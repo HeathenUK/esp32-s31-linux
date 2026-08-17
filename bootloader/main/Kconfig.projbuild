@@ -62,6 +62,24 @@ config S31_AUDIO_ENABLE
 
 if S31_AUDIO_ENABLE
 
+config S31_AUDIO_HOST_CODEC
+	bool "Linux owns the audio codec over I2C"
+	depends on S31_AUDIO_ENABLE
+	default y
+	help
+	  Bring up I2S and the shared rings here, but leave codec control to
+	  Linux, which reaches the codec over its own I2C controller.
+
+	  This is required on the ESP32-S31-Korvo-1. Its codec is an ES8389
+	  rather than the ES8311 this firmware can drive, and the codec shares
+	  one I2C bus with the touch controller on GPIO0/GPIO1. Only one
+	  peripheral can drive those pads, so the side with a working driver
+	  for the part takes the bus - and that is Linux, which has the
+	  mainline ES8389 driver.
+
+	  With this set, nothing here touches I2C, so the pins stay available
+	  to Linux.
+
 config S31_AUDIO_I2C_SDA
 	int "ES8311 I2C SDA GPIO"
 	default 51

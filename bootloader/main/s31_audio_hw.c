@@ -8,6 +8,7 @@
 #include "driver/i2c_master.h"
 #include "driver/i2s_std.h"
 #include "esp_check.h"
+#include "driver/gpio.h"
 #include "esp_codec_dev.h"
 #include "esp_codec_dev_defaults.h"
 #include "esp_err.h"
@@ -21,12 +22,15 @@
 
 static i2s_chan_handle_t s_tx;
 static i2s_chan_handle_t s_rx;
+#ifndef CONFIG_S31_AUDIO_HOST_CODEC
 static esp_codec_dev_handle_t s_codec;
+#endif
 static bool s_tx_enabled;
 static bool s_rx_enabled;
 static int16_t s_i2s_tx[S31_AUDIO_BLOCK_FRAMES * S31_AUDIO_HW_CHANNELS];
 static int16_t s_i2s_rx[S31_AUDIO_BLOCK_FRAMES * S31_AUDIO_HW_CHANNELS];
 
+#ifndef CONFIG_S31_AUDIO_HOST_CODEC
 static void diagnose_i2c_bus(i2c_master_bus_handle_t bus)
 {
 	bool found = false;
@@ -44,6 +48,7 @@ static void diagnose_i2c_bus(i2c_master_bus_handle_t bus)
 	if (!found)
 		ESP_LOGE("s31_audio", "no devices ACK on the configured I2C bus");
 }
+#endif /* !CONFIG_S31_AUDIO_HOST_CODEC */
 
 static esp_err_t i2s_output_start(void *context, unsigned int rate)
 {
@@ -193,6 +198,33 @@ esp_err_t s31_audio_hw_start(void)
 			    "s31_audio", "configure I2S TX");
 	ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(s_rx, &standard),
 			    "s31_audio", "configure I2S RX");
+#ifdef CONFIG_S31_AUDIO_HOST_CODEC
+	/*
+	 * Linux drives the ES8389 over its own I2C controller, so do not create
+	 * a bus here: that would mux GPIO0/GPIO1 away from it. Enable the I2S
+	 * channels directly, since esp_codec_dev_open() is what normally does
+	 * that, and assert the power amplifier the codec path would have
+	 * enabled.
+	 */
+	if (CONFIG_S31_AUDIO_PA_GPIO >= 0) {
+		gpio_config_t pa = {
+			.pin_bit_mask = 1ULL << CONFIG_S31_AUDIO_PA_GPIO,
+			.mode = GPIO_MODE_OUTPUT,
+		};
+
+		ESP_RETURN_ON_ERROR(gpio_config(&pa), "s31_audio",
+				    "configure PA GPIO");
+		ESP_RETURN_ON_ERROR(gpio_set_level(CONFIG_S31_AUDIO_PA_GPIO, 1),
+				    "s31_audio", "enable PA");
+	}
+	ESP_RETURN_ON_ERROR(i2s_channel_enable(s_tx), "s31_audio",
+			    "enable I2S TX");
+	ESP_RETURN_ON_ERROR(i2s_channel_enable(s_rx), "s31_audio",
+			    "enable I2S RX");
+	s_tx_enabled = true;
+	s_rx_enabled = true;
+	return ESP_OK;
+#else
 	ESP_RETURN_ON_ERROR(i2c_new_master_bus(&i2c_master, &i2c_bus),
 			    "s31_audio", "create codec I2C bus");
 	diagnose_i2c_bus(i2c_bus);
@@ -217,6 +249,7 @@ esp_err_t s31_audio_hw_start(void)
 	    esp_codec_dev_set_in_gain(s_codec, 18.0) != ESP_CODEC_DEV_OK)
 		return ESP_FAIL;
 	return ESP_OK;
+#endif /* CONFIG_S31_AUDIO_HOST_CODEC */
 }
 
 esp_err_t s31_audio_hw_read(uint16_t *samples, size_t frames)
