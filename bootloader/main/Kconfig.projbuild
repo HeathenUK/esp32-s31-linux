@@ -1,3 +1,59 @@
+menu "S31 display"
+
+config S31_DISPLAY_ENABLE
+	bool "Bring up the Korvo-1 RGB LCD in the loader"
+	default n
+	help
+	  Configures the LCD_CAM RGB panel (800x480 RGB565, ESP32-S3-LCD-EV-Board
+	  -SUB3 subboard) and leaves a self-refreshing AXI DMA ring scanning the
+	  framebuffer out across the handoff to Linux.
+
+	  The LCD data bus uses GPIO33 and GPIO34, which are also the USB
+	  Serial/JTAG D-/D+ pads. Enabling this therefore requires the console to
+	  be moved off USB Serial/JTAG (set CONFIG_ESP_CONSOLE_UART_DEFAULT), and
+	  costs JTAG debugging. The USB 2.0 OTG host port is unaffected: it uses
+	  the dedicated USB_DP/USB_DM analog pads.
+
+if S31_DISPLAY_ENABLE
+
+config S31_DISPLAY_PCLK_GPIO
+	int "LCD pixel clock GPIO"
+	default 40
+
+config S31_DISPLAY_HSYNC_GPIO
+	int "LCD horizontal sync GPIO"
+	default 44
+
+config S31_DISPLAY_VSYNC_GPIO
+	int "LCD vertical sync GPIO"
+	default 45
+
+config S31_DISPLAY_DE_GPIO
+	int "LCD data enable GPIO"
+	default 43
+
+config S31_DISPLAY_HOLD_HART1
+	bool "Diagnostic: bring up the LCD but never release hart1 to Linux"
+	default n
+	help
+	  Isolates the display from Linux entirely. If the panel stays correct
+	  with this set but degrades without it, the fault is something Linux
+	  does after the handoff; if it degrades either way, the fault is in the
+	  loader's own LCD_CAM or DMA setup. Diagnostic only - the board will
+	  not boot Linux.
+
+config S31_DISPLAY_DISP_GPIO
+	int "LCD display-enable GPIO (-1 to omit)"
+	default -1
+	help
+	  Espressif's own Korvo-1 board definition uses -1 (no DISP pin).
+	  GPIO38 is LCD_CS and Boot Mode 0 on this board, so driving it as a
+	  display-enable holds the panel dark.
+
+endif
+
+endmenu
+
 menu "S31 audio co-processor"
 
 config S31_AUDIO_ENABLE
