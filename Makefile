@@ -168,12 +168,48 @@ linux: toolchain | $(LINUX_OUT)
 		--disable RISCV_ISA_V_DEFAULT_ENABLE \
 		--enable RISCV_ISA_ZBA \
 		--enable RISCV_ISA_ZBB \
-		--enable RISCV_ISA_ZBC
+		--enable RISCV_ISA_ZBC \
+		--enable DRM \
+		--enable DRM_ESP32S31_LCD \
+		--enable BACKLIGHT_CLASS_DEVICE \
+		--enable DRM_PANEL \
+		--enable DRM_PANEL_SIMPLE \
+		--enable VT \
+		--enable VT_CONSOLE \
+		--enable FB \
+		--enable FRAMEBUFFER_CONSOLE \
+		--enable INPUT \
+		--enable INPUT_EVDEV \
+		--enable INPUT_KEYBOARD \
+		--enable CFG80211 \
+		--disable CFG80211_WEXT \
+		--disable MAC80211 \
+		--enable CFG80211_CERTIFICATION_ONUS \
+		--disable CFG80211_REQUIRE_SIGNED_REGDB \
+		--disable CFG80211_USE_KERNEL_REGDB_KEYS \
+		--disable CFG80211_CRDA_SUPPORT \
+		--enable HID \
+		--enable HID_GENERIC \
+		--enable USB_HID \
+		--enable DEBUG_FS \
+		--disable DYNAMIC_DEBUG \
+		--disable USB_DWC2_DEBUG \
+		--disable USB_DWC2_DEBUG_PERIODIC \
+		--enable HID_SUPPORT \
+		--enable DRM_FBDEV_EMULATION \
+		--enable FRAMEBUFFER_CONSOLE \
+		--disable DRM_DEBUG_MODESET_LOCK
 	$(MAKE) -C $(LINUX_DIR) O=$(LINUX_OUT) ARCH=riscv CROSS_COMPILE="$(CROSS_COMPILE)" olddefconfig
 	$(MAKE) -C $(LINUX_DIR) O=$(LINUX_OUT) ARCH=riscv CROSS_COMPILE="$(CROSS_COMPILE)" \
 		KCFLAGS="-march=$(S31_SAFE_ISA) $(S31_COMMON_FLAGS)" -j$(JOBS) $(LINUX_TARGET) dtbs
 	cp -v $(LINUX_OUT)/arch/riscv/boot/$(LINUX_TARGET) $(XIP_IMAGE)
 	cp -v $(LINUX_OUT)/arch/riscv/boot/dts/espressif/esp32s31_generic.dtb $(FDT_DTB)
+	@XIP_SIZE=$$(stat -c%s $(XIP_IMAGE)); \
+	if [ $$XIP_SIZE -gt $(LINUX_PARTITION_SIZE) ]; then \
+		echo "ERROR: xipImage ($$XIP_SIZE bytes) exceeds the linux partition ($(LINUX_PARTITION_SIZE) bytes)"; \
+		exit 1; \
+	fi; \
+	echo "xipImage $$XIP_SIZE bytes, $$(($(LINUX_PARTITION_SIZE) - $$XIP_SIZE)) bytes free in the linux partition"
 
 coremark: rootfs
 	@test -x "$(BUILDROOT_OUT)/target/usr/bin/coremark"
@@ -181,8 +217,12 @@ coremark: rootfs
 
 # Keep this decimal because POSIX test(1) and truncate(1) do not accept the
 # partition table's 0x-prefixed value.
-ROOTFS_PARTITION_SIZE ?= 6291456
+ROOTFS_PARTITION_SIZE ?= 4194304
 PERSIST_PARTITION_SIZE ?= 1441792
+# The XIP kernel must start on a 4-MiB Sv32 megapage boundary, so the linux
+# partition stays at 0x400000 and rootfs takes every byte the kernel does not
+# need. Keep this in step with bootloader/partitions.csv.
+LINUX_PARTITION_SIZE ?= 8388608
 BUILDROOT_MAKE = $(MAKE) -C $(BUILDROOT_DIR) O=$(BUILDROOT_OUT) \
 	BR2_EXTERNAL=$(BUILDROOT_EXTERNAL) BR2_DL_DIR=$(BUILDROOT_DL_DIR)
 

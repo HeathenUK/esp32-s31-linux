@@ -10,6 +10,7 @@
 #include <stdint.h>
 #include <inttypes.h>
 #include "sdkconfig.h"
+#include "s31_wifi_config.h"
 #include "esp_log.h"
 #include "esp_err.h"
 #include "esp_system.h"
@@ -50,6 +51,9 @@
 #ifdef CONFIG_S31_AUDIO_ENABLE
 #include "s31_audio.h"
 #endif
+#ifdef CONFIG_S31_DISPLAY_ENABLE
+#include "s31_display.h"
+#endif
 
 #define OPENSBI_XIP_ADDR              0x40220000U
 /* The complete 16-MiB Flash is linearly mapped at the IDF flash aperture. */
@@ -60,9 +64,9 @@
 #define OPENSBI_FDT_OFFSET_SLOT_SIZE  4U
 #define FDT_MAGIC_LE                  0xEDFE0DD0U
 #define LINUX_PARTITION_OFFSET        0x00400000U
-#define LINUX_PARTITION_SIZE          0x00600000U
-#define ROOTFS_PARTITION_OFFSET       0x00A00000U
-#define ROOTFS_PARTITION_SIZE         0x00600000U
+#define LINUX_PARTITION_SIZE          0x00800000U
+#define ROOTFS_PARTITION_OFFSET       0x00C00000U
+#define ROOTFS_PARTITION_SIZE         0x00400000U
 #define ESP32S31_PSRAM_SIZE           S31_PSRAM_SIZE
 #define LINUX_PSRAM_START             S31_PSRAM_BASE
 /*
@@ -89,19 +93,34 @@ volatile uint32_t g_core1_trap_mepc;
 
 extern void core1_linux_trampoline(void);
 
-/* Keep all loader output on the dedicated USB Serial/JTAG peripheral. */
+/*
+ * Loader failures go to the USB Serial/JTAG peripheral, except when the LCD is
+ * enabled: the panel's R4/R5 data lines are GPIO33/GPIO34, which are the USB
+ * Serial/JTAG D-/D+ pads, so that port no longer exists and the message would
+ * be lost. Fall back to UART0, which carries the console in that configuration.
+ */
+/*
+ * esp_rom_output_* take a plain UART number; only the USB peripherals have
+ * named constants.
+ */
+#ifdef CONFIG_S31_DISPLAY_ENABLE
+#define LOADER_FAILURE_PORT  CONFIG_ESP_CONSOLE_UART_NUM
+#else
+#define LOADER_FAILURE_PORT  ESP_ROM_USB_SERIAL_DEVICE_NUM
+#endif
+
 static __attribute__((noreturn)) void loader_restart(const char *reason)
 {
     static const char prefix[] = "S31 loader failure: ";
 
-    esp_rom_output_set_as_console(ESP_ROM_USB_SERIAL_DEVICE_NUM);
+    esp_rom_output_set_as_console(LOADER_FAILURE_PORT);
     for (const char *p = prefix; *p; p++)
         esp_rom_output_tx_one_char((uint8_t)*p);
     for (const char *p = reason; *p; p++)
         esp_rom_output_tx_one_char((uint8_t)*p);
     esp_rom_output_tx_one_char('\r');
     esp_rom_output_tx_one_char('\n');
-    esp_rom_output_tx_wait_idle(ESP_ROM_USB_SERIAL_DEVICE_NUM);
+    esp_rom_output_tx_wait_idle(LOADER_FAILURE_PORT);
     esp_restart();
 }
 
@@ -273,8 +292,15 @@ static void start_linux_on_core1(uint32_t fdt)
 {
     g_core1_fdt = fdt;
     g_core1_trampoline_entered = 0;
+    /*
+     * Clear only up to the LCD descriptor ring, not to LINUX_SRAM_END. The
+     * ring lives in the last 4 KiB of the shared reservation and the AXI DMA
+     * is already walking it by this point; zeroing it here stops scanout dead.
+     * S31_LCD_DMA_LINK_BASE equals the old value of S31_HP_SHARED_END, so this
+     * is the original range whether or not the display is enabled.
+     */
     for (uint32_t addr = HART1_EARLY_MAILBOX_ADDR;
-         addr < LINUX_SRAM_END; addr += sizeof(uint32_t)) {
+         addr < S31_LCD_DMA_LINK_BASE; addr += sizeof(uint32_t)) {
         *(volatile uint32_t *)addr = 0;
     }
     __asm__ volatile ("fence rw, rw" ::: "memory");
@@ -312,9 +338,9 @@ static void start_linux_on_core1(uint32_t fdt)
 #define OPENSBI_FDT_OFFSET_SLOT_SIZE  4U
 #define FDT_MAGIC_LE                  0xEDFE0DD0U
 #define LINUX_PARTITION_OFFSET        0x00400000U
-#define LINUX_PARTITION_SIZE          0x00600000U
-#define ROOTFS_PARTITION_OFFSET       0x00A00000U
-#define ROOTFS_PARTITION_SIZE         0x00600000U
+#define LINUX_PARTITION_SIZE          0x00800000U
+#define ROOTFS_PARTITION_OFFSET       0x00C00000U
+#define ROOTFS_PARTITION_SIZE         0x00400000U
 static bool map_flash_range(uint32_t vaddr, uint32_t paddr, uint32_t size);
 static bool prepare_core1_cached_psram(void);
 static void enable_core1_external_memory_bus(uint32_t vaddr, uint32_t size);
@@ -344,8 +370,16 @@ static void prepare_linux_uart0(void)
 
 void app_main(void)
 {
+#ifndef CONFIG_S31_DISPLAY_ENABLE
     /* Allow the USB Serial/JTAG device to enumerate before loader output. */
     vTaskDelay(pdMS_TO_TICKS(5000));
+#else
+    /*
+     * With the LCD enabled there is no USB Serial/JTAG to wait for: GPIO33 and
+     * GPIO34 carry the panel's R4/R5. Skipping the wait takes five seconds off
+     * the time to first pixel.
+     */
+#endif
 
     prepare_linux_uart0();
 
@@ -455,11 +489,33 @@ void app_main(void)
         loader_restart("hosted SRAM transport");
     ESP_LOGI(TAG, "hosted SRAM transport started");
 
+    /*
+     * Start the Wi-Fi control service. Nothing called this before, so the
+     * private Wi-Fi control messages were accepted and silently dropped and
+     * every request from Linux timed out.
+     */
+    if (s31_wifi_config_init() != ESP_OK)
+        ESP_LOGW(TAG, "Wi-Fi config service unavailable");
+#ifdef CONFIG_S31_DISPLAY_ENABLE
+    s31_display_progress(40);  /* transport up */
+#endif
+
+
 #ifdef CONFIG_S31_AUDIO_ENABLE
     err = s31_audio_start();
     if (err != ESP_OK)
         ESP_LOGE(TAG, "FreeRTOS audio core unavailable: %s",
                  esp_err_to_name(err));
+#endif
+
+#ifdef CONFIG_S31_DISPLAY_ENABLE
+    /*
+     * Start scanout before hart1 is released so the DMA ring is already
+     * walking the framebuffer across the handoff. A dark panel is not fatal:
+     * Linux is perfectly usable over the UART console without it.
+     */
+    if (!s31_display_start())
+        ESP_LOGE(TAG, "LCD unavailable; continuing without a display");
 #endif
 
     err = nvs_flash_init();
@@ -471,6 +527,10 @@ void app_main(void)
     if (err != ESP_OK || esp_hosted_coprocessor_init() != ESP_OK)
         loader_restart("ESP-Hosted co-processor");
     ESP_LOGI(TAG, "ESP-Hosted co-processor started");
+#ifdef CONFIG_S31_DISPLAY_ENABLE
+    s31_display_progress(75);  /* radio up */
+#endif
+
 
 #ifdef CONFIG_ESP_HOSTED_CP_BT
     if (init_bluetooth() != ESP_OK || enable_bluetooth() != ESP_OK)
@@ -478,6 +538,15 @@ void app_main(void)
     ESP_LOGI(TAG, "Bluetooth controller enabled over Hosted VHCI");
 #endif
 
+#ifdef CONFIG_S31_DISPLAY_HOLD_HART1
+    /* Diagnostic build: keep the panel up and never start Linux. */
+    ESP_LOGW(TAG, "S31_DISPLAY_HOLD_HART1 set: hart1 stays parked, no Linux");
+    (void)fdt;
+#else
+#ifdef CONFIG_S31_DISPLAY_ENABLE
+    s31_display_progress(100);  /* handing off to Linux */
+#endif
     start_linux_on_core1(fdt);
     ESP_LOGI(TAG, "hart1 released to OpenSBI; hart0 FreeRTOS continues");
+#endif
 }
