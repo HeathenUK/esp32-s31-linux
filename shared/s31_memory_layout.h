@@ -24,6 +24,17 @@
 #define S31_OPENSBI_RW_BASE            0x50FF0000U
 #define S31_OPENSBI_RW_SIZE            0x00010000U
 
+/*
+ * Uncached internal SRAM for the Linux I2S ring buffers. Internal RAM sits in
+ * front of no cache on this SoC, unlike PSRAM, so the GDMA and the CPU see the
+ * same bytes with no maintenance -- which is what lets ALSA hand its buffer
+ * straight to the DMA. Page-aligned because the ALSA IRAM allocator aligns
+ * every allocation to PAGE_SIZE. The reservation below covers the short gap up
+ * to the hosted ring as well, so nothing on the FreeRTOS side lands in it.
+ */
+#define S31_AUDIO_DMA_BASE             0x2F062000U
+#define S31_AUDIO_DMA_SIZE             0x00008000U
+
 /* Compact internal HP-SRAM transport and Linux DMA reservation. */
 #define S31_HP_SHARED_BASE             0x2F06AF80U
 #define S31_HOSTED_SRAM_SIZE           0x00007400U
@@ -45,6 +56,14 @@
 #define S31_LCD_DMA_LINK_SIZE          0x00001000U
 #define S31_HP_SHARED_END              0x2F079C00U
 #define S31_LINUX_DMA_END              S31_HP_SHARED_END
+
+#if S31_AUDIO_DMA_BASE & 0xFFFU
+#error "audio DMA SRAM must be page-aligned for the ALSA IRAM allocator"
+#endif
+
+#if S31_AUDIO_DMA_BASE + S31_AUDIO_DMA_SIZE > S31_HP_SHARED_BASE
+#error "audio DMA SRAM must end at or below the hosted ring"
+#endif
 
 #if S31_HP_SHARED_BASE + S31_HOSTED_SRAM_SIZE != S31_AXI_DESC_BASE
 #error "hosted and AXI descriptor regions must be contiguous"
