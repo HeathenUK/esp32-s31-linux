@@ -5,7 +5,11 @@
 ::sysinit:/bin/hostname -F /etc/hostname
 ::sysinit:/etc/init.d/rcS
 # Restore the interactive serial login shell on the Linux console.
-console::respawn:/sbin/getty -L console 115200 vt100
+# /dev/console is the LCD (tty0), so name the UART explicitly here or
+# the serial port would lose its login shell.
+ttyS0::respawn:/sbin/getty -L ttyS0 115200 vt100
+# Login on the LCD's virtual terminal. Needs a USB keyboard (HID + evdev).
+tty1::respawn:/sbin/getty -L tty1 38400 linux
 ::shutdown:/etc/init.d/rcK
 ::shutdown:/sbin/swapoff -a
 ::shutdown:/bin/umount -a -r

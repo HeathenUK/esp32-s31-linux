@@ -17,6 +17,34 @@ mount -t proc proc /proc 2>/dev/null || true
 mount -t sysfs sysfs /sys 2>/dev/null || true
 mount -t devpts devpts /dev/pts 2>/dev/null || true
 
+# Volatile mounts and runtime directories the running system expects. They do
+# not consume JFFS2 space and are not copied up into the persistent upperdir.
+# Every path that hands over to init goes through here, so a fallback never
+# leaves seedrng or bluetoothd without their runtime directories.
+start_init() {
+	mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
+	mount -t proc proc /proc 2>/dev/null || true
+	mount -t sysfs sysfs /sys 2>/dev/null || true
+	mount -t devpts devpts /dev/pts 2>/dev/null || true
+	mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /run 2>/dev/null || true
+	mount -t tmpfs -o mode=1777,nosuid,nodev tmpfs /tmp 2>/dev/null || true
+	mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /var/log 2>/dev/null || true
+	mkdir -p /run/lock 2>/dev/null || true
+	mkdir -m 0700 /run/bluetooth 2>/dev/null || true
+	mkdir -m 0700 /run/seedrng 2>/dev/null || true
+	mkdir -p /etc/s31-conf 2>/dev/null || true
+
+	exec /sbin/init
+}
+
+# An already-writable root - the microSD ext4 filesystem - is persistent by
+# itself. The SquashFS+JFFS2 overlay below exists only to make the immutable
+# flash root writable, so skip it entirely and hand straight over to init.
+root_fstype="$(awk '$2 == "/" { print $3; exit }' /proc/mounts 2>/dev/null)"
+if [ "$root_fstype" != squashfs ]; then
+	start_init
+fi
+
 # The rootfs is SquashFS. Keep the persist mount outside the future merged
 # root while the overlay is assembled, then expose it at /persist after the
 # pivot. Identify persist by its ESP-IDF label, not a fixed MTD number.
@@ -37,7 +65,7 @@ done
 
 if [ -z "$persist_dev" ]; then
 	echo "S31 overlay: persist MTD block device not found" >&2
-	exec /sbin/init
+	start_init
 fi
 
 # /mnt is part of the immutable root, so use a temporary mount there for the
@@ -45,12 +73,12 @@ fi
 # filesystem and does not need a separate mkfs operation on the target.
 mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /mnt || {
 	echo "S31 overlay: failed to allocate staging tmpfs" >&2
-	exec /sbin/init
+	start_init
 }
 mkdir -p /mnt/persist /mnt/newroot
 if ! mount -t jffs2 "$persist_dev" /mnt/persist; then
 	echo "S31 overlay: failed to mount persist as JFFS2" >&2
-	exec /sbin/init
+	start_init
 fi
 
 mkdir -p /mnt/persist/upper /mnt/persist/work
@@ -58,33 +86,19 @@ if ! mount -t overlay overlay \
 	-o lowerdir=/,upperdir=/mnt/persist/upper,workdir=/mnt/persist/work,\
 index=off,redirect_dir=off /mnt/newroot; then
 	echo "S31 overlay: failed to mount overlayfs" >&2
-	exec /sbin/init
+	start_init
 fi
 
 mkdir -p /mnt/newroot/oldroot /mnt/newroot/persist
 mount --bind /mnt/persist /mnt/newroot/persist || {
 	echo "S31 overlay: failed to expose persist" >&2
-	exec /sbin/init
+	start_init
 }
 if ! pivot_root /mnt/newroot /mnt/newroot/oldroot; then
 	echo "S31 overlay: pivot_root failed" >&2
-	exec /sbin/init
+	start_init
 fi
 cd /
 umount -l /oldroot 2>/dev/null || true
 
-# Recreate volatile mounts in the merged root. They do not consume JFFS2
-# space and are not copied up into the persistent upperdir.
-mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
-mount -t proc proc /proc 2>/dev/null || true
-mount -t sysfs sysfs /sys 2>/dev/null || true
-mount -t devpts devpts /dev/pts 2>/dev/null || true
-mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /run 2>/dev/null || true
-mount -t tmpfs -o mode=1777,nosuid,nodev tmpfs /tmp 2>/dev/null || true
-mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /var/log 2>/dev/null || true
-mkdir -p /run/lock
-mkdir -m 0700 /run/bluetooth
-mkdir -m 0700 /run/seedrng
-mkdir -p /etc/s31-conf
-
-exec /sbin/init
+start_init
