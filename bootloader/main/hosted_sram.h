@@ -16,6 +16,8 @@ int s31_hosted_sram_send_meta(uint8_t if_type, uint8_t if_num,
 			      const void *payload, size_t length, uint8_t flags,
 			      uint16_t seq_num, uint8_t packet_type);
 int s31_hosted_sram_send_control(const void *payload, size_t length);
+/* Transport generation, stamped into messages sent to the Linux host. */
+uint32_t s31_hosted_sram_generation(void);
 void s31_hosted_sram_set_frame_handler(s31_hosted_frame_handler_t handler,
 				       void *arg);
 int s31_hosted_sram_wifi_tx(const void *data, size_t length);

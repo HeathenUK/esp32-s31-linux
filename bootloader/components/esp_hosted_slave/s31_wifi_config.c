@@ -13,10 +13,13 @@
 #include "hosted_sram.h"
 #include "s31_hosted_sram.h"
 #include "slave_wifi_std.h"
+#include "s31_wifi_config.h"
 
 static const char *TAG = "s31_wifi_cfg";
 static const char *NVS_NAMESPACE = "s31wifi";
 static const uint8_t INVALID_SLOT = 0xff;
+/* Bound the scan report so one sweep cannot monopolise the control ring. */
+#define S31_WIFI_SCAN_MAX_RECORDS 24
 
 static struct s31_hosted_wifi_slot s_slots[S31_HOSTED_WIFI_SLOT_COUNT];
 static struct s31_hosted_wifi_state s_state;
@@ -24,6 +27,17 @@ static esp_timer_handle_t s_retry_timer;
 static uint8_t s_retry_slot;
 static uint8_t s_attempt_slot = INVALID_SLOT;
 static bool s_initialized;
+
+static esp_err_t wifi_ensure_started(void);
+static void send_response(uint8_t type, uint8_t slot, esp_err_t status,
+			  const void *data, size_t len);
+static void report_scan(void);
+static void send_paced(uint8_t type, esp_err_t status, const void *data,
+		       size_t len);
+static void send_link_event(bool connected, uint8_t reason,
+			    const uint8_t *bssid, const uint8_t *ssid,
+			    uint8_t ssid_len, uint8_t channel);
+static bool station_request(const struct s31_hosted_wifi_msg *msg);
 
 static uint32_t hosted_generation(void)
 {
@@ -166,10 +180,11 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
 				       int32_t event_id, void *event_data)
 {
 	(void)arg;
-	(void)event_data;
 	if (base != WIFI_EVENT)
 		return;
-	if (event_id == WIFI_EVENT_STA_START) {
+	if (event_id == WIFI_EVENT_SCAN_DONE) {
+		report_scan();
+	} else if (event_id == WIFI_EVENT_STA_START) {
 		if (s_state.enabled && s_state.auto_connect) {
 			int slot = choose_slot();
 			if (slot >= 0) {
@@ -179,11 +194,21 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
 			}
 		}
 	} else if (event_id == WIFI_EVENT_STA_CONNECTED) {
+		const wifi_event_sta_connected_t *ev = event_data;
+
 		s_state.connected_slot = s_attempt_slot;
 		if (s_retry_timer)
 			(void)esp_timer_stop(s_retry_timer);
+		if (ev)
+			send_link_event(true, 0, ev->bssid, ev->ssid,
+					ev->ssid_len, ev->channel);
 	} else if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
+		const wifi_event_sta_disconnected_t *ev = event_data;
+
 		s_state.connected_slot = INVALID_SLOT;
+		send_link_event(false, ev ? ev->reason : 0,
+				ev ? ev->bssid : NULL, ev ? ev->ssid : NULL,
+				ev ? ev->ssid_len : 0, 0);
 		if (s_state.enabled && s_state.auto_connect && s_retry_timer) {
 			(void)esp_timer_stop(s_retry_timer);
 			(void)esp_timer_start_once(s_retry_timer,
@@ -227,7 +252,7 @@ esp_err_t s31_wifi_config_autostart(void)
 }
 
 static void send_response(uint8_t type, uint8_t slot, esp_err_t status,
-				  const void *data, size_t len)
+			  const void *data, size_t len)
 {
 	struct s31_hosted_wifi_msg response = {
 		.type = type,
@@ -243,6 +268,269 @@ static void send_response(uint8_t type, uint8_t slot, esp_err_t status,
 	(void)s31_hosted_sram_send_control(&response, sizeof(response));
 }
 
+
+
+/*
+ * The control ring is shallow: s31_hosted_sram_send_control() queues at most
+ * S31_PENDING_CONTROL_DEPTH messages and then drops them. A scan sweep emits
+ * one message per BSS, which overruns it easily, and a lost SCAN_DONE leaves
+ * the host waiting forever. Pace the sends instead. This runs on the esp_event
+ * task, not the transport RX task that drains the ring, so sleeping here lets
+ * the ring catch up rather than deadlocking it.
+ */
+static void send_paced(uint8_t type, esp_err_t status, const void *data,
+		       size_t len)
+{
+	struct s31_hosted_wifi_msg response = {
+		.type = type,
+		.length = len,
+		.generation = hosted_generation(),
+		.status = (uint32_t)status,
+	};
+
+	if (len > sizeof(response.data))
+		len = sizeof(response.data);
+	if (data && len)
+		memcpy(response.data, data, len);
+
+	for (int retry = 0; retry < 200; retry++) {
+		if (s31_hosted_sram_send_control(&response,
+						 sizeof(response)) == 0)
+			return;
+		vTaskDelay(pdMS_TO_TICKS(2));
+	}
+	ESP_LOGW(TAG, "dropped Wi-Fi message type %u after retries", type);
+}
+
+/* ------------------------- cfg80211 station ops ------------------------- */
+
+/*
+ * Linux drives the radio through nl80211/cfg80211 rather than the stored
+ * profiles above. These requests bypass the slot machinery entirely.
+ */
+static bool s_scan_in_progress;
+
+static uint8_t auth_mode_to_wire(wifi_auth_mode_t mode)
+{
+	switch (mode) {
+	case WIFI_AUTH_OPEN:		return S31_HOSTED_WIFI_AUTH_OPEN;
+	case WIFI_AUTH_WEP:		return S31_HOSTED_WIFI_AUTH_WEP;
+	case WIFI_AUTH_WPA_PSK:		return S31_HOSTED_WIFI_AUTH_WPA_PSK;
+	case WIFI_AUTH_WPA2_PSK:	return S31_HOSTED_WIFI_AUTH_WPA2_PSK;
+	case WIFI_AUTH_WPA_WPA2_PSK:	return S31_HOSTED_WIFI_AUTH_WPA_WPA2_PSK;
+	case WIFI_AUTH_WPA3_PSK:	return S31_HOSTED_WIFI_AUTH_WPA3_PSK;
+	case WIFI_AUTH_WPA2_WPA3_PSK:	return S31_HOSTED_WIFI_AUTH_WPA2_WPA3_PSK;
+	case WIFI_AUTH_WAPI_PSK:	return S31_HOSTED_WIFI_AUTH_WAPI_PSK;
+	default:			return S31_HOSTED_WIFI_AUTH_UNKNOWN;
+	}
+}
+
+/*
+ * Report each BSS as its own message then finish with SCAN_DONE, so the kernel
+ * feeds cfg80211 incrementally instead of buffering a whole sweep.
+ */
+static void report_scan(void)
+{
+	uint16_t count = 0;
+	uint16_t wanted;
+	wifi_ap_record_t *records;
+
+	s_scan_in_progress = false;
+
+	if (esp_wifi_scan_get_ap_num(&count) != ESP_OK || !count) {
+		send_paced(S31_HOSTED_CTRL_WIFI_SCAN_DONE, ESP_OK, NULL, 0);
+		return;
+	}
+	wanted = count > S31_WIFI_SCAN_MAX_RECORDS ? S31_WIFI_SCAN_MAX_RECORDS
+						   : count;
+	records = calloc(wanted, sizeof(*records));
+	if (!records) {
+		(void)esp_wifi_scan_get_ap_records(&count, NULL);
+		send_paced(S31_HOSTED_CTRL_WIFI_SCAN_DONE, ESP_ERR_NO_MEM,
+			   NULL, 0);
+		return;
+	}
+	if (esp_wifi_scan_get_ap_records(&wanted, records) != ESP_OK) {
+		free(records);
+		send_paced(S31_HOSTED_CTRL_WIFI_SCAN_DONE, ESP_FAIL,
+			   NULL, 0);
+		return;
+	}
+	if (count > wanted)
+		ESP_LOGW(TAG, "reporting %u of %u scan results", wanted, count);
+
+	for (uint16_t i = 0; i < wanted; i++) {
+		struct s31_hosted_wifi_bss bss = {
+			.channel = records[i].primary,
+			.rssi = records[i].rssi,
+			.auth_mode = auth_mode_to_wire(records[i].authmode),
+		};
+		size_t ssid_len = strnlen((const char *)records[i].ssid,
+					  sizeof(bss.ssid));
+
+		memcpy(bss.bssid, records[i].bssid, sizeof(bss.bssid));
+		memcpy(bss.ssid, records[i].ssid, ssid_len);
+		bss.ssid_len = (uint8_t)ssid_len;
+		send_paced(S31_HOSTED_CTRL_WIFI_SCAN_RESULT, ESP_OK,
+			   &bss, sizeof(bss));
+	}
+	free(records);
+	send_paced(S31_HOSTED_CTRL_WIFI_SCAN_DONE, ESP_OK, NULL, 0);
+}
+
+static void send_link_event(bool connected, uint8_t reason,
+			    const uint8_t *bssid, const uint8_t *ssid,
+			    uint8_t ssid_len, uint8_t channel)
+{
+	struct s31_hosted_wifi_link_event ev = {
+		.connected = connected ? 1 : 0,
+		.reason = reason,
+		.channel = channel,
+	};
+	wifi_ap_record_t ap;
+
+	if (bssid)
+		memcpy(ev.bssid, bssid, sizeof(ev.bssid));
+	if (ssid && ssid_len) {
+		if (ssid_len > sizeof(ev.ssid))
+			ssid_len = sizeof(ev.ssid);
+		memcpy(ev.ssid, ssid, ssid_len);
+		ev.ssid_len = ssid_len;
+	}
+	if (connected && esp_wifi_sta_get_ap_info(&ap) == ESP_OK)
+		ev.rssi = ap.rssi;
+
+	send_paced(S31_HOSTED_CTRL_WIFI_LINK_EVENT, ESP_OK, &ev,
+		   sizeof(ev));
+}
+
+static esp_err_t station_scan(const struct s31_hosted_wifi_scan_req *req)
+{
+	wifi_scan_config_t cfg = { 0 };
+	uint8_t ssid[S31_HOSTED_WIFI_SSID_MAX + 1] = { 0 };
+	esp_err_t err;
+
+	if (s_scan_in_progress)
+		return ESP_ERR_INVALID_STATE;
+
+	/*
+	 * A hidden AP does not answer a broadcast probe, so when the host names
+	 * an SSID, ask for a directed probe instead.
+	 */
+	if (req && req->ssid_len && req->ssid_len <= S31_HOSTED_WIFI_SSID_MAX) {
+		memcpy(ssid, req->ssid, req->ssid_len);
+		cfg.ssid = ssid;
+	}
+	if (req)
+		cfg.channel = req->channel;
+	err = wifi_ensure_started();
+	if (err != ESP_OK)
+		return err;
+	/* Asynchronous: WIFI_EVENT_SCAN_DONE reports the results. */
+	err = esp_wifi_scan_start(&cfg, false);
+	if (err == ESP_OK)
+		s_scan_in_progress = true;
+	return err;
+}
+
+static esp_err_t station_connect(const struct s31_hosted_wifi_connect *req)
+{
+	wifi_config_t cfg = { 0 };
+	esp_err_t err;
+
+	if (!req->ssid_len || req->ssid_len > sizeof(cfg.sta.ssid) ||
+	    req->password_len > sizeof(cfg.sta.password))
+		return ESP_ERR_INVALID_ARG;
+
+	err = wifi_ensure_started();
+	if (err != ESP_OK)
+		return err;
+
+	memcpy(cfg.sta.ssid, req->ssid, req->ssid_len);
+	if (req->password_len)
+		memcpy(cfg.sta.password, req->password, req->password_len);
+	if (req->flags & S31_HOSTED_WIFI_CONNECT_F_BSSID) {
+		cfg.sta.bssid_set = true;
+		memcpy(cfg.sta.bssid, req->bssid, sizeof(cfg.sta.bssid));
+	}
+	cfg.sta.channel = req->channel;
+	cfg.sta.threshold.authmode = WIFI_AUTH_OPEN;
+	/*
+	 * Sweep every channel rather than stopping at the first match. A hidden
+	 * AP does not appear in a passive sweep, so the directed probe has to be
+	 * given the chance to find it wherever it is.
+	 */
+	cfg.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+
+	/*
+	 * Linux is now authoritative. Stop the stored-profile retry timer so it
+	 * cannot reconnect underneath wpa_supplicant.
+	 */
+	s_state.auto_connect = 0;
+	if (s_retry_timer)
+		(void)esp_timer_stop(s_retry_timer);
+
+	(void)esp_wifi_disconnect();
+	err = esp_wifi_set_config(WIFI_IF_STA, &cfg);
+	if (err != ESP_OK)
+		return err;
+	s_attempt_slot = INVALID_SLOT;
+	return esp_wifi_connect();
+}
+
+/* Returns true when the message was one of the station operations. */
+static bool station_request(const struct s31_hosted_wifi_msg *msg)
+{
+	esp_err_t status;
+
+	switch (msg->type) {
+	case S31_HOSTED_CTRL_WIFI_SCAN: {
+		struct s31_hosted_wifi_scan_req req;
+
+		memcpy(&req, msg->data, sizeof(req));
+		status = station_scan(&req);
+		send_response(S31_HOSTED_CTRL_WIFI_SCAN_RESPONSE, 0, status,
+			      NULL, 0);
+		if (status != ESP_OK)
+			send_response(S31_HOSTED_CTRL_WIFI_SCAN_DONE, 0, status,
+				      NULL, 0);
+		return true;
+	}
+	case S31_HOSTED_CTRL_WIFI_CONNECT: {
+		struct s31_hosted_wifi_connect req;
+
+		memcpy(&req, msg->data, sizeof(req));
+		status = station_connect(&req);
+		send_response(S31_HOSTED_CTRL_WIFI_CONNECT_RESPONSE, 0, status,
+			      NULL, 0);
+		return true;
+	}
+	case S31_HOSTED_CTRL_WIFI_DISCONNECT:
+		s_state.auto_connect = 0;
+		if (s_retry_timer)
+			(void)esp_timer_stop(s_retry_timer);
+		status = esp_wifi_disconnect();
+		send_response(S31_HOSTED_CTRL_WIFI_DISCONNECT_RESPONSE, 0,
+			      status, NULL, 0);
+		return true;
+	case S31_HOSTED_CTRL_WIFI_STATION_INFO: {
+		struct s31_hosted_wifi_station_info info = { 0 };
+		wifi_ap_record_t ap;
+
+		status = esp_wifi_sta_get_ap_info(&ap);
+		if (status == ESP_OK) {
+			info.rssi = ap.rssi;
+			info.channel = ap.primary;
+		}
+		send_response(S31_HOSTED_CTRL_WIFI_STATION_INFO_RESPONSE, 0,
+			      status, &info, sizeof(info));
+		return true;
+	}
+	default:
+		return false;
+	}
+}
+
 bool hosted_wifi_config_handler(const uint8_t *data, size_t len)
 {
 	const struct s31_hosted_wifi_msg *msg;
@@ -253,6 +541,12 @@ bool hosted_wifi_config_handler(const uint8_t *data, size_t len)
 		return false;
 	msg = (const void *)data;
 	if (msg->generation != hosted_generation())
+		return true;
+	/*
+	 * cfg80211 station operations are independent of the stored profiles
+	 * below: Linux drives association directly through nl80211.
+	 */
+	if (station_request(msg))
 		return true;
 	if (!s_initialized)
 		return true;

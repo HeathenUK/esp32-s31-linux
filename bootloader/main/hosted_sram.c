@@ -185,6 +185,11 @@ int s31_hosted_sram_send(uint8_t if_type, const void *payload, size_t length,
 					 hci_packet_type);
 }
 
+uint32_t s31_hosted_sram_generation(void)
+{
+	return s_ctrl ? s_ctrl->generation : 0;
+}
+
 int s31_hosted_sram_send_control(const void *payload, size_t length)
 {
 	struct pending_control *pending;

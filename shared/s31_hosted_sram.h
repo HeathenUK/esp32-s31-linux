@@ -20,12 +20,14 @@ typedef u8 s31_u8;
 typedef u16 s31_u16;
 typedef u32 s31_u32;
 typedef u64 s31_u64;
+typedef s8 s31_s8;
 #else
 #include <stdint.h>
 typedef uint8_t s31_u8;
 typedef uint16_t s31_u16;
 typedef uint32_t s31_u32;
 typedef uint64_t s31_u64;
+typedef int8_t s31_s8;
 #endif
 
 #define S31_HOSTED_SRAM_BASE		S31_HP_SHARED_BASE
@@ -38,7 +40,12 @@ typedef uint64_t s31_u64;
 	(S31_HOSTED_H0_TO_H1_OFFSET + S31_HOSTED_SLOT_COUNT * S31_HOSTED_SLOT_SIZE)
 
 #define S31_HOSTED_MAGIC		0x53334846U /* "FH3S" little endian */
-#define S31_HOSTED_ABI_VERSION		1U
+/*
+ * Bumped to 2 for the cfg80211 station operations (scan/connect/disconnect,
+ * link events and station info). Both harts validate this at probe, so the
+ * loader and the kernel must be flashed together when it changes.
+ */
+#define S31_HOSTED_ABI_VERSION		2U
 
 #define S31_HOSTED_H0_READY		(1U << 0)
 #define S31_HOSTED_H1_READY		(1U << 1)
@@ -84,6 +91,25 @@ enum s31_hosted_control_type {
 	/* Linux asks the IDF-owned PM policy to raise the CPU frequency floor. */
 	S31_HOSTED_CTRL_CPU_FREQ_SET,
 	S31_HOSTED_CTRL_CPU_FREQ_SET_RESPONSE,
+	/*
+	 * cfg80211 station operations. Linux drives association directly
+	 * rather than relying on hart0's stored slot profiles, so that
+	 * wpa_supplicant and nl80211 see a normal FullMAC device. All of
+	 * these carry a struct s31_hosted_wifi_msg over the private
+	 * interface; SCAN_RESULT, SCAN_DONE and LINK_EVENT are asynchronous
+	 * hart0 -> Linux notifications with no matching request.
+	 */
+	S31_HOSTED_CTRL_WIFI_SCAN,
+	S31_HOSTED_CTRL_WIFI_SCAN_RESPONSE,
+	S31_HOSTED_CTRL_WIFI_SCAN_RESULT,
+	S31_HOSTED_CTRL_WIFI_SCAN_DONE,
+	S31_HOSTED_CTRL_WIFI_CONNECT,
+	S31_HOSTED_CTRL_WIFI_CONNECT_RESPONSE,
+	S31_HOSTED_CTRL_WIFI_DISCONNECT,
+	S31_HOSTED_CTRL_WIFI_DISCONNECT_RESPONSE,
+	S31_HOSTED_CTRL_WIFI_LINK_EVENT,
+	S31_HOSTED_CTRL_WIFI_STATION_INFO,
+	S31_HOSTED_CTRL_WIFI_STATION_INFO_RESPONSE,
 };
 
 enum s31_hosted_link_state {
@@ -146,7 +172,25 @@ struct s31_hosted_mem_stats {
 #define S31_HOSTED_WIFI_SLOT_COUNT	3U
 #define S31_HOSTED_WIFI_SSID_MAX	32U
 #define S31_HOSTED_WIFI_PASSWORD_MAX	64U
-#define S31_HOSTED_WIFI_MSG_DATA_SIZE	100U
+/* Sized for the largest payload below, struct s31_hosted_wifi_connect. */
+#define S31_HOSTED_WIFI_MSG_DATA_SIZE	128U
+
+/* Wire-stable authentication modes, mapped from/to ESP-IDF's wifi_auth_mode_t. */
+enum s31_hosted_wifi_auth {
+	S31_HOSTED_WIFI_AUTH_OPEN = 0,
+	S31_HOSTED_WIFI_AUTH_WEP,
+	S31_HOSTED_WIFI_AUTH_WPA_PSK,
+	S31_HOSTED_WIFI_AUTH_WPA2_PSK,
+	S31_HOSTED_WIFI_AUTH_WPA_WPA2_PSK,
+	S31_HOSTED_WIFI_AUTH_WPA3_PSK,
+	S31_HOSTED_WIFI_AUTH_WPA2_WPA3_PSK,
+	S31_HOSTED_WIFI_AUTH_WAPI_PSK,
+	S31_HOSTED_WIFI_AUTH_ENTERPRISE,
+	S31_HOSTED_WIFI_AUTH_UNKNOWN = 0xff,
+};
+
+/* s31_hosted_wifi_connect.flags */
+#define S31_HOSTED_WIFI_CONNECT_F_BSSID	0x01U
 
 /* Persistent station profile. Empty/invalid profiles are skipped. */
 struct s31_hosted_wifi_slot {
@@ -176,6 +220,70 @@ struct s31_hosted_wifi_msg {
 	s31_u32 generation;
 	s31_u32 status;
 	s31_u8 data[S31_HOSTED_WIFI_MSG_DATA_SIZE];
+} __attribute__((packed));
+
+/*
+ * One scan result, reported by S31_HOSTED_CTRL_WIFI_SCAN_RESULT. hart0 emits
+ * one message per BSS as esp_wifi returns them, then a SCAN_DONE.
+ */
+struct s31_hosted_wifi_bss {
+	s31_u8 bssid[6];
+	s31_u16 capability;
+	s31_u8 ssid_len;
+	s31_u8 channel;
+	s31_s8 rssi;
+	s31_u8 auth_mode;		/* enum s31_hosted_wifi_auth */
+	s31_u8 reserved[2];
+	s31_u8 ssid[S31_HOSTED_WIFI_SSID_MAX];
+} __attribute__((packed));
+
+/*
+ * S31_HOSTED_CTRL_WIFI_SCAN payload. An empty ssid requests the usual sweep;
+ * a non-empty one asks for a directed probe, which is the only way a hidden
+ * AP is ever found.
+ */
+struct s31_hosted_wifi_scan_req {
+	s31_u8 ssid_len;
+	s31_u8 channel;			/* 0 scans every channel */
+	s31_u8 reserved[2];
+	s31_u8 ssid[S31_HOSTED_WIFI_SSID_MAX];
+} __attribute__((packed));
+
+/* S31_HOSTED_CTRL_WIFI_CONNECT payload. */
+struct s31_hosted_wifi_connect {
+	s31_u8 ssid_len;
+	s31_u8 password_len;
+	s31_u8 channel;			/* 0 selects any channel */
+	s31_u8 flags;			/* S31_HOSTED_WIFI_CONNECT_F_* */
+	s31_u8 bssid[6];
+	s31_u8 reserved[2];
+	s31_u8 ssid[S31_HOSTED_WIFI_SSID_MAX];
+	s31_u8 password[S31_HOSTED_WIFI_PASSWORD_MAX];
+} __attribute__((packed));
+
+/*
+ * S31_HOSTED_CTRL_WIFI_LINK_EVENT payload. This carries the detail cfg80211
+ * needs for cfg80211_connect_result()/cfg80211_disconnected(), which the
+ * coarse S31_HOSTED_CTRL_LINK carrier notification cannot express.
+ */
+struct s31_hosted_wifi_link_event {
+	s31_u8 connected;
+	s31_u8 reason;			/* IEEE 802.11 reason code */
+	s31_u8 channel;
+	s31_u8 ssid_len;
+	s31_u8 bssid[6];
+	s31_s8 rssi;
+	s31_u8 reserved;
+	s31_u8 ssid[S31_HOSTED_WIFI_SSID_MAX];
+} __attribute__((packed));
+
+/* S31_HOSTED_CTRL_WIFI_STATION_INFO_RESPONSE payload. */
+struct s31_hosted_wifi_station_info {
+	s31_s8 rssi;
+	s31_u8 channel;
+	s31_u8 reserved[2];
+	s31_u32 tx_rate_kbps;
+	s31_u32 rx_rate_kbps;
 } __attribute__((packed));
 
 struct s31_hosted_wifi_slot_request {
@@ -249,7 +357,22 @@ _Static_assert(sizeof(struct s31_hosted_wifi_slot) == 100,
 	       "hosted Wi-Fi slot ABI changed");
 _Static_assert(sizeof(struct s31_hosted_wifi_state) == 16,
 	       "hosted Wi-Fi state ABI changed");
-_Static_assert(sizeof(struct s31_hosted_wifi_msg) == 112,
+_Static_assert(sizeof(struct s31_hosted_wifi_connect) <=
+	       S31_HOSTED_WIFI_MSG_DATA_SIZE,
+	       "Wi-Fi connect request does not fit the hosted message payload");
+_Static_assert(sizeof(struct s31_hosted_wifi_scan_req) <=
+	       S31_HOSTED_WIFI_MSG_DATA_SIZE,
+	       "Wi-Fi scan request does not fit the hosted message payload");
+_Static_assert(sizeof(struct s31_hosted_wifi_bss) <=
+	       S31_HOSTED_WIFI_MSG_DATA_SIZE,
+	       "Wi-Fi scan result does not fit the hosted message payload");
+_Static_assert(sizeof(struct s31_hosted_wifi_link_event) <=
+	       S31_HOSTED_WIFI_MSG_DATA_SIZE,
+	       "Wi-Fi link event does not fit the hosted message payload");
+_Static_assert(sizeof(struct s31_hosted_wifi_slot) <=
+	       S31_HOSTED_WIFI_MSG_DATA_SIZE,
+	       "Wi-Fi slot does not fit the hosted message payload");
+_Static_assert(sizeof(struct s31_hosted_wifi_msg) == 140,
 	       "hosted Wi-Fi message ABI changed");
 _Static_assert(sizeof(struct s31_hosted_ring_state) == 192,
 	       "hosted ring state must occupy three cache lines");
