@@ -1235,6 +1235,13 @@ CONFIG_PARTITION_TABLE_MD5=y
 # end of Partition Table
 
 #
+# S31 console
+#
+# default:
+CONFIG_S31_QUIET_PM_LOG=y
+# end of S31 console
+
+#
 # S31 display
 #
 CONFIG_S31_DISPLAY_ENABLE=y

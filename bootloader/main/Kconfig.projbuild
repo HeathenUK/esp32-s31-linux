@@ -1,3 +1,22 @@
+menu "S31 console"
+
+config S31_QUIET_PM_LOG
+	bool "Silence the power manager's frequency-switching log"
+	default y
+	help
+	  The power manager logs a line at INFO every time it reconfigures the
+	  APB frequency, which on this board is several times a second. hart0 and
+	  Linux share UART0, so those lines land in the middle of whatever Linux
+	  is printing: they corrupt framed transfers, they are read back as
+	  command output by any script driving the console, and they interleave
+	  into benchmark results.
+
+	  Leaves every other hart0 log at its normal level - only the "pm" tag is
+	  raised to WARN. Turn this off when actually debugging frequency
+	  switching.
+
+endmenu
+
 menu "S31 display"
 
 config S31_DISPLAY_ENABLE

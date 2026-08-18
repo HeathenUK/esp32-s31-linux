@@ -7,42 +7,48 @@ percentages on this port are unreliable (see "Why not just read top", below).
 
 ---
 
-## 1. Raise the SD card clock — biggest remaining win
+## 1. SD card — clock raised, CPU cost still unexplained
 
-**Now:** the controller already uses its internal DMA (IDMAC), but the device
-tree caps `max-frequency` at 12 MHz and it settles on 10 MHz:
+**Done (2026-08-18):** the card clock is 40 MHz, up from 10. The device tree's
+12 MHz cap was never the binding constraint — `ESP32S31_SDMMC_LS_DIV` pinned the
+CIU source clock at 80/8 = 10 MHz, so `dw_mmc` sat at divider 0 with nowhere to
+go. `LS_DIV = 2` gives 40 MHz, and that is the ceiling for this divider: the next
+step is 80 MHz, well past the 50 MHz high-speed limit.
 
-    mmc_host mmc0: Bus speed (slot 0) = 10000000Hz (slot req 12000000Hz)
+    sequential read   2.29 -> 4.25 MB/s
+    sequential write          1.62 MB/s
+    integrity         cmp against a RAM reference, 3/3 pass
 
-Measured sequential read: **2.29 MB/s** (19.6 MB in 8.58 s). That is only ~46%
-of what even a 10 MHz 4-bit bus allows, and high-speed SD is specified to
-50 MHz — so there may be several times the throughput available. The root
-filesystem lives here, so this is what makes the whole system feel slow.
+The old "corruption at 40 MHz" was `md5sum` miscomputing through the vendor
+hardware-loop extension in libc, not the card. Verify with `cmp` against a known
+reference, never a checksum alone.
 
-A write figure is still missing. An apparent 125 KB/s measured through the SD
-imager on 2026-08-18 turned out to be the sender's serial read blocking, not the
-card — once fixed, the same path ran at the full line rate. Treat that number as
-withdrawn and measure writes directly with `dd` on the board.
+**Already at the hardware ceiling:** the bus is 4-bit, which is the maximum for
+SD (8-bit is eMMC). UHS-I — SDR50, SDR104, DDR50 — is unreachable: those need
+1.8V signalling and the card reports no S18A in its OCR (`0x00300000`, 3.3V
+only). So high speed at 4 bits, ~25 MB/s theoretical, is the hard ceiling.
 
-**Before changing the number, understand two things:**
+**The open problem is CPU cost.** A sustained read drops CoreMark from 890 to
+353 iterations/sec — a 60% loss. Two candidates are ruled out by measurement:
 
-- Why the cap is so conservative. Signal integrity on the Korvo-1's SD traces
-  is a plausible reason, in which case the ceiling is physical.
-- `DW_MMC_QUIRK_LOST_IRQ_POLL`, which the port sets in
-  `drivers/mmc/host/dw_mmc-pltfm.c`. The driver is polling to paper over lost
-  SD interrupts, and that may be *why* someone kept the clock low. Raising the
-  clock without understanding it risks trading throughput for corruption.
+- **Not the lost-IRQ poll.** It is now a runtime toggle
+  (`/sys/module/dw_mmc/parameters/lost_irq_poll`), so both arms run on one boot.
+  With it off, CPU displacement is identical (2.58 s both) and reads are
+  slightly *faster* (3.37 vs 3.04 MB/s), with integrity still passing. It may be
+  removable entirely — worth deciding deliberately rather than leaving a
+  workaround in place that costs throughput and buys nothing measurable.
+- **Not interrupt overhead.** 1170 interrupts/sec during a 32 MB read, about one
+  per 8 KB. Even at 50 µs each that is ~6% of the core, not 60%.
 
-**Verify with:** the same `dd` read, plus a large write-and-read-back compare to
-prove data integrity at the higher clock, across several remounts.
+That leaves PSRAM contention and the cache maintenance that non-coherent DMA
+requires (`DW_MMC_QUIRK_IDMAC_DESC_NONCOHERENT`; see `s31-dma-cache-coherency`).
+**These are not yet separated.** CoreMark's data is cache-resident but its
+instructions are fetched from PSRAM, the same memory IDMAC is writing, so it
+cannot tell stolen cycles from a stalled instruction fetch. Settling it needs a
+probe whose code *and* data fit in cache, or a stall-cycle performance counter.
 
-**The earlier "SD corruption" at 40/20/10 MHz was not the card.** It was
-`md5sum` miscomputing, because every binary carried the vendor hardware-loop
-extension via libc. With that gone (2026-08-18) the same detector scores 0
-faults in 30000 rounds where it scored 59 in 4000 before, and on-board
-`md5sum` now agrees with the host byte for byte. Checksums on this board are
-trustworthy again, so the clock re-test can finally be run on its merits - but
-use `cmp` against a known file as well, not a checksum alone.
+Read throughput also scaled only 1.86x for a 4x clock, which points at the same
+per-byte overhead dominating rather than the bus.
 
 ---
 

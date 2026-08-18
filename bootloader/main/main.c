@@ -382,6 +382,16 @@ void app_main(void)
      */
 #endif
 
+#if CONFIG_S31_QUIET_PM_LOG
+    /*
+     * hart0 and Linux share UART0, so anything logged here arrives spliced into
+     * Linux's output. The power manager reconfigures several times a second,
+     * which is enough to corrupt framed transfers and to be read back as
+     * command output by anything scripting the console.
+     */
+    esp_log_level_set("pm", ESP_LOG_WARN);
+#endif
+
     prepare_linux_uart0();
 
     if (!esp_psram_is_initialized() ||
