@@ -59,6 +59,37 @@ OOM a 14 MB machine.
 
 ---
 
+## Memory: 14.4 MB, and where it goes
+
+Low `MemFree` during I/O is page cache doing its job, not a leak — it is
+reclaimable and handed back on demand. `MemAvailable` after dropping caches is
+**6.7 MB of 14.4**, which is comfortable.
+
+Measured, rather than read off RSS:
+
+    Slab                  ~3.2 MB   unreclaimable; the largest single consumer
+      kernfs_node_cache     727 KB  sysfs metadata, scales with registered devices
+      inode_cache           429 KB
+      kmalloc-1k            304 KB
+      64-byte merged cache  279 KB
+    Reserved (device tree) ~1.1 MB  framebuffer 1 MB, audio 64 KB, opensbi 64 KB
+    Userspace              ~0.2 MB  everything optional, together
+
+**Trimming userspace is not worth doing.** Killing bluetoothd, dbus-daemon,
+crond, syslogd and klogd together returns about **170 kB** — RSS suggests
+bluetoothd alone holds 1.9 MB, but almost all of that is shared libc pages that
+stay resident for other processes anyway.
+
+The consumers are kernel-side, so savings come from dropping subsystems, which
+removes both code and the sysfs nodes behind `kernfs_node_cache`. Keep
+`CONFIG_SLUB_TINY`: disabling it to get slab introspection cost ~390 KB of slab,
+which is a fair measure of what it saves.
+
+To look at slab again, `SLUB_TINY` must come off (it is mutually exclusive with
+`SLUB_DEBUG`/`SLUB_SYSFS`), so the numbers shift slightly while you measure.
+
+---
+
 ## 2. Wi-Fi / Bluetooth transport — the copy path
 
 `drivers/net/ethernet/espressif/esp32s31-hosted-sram.c` has 24 `memcpy` sites
