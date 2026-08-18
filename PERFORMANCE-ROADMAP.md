@@ -109,19 +109,54 @@ out:**
 
 ---
 
-## 2. Wi-Fi / Bluetooth transport — the copy path
+## 2. Wi-Fi / Bluetooth transport — measured, and not worth optimising
 
-`drivers/net/ethernet/espressif/esp32s31-hosted-sram.c` has 24 `memcpy` sites
-moving every packet through hart0's shared SRAM ring with the CPU. This is
-structurally the same problem as the audio ring that used to cost 18.7% of a
-core before Linux took I2S over directly.
+**Struck.** This entry claimed 24 `memcpy` sites in
+`esp32s31-hosted-sram.c` were moving every packet through hart0's SRAM ring with
+the CPU. Measured, the premise does not hold twice over.
 
-**Options:** a GDMA-assisted copy, or having hart0 place data straight into
-memory Linux can use, removing one copy entirely.
+**The datapath is not 24 copies.** Most of those sites are control plane —
+station info, slot state, serial reassembly, IE building — and never touch a
+packet. Per packet it is two copies each way:
 
-**Measure first.** Get a throughput baseline (iperf-style, or a large HTTP
-fetch) and the displacement it causes. If the radio tops out well below the
-point where copying matters, this is not worth the disruption.
+    TX  kmalloc staging frame -> memcpy(skb->data) -> memcpy_toio(slot) -> kfree
+    RX  memcpy_fromio(slot) -> staging -> napi_alloc_skb -> skb_put_data
+
+One staging copy in each direction is genuinely redundant, and TX also does a
+kmalloc/kfree per packet. So there *is* something to remove.
+
+**But copying is under 1% of the cost.** Measured against a real access point:
+
+    RX  24 MB download   0.35 MB/s (2.8 Mbit/s)   CoreMark 316 of 879   ~64% CPU
+    TX  UDP blast        0.15 MB/s (1.2 Mbit/s)   CoreMark 169 of 879   ~81% CPU
+
+At 0.35 MB/s with two copies, total copy volume is 0.7 MB/s against ~90 MB/s for
+a memcpy — 0.8% of the CPU. TX works out at 0.3%. Removing a redundant copy
+would buy a fraction of a percent while 64-81% goes elsewhere.
+
+**And the transport is not where it goes.** The same generator aimed at loopback,
+which touches no SRAM ring, no doorbell and no hart0, costs the same:
+
+    loopback   0.12 MB/s,  91 pps   CoreMark 297 of 830   ~64% CPU
+    wlan0      0.26 MB/s, 195 pps   CoreMark 314 of 830   ~62% CPU
+
+Loopback is no cheaper and moves less. The per-packet cost lives in the network
+stack and syscall path on this CPU, not in the ESP-Hosted transport. (Both were
+measured under CoreMark contention, so compare them with each other rather than
+reading either as peak throughput.)
+
+**If network performance matters**, the lever is packets per second, not bytes:
+fewer, larger packets, and GRO/GSO. Rewriting the transport's copy path is not
+the answer, and profiling to find the real hot function needs finer symbols than
+this kernel can afford — `profile=7` with partial kallsyms misattributes badly
+enough to show thousands of samples in `kernel_init`, which runs once at boot.
+
+**Unrelated defect found while testing:** hart0 logs
+`s31_wifi_cfg: dropped Wi-Fi message type 23 after retries` during scans. The RPC
+path is losing messages; worth chasing on its own terms.
+
+**Note for testing:** the network is a hidden SSID, so it never appears in a
+scan and `wpa_supplicant` needs `scan_ssid=1` in the network block.
 
 ---
 
