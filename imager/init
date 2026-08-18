@@ -50,17 +50,24 @@ sdrecv 3 < $CON 3> $CON | gunzip -c |
 	dd of=/dev/mmcblk0 bs=1M iflag=fullblock 2>/tmp/ddlog
 sync
 
-# dd reports how much it wrote, which is exactly how much of the card has to be
-# read back - the alternative is assuming an image size, and an assumption is
-# the one thing a verification step must not contain.
-BYTES=$(awk '/bytes/ { print $1; exit }' /tmp/ddlog)
-echo "IMAGER_WROTE ${BYTES:-0}" > $CON
+# How much dd actually wrote decides how much of the card is read back. This
+# busybox is built without FEATURE_DD_THIRD_STATUS_LINE, so there is no "N bytes
+# copied" line to parse - only "N+M records out", counting whole and partial
+# blocks. At bs=1M a partial block means the image was not a whole number of
+# mebibytes, and the byte count is then unrecoverable from dd's output, so say so
+# rather than hash the wrong length and report a mismatch as if the card were bad.
+RECORDS=$(awk '/records out/ { print $1; exit }' /tmp/ddlog)
+FULL=${RECORDS%%+*}
+PART=${RECORDS##*+}
+echo "IMAGER_WROTE ${RECORDS:-none}" > $CON
 
-if [ -n "$BYTES" ] && [ "$BYTES" -gt 0 ]; then
-	BLOCKS=$((BYTES / 1048576 + 1))
-	SUM=$(dd if=/dev/mmcblk0 bs=1M count=$BLOCKS 2>/dev/null |
-		head -c "$BYTES" | md5sum | cut -d' ' -f1)
+if [ -n "$FULL" ] && [ "$FULL" -gt 0 ] && [ "$PART" = "0" ]; then
+	BYTES=$((FULL * 1048576))
+	SUM=$(dd if=/dev/mmcblk0 bs=1M count=$FULL 2>/dev/null |
+		md5sum | cut -d' ' -f1)
 	echo "IMAGER_SUM $SUM" > $CON
+else
+	echo "IMAGER_NOSUM records=${RECORDS:-none}" > $CON
 fi
 
 echo "IMAGER_DONE" > $CON

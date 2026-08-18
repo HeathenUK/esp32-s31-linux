@@ -197,7 +197,9 @@ def main():
 
     got = re.search(rb"IMAGER_SUM ([0-9a-f]{32})", tail)
     if not got:
-        print("no checksum reported by the imager", file=sys.stderr)
+        why = re.search(rb"IMAGER_(NOSUM|WROTE)[^\n]*", tail)
+        print(f"no checksum reported by the imager"
+              f"{': ' + why.group(0).decode() if why else ''}", file=sys.stderr)
         return 1
     got = got.group(1).decode()
     if got != expect:

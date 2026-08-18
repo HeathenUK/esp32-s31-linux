@@ -36,6 +36,14 @@ withdrawn and measure writes directly with `dd` on the board.
 **Verify with:** the same `dd` read, plus a large write-and-read-back compare to
 prove data integrity at the higher clock, across several remounts.
 
+**The earlier "SD corruption" at 40/20/10 MHz was not the card.** It was
+`md5sum` miscomputing, because every binary carried the vendor hardware-loop
+extension via libc. With that gone (2026-08-18) the same detector scores 0
+faults in 30000 rounds where it scored 59 in 4000 before, and on-board
+`md5sum` now agrees with the host byte for byte. Checksums on this board are
+trustworthy again, so the clock re-test can finally be run on its merits - but
+use `cmp` against a known file as well, not a checksum alone.
+
 ---
 
 ## 2. Wi-Fi / Bluetooth transport — the copy path
