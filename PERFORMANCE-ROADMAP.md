@@ -41,36 +41,39 @@ only). So high speed at 4 bits, ~25 MB/s theoretical, is the hard ceiling.
   per 8 KB. Even at 50 µs each that is ~6% of the core, not 60%.
 
 The cost is genuinely the I/O path, not the benchmark harness. `dd` copies every
-byte into userspace, so an earlier version of this measurement was charging its
-memcpy to the SD path. Serving the same copy volume from page cache instead:
+byte into userspace, so an earlier version of this measurement charged its memcpy
+to the SD path. Serving the same copy volume from page cache separates them: the
+copy accounts for 6%, the I/O path for the rest.
 
-    idle                                891 iter/s
-    dd from page cache (copy, no DMA)   839 iter/s   -6%
-    dd from the card (copy + DMA)       360 iter/s   -60%
+**Root cause: cache maintenance is a busy-wait on this SoC.** The S31 has no
+Zicbom. `drivers/cache/esp32s31_cache.c` programs a hardware block and spins on
+its done bit with interrupts disabled, and it issues every writeback-class
+request *twice* as an ESP-IDF errata workaround. So DMA is free but the coherency
+around it is not, and it costs in proportion to bytes transferred.
 
-So the copy accounts for 6% and the I/O path for the remaining ~54%.
+**Fixed (2026-08-18):** `arch_sync_dma_clean_before_fromdevice()` returned true,
+so a read wrote back its whole destination before the transfer — memory the card
+was about to overwrite — then invalidated it after. Turned off (page-aligned
+block I/O buffers cannot share a cache line with live data), leaving a runtime
+parameter `dma_clean_before_fromdevice` to restore it:
 
-PSRAM bandwidth is not the constraint: `membench` measures ~44 MiB/s for a
-software memcpy, and the card moves 4.25 MB/s, under 10% of it. What is left is
-**cache maintenance over the DMA destination** (per byte; internal RAM is
-uncached on this SoC but PSRAM is not — see `s31-dma-cache-coherency`) versus
-**IDMAC's PSRAM bursts stalling CPU instruction fetches** (the boot log reports
-octal PSRAM with a 2048-byte burst length; one burst at 44 MiB/s is ~46 us,
-which is a long time to hold off an instruction fetch). **These are still not
-separated.**
+    sequential read   3.38 -> 5.02 MB/s      (~a third less CPU per MB)
+    integrity         six 6 MB cmp runs, repeated cache-dropped re-reads
 
-The experiment that settles it is also the possible fix: point the SD DMA at
-internal SRAM. IDMAC is 32-bit addressing so it can reach `0x2f000000`, and SRAM
-is uncached, so DMA there needs no cache maintenance. If the 54% disappears it
-was cache maintenance; if it does not, it is bus arbitration. It cannot be
-"direct" — the data must end up in page-cache pages, which live in PSRAM because
-that is essentially all the RAM Linux has — so this means a bounce buffer and a
-SRAM->PSRAM copy, and reads from uncached SRAM are slow. The gating unknown is
-how much SRAM is free: only 32 KB is currently carved out, for audio, and hart0
-owns most of the rest.
+**What now limits it.** A read still needs an invalidate before the transfer, to
+drop dirty lines that would otherwise write back over incoming data, and one
+after, to see it. Two passes over the buffer, both busy-waited. Working back from
+the measurements the cache block sustains only ~14 MB/s, against ~44 MiB/s for a
+software memcpy — so the SD path saturates the CPU somewhere near 7 MB/s no
+matter how fast the card or bus is. That is the wall, not the 40 MHz clock.
 
-Read throughput also scaled only 1.86x for a 4x clock, which points at the same
-per-byte overhead dominating rather than the bus.
+**The promising direction is a bounce buffer in uncached memory.** DMA into the
+uncached PSRAM alias at `0xC0000000` needs no cache maintenance at all, and the
+subsequent copy into page cache runs at memcpy speed — 44 MiB/s, three times the
+cache block's 14 MB/s. Internal SRAM is also uncached and would serve, but only
+32 KB is carved out and hart0 owns the rest, whereas the uncached alias has no
+such limit. This is worth measuring before it is worth building: it trades a
+busy-wait for a copy, and the copy is the faster of the two.
 
 ---
 
