@@ -93,7 +93,16 @@ def wait_ack(port, want, timeout):
 
 
 def send(port, data, chunk, retry_limit):
-    seq, retries, t0 = 0, 0, time.time()
+    """Push the compressed image out, one acknowledged frame at a time.
+
+    Two things about the ack budget are easy to get wrong, and both bit this on
+    a real run. The timeout has to cover the *card*, not the link: a 4 KB frame
+    of compressed zeros expands to megabytes, and the ack does not come back
+    until dd has absorbed it, which is seconds. And the retry budget has to be
+    per frame, not cumulative - 200 retries spread over 2294 frames is a normal
+    transfer, but as a running total it aborts one at 97% through.
+    """
+    seq, retries, stuck, t0 = 0, 0, 0, time.time()
     total = (len(data) + chunk - 1) // chunk
 
     while seq < total:
@@ -103,6 +112,7 @@ def send(port, data, chunk, retry_limit):
 
         if reply and reply[0] == "ACK":
             seq += 1
+            stuck = 0
             if seq % 16 == 0 or seq == total:
                 sent = seq * chunk
                 rate = sent / max(time.time() - t0, 0.001) / 1024
@@ -113,9 +123,10 @@ def send(port, data, chunk, retry_limit):
             continue
 
         retries += 1
-        if retries > retry_limit:
-            print(f"\ngave up at frame {seq} after {retries} retries",
-                  file=sys.stderr)
+        stuck += 1
+        if stuck > retry_limit:
+            print(f"\ngave up at frame {seq} after {stuck} consecutive "
+                  f"retries ({retries} total)", file=sys.stderr)
             return None
         # A NAK carries the frame the receiver actually wants, which is how the
         # sender recovers if the two ends ever disagree about position. No drain
@@ -137,8 +148,11 @@ def main():
     ap.add_argument("--port", default="/dev/cu.usbserial-130")
     ap.add_argument("--baud", type=int, default=115200)
     ap.add_argument("--chunk", type=int, default=4096)
-    ap.add_argument("--timeout", type=float, default=5.0)
-    ap.add_argument("--retry-limit", type=int, default=200)
+    ap.add_argument("--timeout", type=float, default=60.0,
+                    help="seconds to wait for a frame's ack; must cover the "
+                         "card absorbing a frame, not just the link")
+    ap.add_argument("--retry-limit", type=int, default=25,
+                    help="consecutive retries on one frame before giving up")
     ap.add_argument("--wait", type=float, default=180.0,
                     help="seconds to wait for the imager to announce itself")
     ap.add_argument("--no-reset", action="store_true",
