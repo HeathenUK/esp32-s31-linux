@@ -7,95 +7,55 @@ percentages on this port are unreliable (see "Why not just read top", below).
 
 ---
 
-## 1. SD card — clock raised, CPU cost still unexplained
+## 1. SD card — done, and the CPU cost was not what it looked like
 
-**Done (2026-08-18):** the card clock is 40 MHz, up from 10. The device tree's
-12 MHz cap was never the binding constraint — `ESP32S31_SDMMC_LS_DIV` pinned the
-CIU source clock at 80/8 = 10 MHz, so `dw_mmc` sat at divider 0 with nowhere to
-go. `LS_DIV = 2` gives 40 MHz, and that is the ceiling for this divider: the next
-step is 80 MHz, well past the 50 MHz high-speed limit.
+**Clock:** 10 -> 40 MHz. `ESP32S31_SDMMC_LS_DIV` pinned the CIU source at 80/8,
+so `dw_mmc` sat at divider 0 with nowhere to go; the device tree's 12 MHz cap was
+never the constraint. 40 MHz is the ceiling for this divider (the next step is
+80 MHz, past the 50 MHz high-speed limit), and high speed at 4 bits is the
+ceiling for the board: UHS-I needs 1.8V signalling and the card reports no S18A.
 
-    sequential read   2.29 -> 4.25 MB/s
-    sequential write          1.62 MB/s
-    integrity         cmp against a RAM reference, 3/3 pass
+**Where the CPU actually went.** A sustained read appeared to cost 60% of the
+core, which is absurd for DMA. Three suspects were ruled out by measurement
+before the real one was found:
 
-The old "corruption at 40 MHz" was `md5sum` miscomputing through the vendor
-hardware-loop extension in libc, not the card. Verify with `cmp` against a known
-reference, never a checksum alone.
+- the lost-IRQ poll: runtime toggle, no measurable difference either way;
+- interrupt overhead: ~1170/s for a 32 MB read, ~6% at any plausible cost;
+- cache maintenance: counters in the S31 cache driver put it at **1% of wall
+  clock**, despite the plausible story about busy-waiting on a hardware block.
 
-**Already at the hardware ceiling:** the bus is 4-bit, which is the maximum for
-SD (8-bit is eMMC). UHS-I — SDR50, SDR104, DDR50 — is unreachable: those need
-1.8V signalling and the card reports no S18A in its OCR (`0x00300000`, 3.3V
-only). So high speed at 4 bits, ~25 MB/s theoretical, is the hard ceiling.
+A profile settled it. The time goes to `get_page_from_freelist`, `shrink_node`,
+`shrink_slab`, `shrink_folio_list` and `kswapd` — **page reclaim**, not block
+I/O. `dw_mci_edmac_start_dma` is 37 samples out of 2710. `min_free_kbytes` was
+256 kB, so a streaming read allocated page-cache pages faster than kswapd could
+free them and every allocation reclaimed synchronously.
 
-**The open problem is CPU cost.** A sustained read drops CoreMark from 890 to
-353 iterations/sec — a 60% loss. Two candidates are ruled out by measurement:
+    2.29 MB/s   where this started, 10 MHz
+    5.11 MB/s   40 MHz + not writing back buffers the card is about to overwrite
+    6.60 MB/s   + min_free_kbytes 1024, readahead 512K
+   14.95 MB/s   O_DIRECT, which allocates no page cache at all
 
-- **Not the lost-IRQ poll.** It is now a runtime toggle
-  (`/sys/module/dw_mmc/parameters/lost_irq_poll`), so both arms run on one boot.
-  With it off, CPU displacement is identical (2.58 s both) and reads are
-  slightly *faster* (3.37 vs 3.04 MB/s), with integrity still passing. It may be
-  removable entirely — worth deciding deliberately rather than leaving a
-  workaround in place that costs throughput and buys nothing measurable.
-- **Not interrupt overhead.** 1170 interrupts/sec during a 32 MB read, about one
-  per 8 KB. Even at 50 µs each that is ~6% of the core, not 60%.
+CoreMark under load, against 890 idle: 411 through the page cache, 691 with
+O_DIRECT — and much of that remainder is `dd`'s own userspace copy, not the
+driver. **DMA on this SoC is close to free, as it should be.**
 
-The cost is genuinely the I/O path, not the benchmark harness. `dd` copies every
-byte into userspace, so an earlier version of this measurement charged its memcpy
-to the SD path. Serving the same copy volume from page cache separates them: the
-copy accounts for 6%, the I/O path for the rest.
+**If more is wanted**, the honest order is: use O_DIRECT for bulk I/O that does
+not want caching (already 15 MB/s, over half the theoretical ceiling); then look
+at readahead and reclaim behaviour again, because 14 MB of RAM is the real
+constraint on cached I/O and no driver change will alter that. A bounce buffer in
+SRAM was considered and is *not* justified — it was proposed when cache
+maintenance looked like the bottleneck, and cache maintenance is 1%.
 
-**Root cause: cache maintenance is a busy-wait on this SoC.** The S31 has no
-Zicbom. `drivers/cache/esp32s31_cache.c` programs a hardware block and spins on
-its done bit with interrupts disabled, and it issues every writeback-class
-request *twice* as an ESP-IDF errata workaround. So DMA is free but the coherency
-around it is not, and it costs in proportion to bytes transferred.
+**Ruled out as hardware options, checked rather than assumed:** the BitScrambler
+cannot reach SDMMC (its attach list is GDMA peripherals — AES, GPSPI2/3, I2S,
+LCD_CAM, PARL_IO, RMT, SHA, UHCI — and SDMMC drives its own IDMAC), and GDMA
+cannot perform a bounce copy because a DMA write into cached page cache
+reintroduces the coherency problem being avoided.
 
-**Fixed (2026-08-18):** `arch_sync_dma_clean_before_fromdevice()` returned true,
-so a read wrote back its whole destination before the transfer — memory the card
-was about to overwrite — then invalidated it after. Turned off (page-aligned
-block I/O buffers cannot share a cache line with live data), leaving a runtime
-parameter `dma_clean_before_fromdevice` to restore it:
-
-    sequential read   3.38 -> 5.02 MB/s      (~a third less CPU per MB)
-    integrity         six 6 MB cmp runs, repeated cache-dropped re-reads
-
-**What now limits it.** A read still needs an invalidate before the transfer, to
-drop dirty lines that would otherwise write back over incoming data, and one
-after, to see it. Two passes over the buffer, both busy-waited. Working back from
-the measurements the cache block sustains only ~14 MB/s, against ~44 MiB/s for a
-software memcpy — so the SD path saturates the CPU somewhere near 7 MB/s no
-matter how fast the card or bus is. That is the wall, not the 40 MHz clock.
-
-**Next: a bounce buffer in internal SRAM.** DMA into uncached memory needs no
-cache maintenance at all, and the CPU then copies into page cache — CPU writes
-go through the cache and are coherent by construction, which is why this copy
-cannot be handed to GDMA instead. Measured read bandwidth decides where the
-buffer goes, and the answer is not obvious:
-
-    PSRAM, cached            90.7 MiB/s
-    PSRAM, uncached alias     7.6 MiB/s     <- slower than the cache block
-    internal SRAM, uncached 340.9 MiB/s
-
-The uncached PSRAM alias at `0xC0000000` is a trap: at 7.6 MiB/s it is slower
-than the ~14 MB/s cache-maintenance path it would replace, so bouncing through
-it would be worse than doing nothing. Internal SRAM is 45x faster than that
-alias and ~24x the cache block, so that is where a bounce buffer belongs.
-
-`sound/soc/espressif/esp32s31-i2s.c` already establishes the pattern — an
-`mmio-sram` node and `of_gen_pool_get()`. The open question is budget: 32 KB is
-carved out for audio and hart0 owns most of the rest. A streaming bounce buffer
-does not need to be large, but it should be double-buffered so the copy overlaps
-the next transfer rather than serialising behind it.
-
-**What will not help, checked rather than assumed:**
-
-- **BitScrambler.** The S31 has one (`SOC_BITSCRAMBLER_SUPPORTED`), but its
-  attach list is AES, GPSPI2/3, I2S0/1, LCD_CAM, PARL_IO, RMT, SHA and UHCI —
-  no SDMMC, because SDMMC drives its own IDMAC rather than GDMA. It also
-  transforms data in flight, which is not what costs here.
-- **GDMA mem2mem for the copy.** A DMA write into cached page cache reintroduces
-  exactly the coherency problem being avoided. The copy has to be the CPU's.
+**Profiling.** This kernel ships without `CONFIG_PROFILING`/`KALLSYMS` to save
+1.2 MB. Re-enable both and add `profile=7` to the cmdline to get `readprofile`
+back; use 7 rather than 2, or the profile buffer and symbol table together will
+OOM a 14 MB machine.
 
 ---
 
