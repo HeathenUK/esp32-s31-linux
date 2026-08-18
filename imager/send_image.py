@@ -31,21 +31,21 @@ def frame(seq, payload):
                                 binascii.crc32(payload) & 0xffffffff) + payload)
 
 
-def drain(port):
-    """Read until the link goes quiet.
+def read_some(port, limit=256):
+    """Read whatever is available, blocking only for the first byte.
 
-    reset_input_buffer() only discards what has already arrived, so an ack still
-    in flight lands in the buffer straight afterwards and the sender stays one
-    ack behind for the rest of the transfer - one wasted retransmit per frame,
-    which doubles a transfer measured in minutes.
+    port.read(n) waits for n bytes or the full timeout, so asking for 256 makes
+    a 6-byte ack sit in the buffer until hart0 happens to print enough log text
+    to fill the rest - seconds per frame, with no retries to show for it. Take
+    one byte, then only what is already waiting.
     """
-    old = port.timeout
-    port.timeout = 0.2
-    try:
-        while port.read(4096):
-            pass
-    finally:
-        port.timeout = old
+    data = port.read(1)
+    if not data:
+        return b""
+    waiting = getattr(port, "in_waiting", 0)
+    if waiting:
+        data += port.read(min(waiting, limit - 1))
+    return data
 
 
 def await_marker(port, marker, timeout, echo=False):
@@ -53,7 +53,7 @@ def await_marker(port, marker, timeout, echo=False):
     deadline = time.time() + timeout
     buf = b""
     while time.time() < deadline:
-        chunk = port.read(256)
+        chunk = read_some(port)
         if chunk:
             buf += chunk
             if echo:
@@ -64,6 +64,34 @@ def await_marker(port, marker, timeout, echo=False):
     return None
 
 
+def wait_ack(port, want, timeout):
+    """Scan the return stream for this frame's ack.
+
+    hart0 prints to the same console several times a second, so reading a single
+    line back gets a log line far more often than an ack. Reading one line and
+    calling anything else a failure costs a full retransmit of the frame every
+    time hart0 speaks - measured at more retries than frames, and 2.6 KiB/s on a
+    link good for 11. So accumulate and search instead, and match ACK on the
+    exact sequence number, which makes a stale ack harmless rather than a frame
+    silently skipped.
+    """
+    deadline = time.time() + timeout
+    buf = b""
+    while time.time() < deadline:
+        chunk = read_some(port)
+        if not chunk:
+            continue
+        buf += chunk
+        for match in ACK_RE.finditer(buf):
+            kind, num = match.group(1), int(match.group(2))
+            if kind == b"ACK" and num == want:
+                return ("ACK", num)
+            if kind == b"NAK":
+                return ("NAK", num)
+        buf = buf[-256:]        # enough tail for a match split across reads
+    return None
+
+
 def send(port, data, chunk, retry_limit):
     seq, retries, t0 = 0, 0, time.time()
     total = (len(data) + chunk - 1) // chunk
@@ -71,10 +99,9 @@ def send(port, data, chunk, retry_limit):
     while seq < total:
         payload = data[seq * chunk:(seq + 1) * chunk]
         port.write(frame(seq, payload))
-        reply = port.read_until(b"\n")
-        match = ACK_RE.search(reply)
+        reply = wait_ack(port, seq, port.timeout)
 
-        if match and match.group(1) == b"ACK" and int(match.group(2)) == seq:
+        if reply and reply[0] == "ACK":
             seq += 1
             if seq % 16 == 0 or seq == total:
                 sent = seq * chunk
@@ -91,15 +118,14 @@ def send(port, data, chunk, retry_limit):
                   file=sys.stderr)
             return None
         # A NAK carries the frame the receiver actually wants, which is how the
-        # sender recovers if the two ends ever disagree about position.
-        if match and match.group(1) == b"NAK":
-            want = int(match.group(2))
-            if want <= total:
-                seq = want
-        drain(port)
+        # sender recovers if the two ends ever disagree about position. No drain
+        # is needed: acks are matched by sequence number, so anything stale in
+        # the buffer is ignored rather than mistaken for this frame's reply.
+        if reply and reply[0] == "NAK" and reply[1] <= total:
+            seq = reply[1]
 
     port.write(frame(seq, b""))
-    port.read_until(b"\n")
+    wait_ack(port, seq, port.timeout)
     print(f"\n  sent {len(data)} bytes in {time.time() - t0:.0f}s, "
           f"{retries} retries")
     return True
@@ -115,6 +141,8 @@ def main():
     ap.add_argument("--retry-limit", type=int, default=200)
     ap.add_argument("--wait", type=float, default=180.0,
                     help="seconds to wait for the imager to announce itself")
+    ap.add_argument("--no-reset", action="store_true",
+                    help="do not pulse EN; use when the board is already waiting")
     args = ap.parse_args()
 
     raw = open(args.image, "rb").read()
@@ -128,7 +156,18 @@ def main():
     port = serial.Serial(args.port, args.baud, timeout=args.timeout)
     port.reset_input_buffer()
 
-    print("waiting for IMAGER_READY (reset the board if it is already up)...")
+    # Reset the board so the handshake cannot be missed. The imager announces
+    # itself exactly once, and compressing a 512 MB image above takes long
+    # enough that a board reset by the flasher has already said it and moved on.
+    if not args.no_reset:
+        print("resetting the board...")
+        port.dtr = False        # GPIO0 high: run, do not enter the bootloader
+        port.rts = True         # EN low
+        time.sleep(0.15)
+        port.rts = False        # EN high: boot
+        port.reset_input_buffer()
+
+    print("waiting for IMAGER_READY...")
     if not await_marker(port, b"IMAGER_READY", args.wait):
         print("imager never reported ready", file=sys.stderr)
         return 1

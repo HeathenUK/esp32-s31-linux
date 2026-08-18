@@ -19,6 +19,15 @@ of what even a 10 MHz 4-bit bus allows, and high-speed SD is specified to
 50 MHz — so there may be several times the throughput available. The root
 filesystem lives here, so this is what makes the whole system feel slow.
 
+**Writes are far worse than reads.** Streaming a 512 MB image onto the card with
+`dd bs=1M` (2026-08-18, via the SD imager) sustained only about **125 KB/s** —
+roughly 2.5% of what the bus allows, and ~18× slower than reads on the same
+card at the same clock. Reads and writes differing by that margin points at the
+driver rather than the clock: the write path is the first thing to look at
+before raising `max-frequency`, because a clock change will not fix a factor of
+eighteen. `DW_MMC_QUIRK_LOST_IRQ_POLL` is the prime suspect — if writes complete
+via poll timeout rather than interrupt, every transfer pays the poll interval.
+
 **Before changing the number, understand two things:**
 
 - Why the cap is so conservative. Signal integrity on the Korvo-1's SD traces
