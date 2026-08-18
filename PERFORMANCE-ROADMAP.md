@@ -88,6 +88,25 @@ which is a fair measure of what it saves.
 To look at slab again, `SLUB_TINY` must come off (it is mutually exclusive with
 `SLUB_DEBUG`/`SLUB_SYSFS`), so the numbers shift slightly while you measure.
 
+**There is little left to reclaim, and the obvious candidates are already ruled
+out:**
+
+- **The 1 MB framebuffer cannot shrink to 768 KB.** See the comment in
+  `shared/s31_memory_layout.h`: the coherent pool allocator rounds the request
+  to `get_order()` = order 8, so a snug pool fails with -ENOMEM however well it
+  appears to fit. Recovering that 256 KB means not allocating it from a coherent
+  pool at all — `ioremap` of a plain reserved region — which is a real change.
+- **Kernel features cost flash, not RAM.** This is an XIP kernel, so dropping a
+  subsystem removes text from flash and only its data structures from memory.
+  Expect far less than on a normal system.
+- **`SReclaimable: 0` is misleading.** The slab does yield: walking the whole
+  filesystem grew it by 536 KB and `drop_caches=2` returned ~400 KB.
+  `vfs_cache_pressure` at 500 or 1000 changes nothing, so the ~3.45 MB floor is
+  in use rather than tunable.
+- Remaining levers are small and cost diagnostics: `LOG_BUF_SHIFT` 16 -> 15 is
+  32 KB of dmesg history, and `CONFIG_SWAP` off is tens of KB on a board with no
+  swap device.
+
 ---
 
 ## 2. Wi-Fi / Bluetooth transport — the copy path
