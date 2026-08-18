@@ -67,13 +67,35 @@ the measurements the cache block sustains only ~14 MB/s, against ~44 MiB/s for a
 software memcpy — so the SD path saturates the CPU somewhere near 7 MB/s no
 matter how fast the card or bus is. That is the wall, not the 40 MHz clock.
 
-**The promising direction is a bounce buffer in uncached memory.** DMA into the
-uncached PSRAM alias at `0xC0000000` needs no cache maintenance at all, and the
-subsequent copy into page cache runs at memcpy speed — 44 MiB/s, three times the
-cache block's 14 MB/s. Internal SRAM is also uncached and would serve, but only
-32 KB is carved out and hart0 owns the rest, whereas the uncached alias has no
-such limit. This is worth measuring before it is worth building: it trades a
-busy-wait for a copy, and the copy is the faster of the two.
+**Next: a bounce buffer in internal SRAM.** DMA into uncached memory needs no
+cache maintenance at all, and the CPU then copies into page cache — CPU writes
+go through the cache and are coherent by construction, which is why this copy
+cannot be handed to GDMA instead. Measured read bandwidth decides where the
+buffer goes, and the answer is not obvious:
+
+    PSRAM, cached            90.7 MiB/s
+    PSRAM, uncached alias     7.6 MiB/s     <- slower than the cache block
+    internal SRAM, uncached 340.9 MiB/s
+
+The uncached PSRAM alias at `0xC0000000` is a trap: at 7.6 MiB/s it is slower
+than the ~14 MB/s cache-maintenance path it would replace, so bouncing through
+it would be worse than doing nothing. Internal SRAM is 45x faster than that
+alias and ~24x the cache block, so that is where a bounce buffer belongs.
+
+`sound/soc/espressif/esp32s31-i2s.c` already establishes the pattern — an
+`mmio-sram` node and `of_gen_pool_get()`. The open question is budget: 32 KB is
+carved out for audio and hart0 owns most of the rest. A streaming bounce buffer
+does not need to be large, but it should be double-buffered so the copy overlaps
+the next transfer rather than serialising behind it.
+
+**What will not help, checked rather than assumed:**
+
+- **BitScrambler.** The S31 has one (`SOC_BITSCRAMBLER_SUPPORTED`), but its
+  attach list is AES, GPSPI2/3, I2S0/1, LCD_CAM, PARL_IO, RMT, SHA and UHCI —
+  no SDMMC, because SDMMC drives its own IDMAC rather than GDMA. It also
+  transforms data in flight, which is not what costs here.
+- **GDMA mem2mem for the copy.** A DMA write into cached page cache reintroduces
+  exactly the coherency problem being avoided. The copy has to be the CPU's.
 
 ---
 
