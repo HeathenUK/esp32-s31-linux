@@ -1,0 +1,67 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# Init for the SD imager kernel. Deliberately never mounts the card: the whole
+# point is to own /dev/mmcblk0 exclusively so it can be written from block zero,
+# which also makes this work on a blank or half-written card.
+#
+# The image is streamed, never stored - there is nowhere to store it, with ~14 MB
+# of RAM and a 512 MB image.
+
+mount -t proc none /proc 2>/dev/null
+mount -t sysfs none /sys 2>/dev/null
+mount -t devtmpfs none /dev 2>/dev/null
+
+# Keep kernel chatter off the wire; hart0's own log lines still arrive, which is
+# why the transfer is framed and checksummed rather than a bare pipe.
+dmesg -n 1 2>/dev/null
+
+CON=/dev/console
+
+# The kernel hands an initramfs init no stdio, because /dev/console does not
+# exist until devtmpfs is mounted above. Reattach it explicitly so that a stray
+# unredirected write cannot land on whatever fd happens to be free.
+exec 0< $CON 1> $CON 2>&1
+
+# Raw is not cosmetic here: the image is binary, and a console left in cooked
+# mode would echo every byte back at the sender and translate CR to LF inside
+# the payload. -parenb cs8 keeps the line 8-bit clean.
+stty -F $CON raw -echo -ixon -ixoff -parenb -cstopb cs8 2>/dev/null
+
+i=0
+while [ ! -b /dev/mmcblk0 ] && [ $i -lt 50 ]; do
+	i=$((i + 1))
+	sleep 1
+done
+
+if [ ! -b /dev/mmcblk0 ]; then
+	echo "IMAGER_NO_CARD" > $CON
+	while :; do sleep 10; done
+fi
+
+echo "IMAGER_READY" > $CON
+
+# sdrecv: frames in on stdin, payload out on stdout, acks on fd 3.
+#
+# iflag=fullblock matters when reading from a pipe: without it dd writes
+# whatever a single read() returned, so a 1M block size degenerates into a
+# stream of short writes to the card.
+sdrecv 3 < $CON 3> $CON | gunzip -c |
+	dd of=/dev/mmcblk0 bs=1M iflag=fullblock 2>/tmp/ddlog
+sync
+
+# dd reports how much it wrote, which is exactly how much of the card has to be
+# read back - the alternative is assuming an image size, and an assumption is
+# the one thing a verification step must not contain.
+BYTES=$(awk '/bytes/ { print $1; exit }' /tmp/ddlog)
+echo "IMAGER_WROTE ${BYTES:-0}" > $CON
+
+if [ -n "$BYTES" ] && [ "$BYTES" -gt 0 ]; then
+	BLOCKS=$((BYTES / 1048576 + 1))
+	SUM=$(dd if=/dev/mmcblk0 bs=1M count=$BLOCKS 2>/dev/null |
+		head -c "$BYTES" | md5sum | cut -d' ' -f1)
+	echo "IMAGER_SUM $SUM" > $CON
+fi
+
+echo "IMAGER_DONE" > $CON
+while :; do sleep 10; done

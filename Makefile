@@ -17,12 +17,18 @@ JOBS ?= $(shell nproc)
 
 # S31 supports F and the stateful Espressif HWLoop/PIE extensions, but firmware
 # and kernel C code must not borrow task coprocessor state.  Use every safe
-# integer code-generation extension there, and expose the complete ISA to
-# userspace where Linux saves/restores that state.
+# integer code-generation extension there.
 S31_SAFE_ISA := rv32imabc_zicsr_zifencei_zaamo_zalrsc_zba_zbb_zbc_zbs
-S31_USER_ISA := rv32imafbc_zicsr_zifencei_zaamo_zalrsc_zba_zbb_zbc_zbs_xesploop_xespv2p2
+# Userspace keeps F and PIE, but NOT xesploop. Linux does save the hardware-loop
+# CSRs across a context switch, yet they are M-mode only, so any trap that
+# reaches hart0 - which saves coprocessor state per trap, not per task - can
+# return with a loop counter that is no longer the one the thread set up. The
+# symptom is a long loop silently computing the wrong answer perhaps 0.5% of the
+# time, which is how md5sum came to report false SD corruption. Keep this in
+# step with BR2_RISCV_ISA_EXTRA and BR2_TARGET_OPTIMIZATION.
+S31_USER_ISA := rv32imafbc_zicsr_zifencei_zaamo_zalrsc_zba_zbb_zbc_zbs
 S31_COMMON_FLAGS := -mabi=ilp32 -mtune=esp-base
-S31_USER_FLAGS := -march=$(S31_USER_ISA) $(S31_COMMON_FLAGS) -mespv-spec=2p2
+S31_USER_FLAGS := -march=$(S31_USER_ISA) $(S31_COMMON_FLAGS)
 
 BUILD_DIR := $(CURDIR)/build
 OPENSBI_DIR := $(CURDIR)/opensbi-esp32-s31
@@ -52,7 +58,8 @@ IDF_EXPORT := $(shell find $(HOME) -maxdepth 5 -type f -name export.sh 2>/dev/nu
 
 .PHONY: all download toolchain toolchain-source opensbi linux coremark rootfs initramfs s31-pie-cases \
 	buildroot-menuconfig buildroot-clean clean fullclean flash-opensbi flash-linux \
-	flash-rootfs persist flash-persist bootloader flash-bootloader erase
+	flash-rootfs persist flash-persist bootloader flash-bootloader erase \
+	imager flash-imager
 
 all: toolchain download opensbi linux initramfs
 
@@ -279,6 +286,28 @@ flash-linux:
 
 flash-rootfs:
 	esptool -p /dev/ttyUSB0 -b 2000000 write-flash $(ROOTFS_OFFSET) $(ROOTFS_IMG)
+
+# SD imager: a throwaway kernel carrying an initramfs, flashed over the normal
+# kernel only for as long as it takes to write the microSD card, then flashed
+# back with flash-linux. See docs/sd-imager.md.
+IMAGER_OUT := $(BUILD_DIR)/linux-imager
+IMAGER_IMAGE := $(BUILD_DIR)/xipImage-imager
+IMAGER_STAGE := $(CURDIR)/imager/initramfs
+
+imager: toolchain rootfs
+	@echo "--- SD imager kernel ---"
+	$(CROSS_COMPILE)gcc -Os -static \
+		-march=$(S31_USER_ISA) -mabi=ilp32 \
+		-o $(CURDIR)/imager/sdrecv $(CURDIR)/imager/sdrecv.c
+	$(CROSS_COMPILE)strip $(CURDIR)/imager/sdrecv
+	$(CURDIR)/imager/mkinitramfs.sh $(BUILDROOT_OUT)/target \
+		$(IMAGER_STAGE) $(CURDIR)/imager/sdrecv
+	$(MAKE) linux DEFCONFIG=esp32s31_imager_defconfig \
+		LINUX_OUT=$(IMAGER_OUT) XIP_IMAGE=$(IMAGER_IMAGE) \
+		FDT_DTB=$(BUILD_DIR)/imager.dtb
+
+flash-imager:
+	esptool -p /dev/ttyUSB0 -b 2000000 write-flash $(LINUX_OFFSET) $(IMAGER_IMAGE)
 
 flash-persist: persist
 	esptool -p /dev/ttyUSB0 -b 2000000 write-flash $(PERSIST_OFFSET) $(PERSIST_IMG)

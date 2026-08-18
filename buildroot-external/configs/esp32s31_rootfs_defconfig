@@ -4,7 +4,11 @@ BR2_RISCV_ISA_RVM=y
 BR2_RISCV_ISA_RVA=y
 BR2_RISCV_ISA_RVF=y
 BR2_RISCV_ISA_RVC=y
-BR2_RISCV_ISA_EXTRA="zaamo_zalrsc_zba_zbb_zbc_zbs_xesploop_xespv2p2"
+# xesploop (hardware loops) is deliberately absent: its loop CSRs are M-mode
+# only, so hart0's per-trap save/restore in ESP-IDF cannot preserve them for a
+# Linux thread, and long loops miscompute. xespv2p2 stays because the vendor
+# musl fork's assembly requires it. See configs/riscv32-esp-linux-musl.config.
+BR2_RISCV_ISA_EXTRA="zaamo_zalrsc_zba_zbb_zbc_zbs_xespv2p2"
 BR2_RISCV_32=y
 BR2_RISCV_USE_MMU=y
 BR2_RISCV_ABI_ILP32=y

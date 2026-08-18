@@ -52,6 +52,22 @@ static int read_exact(int fd, void *buf, unsigned int n)
 	return 1;
 }
 
+/* Downstream is a pipe into gunzip, which can accept a write partially. */
+static int write_all(int fd, const void *buf, unsigned int n)
+{
+	const unsigned char *p = buf;
+	unsigned int done = 0;
+
+	while (done < n) {
+		ssize_t w = write(fd, p + done, n - done);
+
+		if (w <= 0)
+			return 0;
+		done += (unsigned int)w;
+	}
+	return 1;
+}
+
 int main(int argc, char **argv)
 {
 	int ack_fd = argc > 1 ? atoi(argv[1]) : 2;
@@ -91,7 +107,29 @@ int main(int argc, char **argv)
 		if (len && !read_exact(0, payload, len))
 			break;
 
-		if (crc32_of(payload, len) != crc || seq != expect_seq) {
+		if (crc32_of(payload, len) != crc) {
+			snprintf(ack, sizeof(ack), "NAK %lu\n",
+				 (unsigned long)expect_seq);
+			write(ack_fd, ack, strlen(ack));
+			continue;
+		}
+
+		/*
+		 * A frame we already consumed. This is the normal outcome of an
+		 * ack lost on the wire, or of the sender timing out while the SD
+		 * card stalls on an erase block: re-acknowledge it and drop the
+		 * payload, because writing it twice would duplicate data in the
+		 * stream. Without this the transfer deadlocks - the sender waits
+		 * for an ack of seq N while the receiver refuses everything but
+		 * N+1.
+		 */
+		if (seq + 1 == expect_seq) {
+			snprintf(ack, sizeof(ack), "ACK %lu\n",
+				 (unsigned long)seq);
+			write(ack_fd, ack, strlen(ack));
+			continue;
+		}
+		if (seq != expect_seq) {
 			snprintf(ack, sizeof(ack), "NAK %lu\n",
 				 (unsigned long)expect_seq);
 			write(ack_fd, ack, strlen(ack));
@@ -104,7 +142,7 @@ int main(int argc, char **argv)
 			write(ack_fd, ack, strlen(ack));
 			break;
 		}
-		if (write(1, payload, len) != (ssize_t)len)
+		if (!write_all(1, payload, len))
 			return 1;
 		expect_seq++;
 		snprintf(ack, sizeof(ack), "ACK %lu\n", (unsigned long)seq);
