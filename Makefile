@@ -54,7 +54,13 @@ XIP_IMAGE := $(BUILD_DIR)/xipImage
 ROOTFS_IMG := $(BUILD_DIR)/rootfs.sqfs
 PERSIST_IMG := $(BUILD_DIR)/persist.jffs2
 
-IDF_EXPORT := $(shell find $(HOME) -maxdepth 5 -type f -name export.sh 2>/dev/null | grep esp-idf | head -n 1)
+# The S31-capable ESP-IDF lives at /opt/esp-idf in the build container, which is
+# outside $HOME and so invisible to the search below. Check it first: searching
+# $HOME on a developer machine tends to turn up several unrelated ESP-IDF
+# checkouts, and the first one found is usually not the one that knows about
+# esp32s31 - it fails late, at "toolchain-esp32s31.cmake not found".
+IDF_EXPORT := $(shell test -f /opt/esp-idf/export.sh && echo /opt/esp-idf/export.sh || \
+	find $(HOME) -maxdepth 5 -type f -name export.sh 2>/dev/null | grep esp-idf | head -n 1)
 
 .PHONY: all download toolchain toolchain-source opensbi linux coremark rootfs initramfs s31-pie-cases \
 	buildroot-menuconfig buildroot-clean clean fullclean flash-opensbi flash-linux \

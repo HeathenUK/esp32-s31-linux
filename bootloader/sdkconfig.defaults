@@ -1,0 +1,22 @@
+# Console baud for hart0.
+#
+# This must live here, not in sdkconfig: idf.py regenerates sdkconfig on a fresh
+# configure and silently discarded a hand edit of this option, producing firmware
+# that still ran at 115200 while every other artifact said otherwise.
+#
+# CUSTOM is required because the Kconfig prompt is gated on it - with
+# ESP_CONSOLE_UART_DEFAULT the baud is not settable at all and pins to 115200.
+#
+# 1000000 rather than 921600. This project sets CONFIG_PM_ENABLE=y, and with
+# power management IDF drives the console from a 1 MHz REF_TICK; IDF's own help
+# warns that rates between 500 kbps and 1 Mbps "may not be accurate", and 921600
+# needs a divisor of 1.085 from 1 MHz - about 8% out, far beyond UART tolerance.
+# 1 Mbps is divisor 1 exactly. It is exact on the Linux side too: UART0 there is
+# clocked from the 40 MHz XTAL, so 40 MHz / 1 MHz = 40 with no fractional part.
+#
+# Keep in step with esp32s31_generic.dts stdout-path and both kernel cmdlines:
+# UART0 has a single divisor shared by both harts, so whoever programs it last
+# sets the rate for everyone.
+CONFIG_ESP_CONSOLE_UART_CUSTOM=y
+CONFIG_ESP_CONSOLE_UART_CUSTOM_NUM_0=y
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=1000000

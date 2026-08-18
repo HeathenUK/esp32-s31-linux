@@ -7,7 +7,12 @@
 # Restore the interactive serial login shell on the Linux console.
 # /dev/console is the LCD (tty0), so name the UART explicitly here or
 # the serial port would lose its login shell.
-ttyS0::respawn:/sbin/getty -L ttyS0 115200 vt100
+#
+# Baud 0 means "keep whatever speed the line is already at". Naming a rate here
+# makes getty reprogram the UART after boot, silently undoing the console= rate
+# the kernel set: the whole boot log arrives at the new speed and then the login
+# prompt appears at the old one.
+ttyS0::respawn:/sbin/getty -L ttyS0 0 vt100
 # Login on the LCD's virtual terminal. Needs a USB keyboard (HID + evdev).
 tty1::respawn:/sbin/getty -L tty1 38400 linux
 ::shutdown:/etc/init.d/rcK

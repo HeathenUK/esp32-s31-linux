@@ -146,7 +146,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("image", help="raw disk image (uncompressed)")
     ap.add_argument("--port", default="/dev/cu.usbserial-130")
-    ap.add_argument("--baud", type=int, default=115200)
+    ap.add_argument("--baud", type=int, default=1000000)
     ap.add_argument("--chunk", type=int, default=4096)
     ap.add_argument("--timeout", type=float, default=60.0,
                     help="seconds to wait for a frame's ack; must cover the "
