@@ -40,12 +40,34 @@ only). So high speed at 4 bits, ~25 MB/s theoretical, is the hard ceiling.
 - **Not interrupt overhead.** 1170 interrupts/sec during a 32 MB read, about one
   per 8 KB. Even at 50 µs each that is ~6% of the core, not 60%.
 
-That leaves PSRAM contention and the cache maintenance that non-coherent DMA
-requires (`DW_MMC_QUIRK_IDMAC_DESC_NONCOHERENT`; see `s31-dma-cache-coherency`).
-**These are not yet separated.** CoreMark's data is cache-resident but its
-instructions are fetched from PSRAM, the same memory IDMAC is writing, so it
-cannot tell stolen cycles from a stalled instruction fetch. Settling it needs a
-probe whose code *and* data fit in cache, or a stall-cycle performance counter.
+The cost is genuinely the I/O path, not the benchmark harness. `dd` copies every
+byte into userspace, so an earlier version of this measurement was charging its
+memcpy to the SD path. Serving the same copy volume from page cache instead:
+
+    idle                                891 iter/s
+    dd from page cache (copy, no DMA)   839 iter/s   -6%
+    dd from the card (copy + DMA)       360 iter/s   -60%
+
+So the copy accounts for 6% and the I/O path for the remaining ~54%.
+
+PSRAM bandwidth is not the constraint: `membench` measures ~44 MiB/s for a
+software memcpy, and the card moves 4.25 MB/s, under 10% of it. What is left is
+**cache maintenance over the DMA destination** (per byte; internal RAM is
+uncached on this SoC but PSRAM is not — see `s31-dma-cache-coherency`) versus
+**IDMAC's PSRAM bursts stalling CPU instruction fetches** (the boot log reports
+octal PSRAM with a 2048-byte burst length; one burst at 44 MiB/s is ~46 us,
+which is a long time to hold off an instruction fetch). **These are still not
+separated.**
+
+The experiment that settles it is also the possible fix: point the SD DMA at
+internal SRAM. IDMAC is 32-bit addressing so it can reach `0x2f000000`, and SRAM
+is uncached, so DMA there needs no cache maintenance. If the 54% disappears it
+was cache maintenance; if it does not, it is bus arbitration. It cannot be
+"direct" — the data must end up in page-cache pages, which live in PSRAM because
+that is essentially all the RAM Linux has — so this means a bounce buffer and a
+SRAM->PSRAM copy, and reads from uncached SRAM are slow. The gating unknown is
+how much SRAM is free: only 32 KB is currently carved out, for audio, and hart0
+owns most of the rest.
 
 Read throughput also scaled only 1.86x for a 4x clock, which points at the same
 per-byte overhead dominating rather than the bus.
