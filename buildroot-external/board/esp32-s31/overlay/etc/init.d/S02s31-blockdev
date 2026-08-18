@@ -1,0 +1,17 @@
+#!/bin/sh
+#
+# Readahead for the microSD root. 512 KB measured slightly better than both the
+# 128 KB default and a 16 KB minimum, mostly by cutting the number of allocation
+# and reclaim rounds rather than by reading further ahead. Set per-device because
+# it is a queue attribute, not a sysctl.
+
+case "$1" in
+	start)
+		for q in /sys/block/mmcblk*/queue; do
+			[ -w "$q/read_ahead_kb" ] && echo 512 > "$q/read_ahead_kb"
+		done
+		;;
+	stop|restart|reload)
+		;;
+esac
+exit 0
