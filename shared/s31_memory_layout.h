@@ -15,8 +15,8 @@
  * block, so the region must be a full megabyte on a megabyte boundary -- a
  * snug 768 KiB pool fails with -ENOMEM however well it appears to fit.
  */
-#define S31_LCD_FB_BASE                0x50E00000U
-#define S31_LCD_FB_SIZE                0x00100000U
+#define S31_LCD_FB_BASE                0x50C00000U
+#define S31_LCD_FB_SIZE                0x00200000U
 
 /* Keep all non-Linux PSRAM in the final two 64-KiB MMU pages. */
 #define S31_AUDIO_PSRAM_BASE           0x50FE0000U

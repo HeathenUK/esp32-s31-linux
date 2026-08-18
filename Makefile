@@ -209,7 +209,7 @@ linux: toolchain | $(LINUX_OUT)
 		--disable USB_DWC2_DEBUG \
 		--disable USB_DWC2_DEBUG_PERIODIC \
 		--enable HID_SUPPORT \
-		--enable DRM_FBDEV_EMULATION \
+		--disable DRM_FBDEV_EMULATION \
 		--enable FRAMEBUFFER_CONSOLE \
 		--disable DRM_DEBUG_MODESET_LOCK
 	$(MAKE) -C $(LINUX_DIR) O=$(LINUX_OUT) ARCH=riscv CROSS_COMPILE="$(CROSS_COMPILE)" olddefconfig
