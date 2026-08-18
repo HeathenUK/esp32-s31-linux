@@ -56,10 +56,22 @@ exactly as many bytes as `dd` reported writing and hashes them; the host hashes
 the file it sent. `VERIFIED` means the card holds the image byte for byte - it is
 not inferred from the transfer completing.
 
-At 115200 baud a 512 MB image compresses to roughly 9 MB and takes about
-13 minutes on the wire, plus several minutes for the card write itself. Raising
-the console baud rate for the imager kernel is the obvious way to cut that, and
-is safe to do because both ends of this particular link are ours.
+Measured on a 512 MB image, which compresses to about 9 MB:
+
+| console rate | wire rate | whole image |
+|---|---|---|
+| 115200 | 10.7 KiB/s | 19.7 min |
+| 1 Mbps | 70 KiB/s early, 18 KiB/s average | 8.4 min |
+
+The average is well below the peak because the tail of the image is all zeros:
+those frames decompress to megabytes each, so the card becomes the limit rather
+than the link, and no amount of baud rate helps there. Expect roughly 2x from
+the rate change end to end, not the 8.7x the wire alone suggests.
+
+Stop-and-wait costs more at the higher rate too - a 4 KB frame takes 41 ms at
+1 Mbps against 355 ms at 115200, so the per-frame turnaround stops being noise.
+A sliding window would recover some of that, at the cost of the flow control
+that the ack currently provides for free against a stalling card.
 
 ## Testing it without a board
 
