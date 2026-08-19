@@ -163,12 +163,38 @@ dividing wall time by switches gives a tempting ~1.3 ms each - but the machine
 does 1556 switches/sec at idle at full CoreMark, against 764/sec under load. The
 rate falls under load; that arithmetic is an artefact.
 
-**Where this stands:** ~86% of the hart goes somewhere during SD I/O - confirmed
-consumed, not merely displaced - and it is not the busy-wait (0), the poll (~7%),
-cache maintenance (1%), queue depth, controller configuration, context
-switching, or interrupt count. Seven hypotheses, each killed by measurement.
-It has not been localised further because the available profiler cannot exclude
-idle. The next step is an instrument that can.
+**Found: it is USB, not SD.** Unbinding dwc2 - touching nothing in the storage
+path - halves the cost of every SD request:
+
+                    cpubench    SD 4k cost   dwc2 IRQs
+    before           62.1 M/s   13.91 ms/req    1144/s
+    dwc2 unbound     69.7 M/s    6.95 ms/req       0/s
+
+dwc2 fires ~971 interrupts/sec on a completely idle machine - the 1 kHz USB SOF
+rate - against the timer's 249/s and the SD controller's 2/s. With IRQ time
+accounting enabled, an idle board reports 476 of 840 ticks in hard IRQ context.
+Trap entry here is extraordinarily expensive (order 10^5 cycles), so a thousand
+interrupts a second interleave with every SD request and double its latency.
+
+This is why seven hypotheses inside the SD driver all died: the driver was never
+the problem. It also revises [[s31-usb-sof-cpu-accounting]] - with real IRQ
+accounting this is not tick aliasing, it is genuine CPU being consumed.
+
+Caveat on magnitude: IRQ accounting says 57% of the CPU, while cpubench gains
+only 12% when USB goes away, so tick-based IRQ attribution over-counts (a tick
+landing mid-IRQ charges the whole tick to it). The 2x on SD request cost is a
+clean A/B inside one run and is the number to trust.
+
+Residual after USB is gone: 6.95 ms per 4k request, still far above the ~20 us a
+4k read should take, so there is a second cost underneath. But the first one to
+fix is the interrupt rate.
+
+Direction: dwc2 keeps the SOF interrupt unmasked to schedule periodic transfers.
+The attached device is a HID keyboard polling at ~10 ms, so servicing every one
+of 1000 frames a second is not needed. Either mask SOF when no periodic transfer
+is due, or suspend the port when idle. Note [[dont-patch-upstream-drivers]] -
+dwc2 is mature and this rate is normal elsewhere; what is abnormal here is the
+per-trap cost, so the platform side deserves suspicion too.
 
 ## Tried and failed - do not repeat
 
