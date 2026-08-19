@@ -32,27 +32,48 @@ confirmation is the immediate open question and needs human eyes.
     zram compression          3.6x with lzo-rle
     imaging a 128 MB image    ~4 min transfer, ~6 min including verify
 
-## In flight: which swap configuration
+## Settled: which swap configuration
 
-Partial results, and the harness has been the problem rather than the board.
+**SD swap file, no zram, swappiness 100.** Shipped in
+`overlay/etc/s31-swap.conf`. Decided over 15+ runs, scoring CoreMark under a
+Weston workload *and* the worst of three execs of a library-heavy binary under
+the same memory pressure:
 
-    config      CoreMark idle   under Weston   CPU used   Weston survives
-    neither          925             72          92%          no - dies
-    SD only          922            249          73%          yes (7.9 MB swapped)
-    zram only        921            202          78%          run truncated
-    both              -               -           -           never ran
+    config                        CoreMark   worst exec   Weston
+    SD only, swappiness 100          202.8   4.46/4.50 s  yes    <- shipped
+    SD only, swappiness 20           205.2   6.46/10.65   yes
+    zram 4M + SD, swappiness 100     195.3   5.89/6.24    yes
+    zram 24M only, swappiness 20     176.9   26.12        yes
+    zram 4M only, swappiness 100      65.7   -            DIES
+    no swap at all                       -   -            never starts
 
-Solid: **swap is the difference between Weston running and dying.** Unsettled:
-which kind. Note the surprise — SD swap left *more* CPU free than zram, because
-zram spends CPU compressing while SD spends I/O wait that CoreMark can use.
+Four things this settled, none of which were obvious beforehand:
 
-Invalid: the `startup_s` column. Weston appends to its log, so the grep for
-"enabled with head" matched the previous run instantly. Fix by truncating the
-log before each run.
+- **Swap is not optional.** With none, Weston never reaches output-enable.
+- **zram loses on a memory-poor machine.** Its zsmalloc pool costs ~1 MB of
+  MemAvailable (4404 -> 3504 kB) to save compression work that was never
+  expensive - 4.8 MB written over a five-minute run, about 16 kB/s. On a board
+  with more RAM the answer would flip.
+- **A zram device holds its disksize, not its compression ratio.** 4 MB could
+  never cover a ~9 MB shortfall however well pages compressed, which is why that
+  row died. Sized at 24 MB it survives.
+- **Throughput alone picks the wrong swappiness.** 20 beats 100 on CoreMark and
+  doubles worst-case exec latency, because CoreMark is anonymous-memory-heavy
+  and cannot see program text being evicted.
 
-Also note the comparison is tilted: `swappiness=100` and `page-cluster=0` were
-chosen for zram, so the SD-only row runs settings picked for a different medium.
-A low-swappiness run is needed to separate medium from tuning.
+Untested lever: `page-cluster` is still 0, chosen for zram. Every SD number
+above was therefore taken under the pessimal readahead setting for the medium
+that won. That is the next thing to measure.
+
+### What this says about PIE/SIMD for zram
+
+Nothing worth doing. Measured traffic is 4.8 MB compressed per five-minute run
+in the shipped config (~16 kB/s) and 30 MB in the worst config (~100 kB/s).
+Against a scalar LZO-RLE rate of tens of MB/s that is well under 1% of a core,
+so accelerating it saves a fraction of a percent - and would require saving
+vendor register state across context switches and in interrupt context, which is
+exactly the machinery whose absence made [[s31-hardware-loop-corruption]]
+corrupt userspace silently. Large risk, unmeasurable reward.
 
 ## Tried and failed - do not repeat
 
