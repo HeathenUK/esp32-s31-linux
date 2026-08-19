@@ -123,7 +123,21 @@ a measurement rather than an argument:
 - **Queue depth** - 1 to 8 concurrent readers moves 0.401 to 0.462 MB/s.
 - **Controller misconfiguration** - ios reports 40 MHz, 4-bit, SD high-speed.
 
-**/proc/profile cannot answer this, and knowing why matters.** Calibrated
+**The CPU really is being consumed** - this was in doubt, because CoreMark has a
+working set in PSRAM and SD I/O does DMA plus cache invalidation, so its
+collapse was equally consistent with memory contention on an idle CPU. cpubench
+settles it: a serial dependent add chain touching **no memory**, it falls the
+same way.
+
+    load        cpubench (no memory)   CoreMark
+    idle              64.4 M/s           895.7
+    4k reads           9.0 M/s (-86%)    130.7 (-85%)
+    1M reads           8.6 M/s (-87%)    112.9 (-87%)
+
+So the hart is genuinely unavailable ~86% of the time, in kernel or interrupt
+context, and CoreMark displacement was trustworthy all along.
+
+**/proc/profile cannot localise it, and knowing why matters.** Calibrated
 against known loads, samples/sec is identical for an idle machine and a fully
 kernel-bound one:
 
@@ -134,33 +148,27 @@ kernel-bound one:
     SD 4k reads                  11.1         326.0
 
 The idle task runs in kernel mode, so profiling counts it exactly like work;
-only user mode is excluded, which is why CoreMark shows 32.5/sec. This profiler
-therefore measures "time not in userspace", not "time busy", and its symbol
-breakdown includes the idle path - the idle phase attributes 75% to
-process_scheduled_works on a machine that is demonstrably not working.
+only user mode is excluded. It measures "time not in userspace", not "time
+busy". Anything future needs an instrument that excludes idle: per-task
+accounting, ftrace, or IRQ time accounting.
 
-So CoreMark throughput displacement remains the only trustworthy CPU measure on
-this board, as [[s31-cpu-measurement]] already recorded. Any future attempt
-needs an instrument that excludes idle: per-task accounting from
-/proc/<pid>/stat, ftrace, or IRQ time accounting.
+**One real bug found and fixed along the way**, though it is not the answer:
+the IDMAC never set IDMAC_DES0_DIC, so every 4 KB descriptor raised a completion
+interrupt - 217 per 1 MB request. Setting it cuts that to 88.9 and returns about
+28% of the hart under streaming load (cpubench 8.6 -> 11.0 M/s). Request cost is
+unchanged, so interrupt count is not what the 10 ms is made of.
 
-Two facts that constrain any explanation:
+**Context switches are not the cost either.** It is 8.3 per 4k request, and
+dividing wall time by switches gives a tempting ~1.3 ms each - but the machine
+does 1556 switches/sec at idle at full CoreMark, against 764/sec under load. The
+rate falls under load; that arithmetic is an artefact.
 
-- **Interrupts scale with bytes, not requests**: 217 per 1 MB request is one per
-  ~4.8 KB, matching DW_MCI_DESC_DATA_LENGTH (0x1000). The IDMAC interrupts per
-  descriptor rather than per transfer. 4k requests take 12 interrupts each.
-- **Context switches are not the cost.** It is 8.3 per 4k request, and dividing
-  wall time by switches gives a tempting ~1.3 ms each - but the machine does
-  1556 switches/sec at idle at full CoreMark, against 764/sec under load. The
-  rate falls under load; that arithmetic is an artefact.
-
-**Where this stands:** ~85% of the machine goes somewhere during SD I/O, by the
-one instrument that can be trusted here, and it is not the busy-wait, the poll,
-cache maintenance, queue depth, controller configuration, or context switching.
-It has not been localised further, because the profiler available cannot exclude
-idle. The next step is an instrument that can - per-task accounting, ftrace, or
-IRQ time accounting - and then a cost-per-interrupt measurement varying
-interrupt count independently of bytes moved.
+**Where this stands:** ~86% of the hart goes somewhere during SD I/O - confirmed
+consumed, not merely displaced - and it is not the busy-wait (0), the poll (~7%),
+cache maintenance (1%), queue depth, controller configuration, context
+switching, or interrupt count. Seven hypotheses, each killed by measurement.
+It has not been localised further because the available profiler cannot exclude
+idle. The next step is an instrument that can.
 
 ## Tried and failed - do not repeat
 
