@@ -213,7 +213,9 @@ linux: toolchain | $(LINUX_OUT)
 		--enable FRAMEBUFFER_CONSOLE \
 		--disable DRM_DEBUG_MODESET_LOCK \
 		--enable IRQ_TIME_ACCOUNTING \
-		--enable KALLSYMS
+		--enable KALLSYMS \
+		--enable FTRACE \
+		--enable ENABLE_DEFAULT_TRACERS
 	$(MAKE) -C $(LINUX_DIR) O=$(LINUX_OUT) ARCH=riscv CROSS_COMPILE="$(CROSS_COMPILE)" olddefconfig
 	$(MAKE) -C $(LINUX_DIR) O=$(LINUX_OUT) ARCH=riscv CROSS_COMPILE="$(CROSS_COMPILE)" \
 		KCFLAGS="-march=$(S31_SAFE_ISA) $(S31_COMMON_FLAGS)" -j$(JOBS) $(LINUX_TARGET) dtbs

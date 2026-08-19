@@ -187,31 +187,44 @@ What USB costs, measured repeatedly:
     SD 4k request              6.87 ms     11.45 ms    1.7x
     cpubench (userspace only) 73.6 M/s    62.8 M/s     1.2x
 
-**The mechanism is NOT established.** An earlier version of this section blamed
-icache thrash - a 16 KB icache, kernel text XIP from flash, evicted a thousand
-times a second. That theory was tested and failed. A userspace loop spanning
-28 KB of code across 400 functions should suffer far more than a tight loop if
-the icache were being thrashed:
+**Mechanism, traced and named.** Workqueue tracepoints over 3 seconds:
 
-    footprint    USB bound    USB unbound
-    small        34.6 ns      30.3 ns
-    large        40.5 ns      45.2 ns
+    3278  function=dwc2_irq_reenable_work     <- ~1093/s, the USB interrupt rate
+      23  function=dbs_work_handler
+      16  function=dw_mci_work_func
 
-The large-footprint loop is if anything *faster* with USB bound, and both lose
-only ~14%. That is not what icache thrash looks like.
+Context switches track it exactly - 1560/s with USB bound, **19/s** unbound,
+1524/s rebound. About 1.5 switches per interrupt: queue the work, run the
+worker, switch back.
 
-The likelier explanation, untested as yet: every USB interrupt wakes a kworker
-(see the standing task about that wakeup), so with USB active there is always
-another runnable task. sched_yield then genuinely switches to it and back, while
-with USB off it returns immediately. That would make the 4.3x real scheduling
-work rather than cache behaviour, and fits getpid being nearly unaffected and
-userspace loops losing little.
+The source is port-local, not upstream dwc2 (drivers/usb/dwc2/hcd.c):
 
-To settle it: count context switches and kworker wakeups per USB interrupt, and
-compare sched_yield with the kworker pinned away or its wakeup suppressed. Do
-not start moving kernel text into SRAM until the mechanism is known - that is
-linker surgery on the XIP layout, and it only pays if kernel instruction fetch
-is genuinely the cost.
+	defer_reenable = of_device_is_compatible(dev->of_node,
+						 "espressif,esp32s31-dwc2");
+	if (defer_reenable)
+		dwc2_disable_global_interrupts(hsotg);
+	ret = dwc2_handle_hcd_intr(hsotg);
+	if (defer_reenable)
+		schedule_delayed_work(&hsotg->irq_reenable_work, 0);
+
+Every interrupt masks the controller and schedules a work item to unmask it. The
+worker re-checks the CLIC status and, if the interrupt stack has not unwound,
+does schedule_delayed_work(..., 1) - a whole jiffy.
+
+**The underlying fault is the CLIC, and two drivers independently work around
+it.** dwc2 keeps its own level output low across the return boundary; dw_mmc
+runs a 0.5 ms lost_irq_poll timer. Both are lost-interrupt workarounds against
+the same interrupt controller. The USB line is already declared
+IRQ_TYPE_LEVEL_HIGH and the irqchip maps that to handle_level_irq, which masks
+the slot before the handler and unmasks after - so the driver-side masking
+duplicates what genirq already does. The suspect is the ack path: the irqchip
+writes clicintip = 0 because "S31 external slots retain clicintip after the
+matrix source has deasserted", and for a source that is *still* asserted that
+may discard the pending state.
+
+Earlier theory, tested and rejected: icache thrash. A userspace loop spanning
+28 KB of code across 400 functions did not degrade more than a tight loop under
+USB load (40.5 vs 45.2 ns; both lost ~14%), which is not what thrash looks like.
 
 ### Constraints on any fix
 
@@ -222,15 +235,22 @@ is genuinely the cost.
 - **Any fix must be device-agnostic.** Reducing one device's interrupt rate is
   not a solution; the next device with a periodic endpoint brings it back.
 
-Two candidates, both premature until the mechanism is known:
+Ranked by generality:
 
-- **Hot kernel text in SRAM** - trap entry, IRQ dispatch and the switch path,
-  tens of KB rather than megabytes. General by construction, since it lowers the
-  cost of an interrupt rather than any device's rate. Only worth doing if kernel
-  instruction fetch turns out to be the cost. Note SRAM is tight: Linux-side
-  reservations already run 0x2F062000-0x2F079C00.
-- **Stop waking a kworker per interrupt** - if that is the mechanism, this is
-  both the smaller change and the general one.
+1. **Fix the CLIC level path** so neither workaround is needed. This is the real
+   fix: it removes the reason dwc2 defers its re-enable *and* the reason dw_mmc
+   polls for lost interrupts, and spares every future driver. Risk: get it wrong
+   and interrupts are lost outright.
+2. **Defer the re-enable without a workqueue.** The constraint is genuinely
+   "after the outer CLIC sret", which softirq and irq_work cannot satisfy (both
+   run before it). Coalescing is possible - the work item is already a no-op
+   when pending - but it does not currently coalesce because the worker
+   completes between interrupts.
+3. **Drop the dwc2 deferral entirely** and rely on handle_level_irq. Cheapest to
+   try, and directly tests whether the workaround is still needed.
+
+Do NOT move kernel text into SRAM for this. That was aimed at the icache theory,
+which is dead.
 
 **Neither can be validated without a human pressing keys.** Enumeration,
 event nodes and interrupt rates are all checkable from here; "the keyboard still
