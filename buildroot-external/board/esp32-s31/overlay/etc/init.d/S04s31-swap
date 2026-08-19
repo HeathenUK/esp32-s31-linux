@@ -12,11 +12,15 @@
 # Swappiness is left low: this is a safety valve for peaks, not somewhere to
 # live. Anonymous pages that genuinely go cold belong here; hot text does not.
 
+CONF=/etc/s31-swap.conf
 SWAP=/swapfile
 SIZE_MB=64
+SD_SWAP=1
+[ -r "$CONF" ] && . "$CONF"
 
 case "$1" in
 	start)
+		[ "${SD_SWAP:-1}" = "1" ] || exit 0
 		[ -f "$SWAP" ] || {
 			printf 'Creating %s MB swap file: ' "$SIZE_MB"
 			if dd if=/dev/zero of="$SWAP" bs=1M count="$SIZE_MB" \
@@ -29,7 +33,7 @@ case "$1" in
 				exit 0
 			fi
 		}
-		swapon "$SWAP" 2>/dev/null && echo "Swap enabled: $SWAP"
+		swapon "$SWAP" 2>/dev/null && echo "SD swap enabled: $SWAP"
 		;;
 	stop)
 		swapoff "$SWAP" 2>/dev/null
