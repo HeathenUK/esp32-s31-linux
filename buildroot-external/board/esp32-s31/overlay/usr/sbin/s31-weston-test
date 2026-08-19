@@ -1,0 +1,55 @@
+#!/bin/sh
+#
+# Run Weston once and record what happened, without needing the serial console.
+#
+# The console becomes unusable while a compositor renders, so every interactive
+# attempt to collect this data failed or got mangled by shell quoting. This runs
+# on the board, writes a result file, and is read back after a reset.
+#
+#   s31-weston-test [clean_before_value]
+#
+# The optional argument sets dma_clean_before_fromdevice first, so the SD DMA
+# cache-maintenance change can be A/B'd against the crashes seen in libc.
+
+R=/root/s31-weston-result.txt
+P=/sys/module/kernel/parameters/dma_clean_before_fromdevice
+
+: > "$R"
+[ -n "$1" ] && [ -w "$P" ] && echo "$1" > "$P"
+
+echo "clean_before=$(cat $P 2>/dev/null)" >> "$R"
+echo "mem_avail_kb=$(awk '/MemAvailable/{print $2}' /proc/meminfo)" >> "$R"
+echo "sig_before=$(dmesg | grep -c 'unhandled signal')" >> "$R"
+
+export XDG_RUNTIME_DIR=/run/weston
+mkdir -p "$XDG_RUNTIME_DIR"
+chmod 700 "$XDG_RUNTIME_DIR"
+
+weston --backend=drm --renderer=pixman --drm-format=rgb565 --idle-time=0 \
+	--log=/root/s31-weston.log > /root/s31-weston.out 2>&1 &
+W=$!
+
+n=0
+while [ $n -lt 30 ]; do
+	kill -0 $W 2>/dev/null || break
+	n=$((n + 1))
+	sleep 1
+done
+
+if kill -0 $W 2>/dev/null; then
+	echo "weston=alive_after_${n}s" >> "$R"
+	echo "rss_kb=$(awk '/VmRSS/{print $2}' /proc/$W/status 2>/dev/null)" >> "$R"
+	echo "socket=$(ls $XDG_RUNTIME_DIR 2>/dev/null | tr '\n' ' ')" >> "$R"
+	kill -9 $W 2>/dev/null
+else
+	echo "weston=exited_after_${n}s" >> "$R"
+fi
+
+echo "sig_after=$(dmesg | grep -c 'unhandled signal')" >> "$R"
+dmesg | grep 'unhandled signal' | tail -4 >> "$R"
+echo "--- weston log tail ---" >> "$R"
+tail -8 /root/s31-weston.log >> "$R" 2>/dev/null
+echo "--- drm diag ---" >> "$R"
+dmesg | grep 'diag:' | tail -6 >> "$R"
+echo "END" >> "$R"
+sync

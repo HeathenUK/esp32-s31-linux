@@ -69,7 +69,11 @@ BR2_PACKAGE_S31_TOOLS=y
 # /etc/shadow at mode 644.
 BR2_TARGET_ROOTFS_EXT2=y
 BR2_TARGET_ROOTFS_EXT2_4=y
-BR2_TARGET_ROOTFS_EXT2_SIZE="512M"
+# Small on purpose: every byte is written over serial to a card doing ~1.7 MB/s
+# during imaging, and read back again to verify. 512M cost ~9 min of writing
+# zeros for a filesystem using 51M. S01s31-growroot resizes to fill the card on
+# first boot, so the running system is no smaller.
+BR2_TARGET_ROOTFS_EXT2_SIZE="128M"
 BR2_TARGET_ROOTFS_EXT2_LABEL="s31root"
 BR2_TARGET_ROOTFS_SQUASHFS=y
 BR2_TARGET_ROOTFS_SQUASHFS_BS_64K=y

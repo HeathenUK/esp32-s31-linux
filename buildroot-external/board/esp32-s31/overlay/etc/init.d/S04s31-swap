@@ -1,0 +1,38 @@
+#!/bin/sh
+#
+# Swap on the microSD.
+#
+# This board has 14.4 MB of RAM and the card is 8 GB, so swap costs nothing we
+# have a shortage of. It is not fast - the SD path costs a large fraction of a
+# core - but it is far better than the alternative observed without it: a
+# compositor with a 5.7 MB resident set on a machine with ~4 MB free spends
+# 48 seconds paging a single shared library back and forth from the filesystem
+# and is then killed.
+#
+# Swappiness is left low: this is a safety valve for peaks, not somewhere to
+# live. Anonymous pages that genuinely go cold belong here; hot text does not.
+
+SWAP=/swapfile
+SIZE_MB=64
+
+case "$1" in
+	start)
+		[ -f "$SWAP" ] || {
+			printf 'Creating %s MB swap file: ' "$SIZE_MB"
+			if dd if=/dev/zero of="$SWAP" bs=1M count="$SIZE_MB" \
+			     2>/dev/null && chmod 600 "$SWAP" && \
+			     mkswap "$SWAP" >/dev/null 2>&1; then
+				echo "OK"
+			else
+				echo "failed"
+				rm -f "$SWAP"
+				exit 0
+			fi
+		}
+		swapon "$SWAP" 2>/dev/null && echo "Swap enabled: $SWAP"
+		;;
+	stop)
+		swapoff "$SWAP" 2>/dev/null
+		;;
+esac
+exit 0

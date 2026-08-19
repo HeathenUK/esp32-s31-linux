@@ -1,0 +1,25 @@
+#!/bin/sh
+#
+# Grow the root filesystem to fill the microSD on first boot.
+#
+# The shipped image is deliberately small. Imaging writes every byte of it over
+# a serial link to a card that sustains around 1.7 MB/s, so a 512 MB image spent
+# most of nine minutes writing zeros and then read all 512 MB back to verify
+# them - for a filesystem holding well under a hundred megabytes. Ship the small
+# image, grow it here, and the card ends up just as large.
+
+case "$1" in
+	start)
+		# resize2fs is a no-op once the filesystem already fills the
+		# partition, so this is safe to run on every boot.
+		printf 'Growing root filesystem: '
+		if resize2fs /dev/mmcblk0 >/dev/null 2>&1; then
+			echo "OK"
+		else
+			echo "skipped"
+		fi
+		;;
+	stop|restart|reload)
+		;;
+esac
+exit 0
