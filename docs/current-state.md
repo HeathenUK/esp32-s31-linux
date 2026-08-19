@@ -163,38 +163,61 @@ dividing wall time by switches gives a tempting ~1.3 ms each - but the machine
 does 1556 switches/sec at idle at full CoreMark, against 764/sec under load. The
 rate falls under load; that arithmetic is an artefact.
 
-**Found: it is USB, not SD.** Unbinding dwc2 - touching nothing in the storage
-path - halves the cost of every SD request:
+## Root cause: a 16 KB icache, an XIP kernel, and 1 kHz of USB interrupts
 
-                    cpubench    SD 4k cost   dwc2 IRQs
-    before           62.1 M/s   13.91 ms/req    1144/s
-    dwc2 unbound     69.7 M/s    6.95 ms/req       0/s
+The SD driver was never at fault. Unbinding dwc2 - touching nothing in the
+storage path - nearly halves the cost of every SD request.
 
-dwc2 fires ~971 interrupts/sec on a completely idle machine - the 1 kHz USB SOF
-rate - against the timer's 249/s and the SD controller's 2/s. With IRQ time
-accounting enabled, an idle board reports 476 of 840 ticks in hard IRQ context.
-Trap entry here is extraordinarily expensive (order 10^5 cycles), so a thousand
-interrupts a second interleave with every SD request and double its latency.
+The chain, each link measured:
 
-This is why seven hypotheses inside the SD driver all died: the driver was never
-the problem. It also revises [[s31-usb-sof-cpu-accounting]] - with real IRQ
-accounting this is not tick aliasing, it is genuine CPU being consumed.
+1. The kernel runs **XIP from flash** through a **16 KB instruction cache**
+   (CONFIG_CACHE_L1_ICACHE_SIZE=0x4000; the dcache gets 64 KB).
+2. dwc2 takes a **SOF interrupt every frame, ~971/sec**, because the HID
+   keyboard's periodic endpoint keeps SOF unmasked (GINTMSK bit 3), even though
+   descriptor DMA is already enabled (HCFG bit 23). The timer contributes 249/s
+   and the SD controller 2/s.
+3. Each interrupt evicts kernel text from that small icache, so every subsequent
+   kernel entry refetches from flash.
 
-Caveat on magnitude: IRQ accounting says 57% of the CPU, while cpubench gains
-only 12% when USB goes away, so tick-based IRQ attribution over-counts (a tick
-landing mid-IRQ charges the whole tick to it). The 2x on SD request cost is a
-clean A/B inside one run and is the number to trust.
+The signature is that **cost scales with how much kernel code a path touches**,
+which a uniform CPU steal would not do:
 
-Residual after USB is gone: 6.95 ms per 4k request, still far above the ~20 us a
-4k read should take, so there is a second cost underneath. But the first one to
-fix is the interrupt rate.
+    path                     USB idle   USB active   ratio
+    getpid (tiny path)         1.37 us      2.02 us    1.5x
+    sched_yield (scheduler)   39.60 us    169.77 us    4.3x
+    SD 4k request              6.87 ms     11.45 ms    1.7x
+    cpubench (userspace only) 73.6 M/s    62.8 M/s     1.2x
 
-Direction: dwc2 keeps the SOF interrupt unmasked to schedule periodic transfers.
-The attached device is a HID keyboard polling at ~10 ms, so servicing every one
-of 1000 frames a second is not needed. Either mask SOF when no periodic transfer
-is due, or suspend the port when idle. Note [[dont-patch-upstream-drivers]] -
-dwc2 is mature and this rate is normal elsewhere; what is abnormal here is the
-per-trap cost, so the platform side deserves suspicion too.
+Numbers that took several wrong turns to establish:
+
+- A context switch is **~22-43 us**, not the ~517 us an earlier pipe benchmark
+  suggested. A blocking pipe round trip is paced by the timer tick, so it
+  measures wakeup latency rather than switch cost. Use yieldbench, not ctxbench.
+- Traps are ordinary: a syscall is ~1.4 us.
+- MMIO is ordinary: ~0.15 us per register read. An early reading of 673 us came
+  from probing dwc2 while it was left unbound and clock-gated.
+- The coprocessor SBI hook in switch_to() is real but secondary, ~10%.
+- Address space switching is not it: thread and process round trips match.
+
+### Why the obvious fixes are not available
+
+- **Enlarge the icache** - CACHE_L1_ICACHE_SIZE is a promptless Kconfig with a
+  fixed default and there are no cache_ll size knobs. Fixed in silicon.
+- **Stop running XIP** - 6.3 MB of kernel text against 13.4 MB of RAM, on a
+  board already swapping to run a compositor. XIP is the right call; keep it.
+
+That leaves the interrupt rate. Both candidates trade against USB working:
+
+- **Mask SOF under descriptor DMA.** dwc2 only masks SOF when no *non-periodic*
+  transfers remain; periodic endpoints keep it on deliberately. This is surgery
+  on mature upstream code whose interrupt rate is unremarkable elsewhere - see
+  [[dont-patch-upstream-drivers]].
+- **USB autosuspend for the HID device.** Configuration rather than a patch, but
+  it depends on remote wakeup; without it, keypresses are lost.
+
+**Neither can be validated without a human pressing keys.** Enumeration,
+event nodes and interrupt rates are all checkable from here; "the keyboard still
+works" is not.
 
 ## Tried and failed - do not repeat
 

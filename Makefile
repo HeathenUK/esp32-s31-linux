@@ -212,10 +212,8 @@ linux: toolchain | $(LINUX_OUT)
 		--disable DRM_FBDEV_EMULATION \
 		--enable FRAMEBUFFER_CONSOLE \
 		--disable DRM_DEBUG_MODESET_LOCK \
-		--enable PROFILING \
-		--enable KALLSYMS \
-		--enable KALLSYMS_ALL \
-		--set-str CMDLINE "console=tty0 console=ttyS0,1000000n8 root=/dev/mmcblk0 rootfstype=ext4 rw rootwait init=/init profile=2"
+		--enable IRQ_TIME_ACCOUNTING \
+		--enable KALLSYMS
 	$(MAKE) -C $(LINUX_DIR) O=$(LINUX_OUT) ARCH=riscv CROSS_COMPILE="$(CROSS_COMPILE)" olddefconfig
 	$(MAKE) -C $(LINUX_DIR) O=$(LINUX_OUT) ARCH=riscv CROSS_COMPILE="$(CROSS_COMPILE)" \
 		KCFLAGS="-march=$(S31_SAFE_ISA) $(S31_COMMON_FLAGS)" -j$(JOBS) $(LINUX_TARGET) dtbs
