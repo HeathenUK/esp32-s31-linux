@@ -75,6 +75,52 @@ vendor register state across context switches and in interrupt context, which is
 exactly the machinery whose absence made [[s31-hardware-loop-corruption]]
 corrupt userspace silently. Large risk, unmeasurable reward.
 
+## The biggest open performance item: ~10 ms per SD request
+
+Every SD request costs a fixed ~10 ms regardless of size, and it is paid in CPU.
+This caps swap at 0.39 MB/s on a path that reaches 12.7 MB/s, and it is the
+single largest known performance defect on the board.
+
+Measured, with the page cache bypassed:
+
+    request   throughput   time per request
+    4k          0.39 MB/s   9.98 ms
+    32k         2.80 MB/s  11.15 ms
+    64k         5.23 MB/s  11.95 ms
+    1M         12.70 MB/s  78.75 ms
+
+The curve fits `time = 10 ms + size / 13 MB/s`. The data clock is therefore
+fine - a 4k read should take ~20 us and takes 500x that.
+
+It is CPU, not waiting. CoreMark falls from 916 to 151 under 4k reads moving
+0.4 MB/s, and to 136 under 1M reads moving 12.7 MB/s - the same ~85% of the hart
+for 32x less data. Cost per request, not per byte.
+
+Ruled out, each by measurement rather than argument:
+
+- **Cache maintenance** - the counters say 55 ms across a 5.27 s run, about 1%.
+- **The lost-interrupt poll** - toggling it changes neither throughput
+  (10.15/9.71/10.11 ms) nor CPU (114.6/122.7/121.2 CoreMark, the repeat landing
+  with the opposite setting). Interrupts also arrive at ~3 per request, so
+  nothing is being completed by the timer; the IRQ path works.
+- **Queue depth** - 1 to 8 concurrent readers moves 0.401 to 0.462 MB/s. The
+  serialised resource is the hart, not the bus.
+- **page-cluster** - see 99-s31-memory.conf; no effect, and it addresses swap-in
+  of anonymous pages rather than the file-backed text paging that stalls exec.
+
+The mechanism, located but not yet proven by instrumentation:
+`dw_mci_wait_while_busy()` runs before every data command and uses
+`readl_poll_timeout_atomic()`, which **busy-spins** on SDMMC_STATUS_BUSY every
+10 us with udelay and never sleeps. That accounts for every observation above:
+fixed per request, charged to CPU, unaffected by concurrency on a single hart.
+
+To confirm before changing anything: put a ktime around that call, expose the
+total alongside the existing cache counters, and check it accounts for ~10 ms
+per request. If it does, the fix is to sleep rather than spin - the non-atomic
+`readl_poll_timeout()` - which frees the hart for the compositor even if it
+leaves throughput unchanged. Worth ~85% of a core against a workload where the
+whole reason swap exists is that the machine is short of resources.
+
 ## Tried and failed - do not repeat
 
 **On the black screen / Weston bring-up.** Five separate faults had to be fixed;
