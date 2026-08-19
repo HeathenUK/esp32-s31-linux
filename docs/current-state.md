@@ -179,8 +179,7 @@ The chain, each link measured:
 3. Each interrupt evicts kernel text from that small icache, so every subsequent
    kernel entry refetches from flash.
 
-The signature is that **cost scales with how much kernel code a path touches**,
-which a uniform CPU steal would not do:
+What USB costs, measured repeatedly:
 
     path                     USB idle   USB active   ratio
     getpid (tiny path)         1.37 us      2.02 us    1.5x
@@ -188,32 +187,50 @@ which a uniform CPU steal would not do:
     SD 4k request              6.87 ms     11.45 ms    1.7x
     cpubench (userspace only) 73.6 M/s    62.8 M/s     1.2x
 
-Numbers that took several wrong turns to establish:
+**The mechanism is NOT established.** An earlier version of this section blamed
+icache thrash - a 16 KB icache, kernel text XIP from flash, evicted a thousand
+times a second. That theory was tested and failed. A userspace loop spanning
+28 KB of code across 400 functions should suffer far more than a tight loop if
+the icache were being thrashed:
 
-- A context switch is **~22-43 us**, not the ~517 us an earlier pipe benchmark
-  suggested. A blocking pipe round trip is paced by the timer tick, so it
-  measures wakeup latency rather than switch cost. Use yieldbench, not ctxbench.
-- Traps are ordinary: a syscall is ~1.4 us.
-- MMIO is ordinary: ~0.15 us per register read. An early reading of 673 us came
-  from probing dwc2 while it was left unbound and clock-gated.
-- The coprocessor SBI hook in switch_to() is real but secondary, ~10%.
-- Address space switching is not it: thread and process round trips match.
+    footprint    USB bound    USB unbound
+    small        34.6 ns      30.3 ns
+    large        40.5 ns      45.2 ns
 
-### Why the obvious fixes are not available
+The large-footprint loop is if anything *faster* with USB bound, and both lose
+only ~14%. That is not what icache thrash looks like.
 
-- **Enlarge the icache** - CACHE_L1_ICACHE_SIZE is a promptless Kconfig with a
-  fixed default and there are no cache_ll size knobs. Fixed in silicon.
-- **Stop running XIP** - 6.3 MB of kernel text against 13.4 MB of RAM, on a
-  board already swapping to run a compositor. XIP is the right call; keep it.
+The likelier explanation, untested as yet: every USB interrupt wakes a kworker
+(see the standing task about that wakeup), so with USB active there is always
+another runnable task. sched_yield then genuinely switches to it and back, while
+with USB off it returns immediately. That would make the 4.3x real scheduling
+work rather than cache behaviour, and fits getpid being nearly unaffected and
+userspace loops losing little.
 
-That leaves the interrupt rate. Both candidates trade against USB working:
+To settle it: count context switches and kworker wakeups per USB interrupt, and
+compare sched_yield with the kworker pinned away or its wakeup suppressed. Do
+not start moving kernel text into SRAM until the mechanism is known - that is
+linker surgery on the XIP layout, and it only pays if kernel instruction fetch
+is genuinely the cost.
 
-- **Mask SOF under descriptor DMA.** dwc2 only masks SOF when no *non-periodic*
-  transfers remain; periodic endpoints keep it on deliberately. This is surgery
-  on mature upstream code whose interrupt rate is unremarkable elsewhere - see
-  [[dont-patch-upstream-drivers]].
-- **USB autosuspend for the HID device.** Configuration rather than a patch, but
-  it depends on remote wakeup; without it, keypresses are lost.
+### Constraints on any fix
+
+- **The icache cannot be enlarged.** CACHE_L1_ICACHE_SIZE is a promptless
+  Kconfig with a fixed default and there are no cache_ll size knobs.
+- **XIP has to stay.** 6.3 MB of kernel text against 13.4 MB of RAM, on a board
+  already swapping to run a compositor.
+- **Any fix must be device-agnostic.** Reducing one device's interrupt rate is
+  not a solution; the next device with a periodic endpoint brings it back.
+
+Two candidates, both premature until the mechanism is known:
+
+- **Hot kernel text in SRAM** - trap entry, IRQ dispatch and the switch path,
+  tens of KB rather than megabytes. General by construction, since it lowers the
+  cost of an interrupt rather than any device's rate. Only worth doing if kernel
+  instruction fetch turns out to be the cost. Note SRAM is tight: Linux-side
+  reservations already run 0x2F062000-0x2F079C00.
+- **Stop waking a kworker per interrupt** - if that is the mechanism, this is
+  both the smaller change and the general one.
 
 **Neither can be validated without a human pressing keys.** Enumeration,
 event nodes and interrupt rates are all checkable from here; "the keyboard still
