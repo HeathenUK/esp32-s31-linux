@@ -108,18 +108,48 @@ Ruled out, each by measurement rather than argument:
 - **page-cluster** - see 99-s31-memory.conf; no effect, and it addresses swap-in
   of anonymous pages rather than the file-backed text paging that stalls exec.
 
-The mechanism, located but not yet proven by instrumentation:
-`dw_mci_wait_while_busy()` runs before every data command and uses
-`readl_poll_timeout_atomic()`, which **busy-spins** on SDMMC_STATUS_BUSY every
-10 us with udelay and never sleeps. That accounts for every observation above:
-fixed per request, charged to CPU, unaffected by concurrency on a single hart.
+What it is not. Each of these was a working hypothesis, and each was killed by
+a measurement rather than an argument:
 
-To confirm before changing anything: put a ktime around that call, expose the
-total alongside the existing cache counters, and check it accounts for ~10 ms
-per request. If it does, the fix is to sleep rather than spin - the non-atomic
-`readl_poll_timeout()` - which frees the hart for the compositor even if it
-leaves throughput unchanged. Worth ~85% of a core against a workload where the
-whole reason swap exists is that the machine is short of resources.
+- **The busy-wait in dw_mci_wait_while_busy()** - the leading suspect, since it
+  runs before every data command and busy-spins. Instrumented in-tree
+  (/sys/kernel/debug/mmc0/busy_wait): **waited=0 over 1380 calls, total_ns=0**.
+  The card never asserts BUSY. It also could not have been changed to sleep: the
+  call runs under host->lock from __dw_mci_start_request(), so the _atomic form
+  is required and not a defect.
+- **The lost-interrupt poll** - ~7% by CoreMark displacement, and the handler
+  does honour its module parameter. The 0.5 ms interval is not the 10 ms.
+- **Cache maintenance** - 1% of wall time by the driver's own counters.
+- **Queue depth** - 1 to 8 concurrent readers moves 0.401 to 0.462 MB/s.
+- **Controller misconfiguration** - ios reports 40 MHz, 4-bit, SD high-speed.
+
+What the profile says (profile=2, resolved against System.map, 4k reads):
+
+    finish_task_switch      29.4%
+    process_scheduled_works 13.1%
+    gup_fast_fallback        2.5%
+    mmc_blk_mq_issue_rq      1.2%
+    esp32s31_cache_range     0.7%
+
+The SD path barely appears. Over 42% is scheduler and workqueue.
+
+Two facts that constrain any future explanation:
+
+- **Interrupts scale with bytes, not requests**: 217 per 1 MB request is one per
+  ~4.8 KB, matching DW_MCI_DESC_DATA_LENGTH (0x1000). The IDMAC interrupts per
+  descriptor rather than per transfer. 4k requests take 12 interrupts each.
+- **Context switches are not the cost.** Tempting, because it is 8.3 per 4k
+  request and dividing wall time by switches gives ~1.3 ms each. But the machine
+  does **1556 switches/sec at idle** at full CoreMark, and only 764/sec under
+  4k load - the rate *falls* under load. That arithmetic is an artefact.
+
+**Unresolved, and stated plainly:** two instruments disagree. CoreMark
+displacement says ~85% of the machine is consumed during SD I/O; the profile's
+sample count (3496 over 11 s) and its idle-dominated top symbol suggest the CPU
+is far less busy. Which one is lying should be settled before any fix is
+attempted, because every wrong hypothesis so far came from trusting a single
+instrument. The next step is a cost-per-interrupt measurement, varying interrupt
+count independently of bytes moved.
 
 ## Tried and failed - do not repeat
 
