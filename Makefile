@@ -211,12 +211,17 @@ linux: toolchain | $(LINUX_OUT)
 		--enable HID_SUPPORT \
 		--disable DRM_FBDEV_EMULATION \
 		--enable FRAMEBUFFER_CONSOLE \
-		--disable DRM_DEBUG_MODESET_LOCK
+		--disable DRM_DEBUG_MODESET_LOCK \
+		--enable PROFILING \
+		--enable KALLSYMS \
+		--enable KALLSYMS_ALL \
+		--set-str CMDLINE "console=tty0 console=ttyS0,1000000n8 root=/dev/mmcblk0 rootfstype=ext4 rw rootwait init=/init profile=2"
 	$(MAKE) -C $(LINUX_DIR) O=$(LINUX_OUT) ARCH=riscv CROSS_COMPILE="$(CROSS_COMPILE)" olddefconfig
 	$(MAKE) -C $(LINUX_DIR) O=$(LINUX_OUT) ARCH=riscv CROSS_COMPILE="$(CROSS_COMPILE)" \
 		KCFLAGS="-march=$(S31_SAFE_ISA) $(S31_COMMON_FLAGS)" -j$(JOBS) $(LINUX_TARGET) dtbs
 	cp -v $(LINUX_OUT)/arch/riscv/boot/$(LINUX_TARGET) $(XIP_IMAGE)
 	cp -v $(LINUX_OUT)/arch/riscv/boot/dts/espressif/esp32s31_generic.dtb $(FDT_DTB)
+	cp -v $(LINUX_OUT)/System.map $(BUILD_DIR)/System.map
 	@XIP_SIZE=$$(stat -c%s $(XIP_IMAGE)); \
 	if [ $$XIP_SIZE -gt $(LINUX_PARTITION_SIZE) ]; then \
 		echo "ERROR: xipImage ($$XIP_SIZE bytes) exceeds the linux partition ($(LINUX_PARTITION_SIZE) bytes)"; \
