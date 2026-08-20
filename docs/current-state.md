@@ -256,6 +256,57 @@ which is dead.
 event nodes and interrupt rates are all checkable from here; "the keyboard still
 works" is not.
 
+## Weston is up, and what makes it slow is now measured
+
+The panel shows Weston's shell and a terminal - confirmed by eye. It is very
+slow to interact with, and the cause is not what several plausible theories
+said:
+
+- **Not swapping.** At the desktop, idle: swap_in 0 pages/s, swap_out 0, weston
+  and terminal both 0% CPU. Closing and relaunching a client: 0 swap-ins. The
+  16 MB sitting in swap is cold and stays there.
+- **Not the compositor.** Across a scripted 200-line scroll, weston used ~0-70
+  CPU ticks against the terminal's ~446. Compositor-side acceleration - the
+  existing weston-acceleration-plan - would reclaim almost nothing.
+- **It is client-side glyph compositing**, and it is compute-bound rather than
+  bandwidth-bound. Measured on the board with pixbench:
+
+        raw memcpy frame (r+w)          84.9 MB/s   <- the memory ceiling
+        pixman SRC copy 565->565        91.7 MB/s   <- already at it
+        pixman fill rect                62.4 MB/s
+        pixman OVER solid+a8 (glyphs)   13.0 MB/s   <- 7x below it
+        same, one 800x18 text line       4.48 ms per line
+
+A terminal scrolls at ~62 lines/s, or 16 ms a line, of which 4.5 ms is that one
+pixman operation before cairo's rasterisation is counted.
+
+### What the hardware can and cannot do about it
+
+    block            accelerates                        useful here
+    PIE (xespv2p2)   any per-pixel inner loop           yes - the hot path
+    PPA              rect blend / fill / scale+rotate   partly - whole-line blits
+    DMA2D            2D block moves                     partly - scroll, copies
+    JPEG codec       image encode/decode                no
+    AES/SHA/ECC      crypto                             no
+
+There is no GPU and nothing that rasterises glyphs, so PIE is the only block
+that touches the measured bottleneck.
+
+**The target is one function: over_n_8_0565** - solid colour, A8 mask, RGB565
+destination - with about 6x of headroom before it reaches the memory wall.
+Userspace already runs with xespv2p2 enabled and it is safe there, unlike the
+kernel where it caused [[s31-hardware-loop-corruption]]. pixbench gives an
+immediate pass/fail signal.
+
+Deliberately NOT first: PPA blend could in principle reach bandwidth at zero CPU
+cost, but needs a kernel driver plus a userspace API, and per-operation setup
+would swamp per-glyph runs. Copies and fills need nothing at all - they are
+already at memory speed, so accelerating them frees CPU without going faster.
+
+Cheap parallel experiment: scanout consumes 32 MB/s of ~90 MB/s (36%)
+continuously at 18 MHz / 42 Hz. Lowering the refresh frees roughly 9 MB/s for
+everything else, at the cost of frame latency, and is a one-line panel change.
+
 ## Tried and failed - do not repeat
 
 **On the black screen / Weston bring-up.** Five separate faults had to be fixed;
