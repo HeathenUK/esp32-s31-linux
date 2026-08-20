@@ -216,6 +216,7 @@ linux: toolchain | $(LINUX_OUT)
 		--enable INPUT_UINPUT \
 		--enable HIGH_RES_TIMERS \
 		--enable NO_HZ_IDLE \
+		--enable FILE_LOCKING \
 		--enable FTRACE \
 		--enable ENABLE_DEFAULT_TRACERS \
 		--enable BLK_DEV_IO_TRACE
