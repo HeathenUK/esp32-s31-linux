@@ -213,7 +213,9 @@ linux: toolchain | $(LINUX_OUT)
 		--enable FRAMEBUFFER_CONSOLE \
 		--disable DRM_DEBUG_MODESET_LOCK \
 		--enable INPUT_MISC \
-		--enable INPUT_UINPUT
+		--enable INPUT_UINPUT \
+		--enable HIGH_RES_TIMERS \
+		--enable NO_HZ_IDLE
 	$(MAKE) -C $(LINUX_DIR) O=$(LINUX_OUT) ARCH=riscv CROSS_COMPILE="$(CROSS_COMPILE)" olddefconfig
 	$(MAKE) -C $(LINUX_DIR) O=$(LINUX_OUT) ARCH=riscv CROSS_COMPILE="$(CROSS_COMPILE)" \
 		KCFLAGS="-march=$(S31_SAFE_ISA) $(S31_COMMON_FLAGS)" -j$(JOBS) $(LINUX_TARGET) dtbs
