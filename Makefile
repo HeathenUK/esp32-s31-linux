@@ -215,7 +215,10 @@ linux: toolchain | $(LINUX_OUT)
 		--enable INPUT_MISC \
 		--enable INPUT_UINPUT \
 		--enable HIGH_RES_TIMERS \
-		--enable NO_HZ_IDLE
+		--enable NO_HZ_IDLE \
+		--enable FTRACE \
+		--enable ENABLE_DEFAULT_TRACERS \
+		--enable BLK_DEV_IO_TRACE
 	$(MAKE) -C $(LINUX_DIR) O=$(LINUX_OUT) ARCH=riscv CROSS_COMPILE="$(CROSS_COMPILE)" olddefconfig
 	$(MAKE) -C $(LINUX_DIR) O=$(LINUX_OUT) ARCH=riscv CROSS_COMPILE="$(CROSS_COMPILE)" \
 		KCFLAGS="-march=$(S31_SAFE_ISA) $(S31_COMMON_FLAGS)" -j$(JOBS) $(LINUX_TARGET) dtbs

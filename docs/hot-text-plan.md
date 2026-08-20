@@ -1,0 +1,84 @@
+# Getting hot kernel code out of flash
+
+## Why
+
+The timer interrupt costs ~860 us. Measured three ways that agree: an ftrace
+timeline put it at 864 us, the hrtimer breakdown attributed 480 us of that to
+the scheduler-tick callback alone, and the kernel's own watchdog printed
+`hrtimer: interrupt took 856063 ns` without being asked. At 250 Hz that is ~22%
+of the CPU spent ticking, and every wakeup, I/O completion and repaint queues
+behind it.
+
+The mechanism is instruction fetch. The kernel runs XIP from flash through a
+**16 KB** instruction cache. The tick path spans tens of KB of scheduler, RCU
+and timer code, so it evicts itself and refetches every tick. Flash is 80 MHz
+QIO, about 40 MB/s; 30 KB at that rate is ~0.75 ms, which is the right order for
+the 480 us measured.
+
+This also explains the asymmetry that confused things for a long time:
+kernel-heavy work is hit hard (`sched_yield` 4.3x slower under load) while
+pure-userspace work is barely touched (`cpubench` -12%), because userspace runs
+from PSRAM and only the kernel runs from flash. An earlier "icache thrash is
+disproved" note was wrong: that test used a userspace workload and never
+exercised the flash path.
+
+## What is not available
+
+- **A bigger icache.** CACHE_L1_ICACHE_SIZE is a promptless Kconfig with a fixed
+  default and there are no cache_ll size setters. Fixed in silicon.
+- **Faster flash.** Already 80 MHz QIO - the bootloader enables quad mode at
+  runtime regardless of the DIO header the ROM uses. IDF maps FLASHFREQ_120M to
+  '80m' for this part, so 80 MHz is the ceiling.
+- **Running the whole kernel from RAM.** Kernel text is 4365 KB against 12.4 MB
+  of usable RAM on a board already swapping.
+- **A lower tick rate.** Tried: HZ 250 -> 100 left wake latency unchanged
+  (median 1432 vs 1487 us) and made SD worse (12.07 -> 16.93 ms per request).
+  Fewer ticks, but each still costs 860 us. Reverted.
+
+## Plan
+
+### Phase 0 - quantify the payoff before doing any linker work
+
+Execute the same synthetic loop from flash and from PSRAM and compare. PSRAM is
+90 MB/s against flash's 40 MB/s, so the ceiling for this whole exercise is about
+2.25x on fetch-bound code; SRAM would be far better but is scarce. If a
+PSRAM-resident loop does not run measurably faster than a flash-resident one,
+the mechanism is wrong and nothing below is worth building.
+
+Also establish the SRAM budget: Linux reservations currently run
+0x2F062000-0x2F079C00 and hart0 owns the rest, so how much is genuinely free
+decides whether SRAM is an option at all or whether this is a PSRAM exercise.
+
+### Phase 1 - relocate the hot paths
+
+Add a `.text.fast` output section to `arch/riscv/kernel/vmlinux-xip.lds.S` with
+a RAM VMA and a flash LMA, copied during early boot exactly as `.data` already
+is for XIP. Mark functions with a `__fasttext` attribute macro.
+
+Start with the smallest set that covers the measured cost, in this order:
+
+1. trap entry and exit (`arch/riscv/kernel/entry.S`)
+2. IRQ dispatch and the CLIC driver's handler
+3. `tick_sched_timer`, `hrtimer_interrupt` and the timer wheel
+4. the scheduler core reached from the tick - `__schedule`, `pick_next_task`
+
+Tens of KB, not megabytes. Grow the set only while the trace says it pays.
+
+### Phase 2 - measure each step
+
+Re-run, in order: the ftrace timer-IRQ duration (the headline number), `waklat`
+for wake latency, `req_timing` for the SD breakdown, and the input-latency
+harness for the user-visible figure. Keep whichever additions move the headline
+and drop the rest - the budget is small enough that only the hottest code earns
+its place.
+
+### Phase 3 - SRAM for the hottest subset, if the budget allows
+
+PSRAM caps the win at ~2.25x. Internal SRAM is far faster, so once Phase 1 shows
+which functions actually matter, move that subset to SRAM if there is room.
+
+## Unrelated but free, found in the same trace
+
+IRQ 20 runs two handlers and the first, `20300000.usb`, returned `unhandled` on
+all 1365 invocations at 0.093 ms each - 127 ms of pure waste in a 3 s trace.
+Whatever registered that second handler should not have.
