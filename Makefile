@@ -212,16 +212,13 @@ linux: toolchain | $(LINUX_OUT)
 		--disable DRM_FBDEV_EMULATION \
 		--enable FRAMEBUFFER_CONSOLE \
 		--disable DRM_DEBUG_MODESET_LOCK \
-		--enable IRQ_TIME_ACCOUNTING \
-		--enable KALLSYMS \
-		--enable FTRACE \
-		--enable ENABLE_DEFAULT_TRACERS
+		--enable INPUT_MISC \
+		--enable INPUT_UINPUT
 	$(MAKE) -C $(LINUX_DIR) O=$(LINUX_OUT) ARCH=riscv CROSS_COMPILE="$(CROSS_COMPILE)" olddefconfig
 	$(MAKE) -C $(LINUX_DIR) O=$(LINUX_OUT) ARCH=riscv CROSS_COMPILE="$(CROSS_COMPILE)" \
 		KCFLAGS="-march=$(S31_SAFE_ISA) $(S31_COMMON_FLAGS)" -j$(JOBS) $(LINUX_TARGET) dtbs
 	cp -v $(LINUX_OUT)/arch/riscv/boot/$(LINUX_TARGET) $(XIP_IMAGE)
 	cp -v $(LINUX_OUT)/arch/riscv/boot/dts/espressif/esp32s31_generic.dtb $(FDT_DTB)
-	cp -v $(LINUX_OUT)/System.map $(BUILD_DIR)/System.map
 	@XIP_SIZE=$$(stat -c%s $(XIP_IMAGE)); \
 	if [ $$XIP_SIZE -gt $(LINUX_PARTITION_SIZE) ]; then \
 		echo "ERROR: xipImage ($$XIP_SIZE bytes) exceeds the linux partition ($(LINUX_PARTITION_SIZE) bytes)"; \
