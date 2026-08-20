@@ -217,6 +217,7 @@ linux: toolchain | $(LINUX_OUT)
 		--enable HIGH_RES_TIMERS \
 		--enable NO_HZ_IDLE \
 		--enable FILE_LOCKING \
+		--enable DRM_ESP32S31_PPA \
 		--enable FTRACE \
 		--enable ENABLE_DEFAULT_TRACERS \
 		--enable BLK_DEV_IO_TRACE
@@ -225,6 +226,7 @@ linux: toolchain | $(LINUX_OUT)
 		KCFLAGS="-march=$(S31_SAFE_ISA) $(S31_COMMON_FLAGS)" -j$(JOBS) $(LINUX_TARGET) dtbs
 	cp -v $(LINUX_OUT)/arch/riscv/boot/$(LINUX_TARGET) $(XIP_IMAGE)
 	cp -v $(LINUX_OUT)/arch/riscv/boot/dts/espressif/esp32s31_generic.dtb $(FDT_DTB)
+	cp -v $(LINUX_OUT)/System.map $(BUILD_DIR)/System.map
 	@XIP_SIZE=$$(stat -c%s $(XIP_IMAGE)); \
 	if [ $$XIP_SIZE -gt $(LINUX_PARTITION_SIZE) ]; then \
 		echo "ERROR: xipImage ($$XIP_SIZE bytes) exceeds the linux partition ($(LINUX_PARTITION_SIZE) bytes)"; \
