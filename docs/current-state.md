@@ -4,84 +4,106 @@ Read this first after a context reset. It records what is true of the board
 right now, what is in flight, and — most importantly — what has already been
 tried and failed, so it is not tried again.
 
-## Where the display stands
+## Where the desktop stands
 
-Weston runs and paints. Confirmed by eye on the panel, and confirmed here by
-dumping the scanout buffer and rendering it (see the harness below).
+Weston runs on the panel and is usable. Keystroke-to-glyph, measured with the
+automated harness (uinput injection, scanout buffer watched for the glyph):
 
-    keystroke -> glyph, steady state      22-68 ms   (1-3 frames, usable)
-    keystroke -> glyph, first ~4 events   8-29 s     <- the remaining problem
+    worst case      40-60 s (often timing out)  ->  3.56 s
+    median          ~10.6 s                     ->  73 ms
+    later trials    -                           ->  18-242 ms
 
-The first figure is fine. The second is what "unbelievably slow to type" was:
-cold-cache startup of the client and its libraries off a card that charges
-~10 ms per request. It is not a display problem.
+Steady state is where it needs to be. The worst case - the first interaction
+after the desktop starts - is not, and its cause is known: the working set is
+~25 MB against 13.4 MB of RAM, so roughly 15 MB is evicted to the SD card.
 
-Fixed to get here, all committed:
+### What produced that
 
-- **The page flip was ignored.** Weston double-buffers; the driver logged
-  "update wants 0x50c00000 but scanout is at 0x50d00000" and did nothing, so the
-  hardware kept displaying one buffer while weston drew into the other. Scanout
-  is a cyclic DMA that never stops, so a flip cannot go through dmaengine.
-  esp32s31_axi_gdma_retarget_cyclic() rewrites the self-linking descriptors'
-  buffer pointers in place; the engine re-reads them each pass, so the switch
-  lands at a frame boundary with nothing stopped and no tearing.
-- **There was no vblank.** drm_vblank_init() was skipped and flip events were
-  completed by hand with invented timestamps, so weston - which schedules from
-  "last presentation + refresh" - logged "abnormal: -2880 msec". Vblank now runs
-  from a timer at the frame period.
-- **eth0** - 30 s of every boot spent DHCPing an interface that does not exist.
+**Hot kernel code moved from XIP flash into RAM.** This kernel executes XIP from
+80 MHz QIO flash through a 16 KB instruction cache, and identical code measured
+**5.98x faster from RAM** (72 KB per side, larger than the cache, so neither can
+hold it). 113 KB now lives in RAM via `.text.fast`:
 
-## The harness - measure before changing anything
+    timer subsystem   hrtimer, timer, tick-sched, tick-common, timekeeping,
+                      clockevents
+    storage path      dw_mmc, blk-mq, blk-core, bio, blk-merge, blk-mq-sched,
+                      mmc_ops, sd_ops
 
-`inputlat` injects through uinput and watches the scanout buffer; `fbdump`
-copies the buffer out so it can be looked at as a PNG on the host.
+    timer interrupt        0.864 -> 0.465 ms   (kernel watchdog now silent)
+    SD wall per request   12.07 -> 8.05 ms     (three runs: 8.75/8.73/8.05)
+    4k reads               0.39 -> 0.45 MB/s
+    1M reads              12.21 -> 14.95 MB/s
 
-    inputlat <trials> <wait_s> <pointer?> [fps_secs]
-    fbdump 0x50d00000 > /tmp/fb.raw     # gzip is ~28 KB, fine over the console
+The SD gain compounds: the latency tail *is* eviction to that card, so cheaper
+page-outs shortened the storm from 40-60 s to 3.56 s.
 
-Hard-won rules, each of which cost a wrong answer:
+**Also fixed:** vblank plumbing and the page-flip DMA retarget (the driver was
+ignoring flips and scanning out the stale buffer), high-resolution timers
+(`CONFIG_HIGH_RES_TIMERS` was off, quantising every sleep to 4 ms), eth0 (~30 s
+per boot spent DHCPing an interface that does not exist), and `FILE_LOCKING`.
 
-- **Create the uinput device before the compositor starts.** Create it after and
-  every key is discarded; the client received nothing over a full minute.
-- **Watch the buffer being scanned out, not the one weston renders into.** They
-  differ, and the driver logs which is which.
-- **Read whole rows.** A glyph changes ~20 bytes per row, so sampling one word
-  every 512 bytes misses it - that timed out 18 trials of 20.
-- **A framebuffer diff cannot attribute a change to your input.** Unrelated
-  repaints read as instant latency; that is how "0.8 ms" got reported for a
-  pipeline whose frame is 23.8 ms. Quiesce first, or count plane updates.
-- **Use a window longer than the effect.** A 3 s timeout cannot measure a 30 s
-  stall; every "timeout" was a discarded measurement.
-- **Truncate logs before grepping them for readiness.** A stale "enabled with
-  head" reports weston up in 0 s when it never started.
+### How the relocation works
 
-## What to do next, in order
+`.text.fast` sits between `_sdata` and `__bss_start`, so the existing XIP copy in
+`arch/riscv/mm/init.c` relocates it to RAM at boot with no extra code, and RAM is
+executable because this architecture does not enforce kernel RWX.
 
-1. **The ~10 ms fixed cost per SD request.** This is the cold-start cost and so
-   the remaining user-visible delay, and it also slows boot, imaging and swap.
-   Still unexplained after eliminating the busy-wait (0), the lost-IRQ poll
-   (~7%), cache maintenance (1%), queue depth, controller config, context
-   switches and interrupt count. Next instrument: timestamp a single request end
-   to end through the mmc block layer.
-2. **Make the VSYNC interrupt fire.** It is wired (source 13, CLIC slot 42) and
-   its count stays at zero, so a drifting timer is carrying vblank today. Either
-   the CLIC matrix is not routing the source or LCD_CAM needs more than
-   LC_DMA_INT_ENA set. A hardware frame boundary does not drift against scanout.
-3. **Prime the page cache at boot** so the first launch is not paying full
-   cold-start price. Cheap to try; bounded by 13.4 MB of RAM.
-4. **Then, and only then, acceleration.** With repaints happening at frame rate
-   these finally become measurable against the harness:
-   - **The shadow-buffer copy.** Weston logs "uses shadow framebuffer": an extra
-     750 KB memcpy per repaint, ~9-17 ms. Best removed by rendering straight
-     into the scanout buffer; failing that DMA2D or PPA can do the blit with no
-     CPU. Best-evidenced target.
-   - **Scanout bandwidth.** The panel eats 32 of ~90 MB/s (36%) continuously at
-     18 MHz / 42 Hz, whether anything changed or not.
-   - **PIE/SIMD is not a target for pixman** - copies, fills and realistic glyph
-     blends all measured at or near the memory ceiling. Possibly worth it for
-     FreeType rasterisation, which has not been measured.
-   - **Hardware JPEG** would let the panel be streamed continuously for visual
-     debugging rather than single snapshots.
+`TEXT_TEXT` is redefined in `vmlinux-xip.lds.S` for that script alone: the main
+`.text` output section appears first and claims `*(.text)` from every object, so
+collecting whole objects into `.text.fast` without the override produces an
+**empty section** - which is what a first attempt did.
+
+Two traps worth keeping:
+
+- **Do not add `traps.o` or `irq.o`.** Including them lost the irq tracepoints
+  (`/sys/kernel/tracing/events/irq` disappeared), removing the instrument.
+- **`__fasttext` conflicts with `__sched`.** Both are section attributes; annotate
+  such functions via the linker instead.
+- Annotating a function relocates only *that* function. Where the work is inlined
+  into a caller still in flash, nothing moves - which is why the first round of
+  callee annotations grew the section 576 bytes and changed nothing.
+
+### What is left, and what it needs
+
+The remaining 3.56 s is the eviction storm. Two routes, no others:
+
+1. **More of the paging path in RAM** - `vmscan`, `page_io`, `ext4`. Whether this
+   pays should be measured, not assumed: every KB moved to RAM is a KB less for
+   the working set that is already 15 MB over. A profiling kernel (PROFILING +
+   KALLSYMS, `profile=2`) sampled during the storm would rank the candidates;
+   during a storm the CPU is genuinely busy, so the usual idle-counts-as-kernel
+   objection does not apply.
+2. **A lighter client stack.** Weston plus a cairo/pango terminal cannot fit in
+   13.4 MB. Dropping the background image and panel removed two of four slow
+   interactions, confirming the mechanism, but ~12 MB cannot be trimmed from that
+   stack.
+
+Not available, each checked: the icache is fixed in silicon; flash is already at
+its 80 MHz ceiling with quad mode enabled at runtime; function tracing needs
+`HAVE_DYNAMIC_FTRACE`, which riscv selects only `if !XIP_KERNEL`; HZ=100 was
+tried and reverted (SD got worse, wake latency unchanged); zram was tried and
+reverted (median 13 s -> 60 s - it compresses 10.9x but takes its pages from the
+RAM already exhausted).
+
+### Cautions for whoever picks this up
+
+- **Watch `arch/riscv/configs/esp32s31_defconfig` for uncommitted changes.** It
+  accumulated 16 lines of drift that were silently changing every build, and
+  reverting it to HEAD removed `FILE_LOCKING` and stopped weston starting at all.
+  `FILE_LOCKING` is now set from the top-level Makefile instead, because the
+  defconfig carries an explicit "is not set" further down that overrides a
+  prepended line.
+- **Killed builds corrupt `.cmd` files.** A tool timeout mid-write left
+  "unterminated call to function 'wildcard'", which silently skipped relinking so
+  a stale image was flashed and measured for several cycles. Delete the truncated
+  files and rebuild.
+- **The bootloader lives at 0x2000, not 0x0**, the partition table at 0x8000 and
+  the hart0 app at 0x20000. Writing the bootloader to 0x0 bricks the boot.
+  Deleting `bootloader/sdkconfig` regenerates it at 2 MB flash size and 115200
+  baud, which reboot-loops the board.
+- **`fbdump 0x50d00000` plus a small RGB565->PNG script** shows the panel; the
+  live scanout buffer gzips to 4-28 KB, so stills over the console are cheap.
+  `weston-screenshooter` returns solid black and cannot be used.
 
 ## Tried and failed - do not repeat
 
