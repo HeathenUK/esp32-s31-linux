@@ -77,6 +77,47 @@ its place.
 PSRAM caps the win at ~2.25x. Internal SRAM is far faster, so once Phase 1 shows
 which functions actually matter, move that subset to SRAM if there is room.
 
+## Results so far
+
+Phase 0 measured the payoff with 72 KB of identical code on each side, larger
+than the icache so neither can cache it:
+
+    flash 17.77 ms    RAM 2.97 ms    = 5.98x
+
+That is far better than the ~2.25x the bandwidth figures suggested, because on a
+cache miss it is flash *latency* that dominates, not throughput.
+
+Phase 1 relocated hrtimer_interrupt, __hrtimer_run_queues, tick_sched_handle and
+tick_nohz_handler - 992 bytes:
+
+    riscv-timer irq   0.864 -> 0.725 ms
+    tick callback     0.480 -> 0.383 ms   (now at 0xc08c5552, in RAM)
+
+and the kernel's "hrtimer: interrupt took" watchdog stopped firing.
+
+Adding the obvious callees next - update_process_times, __run_timers,
+run_local_timers, sched_tick, rcu_sched_clock_irq, ktime_get - grew the section
+by only 576 bytes and did not improve anything (0.768 ms, inside the noise).
+Annotating a function relocates that function's own code only; where the work is
+inlined into a caller still in flash, nothing moves.
+
+## Two constraints that shape what is left
+
+- **Whole-object relocation is blocked by section ordering.** Collecting
+  `*hrtimer.o(.text)` into `.text.fast` produces an empty section: the main
+  `.text` output section appears earlier and has already claimed `*(.text)` from
+  every object. Excluding objects from it means rewriting the kernel-wide
+  TEXT_TEXT macro.
+- **Function tracing cannot be used to find the rest.** `arch/riscv/Kconfig`
+  has `select HAVE_DYNAMIC_FTRACE if !XIP_KERNEL`: dynamic ftrace patches call
+  sites, and this kernel's text is read-only flash. The precise attribution tool
+  is simply unavailable here.
+
+So the remaining ~380 us needs hand instrumentation - ktime stamps around
+candidate callees inside the tick, the same approach that localised the SD
+request cost - or a custom text section for this architecture that can claim
+whole objects before TEXT_TEXT sees them.
+
 ## Unrelated but free, found in the same trace
 
 IRQ 20 runs two handlers and the first, `20300000.usb`, returned `unhandled` on
