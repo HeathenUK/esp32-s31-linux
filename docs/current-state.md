@@ -4,336 +4,84 @@ Read this first after a context reset. It records what is true of the board
 right now, what is in flight, and — most importantly — what has already been
 tried and failed, so it is not tried again.
 
-## The board today
-
-Linux 6.12 on hart1 of an ESP32-S31-Korvo-1 V1.1, kernel XIP from flash, root
-on microSD. hart0 runs ESP-IDF and owns the radio.
-
-Working: LCD via a native DRM/KMS driver, USB HID keyboard, microSD root at
-40 MHz, Wi-Fi (hidden SSID, see below), I2S audio confirmed by ear, a serial
-console at 1 Mbps, and an SD imager that writes and verifies the card over that
-console.
-
-**Weston runs.** `Output 'DPI-1' enabled with head(s) DPI-1`, pixman renderer,
-RGB565, ~5.7 MB RSS. **It has not been visually confirmed painting** — the panel
-showed black at the last check, before several of the fixes below landed. That
-confirmation is the immediate open question and needs human eyes.
-
-## Numbers worth not re-measuring
-
-    RAM total                 13.4 MB (16 MB PSRAM less carve-outs)
-    CoreMark, idle            ~920 iterations/sec
-    PSRAM read, cached        90 MB/s
-    PSRAM read, uncached      7.6 MB/s   (the 0xC0000000 alias - a trap, see below)
-    internal SRAM read        341 MB/s   (uncached, 512 KB total, mostly spoken for)
-    SD read / write           4.75 / 1.7 MB/s at 40 MHz
-    LCD scanout               31 MB/s continuous = 34% of PSRAM bandwidth
-    Weston RSS                5.7 MB; needs ~7.9 MB of swap to survive
-    zram compression          3.6x with lzo-rle
-    imaging a 128 MB image    ~4 min transfer, ~6 min including verify
-
-## Settled: which swap configuration
-
-**SD swap file, no zram, swappiness 100.** Shipped in
-`overlay/etc/s31-swap.conf`. Decided over 15+ runs, scoring CoreMark under a
-Weston workload *and* the worst of three execs of a library-heavy binary under
-the same memory pressure:
-
-    config                        CoreMark   worst exec   Weston
-    SD only, swappiness 100          202.8   4.46/4.50 s  yes    <- shipped
-    SD only, swappiness 20           205.2   6.46/10.65   yes
-    zram 4M + SD, swappiness 100     195.3   5.89/6.24    yes
-    zram 24M only, swappiness 20     176.9   26.12        yes
-    zram 4M only, swappiness 100      65.7   -            DIES
-    no swap at all                       -   -            never starts
-
-Four things this settled, none of which were obvious beforehand:
-
-- **Swap is not optional.** With none, Weston never reaches output-enable.
-- **zram loses on a memory-poor machine.** Its zsmalloc pool costs ~1 MB of
-  MemAvailable (4404 -> 3504 kB) to save compression work that was never
-  expensive - 4.8 MB written over a five-minute run, about 16 kB/s. On a board
-  with more RAM the answer would flip.
-- **A zram device holds its disksize, not its compression ratio.** 4 MB could
-  never cover a ~9 MB shortfall however well pages compressed, which is why that
-  row died. Sized at 24 MB it survives.
-- **Throughput alone picks the wrong swappiness.** 20 beats 100 on CoreMark and
-  doubles worst-case exec latency, because CoreMark is anonymous-memory-heavy
-  and cannot see program text being evicted.
-
-Untested lever: `page-cluster` is still 0, chosen for zram. Every SD number
-above was therefore taken under the pessimal readahead setting for the medium
-that won. That is the next thing to measure.
-
-### What this says about PIE/SIMD for zram
-
-Nothing worth doing. Measured traffic is 4.8 MB compressed per five-minute run
-in the shipped config (~16 kB/s) and 30 MB in the worst config (~100 kB/s).
-Against a scalar LZO-RLE rate of tens of MB/s that is well under 1% of a core,
-so accelerating it saves a fraction of a percent - and would require saving
-vendor register state across context switches and in interrupt context, which is
-exactly the machinery whose absence made [[s31-hardware-loop-corruption]]
-corrupt userspace silently. Large risk, unmeasurable reward.
-
-## The biggest open performance item: ~10 ms per SD request
-
-Every SD request costs a fixed ~10 ms regardless of size, and it is paid in CPU.
-This caps swap at 0.39 MB/s on a path that reaches 12.7 MB/s, and it is the
-single largest known performance defect on the board.
-
-Measured, with the page cache bypassed:
-
-    request   throughput   time per request
-    4k          0.39 MB/s   9.98 ms
-    32k         2.80 MB/s  11.15 ms
-    64k         5.23 MB/s  11.95 ms
-    1M         12.70 MB/s  78.75 ms
-
-The curve fits `time = 10 ms + size / 13 MB/s`. The data clock is therefore
-fine - a 4k read should take ~20 us and takes 500x that.
-
-It is CPU, not waiting. CoreMark falls from 916 to 151 under 4k reads moving
-0.4 MB/s, and to 136 under 1M reads moving 12.7 MB/s - the same ~85% of the hart
-for 32x less data. Cost per request, not per byte.
-
-Ruled out, each by measurement rather than argument:
-
-- **Cache maintenance** - the counters say 55 ms across a 5.27 s run, about 1%.
-- **The lost-interrupt poll** - toggling it changes neither throughput
-  (10.15/9.71/10.11 ms) nor CPU (114.6/122.7/121.2 CoreMark, the repeat landing
-  with the opposite setting). Interrupts also arrive at ~3 per request, so
-  nothing is being completed by the timer; the IRQ path works.
-- **Queue depth** - 1 to 8 concurrent readers moves 0.401 to 0.462 MB/s. The
-  serialised resource is the hart, not the bus.
-- **page-cluster** - see 99-s31-memory.conf; no effect, and it addresses swap-in
-  of anonymous pages rather than the file-backed text paging that stalls exec.
-
-What it is not. Each of these was a working hypothesis, and each was killed by
-a measurement rather than an argument:
-
-- **The busy-wait in dw_mci_wait_while_busy()** - the leading suspect, since it
-  runs before every data command and busy-spins. Instrumented in-tree
-  (/sys/kernel/debug/mmc0/busy_wait): **waited=0 over 1380 calls, total_ns=0**.
-  The card never asserts BUSY. It also could not have been changed to sleep: the
-  call runs under host->lock from __dw_mci_start_request(), so the _atomic form
-  is required and not a defect.
-- **The lost-interrupt poll** - ~7% by CoreMark displacement, and the handler
-  does honour its module parameter. The 0.5 ms interval is not the 10 ms.
-- **Cache maintenance** - 1% of wall time by the driver's own counters.
-- **Queue depth** - 1 to 8 concurrent readers moves 0.401 to 0.462 MB/s.
-- **Controller misconfiguration** - ios reports 40 MHz, 4-bit, SD high-speed.
-
-**The CPU really is being consumed** - this was in doubt, because CoreMark has a
-working set in PSRAM and SD I/O does DMA plus cache invalidation, so its
-collapse was equally consistent with memory contention on an idle CPU. cpubench
-settles it: a serial dependent add chain touching **no memory**, it falls the
-same way.
-
-    load        cpubench (no memory)   CoreMark
-    idle              64.4 M/s           895.7
-    4k reads           9.0 M/s (-86%)    130.7 (-85%)
-    1M reads           8.6 M/s (-87%)    112.9 (-87%)
-
-So the hart is genuinely unavailable ~86% of the time, in kernel or interrupt
-context, and CoreMark displacement was trustworthy all along.
-
-**/proc/profile cannot localise it, and knowing why matters.** Calibrated
-against known loads, samples/sec is identical for an idle machine and a fully
-kernel-bound one:
-
-    phase                        secs   samples/sec
-    idle                         10.3         284.3
-    kernel-bound (zero->null)     9.9         284.0
-    user-bound (CoreMark)        13.8          32.5
-    SD 4k reads                  11.1         326.0
-
-The idle task runs in kernel mode, so profiling counts it exactly like work;
-only user mode is excluded. It measures "time not in userspace", not "time
-busy". Anything future needs an instrument that excludes idle: per-task
-accounting, ftrace, or IRQ time accounting.
-
-**One real bug found and fixed along the way**, though it is not the answer:
-the IDMAC never set IDMAC_DES0_DIC, so every 4 KB descriptor raised a completion
-interrupt - 217 per 1 MB request. Setting it cuts that to 88.9 and returns about
-28% of the hart under streaming load (cpubench 8.6 -> 11.0 M/s). Request cost is
-unchanged, so interrupt count is not what the 10 ms is made of.
-
-**Context switches are not the cost either.** It is 8.3 per 4k request, and
-dividing wall time by switches gives a tempting ~1.3 ms each - but the machine
-does 1556 switches/sec at idle at full CoreMark, against 764/sec under load. The
-rate falls under load; that arithmetic is an artefact.
-
-## Root cause: a 16 KB icache, an XIP kernel, and 1 kHz of USB interrupts
-
-The SD driver was never at fault. Unbinding dwc2 - touching nothing in the
-storage path - nearly halves the cost of every SD request.
-
-The chain, each link measured:
-
-1. The kernel runs **XIP from flash** through a **16 KB instruction cache**
-   (CONFIG_CACHE_L1_ICACHE_SIZE=0x4000; the dcache gets 64 KB).
-2. dwc2 takes a **SOF interrupt every frame, ~971/sec**, because the HID
-   keyboard's periodic endpoint keeps SOF unmasked (GINTMSK bit 3), even though
-   descriptor DMA is already enabled (HCFG bit 23). The timer contributes 249/s
-   and the SD controller 2/s.
-3. Each interrupt evicts kernel text from that small icache, so every subsequent
-   kernel entry refetches from flash.
-
-What USB costs, measured repeatedly:
-
-    path                     USB idle   USB active   ratio
-    getpid (tiny path)         1.37 us      2.02 us    1.5x
-    sched_yield (scheduler)   39.60 us    169.77 us    4.3x
-    SD 4k request              6.87 ms     11.45 ms    1.7x
-    cpubench (userspace only) 73.6 M/s    62.8 M/s     1.2x
-
-**Mechanism, traced and named.** Workqueue tracepoints over 3 seconds:
-
-    3278  function=dwc2_irq_reenable_work     <- ~1093/s, the USB interrupt rate
-      23  function=dbs_work_handler
-      16  function=dw_mci_work_func
-
-Context switches track it exactly - 1560/s with USB bound, **19/s** unbound,
-1524/s rebound. About 1.5 switches per interrupt: queue the work, run the
-worker, switch back.
-
-The source is port-local, not upstream dwc2 (drivers/usb/dwc2/hcd.c):
-
-	defer_reenable = of_device_is_compatible(dev->of_node,
-						 "espressif,esp32s31-dwc2");
-	if (defer_reenable)
-		dwc2_disable_global_interrupts(hsotg);
-	ret = dwc2_handle_hcd_intr(hsotg);
-	if (defer_reenable)
-		schedule_delayed_work(&hsotg->irq_reenable_work, 0);
-
-Every interrupt masks the controller and schedules a work item to unmask it. The
-worker re-checks the CLIC status and, if the interrupt stack has not unwound,
-does schedule_delayed_work(..., 1) - a whole jiffy.
-
-**The underlying fault is the CLIC, and two drivers independently work around
-it.** dwc2 keeps its own level output low across the return boundary; dw_mmc
-runs a 0.5 ms lost_irq_poll timer. Both are lost-interrupt workarounds against
-the same interrupt controller. The USB line is already declared
-IRQ_TYPE_LEVEL_HIGH and the irqchip maps that to handle_level_irq, which masks
-the slot before the handler and unmasks after - so the driver-side masking
-duplicates what genirq already does. The suspect is the ack path: the irqchip
-writes clicintip = 0 because "S31 external slots retain clicintip after the
-matrix source has deasserted", and for a source that is *still* asserted that
-may discard the pending state.
-
-Earlier theory, tested and rejected: icache thrash. A userspace loop spanning
-28 KB of code across 400 functions did not degrade more than a tight loop under
-USB load (40.5 vs 45.2 ns; both lost ~14%), which is not what thrash looks like.
-
-### Constraints on any fix
-
-- **The icache cannot be enlarged.** CACHE_L1_ICACHE_SIZE is a promptless
-  Kconfig with a fixed default and there are no cache_ll size knobs.
-- **XIP has to stay.** 6.3 MB of kernel text against 13.4 MB of RAM, on a board
-  already swapping to run a compositor.
-- **Any fix must be device-agnostic.** Reducing one device's interrupt rate is
-  not a solution; the next device with a periodic endpoint brings it back.
-
-Ranked by generality:
-
-1. **Fix the CLIC level path** so neither workaround is needed. This is the real
-   fix: it removes the reason dwc2 defers its re-enable *and* the reason dw_mmc
-   polls for lost interrupts, and spares every future driver. Risk: get it wrong
-   and interrupts are lost outright.
-2. **Defer the re-enable without a workqueue.** The constraint is genuinely
-   "after the outer CLIC sret", which softirq and irq_work cannot satisfy (both
-   run before it). Coalescing is possible - the work item is already a no-op
-   when pending - but it does not currently coalesce because the worker
-   completes between interrupts.
-3. **Drop the dwc2 deferral entirely** and rely on handle_level_irq. Cheapest to
-   try, and directly tests whether the workaround is still needed.
-
-Do NOT move kernel text into SRAM for this. That was aimed at the icache theory,
-which is dead.
-
-**Neither can be validated without a human pressing keys.** Enumeration,
-event nodes and interrupt rates are all checkable from here; "the keyboard still
-works" is not.
-
-## Weston is up, and what makes it slow is now measured
-
-The panel shows Weston's shell and a terminal - confirmed by eye. It is very
-slow to interact with, and the cause is not what several plausible theories
-said:
-
-- **Not swapping.** At the desktop, idle: swap_in 0 pages/s, swap_out 0, weston
-  and terminal both 0% CPU. Closing and relaunching a client: 0 swap-ins. The
-  16 MB sitting in swap is cold and stays there.
-- **Not the compositor.** Across a scripted 200-line scroll, weston used ~0-70
-  CPU ticks against the terminal's ~446. Compositor-side acceleration - the
-  existing weston-acceleration-plan - would reclaim almost nothing.
-- **It is client-side glyph compositing**, and it is compute-bound rather than
-  bandwidth-bound. Measured on the board with pixbench:
-
-        raw memcpy frame (r+w)          84.9 MB/s   <- the memory ceiling
-        pixman SRC copy 565->565        91.7 MB/s   <- already at it
-        pixman fill rect                62.4 MB/s
-        pixman OVER solid+a8 (glyphs)   13.0 MB/s   <- 7x below it
-        same, one 800x18 text line       4.48 ms per line
-
-A terminal scrolls at ~62 lines/s, or 16 ms a line, of which 4.5 ms is that one
-pixman operation before cairo's rasterisation is counted.
-
-### Correction: the SIMD case does not survive a realistic mask
-
-The 13 MB/s above was measured with a mask of uniform 0x80, which forces every
-pixel down the full blend path. pixman's fast path skips m == 0 entirely and
-avoids the blend for m == 0xff, and real glyphs are mostly background with solid
-interiors. With a realistic mask (85% empty, 12% solid):
-
-    OVER solid+a8, one 800x18 line   0.81 ms   71.1 MB/s   <- near the ceiling
-    same, worst-case 0x80 mask       4.47 ms   12.9 MB/s   <- never occurs
-
-So glyph compositing runs at 71 of ~85 MB/s: about 20% of headroom, not 6x, and
-it accounts for 0.81 ms of a ~16 ms line - roughly 5%. **Do not write PIE fast
-paths for over_n_8_0565.** That recommendation was an artefact of a bad mask.
-
-### What is actually slow, and what no accelerator can fix
-
-    scroll, 78 chars/line     107.1 and 92.6 lines/s
-    scroll, 4 chars/line       48.4 lines/s
-
-Longer lines are *faster*, so cost does not scale with glyphs - it scales with
-commits. Both figures work out to ~43-45 commits/sec, which is the 42 Hz panel
-refresh: the terminal commits once per frame and the refresh rate caps it.
-
-That leaves no accelerator with anything to do. PPA, DMA2D and PIE all make
-pixels faster, and pixels are not the constraint:
-
-    block            accelerates                      useful here
-    PIE (xespv2p2)   per-pixel inner loops            no - already near bandwidth
-    PPA              rect blend / fill / scale        no - fills already at bandwidth
-    DMA2D            2D block moves                   no - copies already at bandwidth
-    JPEG codec       image encode/decode              no
-    AES/SHA/ECC      crypto                           no
-
-Compositor-side work is likewise unwarranted: weston measured 0% CPU across a
-scroll while the client used 41%. The existing weston-acceleration-plan would
-reclaim almost nothing.
-
-### Open leads, in the order worth pursuing
-
-1. **Client startup is slow** - over 12 s for weston-terminal to reach its
-   shell. This is the strongest candidate for the felt slowness, and it is not a
-   rendering problem. The measurement so far is unreliable (a "warm" start timed
-   slower than cold), so it needs instrumenting properly before acting.
-2. **There are no fonts installed at all** - no .ttf, .pcf or .otf anywhere, and
-   no /var/cache/fontconfig. Text still appears, so something is falling back;
-   worth finding out what, and whether every lookup pays a failing scan.
-3. **Frame pacing.** 42 Hz caps updates at ~43/s. Raising the pixel clock would
-   lift that proportionally, at the cost of scanout bandwidth (32 -> 46 MB/s of
-   ~90 at 60 Hz). The 18 MHz timing is Espressif's verified value, cross-checked
-   against two board definitions, so this is an experiment rather than a
-   free win.
-4. **weston-screenshooter captures solid black** while the panel shows a working
-   desktop, so it reads a buffer that is not the one being scanned out. A real
-   bug, and it rules screenshots out as an instrument.
+## Where the display stands
+
+Weston runs and paints. Confirmed by eye on the panel, and confirmed here by
+dumping the scanout buffer and rendering it (see the harness below).
+
+    keystroke -> glyph, steady state      22-68 ms   (1-3 frames, usable)
+    keystroke -> glyph, first ~4 events   8-29 s     <- the remaining problem
+
+The first figure is fine. The second is what "unbelievably slow to type" was:
+cold-cache startup of the client and its libraries off a card that charges
+~10 ms per request. It is not a display problem.
+
+Fixed to get here, all committed:
+
+- **The page flip was ignored.** Weston double-buffers; the driver logged
+  "update wants 0x50c00000 but scanout is at 0x50d00000" and did nothing, so the
+  hardware kept displaying one buffer while weston drew into the other. Scanout
+  is a cyclic DMA that never stops, so a flip cannot go through dmaengine.
+  esp32s31_axi_gdma_retarget_cyclic() rewrites the self-linking descriptors'
+  buffer pointers in place; the engine re-reads them each pass, so the switch
+  lands at a frame boundary with nothing stopped and no tearing.
+- **There was no vblank.** drm_vblank_init() was skipped and flip events were
+  completed by hand with invented timestamps, so weston - which schedules from
+  "last presentation + refresh" - logged "abnormal: -2880 msec". Vblank now runs
+  from a timer at the frame period.
+- **eth0** - 30 s of every boot spent DHCPing an interface that does not exist.
+
+## The harness - measure before changing anything
+
+`inputlat` injects through uinput and watches the scanout buffer; `fbdump`
+copies the buffer out so it can be looked at as a PNG on the host.
+
+    inputlat <trials> <wait_s> <pointer?> [fps_secs]
+    fbdump 0x50d00000 > /tmp/fb.raw     # gzip is ~28 KB, fine over the console
+
+Hard-won rules, each of which cost a wrong answer:
+
+- **Create the uinput device before the compositor starts.** Create it after and
+  every key is discarded; the client received nothing over a full minute.
+- **Watch the buffer being scanned out, not the one weston renders into.** They
+  differ, and the driver logs which is which.
+- **Read whole rows.** A glyph changes ~20 bytes per row, so sampling one word
+  every 512 bytes misses it - that timed out 18 trials of 20.
+- **A framebuffer diff cannot attribute a change to your input.** Unrelated
+  repaints read as instant latency; that is how "0.8 ms" got reported for a
+  pipeline whose frame is 23.8 ms. Quiesce first, or count plane updates.
+- **Use a window longer than the effect.** A 3 s timeout cannot measure a 30 s
+  stall; every "timeout" was a discarded measurement.
+- **Truncate logs before grepping them for readiness.** A stale "enabled with
+  head" reports weston up in 0 s when it never started.
+
+## What to do next, in order
+
+1. **The ~10 ms fixed cost per SD request.** This is the cold-start cost and so
+   the remaining user-visible delay, and it also slows boot, imaging and swap.
+   Still unexplained after eliminating the busy-wait (0), the lost-IRQ poll
+   (~7%), cache maintenance (1%), queue depth, controller config, context
+   switches and interrupt count. Next instrument: timestamp a single request end
+   to end through the mmc block layer.
+2. **Make the VSYNC interrupt fire.** It is wired (source 13, CLIC slot 42) and
+   its count stays at zero, so a drifting timer is carrying vblank today. Either
+   the CLIC matrix is not routing the source or LCD_CAM needs more than
+   LC_DMA_INT_ENA set. A hardware frame boundary does not drift against scanout.
+3. **Prime the page cache at boot** so the first launch is not paying full
+   cold-start price. Cheap to try; bounded by 13.4 MB of RAM.
+4. **Then, and only then, acceleration.** With repaints happening at frame rate
+   these finally become measurable against the harness:
+   - **The shadow-buffer copy.** Weston logs "uses shadow framebuffer": an extra
+     750 KB memcpy per repaint, ~9-17 ms. Best removed by rendering straight
+     into the scanout buffer; failing that DMA2D or PPA can do the blit with no
+     CPU. Best-evidenced target.
+   - **Scanout bandwidth.** The panel eats 32 of ~90 MB/s (36%) continuously at
+     18 MHz / 42 Hz, whether anything changed or not.
+   - **PIE/SIMD is not a target for pixman** - copies, fills and realistic glyph
+     blends all measured at or near the memory ceiling. Possibly worth it for
+     FreeType rasterisation, which has not been measured.
+   - **Hardware JPEG** would let the panel be streamed continuously for visual
+     debugging rather than single snapshots.
 
 ## Tried and failed - do not repeat
 
