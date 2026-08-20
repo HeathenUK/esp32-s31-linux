@@ -6,21 +6,68 @@ tried and failed, so it is not tried again.
 
 ## Where the desktop stands
 
-Weston runs on the panel and is usable. Keystroke-to-glyph, measured with the
-automated harness (uinput injection, scanout buffer watched for the glyph):
+Weston runs on the panel. Behaviour is BIMODAL, not uniformly slow. Measured
+2026-08-20, desktop-shell, uinput injection, detector null-validated (see below):
 
-    worst case      40-60 s (often timing out)  ->  3.56 s
-    median          ~10.6 s                     ->  73 ms
-    later trials    -                           ->  18-242 ms
+    5 trials at 25 s spacing (trials isolated - spacing > latency):
+        66.6   75.8   83.8   63.0   17046.4   ms
 
-Steady state is where it needs to be. The worst case - the first interaction
-after the desktop starts - is not, and its cause is known: the working set is
-~25 MB against 13.4 MB of RAM, so roughly 15 MB is evicted to the SD card.
+    12 trials at 2 s spacing (sustained pressure, no recovery time):
+        min 13.7 s   median 16.2 s   max 22.2 s
+
+Typical keystrokes cost 63-84 ms. Roughly one in five costs ~17 s. The fault
+counters attribute it exactly: +504 major faults across the 5-trial run, almost
+all inside the single slow trial, at ~34 ms of SD latency each.
+
+Both numbers are real and measure different regimes. At 2 s spacing the system
+never recovers, so every keystroke pays; at 25 s spacing the working set mostly
+stays resident until something evicts it, and then one keystroke pays the whole
+bill. The user reports ~20 s from a physical keypress, consistent with hitting
+the bad case.
+
+**The defect is periodic eviction of the desktop working set, not per-keystroke
+slowness.** Cost of one bad keystroke, measured: ~500 major faults blocked on SD
+(~10-17 s), 2.8 s system CPU, and only 0.4 s of actual glyph rendering.
+
+**WITHDRAWN - earlier numbers in this file were wrong.** A previous revision
+claimed 40-60 s -> 3.56 s worst and ~10.6 s -> 73 ms median. Those do not
+reproduce and must not be quoted. The likely fault: `inputlat` watches the
+scanout buffer for *any* change and attributes it to the injected key, so it
+latches onto unrelated Weston repaints (cursor, its own damage) and reports an
+interval far shorter than the real keystroke-to-glyph path. The same failure
+mode was caught once before, when a "13 ms median" was rejected as physically
+impossible; it was fixed for that case and evidently not in general. A longer
+2 s spacing gives the detector less unrelated churn to mistake for a glyph,
+which is why the honest numbers only appeared once spacing was raised.
+
+What survives from the XIP work is the *mechanism*, not the end-to-end claim:
+identical code measured 5.98x faster from RAM than flash in a self-contained
+microbenchmark, and the timer interrupt went 0.864 -> 0.465 ms. Any
+keystroke-to-glyph delta attributed to it is unproven.
+
+Before trusting any latency number from this harness, validate BOTH ways:
+
+1. **Null test** - sample the framebuffer with no input injected. Run
+   2026-08-20: 0 spontaneous changes in 19 comparisons on each buffer, so the
+   display is static without input and the detector is not timing cursor blink.
+   Note `fbdump` takes positional `<base> <len>`; there is no `-d` flag, and a
+   first attempt using one silently compared empty strings and would have
+   reported a clean result regardless.
+2. **Spacing > latency** - if trial spacing is shorter than the real latency,
+   the previous glyph lands during the next trial and is credited to it. That
+   produces one honest slow trial followed by implausibly fast ones (1.5 ms was
+   observed, against a 23.8 ms frame and ~56 ms of render CPU). Always space
+   trials wider than the worst case being measured.
+
+The cause of the storm is still believed to be memory: the working set is ~25 MB
+against 13.4 MB of RAM, so roughly 15 MB is evicted to the SD card. Measured
+during the run above: MemAvailable fell to 1.8 MB with 14.5 MB in swap.
 
 ### What produced that
 
 **Hot kernel code moved from XIP flash into RAM.** This kernel executes XIP from
-80 MHz QIO flash through a 16 KB instruction cache, and identical code measured
+80 MHz **DIO** flash (verified in the boot log and `bootloader/sdkconfig`; this
+file previously said QIO, which was wrong) through a 16 KB instruction cache, and identical code measured
 **5.98x faster from RAM** (72 KB per side, larger than the cache, so neither can
 hold it). 113 KB now lives in RAM via `.text.fast`:
 
@@ -35,7 +82,8 @@ hold it). 113 KB now lives in RAM via `.text.fast`:
     1M reads              12.21 -> 14.95 MB/s
 
 The SD gain compounds: the latency tail *is* eviction to that card, so cheaper
-page-outs shortened the storm from 40-60 s to 3.56 s.
+page-outs should shorten the storm - but the end-to-end gain is UNPROVEN;
+see the withdrawal above.
 
 **Also fixed:** vblank plumbing and the page-flip DMA retarget (the driver was
 ignoring flips and scanning out the stale buffer), high-resolution timers
@@ -65,7 +113,7 @@ Two traps worth keeping:
 
 ### What is left, and what it needs
 
-The remaining 3.56 s is the eviction storm. Two routes, no others:
+The remaining ~16 s is the eviction storm. Two routes, no others:
 
 1. **More of the paging path in RAM** - `vmscan`, `page_io`, `ext4`. Whether this
    pays should be measured, not assumed: every KB moved to RAM is a KB less for
