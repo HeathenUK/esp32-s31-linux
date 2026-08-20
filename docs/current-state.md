@@ -280,32 +280,60 @@ said:
 A terminal scrolls at ~62 lines/s, or 16 ms a line, of which 4.5 ms is that one
 pixman operation before cairo's rasterisation is counted.
 
-### What the hardware can and cannot do about it
+### Correction: the SIMD case does not survive a realistic mask
 
-    block            accelerates                        useful here
-    PIE (xespv2p2)   any per-pixel inner loop           yes - the hot path
-    PPA              rect blend / fill / scale+rotate   partly - whole-line blits
-    DMA2D            2D block moves                     partly - scroll, copies
-    JPEG codec       image encode/decode                no
-    AES/SHA/ECC      crypto                             no
+The 13 MB/s above was measured with a mask of uniform 0x80, which forces every
+pixel down the full blend path. pixman's fast path skips m == 0 entirely and
+avoids the blend for m == 0xff, and real glyphs are mostly background with solid
+interiors. With a realistic mask (85% empty, 12% solid):
 
-There is no GPU and nothing that rasterises glyphs, so PIE is the only block
-that touches the measured bottleneck.
+    OVER solid+a8, one 800x18 line   0.81 ms   71.1 MB/s   <- near the ceiling
+    same, worst-case 0x80 mask       4.47 ms   12.9 MB/s   <- never occurs
 
-**The target is one function: over_n_8_0565** - solid colour, A8 mask, RGB565
-destination - with about 6x of headroom before it reaches the memory wall.
-Userspace already runs with xespv2p2 enabled and it is safe there, unlike the
-kernel where it caused [[s31-hardware-loop-corruption]]. pixbench gives an
-immediate pass/fail signal.
+So glyph compositing runs at 71 of ~85 MB/s: about 20% of headroom, not 6x, and
+it accounts for 0.81 ms of a ~16 ms line - roughly 5%. **Do not write PIE fast
+paths for over_n_8_0565.** That recommendation was an artefact of a bad mask.
 
-Deliberately NOT first: PPA blend could in principle reach bandwidth at zero CPU
-cost, but needs a kernel driver plus a userspace API, and per-operation setup
-would swamp per-glyph runs. Copies and fills need nothing at all - they are
-already at memory speed, so accelerating them frees CPU without going faster.
+### What is actually slow, and what no accelerator can fix
 
-Cheap parallel experiment: scanout consumes 32 MB/s of ~90 MB/s (36%)
-continuously at 18 MHz / 42 Hz. Lowering the refresh frees roughly 9 MB/s for
-everything else, at the cost of frame latency, and is a one-line panel change.
+    scroll, 78 chars/line     107.1 and 92.6 lines/s
+    scroll, 4 chars/line       48.4 lines/s
+
+Longer lines are *faster*, so cost does not scale with glyphs - it scales with
+commits. Both figures work out to ~43-45 commits/sec, which is the 42 Hz panel
+refresh: the terminal commits once per frame and the refresh rate caps it.
+
+That leaves no accelerator with anything to do. PPA, DMA2D and PIE all make
+pixels faster, and pixels are not the constraint:
+
+    block            accelerates                      useful here
+    PIE (xespv2p2)   per-pixel inner loops            no - already near bandwidth
+    PPA              rect blend / fill / scale        no - fills already at bandwidth
+    DMA2D            2D block moves                   no - copies already at bandwidth
+    JPEG codec       image encode/decode              no
+    AES/SHA/ECC      crypto                           no
+
+Compositor-side work is likewise unwarranted: weston measured 0% CPU across a
+scroll while the client used 41%. The existing weston-acceleration-plan would
+reclaim almost nothing.
+
+### Open leads, in the order worth pursuing
+
+1. **Client startup is slow** - over 12 s for weston-terminal to reach its
+   shell. This is the strongest candidate for the felt slowness, and it is not a
+   rendering problem. The measurement so far is unreliable (a "warm" start timed
+   slower than cold), so it needs instrumenting properly before acting.
+2. **There are no fonts installed at all** - no .ttf, .pcf or .otf anywhere, and
+   no /var/cache/fontconfig. Text still appears, so something is falling back;
+   worth finding out what, and whether every lookup pays a failing scan.
+3. **Frame pacing.** 42 Hz caps updates at ~43/s. Raising the pixel clock would
+   lift that proportionally, at the cost of scanout bandwidth (32 -> 46 MB/s of
+   ~90 at 60 Hz). The 18 MHz timing is Espressif's verified value, cross-checked
+   against two board definitions, so this is an experiment rather than a
+   free win.
+4. **weston-screenshooter captures solid black** while the panel shows a working
+   desktop, so it reads a buffer that is not the one being scanned out. A real
+   bug, and it rules screenshots out as an instrument.
 
 ## Tried and failed - do not repeat
 

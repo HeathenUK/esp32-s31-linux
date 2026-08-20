@@ -52,7 +52,21 @@ int main(void)
 
 	if (!dst || !src || !mask) { perror("malloc"); return 1; }
 	memset(src, 0x5a, px * 2);
-	memset(mask, 0x80, px);
+	memset(mask, 0x80, px);	/* worst case: every pixel takes the blend */
+
+	/*
+	 * A realistic text mask matters, because the fast path skips m == 0
+	 * entirely and avoids the blend for m == 0xff. Real glyphs are mostly
+	 * background with solid interiors and only edges in between, so a
+	 * uniform 0x80 measures a case that never occurs.
+	 */
+	uint8_t *tmask = malloc(px);
+	if (!tmask) { perror("malloc"); return 1; }
+	for (size_t i = 0; i < px; i++) {
+		size_t r = (i * 1103515245u + 12345u) >> 16;
+		tmask[i] = (r % 100) < 85 ? 0x00 :
+			   (r % 100) < 97 ? 0xff : (uint8_t)(r & 0xfe);
+	}
 
 	printf("panel %dx%d RGB565, one frame = %zu KB\n", W, H, px * 2 / 1024);
 	printf("raw memory:\n");
@@ -77,9 +91,19 @@ int main(void)
 		      pixman_image_fill_boxes(PIXMAN_OP_SRC, pdst, &white, 1, &box));
 	}
 
-	/* One terminal line: 80 glyphs of 10x18 over the width of the screen. */
-	printf("pixman, one 800x18 text line:\n");
-	BENCH("OVER solid+a8 mask, 1 line", (size_t)W * 18 * 4, 200,
+	{
+		pixman_image_t *ptext = pixman_image_create_bits(PIXMAN_a8, W, H,
+						(uint32_t *)tmask, W);
+		printf("pixman, realistic text mask (85%% empty, 12%% solid):\n");
+		BENCH("OVER solid+a8, full screen", px * 4, 20,
+		      pixman_image_composite32(PIXMAN_OP_OVER, solid, ptext, pdst,
+					       0, 0, 0, 0, 0, 0, W, H));
+		BENCH("OVER solid+a8, one 800x18 line", (size_t)W * 18 * 4, 200,
+		      pixman_image_composite32(PIXMAN_OP_OVER, solid, ptext, pdst,
+					       0, 0, 0, 0, 0, 0, W, 18));
+	}
+	printf("pixman, worst-case mask (every pixel blends):\n");
+	BENCH("OVER solid+a8, one 800x18 line", (size_t)W * 18 * 4, 200,
 	      pixman_image_composite32(PIXMAN_OP_OVER, solid, pmask, pdst,
 				       0, 0, 0, 0, 0, 0, W, 18));
 	return 0;
