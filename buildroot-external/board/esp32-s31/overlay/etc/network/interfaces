@@ -1,6 +1,12 @@
-# Loopback and ESP-Hosted network interface.
+# Loopback only.
+#
+# There is no eth0 on this board. The S31 has an Ethernet MAC, but the Korvo-1
+# brings out no PHY, and networking comes from ESP-Hosted as wlan0. An
+# "auto eth0 / iface eth0 inet dhcp" stanza was here and cost about 30 seconds
+# of every boot: ifup -a blocked trying to DHCP an interface that will never
+# exist, printing "Cannot find device eth0" and then failing.
+#
+# wlan0 is deliberately not brought up here. It needs wpa_supplicant with
+# credentials that are not in this tree, so it is configured at runtime.
 auto lo
 iface lo inet loopback
-
-auto eth0
-iface eth0 inet dhcp
