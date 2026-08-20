@@ -30,7 +30,7 @@
 #define FB_BASE 0x50C00000UL
 #define FB_SIZE 0x00200000UL
 #define ROW     1600		/* 800 px * 2 bytes */
-#define ROWSKIP 2
+#define ROWSKIP 8
 
 static double now_ms(void)
 {
@@ -91,6 +91,13 @@ int main(int argc, char **argv)
 	 * path without depending on focus at all.
 	 */
 	int pointer_mode = argc > 3 ? atoi(argv[3]) : 0;
+	/*
+	 * FPS mode: drive the pointer continuously and count how many distinct
+	 * frames actually reach the panel. Sampling has to be cheaper than the
+	 * frame interval or it aliases, so this walks every 8th row - enough to
+	 * catch a 24-row cursor while keeping a sweep near 3 ms.
+	 */
+	int fps_secs = argc > 4 ? atoi(argv[4]) : 0;
 	struct uinput_setup us = { .id = { .bustype = BUS_USB, .vendor = 0x1234,
 					   .product = 0x5678 },
 				   .name = "inputlat-virtual-kbd" };
@@ -165,6 +172,56 @@ int main(int argc, char **argv)
 	printf("clicked at centre to take focus\n");
 	fflush(stdout);
 	sleep(2);
+
+	if (fps_secs) {
+		double t_end, t_now, last_inject = 0, last_change;
+		uint32_t prev = digest(fb);
+		unsigned long frames = 0, injects = 0;
+		double gap_min = 1e9, gap_max = 0, sweep;
+		int step = 0;
+
+		t_now = now_ms();
+		sweep = now_ms() - t_now;
+		t_end = now_ms() + fps_secs * 1000.0;
+		last_change = now_ms();
+
+		while ((t_now = now_ms()) < t_end) {
+			uint32_t d;
+
+			/* ~120 Hz of motion: faster than the panel can show. */
+			if (t_now - last_inject >= 8.0) {
+				static const int dx[] = { 6, 4, 0, -4, -6, -4, 0, 4 };
+				static const int dy[] = { 0, 4, 6, 4, 0, -4, -6, -4 };
+
+				emit(ufd, EV_REL, REL_X, dx[step & 7]);
+				emit(ufd, EV_REL, REL_Y, dy[step & 7]);
+				emit(ufd, EV_SYN, SYN_REPORT, 0);
+				step++;
+				injects++;
+				last_inject = t_now;
+			}
+			d = digest(fb);
+			if (d != prev) {
+				double gap = now_ms() - last_change;
+
+				prev = d;
+				frames++;
+				if (frames > 1) {
+					if (gap < gap_min) gap_min = gap;
+					if (gap > gap_max) gap_max = gap;
+				}
+				last_change = now_ms();
+			}
+		}
+		printf("smooth pointer motion for %d s\n", fps_secs);
+		printf("  injected %lu moves, saw %lu distinct frames\n",
+		       injects, frames);
+		printf("  achieved %.1f fps (panel refresh is 42 Hz)\n",
+		       frames / (double)fps_secs);
+		printf("  frame gap: min %.1f ms, max %.1f ms\n", gap_min, gap_max);
+		ioctl(ufd, UI_DEV_DESTROY);
+		return 0;
+	}
 
 	lat = calloc(trials, sizeof(*lat));
 	for (i = 0; i < trials; i++) {
