@@ -541,8 +541,46 @@ Debugging notes for next time:
 - Cached (`0x50c00000`) and uncached (`0xc0c00000`) reads of PPA output agreed
   here, so the DMA-vs-cache trap did not bite - do not assume it is the cause.
 
-Still to do for the plan: advertise a scaled mode in `esp32s31-lcd.c`, upscale
-on flip in the atomic commit path, and wire damage clips.
+### Rendering below panel resolution - phase 1 complete
+
+`esp32s31-lcd.c` advertises a mode at 1/`scale` of the panel next to the
+panel's own and upscales every flip into a private scanout buffer with the PPA.
+`scale` is a module parameter, writable at runtime
+(`/sys/module/esp32s31_lcd/parameters/scale`) so an A/B needs no reflash - set
+it, force a connector reprobe (`echo detect > /sys/class/drm/card0-DPI-1/status`),
+then start weston. Weston needs no configuration change; it just sees a mode.
+
+Matched runs, cold boot each, identical script, keystroke to visible change:
+
+        scale=1   800x480   median 5751.7 ms   min 5236   MemAvailable  708 kB
+        scale=2   400x240   median 2586.1 ms   min 2132   MemAvailable 1032 kB
+
+**2.2x**, and reproducible (2579 ms and 2586 ms on two separate scale=2 boots).
+Verified visually: the panel shows a correctly upscaled Weston desktop, right
+colours, no seam artifacts.
+
+**The mechanism is not what the plan assumed.** The plan predicted the win from
+smaller *client* buffers. It is not: `weston-terminal`'s window is a fixed pixel
+size, so its RSS did not fall - it rose. The gain is compositor-side, a quarter
+of the pixels to composite in pixman and a quarter of the buffer to flush per
+frame. Two consequences:
+
+- The remaining phases aimed at client buffers (32->16 bit colour) will not pay
+  what the plan estimated, and should be re-costed before being built.
+- At 400x240 a default `weston-terminal` no longer fits on screen. Rendering
+  small trades screen real estate for latency, which matters for the "off the
+  shelf desktop" goal - apps assume a certain pixel budget.
+
+Notes:
+
+- The CRTC is always driven at the panel's native timing; the plane framebuffer
+  is the small one and is never scanned out directly.
+- The connector belongs to the panel bridge, so its helper vtable is copied and
+  `get_modes` chained rather than replaced.
+- `drm_plane_enable_fb_damage_clips()` was never called, so every update
+  reported full-surface damage and the per-scanline flush degenerated to the
+  whole buffer. Now enabled.
+
 
 ### Cautions for whoever picks this up
 
