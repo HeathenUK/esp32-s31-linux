@@ -75,6 +75,15 @@ BR2_TARGET_ROOTFS_EXT2_4=y
 # first boot, so the running system is no smaller.
 BR2_TARGET_ROOTFS_EXT2_SIZE="128M"
 BR2_TARGET_ROOTFS_EXT2_LABEL="s31root"
+# 4 KiB blocks, not mkfs.ext4's small-filesystem default of 1 KiB. Block group
+# size scales with block size (8 blocks/group * blocksize), so 1 KiB blocks give
+# 8 MiB groups - 952 of them once growroot expands onto a 7.6 GB card, and
+# ext4_groupinfo_1k then costs ~112 KiB of permanently unreclaimable slab. At
+# 4 KiB it is 128 MiB groups, ~60 of them, ~7 KiB of slab. The cost is more
+# slack per file, which is irrelevant next to 105 KiB of RAM here.
+# resize2fs preserves the block size, so growroot keeps this on the grown
+# filesystem too.
+BR2_TARGET_ROOTFS_EXT2_MKFS_OPTIONS="-b 4096"
 BR2_TARGET_ROOTFS_SQUASHFS=y
 BR2_TARGET_ROOTFS_SQUASHFS_BS_64K=y
 BR2_TARGET_ROOTFS_SQUASHFS4_XZ=y

@@ -840,6 +840,50 @@ All three of `fbdump`, `inputlat` and `pixbench` are now built by the
 `s31-tools` package. They were previously deployed by hand onto the card, so
 re-imaging destroyed them - which it did, in the middle of a measurement.
 
+### Three cheap RAM wins: tracing, the log buffer, and the ext4 block size
+
+Measured, cumulative, on the running board:
+
+                          MemTotal   Slab   MemAvailable
+        starting point     14888    4348      ~4864 kB
+        after 1 and 2      15516    3792       6768 kB
+        after 3            15516    3728       6796 kB
+
+**~1.25 MB**, from three lines and one reformat. None of it is slab pruning in
+the sense of removing drivers.
+
+1. **`FTRACE`, `ENABLE_DEFAULT_TRACERS` and `BLK_DEV_IO_TRACE` off.** These
+   were enabled for the latency investigation. ~577 ftrace events register
+   eagerly at boot at ~304 B of slab each, and their metadata
+   (`print_fmt_*`, `trace_event_fields_*`, `event_class_*`) is another ~394 KiB
+   of `.data`, which is RAM even though the kernel is XIP. `BLK_DEV_IO_TRACE`
+   is what selects `GENERIC_TRACER`, so all three must go together - disabling
+   only one leaves the tracer alive. The kernel image shrank by **1,056,072
+   bytes**. Re-enable all three together if ftrace is needed again.
+2. **`LOG_BUF_SHIFT` 16 -> 14.** `__log_buf` is 64 KiB of `.bss` and the static
+   printk ringbuffer descriptors are ~200 KiB of `.data`; 264 KiB of a 15 MiB
+   machine spent on dmesg history.
+3. **`mkfs.ext4 -b 4096` for the rootfs image**
+   (`BR2_TARGET_ROOTFS_EXT2_MKFS_OPTIONS`). Block group size is
+   8 blocks/group * blocksize, so 1 KiB blocks gave 8 MiB groups - **952 of
+   them** once growroot expanded onto the card, each costing an
+   `ext4_groupinfo_1k`. At 4 KiB it is 128 MiB groups, **61 of them**.
+   `resize2fs` preserves the block size, so the growroot path needed no change,
+   and it is now a property of the built image rather than of whoever formatted
+   the card. Observed saving 64 KiB rather than the predicted 105 KiB, because
+   group info is allocated lazily as groups are touched.
+
+**Re-imaging no longer destroys the tooling.** `foot`, `inputlat`, `fbdump`,
+`pixbench` and `weston.ini` all came back from the image, because they are in
+the buildroot package and overlay rather than hand-copied onto the card.
+
+Not done, and still available if memory gets tight: `DEBUG_FS=n` (~315 KiB, but
+this project leans on debugfs - a production-image flag), and patching
+`MAX_NR_CONSOLES` 63 -> 2 (~126 KiB; all 63 VTs register eagerly, which is why
+`/sys/dev` has 128 entries). Note also that `SReclaimable` reads 0 while
+`dentry` and `inode_cache` are created `SLAB_RECLAIM_ACCOUNT`, so ~620 KiB of
+the reported slab should in fact be reclaimable under pressure.
+
 ### The framebuffer region is CMA, which bought 2 MB of system RAM
 
 `lcd_reserved` used to be a `shared-dma-pool` with `no-map`, which routes it to

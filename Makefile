@@ -205,6 +205,7 @@ linux: toolchain | $(LINUX_OUT)
 		--enable HID_GENERIC \
 		--enable USB_HID \
 		--enable DEBUG_FS \
+		--set-val LOG_BUF_SHIFT 14 \
 		--enable CMA \
 		--enable DMA_CMA \
 		--set-val CMA_SIZE_MBYTES 0 \
@@ -224,9 +225,9 @@ linux: toolchain | $(LINUX_OUT)
 		--enable CRAMFS_MTD \
 		--disable CRAMFS_BLOCKDEV \
 		--enable DRM_ESP32S31_PPA \
-		--enable FTRACE \
-		--enable ENABLE_DEFAULT_TRACERS \
-		--enable BLK_DEV_IO_TRACE
+		--disable FTRACE \
+		--disable ENABLE_DEFAULT_TRACERS \
+		--disable BLK_DEV_IO_TRACE
 	$(MAKE) -C $(LINUX_DIR) O=$(LINUX_OUT) ARCH=riscv CROSS_COMPILE="$(CROSS_COMPILE)" olddefconfig
 	$(MAKE) -C $(LINUX_DIR) O=$(LINUX_OUT) ARCH=riscv CROSS_COMPILE="$(CROSS_COMPILE)" \
 		KCFLAGS="-march=$(S31_SAFE_ISA) $(S31_COMMON_FLAGS)" -j$(JOBS) $(LINUX_TARGET) dtbs
