@@ -663,6 +663,57 @@ the *client* `wl_shm` ones: `weston-terminal` draws through cairo, which needs
 ARGB32, and `wl_shm` mandates ARGB8888/XRGB8888. That is the client's choice,
 not a compositor setting, so there is nothing to turn down.
 
+### Where the remaining latency actually goes
+
+MemTotal is **12804 kB**. The breakdown at rest, weston + terminal running:
+
+        Slab            ~4400-4800 kB   (SUnreclaim; SReclaimable is 0)
+        Cached           ~2800 kB
+        AnonPages        ~1550 kB
+        MemAvailable     ~1200-1460 kB
+
+Slab is a third of all RAM and is not reclaimable. `/proc/slabinfo` needs
+`CONFIG_SLUB_TINY=n` + `CONFIG_SLUB_DEBUG=y` - the production kernel has
+SLUB_TINY, which disables both slabinfo and `/sys/kernel/slab`. With a
+throwaway diagnostic kernel the top caches are `kernfs_node_cache` 748 kB
+(8602 objects), `kmalloc-64` 368 kB, `inode_cache` 364 kB, `kmalloc-1k`
+328 kB, `dentry` 256 kB. The kernfs nodes are real devices in sysfs, so
+shrinking that means removing drivers.
+
+**XIP works, and it is verified, not assumed.** `rootfs/xipmap.c` mmaps a file
+and prints the kernel's own accounting for that VMA:
+
+        libpixman (385 kB) from cramfs XIP    Rss    16 kB   VmFlags ... mm
+        libpixman (385 kB) from SD/ext4       Rss   388 kB   VmFlags ... (none)
+
+`mm` is VM_MIXEDMAP - pages mapped straight out of the flash window. They are
+not page cache, never age and never refault. **overlayfs preserves this**: the
+same library through `/usr/lib` on the overlay maps at 16 kB with `mm`, while a
+library present only on the SD lower layer maps at full size without it.
+
+**The library side is done.** With the overlay mounted, weston has *zero* kB of
+file-backed mapping costing RAM. weston-terminal has 1672 kB, and only 108 kB
+of that is its own binary - the other **1488 kB is `/memfd:weston-shared`**, the
+wl_shm client buffers.
+
+**That is the whole remaining problem.** 427 major faults per keystroke x 4 kB
+is ~1.7 MB, which is exactly the terminal's in-RAM footprint: its entire
+working set is evicted and reloaded on every keystroke. And those buffers are
+twice the size they need to be, because clients must use ARGB8888 - see the
+RGB565 section. They are also larger than the screen, because weston-terminal
+sizes its window in pixels and does not fit in 400x240.
+
+**Set up the overlay, not just LD_LIBRARY_PATH.** `LD_LIBRARY_PATH=/mnt/xip/usr/lib`
+misses libc entirely - the interpreter path is baked into every binary - and
+misses anything dlopened by absolute path, like `libweston-15/drm-backend.so`.
+Measured at 400x240: LD_LIBRARY_PATH only, median 2586 ms; full overlay, median
+2237 ms with trials trending to 1123 ms as the working set warms.
+
+        mkdir -p /mnt/xip /mnt/sdlib
+        mount -t cramfs mtd:rootfs /mnt/xip
+        mount --bind /usr/lib /mnt/sdlib
+        mount -t overlay overlay -o lowerdir=/mnt/xip/usr/lib:/mnt/sdlib /usr/lib
+
 ### Cautions for whoever picks this up
 
 - **Watch `arch/riscv/configs/esp32s31_defconfig` for uncommitted changes.** It
