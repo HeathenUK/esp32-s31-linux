@@ -64,9 +64,9 @@
 #define OPENSBI_FDT_OFFSET_SLOT_SIZE  4U
 #define FDT_MAGIC_LE                  0xEDFE0DD0U
 #define LINUX_PARTITION_OFFSET        0x00400000U
-#define LINUX_PARTITION_SIZE          0x00800000U
-#define ROOTFS_PARTITION_OFFSET       0x00C00000U
-#define ROOTFS_PARTITION_SIZE         0x00400000U
+#define LINUX_PARTITION_SIZE          0x006C0000U
+#define ROOTFS_PARTITION_OFFSET       0x00AC0000U
+#define ROOTFS_PARTITION_SIZE         0x00540000U
 #define ESP32S31_PSRAM_SIZE           S31_PSRAM_SIZE
 #define LINUX_PSRAM_START             S31_PSRAM_BASE
 /*
@@ -339,9 +339,9 @@ static void start_linux_on_core1(uint32_t fdt)
 #define OPENSBI_FDT_OFFSET_SLOT_SIZE  4U
 #define FDT_MAGIC_LE                  0xEDFE0DD0U
 #define LINUX_PARTITION_OFFSET        0x00400000U
-#define LINUX_PARTITION_SIZE          0x00800000U
-#define ROOTFS_PARTITION_OFFSET       0x00C00000U
-#define ROOTFS_PARTITION_SIZE         0x00400000U
+#define LINUX_PARTITION_SIZE          0x006C0000U
+#define ROOTFS_PARTITION_OFFSET       0x00AC0000U
+#define ROOTFS_PARTITION_SIZE         0x00540000U
 static bool map_flash_range(uint32_t vaddr, uint32_t paddr, uint32_t size);
 static bool prepare_core1_cached_psram(void);
 static void enable_core1_external_memory_bus(uint32_t vaddr, uint32_t size);
