@@ -15,9 +15,12 @@ Weston runs on the panel. Behaviour is BIMODAL, not uniformly slow. Measured
     12 trials at 2 s spacing (sustained pressure, no recovery time):
         min 13.7 s   median 16.2 s   max 22.2 s
 
-Typical keystrokes cost 63-84 ms. Roughly one in five costs ~17 s. The fault
-counters attribute it exactly: +504 major faults across the 5-trial run, almost
-all inside the single slow trial, at ~34 ms of SD latency each.
+**Do not trust the "typical 63-84 ms" reading**: it came from a single 5-trial
+run. A later run of the same test on the same board gave 2.4 / 17.0 / 12.2 /
+17.1 / 14.8 s - every trial slow. The desktop is routinely multi-second, which
+is what the user reported from the keyboard all along. The fault counters do
+attribute the slow trials exactly: ~500 major faults each, at ~34 ms of SD
+latency.
 
 Both numbers are real and measure different regimes. At 2 s spacing the system
 never recovers, so every keystroke pays; at 25 s spacing the working set mostly
@@ -89,6 +92,50 @@ see the withdrawal above.
 ignoring flips and scanning out the stale buffer), high-resolution timers
 (`CONFIG_HIGH_RES_TIMERS` was off, quantising every sleep to 4 ms), eth0 (~30 s
 per boot spent DHCPing an interface that does not exist), and `FILE_LOCKING`.
+
+## Why the desktop is slow: it does not fit, by ~2.8 MB
+
+Measured 2026-08-21, and this is the conclusion the rest of the tuning should be
+read against:
+
+    desktop working set   6.6 MB   weston 3.8 MB + weston-terminal 2.8 MB
+    available at rest     3.8 MB
+    deficit              ~2.8 MB
+
+Weston's RSS collapses from 3784 kB to 432 kB once the terminal starts - that is
+its text being evicted, not it using less. Every keystroke then faults it back
+in from SD.
+
+### What does not work, with numbers
+
+    disable Bluetooth + IPv6 (both subsystems)   +364 kB   and latency unchanged
+    kill on-screen keyboard + crond              +100 kB
+    relocate mmc core hot path to RAM            ~5% on SD, not on latency
+    relocate mm reclaim/swap path to RAM (97 kB) no measurable effect (reverted)
+    PPA / DRM plane integration                  0 - see below
+
+Trimming yields hundreds of KB per change against a multi-MB deficit. It cannot
+close the gap.
+
+**PPA does not help this.** The premise was that overlay planes would free
+Weston's pixman shadow buffer. There is no shadow: Weston's pixman renderer
+draws directly into DRM dumb buffers, and there are two of them (770048 bytes
+each) inside the 2 MB `lcd_reserved` region, which is `nomap` and already
+excluded from MemTotal. They cost system RAM nothing. CPU is not the constraint
+either - 0.4 s of a 13.7 s keystroke. The PPA work is good hardware
+acceleration and worth having, but it is not the fix for this.
+
+### The two changes big enough to matter
+
+  1. **A lighter terminal, ~2.4 MB.** weston-terminal is 2.8 MB almost entirely
+     because of cairo/pango/freetype. A bitmap-font Wayland terminal is
+     200-400 kB. Biggest single lever on the board, and it keeps the real
+     desktop shell.
+  2. **Reclaim the framebuffer reservation, ~1 MB.** `lcd_reserved` is 2 MB and
+     Weston double-buffers into 1.5 MB of it. Single-buffering allows shrinking
+     the reservation to ~1 MB; because the region is carved out of system RAM at
+     boot, the difference goes back to the kernel. Worth three times what
+     removing two kernel subsystems was.
 
 ## SD request cost: what the ~8 ms actually is
 
