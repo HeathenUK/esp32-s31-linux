@@ -217,6 +217,9 @@ linux: toolchain | $(LINUX_OUT)
 		--enable HIGH_RES_TIMERS \
 		--enable NO_HZ_IDLE \
 		--enable FILE_LOCKING \
+		--enable CRAMFS \
+		--enable CRAMFS_MTD \
+		--disable CRAMFS_BLOCKDEV \
 		--enable DRM_ESP32S31_PPA \
 		--enable FTRACE \
 		--enable ENABLE_DEFAULT_TRACERS \
