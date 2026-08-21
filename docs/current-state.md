@@ -90,6 +90,66 @@ ignoring flips and scanning out the stale buffer), high-resolution timers
 (`CONFIG_HIGH_RES_TIMERS` was off, quantising every sleep to 4 ms), eth0 (~30 s
 per boot spent DHCPing an interface that does not exist), and `FILE_LOCKING`.
 
+## SD request cost: what the ~8 ms actually is
+
+Measured 2026-08-21. A 4k O_DIRECT read costs **~7.8-8.2 ms**, and the cost is
+per *request*, not per byte: 64k costs 11 ms, so 16x the data adds only 32% more
+time. Reproducible to +-0.15 ms when measured properly.
+
+    card busy wait      0 ms      0 waits in 2617 calls - the card never stalls
+    inside dw_mmc       1.62 ms   before/after req_timing over 469 requests
+    idle exit           0 ms      no cpuidle driver; busy-loop A/B disproved it
+    runtime PM          0 ms      "echo on > power/control" changed nothing
+    unaccounted        ~6.5 ms
+
+The unaccounted part is **CPU-bound, not waiting**: pinning the CPU with a busy
+loop made a read burst 56% *worse* (8.4 -> 13.0 ms/req), which cannot happen if
+the path is idling on hardware.
+
+### Profile of a 1500-request read burst
+
+`/proc/profile` with `profile=6`, resolved against System.map:
+
+    finish_task_switch      26.6%   (largely idle - see the caveat below)
+    process_scheduled_works  5.8%
+    __queue_work             4.1%
+    __wait_for_common        2.8%
+    swake_up_locked          2.1%
+    bh_worker                1.7%
+    __schedule               1.3%
+    __pm_runtime_resume      1.3%
+    mmc_blk_mq_issue_rq      1.3%
+
+Caveat: `/proc/profile` attributes idle to whatever the idle path touches, and
+`finish_task_switch` is where the CPU lands after any switch including returning
+from idle. Read that 26.6% as ~2 ms/request of waiting for the card, not CPU.
+
+What *is* real CPU: workqueue dispatch - `process_scheduled_works` +
+`__queue_work` + `bh_worker` + `mod_delayed_work_on` is ~12%, about **0.9 ms per
+request**, for a path that is one IRQ and one completion.
+
+The MMC and block code is nearly absent from the profile (`mmc_blk_mq_issue_rq`
+1.3%), which explains why relocating the mmc core hot functions to RAM bought
+only ~5%. Those annotations are kept - they are cheap, ~1.3 KB - but this is not
+where the time goes.
+
+### Measurement traps, both hit
+
+  - **`dd` startup is ~150 ms.** Over count=100 that is 1.5 ms/req of pure
+    process overhead; over count=500 it is 0.3 ms. Comparing runs with different
+    counts manufactures differences that are not there. Use count>=500.
+  - **`profile=2` allocates a buffer the size of the text segment**, ~4 MB on a
+    12.8 MB machine. The kernel boots and then userspace starves; it looks
+    exactly like "hangs in udev and never reaches a shell", which is what it was
+    misdiagnosed as for most of a day. Use `profile=6` (256 KB).
+
+### Not yet explained
+
+About 3-4 ms per request remains unattributed after card wait, driver time and
+workqueue overhead. `/proc/profile` at 250 Hz over 1500 requests does not have
+the resolution to split it further; this needs per-request tracing rather than
+sampling.
+
 ## PPA (Pixel Processing Accelerator)
 
 Working under Linux as of 2026-08-21: `drivers/gpu/drm/espressif/esp32s31-ppa.c`,
