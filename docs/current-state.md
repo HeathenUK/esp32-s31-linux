@@ -495,6 +495,55 @@ tried and reverted (SD got worse, wake latency unchanged); zram was tried and
 reverted (median 13 s -> 60 s - it compresses 10.9x but takes its pages from the
 RAM already exhausted).
 
+### PPA SRM works - phase 1 of the buffer plan
+
+Hardware scaling is up. `/sys/kernel/debug/esp32s31_ppa/srm` takes
+`<hex src> <sw> <sh> <hex dst> <dw> <dh>` and scales RGB565 to RGB565.
+
+Measured, solid-colour source, buffers in `lcd_reserved`:
+
+        400x240 -> 800x480    7.75 ms
+        320x192 -> 640x384    5.38 ms
+        400x240 -> 400x240    2.90 ms
+        800x480 -> 400x240    7.19 ms
+
+Correctness was checked two ways: a solid source must produce a bit-uniform
+output (gzip of the result drops from 40-90 KB when broken to ~200-800 bytes
+when clean), and a banded source must land its bands on the expected rows.
+Both pass; boundaries show the two-row bilinear transition a scaler should
+produce.
+
+Two things cost the whole bring-up and are worth writing down:
+
+- **Leave the PPA macro block size at its 32x32 reset default.** IDF's
+  `ppa_ll_srm_get_mb_size()` only *reads* the field - nothing ever writes it -
+  so the vendor driver silently depends on the default. Forcing 16x16 (which
+  tiles 400x240 exactly, so it looked like the better choice) wedges the
+  engine: `PPA_SRM_STATUS` shows the input side scanning and the output side
+  stuck, `param_err` stays 0, and the output DMA never fetches its descriptor.
+- **The descriptor-port block is macro block + a one-pixel border per side**,
+  so 32x32 needs **34x34**. 16x16 needs 18x18, and generalising that as
+  "+4 for 32x32" is wrong. This one does not fail loudly: it corrupts three
+  output pixels at every macro-block seam - every 64 output pixels at 2x -
+  and the bad values are red-ish interpolations that look like legitimate
+  scaler noise rather than a bug.
+
+Debugging notes for next time:
+
+- `PPA_BLEND_FIX_PIXEL` is **ARGB8888 regardless of output colour mode**, so
+  the `fill` debugfs entry takes ARGB8888. Passing RGB565 (`f800`) writes
+  `0x07c0`, and that near-miss wasted a verification round.
+- `fbdump` needs a **page-aligned** address; `mmap` refuses otherwise and the
+  dump comes back empty. Every 64th row of an 800-wide RGB565 picture is
+  page aligned.
+- **Silence the console (`dmesg -n 1`) before dumping base64 over serial.**
+  Driver `dev_info` lines interleave with the stream and corrupt it.
+- Cached (`0x50c00000`) and uncached (`0xc0c00000`) reads of PPA output agreed
+  here, so the DMA-vs-cache trap did not bite - do not assume it is the cause.
+
+Still to do for the plan: advertise a scaled mode in `esp32s31-lcd.c`, upscale
+on flip in the atomic commit path, and wire damage clips.
+
 ### Cautions for whoever picks this up
 
 - **Watch `arch/riscv/configs/esp32s31_defconfig` for uncommitted changes.** It
