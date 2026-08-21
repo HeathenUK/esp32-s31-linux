@@ -27,10 +27,47 @@
 #include <time.h>
 #include <unistd.h>
 
-#define FB_BASE 0x50C00000UL
-#define FB_SIZE 0x00200000UL
+#define LCD_DEBUGFS "/sys/kernel/debug/esp32s31_lcd/updates"
 #define ROW     1600		/* 800 px * 2 bytes */
 #define ROWSKIP 8
+
+/*
+ * Where the display engine is reading. Not a constant: without scaling it
+ * follows the compositor's page flips, and with scaling it is a CMA
+ * allocation that moves with the memory map. The driver publishes it, and
+ * watching the wrong address reports "no change" for every trial - which
+ * looks like a slow desktop rather than a broken harness.
+ */
+static unsigned long fb_base;
+static size_t fb_size = 0x00200000UL;
+
+static int query_scanout(void)
+{
+	char buf[512];
+	char *p;
+	FILE *f = fopen(LCD_DEBUGFS, "r");
+
+	if (!f)
+		return -1;
+	if (!fgets(buf, sizeof(buf), f)) {
+		fclose(f);
+		return -1;
+	}
+	fclose(f);
+
+	p = strstr(buf, "scanout=");
+	if (!p)
+		return -1;		/* driver too old to publish it */
+	fb_base = strtoul(p + 8, NULL, 0);
+	p = strstr(buf, "size=");
+	if (p) {
+		size_t n = strtoul(p + 5, NULL, 0);
+
+		if (n)
+			fb_size = n;
+	}
+	return fb_base ? 0 : -2;	/* -2: published, but nothing scanning out yet */
+}
 
 static double now_ms(void)
 {
@@ -45,7 +82,7 @@ static uint32_t digest(const volatile uint8_t *fb)
 	uint32_t h = 2166136261u;
 	unsigned long r, i;
 
-	for (r = 0; r + ROW <= FB_SIZE; r += ROW * ROWSKIP)
+	for (r = 0; r + ROW <= fb_size; r += ROW * ROWSKIP)
 		for (i = 0; i < ROW; i += 4)
 			h = (h ^ *(const volatile uint32_t *)(fb + r + i)) * 16777619u;
 	return h;
@@ -56,7 +93,7 @@ static unsigned long nonzero(const volatile uint8_t *fb)
 {
 	unsigned long r, i, n = 0;
 
-	for (r = 0; r + ROW <= FB_SIZE; r += ROW * ROWSKIP)
+	for (r = 0; r + ROW <= fb_size; r += ROW * ROWSKIP)
 		for (i = 0; i < ROW; i += 4)
 			if (*(const volatile uint32_t *)(fb + r + i))
 				n++;
@@ -105,9 +142,25 @@ int main(int argc, char **argv)
 	volatile uint8_t *fb;
 	double *lat;
 
+	{
+		int rc = query_scanout();
+
+		if (rc == -2) {
+			fprintf(stderr,
+				"inputlat: nothing is scanning out yet - start the desktop first\n");
+			return 1;
+		}
+		if (rc) {
+			fprintf(stderr,
+				"inputlat: cannot read %s - mount debugfs first\n",
+				LCD_DEBUGFS);
+			return 1;
+		}
+	}
+
 	memfd = open("/dev/mem", O_RDONLY);
 	if (memfd < 0) { perror("open /dev/mem"); return 1; }
-	fb = mmap(NULL, FB_SIZE, PROT_READ, MAP_SHARED, memfd, FB_BASE);
+	fb = mmap(NULL, fb_size, PROT_READ, MAP_SHARED, memfd, fb_base);
 	if (fb == MAP_FAILED) { perror("mmap framebuffer"); return 1; }
 
 	/* Check the mapping holds an image at all, and time a sweep. */
@@ -117,8 +170,8 @@ int main(int argc, char **argv)
 		double sweep = now_ms() - t0;
 		unsigned long nz = nonzero(fb);
 
-		printf("fb 0x%lx: digest=%08x nonzero_samples=%lu sweep=%.2f ms\n",
-		       FB_BASE, d, nz, sweep);
+		printf("fb 0x%lx (%zu bytes, from the driver): digest=%08x nonzero_samples=%lu sweep=%.2f ms\n",
+		       fb_base, fb_size, d, nz, sweep);
 		if (nz == 0) {
 			printf("  buffer is blank - scanout is not at this address\n");
 			quiet = 1;

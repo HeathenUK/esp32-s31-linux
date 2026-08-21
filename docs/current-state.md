@@ -820,6 +820,26 @@ experiment was so effective - it shrank the window, i.e. the client's drawing
 area - and why cutting the output resolution helped less than the plan
 predicted: a clipped window still draws at full size.
 
+### Diagnostics take the scanout address from the driver
+
+`/sys/kernel/debug/esp32s31_lcd/updates` now ends with
+`scanout=0x... size=...`, and `fbdump` and `inputlat` read it when given no
+address. This is not a convenience: the buffer is **not at a fixed place**.
+Without scaling it follows the compositor's page flips; with scaling it is a
+CMA allocation that moves with the memory map. The old hardcoded 0x50c00000 /
+0x50d00000 now read unrelated memory, which presents as a corrupted frame or
+as "every trial timed out" rather than as an obvious mistake - both of which
+happened during this work.
+
+`scanout=0x00000000` is normal before the first page flip: the address is
+published on enable, so reading it the instant weston says "enabled with head"
+is too early. The tools distinguish that case ("nothing is scanning out yet")
+from a missing debugfs mount.
+
+All three of `fbdump`, `inputlat` and `pixbench` are now built by the
+`s31-tools` package. They were previously deployed by hand onto the card, so
+re-imaging destroyed them - which it did, in the middle of a measurement.
+
 ### The framebuffer region is CMA, which bought 2 MB of system RAM
 
 `lcd_reserved` used to be a `shared-dma-pool` with `no-map`, which routes it to

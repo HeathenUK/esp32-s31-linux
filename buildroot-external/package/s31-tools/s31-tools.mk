@@ -8,7 +8,7 @@ S31_TOOLS_VERSION = 1.0
 S31_TOOLS_SITE = $(BR2_EXTERNAL_ESP32_S31_PATH)/../rootfs
 S31_TOOLS_SITE_METHOD = local
 S31_TOOLS_LICENSE = GPL-2.0-only
-S31_TOOLS_DEPENDENCIES = dtc
+S31_TOOLS_DEPENDENCIES = dtc pixman
 
 S31_TOOLS_ESP_HOSTED_DIR = $(BR2_EXTERNAL_ESP32_S31_PATH)/../esp-hosted-fg
 S31_TOOLS_PROTO_DIR = $(S31_TOOLS_ESP_HOSTED_DIR)/common/proto
@@ -63,6 +63,13 @@ define S31_TOOLS_BUILD_CMDS
 		$(@D)/s31_audio_analyze.c -o $(@D)/s31-audio-analyze
 	$(TARGET_CC) $(TARGET_CFLAGS) $(TARGET_LDFLAGS) \
 		$(@D)/s31_audio_stream_stats.c -o $(@D)/s31-audio-stream-stats
+	$(TARGET_CC) $(TARGET_CFLAGS) $(TARGET_LDFLAGS) \
+		$(@D)/fbdump.c -o $(@D)/fbdump
+	$(TARGET_CC) $(TARGET_CFLAGS) $(TARGET_LDFLAGS) \
+		$(@D)/inputlat.c -o $(@D)/inputlat
+	$(TARGET_CC) $(TARGET_CFLAGS) $(TARGET_LDFLAGS) \
+		$(@D)/pixbench.c -o $(@D)/pixbench -lpixman-1 \
+		-I$(STAGING_DIR)/usr/include/pixman-1
 endef
 
 define S31_TOOLS_INSTALL_TARGET_CMDS
@@ -94,6 +101,9 @@ define S31_TOOLS_INSTALL_TARGET_CMDS
 		$(TARGET_DIR)/usr/bin/s31-audio-analyze
 	$(INSTALL) -D -m 0755 $(@D)/s31-audio-stream-stats \
 		$(TARGET_DIR)/usr/bin/s31-audio-stream-stats
+	$(INSTALL) -D -m 0755 $(@D)/fbdump $(TARGET_DIR)/usr/sbin/fbdump
+	$(INSTALL) -D -m 0755 $(@D)/inputlat $(TARGET_DIR)/usr/sbin/inputlat
+	$(INSTALL) -D -m 0755 $(@D)/pixbench $(TARGET_DIR)/usr/sbin/pixbench
 	ln -sfn esp-hosted-ctl $(TARGET_DIR)/usr/sbin/test.out
 endef
 
