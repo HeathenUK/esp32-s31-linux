@@ -213,7 +213,7 @@ linux: toolchain | $(LINUX_OUT)
 		--disable USB_DWC2_DEBUG \
 		--disable USB_DWC2_DEBUG_PERIODIC \
 		--enable HID_SUPPORT \
-		--disable DRM_FBDEV_EMULATION \
+		--enable DRM_FBDEV_EMULATION \
 		--enable FRAMEBUFFER_CONSOLE \
 		--disable DRM_DEBUG_MODESET_LOCK \
 		--enable INPUT_MISC \
