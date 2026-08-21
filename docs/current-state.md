@@ -543,21 +543,40 @@ Debugging notes for next time:
 
 ### Rendering below panel resolution - phase 1 complete
 
-`esp32s31-lcd.c` advertises a mode at 1/`scale` of the panel next to the
-panel's own and upscales every flip into a private scanout buffer with the PPA.
-`scale` is a module parameter, writable at runtime
-(`/sys/module/esp32s31_lcd/parameters/scale`) so an A/B needs no reflash - set
+`esp32s31-lcd.c` advertises a reduced-size mode next to the panel's own and
+upscales every flip into a private scanout buffer with the PPA. `render=WxH` is
+a module parameter, writable at runtime
+(`/sys/module/esp32s31_lcd/parameters/render`) so an A/B needs no reflash - set
 it, force a connector reprobe (`echo detect > /sys/class/drm/card0-DPI-1/status`),
 then start weston. Weston needs no configuration change; it just sees a mode.
 
+**Only some sizes are legal.** The scaling coefficient is 8.4 fixed point, so
+there must be an integer K with `render * K / 16 == native`, and both axes must
+share one K or the image is stretched. For this 800x480 panel that is exactly:
+
+        800x480 (K=16)  640x384 (K=20)  400x240 (K=32)
+        320x192 (K=40)  200x120 (K=64)  160x96  (K=80)
+
+640x480 is **not** usable: it is 4:3 against a 5:3 panel, so filling the panel
+would need a horizontal-only 1.25x stretch. It is refused, as is 512x320
+(K=25 horizontally, 24 vertically - subtly anisotropic).
+
 Matched runs, cold boot each, identical script, keystroke to visible change:
 
-        scale=1   800x480   median 5751.7 ms   min 5236   MemAvailable  708 kB
-        scale=2   400x240   median 2586.1 ms   min 2132   MemAvailable 1032 kB
+        render      pixels   median      min    MemAvailable
+        800x480      100%   5751.7 ms   5236 ms      708 kB
+        640x384       64%   4763.4 ms   -            764 kB
+        400x240       25%   2586.1 ms   2132 ms     1032 kB
+        320x192       16%   2403.5 ms   1939 ms      824 kB
 
-**2.2x**, and reproducible (2579 ms and 2586 ms on two separate scale=2 boots).
-Verified visually: the panel shows a correctly upscaled Weston desktop, right
-colours, no seam artifacts.
+400x240 is reproducible (2579 ms and 2586 ms on two separate boots). Verified
+visually: the panel shows a correctly upscaled Weston desktop, right colours,
+no seam artifacts.
+
+**The curve flattens hard.** Below 400x240 a further 36% cut in pixels buys 7%.
+Resolution is a real lever but a bounded one, and the floor it converges on
+(~2.4 s) is still far from usable. Whatever dominates the remaining time is not
+pixel work.
 
 **The mechanism is not what the plan assumed.** The plan predicted the win from
 smaller *client* buffers. It is not: `weston-terminal`'s window is a fixed pixel
@@ -581,6 +600,29 @@ Notes:
   reported full-surface damage and the per-scanline flush degenerated to the
   whole buffer. Now enabled.
 
+
+### Colour depth is not a lever - closed
+
+Checked against Weston 15's own `libweston/pixel-formats.c` rather than
+assumed. The only formats its pixman renderer can render into are **RGB565 at
+16 bpp** and a set of 32 bpp variants. There is nothing between, and nothing
+below. Weston states the rule in a comment: *"Indexed/greyscale formats, and
+formats not containing complete colour channels, are not supported."*
+
+- We are **already** at the floor: `gbm-format=rgb565`, and the driver
+  advertises only `DRM_FORMAT_RGB565`.
+- The hardware could go lower - the PPA converts GRAY8 (8 bpp) or YUV420
+  (12 bpp) to RGB565 on the fly - but Weston cannot produce either without
+  being patched.
+- `XRGB4444` is in Weston's format table but has no pixman mapping, and is
+  still 16 bits in memory, so it would save nothing even if it worked.
+- RGB888 is 24 bpp: more traffic, not less. Not a reduction lever.
+
+This also **kills phase 3 of the plan**, which was written as "32 -> 16 bit
+colour". Weston's own framebuffers were already 16-bit. The 32-bit buffers are
+the *client* `wl_shm` ones: `weston-terminal` draws through cairo, which needs
+ARGB32, and `wl_shm` mandates ARGB8888/XRGB8888. That is the client's choice,
+not a compositor setting, so there is nothing to turn down.
 
 ### Cautions for whoever picks this up
 
