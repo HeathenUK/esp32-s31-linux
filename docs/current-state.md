@@ -601,7 +601,46 @@ Notes:
   whole buffer. Now enabled.
 
 
-### Colour depth is not a lever - closed
+### RGB565 end to end: as far as it can go - closed
+
+The scanout buffer, the DRM format (`DRM_FORMAT_RGB565` is the only one the
+driver advertises) and weston's own output buffer (`gbm-format=rgb565`) are all
+565. That was the original fight and it is won. The one remaining 32-bit buffer
+is the **client surface**, and it cannot be removed by configuration.
+
+`weston-terminal` allocates ARGB8888/XRGB8888, so every composite converts down
+to 565. It cannot be forced off, for two independent reasons:
+
+- **libwayland hardcodes it.** `bind_shm()` sends `WL_SHM_FORMAT_ARGB8888` and
+  `WL_SHM_FORMAT_XRGB8888` to every client unconditionally, before any
+  compositor-added formats. A compositor cannot withdraw them. The protocol
+  says so too: *"All renderers should support argb8888 and xrgb8888."*
+- **The toytoolkit hardcodes it.** `clients/window.c` uses
+  `CAIRO_FORMAT_ARGB32` and asks for XRGB8888/ARGB8888 without ever querying
+  what else is advertised - and weston's pixman renderer *does* advertise
+  RGB565.
+
+So it is patch-only. What that costs, measured on the board with `pixbench`
+(pixman directly, nothing patched), ms per composite:
+
+        surface        8888->565   565->565   penalty
+        800x480 SRC       61.67      16.63      3.7x
+        800x480 OVER     108.56      16.74      6.5x
+        640x384 OVER      71.19      10.73      6.6x
+        400x240 SRC       15.35       4.40       11 ms
+        400x240 OVER      27.13       4.43       23 ms
+
+Two readings, and the second matters more:
+
+1. **At today's latency it is noise** - 11-23 ms against a 2586 ms keystroke.
+   It is not why the desktop is slow.
+2. **It is a permanent ceiling on smoothness.** An OVER composite at 800x480
+   costs 108 ms, which is 4.5 frame times at the panel's 42 Hz. Even with
+   memory pressure solved, 800x480 can never hit frame rate while clients hand
+   over 8888. At 400x240 it is 27 ms against a 24 ms budget. This is an
+   argument for a reduced render size that is independent of the memory story.
+
+### Colour depth below 565 is not a lever - closed
 
 Checked against Weston 15's own `libweston/pixel-formats.c` rather than
 assumed. The only formats its pixman renderer can render into are **RGB565 at
