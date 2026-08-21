@@ -207,6 +207,79 @@ the visible content getting smaller. Note it does not reduce scanout traffic -
 the LCD DMA reads 768 KB every frame regardless - but that is not the bottleneck;
 client buffers are.
 
+## Plan: minimise client buffer memory (next work)
+
+Client buffer today is 800x403x4B = 1.26 MB, double buffered. The floor worth
+aiming at is 400x240x2B = 192 KB - a 6.6x reduction - by attacking both terms.
+
+                 pixels     bytes/px     buffer     total (x2)
+    now          800x403        4       1,290 KB     2,580 KB
+    phase 1      400x240        4         384 KB       768 KB
+    phase 3      400x240        2         192 KB       384 KB
+
+### Phase 1 - smaller DRM mode + PPA SRM upscale   (4x, driver only)
+
+The core work, and the only lever that shrinks buffers for *every* client
+without modifying any of them, which the off-the-shelf constraint requires.
+
+  1. Implement PPA SRM in esp32s31-ppa.c alongside the working fill and blend.
+     Same 2D-DMA pattern: one TX channel feeding the source, one RX taking the
+     scaled result. Registers PPA_SRM_* (0x20, 0x28, 0x64); IDF's ppa_srm.c is
+     the reference and uses SOC_DMA2D_TRIG_PERIPH_PPA_SRM_TX/RX.
+  2. Advertise a scaled mode in esp32s31-lcd.c. The connector exposes only the
+     native 800x480 today; add 400x240 (and maybe 640x384). Weston picks it up
+     as an ordinary mode - no Weston changes.
+  3. Upscale on flip: in the atomic commit path, when the framebuffer is smaller
+     than the panel, SRM-scale it into the scanout buffer rather than pointing
+     the scanout DMA at it.
+  4. Wire damage clips. The driver logs "drm_plane_enable_fb_damage_clips() not
+     called"; with them, SRM only reprocesses damaged rectangles, so a cursor
+     blink costs a tiny scale rather than a full-screen one.
+
+  Cost: a full-screen 400x240 -> 800x480 SRM is ~1 MB of traffic, extrapolating
+  from the measured blend to ~5 ms against a 23.8 ms frame. Damage clips cut it.
+  Risk: text upscaled 2x is slightly soft - but full size, unlike the font hack.
+
+### Phase 2 - reclaim the framebuffer reservation   (~750 KB back)
+
+With Weston rendering at 400x240 its own buffers drop 768 -> 192 KB each. The
+lcd_reserved region is 2 MB and `nomap`, carved out of system RAM at boot:
+
+    now       2 x 768 KB scanout                 = 1.5 MB of a 2 MB reservation
+    phase 2   2 x 192 KB render + 1 x 768 KB out = 1.15 MB -> reserve 1.25 MB
+
+Requires the DT reservation and the driver's buffer allocation to change
+together.
+
+### Phase 3 - 32 -> 16 bit colour   (a further 2x)
+
+Display, PPA and Weston's pixman renderer all speak RGB565 natively, and Weston
+already converts down to it every frame, so this saves memory *and* CPU. The
+obstacle is that wl_shm format choice is client-side.
+
+  - First check whether the compositor can force it: if Weston can advertise
+    only RGB565 in wl_shm, cairo clients should negotiate down without patching,
+    keeping this off-the-shelf.
+  - If not, it needs a client patch - park it rather than break the constraint.
+
+  Not pursued: 12-bit is not byte-aligned and has no hardware path; 8-bit needs
+  a palette.
+
+### Phase 4 - verify
+
+Re-measure with the standing methodology: 5 trials, 25 s spacing, null-validated
+detector, fresh boot between comparisons (DRM master does not release promptly
+on killall - running two compositors in one session invalidates the result).
+Track buffer size, majflt/keystroke and median latency together; those three are
+the causal chain.
+
+**Expected:** phase 1 alone takes buffers to 384 KB total and, on the measured
+430->150 fault relationship, should put latency near the 0.71 s already observed
+- but with a full-size readable screen. Phase 3 roughly halves the rest again.
+
+**Order matters:** phase 1 first, largest win and unblocks phase 2; phase 3 last
+because it is the one that risks needing a client change.
+
 ## Why the desktop is slow: it does not fit, by ~2.8 MB
 
 Measured 2026-08-21, and this is the conclusion the rest of the tuning should be
