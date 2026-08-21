@@ -384,6 +384,50 @@ workqueue overhead. `/proc/profile` at 250 Hz over 1500 requests does not have
 the resolution to split it further; this needs per-request tracing rather than
 sampling.
 
+## USB: a hub used to cost 39% of the core
+
+Fixed 2026-08-21. The board has one USB port, so a hub is the normal way to
+attach a keyboard and a mouse at once, and until now that was ruinous.
+
+    both arms on one boot, same hub, same two HID receivers, no compositor
+
+                 dwc2 irq/s   CoreMark        descriptor DMA
+    high speed         8541   599.0 / 601.1   off
+    full speed         1040   981.9 / 980.0   on
+
+CoreMark idle on this board is ~986, so the controller went from costing about
+39% of the core to roughly 0.5%.
+
+**Why a hub was expensive.** A full-speed device behind a HIGH-speed hub needs
+split transactions, and this core cannot schedule those in descriptor DMA mode:
+`dwc2_hcd_qh_init_ddma()` rejects every `do_split` QH and `dwc2_hcd_qh_create()`
+then fails the URB. A hub therefore knocks the whole periodic schedule off the
+hardware scheduler and onto software driven by the SOF interrupt - and because
+the root port is now high speed, SOF fires once per *microframe*, 8 kHz rather
+than 1 kHz. Both penalties arrive together, which is why the number is so large.
+
+**The fix** is `host_full_speed` in `dwc2_set_esp32s31_params()`, default on.
+Pinning the port to full speed makes the hub a plain full-speed repeater, so
+nothing behind it needs a split, `do_split` is false everywhere, and
+`dma_desc_fs_enable` puts descriptor DMA back on. The price is a 12 Mbit/s
+ceiling for the entire bus - irrelevant for HID, and the reason this is a
+runtime knob rather than a hard-coded choice:
+
+    /sys/module/dwc2/parameters/host_full_speed     write 0 or 1
+    /sys/bus/platform/drivers/dwc2/20300000.usb     unbind, then bind
+
+**Measurement traps hit here.** A first A/B run with Weston up gave 175 vs 388
+CoreMark - right direction, wrong magnitude, because memory pressure dominated.
+Measure USB cost with no compositor running. Unbinding `usbhid` isolates HID
+cost without unplugging anything, and Weston re-attaches to the renumbered
+event nodes by itself.
+
+**Still unexplained:** a Logitech receiver behind the hub spontaneously
+disconnected once, 99 s after enumerating, with no transfer errors before it.
+It has not recurred since the change. The hub is bus-powered and declares
+`bMaxPower = 100mA` while feeding two receivers that each declare 100 mA, which
+is an untested suspect.
+
 ## PPA (Pixel Processing Accelerator)
 
 Working under Linux as of 2026-08-21: `drivers/gpu/drm/espressif/esp32s31-ppa.c`,
