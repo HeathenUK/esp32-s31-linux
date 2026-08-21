@@ -884,6 +884,44 @@ this project leans on debugfs - a production-image flag), and patching
 `dentry` and `inode_cache` are created `SLAB_RECLAIM_ACCOUNT`, so ~620 KiB of
 the reported slab should in fact be reclaimable under pressure.
 
+### fbcon is back on, and its 752 KiB idle cost is accepted
+
+`DRM_FBDEV_EMULATION` is enabled again. It was dropped when fbcon held the only
+slot in a 2 MiB coherent pool; that constraint died with the move to CMA. The
+driver already called `drm_fbdev_dma_setup()` and already installed the
+`.dirty` callback deferred I/O needs, so it was only the config.
+
+What it gives: the kernel log and a login prompt on the panel from boot, and
+**the console comes back when a compositor exits** - `drm_fb_helper` restores it
+on last-close, verified by `scanout` returning to the fbdev buffer and the
+console redrawing. No work needed for that.
+
+What it costs: **752 KiB of CMA**, held whether or not anything is on screen.
+Measured on a clean boot: `CmaFree` 4096 -> 3344, `fb0` 800x480 at 16 bpp.
+There is **no second shadow buffer** - `drm_fbdev_dma` with deferred I/O uses a
+vmap of the same DMA object as `screen_buffer`.
+
+**Decision: accept it.** The alternatives were examined and are worse:
+
+- **A smaller fbcon mode via `video=DPI-1:400x240` costs *more*, not less.**
+  Today `scanout` *is* the fbdev buffer - fbcon is scanned out directly,
+  zero-copy. Any reduced mode forces the PPA path, which needs a full-size
+  destination: 192 KiB fbdev + 750 KiB scanout = 942 KiB, ~190 KiB worse.
+  The current arrangement is already optimal.
+- **Unbinding fbcon does not free it.** `echo 0 > /sys/class/vtconsole/vtcon1/bind`
+  switches the console to the dummy device and returns ~20 KiB of fbcon's own
+  structures; `CmaFree` does not move and `/dev/fb0` remains. There is no sysfs
+  to unregister a DRM fbdev, and `CONFIG_MODULES=n` rules out unload tricks.
+- Releasing the buffer on master-set and reallocating on last-close is the only
+  thing that would actually do it, and DRM exposes no driver API for that - it
+  would mean driving `drm_fb_helper` internals from our driver.
+
+**Worth doing if the desktop is ever run downscaled:** in the scaled path the
+driver allocates its own native-sized scanout buffer while fbdev already owns
+an identical one that is idle (fbcon is suspended whenever a master holds the
+device). Those could be the same allocation - **750 KiB back** in any reduced
+resolution configuration, and nothing lost at native.
+
 ### The framebuffer region is CMA, which bought 2 MB of system RAM
 
 `lcd_reserved` used to be a `shared-dma-pool` with `no-map`, which routes it to
