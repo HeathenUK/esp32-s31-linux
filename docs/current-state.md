@@ -90,6 +90,74 @@ ignoring flips and scanning out the stale buffer), high-resolution timers
 (`CONFIG_HIGH_RES_TIMERS` was off, quantising every sleep to 4 ms), eth0 (~30 s
 per boot spent DHCPing an interface that does not exist), and `FILE_LOCKING`.
 
+## PPA (Pixel Processing Accelerator)
+
+Working under Linux as of 2026-08-21: `drivers/gpu/drm/espressif/esp32s31-ppa.c`,
+DT node `pixel-accelerator@20345000`. Fill is implemented and verified; blend and
+SRM are not yet written.
+
+    800x480 RGB565 fill (768 KB)   4.43 - 4.97 ms   (~165 MB/s), off-CPU
+    64x64 fill (8 KB)              0.39 - 0.56 ms   (overhead-dominated)
+    completion                     interrupt-driven, 361 us for a small fill
+
+The point of this is memory, not CPU. Weston's pixman renderer holds an 800x480
+RGB565 shadow buffer - 768 KB of a 12.8 MB machine - and a hardware blend path
+lets that go. Measured, the desktop's bad keystroke is ~500 major faults blocked
+on SD and only 0.4 s of actual rendering, so free RAM is the constraint.
+
+### What it took, and what will bite again
+
+Four separate enables, in three register blocks, none visible from the vendor's
+operation-level code. Symptom of missing any of them: the 2D-DMA arms, completes,
+and reports INFIFO_UDF - it starved - and zeros land in the target buffer.
+
+    HP_SYSTEM PPA/2DDMA mem_lp_ctrl   LP_EN defaults to 1: both blocks' internal
+    (0x2058629c / 0x20586210)         memories are POWERED DOWN out of reset.
+                                      This was the one that mattered.
+    DMA2D RST_CONF.CLK_EN (0xa04)     a second, global module clock, separate
+                                      from the HP_SYS_CLKRST gate
+    DMA2D RST_CONF AXI FIFO resets    read and write master FIFOs
+    PPA REG_CONF.CLK_EN (0x6c)        engine clock, defaults to auto-gated
+
+Also required: single-block descriptor mode (not multiple), macro-block size
+NONE (the field defaults to 8x8, wrong for a plain RGB565 fill), descriptor
+burst enabled, and the descriptor in **uncached** SRAM - `dma_alloc_coherent`
+returns cached memory here, so the engine reads a stale descriptor and never
+starts. The AXI GDMA driver has the same constraint and says so.
+
+Fill colour is **ARGB8888** whatever the output colour mode; the engine converts.
+Passing a raw RGB565 value fills near-black. Output is already RGB565 - there is
+no CPU-side conversion anywhere.
+
+### Interrupt source numbers - do not count enum entries
+
+The PPA interrupt was dead because the DT source was 94 rather than 102.
+Deriving it by counting matches of `ETS_.*_INTR_SOURCE` in `soc/interrupts.h`
+undercounts by 8: `ETS_GPIO_INTR0-3_SOURCE` and `ETS_CPU_INTR_FROM_CPU_0-3_SOURCE`
+do not end in `_INTR_SOURCE`. Checking the method against LCD_CAM appeared to
+validate it only because LCD_CAM sits *before* those entries.
+
+Verify against a known-good node (USB OTGHS is source 99) or read the live
+interrupt matrix: `devmem 0x20585800 + source*4` on the running board shows
+`PASS_LEVEL | slot`. **busybox `devmem` is on the rootfs** and is by far the
+fastest way to test a register hypothesis - no rebuild, no reflash.
+
+## LCD vblank: the hardware interrupt works
+
+Previously believed dead. It is not. Enabling `LCD_VSYNC_INT` by hand:
+
+    devmem 0x20396070 32 0x1    # INT_CLR
+    devmem 0x20396064 32 0x1    # INT_ENA
+    -> 82 interrupts in 2 s on CLIC slot 42, i.e. ~41 Hz, the panel's refresh
+
+The interrupt, its routing and the driver's handler are all fine. The count is
+zero only because nothing enables it: the driver arms it in the vblank-enable
+path, and that is only reached when a DRM client asks for vblank. So the driver
+can use real hardware vblank instead of the hrtimer approximation - worth doing,
+because the hrtimer only approximates frame boundaries.
+
+Note `LCD_UNDERRUN` (bit 4) is latched in `int_raw` and has not been looked at.
+
 ### How the relocation works
 
 `.text.fast` sits between `_sdata` and `__bss_start`, so the existing XIP copy in
