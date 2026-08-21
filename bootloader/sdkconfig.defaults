@@ -20,3 +20,9 @@
 CONFIG_ESP_CONSOLE_UART_CUSTOM=y
 CONFIG_ESP_CONSOLE_UART_CUSTOM_NUM_0=y
 CONFIG_ESP_CONSOLE_UART_BAUDRATE=1000000
+
+# Quad I/O: the kernel executes XIP from this flash, so the mode sets the
+# instruction-fetch bandwidth for the whole system. The part (mfr 0x46, dev
+# 0x4018) is a quad-capable SPI NOR. If a board ever fails to boot after this,
+# reflash with DIO - the ROM loader is unaffected by this setting.
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
