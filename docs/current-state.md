@@ -984,6 +984,55 @@ is allocated, not fixed). Diagnostics that hardcode 0x50c00000/0x50d00000 -
 `inputlat`'s FB_BASE, `fbdump` invocations - now read the wrong memory. Take
 the address from `dmesg | grep "scaling: scanout buffer"`.
 
+### USB unplug: the host pull-downs were the whole problem
+
+**Symptom:** unplugging any device produced a 2-3 s burst of `-71`/XactErr, and
+USB was then dead until reboot - replugging anything, including the same
+device, produced nothing in dmesg at all. Plugging a mouse in could oops the
+kernel in `dma_pool_alloc`.
+
+**Cause:** `esp32s31_usb_set_pulldowns()` was *clearing* the D+/D- pull-downs.
+A host port must hold both lines low through 15k pull-downs; that is what makes
+"nothing attached" a defined SE0. With them off the port floats, and about half
+a second after a real unplug the controller reports a **phantom connect**. The
+hub cannot enumerate a device that is not there, retries, power-cycles the port
+as its last recovery step, gives up, and **leaves the port switched off** -
+after which nothing is ever detected again.
+
+Every observed symptom follows from that: the error burst is the hub arguing
+with a device that has gone; it happened with any device because nothing about
+it is device-specific; and the replug did nothing because the port was already
+unpowered by then.
+
+**The bad note.** A note from August recorded the opposite - that asserting the
+bits clamped the bus and hid devices - on a measurement showing SE0 with a
+keyboard attached. **It claimed 15k swamps a device's 1.5k pull-up, which is
+electrically impossible**; that ratio is a 10:1 divider and reads as a solid J.
+The impossible claim was written down as fact and believed for months. The
+original reading was real but confounded by other PHY init faults (suspend/PLL
+routing, line-state keepalive bits, reset ordering) fixed afterwards.
+
+Re-measured, port powered:
+
+        empty port, pull-downs off : PRTLNSTS = J    <- floating, reads attached
+        empty port, pull-downs on  : PRTLNSTS = SE0  <- correct, stable
+        keyboard,   pull-downs on  : HPRT0 = 0x00021405, enumerates first time
+
+**After the fix**, on hardware: unplug gives four `Not connected` messages over
+240 ms and a clean disconnect; the port then sat empty for 70 s inventing
+nothing; a different device (Logitech receiver) enumerated first time; and the
+`dma_pool_alloc` oops did not recur - it was downstream of the phantom-connect
+churn, not a separate DMA bug.
+
+Also raised `bPwrOn2PwrGood` for this board from 1 (2 ms) to 50 (100 ms).
+`hub_power_on_good_delay()` applies no 100 ms floor to *root* hubs, so the hub
+retried 4 ms after powering a port - too soon for a device that just lost
+power, which turned a last-resort recovery into a permanent failure. Belt and
+braces now that the phantom connect is gone.
+
+**The `pulldowns` sysfs attribute on the phy device makes this a 60-second
+test.** Use it rather than trusting any note, including this one.
+
 ### Cautions for whoever picks this up
 
 - **Watch `arch/riscv/configs/esp32s31_defconfig` for uncommitted changes.** It
