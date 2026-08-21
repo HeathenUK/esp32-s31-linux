@@ -20,12 +20,24 @@ P=/sys/module/kernel/parameters/dma_clean_before_fromdevice
 echo "clean_before=$(cat $P 2>/dev/null)" >> "$R"
 echo "mem_avail_kb=$(awk '/MemAvailable/{print $2}' /proc/meminfo)" >> "$R"
 echo "sig_before=$(dmesg | grep -c 'unhandled signal')" >> "$R"
+echo "swappiness=$(cat /proc/sys/vm/swappiness)" >> "$R"
+echo "page_cluster=$(cat /proc/sys/vm/page-cluster)" >> "$R"
+swapon -s 2>/dev/null | tail -n +2 | while read dev type size used prio; do
+	echo "swapdev=$dev size=$size used=$used prio=$prio" >> "$R"
+done
+echo "coremark_idle=$(coremark 2>/dev/null | grep -i 'Iterations/Sec' | tr -dc '0-9.')" >> "$R"
+
+# A previous run leaving a process or a lockfile behind shows up as
+# "failed to add socket", which looks like a kernel problem and is not.
+killall -9 weston 2>/dev/null
+sleep 1
+rm -rf /run/weston
 
 export XDG_RUNTIME_DIR=/run/weston
 mkdir -p "$XDG_RUNTIME_DIR"
 chmod 700 "$XDG_RUNTIME_DIR"
 
-weston --backend=drm --renderer=pixman --drm-format=rgb565 --idle-time=0 \
+weston --backend=drm --renderer=pixman --idle-time=0 \
 	--log=/root/s31-weston.log > /root/s31-weston.out 2>&1 &
 W=$!
 
@@ -46,6 +58,11 @@ else
 fi
 
 echo "sig_after=$(dmesg | grep -c 'unhandled signal')" >> "$R"
+echo "swap_used_kb=$(awk '/SwapTotal|SwapFree/{print $2}' /proc/meminfo | paste -sd- | bc 2>/dev/null)" >> "$R"
+[ -r /sys/block/zram0/mm_stat ] && \
+	echo "zram_mm_stat=$(cat /sys/block/zram0/mm_stat)" >> "$R"
+echo "enabled_at=$(grep -o 'Output .DPI-1. enabled' /root/s31-weston.log | head -1)" >> "$R"
+echo "startup_s=$(awk -F'[][]' '/Loading module/{a=$2} /enabled with head/{print $2; exit}' /root/s31-weston.log)" >> "$R"
 dmesg | grep 'unhandled signal' | tail -4 >> "$R"
 echo "--- weston log tail ---" >> "$R"
 tail -8 /root/s31-weston.log >> "$R" 2>/dev/null
