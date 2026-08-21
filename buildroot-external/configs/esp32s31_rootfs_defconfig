@@ -86,3 +86,10 @@ BR2_TARGET_ROOTFS_SQUASHFS_EXTREME_COMP=y
 # glamor cannot use. See docs/weston-acceleration-plan.md.
 BR2_PACKAGE_WESTON=y
 BR2_PACKAGE_WESTON_DRM=y
+# foot: an off-the-shelf wayland-native terminal with real damage tracking,
+# for comparison against the weston toytoolkit demo client
+# foot needs a real monospace font; the image had none at all, and
+# weston-terminal was falling back to a cairo builtin.
+BR2_PACKAGE_DEJAVU=y
+BR2_PACKAGE_DEJAVU_MONO=y
+BR2_PACKAGE_FOOT=y

@@ -714,6 +714,44 @@ Measured at 400x240: LD_LIBRARY_PATH only, median 2586 ms; full overlay, median
         mount --bind /usr/lib /mnt/sdlib
         mount -t overlay overlay -o lowerdir=/mnt/xip/usr/lib:/mnt/sdlib /usr/lib
 
+### The client was the problem, not the stack
+
+`weston-terminal` is a **toytoolkit demo**, and measuring it was measuring the
+wrong thing. Replacing it with `foot` - an off-the-shelf, Wayland-native
+terminal that does real damage tracking - changes the result by an order of
+magnitude. Matched runs, one client each, fresh boot, native 800x480:
+
+        client            median     min      max    majflt/keystroke
+        foot              237.7 ms   141.6    1193       ~171
+        weston-terminal  3462.0 ms   172.2    7277       ~413
+
+**14.6x on the median.** foot also idles at a fraction of the footprint:
+RssShmem 0-180 kB against weston-terminal's 1488 kB, and 0 faults on a warm
+keystroke.
+
+This overturns the previous section's conclusion. The Wayland client-side
+rendering model is **not** the ceiling; `weston-terminal` redrawing its whole
+surface through cairo/pango on every keystroke was. Note weston-terminal's
+*min* of 172 ms - it can be fast when warm, it just almost never is.
+
+Consequences:
+
+- **Option C (switching to X11) is not needed.** It was proposed on the premise
+  that Wayland had no route to acceptable latency. That premise was wrong.
+- The remaining gap to "usable" (~150 ms) is now small: foot's best trial is
+  141.6 ms and its median 237.7 ms, at *full* 800x480 with no render-downscale.
+- Variance, not the mean, is now the problem: foot ranges 141-1193 ms.
+
+`BR2_PACKAGE_FOOT` and `BR2_PACKAGE_DEJAVU`/`_MONO` are now in the rootfs
+defconfig. The image had **no fonts at all** before - weston-terminal was
+falling back to a cairo builtin, and foot refuses to start without a real one.
+
+**Use the SD imager to deploy rootfs changes** (`docs/sd-imager.md`), not
+ad-hoc file copies. Hand-carrying binaries misses everything the package
+would have installed - fonts, in this case. Note the imager rewrites the whole
+card, so anything deployed ad-hoc is destroyed: `inputlat` and `fbdump` were
+lost and had to be rebuilt. They are not part of any package and should be.
+
 ### What the remaining time is NOT
 
 Three hypotheses were tested and killed, which is worth more than the one that
