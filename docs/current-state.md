@@ -721,11 +721,13 @@ wrong thing. Replacing it with `foot` - an off-the-shelf, Wayland-native
 terminal that does real damage tracking - changes the result by an order of
 magnitude. Matched runs, one client each, fresh boot, native 800x480:
 
-        client            median     min      max    majflt/keystroke
-        foot              237.7 ms   141.6    1193       ~171
-        weston-terminal  3462.0 ms   172.2    7277       ~413
+        client            median     min      max
+        foot              193.8 ms    98.2     316
+        weston-terminal  7827.1 ms  6961.0    8338
 
-**14.6x on the median.** foot also idles at a fraction of the footprint:
+**40x on the median**, and foot's last three trials were 102, 109 and 98 ms -
+it settles around 100 ms once warm, which is inside the ~150 ms usability
+threshold. At **native 800x480**, with no render-downscale. foot also idles at a fraction of the footprint:
 RssShmem 0-180 kB against weston-terminal's 1488 kB, and 0 faults on a warm
 keystroke.
 
@@ -738,9 +740,10 @@ Consequences:
 
 - **Option C (switching to X11) is not needed.** It was proposed on the premise
   that Wayland had no route to acceptable latency. That premise was wrong.
-- The remaining gap to "usable" (~150 ms) is now small: foot's best trial is
-  141.6 ms and its median 237.7 ms, at *full* 800x480 with no render-downscale.
-- Variance, not the mean, is now the problem: foot ranges 141-1193 ms.
+- **The objective is essentially met at native resolution**: ~100 ms warm,
+  194 ms median, off-the-shelf, no customisation, no downscale.
+- Most of the earlier variance was **measurement contamination**, not the
+  system. See below.
 
 `BR2_PACKAGE_FOOT` and `BR2_PACKAGE_DEJAVU`/`_MONO` are now in the rootfs
 defconfig. The image had **no fonts at all** before - weston-terminal was
@@ -751,6 +754,35 @@ ad-hoc file copies. Hand-carrying binaries misses everything the package
 would have installed - fonts, in this case. Note the imager rewrites the whole
 card, so anything deployed ad-hoc is destroyed: `inputlat` and `fbdump` were
 lost and had to be rebuilt. They are not part of any package and should be.
+
+### weston.ini is now tracked - it was silently changing the experiment
+
+`weston.ini` existed only as a hand-edit on the SD card. Re-imaging replaced it
+with buildroot's default, which does two damaging things:
+
+- pins `[output] mode=800x480`, overriding the driver's preferred scaled mode;
+- leaves the desktop shell's **panel** enabled, whose launcher starts a
+  **second terminal**.
+
+So runs that were supposed to compare one client at 400x240 were actually
+measuring two clients at 800x480, on a machine with ~1 MB free. That is where
+the wild variance came from: foot measured 141-1193 ms contaminated, and
+98-316 ms clean. It also made the render-downscale path look like a large
+regression (medians of 6-8 s) when the second client was the cause.
+
+The file now lives in `buildroot-external/board/esp32-s31/overlay/etc/xdg/weston/`
+with `panel-position=none`, no `mode=` pin, and `gbm-format=rgb565`.
+
+**Damage-aware scaling.** `esp32s31_ppa_scale_rect()` scales a sub-rectangle,
+so the driver honours the client's damage instead of rescaling the whole frame
+on every flip - otherwise a one-glyph keystroke costs a full-surface SRM pass
+and throws away exactly the property that makes a good client fast. Verified
+visually: a clean 2x upscale with no stale regions.
+
+The same call places a smaller image inside the scanout buffer without
+stretching it, which is how a mode whose aspect ratio does not match the panel
+gets **pillarboxed** - e.g. 640x480 copied 1:1 to destination x=80, with the
+two 80-px bars filled once at modeset rather than every frame.
 
 ### What the remaining time is NOT
 
