@@ -63,7 +63,8 @@ IDF_EXPORT := $(shell test -f /opt/esp-idf/export.sh && echo /opt/esp-idf/export
 	find $(HOME) -maxdepth 5 -type f -name export.sh 2>/dev/null | grep esp-idf | head -n 1)
 
 .PHONY: all download toolchain toolchain-source opensbi linux coremark rootfs initramfs s31-pie-cases \
-	buildroot-menuconfig buildroot-clean clean fullclean flash-opensbi flash-linux \
+	buildroot-menuconfig buildroot-clean clean fullclean flash-opensbi flash-linux  \
+	xip-rootfs flash-xip-rootfs \
 	flash-rootfs persist flash-persist bootloader flash-bootloader erase \
 	imager flash-imager
 
@@ -247,12 +248,12 @@ coremark: rootfs
 
 # Keep this decimal because POSIX test(1) and truncate(1) do not accept the
 # partition table's 0x-prefixed value.
-ROOTFS_PARTITION_SIZE ?= 4194304
+ROOTFS_PARTITION_SIZE ?= 5505024
 PERSIST_PARTITION_SIZE ?= 1441792
 # The XIP kernel must start on a 4-MiB Sv32 megapage boundary, so the linux
 # partition stays at 0x400000 and rootfs takes every byte the kernel does not
 # need. Keep this in step with bootloader/partitions.csv.
-LINUX_PARTITION_SIZE ?= 8388608
+LINUX_PARTITION_SIZE ?= 7077888
 BUILDROOT_MAKE = $(MAKE) -C $(BUILDROOT_DIR) O=$(BUILDROOT_OUT) \
 	BR2_EXTERNAL=$(BUILDROOT_EXTERNAL) BR2_DL_DIR=$(BUILDROOT_DL_DIR)
 
@@ -274,6 +275,53 @@ rootfs: toolchain s31-pie-cases | $(BUILDROOT_OUT)
 		exit 1; \
 	fi; \
 	truncate -s $(ROOTFS_PARTITION_SIZE) $(ROOTFS_IMG)
+
+# Userspace XIP image: the compositor's dependency closure, executed in place
+# from the always-mapped flash window instead of faulting off the SD card.
+#
+# Two things this must get right, both of which were wrong when the image was
+# built by hand and cost most of a session to find:
+#
+#   * Paths are preserved, not flattened. The runtime overlays this image over
+#     /usr/lib, /usr/bin and /usr/libexec, so an object staged anywhere else is
+#     dead weight - present in flash at a path nothing loads.
+#   * dlopen()ed plugins are named explicitly. Weston loads its backend and
+#     shell by absolute path, so a DT_NEEDED walk alone misses drm-backend.so
+#     and desktop-shell.so, which are exactly the objects that run every frame.
+XIP_STAGE := $(BUILD_DIR)/xipstage
+XIP_ROOTFS_IMG := $(BUILD_DIR)/rootfs-xip.cramfs
+#
+# Deliberately narrow. The partition is 5.25 MB and an XIP cramfs cannot
+# compress text - it has to be executable in place - so the closure has to fit
+# uncompressed. Staging everything Weston can load comes to 6.35 MB. Left out:
+# the ivi/kiosk/fullscreen/screen-share shells, which this board never loads,
+# and the libexec clients, whose cairo dependency alone is 823 KB and which
+# draw the panel once at startup rather than per frame.
+XIP_ROOTS ?= usr/bin/weston usr/lib/libweston-15/*.so \
+	usr/lib/weston/desktop-shell.so usr/bin/foot
+
+xip-rootfs: rootfs
+	@echo "--- userspace XIP image ---"
+	@command -v mkcramfs >/dev/null || test -x $(BUILDROOT_OUT)/host/bin/mkcramfs || \
+		{ echo "ERROR: mkcramfs not found; enable BR2_PACKAGE_HOST_CRAMFS" >&2; exit 1; }
+	rm -rf $(XIP_STAGE)
+	mkdir -p $(XIP_STAGE)
+	python3 $(CURDIR)/rootfs/mkxipstage.py $(CROSS_COMPILE)readelf \
+		$(BUILDROOT_OUT)/target $(XIP_STAGE) $(XIP_ROOTS)
+	@# -X TWICE, deliberately. One -X aligns data to 8 bytes and the kernel
+	@# refuses the image with "data is not page aligned"; the second sets
+	@# opt_xip_mmu and aligns to a page. A single -X mounts, runs, and
+	@# silently never executes in place. The help text does not say this.
+	$(BUILDROOT_OUT)/host/bin/mkcramfs -X -X $(XIP_STAGE) $(XIP_ROOTFS_IMG)
+	@XIP_SIZE=$$(stat -c%s $(XIP_ROOTFS_IMG)); \
+	if [ $$XIP_SIZE -gt $(ROOTFS_PARTITION_SIZE) ]; then \
+		echo "ERROR: XIP image ($$XIP_SIZE bytes) exceeds the rootfs partition ($(ROOTFS_PARTITION_SIZE) bytes)"; \
+		exit 1; \
+	fi; \
+	echo "XIP image $$XIP_SIZE bytes, $$(($(ROOTFS_PARTITION_SIZE) - $$XIP_SIZE)) bytes free in the rootfs partition"
+
+flash-xip-rootfs:
+	esptool -p /dev/ttyUSB0 -b 2000000 write-flash $(ROOTFS_OFFSET) $(XIP_ROOTFS_IMG)
 
 # Historical/user-facing name for the root filesystem image.
 initramfs: linux rootfs

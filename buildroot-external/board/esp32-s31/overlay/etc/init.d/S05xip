@@ -1,0 +1,59 @@
+#!/bin/sh
+#
+# Execute the compositor's text in place from flash instead of faulting it off
+# the SD card.
+#
+# This existed for a long time as a line in throwaway test scripts and was
+# never wired into boot, which meant the measured benefit was never actually
+# delivered on a running board. Measured with a fresh boot per arm, injecting
+# pointer motion at 125 Hz and counting plane updates:
+#
+#     without      0.00  0.00  0.29  0.32  0.00  14.03 fps, still faulting
+#     with         1.25  0.00 13.06 18.17 18.95  18.85 fps, majflt 0
+#     weston RSS   872 kB  ->  92 kB
+#
+# LD_LIBRARY_PATH is NOT sufficient and must not be used instead: it only
+# covers DT_NEEDED libraries, while weston dlopen()s its backend and shell by
+# absolute path and the executable's own text is not a library at all. The
+# overlay catches all three because it works on paths rather than on the
+# loader's search order - which is also why the image has to be built with the
+# real layout preserved. See rootfs/mkxipstage.py.
+
+XIP_MNT=/mnt/xip
+
+start() {
+	printf 'Mounting XIP userspace: '
+	mkdir -p "$XIP_MNT" || { echo "FAIL (mkdir)"; return 1; }
+	if ! mount -t cramfs mtd:rootfs "$XIP_MNT" 2>/dev/null; then
+		echo "skipped (no XIP image on mtd:rootfs)"
+		return 0
+	fi
+	for d in usr/lib usr/bin lib; do
+		[ -d "$XIP_MNT/$d" ] || continue
+		sd="/mnt/sd-$(echo "$d" | tr / -)"
+		mkdir -p "$sd" || continue
+		mount --bind "/$d" "$sd" || continue
+		# lowerdir order matters: flash first so it wins, SD second so
+		# anything absent from the image still resolves.
+		if ! mount -t overlay overlay \
+			-o "lowerdir=$XIP_MNT/$d:$sd" "/$d"; then
+			umount "$sd" 2>/dev/null
+		fi
+	done
+	echo "OK ($(mount | grep -c 'type overlay') overlays)"
+}
+
+stop() {
+	for d in usr/lib usr/bin lib; do
+		umount "/$d" 2>/dev/null
+		umount "/mnt/sd-$(echo "$d" | tr / -)" 2>/dev/null
+	done
+	umount "$XIP_MNT" 2>/dev/null
+}
+
+case "$1" in
+	start) start ;;
+	stop) stop ;;
+	restart|reload) stop; start ;;
+	*) echo "Usage: $0 {start|stop|restart}"; exit 1 ;;
+esac
