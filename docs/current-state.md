@@ -100,9 +100,13 @@ per boot spent DHCPing an interface that does not exist), and `FILE_LOCKING`.
         14.76 s   morning: flash in DIO, no XIP
          7.59 s   after switching the flash to QIO
          5.58 s   after XIP libraries via LD_LIBRARY_PATH
-         4.85 s   after overlaying the XIP image over /usr/lib   <- current
+         4.85 s   after overlaying the XIP image over /usr/lib
+         0.71 s   with a smaller client surface            <- 95% off, usable
 
-67% off, and still not usable. What changed and what is left is below.
+The last step was a 3.1x smaller Wayland buffer, obtained crudely with
+`weston-terminal --font-size=6`. Trials 633/685/707 ms after a 2.6 s warm-up.
+It shrinks the visible window too, so it is a proof of mechanism rather than the
+shipping answer - see "surface size is the dominant cost" below.
 
 ### 1. The flash was running DIO, not QIO
 
@@ -175,11 +179,33 @@ text problem is solved. The terminal's memory is now dominated by ~1.1 MB of
 **shmem: the Wayland shared buffers** between client and compositor, which are
 RAM pages being swapped out and faulted back in.
 
-That makes reducing surface size the next lever, not more XIP: a smaller window
-or a lower render resolution shrinks those buffers directly. Rendering at
-400x240 and upscaling with PPA SRM is the obvious form - note it does **not**
-reduce scanout traffic, since the panel is 800x480 and the LCD DMA reads 768 KB
-every frame regardless, but it does cut the client buffers and compositing work.
+### Surface size is the dominant cost, and it is measured
+
+Shrinking the client surface 3.1x (via `--font-size=6`, as a proof of mechanism):
+
+    wayland buffer      1,290,240 B  ->  409,600 B   each, double buffered
+    majflt/keystroke            430  ->        150
+    median latency          4854 ms  ->     707 ms
+
+That is the whole remaining problem in one measurement. The causal chain -
+buffer size -> shmem resident -> major faults -> latency - is confirmed end to
+end.
+
+**Client buffers are ARGB8888 on an RGB565 display.** Each buffer is 0x13B000
+bytes for a ~800x403 window: exactly 4 bytes/pixel. Weston converts down to
+RGB565 for scanout every frame, so we pay double the memory *and* a conversion
+pass. Moving clients to RGB565 would halve the buffers with *less* CPU, and the
+display, the PPA and Weston's pixman renderer all handle it natively - but
+`wl_shm` format choice is client-side and weston-terminal builds cairo surfaces
+as ARGB32, so it needs a patched client. Lower colour depth is otherwise a dead
+end: 12-bit is not byte-aligned and has no hardware path, 8-bit needs a palette.
+
+**The shipping form is a smaller DRM mode plus PPA SRM upscaling**, because it
+works entirely in the driver: advertise e.g. 400x240, upscale into the 800x480
+scanout buffer, and every client's buffers shrink without the client knowing or
+the visible content getting smaller. Note it does not reduce scanout traffic -
+the LCD DMA reads 768 KB every frame regardless - but that is not the bottleneck;
+client buffers are.
 
 ## Why the desktop is slow: it does not fit, by ~2.8 MB
 
