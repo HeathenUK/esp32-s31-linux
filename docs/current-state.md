@@ -820,6 +820,51 @@ experiment was so effective - it shrank the window, i.e. the client's drawing
 area - and why cutting the output resolution helped less than the plan
 predicted: a clipped window still draws at full size.
 
+### The framebuffer region is CMA, which bought 2 MB of system RAM
+
+`lcd_reserved` used to be a `shared-dma-pool` with `no-map`, which routes it to
+the reserved-memory **coherent** allocator. That allocator is
+`bitmap_find_free_region(mem->bitmap, mem->size, order)` - **power-of-two page
+orders only**. The consequences were absurd rather than merely wasteful:
+
+        buffer            bytes    pages needed   pages taken   waste
+        640x384 client   491520        120         128 (ord 7)    6%
+        640x480 client   614400        150         256 (ord 8)   41%
+        800x480 scanout  768000        188         256 (ord 8)   36%
+
+Two 640x480 clients therefore claimed the whole 2 MiB region and the scanout
+buffer could not be allocated at all - the driver fell back to driving the
+panel at the client's timing and the picture was garbage. 640x480 cost twice
+640x384 for 25% more pixels.
+
+**Now `reusable` instead of `no-map`**, which selects `rmem_cma_setup()` -
+`rmem_dma_setup()` rejects `reusable` outright, so the property is the whole
+switch. CMA allocates by page count, so nothing rounds away, *and* the region
+counts towards MemTotal with the kernel free to put movable pages in whatever
+the display is not using.
+
+        Reserved memory: created CMA memory pool at 0x50800000, size 4 MiB
+
+                        before      after
+        MemTotal       12844 kB   14888 kB
+        MemAvailable    ~1200 kB    5764 kB   (idle, before weston)
+        CmaFree              -      4096 kB
+
+**Constraints that fixed the geometry.** CMA needs base *and size* aligned to
+`PAGE_SIZE * pageblock_nr_pages`; with no huge pages `pageblock_order =
+MAX_PAGE_ORDER`, so 4 MiB. 0x50800000 is the highest 4 MiB-aligned base that
+still clears `audio_reserved` (0x50fe0000) and `opensbi_reserved` (0x50ff0000),
+so **nothing had to be relocated** - and the old 2 MiB `no-map` hole at
+0x50c00000 went back to the system, which is where the +2 MB comes from.
+
+`CONFIG_CMA_SIZE_MBYTES` is set to 0: the default global CMA area is unused
+here and otherwise logs "cma: Failed to reserve 16 MiB".
+
+**The scanout buffer address moved** (0x50a00000 at the time of writing, and it
+is allocated, not fixed). Diagnostics that hardcode 0x50c00000/0x50d00000 -
+`inputlat`'s FB_BASE, `fbdump` invocations - now read the wrong memory. Take
+the address from `dmesg | grep "scaling: scanout buffer"`.
+
 ### Cautions for whoever picks this up
 
 - **Watch `arch/riscv/configs/esp32s31_defconfig` for uncommitted changes.** It

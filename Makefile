@@ -205,6 +205,9 @@ linux: toolchain | $(LINUX_OUT)
 		--enable HID_GENERIC \
 		--enable USB_HID \
 		--enable DEBUG_FS \
+		--enable CMA \
+		--enable DMA_CMA \
+		--set-val CMA_SIZE_MBYTES 0 \
 		--disable DYNAMIC_DEBUG \
 		--disable USB_DWC2_DEBUG \
 		--disable USB_DWC2_DEBUG_PERIODIC \
