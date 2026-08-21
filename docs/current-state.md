@@ -93,6 +93,94 @@ ignoring flips and scanning out the stale buffer), high-resolution timers
 (`CONFIG_HIGH_RES_TIMERS` was off, quantising every sleep to 4 ms), eth0 (~30 s
 per boot spent DHCPing an interface that does not exist), and `FILE_LOCKING`.
 
+## Where the desktop is now (2026-08-21)
+
+    keystroke-to-glyph, median, 5 trials at 25 s spacing, null-validated detector
+
+        14.76 s   morning: flash in DIO, no XIP
+         7.59 s   after switching the flash to QIO
+         5.58 s   after XIP libraries via LD_LIBRARY_PATH
+         4.85 s   after overlaying the XIP image over /usr/lib   <- current
+
+67% off, and still not usable. What changed and what is left is below.
+
+### 1. The flash was running DIO, not QIO
+
+The single biggest win of the day, and it was free. The kernel executes XIP from
+flash, so the SPI mode sets instruction-fetch bandwidth for the whole system.
+Same 80 MHz clock, four bits per clock instead of two:
+
+    SD 4k O_DIRECT read     8.12-8.43  ->  4.44-4.74 ms/req   (-46%)
+    CoreMark                     ~845  ->  985.8 iter/s       (+17%)
+    desktop keystroke          14.76 s  ->  7.59 s            (-49%)
+
+Everything else on this axis is already at its ceiling: 80 MHz is the maximum
+the S31 offers (20/40/80 only, no 120), OPI and DTR need octal flash silicon and
+this part is a quad NOR, and PSRAM is already octal at 250 MHz - above IDF's own
+200 MHz default.
+
+**Beware the image header.** ESP-IDF deliberately writes "dio" into it even when
+QIO is selected, because the ROM loader reads that header in DIO to fetch the
+second-stage bootloader, which then switches the flash to quad at runtime. Read
+the bootloader's own `SPI Mode : QIO` line, not the header.
+
+### 2. Userspace text executes in place from flash
+
+Library text no longer occupies RAM or faults from SD. Four pieces:
+
+  - `drivers/mtd/devices/esp32s31_flash.c` implements `->_point()`, handing out
+    the address in the always-mapped 16 MiB flash window instead of a copy.
+  - `CONFIG_CRAMFS` + `CONFIG_CRAMFS_MTD`, mounted as `mount -t cramfs
+    mtd:rootfs /mnt/xip`.
+  - The image is built with **`mkcramfs -X -X`** - `-X` TWICE. Once aligns data
+    to 8 bytes and the kernel refuses with "data is not page aligned"; the
+    second `-X` sets `opt_xip_mmu` and aligns to a page. The help text does not
+    say this, and a single `-X` yields an image that mounts, runs, and silently
+    never XIPs.
+  - `arch/riscv/mm/cacheflush.c`: `flush_icache_pte()` did
+    `page_folio(pte_page(pte))` unconditionally. Text mapped from the flash
+    window sits below PHYS_RAM_BASE and has no memmap entry, so this walked a
+    wild pointer and oopsed inside execve. Guarded with `pfn_valid()`.
+
+Delivery matters as much as the mechanism. `LD_LIBRARY_PATH` only covers
+DT_NEEDED libraries; Weston `dlopen`s its shell and backend plugins by absolute
+path, and the ELF interpreter path is baked into every binary. Overlaying the
+image over `/usr/lib` catches all three:
+
+    mount --bind /usr/lib /mnt/sdlib
+    mount -t overlay overlay -o lowerdir=/mnt/xip/usr/lib:/mnt/sdlib /usr/lib
+
+libc comes along for free because `/lib/ld-musl-riscv32-sf.so.1` is a symlink to
+`../usr/lib/libc.so`. Anything not in the image falls through to SD.
+
+Flash layout was regrown for it: linux 8 -> 6.75 MB, rootfs 4 -> 5.25 MB at
+0xAC0000, `persist` preserved. **The hart0 loader validates both partitions
+against hardcoded constants in bootloader/main/main.c and refuses to boot on a
+mismatch** - changing only partitions.csv gives a boot loop printing "Linux
+partition not found". That is the check working.
+
+    Weston dependency closure   23 objects, 4.92 MB text, 0.12 MB data  (36:1)
+    image shipped               5.13 MB incl. libc and plugins, in a 5.25 MB part
+
+### 3. What is left: it is data now, not text
+
+One keystroke, measured with the overlay active:
+
+    terminal   minflt +568   majflt +430   utime +75   stime +78
+    weston     minflt +33    majflt +22
+    terminal   VmRSS 1436 kB = RssAnon 120 + RssFile 100 + ~1116 shmem
+
+**452 major faults still per keystroke**, but `RssFile` is down to 100 kB - the
+text problem is solved. The terminal's memory is now dominated by ~1.1 MB of
+**shmem: the Wayland shared buffers** between client and compositor, which are
+RAM pages being swapped out and faulted back in.
+
+That makes reducing surface size the next lever, not more XIP: a smaller window
+or a lower render resolution shrinks those buffers directly. Rendering at
+400x240 and upscaling with PPA SRM is the obvious form - note it does **not**
+reduce scanout traffic, since the panel is 800x480 and the LCD DMA reads 768 KB
+every frame regardless, but it does cut the client buffers and compositing work.
+
 ## Why the desktop is slow: it does not fit, by ~2.8 MB
 
 Measured 2026-08-21, and this is the conclusion the rest of the tuning should be
