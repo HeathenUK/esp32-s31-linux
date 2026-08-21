@@ -714,6 +714,42 @@ Measured at 400x240: LD_LIBRARY_PATH only, median 2586 ms; full overlay, median
         mount --bind /usr/lib /mnt/sdlib
         mount -t overlay overlay -o lowerdir=/mnt/xip/usr/lib:/mnt/sdlib /usr/lib
 
+### What the remaining time is NOT
+
+Three hypotheses were tested and killed, which is worth more than the one that
+survived:
+
+- **Not SD I/O.** System-wide `iowait` during a keystroke is **10-30 ms** out of
+  ~3900 ms. The ~430 major faults per keystroke are being served from swap
+  *cache* (`SwapCached` ~1 MB), not from `/swapfile`. The known ~10 ms per SD
+  request is not in this path at all.
+- **Not swap readahead.** `vm.page-cluster` swept 0/3/5 with the default (3,
+  8 pages) repeated to detect drift: 0 gives 1090 faults and a 4354 ms median,
+  5 gives 404 faults and 3867 ms, 3 gives 327-452 faults and 2985-3133 ms. The
+  default is already the optimum; turning readahead off costs ~1.4 s.
+- **Not the compositor.** Weston uses ~50 ms of CPU per keystroke and has zero
+  kB of file-backed mapping in RAM. weston-terminal uses ~1510 ms.
+
+**`/proc/stat` is unusable here - confirmed quantitatively.** Over a 4154 ms
+wall window on a single hart it reported user+system+idle+iowait = 11480 ms,
+a 2.7x over-count. Do not quote CPU percentages from it; see
+[[s31-cpu-measurement]]. The reliable substitute is displacement: run a
+competing CPU hog and watch wall-clock latency.
+
+Doing that: baseline median 4160 ms, with one hog 5797 ms, baseline again
+3322 ms (note the drift - always bracket). Against the mean baseline of
+~3740 ms that is 1.55x. If a fraction f of the latency is CPU work that has to
+share with the hog, the ratio is 1+f, so **~55% of a keystroke is CPU-bound and
+~45% is not**.
+
+**So the dominant cost is the client redrawing itself**, not compositing, not
+paging, not I/O. weston-terminal redraws its surface through cairo/pango on
+every keystroke, and its window is *larger than the screen* at 400x240, so it
+is drawing more pixels than are displayed. That is why the old font-size
+experiment was so effective - it shrank the window, i.e. the client's drawing
+area - and why cutting the output resolution helped less than the plan
+predicted: a clipped window still draws at full size.
+
 ### Cautions for whoever picks this up
 
 - **Watch `arch/riscv/configs/esp32s31_defconfig` for uncommitted changes.** It
