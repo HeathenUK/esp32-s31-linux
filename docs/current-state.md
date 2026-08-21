@@ -850,6 +850,23 @@ the display is not using.
         MemAvailable    ~1200 kB    5764 kB   (idle, before weston)
         CmaFree              -      4096 kB
 
+**And that was the remaining bottleneck.** Memory pressure, not pixels, not
+I/O. With the same kernel, same client, same clean weston.ini, at native
+800x480:
+
+        foot, before CMA   median 193.8 ms   min 98.2
+        foot, after CMA    median  20.7 ms   min  9.8   (10 trials, 9.8-33.7)
+
+**Null test.** Every trial being under a frame is exactly the shape a broken
+harness produces, so it was checked: with the client killed, `inputlat` reports
+17-20 s - nothing changes the framebuffer, as it should. One spurious 10.1 ms
+appeared immediately after `killall`, which is the compositor repainting the
+window away, not a measurement artefact.
+
+`inputlat` measures **input to framebuffer-in-memory**, not input to photons.
+The panel shows the result up to one frame later, so end to end is roughly
+21 + <=24 = **30-45 ms**.
+
 **Constraints that fixed the geometry.** CMA needs base *and size* aligned to
 `PAGE_SIZE * pageblock_nr_pages`; with no huge pages `pageblock_order =
 MAX_PAGE_ORDER`, so 4 MiB. 0x50800000 is the highest 4 MiB-aligned base that
