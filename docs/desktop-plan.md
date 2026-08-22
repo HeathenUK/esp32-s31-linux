@@ -105,8 +105,18 @@ DRM driver provides fbdev emulation, and fbcon already runs through it at
 640x384 1:1 with PPA scaling. So /dev/fb0 writes still reach the DRM plane
 update path. Worth confirming rather than assuming.
 
-Recommendation: try X11Libre's Xfbdev first - modern and small - and fall back
-to the measured 3.0 MB Xorg + modesetting, which is known to build here.
+**Decision (agreed 2026-08-22): X11 replaces Wayland entirely, and X11Libre's
+Xfbdev is the first choice**, with Xorg 21 + modesetting as the fallback that is
+already known to build here.
+
+Replacing rather than adding is what makes this affordable. Dropping the Wayland
+stack frees roughly 2.3 MB - libweston-15 444 kB, libinput 366 kB, libxkbcommon
+279 kB, drm-backend 141 kB, the wayland libraries ~180 kB, plus weston,
+desktop-shell and foot - which is most of what X11's client libraries cost.
+
+Everything below the display protocol carries over untouched: the DRM driver,
+PPA scaling, render=, damage tracking, the .text.fast relocation and all of the
+SD and swap work.
 
 ## Ruled out, with reasons
 
