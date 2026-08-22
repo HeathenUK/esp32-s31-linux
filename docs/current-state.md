@@ -498,10 +498,19 @@ waiting for the card; it is executing.
 the card was aimed at a seventh of the problem, which is why the card swap and
 the interrupt-type fix bought so little.
 
-The biggest identifiable target is the **workqueue hop**: `__queue_work` alone
-is 8.0%, and dw_mmc's interrupt handler does
+The biggest identifiable target looked like the **workqueue hop**:
+`__queue_work` alone is 8.0%, and dw_mmc's interrupt handler does
 `queue_work(system_bh_wq, &host->bh_work)` on every completion before the mmc
-core sees it. `finish_task_switch` at 12.3% should be read with the usual
+core sees it - up to three times per request.
+
+**Tried and it does nothing.** Guarding those calls with `work_pending()`, so
+the second and third reach only a bit test instead of walking into
+`__queue_work`, changed the result not at all: 2.793 / 2.812 / 2.804 ms against
+a baseline of 2.789 / 2.747 / 2.843. Reverted rather than carry a divergence
+from upstream for no measured benefit. What that tells us is that the 8% is the
+first, unavoidable queue per request, not redundant repeats - so removing it
+means not deferring at all, and the bottom half calls into the mmc core where
+that is not safe. `finish_task_switch` at 12.3% should be read with the usual
 caveat - it is where the CPU lands after any switch - but with the CPU ~100%
 busy these are real switches rather than returns from idle.
 
