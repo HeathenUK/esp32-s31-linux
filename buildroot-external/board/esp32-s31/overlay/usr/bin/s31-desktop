@@ -25,38 +25,36 @@ LOG=/tmp/xfbdev.log
 die() { echo "s31-desktop: $*" >&2; exit 1; }
 
 # kdrive was built without udev, so input devices are named explicitly rather
-# than discovered. Match on the capability bits in /proc/bus/input/devices:
-# EV=120013 marks a keyboard, and a mouse advertises REL axes.
+# than discovered.
+#
+# Match on capability bits, not on the Handlers list. The obvious test - looking
+# for "mouse" in Handlers - fails here: that handler comes from mousedev, which
+# this kernel does not build, so a perfectly good USB mouse shows only
+# "Handlers=event0" and gets reported as absent. A pointer is instead a device
+# that advertises REL_X (0x1) and REL_Y (0x2), i.e. the low two bits of its
+# REL mask. Checking the last hex digit avoids needing strtonum, which busybox
+# awk does not have: 3, 7, b and f are the digits with both bits set.
+#
+# Note a combo receiver presents several nodes - the 8BitDo one reports
+# REL=1943 on its composite node and REL=1040 on its keyboard node - so this
+# correctly picks the composite and ignores the keyboard.
 find_input() {
 	want=$1
 	awk -v want="$want" '
-		/^I:/ { ev=""; rel=""; hand="" }
-		/^B: EV=/ { ev=$3 }
-		/^B: REL=/ { rel=$3 }
+		/^I:/  { hand=""; rel=""; ev="" }
 		/^H: Handlers=/ { hand=$0 }
+		/^B: EV=/  { ev=substr($2, 4) }
+		/^B: REL=/ { rel=substr($2, 5) }
 		/^$/ {
 			if (hand ~ /event/) {
-				n=hand; sub(/.*(event)/,"event",n); sub(/ .*/,"",n)
-				if (want=="kbd" && hand ~ /kbd/) print "/dev/input/" n
-				if (want=="mouse" && hand ~ /mouse/) print "/dev/input/" n
+				n = hand; sub(/.*(event)/, "event", n); sub(/ .*/, "", n)
+				last = tolower(substr(rel, length(rel), 1))
+				ptr = (last == "3" || last == "7" || last == "b" || last == "f")
+				if (want == "mouse" && ptr) print "/dev/input/" n
+				if (want == "kbd" && !ptr && hand ~ /kbd/) print "/dev/input/" n
 			}
 		}
 	' /proc/bus/input/devices 2>/dev/null | head -1
-}
-
-# fontconfig ships no cache, and buildroot cannot build one for us: its caches
-# are architecture-specific, so a host-generated cache would be wrong here.
-# Without it every Xft lookup walks the whole font directory and reads each face
-# off the SD card - the exact cost this board has spent the most effort
-# reducing. Build it once and keep it; /var is on the card and persists.
-warm_font_cache() {
-	command -v fc-cache >/dev/null 2>&1 || return 0
-	[ -d /var/cache/fontconfig ] && [ -n "$(ls -A /var/cache/fontconfig 2>/dev/null)" ] && return 0
-	echo "s31-desktop: building font cache (one time, slow)..."
-	mkdir -p /var/cache/fontconfig
-	fc-cache -f >/dev/null 2>&1
-	sync
-	echo "s31-desktop: font cache built"
 }
 
 start_server() {
@@ -104,7 +102,11 @@ server)
 all)
 	start_server
 	xsetroot -solid steelblue 2>/dev/null || echo "s31-desktop: xsetroot failed"
-	evilwm & sleep 1
+	# -fn is not optional. evilwm's built-in default resolves against the
+	# full core font path; with the path pinned to X11/misc it finds nothing
+	# and exits with "couldn't find a font to use", which looks like a crash.
+	evilwm -fn fixed >/tmp/evilwm.log 2>&1 &
+	sleep 1
 	pidof evilwm >/dev/null 2>&1 || echo "s31-desktop: WARNING evilwm did not start"
 	xterm -fa 'DejaVu Sans Mono' -fs 9 -bg black -fg green &
 	echo "s31-desktop: up. 's31-desktop stop' to tear down."

@@ -21,19 +21,45 @@ SD_SWAP=1
 case "$1" in
 	start)
 		[ "${SD_SWAP:-1}" = "1" ] || exit 0
-		[ -f "$SWAP" ] || {
+		# Check the file is the right SIZE, not merely that it exists.
+		# Creating it takes ~38 s on this card, and a reset during the
+		# first boot leaves a short, unsigned file behind. An existence
+		# test then skips creation forever, swapon fails with "Unable to
+		# find swap-space signature", and the board runs with no swap at
+		# all - which, per the note above, is not a survivable state:
+		# Xfbdev gets OOM-killed a minute into a desktop session. Seen
+		# exactly this way, with an 18.9 MB stub left by an interrupted
+		# first boot.
+		# wc -c, not stat: this busybox is built without the stat
+		# applet, and `stat -c%s` fails as "not found" - which would
+		# leave have=0, rewriting 64 MB of zeros on every single boot.
+		want=$((SIZE_MB * 1048576))
+		have=$(wc -c < "$SWAP" 2>/dev/null || echo 0)
+		have=${have:-0}
+		if [ "$have" != "$want" ]; then
+			[ "$have" != "0" ] && printf 'Discarding short swap file (%s of %s bytes): ' "$have" "$want"
+			rm -f "$SWAP"
 			printf 'Creating %s MB swap file: ' "$SIZE_MB"
 			if dd if=/dev/zero of="$SWAP" bs=1M count="$SIZE_MB" \
 			     2>/dev/null && chmod 600 "$SWAP" && \
-			     mkswap "$SWAP" >/dev/null 2>&1; then
+			     mkswap "$SWAP" >/dev/null 2>&1 && sync; then
 				echo "OK"
 			else
 				echo "failed"
 				rm -f "$SWAP"
 				exit 0
 			fi
-		}
-		swapon "$SWAP" 2>/dev/null && echo "SD swap enabled: $SWAP"
+		fi
+		if ! swapon "$SWAP" 2>/dev/null; then
+			# Right size but no signature - re-sign rather than
+			# spend another 38 s rewriting 64 MB of zeros.
+			mkswap "$SWAP" >/dev/null 2>&1 && sync
+			swapon "$SWAP" 2>/dev/null || {
+				echo "SD swap FAILED to enable: $SWAP"
+				exit 0
+			}
+		fi
+		echo "SD swap enabled: $SWAP"
 		;;
 	stop)
 		swapoff "$SWAP" 2>/dev/null
