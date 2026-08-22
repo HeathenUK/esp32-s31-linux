@@ -1,0 +1,35 @@
+From: ESP32-S31 Linux port
+Subject: [PATCH] os: fix the arc4random_buf fallback so it builds on musl
+
+Two bugs in the same seven lines, both reachable only when the C library has
+getrandom() but not arc4random_buf() - which is exactly musl here:
+
+  - the loop tests `pos < len`, and there is no `len`; the parameter is
+    `nbytes`.  glibc builds never notice because they take the
+    HAVE_ARC4RANDOM_BUF path and the fallback is not compiled.
+  - getrandom() is called without including <sys/random.h>, so it is an
+    implicit declaration, which -Werror=implicit turns into an error.
+
+Signed-off-by: ESP32-S31 Linux port
+---
+--- a/os/osdep.h
++++ b/os/osdep.h
+@@ -85,12 +85,16 @@
+ 
+ /* for platforms lacking arc4random_buf() libc function */
+ #ifndef HAVE_ARC4RANDOM_BUF
++#ifdef HAVE_GETRANDOM
++#include <sys/random.h>
++#endif
++
+ static inline void arc4random_buf(void *buf, size_t nbytes)
+ {
+ #ifdef HAVE_GETRANDOM
+     ssize_t pos = 0;
+-    while (pos < len) {
+-        ssize_t ret = getrandom(buf + pos, nbytes - pos, 0);
++    while (pos < (ssize_t) nbytes) {
++        ssize_t ret = getrandom((unsigned char *) buf + pos, nbytes - pos, 0);
+         if (ret <= 0) {
+             if (ret < 0 && errno == EINTR)
+                 continue;

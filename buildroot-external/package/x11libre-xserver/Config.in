@@ -1,0 +1,22 @@
+config BR2_PACKAGE_X11LIBRE_XSERVER
+	bool "X11Libre Xfbdev server"
+	depends on BR2_USE_MMU
+	select BR2_PACKAGE_XORGPROTO
+	select BR2_PACKAGE_XLIB_LIBXFONT2
+	select BR2_PACKAGE_XLIB_XTRANS
+	select BR2_PACKAGE_PIXMAN
+	help
+	  Xfbdev, the kdrive framebuffer X server, from the X11Libre fork of
+	  xorg-server.
+
+	  Upstream xorg-server dropped the small kdrive servers - 21.1.23 ships
+	  only Xephyr, which needs a host X server. X11Libre restores Xfbdev on
+	  a modern, actively maintained codebase, which matters here because the
+	  full Xorg server plus its modules measures 3.0 MB against a flash
+	  budget of roughly 7.4 MB shared with everything else.
+
+	  Draws into /dev/fb0. On this board that is the DRM driver's fbdev
+	  emulation, so writes still reach the plane update path and keep PPA
+	  scaling and the reduced render size.
+
+	  https://github.com/X11Libre/xserver

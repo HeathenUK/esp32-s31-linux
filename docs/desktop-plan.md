@@ -88,11 +88,30 @@ true of upstream only; the ecosystem kept them alive.
 /dev/fb0 - which means the PPA scaling, `render=` and 1:1 placement survive.
 Known-good, largest, and already builds here.
 
-**2. X11Libre/xserver.** An actively maintained fork of xorg-server, ~23.7k
-commits, which explicitly restores "Xfbdev, the generic framebuffer Xserver for
-Linux". Modern code, so no toolchain archaeology, and a framebuffer server
-without Xorg's module machinery. Not packaged in buildroot; needs a custom
-package. Size unmeasured.
+**2. X11Libre/xserver - BUILT AND MEASURED.** An actively maintained fork of
+xorg-server which restores "Xfbdev, the generic framebuffer Xserver for Linux".
+Now packaged at `buildroot-external/package/x11libre-xserver`, version
+xlibre-xserver-25.2.2:
+
+    Xfbdev            1,597,644 bytes, one self-contained binary
+    runtime deps      libpixman-1, libXfont2, libsha1, libXau, libc
+                      no libdrm, no GBM, no udev, no driver modules
+
+**Half the size of Xorg 21 plus its modules**, and the dependency list is five
+libraries rather than a module directory.
+
+Two upstream bugs had to be patched to build it against musl, both in the
+arc4random_buf fallback in os/osdep.h, which is only compiled when the C library
+has getrandom() but not arc4random_buf() - exactly musl's case, so glibc builds
+never see it. The loop tests an undeclared `len` instead of `nbytes`, and
+getrandom() is called without including <sys/random.h>. Patch carried in the
+package.
+
+Configuration notes for anyone touching it: meson hard-errors on unknown
+options, and X11Libre has dropped some upstream has - there is no `-Dxwayland`.
+`-Dxdmcp=false` also requires `-Dxdm-auth-1=false`, or os/xdmauth.c fails to
+compile against headers it no longer has. And a meson option change needs
+`make x11libre-xserver-dirclean`; buildroot will not reconfigure on its own.
 
 **3. tinycorelinux/tinyx.** The classic TinyX resurrected - Xvesa and Xfbdev,
 deliberately omitting xkb, xinput, xinerama and GL. Smallest of the three, but
