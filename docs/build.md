@@ -2,6 +2,50 @@
 
 This project uses a unified `Makefile` at the root directory to manage downloading the toolchain, out-of-tree builds for all components, and flashing the firmware to the board. All build artifacts are cleanly separated into the `build/` directory.
 
+## Building in the container
+
+Builds run inside the CI-equivalent container via `docker/build.sh`, which
+bind-mounts the repo at `/src` and keeps the build tree and toolchain on Docker
+volumes. Build output is therefore **not visible on the host** - copy artifacts
+out explicitly.
+
+```bash
+./docker/build.sh                    # make all
+./docker/build.sh 'cd /src/build/buildroot && make fltk'
+./docker/build.sh bash               # interactive shell
+```
+
+### Native versus emulated - the one thing to get right
+
+`PLATFORM` selects the image, and it now **defaults to the host architecture**:
+`linux/arm64` on Apple Silicon, `linux/amd64` elsewhere. Set it explicitly only
+to cross-check against the other image.
+
+This default used to be `linux/amd64` unconditionally, which on an Apple Silicon
+machine silently selected the emulated image. Nothing ever failed - builds just
+took minutes where the native image takes about ninety seconds - so there was no
+symptom pointing at the cause. If a build feels inexplicably slow, check first:
+
+```bash
+docker ps --format '{{.Image}}'      # ...-arm64 is native on Apple Silicon
+docker exec <id> uname -m            # aarch64, not x86_64
+```
+
+The two platforms use **separate volumes** (`esp32-s31-*` versus
+`esp32-s31-arm64-*`). A toolchain built for one host cannot run on the other, so
+they are deliberately not shared; switching platforms means rebuilding, not
+resuming. Never run two builds against the same volume concurrently - it
+corrupts Buildroot's `.cmd` and `.d` files and costs a full rebuild.
+
+### Downloads
+
+`BR2_WGET` carries `--read-timeout=30` as well as `--connect-timeout`. Without
+the read timeout a server that accepts the connection and then stops sending
+hangs forever: `-t 3` never retries and the mirror fallback never runs. Note
+several Buildroot primary URLs use the `http+` prefix, forcing plain HTTP, which
+is what stalls; the same files over HTTPS are usually fine. To seed a tarball by
+hand, drop it in `buildroot/dl/<pkg>/` and the hash check will pick it up.
+
 ## Build Targets
 
 ### Default Target

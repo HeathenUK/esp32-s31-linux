@@ -24,11 +24,21 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TOOLCHAIN_RELEASE_TAG="${TOOLCHAIN_RELEASE_TAG:-esp32s31-linux-gcc-15.2.0-4}"
 
-# PLATFORM=linux/arm64 selects the native (non-emulated) image, which builds the
-# S31 toolchain from source instead of using the x86_64-only release. Volumes
-# are per-platform because a toolchain built for one host cannot run on the
-# other, and mixing them would silently corrupt a build tree.
-PLATFORM="${PLATFORM:-linux/amd64}"
+# PLATFORM selects the image. linux/arm64 is the native (non-emulated) one,
+# which builds the S31 toolchain from source instead of using the x86_64-only
+# release. Volumes are per-platform because a toolchain built for one host
+# cannot run on the other, and mixing them would silently corrupt a build tree.
+#
+# This defaults to the HOST architecture. It used to default unconditionally to
+# linux/amd64, which on an Apple Silicon machine silently selected the emulated
+# image: every build still succeeded, so nothing ever pointed at the cause, and
+# incremental builds took minutes instead of ~90 seconds. Override explicitly to
+# cross-check against the amd64 image; do not rely on the default to do it.
+case "$(uname -m)" in
+aarch64 | arm64) HOST_PLATFORM=linux/arm64 ;;
+*) HOST_PLATFORM=linux/amd64 ;;
+esac
+PLATFORM="${PLATFORM:-$HOST_PLATFORM}"
 case "$PLATFORM" in
 linux/arm64)
 	DOCKERFILE=Dockerfile.arm64
