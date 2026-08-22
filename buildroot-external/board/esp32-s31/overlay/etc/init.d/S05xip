@@ -20,6 +20,7 @@
 # real layout preserved. See rootfs/mkxipstage.py.
 
 XIP_MNT=/mnt/xip
+XIP2_MNT=/mnt/xip2
 
 start() {
 	printf 'Mounting XIP userspace: '
@@ -28,15 +29,24 @@ start() {
 		echo "skipped (no XIP image on mtd:rootfs)"
 		return 0
 	fi
+	# Second image, in the slot that used to be `persist`. Optional: a board
+	# without it just gets one layer.
+	mkdir -p "$XIP2_MNT" 2>/dev/null
+	mount -t cramfs mtd:xip2 "$XIP2_MNT" 2>/dev/null || XIP2_MNT=""
 	for d in usr/lib usr/bin usr/libexec lib; do
 		[ -d "$XIP_MNT/$d" ] || continue
 		sd="/mnt/sd-$(echo "$d" | tr / -)"
 		mkdir -p "$sd" || continue
 		mount --bind "/$d" "$sd" || continue
-		# lowerdir order matters: flash first so it wins, SD second so
-		# anything absent from the image still resolves.
+		# lowerdir order matters: flash first so it wins, SD last so
+		# anything absent from both images still resolves. Both flash
+		# layers are searched before the card, and overlayfs merges
+		# them, so an object only has to exist in one.
+		lower="$XIP_MNT/$d"
+		[ -n "$XIP2_MNT" ] && [ -d "$XIP2_MNT/$d" ] && \
+			lower="$lower:$XIP2_MNT/$d"
 		if ! mount -t overlay overlay \
-			-o "lowerdir=$XIP_MNT/$d:$sd" "/$d"; then
+			-o "lowerdir=$lower:$sd" "/$d"; then
 			umount "$sd" 2>/dev/null
 		fi
 	done
@@ -49,6 +59,7 @@ stop() {
 		umount "/mnt/sd-$(echo "$d" | tr / -)" 2>/dev/null
 	done
 	umount "$XIP_MNT" 2>/dev/null
+	umount "$XIP2_MNT" 2>/dev/null
 }
 
 case "$1" in

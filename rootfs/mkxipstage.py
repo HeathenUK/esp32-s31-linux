@@ -19,6 +19,11 @@ libc is staged: /lib/ld-musl-riscv32-sf.so.1 is a symlink to ../usr/lib/libc.so,
 so the interpreter follows the overlay even though its path is baked into every
 binary.
 
+Set EXCLUDE_DIR to a previously staged directory and anything already present
+there is skipped. That is how the second flash image is built without carrying
+a duplicate copy of libc, freetype and everything else the first one holds:
+overlayfs merges both lower layers, so an object only has to exist in one.
+
     mkxipstage.py <readelf> <target-dir> <out-dir> <root> [root...]
 """
 import glob
@@ -65,10 +70,15 @@ while queue:
         if lp and lp not in closure:
             queue.append(lp)
 
+exclude = os.environ.get("EXCLUDE_DIR", "")
 staged = 0
 count = 0
+skipped = 0
 for p in sorted(closure):
     rel = os.path.relpath(p, T)
+    if exclude and os.path.exists(os.path.join(exclude, rel)):
+        skipped += 1
+        continue
     if rel.startswith(".."):
         print("  skip (outside target):", p)
         continue
@@ -93,6 +103,7 @@ for p in sorted(closure):
         if not os.path.exists(os.path.join(d, base)):
             os.symlink(b, os.path.join(d, base))
 
-print("staged %d objects, %.2f MB" % (count, staged / 1048576))
+print("staged %d objects, %.2f MB (skipped %d already in EXCLUDE_DIR)"
+      % (count, staged / 1048576, skipped))
 for p in sorted(closure):
     print("   ", os.path.relpath(p, T))

@@ -47,12 +47,12 @@ PARTITIONS_CSV := $(CURDIR)/bootloader/partitions.csv
 OPENSBI_OFFSET := $(shell awk -F, '/opensbi/ {gsub(/ /, "", $$4); print $$4}' $(PARTITIONS_CSV))
 LINUX_OFFSET := $(shell awk -F, '/linux/ {gsub(/ /, "", $$4); print $$4}' $(PARTITIONS_CSV))
 ROOTFS_OFFSET := $(shell awk -F, '/rootfs/ {gsub(/ /, "", $$4); print $$4}' $(PARTITIONS_CSV))
-PERSIST_OFFSET := $(shell awk -F, '/persist/ {gsub(/ /, "", $$4); print $$4}' $(PARTITIONS_CSV))
+XIP2_OFFSET := $(shell awk -F, '/xip2/ {gsub(/ /, "", $$4); print $$4}' $(PARTITIONS_CSV))
 
 FW_PAYLOAD := $(BUILD_DIR)/fw_payload.bin
 XIP_IMAGE := $(BUILD_DIR)/xipImage
 ROOTFS_IMG := $(BUILD_DIR)/rootfs.sqfs
-PERSIST_IMG := $(BUILD_DIR)/persist.jffs2
+XIP2_ROOTFS_IMG := $(BUILD_DIR)/rootfs-xip2.cramfs
 
 # The S31-capable ESP-IDF lives at /opt/esp-idf in the build container, which is
 # outside $HOME and so invisible to the search below. Check it first: searching
@@ -65,7 +65,7 @@ IDF_EXPORT := $(shell test -f /opt/esp-idf/export.sh && echo /opt/esp-idf/export
 .PHONY: all download toolchain toolchain-source opensbi linux coremark rootfs initramfs s31-pie-cases \
 	buildroot-menuconfig buildroot-clean clean fullclean flash-opensbi flash-linux  \
 	xip-rootfs flash-xip-rootfs \
-	flash-rootfs persist flash-persist bootloader flash-bootloader erase \
+	flash-rootfs xip2-rootfs flash-xip2-rootfs bootloader flash-bootloader erase \
 	imager flash-imager
 
 all: toolchain download opensbi linux initramfs
@@ -253,7 +253,7 @@ coremark: rootfs
 # Keep this decimal because POSIX test(1) and truncate(1) do not accept the
 # partition table's 0x-prefixed value.
 ROOTFS_PARTITION_SIZE ?= 6291456
-PERSIST_PARTITION_SIZE ?= 1441792
+XIP2_PARTITION_SIZE ?= 1441792
 # The XIP kernel must start on a 4-MiB Sv32 megapage boundary, so the linux
 # partition stays at 0x400000 and rootfs takes every byte the kernel does not
 # need. Keep this in step with bootloader/partitions.csv.
@@ -305,8 +305,7 @@ XIP_ROOTFS_IMG := $(BUILD_DIR)/rootfs-xip.cramfs
 # of cairo, because it is the shell surface and faulting it off the SD card is
 # what this whole mechanism exists to avoid.
 XIP_ROOTS ?= usr/bin/weston usr/lib/libweston-15/*.so \
-	usr/lib/weston/desktop-shell.so usr/libexec/weston-desktop-shell \
-	usr/bin/foot
+	usr/lib/weston/desktop-shell.so usr/libexec/weston-desktop-shell
 
 xip-rootfs: rootfs
 	@echo "--- userspace XIP image ---"
@@ -334,65 +333,37 @@ flash-xip-rootfs:
 # Historical/user-facing name for the root filesystem image.
 initramfs: linux rootfs
 
-# Generate an empty, NOR-compatible JFFS2 image for the persist partition.
-# This is separate from normal firmware updates so user data is not erased.
-persist: | $(BUILD_DIR)
-	@command -v mkfs.jffs2 >/dev/null || { echo "ERROR: mkfs.jffs2 is required" >&2; exit 1; }
-	@staging=$$(mktemp -d "$(BUILD_DIR)/persist.XXXXXX"); \
-	trap 'rmdir "$$staging"' EXIT; \
-	mkfs.jffs2 -q -e 0x2000 --pad=$(PERSIST_PARTITION_SIZE) \
-		-d "$$staging" -o $(PERSIST_IMG)
+# Second userspace XIP image, in the slot that used to be `persist`.
+#
+# persist held a JFFS2 upper layer for making a SquashFS flash root writable.
+# That boot mode is unreachable now - the root is ext4 on the microSD and the
+# flash rootfs partition holds the XIP cramfs - so the 1.4 MB was dead. It sits
+# at 0x2A0000, between opensbi and linux, so it cannot be merged into rootfs;
+# it becomes a second image and a second overlay lower layer instead.
+#
+# EXCLUDE_DIR keeps this from duplicating what the first image already holds.
+# overlayfs merges both layers, so an object only needs to exist in one.
+XIP2_STAGE := $(BUILD_DIR)/xipstage2
+XIP2_ROOTS ?= usr/bin/foot
 
-buildroot-menuconfig: | $(BUILDROOT_OUT)
-	$(BUILDROOT_MAKE) esp32s31_rootfs_defconfig
-	$(BUILDROOT_MAKE) menuconfig
+xip2-rootfs: xip-rootfs
+	@echo "--- second userspace XIP image ---"
+	rm -rf $(XIP2_STAGE)
+	mkdir -p $(XIP2_STAGE)
+	EXCLUDE_DIR=$(XIP_STAGE) python3 $(CURDIR)/rootfs/mkxipstage.py \
+		$(CROSS_COMPILE)readelf $(BUILDROOT_OUT)/target $(XIP2_STAGE) \
+		$(XIP2_ROOTS)
+	$(BUILDROOT_OUT)/host/bin/mkcramfs -X -X $(XIP2_STAGE) $(XIP2_ROOTFS_IMG)
+	@SZ=$$(stat -c%s $(XIP2_ROOTFS_IMG)); \
+	if [ $$SZ -gt $(XIP2_PARTITION_SIZE) ]; then \
+		echo "ERROR: xip2 image ($$SZ bytes) exceeds its partition ($(XIP2_PARTITION_SIZE) bytes)"; \
+		exit 1; \
+	fi; \
+	echo "xip2 image $$SZ bytes, $$(($(XIP2_PARTITION_SIZE) - $$SZ)) bytes free"
 
-buildroot-clean:
-	rm -rf $(BUILDROOT_OUT)
+flash-xip2-rootfs:
+	esptool -p /dev/ttyUSB0 -b 2000000 write-flash $(XIP2_OFFSET) $(XIP2_ROOTFS_IMG)
 
-clean:
-	rm -rf $(BUILD_DIR)
-
-fullclean: clean
-	@test ! -e $(TOOLCHAIN_DIR) || chmod -R u+w $(TOOLCHAIN_DIR)
-	rm -rf $(TOOLCHAIN_DIR)
-
-flash-opensbi:
-	esptool -p /dev/ttyUSB0 -b 2000000 write-flash $(OPENSBI_OFFSET) $(FW_PAYLOAD)
-
-flash-linux:
-	esptool -p /dev/ttyUSB0 -b 2000000 write-flash $(LINUX_OFFSET) $(XIP_IMAGE)
-
-# The flash `rootfs` partition holds the userspace XIP image, NOT the squashfs.
-# Flashing the squashfs here would silently destroy the XIP image and take the
-# compositor back to faulting its text off the SD card, so this is an alias for
-# the thing that actually belongs there.
-flash-rootfs: flash-xip-rootfs
-
-# SD imager: a throwaway kernel carrying an initramfs, flashed over the normal
-# kernel only for as long as it takes to write the microSD card, then flashed
-# back with flash-linux. See docs/sd-imager.md.
-IMAGER_OUT := $(BUILD_DIR)/linux-imager
-IMAGER_IMAGE := $(BUILD_DIR)/xipImage-imager
-IMAGER_STAGE := $(CURDIR)/imager/initramfs
-
-imager: toolchain rootfs
-	@echo "--- SD imager kernel ---"
-	$(CROSS_COMPILE)gcc -Os -static \
-		-march=$(S31_USER_ISA) -mabi=ilp32 \
-		-o $(CURDIR)/imager/sdrecv $(CURDIR)/imager/sdrecv.c
-	$(CROSS_COMPILE)strip $(CURDIR)/imager/sdrecv
-	$(CURDIR)/imager/mkinitramfs.sh $(BUILDROOT_OUT)/target \
-		$(IMAGER_STAGE) $(CURDIR)/imager/sdrecv
-	$(MAKE) linux DEFCONFIG=esp32s31_imager_defconfig \
-		LINUX_OUT=$(IMAGER_OUT) XIP_IMAGE=$(IMAGER_IMAGE) \
-		FDT_DTB=$(BUILD_DIR)/imager.dtb
-
-flash-imager:
-	esptool -p /dev/ttyUSB0 -b 2000000 write-flash $(LINUX_OFFSET) $(IMAGER_IMAGE)
-
-flash-persist: persist
-	esptool -p /dev/ttyUSB0 -b 2000000 write-flash $(PERSIST_OFFSET) $(PERSIST_IMG)
 
 bootloader:
 	@if [ -z "$(IDF_EXPORT)" ]; then echo "ERROR: ESP-IDF export.sh not found under $(HOME)"; exit 1; fi
