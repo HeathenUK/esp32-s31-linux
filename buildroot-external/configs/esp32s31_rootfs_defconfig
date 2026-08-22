@@ -111,3 +111,11 @@ BR2_PACKAGE_XORG7=y
 BR2_PACKAGE_CAIRO_XLIB=y
 BR2_PACKAGE_FLTK=y
 BR2_PACKAGE_X11LIBRE_XSERVER=y
+
+# Buildroot's default wget line sets --connect-timeout but no --read-timeout,
+# so a server that accepts the connection and then stops sending hangs forever:
+# the retry count never decrements and the mirror fallback never runs. Seen with
+# http://cairographics.org/releases, which stalled a build for 30 minutes.
+# Note the primary URL uses the http+ prefix, forcing plain HTTP; the same file
+# over HTTPS downloads in seconds. Bound the read so a stall fails over.
+BR2_WGET="wget -nd -t 3 --connect-timeout=15 --read-timeout=30"
