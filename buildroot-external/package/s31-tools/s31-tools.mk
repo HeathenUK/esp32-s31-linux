@@ -74,6 +74,8 @@ define S31_TOOLS_BUILD_CMDS
 	$(TARGET_CC) $(TARGET_CFLAGS) $(TARGET_LDFLAGS) \
 		$(@D)/sdlat.c -o $(@D)/sdlat
 	$(TARGET_CC) $(TARGET_CFLAGS) $(TARGET_LDFLAGS) \
+		$(@D)/cmdlat.c -o $(@D)/cmdlat
+	$(TARGET_CC) $(TARGET_CFLAGS) $(TARGET_LDFLAGS) \
 		$(@D)/pixbench.c -o $(@D)/pixbench -lpixman-1 \
 		-I$(STAGING_DIR)/usr/include/pixman-1
 endef
@@ -112,6 +114,7 @@ define S31_TOOLS_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0755 $(@D)/mousebench $(TARGET_DIR)/usr/sbin/mousebench
 	$(INSTALL) -D -m 0755 $(@D)/swapbench $(TARGET_DIR)/usr/sbin/swapbench
 	$(INSTALL) -D -m 0755 $(@D)/sdlat $(TARGET_DIR)/usr/sbin/sdlat
+	$(INSTALL) -D -m 0755 $(@D)/cmdlat $(TARGET_DIR)/usr/sbin/cmdlat
 	$(INSTALL) -D -m 0755 $(@D)/pixbench $(TARGET_DIR)/usr/sbin/pixbench
 	ln -sfn esp-hosted-ctl $(TARGET_DIR)/usr/sbin/test.out
 endef
