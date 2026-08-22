@@ -136,6 +136,11 @@ BR2_PACKAGE_XTERM=y
 BR2_PACKAGE_XFONT_ENCODINGS=y
 BR2_PACKAGE_XFONT_FONT_ALIAS=y
 BR2_PACKAGE_XFONT_FONT_MISC_MISC=y
+# The root pointer is drawn from the font literally named "cursor", which lives
+# in font-cursor-misc and NOT in font-misc-misc. Without it the server still
+# starts - it does not complain - so a missing pointer looks like broken input
+# rather than a missing font. This Xfbdev has no -fc option to redirect it.
+BR2_PACKAGE_XFONT_FONT_CURSOR_MISC=y
 BR2_PACKAGE_XFONT_FONT_UTIL=y
 
 # DejaVu Sans as well as Mono: FLTK renders through Xft, which needs a scalable
