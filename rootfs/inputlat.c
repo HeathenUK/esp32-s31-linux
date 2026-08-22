@@ -41,6 +41,22 @@
 static unsigned long fb_base;
 static size_t fb_size = 0x00200000UL;
 
+/*
+ * The compositor page-flips between two buffers, so the scanout address
+ * alternates. Watching one of them reports "no change" whenever the glyph
+ * lands in the other, which looks like a multi-second desktop and is really a
+ * broken harness - three of five trials timed out at 60 s that way while the
+ * two that landed came back at ~120 ms.
+ *
+ * Sampling whichever buffer is currently live would be worse, not better: the
+ * digest would then change on every page flip with no input at all, and the
+ * harness would report impossibly fast latencies. The whole reserved pool is
+ * hashed instead, which covers both buffers and is invariant under flips.
+ */
+#define POOL_ALIGN 0x00400000UL		/* the reserved region is 4 MiB aligned */
+static unsigned long pool_base;
+static size_t pool_size = POOL_ALIGN;
+
 static int query_scanout(void)
 {
 	char buf[512];
@@ -139,7 +155,8 @@ int main(int argc, char **argv)
 					   .product = 0x5678 },
 				   .name = "inputlat-virtual-kbd" };
 	int memfd, ufd, i, timeouts = 0, quiet = 0;
-	volatile uint8_t *fb;
+	volatile uint8_t *pool;
+	const volatile uint8_t *fb;
 	double *lat;
 
 	{
@@ -160,8 +177,11 @@ int main(int argc, char **argv)
 
 	memfd = open("/dev/mem", O_RDONLY);
 	if (memfd < 0) { perror("open /dev/mem"); return 1; }
-	fb = mmap(NULL, fb_size, PROT_READ, MAP_SHARED, memfd, fb_base);
-	if (fb == MAP_FAILED) { perror("mmap framebuffer"); return 1; }
+	pool_base = fb_base & ~(POOL_ALIGN - 1);
+	pool = mmap(NULL, pool_size, PROT_READ, MAP_SHARED, memfd, pool_base);
+	if (pool == MAP_FAILED) { perror("mmap framebuffer pool"); return 1; }
+	fb = pool;
+	fb_size = pool_size;		/* hash both buffers, not just the live one */
 
 	/* Check the mapping holds an image at all, and time a sweep. */
 	{
