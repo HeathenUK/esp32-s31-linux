@@ -477,6 +477,47 @@ startup and switching. `vm.page-cluster` stays at 0 and zram stays off - both
 were measured against the real workload and rejected, see
 `/etc/sysctl.d/99-s31-memory.conf`.
 
+## SD reads are CPU-bound, not I/O-bound
+
+Profiled 2026-08-22 with `profile=6`, 2000 random 4k O_DIRECT reads, resolved
+against System.map. 586 samples at 100 Hz is 5.9 s against 5.58 s of wall clock
+for the run, so **the CPU is essentially never idle during SD reads**. It is not
+waiting for the card; it is executing.
+
+    workqueue / completion       18.9%
+    scheduler / context switch   15.4%
+    mmc core / block layer       12.6%
+    uart / console                6.7%   <- measurement contamination, see below
+    user copy / gup               4.3%
+    cache / DMA                   2.6%
+    dw_mmc driver                 0.0%
+    unattributed                 37.4%
+
+**dw_mmc is 0.0%**, which independently confirms the driver's own timing: only
+0.43 ms of a 2.84 ms request is inside it. Every fix aimed at the controller or
+the card was aimed at a seventh of the problem, which is why the card swap and
+the interrupt-type fix bought so little.
+
+The biggest identifiable target is the **workqueue hop**: `__queue_work` alone
+is 8.0%, and dw_mmc's interrupt handler does
+`queue_work(system_bh_wq, &host->bh_work)` on every completion before the mmc
+core sees it. `finish_task_switch` at 12.3% should be read with the usual
+caveat - it is where the CPU lands after any switch - but with the CPU ~100%
+busy these are real switches rather than returns from idle.
+
+Two traps when repeating this:
+
+  - `CONFIG_PROFILING` is now on, but the profiling buffer is only allocated
+    when `profile=` is on the kernel command line, which is compiled in
+    (`CMDLINE_FORCE`). So enabling it needs a rebuild, and leaving it enabled
+    costs 253 KB. Add `profile=6` to CMDLINE in the Makefile, and take it out
+    afterwards.
+  - `/proc/profile`'s first word is the step in **bytes** (64 for `profile=6`),
+    not a shift. Treating it as a shift puts every sample in one symbol and
+    looks like a smoking gun. Bucket i maps to `_stext + i * step`.
+  - The serial console shows up at 6.7% because the harness drives the board
+    over it. Discount it, or profile a run that produces no console output.
+
 ## Render size is the memory lever, and it stops the swapping
 
 Measured 2026-08-22, warm, weston + desktop-shell + foot, a reboot between arms.

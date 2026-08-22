@@ -178,6 +178,7 @@ linux: toolchain | $(LINUX_OUT)
 	$(LINUX_DIR)/scripts/config --file $(LINUX_OUT)/.config \
 		--set-str BUILTIN_DTB_SOURCE "espressif/esp32s31_generic" \
 		--enable RISCV_ISA_C \
+		--enable PROFILING \
 		--disable HZ_250 \
 		--enable HZ_100 \
 		--set-val HZ 100 \
