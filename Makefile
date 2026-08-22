@@ -269,12 +269,13 @@ rootfs: toolchain s31-pie-cases | $(BUILDROOT_OUT)
 	$(BUILDROOT_MAKE) s31-tools-rebuild
 	$(BUILDROOT_MAKE)
 	cp -v $(BUILDROOT_OUT)/images/rootfs.squashfs $(ROOTFS_IMG)
-	@ROOTFS_SIZE=$$(stat -c%s $(ROOTFS_IMG)); \
-	if [ $$ROOTFS_SIZE -gt $(ROOTFS_PARTITION_SIZE) ]; then \
-		echo "ERROR: Buildroot rootfs ($$ROOTFS_SIZE bytes) exceeds partition ($(ROOTFS_PARTITION_SIZE) bytes)"; \
-		exit 1; \
-	fi; \
-	truncate -s $(ROOTFS_PARTITION_SIZE) $(ROOTFS_IMG)
+	@# The root filesystem lives on the microSD card (rootfs.ext2, written with
+	@# imager/send_image.py). The flash `rootfs` partition belongs to the
+	@# userspace XIP image - see the xip-rootfs target - so the squashfs is not
+	@# sized against it and must not be flashed there. It is kept only as a
+	@# self-contained image for bring-up without a card.
+	@echo "SD image:   $(BUILDROOT_OUT)/images/rootfs.ext2"
+	@echo "squashfs:   $(ROOTFS_IMG) ($$(stat -c%s $(ROOTFS_IMG)) bytes, not flashed)"
 
 # Userspace XIP image: the compositor's dependency closure, executed in place
 # from the always-mapped flash window instead of faulting off the SD card.
@@ -355,8 +356,11 @@ flash-opensbi:
 flash-linux:
 	esptool -p /dev/ttyUSB0 -b 2000000 write-flash $(LINUX_OFFSET) $(XIP_IMAGE)
 
-flash-rootfs:
-	esptool -p /dev/ttyUSB0 -b 2000000 write-flash $(ROOTFS_OFFSET) $(ROOTFS_IMG)
+# The flash `rootfs` partition holds the userspace XIP image, NOT the squashfs.
+# Flashing the squashfs here would silently destroy the XIP image and take the
+# compositor back to faulting its text off the SD card, so this is an alias for
+# the thing that actually belongs there.
+flash-rootfs: flash-xip-rootfs
 
 # SD imager: a throwaway kernel carrying an initramfs, flashed over the normal
 # kernel only for as long as it takes to write the microSD card, then flashed
