@@ -268,6 +268,17 @@ SERIAL_PORT ?= $(firstword $(wildcard /dev/cu.usbserial-* /dev/ttyUSB0))
 ESPTOOL ?= $(firstword $(wildcard $(HOME)/.espressif/python_env/idf6*/bin/esptool) esptool)
 ESPTOOL_BAUD ?= 2000000
 ESPFLASH = $(ESPTOOL) -p $(SERIAL_PORT) -b $(ESPTOOL_BAUD) write-flash
+
+# Where a flashable artifact actually is. Builds run in a container and the
+# build tree is a Docker volume, so on the host $(BUILD_DIR) is empty and the
+# artifacts live in images/ after the documented copy-out step (see
+# docker/build.sh). Prefer the build tree when it is populated - that is the
+# in-container case, and during a build - and fall back to images/ otherwise,
+# so `make flash-*` works from the host without overriding paths by hand.
+# Deliberately applied only to the flash rules: applying it to the build rules
+# would let a target be written to images/ when its build-tree copy is merely
+# not created yet.
+flashfile = $(if $(wildcard $(1)),$(1),$(CURDIR)/images/$(notdir $(1)))
 BUILDROOT_MAKE = $(MAKE) -C $(BUILDROOT_DIR) O=$(BUILDROOT_OUT) \
 	BR2_EXTERNAL=$(BUILDROOT_EXTERNAL) BR2_DL_DIR=$(BUILDROOT_DL_DIR)
 
@@ -358,7 +369,7 @@ xip-rootfs: rootfs
 	echo "XIP image $$XIP_SIZE bytes, $$(($(ROOTFS_PARTITION_SIZE) - $$XIP_SIZE)) bytes free in the rootfs partition"
 
 flash-xip-rootfs:
-	$(ESPFLASH) $(ROOTFS_OFFSET) $(XIP_ROOTFS_IMG)
+	$(ESPFLASH) $(ROOTFS_OFFSET) $(call flashfile,$(XIP_ROOTFS_IMG))
 
 # Historical/user-facing name for the root filesystem image.
 initramfs: linux rootfs
@@ -403,7 +414,7 @@ xip2-rootfs: xip-rootfs
 	echo "xip2 image $$SZ bytes, $$(($(XIP2_PARTITION_SIZE) - $$SZ)) bytes free"
 
 flash-xip2-rootfs:
-	$(ESPFLASH) $(XIP2_OFFSET) $(XIP2_ROOTFS_IMG)
+	$(ESPFLASH) $(XIP2_OFFSET) $(call flashfile,$(XIP2_ROOTFS_IMG))
 
 
 bootloader:
@@ -435,10 +446,10 @@ fullclean: clean
 	rm -rf $(TOOLCHAIN_DIR)
 
 flash-opensbi:
-	$(ESPFLASH) $(OPENSBI_OFFSET) $(FW_PAYLOAD)
+	$(ESPFLASH) $(OPENSBI_OFFSET) $(call flashfile,$(FW_PAYLOAD))
 
 flash-linux:
-	$(ESPFLASH) $(LINUX_OFFSET) $(XIP_IMAGE)
+	$(ESPFLASH) $(LINUX_OFFSET) $(call flashfile,$(XIP_IMAGE))
 
 # The flash `rootfs` partition holds the userspace XIP image, NOT the squashfs.
 # Flashing the squashfs here would silently destroy the XIP image and take the
@@ -466,7 +477,7 @@ imager: toolchain rootfs
 		FDT_DTB=$(BUILD_DIR)/imager.dtb
 
 flash-imager:
-	$(ESPFLASH) $(LINUX_OFFSET) $(IMAGER_IMAGE)
+	$(ESPFLASH) $(LINUX_OFFSET) $(call flashfile,$(IMAGER_IMAGE))
 
 # Reset the board and hand the console back. esptool drives the strapping and
 # reset lines properly; hand-rolled DTR/RTS toggling looks equivalent and is
