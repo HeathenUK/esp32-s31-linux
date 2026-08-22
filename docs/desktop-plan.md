@@ -224,10 +224,30 @@ steady-state, and a single-layout subset should cut most of it. Not yet done.
      images. That is roughly break-even before the kernel trim in question 4,
      and it does not yet count xterm, a window manager or the apps themselves -
      so the margin is real but not generous, and question 4 still matters.
-  3. Confirm that an X server on /dev/fb0 still reaches the DRM plane update
-     path through our fbdev emulation, and so keeps PPA scaling, `render=` and
-     1:1 placement. fbcon does; an X server should, but it has not been tested.
-     Moot if modesetting is used instead.
+  3. ~~Confirm that an X server on /dev/fb0 still reaches the DRM plane update
+     path.~~ **CONFIRMED on hardware, 2026-08-22.** Xfbdev started on the
+     panel, and the driver's own counters across a single xsetroot show:
+
+         updates      371 -> 372
+         flushes      371 -> 372
+         ppa_ops      370 -> 371
+         flush_bytes  +491,520   = exactly one 640x384x2 frame
+         scanout      0x50900000  size=768000 = 800x480x2
+
+     The scanout buffer is native-panel sized while the render is 640x384, so
+     PPA ran. Counting colours in it after painting a 16x16 grid:
+
+         0x0010 navy    216,000
+         0xffe0 yellow   29,760     245,760 = 640x384 exactly
+         0x0000 black   138,240     800x480 - 640x384 exactly, the letterbox
+
+     So RGB565 holds end to end and placement is 1:1 centred, not stretched.
+     The Xorg + modesetting fallback is not needed.
+
+     Two things had to be worked around to get there, both worth knowing: this
+     Xfbdev has no `-fc` option, so the cursor font cannot be redirected and
+     font-cursor-misc should be packaged; and the server starts happily with
+     no cursor font at all.
   4. How much can the kernel be trimmed - Bluetooth, IPv6, netfilter, unused
      drivers - and does repartitioning help, given only `linux` needs 4 MiB
      alignment and `rootfs` does not?
