@@ -304,11 +304,19 @@ in from SD.
 Trimming yields hundreds of KB per change against a multi-MB deficit. It cannot
 close the gap.
 
-**PPA does not help this.** The premise was that overlay planes would free
-Weston's pixman shadow buffer. There is no shadow: Weston's pixman renderer
-draws directly into DRM dumb buffers, and there are two of them (770048 bytes
-each) inside the 2 MB `lcd_reserved` region, which is `nomap` and already
-excluded from MemTotal. They cost system RAM nothing. CPU is not the constraint
+**CORRECTED 2026-08-22: there IS a shadow, and it was the largest consumer.**
+This section previously claimed "there is no shadow: Weston's pixman renderer
+draws directly into DRM dumb buffers". Weston's own log says
+`DRM: output DPI-1 uses shadow framebuffer.`, and the measurement agrees:
+shrinking the render size drops Weston's *anonymous* footprint from 2096 kB to
+688 kB, which dumb buffers in `lcd_reserved` cannot explain because that region
+is excluded from MemTotal. The dumb-buffer half of the old claim stands; the
+"no shadow" half was wrong and load-bearing, so anything derived from it should
+be re-checked.
+
+The rest of the original point survives on its own evidence: CPU is not the
+constraint - 0.4 s of a 13.7 s keystroke - so a hardware blend path is not what
+fixes this. CPU is not the constraint
 either - 0.4 s of a 13.7 s keystroke. The PPA work is good hardware
 acceleration and worth having, but it is not the fix for this.
 
@@ -427,6 +435,29 @@ disconnected once, 99 s after enumerating, with no transfer errors before it.
 It has not recurred since the change. The hub is bus-powered and declares
 `bMaxPower = 100mA` while feeding two receivers that each declare 100 mA, which
 is an untested suspect.
+
+## Render size is the memory lever, and it stops the swapping
+
+Measured 2026-08-22, warm, weston + desktop-shell + foot, a reboot between arms.
+`esp32s31_lcd.render=WxH` renders below the panel and upscales with the PPA, so
+every client's buffers and Weston's shadow shrink without any client knowing or
+the desktop getting visibly smaller.
+
+                MemAvailable  weston VmRSS  cursor runs 1-3   swap written
+    800x480       1148 kB       2884 kB     10.5 13.6 18.0    -768 -768 0 kB
+    640x384       2724 kB        768 kB     16.7 17.8 17.8       0    0  0
+    400x240       3168 kB        796 kB     18.1 18.7 18.2       0    0 +256
+
+**640x384 is now the default.** It is exactly 1.25x in both axes, so it fills
+the panel with no pillarboxing and no aspect distortion, and it takes the whole
+win: 400x240 shrinks Weston no further and costs a soft 2x upscale.
+
+Two things worth reading off that table. Native **swaps during ordinary pointer
+motion** and needs three runs to reach full speed, which is the "takes a while
+to become responsive" behaviour reported from the board; the reduced modes are
+at full speed immediately and never touch swap. And Weston's anonymous memory
+falling 2096 -> 688 kB is the shadow framebuffer, not client buffers - see the
+correction under PPA below.
 
 ## PPA (Pixel Processing Accelerator)
 
