@@ -1,0 +1,25 @@
+config BR2_PACKAGE_XFILES
+	bool "xfiles (X11 file manager)"
+	depends on BR2_PACKAGE_XORG7
+	depends on BR2_USE_MMU
+	select BR2_PACKAGE_XLIB_LIBX11
+	select BR2_PACKAGE_XLIB_LIBXFT
+	select BR2_PACKAGE_XLIB_LIBXPM
+	select BR2_PACKAGE_XLIB_LIBXCURSOR
+	select BR2_PACKAGE_XLIB_LIBXRENDER
+	select BR2_PACKAGE_FONTCONFIG
+	help
+	  A file manager written directly against Xlib - no toolkit, no C++,
+	  no glib. About 5,000 lines of C99 with its own widget layer.
+
+	  It is here because it is the only maintained, glib-free, resizable
+	  X11 file manager that fits this board. Everything else is a terminal
+	  application, unmaintained, or built on GTK/Qt/FOX/Tk and 5-20x over
+	  budget. Of its dependencies only libXpm is not already in the flash
+	  image for the X server.
+
+	  Note file operations - copy, move, delete - are delegated to a shell
+	  script, examples/xfilesctl, which this package installs. Browsing,
+	  navigation, selection and launching work without it.
+
+	  https://github.com/phillbush/xfiles

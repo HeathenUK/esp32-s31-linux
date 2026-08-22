@@ -116,7 +116,11 @@ BR2_PACKAGE_BC=y
 # Measured: Xfbdev 1.60 MB, X client libs 1.92 MB, FLTK 1.28 MB.
 BR2_PACKAGE_XORG7=y
 BR2_PACKAGE_CAIRO_XLIB=y
-BR2_PACKAGE_FLTK=y
+# FLTK is OFF. libfltk.so.1.3 has DT_NEEDED libstdc++.so.6, and
+# post-build.sh deletes libstdc++ from the target - so every byte of it was
+# unloadable on the board, including the 1,323,008 it occupied in XIP image 2.
+# The file manager is xfiles instead, which needs no C++ at all.
+# BR2_PACKAGE_FLTK is not set
 
 # Xft must be asked for explicitly. Neither FLTK nor xterm selects it - both
 # test for it and silently fall back to core bitmap fonts when it is absent
@@ -129,13 +133,29 @@ BR2_PACKAGE_X11LIBRE_XSERVER=y
 
 # evilwm is about 30 KB and gives real window management - move, resize, focus,
 # virtual desktops - without a toolkit, a config parser or an icon theme.
-BR2_PACKAGE_EVILWM=y
+# jwm replaces evilwm. evilwm draws a one-pixel border and nothing else - no
+# title bars, no close/maximise/minimise, no taskbar - which is not a desktop.
+# fluxbox and openbox have those but are C++, and would bring libstdc++ back to
+# a board that now has no C++ runtime at all. jwm is C against Xlib and reuses
+# libX11, libXft and libXpm already in flash.
+BR2_PACKAGE_JWM=y
 # st replaces xterm. xterm's Athena chain - xterm, libXaw7, libXt, libXmu,
 # libXpm, libncursesw, libICE, libSM - is 1,957,904 bytes and does not fit the
 # XIP image, so it paged off the SD card on every window redraw. Measured during
 # a redraw: xterm took 72 major faults and the server 66. st draws with Xft and
 # needs only libX11, libXft, fontconfig and freetype, all already in flash.
 BR2_PACKAGE_ST=y
+
+# xcalc: the calculator, off the shelf. It is an Athena app, so it brings back
+# libXaw7 (346,108), libXt (316,096) and libXmu (87,752) that leaving xterm
+# removed. That is ~750 kB for one application, which is only worth it because
+# nothing smaller exists off the shelf - and unlike xterm's chain it is not on
+# the redraw-hot path, so it can page from the card without being felt.
+BR2_PACKAGE_XAPP_XCALC=y
+
+# xfiles: the file manager. Raw Xlib, C99, no toolkit and no C++. Of its
+# dependencies only libXpm is not already in flash for the server.
+BR2_PACKAGE_XFILES=y
 
 # Core bitmap fonts. xterm and any Xt app need "fixed" to start at all, and
 # these are tens of KB against a scalable face's several hundred.

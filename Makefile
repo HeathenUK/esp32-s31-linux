@@ -64,7 +64,7 @@ IDF_EXPORT := $(shell test -f /opt/esp-idf/export.sh && echo /opt/esp-idf/export
 
 .PHONY: all download toolchain toolchain-source opensbi linux coremark rootfs initramfs s31-pie-cases \
 	buildroot-menuconfig buildroot-clean clean fullclean flash-opensbi flash-linux  \
-	xip-rootfs flash-xip-rootfs \
+	xip-rootfs flash-xip-rootfs xip2-stage \
 	flash-rootfs xip2-rootfs flash-xip2-rootfs bootloader flash-bootloader erase \
 	imager flash-imager reset
 
@@ -362,9 +362,18 @@ XIP_ROOTFS_IMG := $(BUILD_DIR)/rootfs-xip.cramfs
 # alike. Staging it beside FLTK instead would put it in the smaller image and
 # duplicate nothing, but leave the shared stack in the partition with the least
 # room. Measured: this is what makes both images fit.
-XIP_ROOTS ?= usr/bin/Xfbdev usr/bin/evilwm usr/bin/xsetroot usr/bin/xkbcomp \
-	usr/bin/st usr/lib/libXft.so \
-	'usr/share/fonts/X11/misc/6x13*.pcf.gz' \
+XIP_ROOTS ?= usr/bin/Xfbdev usr/bin/jwm usr/bin/xsetroot \
+	usr/lib/libXft.so \
+	usr/share/fonts/X11/misc/6x13.pcf.gz \
+	usr/share/fonts/X11/misc/6x13-ISO8859-1.pcf.gz \
+	usr/share/fonts/X11/misc/6x13B.pcf.gz \
+	usr/share/fonts/X11/misc/6x13B-ISO8859-1.pcf.gz \
+	usr/share/fonts/X11/misc/6x13O-ISO8859-1.pcf.gz \
+	usr/share/fonts/X11/misc/6x12-ISO8859-1.pcf.gz \
+	usr/share/fonts/X11/misc/8x13.pcf.gz \
+	usr/share/fonts/X11/misc/8x13-ISO8859-1.pcf.gz \
+	usr/share/fonts/X11/misc/8x13B-ISO8859-1.pcf.gz \
+	usr/share/fonts/X11/misc/10x20-ISO8859-1.pcf.gz \
 	usr/share/fonts/X11/misc/cursor.pcf.gz \
 	usr/share/fonts/X11/misc/fonts.alias \
 	usr/share/fonts/dejavu/DejaVuSansMono.ttf
@@ -375,8 +384,31 @@ xip-rootfs: rootfs
 		{ echo "ERROR: mkcramfs not found; enable BR2_PACKAGE_HOST_CRAMFS" >&2; exit 1; }
 	rm -rf $(XIP_STAGE)
 	mkdir -p $(XIP_STAGE)
+	@# Image 1 is staged first and image 2 excludes it, so the shared
+	@# libraries land here once. The split between the two is therefore
+	@# about which BINARIES go where, not which libraries: moving a binary
+	@# to image 2 moves only the binary, because its libraries are already
+	@# here. That is how the two partitions get balanced.
 	python3 $(CURDIR)/rootfs/mkxipstage.py $(CROSS_COMPILE)readelf \
 		$(BUILDROOT_OUT)/target $(XIP_STAGE) $(XIP_ROOTS)
+	@# Core-font clients need a fonts.dir index; Xft ones do not. The font
+	@# files copy across on their own, so the server and st work and the
+	@# omission is invisible until an Athena application starts and reports
+	@# "Unable to load any usable ISO8859 font". Build an index describing
+	@# exactly what was staged - the card's own fonts.dir lists 334 faces
+	@# that are not here, and the flash copy replaces it via a bind mount.
+	@FD=$(XIP_STAGE)/usr/share/fonts/X11/misc; \
+	if [ -d "$$FD" ]; then \
+		SRC=$(BUILDROOT_OUT)/target/usr/share/fonts/X11/misc/fonts.dir; \
+		( cd "$$FD" && ls *.pcf.gz 2>/dev/null | wc -l; \
+		  for f in "$$FD"/*.pcf.gz; do \
+			grep "^$$(basename $$f) " "$$SRC" 2>/dev/null; \
+		  done ) > "$$FD/fonts.dir"; \
+		echo "staged fonts.dir: $$(head -1 $$FD/fonts.dir) faces"; \
+		{ echo '-adobe-symbol-medium-r-normal--13-120-75-75-p-74-adobe-fontspecific 6x13'; \
+		  echo '8x13bold "-misc-fixed-bold-r-normal--13-120-75-75-c-80-iso8859-1"'; \
+		} >> "$$FD/fonts.alias"; \
+	fi
 	@# -X TWICE, deliberately. One -X aligns data to 8 bytes and the kernel
 	@# refuses the image with "data is not page aligned"; the second sets
 	@# opt_xip_mmu and aligns to a page. A single -X mounts, runs, and
@@ -410,22 +442,30 @@ XIP2_STAGE := $(BUILD_DIR)/xipstage2
 # foot was here and is gone: it is a Wayland-native terminal, so it has no
 # client under X11.
 #
-# This image is FLTK's. The toolkit is shared by every application the desktop
-# is being built for, which makes it the best remaining use of flash once the
-# server has the first image.
+# This image was FLTK's, which was a mistake: libfltk NEEDs libstdc++ and
+# post-build.sh deletes libstdc++ from the target, so nothing here could load.
+# It now carries xcalc and the Athena chain it drags in - libXaw7, libXt,
+# libXmu, libXpm, libICE, libSM - which is the only off-the-shelf calculator
+# that exists for X11.
 #
-# What lands here is FLTK plus what only FLTK needs - libjpeg and libgcc_s.
-# The Xft/fontconfig/expat stack it shares with xterm is in the first image
-# instead; see the note there. nnn, bc and xterm stay on the card.
-XIP2_ROOTS ?= usr/lib/libfltk.so usr/lib/libfltk_images.so usr/lib/libfltk_forms.so
+# jwm also needs libXmu from this chain. Both flash images are lowerdirs of
+# the same overlay, so image 1 sees these without carrying its own copy.
+# xkbcomp is here rather than image 1 because it runs once, when the server
+# starts, and never again - the least hot thing in the desktop.
+XIP2_ROOTS ?= usr/bin/xcalc usr/bin/st usr/bin/xfiles usr/bin/xkbcomp
 
-xip2-rootfs: xip-rootfs
-	@echo "--- second userspace XIP image ---"
+# Staged separately from image creation, because image 1 has to know what is
+# in here before it stages itself - see the EXCLUDE_DIR note in xip-rootfs.
+xip2-stage: xip-rootfs
+	@echo "--- staging second userspace XIP image ---"
 	rm -rf $(XIP2_STAGE)
 	mkdir -p $(XIP2_STAGE)
 	EXCLUDE_DIR=$(XIP_STAGE) python3 $(CURDIR)/rootfs/mkxipstage.py \
 		$(CROSS_COMPILE)readelf $(BUILDROOT_OUT)/target $(XIP2_STAGE) \
 		$(XIP2_ROOTS)
+
+xip2-rootfs: xip2-stage
+	@echo "--- second userspace XIP image ---"
 	$(BUILDROOT_OUT)/host/bin/mkcramfs -X -X $(XIP2_STAGE) $(XIP2_ROOTFS_IMG)
 	@SZ=$$(stat -c%s $(XIP2_ROOTFS_IMG)); \
 	if [ $$SZ -gt $(XIP2_PARTITION_SIZE) ]; then \

@@ -99,12 +99,13 @@ server)
 all)
 	start_server
 	xsetroot -solid steelblue 2>/dev/null || echo "s31-desktop: xsetroot failed"
-	# -fn is not optional. evilwm's built-in default resolves against the
-	# full core font path; with the path pinned to X11/misc it finds nothing
-	# and exits with "couldn't find a font to use", which looks like a crash.
-	evilwm -fn fixed >/tmp/evilwm.log 2>&1 &
-	sleep 1
-	pidof evilwm >/dev/null 2>&1 || echo "s31-desktop: WARNING evilwm did not start"
+	# jwm, not evilwm: evilwm draws a one-pixel border and nothing else, so
+	# there is no title bar, no close/maximise/minimise and no taskbar. jwm
+	# provides all three in C against Xlib, reusing libraries already in
+	# flash, where fluxbox and openbox would drag libstdc++ back in.
+	jwm >/tmp/jwm.log 2>&1 &
+	sleep 2
+	pidof jwm >/dev/null 2>&1 || echo "s31-desktop: WARNING jwm did not start"
 	# st, not xterm. xterm's Athena chain - xterm, libXaw7, libXt, libXmu,
 	# libXpm, libncursesw, libICE, libSM - is 1,957,904 bytes, does not fit
 	# the flash image, and so paged off the SD card on every window redraw.
@@ -115,7 +116,7 @@ all)
 	echo "s31-desktop: up. 's31-desktop stop' to tear down."
 	;;
 stop)
-	for p in st xterm evilwm Xfbdev; do killall "$p" 2>/dev/null; done
+	for p in st xterm xfiles xcalc jwm evilwm Xfbdev; do killall "$p" 2>/dev/null; done
 	echo "s31-desktop: stopped"
 	;;
 *)

@@ -1,0 +1,21 @@
+config BR2_PACKAGE_JWM
+	bool "jwm (Joe's Window Manager)"
+	depends on BR2_PACKAGE_XORG7
+	depends on BR2_USE_MMU
+	select BR2_PACKAGE_XLIB_LIBX11
+	select BR2_PACKAGE_XLIB_LIBXFT
+	select BR2_PACKAGE_XLIB_LIBXPM
+	select BR2_PACKAGE_XLIB_LIBXEXT
+	help
+	  A window manager with title bars, buttons, a taskbar and a root menu,
+	  written in C against Xlib.
+
+	  It replaces evilwm, which was chosen for size alone and draws nothing
+	  but a one-pixel border - no title bars, no close/maximise/minimise, no
+	  taskbar. fluxbox and openbox have those, but are C++ and would bring
+	  libstdc++ (1,655,438) back onto a board that currently has no C++
+	  runtime at all.
+
+	  Reuses libX11, libXft and libXpm, already in the flash image.
+
+	  https://joewing.net/projects/jwm/

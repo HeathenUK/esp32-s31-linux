@@ -3,5 +3,7 @@ menu "ESP32-S31 packages"
 source "$BR2_EXTERNAL_ESP32_S31_PATH/package/s31-tools/Config.in"
 source "$BR2_EXTERNAL_ESP32_S31_PATH/package/x11libre-xserver/Config.in"
 source "$BR2_EXTERNAL_ESP32_S31_PATH/package/st/Config.in"
+source "$BR2_EXTERNAL_ESP32_S31_PATH/package/xfiles/Config.in"
+source "$BR2_EXTERNAL_ESP32_S31_PATH/package/jwm/Config.in"
 
 endmenu
