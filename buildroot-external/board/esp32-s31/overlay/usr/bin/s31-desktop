@@ -24,6 +24,30 @@ LOG=/tmp/xfbdev.log
 
 die() { echo "s31-desktop: $*" >&2; exit 1; }
 
+# Match pointers on capability bits, not on the Handlers list: the "mouse"
+# handler comes from mousedev, which this kernel does not build, so a working
+# USB mouse shows only "Handlers=event0". A pointer advertises REL_X (0x1) and
+# REL_Y (0x2) - the low two bits of its REL mask. Testing the last hex digit
+# avoids strtonum, which busybox awk lacks.
+find_inputs() {
+	want=$1
+	awk -v want="$want" '
+		/^I:/  { hand=""; rel="" }
+		/^H: Handlers=/ { hand=$0 }
+		/^B: REL=/ { rel=substr($2, 5) }
+		/^$/ {
+			if (hand ~ /event/) {
+				n = hand; sub(/.*(event)/, "event", n); sub(/ .*/, "", n)
+				last = tolower(substr(rel, length(rel), 1))
+				ptr = (rel != "" && (last == "3" || last == "7" || \
+				       last == "b" || last == "f"))
+				if (want == "mouse" && ptr) print "/dev/input/" n
+				if (want == "kbd" && !ptr && hand ~ /kbd/) print "/dev/input/" n
+			}
+		}
+	' /proc/bus/input/devices 2>/dev/null
+}
+
 # fontconfig ships no cache, and buildroot cannot build one for us: its caches
 # are architecture-specific, so a host-generated cache would be wrong here.
 # Without it every Xft lookup walks the whole font directory and reads each face
@@ -51,25 +75,41 @@ start_server() {
 	# drops it with a warning. Only misc has real fonts here - 334 pcf files
 	# and the "fixed" alias every Xt application needs to start.
 	FP=/usr/share/fonts/X11/misc
-	# -seat is what turns udev input on, and it is not optional. kdrive only
-	# calls config_init() - the hot-plug path - when dixSettingSeatId is set,
-	# and that is set by -seat alone:
+	# Input devices are named explicitly, and -seat is NOT used, because
+	# kdrive's udev enumeration is broken in this build. Measured, same
+	# virtual mouse, one variable changed:
 	#
-	#     if (dixSettingSeatId) /* Enable input hot-plugging */
-	#         config_init();                 hw/kdrive/src/kinput.c
+	#     -seat seat0 (udev)      pointer frozen at (41,177) for 12 samples
+	#     -mouse evdev,,device=   pointer moves: 81 129 235 297 307 242 175
 	#
-	# Without it the server links libudev, maps it, and opens no devices at
-	# all, with nothing in the log to say why. With it, it finds them itself:
-	# event0 (mouse), event2 and event3 (keyboard), and correctly skips
-	# event1, the receiver's consumer-control node.
-	args="-fb /dev/fb0 -dpi 100 -nolisten tcp -seat seat0"
-	[ -f "$FP/fonts.dir" ] && args="$args -fp $FP"
-	# No -keybd or -mouse. The server is built with udev, so it enumerates
-	# input itself and picks up hotplugged devices while running. Naming
-	# devices here was a mistake worth not repeating: a wireless keyboard
-	# publishes a phantom mouse collection and a mouse receiver publishes a
-	# consumer-control keyboard, so which node looked "real" depended on USB
-	# enumeration order and changed between boots.
+	# With -seat the server enumerates devices, opens them - three fds, and
+	# it hotplugs new ones correctly - and then never delivers their events.
+	# That leaves the desktop with no working input at all, including the
+	# real mouse, and nothing in the log says so. Do not "simplify" this back
+	# to -seat without re-running that A/B.
+	#
+	# Every matching device is passed rather than the first, because a
+	# wireless keyboard publishes a phantom mouse and a mouse receiver
+	# publishes a consumer-control keyboard, so picking one is a coin toss
+	# decided by USB enumeration order:
+	#
+	#     event0  Logitech USB Receiver                   REL=1943  pointer
+	#     event1  Logitech USB Receiver Consumer Control  REL=1040  keyboard
+	#     event2  8BitDo Retro Keyboard Receiver          REL=1943  pointer (phantom)
+	#     event3  8BitDo Retro Keyboard Receiver Keyboard REL=1040  keyboard
+	#
+	# kdrive merges them all into the core pointer and keyboard, so a
+	# phantom that never moves contributes nothing.
+	nk=0; nm=0
+	for k in $(find_inputs kbd); do
+		args="$args -keybd evdev,,device=$k"; nk=$((nk+1))
+	done
+	for m in $(find_inputs mouse); do
+		args="$args -mouse evdev,,device=$m"; nm=$((nm+1))
+	done
+	[ "$nk" = 0 ] && echo "s31-desktop: WARNING no keyboard found"
+	[ "$nm" = 0 ] && echo "s31-desktop: WARNING no pointer found"
+	echo "s31-desktop: $nk keyboard(s), $nm pointer(s)"
 	echo "s31-desktop: $XSRV $args"
 
 	$XSRV $args >"$LOG" 2>&1 &
@@ -93,6 +133,9 @@ server)
 	# panel, the server is talking to the plane. The stipple default is
 	# hard to tell apart from a stale framebuffer.
 	xsetroot -solid steelblue 2>/dev/null && echo "s31-desktop: root painted"
+	# Xfbdev leaves the root cursor as None, so the pointer is invisible
+	# and moving it damages nothing at all - which reads as dead input.
+	xsetroot -cursor_name left_ptr 2>/dev/null
 	;;
 all)
 	start_server
