@@ -63,7 +63,23 @@ X11 client libraries, measured from a real build:
     libXext           70,116
     libXfixes         21,452
     subtotal        ~1.92 MB
-    FLTK 1.3.7      packaged already, no Pango, no glib
+
+FLTK 1.3.7 now built against X11 and measured:
+
+    libfltk        1,182,232
+    libfltk_images    58,836
+    libfltk_forms     30,120
+    libfltk_cairo      7,468
+    subtotal        1,278,656
+
+Its NEEDED list is libXrender, libXcursor, libXfixes, libXext, libXft,
+libfontconfig, libXinerama, libX11, libstdc++, libgcc_s, libc - and **zero
+Wayland entries**, confirming it took the X11 path rather than quietly linking
+both. No Pango and no glib, which is the whole 2.4 MB the Wayland build would
+have cost. Only libXinerama was not already in the X11 subtotal above.
+
+Note fltk_cairo is a 7 kB shim, not Cairo itself - Cairo remains a dependency
+of the wider build, not of FLTK's X11 backend.
 
 **X11 and Wayland are alternatives, not additions.** Comparing X11's cost
 against a budget that still contains Weston is wrong, and I made that mistake
@@ -161,11 +177,15 @@ argument for X11 on a machine this small, independent of flash cost.
 
 ## Open questions
 
-  1. What does X11Libre's Xfbdev weigh, and does it build against musl with a
-     modern toolchain? Full Xorg is measured at 3.0 MB; this is the one that
-     could be materially smaller.
-  2. If X11 replaces Wayland entirely, does the total fit in ~7.4 MB of flash
-     with the hot path prioritised and the rest paging from SD?
+  1. ~~What does X11Libre's Xfbdev weigh, and does it build against musl?~~
+     **Answered: 1,597,644 bytes**, against 3.0 MB for Xorg plus modules. Two
+     musl portability bugs patched; see the package.
+  2. ~~If X11 replaces Wayland entirely, does the total fit?~~ **Answered: yes,
+     with room.** Server 1.60 + X libs 1.92 + FLTK 1.28 = 4.80 MB, against
+     ~2.3 MB freed by dropping Wayland and ~1.8 MB already free in the two XIP
+     images. That is roughly break-even before the kernel trim in question 4,
+     and it does not yet count xterm, a window manager or the apps themselves -
+     so the margin is real but not generous, and question 4 still matters.
   3. Confirm that an X server on /dev/fb0 still reaches the DRM plane update
      path through our fbdev emulation, and so keeps PPA scaling, `render=` and
      1:1 placement. fbcon does; an X server should, but it has not been tested.
