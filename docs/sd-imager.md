@@ -39,6 +39,28 @@ rejecting it. This matters: without it, an ack lost on the wire deadlocks the
 transfer, with the sender waiting for an ack of frame N while the receiver will
 accept nothing but N+1.
 
+## The imager kernel must fit the linux partition
+
+`make imager` builds a *second* kernel and flashes it over the normal one at the
+`linux` partition offset. Nothing checks the size at flash time - only `make
+linux` does - so an oversized imager kernel flashes happily and runs off the end
+of its partition:
+
+    0x400000 + 6,570,053 = 0xA44045      rootfs starts at 0xA00000
+
+That silently destroys the first 278 KB of the userspace XIP image, which then
+fails to mount on the next boot for reasons that have nothing to do with the
+card. If `make imager` reports the image exceeding the partition, **do not flash
+it anyway**.
+
+It got oversized for a structural reason worth knowing: the `linux` rule used to
+apply its whole `scripts/config` list unconditionally, so selecting
+`esp32s31_imager_defconfig` had DRM, Wi-Fi, HID, CMA, CRAMFS and PROFILING
+switched straight back on over the top. The imager only writes an SD card and
+needs none of it. The config is now split - `LINUX_BASE_CONFIG` is what any
+kernel for this board needs, `LINUX_FEATURE_CONFIG` is the running system's
+feature set, and the imager passes the base set alone.
+
 ## Use
 
     # 1. Build the imager kernel (embeds the initramfs) and flash it
