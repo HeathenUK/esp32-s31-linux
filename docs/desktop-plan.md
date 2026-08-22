@@ -213,6 +213,38 @@ The xkb rule files are the remaining 3.4 MB and are not yet trimmed. They are
 read once per server start by xkbcomp, so they cost startup latency rather than
 steady-state, and a single-layout subset should cut most of it. Not yet done.
 
+## Buildroot never cleans target/, and it has cost real time
+
+Disabling a package or a sub-option removes it from `.config` and changes
+nothing in the image. `target/` keeps whatever was installed into it, so the
+saving is real in the configuration and absent from the thing you flash. This
+has bitten three times in one day:
+
+  * DejaVu's serif and condensed families stayed installed after being switched
+    off - 5.36 MB still in the image.
+  * A full Xorg server, 2,437,091 bytes including `/usr/bin/Xorg` and an
+    `S40xorg` init script, survived in the image long after
+    `BR2_PACKAGE_XSERVER_XORG_SERVER` stopped being set. It was left from
+    measuring Xorg as a fallback. Worse than dead weight: **S40xorg starts Xorg
+    at boot and it takes `:0`**, so Xfbdev could not get the display and the
+    desktop appeared to hang.
+  * A defconfig symbol that does not exist is silently ignored -
+    `BR2_PACKAGE_XAPP_XTERM` is not real, it is `BR2_PACKAGE_XTERM` - so the
+    package is simply never built and nothing says so.
+
+The removal is exact rather than guesswork, because buildroot records what each
+package installed:
+
+    build/<pkg>-<ver>/.files-list.txt      target
+    build/<pkg>-<ver>/.files-list-staging.txt
+    build/<pkg>-<ver>/.files-list-host.txt
+
+Walk the target list, delete what exists, then `make <pkg>-dirclean`.
+
+**Verify, do not assume.** After any defconfig change, grep the generated
+`.config` for every symbol touched, and check `target/` for what should have
+gone. A build that succeeds proves nothing about what was removed.
+
 ## Open questions
 
   1. ~~What does X11Libre's Xfbdev weigh, and does it build against musl?~~
