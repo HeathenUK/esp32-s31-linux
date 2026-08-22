@@ -39,6 +39,46 @@ rejecting it. This matters: without it, an ack lost on the wire deadlocks the
 transfer, with the sender waiting for an ack of frame N while the receiver will
 accept nothing but N+1.
 
+## The imager kernel does not fit the linux partition, and that is expected
+
+`make imager` builds a second kernel and flashes it over the normal one at the
+`linux` offset. It is **larger than that partition** and overruns into `rootfs`:
+
+    linux partition   0x400000 .. 0xA00000    6,291,456 bytes
+    imager kernel     6,570,053 bytes  ->  ends 0xA44045
+    overrun                                  278,597 bytes into rootfs
+
+`rootfs` holds userspace XIP image 1, so flashing the imager destroys the start
+of it. `xip2` lives at 0x2A0000..0x400000, before `linux`, and is untouched.
+
+That is acceptable because imaging is transient - but **the restore step is two
+commands, not one**:
+
+    make flash-linux flash-xip-rootfs
+
+Flashing only the kernel back leaves a corrupt XIP image, and the symptom on the
+next boot is cramfs failing to mount, which points nowhere near the cause.
+
+`make imager` therefore warns rather than failing, via `LINUX_SIZE_FATAL=0`. For
+any other kernel an oversized image stays a hard error.
+
+### Do not try to slim the imager kernel
+
+It grew past the partition because the `linux` rule applies its `scripts/config`
+list on top of whatever DEFCONFIG selects, so the imager inherits the running
+system's feature set - DRM, Wi-Fi, HID, CRAMFS, PROFILING - none of which it
+obviously needs. It fit until that list grew.
+
+Splitting the config so the imager gets only a base set is the obvious fix and
+**does not work**. It was tried: the imager kernel drops to 5,688,253 bytes and
+fits, and then panics at boot with
+
+    Kernel panic - not syncing: Attempted to kill init! exitcode=0x0000000b
+
+before printing `IMAGER_READY`. Something in that feature set is load-bearing
+for this initramfs. Until someone identifies which option and why, leave the
+config inheritance alone and accept the overrun.
+
 ## Use
 
     # 1. Build the imager kernel (embeds the initramfs) and flash it

@@ -172,6 +172,12 @@ opensbi: toolchain | $(OPENSBI_OUT)
 DEFCONFIG ?= esp32s31_defconfig
 LINUX_TARGET ?= xipImage
 
+# An oversized kernel is fatal, because it silently runs past its partition into
+# rootfs. The SD imager is the one deliberate exception: it is flashed over the
+# normal kernel only for as long as it takes to write the card, and the restore
+# step reflashes rootfs anyway. See docs/sd-imager.md.
+LINUX_SIZE_FATAL ?= 1
+
 linux: toolchain | $(LINUX_OUT)
 	@echo "--- Linux ---"
 	$(MAKE) -C $(LINUX_DIR) O=$(LINUX_OUT) ARCH=riscv CROSS_COMPILE="$(CROSS_COMPILE)" $(DEFCONFIG)
@@ -241,10 +247,19 @@ linux: toolchain | $(LINUX_OUT)
 	cp -v $(LINUX_OUT)/System.map $(BUILD_DIR)/System.map
 	@XIP_SIZE=$$(stat -c%s $(XIP_IMAGE)); \
 	if [ $$XIP_SIZE -gt $(LINUX_PARTITION_SIZE) ]; then \
-		echo "ERROR: xipImage ($$XIP_SIZE bytes) exceeds the linux partition ($(LINUX_PARTITION_SIZE) bytes)"; \
-		exit 1; \
-	fi; \
-	echo "xipImage $$XIP_SIZE bytes, $$(($(LINUX_PARTITION_SIZE) - $$XIP_SIZE)) bytes free in the linux partition"
+		OVER=$$(($$XIP_SIZE - $(LINUX_PARTITION_SIZE))); \
+		if [ "$(LINUX_SIZE_FATAL)" = "0" ]; then \
+			echo "WARNING: $(notdir $(XIP_IMAGE)) ($$XIP_SIZE bytes) exceeds the linux partition by $$OVER bytes."; \
+			echo "         Flashing it will overwrite the first $$OVER bytes of the rootfs"; \
+			echo "         partition, which holds XIP image 1. Reflash it afterwards:"; \
+			echo "             make flash-linux flash-xip-rootfs"; \
+		else \
+			echo "ERROR: xipImage ($$XIP_SIZE bytes) exceeds the linux partition ($(LINUX_PARTITION_SIZE) bytes)"; \
+			exit 1; \
+		fi; \
+	else \
+		echo "$(notdir $(XIP_IMAGE)) $$XIP_SIZE bytes, $$(($(LINUX_PARTITION_SIZE) - $$XIP_SIZE)) bytes free in the linux partition"; \
+	fi
 
 coremark: rootfs
 	@test -x "$(BUILDROOT_OUT)/target/usr/bin/coremark"
@@ -474,7 +489,7 @@ imager: toolchain rootfs
 		$(IMAGER_STAGE) $(CURDIR)/imager/sdrecv
 	$(MAKE) linux DEFCONFIG=esp32s31_imager_defconfig \
 		LINUX_OUT=$(IMAGER_OUT) XIP_IMAGE=$(IMAGER_IMAGE) \
-		FDT_DTB=$(BUILD_DIR)/imager.dtb
+		FDT_DTB=$(BUILD_DIR)/imager.dtb LINUX_SIZE_FATAL=0
 
 flash-imager:
 	$(ESPFLASH) $(LINUX_OFFSET) $(call flashfile,$(IMAGER_IMAGE))
