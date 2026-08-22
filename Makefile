@@ -238,7 +238,9 @@ linux: toolchain | $(LINUX_OUT)
 		--enable DRM_ESP32S31_PPA \
 		--disable FTRACE \
 		--disable ENABLE_DEFAULT_TRACERS \
-		--disable BLK_DEV_IO_TRACE
+		--disable BLK_DEV_IO_TRACE \
+		--disable PROFILING \
+		--disable IPV6
 	$(MAKE) -C $(LINUX_DIR) O=$(LINUX_OUT) ARCH=riscv CROSS_COMPILE="$(CROSS_COMPILE)" olddefconfig
 	$(MAKE) -C $(LINUX_DIR) O=$(LINUX_OUT) ARCH=riscv CROSS_COMPILE="$(CROSS_COMPILE)" \
 		KCFLAGS="-march=$(S31_SAFE_ISA) $(S31_COMMON_FLAGS)" -j$(JOBS) $(LINUX_TARGET) dtbs
@@ -267,12 +269,12 @@ coremark: rootfs
 
 # Keep this decimal because POSIX test(1) and truncate(1) do not accept the
 # partition table's 0x-prefixed value.
-ROOTFS_PARTITION_SIZE ?= 6291456
+ROOTFS_PARTITION_SIZE ?= 6946816
 XIP2_PARTITION_SIZE ?= 1441792
 # The XIP kernel must start on a 4-MiB Sv32 megapage boundary, so the linux
 # partition stays at 0x400000 and rootfs takes every byte the kernel does not
 # need. Keep this in step with bootloader/partitions.csv.
-LINUX_PARTITION_SIZE ?= 6291456
+LINUX_PARTITION_SIZE ?= 5636096
 
 # Flashing knobs. These were hardcoded to /dev/ttyUSB0 and a bare `esptool`,
 # which is a Linux-only assumption: on macOS the adapter is /dev/cu.usbserial-*
@@ -361,7 +363,11 @@ XIP_ROOTFS_IMG := $(BUILD_DIR)/rootfs-xip.cramfs
 # duplicate nothing, but leave the shared stack in the partition with the least
 # room. Measured: this is what makes both images fit.
 XIP_ROOTS ?= usr/bin/Xfbdev usr/bin/evilwm usr/bin/xsetroot usr/bin/xkbcomp \
-	usr/lib/libXft.so
+	usr/lib/libXft.so \
+	'usr/share/fonts/X11/misc/6x13*.pcf.gz' \
+	usr/share/fonts/X11/misc/cursor.pcf.gz \
+	usr/share/fonts/X11/misc/fonts.alias \
+	usr/share/fonts/dejavu/DejaVuSansMono.ttf
 
 xip-rootfs: rootfs
 	@echo "--- userspace XIP image ---"

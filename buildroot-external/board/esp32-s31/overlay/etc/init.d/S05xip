@@ -43,7 +43,16 @@ start() {
 	# without it just gets one layer.
 	mkdir -p "$XIP2_MNT" 2>/dev/null
 	mount -t cramfs mtd:xip2 "$XIP2_MNT" 2>/dev/null || XIP2_MNT=""
-	for d in usr/lib usr/bin usr/libexec lib; do
+	# usr/share/fonts is here for a measured reason. Fonts were the single
+	# largest source of major faults on this board: with them on the SD card
+	# the desktop managed 1 plane update per 10 s and X took 987 major faults
+	# in the same window; with a 768 kB font set in RAM it managed 87 updates
+	# and 213 faults, and used 3.7 MB less swap. Same workload, one variable.
+	#
+	# They are read transiently while rendering rather than held mapped, so
+	# inspecting a running server's mappings does not show them and makes the
+	# cost invisible - only an A/B finds it.
+	for d in usr/lib usr/bin usr/libexec lib usr/share/fonts; do
 		[ -d "$XIP_MNT/$d" ] || continue
 		sd="/mnt/sd-$(echo "$d" | tr / -)"
 		mkdir -p "$sd" || continue
@@ -64,7 +73,7 @@ start() {
 }
 
 stop() {
-	for d in usr/lib usr/bin usr/libexec lib; do
+	for d in usr/lib usr/bin usr/libexec lib usr/share/fonts; do
 		umount "/$d" 2>/dev/null
 		umount "/mnt/sd-$(echo "$d" | tr / -)" 2>/dev/null
 	done

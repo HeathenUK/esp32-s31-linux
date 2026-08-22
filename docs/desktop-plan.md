@@ -245,6 +245,136 @@ Walk the target list, delete what exists, then `make <pkg>-dirclean`.
 `.config` for every symbol touched, and check `target/` for what should have
 gone. A build that succeeds proves nothing about what was removed.
 
+## The display path, re-examined after measuring the real thing
+
+Xfbdev works, but a desktop on it is unusable: with xterm and a window manager
+running, pointer motion produces about one plane update per second and X takes
+800+ major faults per 10 s. The cause is **not** the display path. It is memory:
+
+    MemTotal   15,456 kB
+    Slab        4,696 kB   unreclaimable
+    CMA         4,096 kB
+    -> roughly 6.5 MB for all of userspace
+
+X's ~2.9 MB of dirty anonymous memory does not fit, so it goes to SD swap and
+the session stalls for seconds at a time. XIP is working correctly - Xfbdev's
+Pss_File is only 480 kB, so its text really is executing from flash - but XIP
+does nothing for anonymous memory.
+
+`-noshadow` is a clear win regardless of route: X's anonymous memory drops from
+2132 kB to 956 kB and updates go from 1 to 9 per 10 s. Still not usable.
+
+### Route comparison, measured
+
+The X11 path does add layers Weston never had:
+
+    Weston:  client -> pixman -> dumb buffer -> atomic commit -> PPA -> panel
+    Xfbdev:  client -> X -> shadow copy -> fbdev mmap -> deferred I/O page
+             faulting -> 50 ms timer -> ->dirty -> damage -> commit -> PPA -> panel
+
+`fbdefio.delay = HZ/20` is 1/20 s regardless of CONFIG_HZ, so **any fbdev client
+is capped at 20 fps**. Weston page-flipped straight into DRM and was not.
+
+**Weston + Pango/glib: ruled out on size.**
+
+    Weston + pango + glib closure   12,322,960
+    XIP capacity                     7,733,248
+    shortfall                        4,589,712      before FLTK's Wayland build
+
+The glib chain is the problem, and it is bigger than earlier notes here claimed
+because they omitted libgio:
+
+    libgio-2.0     1,660,968
+    libglib-2.0    1,218,632
+    libpango-1.0     374,652
+    libfribidi       115,912
+    others           230,108
+    TOTAL          3,934,284
+
+There is no repartitioning escape: flash is 16 MB and bootloader, factory,
+opensbi and linux already take 10 MB.
+
+**Xorg + modesetting: prerequisite proven, budget close.** modesetting_drv.so
+builds and installs; XORG_DRIVER_MODESETTING resolves true when DRM and DRI2 are
+both on. Weston already drove this DRM driver through the same dumb-buffer and
+atomic path, so the kernel side is not in doubt. Sized as a *replacement*, not
+an addition - Xfbdev goes away and the X client libraries are shared:
+
+    Xfbdev removed        -1,330,680
+    Xorg                  +2,248,288
+    modesetting_drv.so      +124,856
+    libshadow, libfbdevhw    +56,196
+    libdrm                   +74,964
+    (libexa, libint10, libvgahw, libwfb are not needed)
+
+    trimmed image1  7,189,062   partition 6,291,456
+    + FLTK image2   1,333,514
+    total           8,522,576   capacity  7,733,248   short by 789,328
+
+Two known sources for the missing 790 kB: the linux partition holds 696,203
+bytes of slack (only its *offset* needs 4 MiB alignment, not its size), and
+CONFIG_BT, CONFIG_IPV6 and CONFIG_PROFILING are all on and unused.
+
+Route 2 is the only option where the whole desktop can execute in place, which
+matters more than the layer count - paging from SD is what produces the
+multi-second stalls.
+
+## Corrections: several conclusions in this document were wrong
+
+Measured with full dependency closures of real executables, not subtotals of
+selected libraries. The difference is what made the earlier figures wrong.
+
+**1. X11 does not fit, and the flash argument for it was backwards.**
+
+    X11 + xterm closure        7,920,836     XIP capacity 7,733,248
+    weston + foot closure      4,785,680
+    fluid (one FLTK app)       6,591,409
+
+The earlier "server 1.60 + X libs 1.92 + FLTK 1.28 = 4.80 MB" added chosen
+libraries rather than closing over an executable, so it omitted libstdc++
+(1,655,438 - mandatory for every FLTK app and present in NEITHER XIP image),
+libncursesw, libXaw7, libXt, libXmu, libICE and libSM. **X11 with a terminal
+already exceeds the whole XIP budget before any toolkit.**
+
+**2. The Pango tax is 5,352,016, not 3,934,284.** The earlier figure omitted
+libharfbuzz (1,172,704), libpcre2 (371,888) and libgobject (324,328). libgio is
+a hard DT_NEEDED of libpango and cannot be dropped.
+
+**3. FLTK 1.4 cannot be built on Wayland without Pango.** Not a documented
+preference - a mechanism. CMake/options.cmake:341-342 *unsets* any
+-DFLTK_USE_PANGO=OFF inside the Wayland branch, and the whole of
+Fl_Cairo_Graphics_Driver.cxx sits inside `#if USE_PANGO` with no `#else`, so
+disabling it removes the graphics driver the Wayland backend inherits from.
+
+**4. Cairo needs no glib**, and its X11 dependencies exist only because
+BR2_PACKAGE_XORG7 is set (cairo.mk:93-96). With X off, Cairo's marginal cost
+over a weston+foot closure is 884,400 bytes.
+
+**5. No glib-free native-Wayland file manager or calculator exists.** Every
+glib-free toolkit (FLTK 1.3, FOX, Tk, Motif) lacks a Wayland backend; every
+toolkit with a Wayland backend bought it with Cairo+Pango. Those two
+applications have to be written whichever way this goes.
+
+**What remains true** is the RAM argument, which was never the reason recorded
+here: Wayland costs a per-client shm buffer where X11 costs none. At 640x384
+RGB565 double-buffered that is 983,040 per fullscreen client, so three visible
+clients take ~2.9 MB of ~6.5 MB.
+
+## Fonts were the dominant cost, not the display path
+
+Measured with xterm and a window manager running, one variable changed:
+
+    fonts on SD    1 update / 10 s     987 major faults / 10 s   10,784 kB swap
+    fonts in RAM  87 updates / 10 s    213 major faults / 10 s    7,052 kB swap
+
+An 87x difference from putting 768 kB of fonts in RAM. /usr/share was never in
+the XIP overlay, so 10.2 MB of fonts and 4 MB of xkb data lived on the SD card.
+
+This was invisible to inspection: X's mappings at idle are entirely
+flash-backed, because font files are opened transiently while rendering rather
+than held mapped. Only the A/B found it. Do not diagnose this class of problem
+by reading /proc/<pid>/maps.
+
 ## Open questions
 
   1. ~~What does X11Libre's Xfbdev weigh, and does it build against musl?~~
