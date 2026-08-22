@@ -1,0 +1,21 @@
+config BR2_PACKAGE_ST
+	bool "st (suckless simple terminal)"
+	depends on BR2_PACKAGE_XORG7
+	depends on BR2_USE_MMU # fork()
+	select BR2_PACKAGE_XLIB_LIBX11
+	select BR2_PACKAGE_XLIB_LIBXFT
+	select BR2_PACKAGE_FONTCONFIG
+	help
+	  A terminal emulator that draws with Xft and nothing else.
+
+	  It exists here to replace xterm, whose Athena dependency chain -
+	  xterm, libXaw7, libXt, libXmu, libXpm, libncursesw, libICE, libSM -
+	  totals 1,957,904 bytes and does not fit in the XIP flash image. That
+	  chain therefore paged off the SD card on every window redraw, which is
+	  what made dragging a window laggy.
+
+	  st needs only libX11, libXft, fontconfig and freetype, all of which
+	  are already in the flash image for the server, so it costs roughly
+	  100 kB and executes in place.
+
+	  https://st.suckless.org/

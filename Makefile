@@ -363,7 +363,7 @@ XIP_ROOTFS_IMG := $(BUILD_DIR)/rootfs-xip.cramfs
 # duplicate nothing, but leave the shared stack in the partition with the least
 # room. Measured: this is what makes both images fit.
 XIP_ROOTS ?= usr/bin/Xfbdev usr/bin/evilwm usr/bin/xsetroot usr/bin/xkbcomp \
-	usr/lib/libXft.so \
+	usr/bin/st usr/lib/libXft.so \
 	'usr/share/fonts/X11/misc/6x13*.pcf.gz' \
 	usr/share/fonts/X11/misc/cursor.pcf.gz \
 	usr/share/fonts/X11/misc/fonts.alias \

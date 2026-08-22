@@ -105,11 +105,17 @@ all)
 	evilwm -fn fixed >/tmp/evilwm.log 2>&1 &
 	sleep 1
 	pidof evilwm >/dev/null 2>&1 || echo "s31-desktop: WARNING evilwm did not start"
-	xterm -fa 'DejaVu Sans Mono' -fs 9 -bg black -fg green &
+	# st, not xterm. xterm's Athena chain - xterm, libXaw7, libXt, libXmu,
+	# libXpm, libncursesw, libICE, libSM - is 1,957,904 bytes, does not fit
+	# the flash image, and so paged off the SD card on every window redraw.
+	# Measured during a redraw: 72 major faults in xterm, 66 in the server.
+	# st is 179,504 and needs only libX11, libXft, fontconfig and freetype,
+	# all already resident in flash for the server.
+	st -f 'DejaVu Sans Mono:size=9' &
 	echo "s31-desktop: up. 's31-desktop stop' to tear down."
 	;;
 stop)
-	for p in xterm evilwm Xfbdev; do killall "$p" 2>/dev/null; done
+	for p in st xterm evilwm Xfbdev; do killall "$p" 2>/dev/null; done
 	echo "s31-desktop: stopped"
 	;;
 *)

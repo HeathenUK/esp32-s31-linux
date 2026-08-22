@@ -126,10 +126,16 @@ BR2_PACKAGE_FLTK=y
 BR2_PACKAGE_XLIB_LIBXFT=y
 BR2_PACKAGE_X11LIBRE_XSERVER=y
 
+
 # evilwm is about 30 KB and gives real window management - move, resize, focus,
 # virtual desktops - without a toolkit, a config parser or an icon theme.
 BR2_PACKAGE_EVILWM=y
-BR2_PACKAGE_XTERM=y
+# st replaces xterm. xterm's Athena chain - xterm, libXaw7, libXt, libXmu,
+# libXpm, libncursesw, libICE, libSM - is 1,957,904 bytes and does not fit the
+# XIP image, so it paged off the SD card on every window redraw. Measured during
+# a redraw: xterm took 72 major faults and the server 66. st draws with Xft and
+# needs only libX11, libXft, fontconfig and freetype, all already in flash.
+BR2_PACKAGE_ST=y
 
 # Core bitmap fonts. xterm and any Xt app need "fixed" to start at all, and
 # these are tens of KB against a scalable face's several hundred.
