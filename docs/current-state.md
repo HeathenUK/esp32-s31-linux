@@ -436,6 +436,47 @@ It has not recurred since the change. The hub is bus-powered and declares
 `bMaxPower = 100mA` while feeding two receivers that each declare 100 mA, which
 is an untested suspect.
 
+## Where SD and swap stand (2026-08-22)
+
+Measured with `sdlat` (verified O_DIRECT, random offsets, percentiles) rather
+than `dd`, which does not honour `iflag=direct` here and produced numbers
+implying 70 MB/s on a 20 MB/s bus.
+
+    4k random read, p50      3.78 ms  ->  2.84 ms      new card + HZ=100
+    10 MB swap-in           12.91 s   -> 10.43 s
+    CoreMark                    unchanged, 959-988 -> 964-971
+
+Two changes did it: a different microSD (14%, and it is bigger, though its tail
+is worse - p99 182 ms at 32k against 5.8) and dropping the scheduler tick from
+250 Hz to 100 Hz (12%, free, since HIGH_RES_TIMERS provides precision and HZ
+only sets the tick).
+
+**The remaining cost is not the controller and not the card.** Of a 2.86 ms
+request, only **0.43 ms is inside dw_mmc**. A command with no data payload
+(`cmdlat`, CMD13) completes in 0.845 ms through the whole ioctl path. So ~2.4 ms
+per request is spent above the driver - in blk-mq, the mmc core, or waking the
+submitter - which is what the note at the top of dw_mmc.c said before any of
+this work started.
+
+Eliminated by measurement, on top of the eight recorded previously: the card
+(second card, 14%), Linux interrupt delivery (a 0.5 ms MINTSTS poll does not
+see completions earlier), card clock gating (CLKENA bit 16, 3.781 vs 3.778 ms),
+the BIU and CIU clocks (80 and 40 MHz, both correct), interrupt loss (3.0 per
+request), edge-vs-level triggering (fixed because it was wrong, worth 0 ms), and
+CONFIG_PREEMPT (no change to SD, and it cost 3-5% of CoreMark).
+
+**And beware the instrument.** The "2 ms command phase" reported during this
+investigation was an artifact of the driver's own timestamps: `t_data` was
+stamped before `t_cmd` when both completions arrived in one interrupt, so those
+requests were dropped from one accumulator and charged whole to another. Fixed;
+`issue_to_cmd` is 0.25 ms.
+
+**Swap is no longer on the interactive path at all.** With `render=640x384`,
+pointer motion writes zero bytes to swap; the remaining swap traffic is app
+startup and switching. `vm.page-cluster` stays at 0 and zram stays off - both
+were measured against the real workload and rejected, see
+`/etc/sysctl.d/99-s31-memory.conf`.
+
 ## Render size is the memory lever, and it stops the swapping
 
 Measured 2026-08-22, warm, weston + desktop-shell + foot, a reboot between arms.
