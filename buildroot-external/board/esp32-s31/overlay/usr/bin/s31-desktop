@@ -44,10 +44,26 @@ find_input() {
 	' /proc/bus/input/devices 2>/dev/null | head -1
 }
 
+# fontconfig ships no cache, and buildroot cannot build one for us: its caches
+# are architecture-specific, so a host-generated cache would be wrong here.
+# Without it every Xft lookup walks the whole font directory and reads each face
+# off the SD card - the exact cost this board has spent the most effort
+# reducing. Build it once and keep it; /var is on the card and persists.
+warm_font_cache() {
+	command -v fc-cache >/dev/null 2>&1 || return 0
+	[ -d /var/cache/fontconfig ] && [ -n "$(ls -A /var/cache/fontconfig 2>/dev/null)" ] && return 0
+	echo "s31-desktop: building font cache (one time, slow)..."
+	mkdir -p /var/cache/fontconfig
+	fc-cache -f >/dev/null 2>&1
+	sync
+	echo "s31-desktop: font cache built"
+}
+
 start_server() {
 	[ -x "$XSRV" ] || die "$XSRV missing - is the XIP overlay mounted?"
 	[ -c /dev/fb0 ] || die "/dev/fb0 missing - is DRM fbdev emulation on?"
 	pidof Xfbdev >/dev/null 2>&1 && die "Xfbdev already running"
+	warm_font_cache
 
 	args="-fb /dev/fb0 -dpi 100 -nolisten tcp"
 	k=$(find_input kbd);   [ -n "$k" ] && args="$args -keybd evdev,,device=$k"

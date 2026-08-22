@@ -133,7 +133,16 @@ BR2_PACKAGE_XFONT_FONT_UTIL=y
 
 # DejaVu Sans as well as Mono: FLTK renders through Xft, which needs a scalable
 # face, and Mono alone leaves proportional text unresolvable.
+#
+# The serif and condensed families default to y and are 4.9 MB of the 9.6 MB
+# DejaVu otherwise installs - measured, per file. Nothing here asks for them:
+# FLTK's default faces map to sans and mono, and xterm uses mono. They are not
+# free even sitting unused, because fontconfig scans the whole directory and
+# every file it finds is read off the SD card.
 BR2_PACKAGE_DEJAVU_SANS=y
+# BR2_PACKAGE_DEJAVU_SERIF is not set
+# BR2_PACKAGE_DEJAVU_SANS_CONDENSED is not set
+# BR2_PACKAGE_DEJAVU_SERIF_CONDENSED is not set
 
 # The server needs a keymap compiled at runtime, so xkbcomp and the rule files
 # have to be on the target. This is the one unmeasured cost in the plan.
