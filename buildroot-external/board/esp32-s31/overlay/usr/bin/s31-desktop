@@ -24,37 +24,19 @@ LOG=/tmp/xfbdev.log
 
 die() { echo "s31-desktop: $*" >&2; exit 1; }
 
-# kdrive was built without udev, so input devices are named explicitly rather
-# than discovered.
-#
-# Match on capability bits, not on the Handlers list. The obvious test - looking
-# for "mouse" in Handlers - fails here: that handler comes from mousedev, which
-# this kernel does not build, so a perfectly good USB mouse shows only
-# "Handlers=event0" and gets reported as absent. A pointer is instead a device
-# that advertises REL_X (0x1) and REL_Y (0x2), i.e. the low two bits of its
-# REL mask. Checking the last hex digit avoids needing strtonum, which busybox
-# awk does not have: 3, 7, b and f are the digits with both bits set.
-#
-# Note a combo receiver presents several nodes - the 8BitDo one reports
-# REL=1943 on its composite node and REL=1040 on its keyboard node - so this
-# correctly picks the composite and ignores the keyboard.
-find_input() {
-	want=$1
-	awk -v want="$want" '
-		/^I:/  { hand=""; rel=""; ev="" }
-		/^H: Handlers=/ { hand=$0 }
-		/^B: EV=/  { ev=substr($2, 4) }
-		/^B: REL=/ { rel=substr($2, 5) }
-		/^$/ {
-			if (hand ~ /event/) {
-				n = hand; sub(/.*(event)/, "event", n); sub(/ .*/, "", n)
-				last = tolower(substr(rel, length(rel), 1))
-				ptr = (last == "3" || last == "7" || last == "b" || last == "f")
-				if (want == "mouse" && ptr) print "/dev/input/" n
-				if (want == "kbd" && !ptr && hand ~ /kbd/) print "/dev/input/" n
-			}
-		}
-	' /proc/bus/input/devices 2>/dev/null | head -1
+# fontconfig ships no cache, and buildroot cannot build one for us: its caches
+# are architecture-specific, so a host-generated cache would be wrong here.
+# Without it every Xft lookup walks the whole font directory and reads each face
+# off the SD card - the exact cost this board has spent the most effort
+# reducing. Build it once and keep it; /var is on the card and persists.
+warm_font_cache() {
+	command -v fc-cache >/dev/null 2>&1 || return 0
+	[ -d /var/cache/fontconfig ] && [ -n "$(ls -A /var/cache/fontconfig 2>/dev/null)" ] && return 0
+	echo "s31-desktop: building font cache (one time, slow)..."
+	mkdir -p /var/cache/fontconfig
+	fc-cache -f >/dev/null 2>&1
+	sync
+	echo "s31-desktop: font cache built"
 }
 
 start_server() {
@@ -71,11 +53,13 @@ start_server() {
 	FP=/usr/share/fonts/X11/misc
 	args="-fb /dev/fb0 -dpi 100 -nolisten tcp"
 	[ -f "$FP/fonts.dir" ] && args="$args -fp $FP"
-	k=$(find_input kbd);   [ -n "$k" ] && args="$args -keybd evdev,,device=$k"
-	m=$(find_input mouse); [ -n "$m" ] && args="$args -mouse evdev,,device=$m"
+	# No -keybd or -mouse. The server is built with udev, so it enumerates
+	# input itself and picks up hotplugged devices while running. Naming
+	# devices here was a mistake worth not repeating: a wireless keyboard
+	# publishes a phantom mouse collection and a mouse receiver publishes a
+	# consumer-control keyboard, so which node looked "real" depended on USB
+	# enumeration order and changed between boots.
 	echo "s31-desktop: $XSRV $args"
-	[ -z "$k" ] && echo "s31-desktop: WARNING no keyboard found"
-	[ -z "$m" ] && echo "s31-desktop: WARNING no mouse found"
 
 	$XSRV $args >"$LOG" 2>&1 &
 	# The server has to create the socket before any client can connect;

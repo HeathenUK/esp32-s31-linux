@@ -11,12 +11,22 @@ X11LIBRE_XSERVER_LICENSE_FILES = COPYING
 X11LIBRE_XSERVER_INSTALL_STAGING = NO
 
 X11LIBRE_XSERVER_DEPENDENCIES = \
+	udev \
 	xorgproto \
 	xlib_libXfont2 \
 	xlib_xtrans \
 	pixman \
 	host-pkgconf
 
+# udev is ON, and that is not negotiable despite the size budget. Without it
+# kdrive cannot enumerate its own input devices, so every mouse and keyboard has
+# to be named on the command line - which means guessing which of several
+# candidates is real. A wireless keyboard publishes a phantom mouse collection
+# and a mouse receiver publishes a consumer-control keyboard, so the "obvious"
+# device is decided by USB enumeration order and changes between boots. With
+# udev the server finds them itself and handles hotplug. libudev is already on
+# the target for eudev, so this costs a shared-library reference, not a package.
+#
 # Only Xfbdev. Everything else is off deliberately: this exists because the
 # full Xorg server is 3.0 MB and the flash budget is 7.4 MB shared with the
 # whole userspace, so anything not needed to put pixels on a framebuffer and
@@ -55,7 +65,7 @@ X11LIBRE_XSERVER_CONF_OPTS = \
 	-Dkdrive_evdev=true \
 	-Dkdrive_kbd=true \
 	-Dkdrive_mouse=true \
-	-Dudev=false \
+	-Dudev=true \
 	-Dxkb_dir=/usr/share/X11/xkb \
 	-Dxkb_output_dir=/var/lib/xkb
 
