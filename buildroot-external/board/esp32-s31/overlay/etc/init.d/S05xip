@@ -28,7 +28,7 @@ start() {
 		echo "skipped (no XIP image on mtd:rootfs)"
 		return 0
 	fi
-	for d in usr/lib usr/bin lib; do
+	for d in usr/lib usr/bin usr/libexec lib; do
 		[ -d "$XIP_MNT/$d" ] || continue
 		sd="/mnt/sd-$(echo "$d" | tr / -)"
 		mkdir -p "$sd" || continue
@@ -44,7 +44,7 @@ start() {
 }
 
 stop() {
-	for d in usr/lib usr/bin lib; do
+	for d in usr/lib usr/bin usr/libexec lib; do
 		umount "/$d" 2>/dev/null
 		umount "/mnt/sd-$(echo "$d" | tr / -)" 2>/dev/null
 	done

@@ -248,12 +248,12 @@ coremark: rootfs
 
 # Keep this decimal because POSIX test(1) and truncate(1) do not accept the
 # partition table's 0x-prefixed value.
-ROOTFS_PARTITION_SIZE ?= 5505024
+ROOTFS_PARTITION_SIZE ?= 6291456
 PERSIST_PARTITION_SIZE ?= 1441792
 # The XIP kernel must start on a 4-MiB Sv32 megapage boundary, so the linux
 # partition stays at 0x400000 and rootfs takes every byte the kernel does not
 # need. Keep this in step with bootloader/partitions.csv.
-LINUX_PARTITION_SIZE ?= 7077888
+LINUX_PARTITION_SIZE ?= 6291456
 BUILDROOT_MAKE = $(MAKE) -C $(BUILDROOT_DIR) O=$(BUILDROOT_OUT) \
 	BR2_EXTERNAL=$(BUILDROOT_EXTERNAL) BR2_DL_DIR=$(BUILDROOT_DL_DIR)
 
@@ -292,14 +292,17 @@ rootfs: toolchain s31-pie-cases | $(BUILDROOT_OUT)
 XIP_STAGE := $(BUILD_DIR)/xipstage
 XIP_ROOTFS_IMG := $(BUILD_DIR)/rootfs-xip.cramfs
 #
-# Deliberately narrow. The partition is 5.25 MB and an XIP cramfs cannot
-# compress text - it has to be executable in place - so the closure has to fit
+# Deliberately narrow. An XIP cramfs cannot compress text - it has to be
+# executable in place - so the closure has to fit the rootfs partition
 # uncompressed. Staging everything Weston can load comes to 6.35 MB. Left out:
 # the ivi/kiosk/fullscreen/screen-share shells, which this board never loads,
-# and the libexec clients, whose cairo dependency alone is 823 KB and which
-# draw the panel once at startup rather than per frame.
+# and weston-keyboard, an on-screen keyboard that is useless here and costs a
+# resident client. weston-desktop-shell IS included despite dragging in 823 KB
+# of cairo, because it is the shell surface and faulting it off the SD card is
+# what this whole mechanism exists to avoid.
 XIP_ROOTS ?= usr/bin/weston usr/lib/libweston-15/*.so \
-	usr/lib/weston/desktop-shell.so usr/bin/foot
+	usr/lib/weston/desktop-shell.so usr/libexec/weston-desktop-shell \
+	usr/bin/foot
 
 xip-rootfs: rootfs
 	@echo "--- userspace XIP image ---"
