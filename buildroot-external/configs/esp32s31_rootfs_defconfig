@@ -117,6 +117,13 @@ BR2_PACKAGE_BC=y
 BR2_PACKAGE_XORG7=y
 BR2_PACKAGE_CAIRO_XLIB=y
 BR2_PACKAGE_FLTK=y
+
+# Xft must be asked for explicitly. Neither FLTK nor xterm selects it - both
+# test for it and silently fall back to core bitmap fonts when it is absent
+# (FLTK's .mk and xterm's --disable-freetype). With it off, "proper desktop
+# apps" means unantialiased fixed-pitch bitmaps and DejaVu is unreachable.
+# It is 83 KB; freetype and fontconfig are already paid for by the server.
+BR2_PACKAGE_XLIB_LIBXFT=y
 BR2_PACKAGE_X11LIBRE_XSERVER=y
 
 # evilwm is about 30 KB and gives real window management - move, resize, focus,

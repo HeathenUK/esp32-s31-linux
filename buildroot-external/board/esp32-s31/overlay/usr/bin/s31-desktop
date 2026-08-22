@@ -65,7 +65,14 @@ start_server() {
 	pidof Xfbdev >/dev/null 2>&1 && die "Xfbdev already running"
 	warm_font_cache
 
+	# Name the font path explicitly. The default list also contains 100dpi,
+	# 75dpi and cyrillic, which the font-alias package creates as alias-only
+	# stubs with no fonts.dir; the server probes each off the SD card and then
+	# drops it with a warning. Only misc has real fonts here - 334 pcf files
+	# and the "fixed" alias every Xt application needs to start.
+	FP=/usr/share/fonts/X11/misc
 	args="-fb /dev/fb0 -dpi 100 -nolisten tcp"
+	[ -f "$FP/fonts.dir" ] && args="$args -fp $FP"
 	k=$(find_input kbd);   [ -n "$k" ] && args="$args -keybd evdev,,device=$k"
 	m=$(find_input mouse); [ -n "$m" ] && args="$args -mouse evdev,,device=$m"
 	echo "s31-desktop: $XSRV $args"

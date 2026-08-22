@@ -311,7 +311,21 @@ XIP_ROOTFS_IMG := $(BUILD_DIR)/rootfs-xip.cramfs
 #
 #   make xip-rootfs XIP_ROOTS='usr/bin/weston usr/lib/libweston-15/*.so \
 #       usr/lib/weston/desktop-shell.so usr/libexec/weston-desktop-shell'
-XIP_ROOTS ?= usr/bin/Xfbdev usr/bin/evilwm usr/bin/xterm usr/bin/xsetroot
+# xterm is deliberately NOT here. Measured, its exclusive closure - the binary
+# plus libXt, libXaw7, libXpm and libncursesw, none of which anything else here
+# needs - is 1,731,680 bytes, and staging it pushed this image to 6,889,472
+# against a 6,291,456 partition. The server is the right thing to spend flash
+# on: it is shared by every client, whereas xterm is one client among several.
+#
+# libXft is a root in its own right, not because the server needs it - Xfbdev
+# does not - but because it is the shared half of text rendering. Its closure
+# is libXft, libfontconfig and libexpat, 499,264 bytes, and every client that
+# draws antialiased text goes through it: xterm and every FLTK application
+# alike. Staging it beside FLTK instead would put it in the smaller image and
+# duplicate nothing, but leave the shared stack in the partition with the least
+# room. Measured: this is what makes both images fit.
+XIP_ROOTS ?= usr/bin/Xfbdev usr/bin/evilwm usr/bin/xsetroot usr/bin/xkbcomp \
+	usr/lib/libXft.so
 
 xip-rootfs: rootfs
 	@echo "--- userspace XIP image ---"
@@ -352,9 +366,16 @@ initramfs: linux rootfs
 XIP2_STAGE := $(BUILD_DIR)/xipstage2
 #
 # foot was here and is gone: it is a Wayland-native terminal, so it has no
-# client under X11. xterm replaces it in the first image. xkbcomp runs once per
-# server start rather than continuously, so it is here rather than there.
-XIP2_ROOTS ?= usr/bin/xkbcomp usr/bin/nnn usr/bin/bc
+# client under X11.
+#
+# This image is FLTK's. The toolkit is shared by every application the desktop
+# is being built for, which makes it the best remaining use of flash once the
+# server has the first image.
+#
+# What lands here is FLTK plus what only FLTK needs - libjpeg and libgcc_s.
+# The Xft/fontconfig/expat stack it shares with xterm is in the first image
+# instead; see the note there. nnn, bc and xterm stay on the card.
+XIP2_ROOTS ?= usr/lib/libfltk.so usr/lib/libfltk_images.so usr/lib/libfltk_forms.so
 
 xip2-rootfs: xip-rootfs
 	@echo "--- second userspace XIP image ---"
