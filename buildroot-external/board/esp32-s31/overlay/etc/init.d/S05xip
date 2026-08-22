@@ -52,7 +52,7 @@ start() {
 	# They are read transiently while rendering rather than held mapped, so
 	# inspecting a running server's mappings does not show them and makes the
 	# cost invisible - only an A/B finds it.
-	for d in usr/lib usr/bin usr/libexec lib usr/share/fonts; do
+	for d in usr/lib usr/bin usr/libexec lib; do
 		[ -d "$XIP_MNT/$d" ] || continue
 		sd="/mnt/sd-$(echo "$d" | tr / -)"
 		mkdir -p "$sd" || continue
@@ -69,11 +69,30 @@ start() {
 			umount "$sd" 2>/dev/null
 		fi
 	done
+	# Fonts REPLACE rather than merge. An overlay is wrong here: overlayfs
+	# unions the directories, so all 334 fonts on the card stay visible and
+	# fontconfig still walks every one of them off the SD. Measured, that is
+	# worse than doing nothing - 5 plane updates per 10 s against 34 with no
+	# font mount at all. A bind mount hides the card's set entirely, which is
+	# what the experiment that found this actually did:
+	#
+	#     fonts on SD (334 faces)      1 update / 10 s
+	#     fonts overlaid (merged)      5 updates / 10 s
+	#     fonts bind-mounted (768 kB) 87 updates / 10 s
+	#
+	# The cache has to go with them: it indexes paths that are about to
+	# disappear, and a stale cache sends fontconfig back to scanning.
+	if [ -d "$XIP_MNT/usr/share/fonts" ]; then
+		if mount --bind "$XIP_MNT/usr/share/fonts" /usr/share/fonts; then
+			rm -rf /var/cache/fontconfig/* 2>/dev/null
+		fi
+	fi
 	echo "OK ($(mount | grep -c 'type overlay') overlays)"
 }
 
 stop() {
-	for d in usr/lib usr/bin usr/libexec lib usr/share/fonts; do
+	umount /usr/share/fonts 2>/dev/null
+	for d in usr/lib usr/bin usr/libexec lib; do
 		umount "/$d" 2>/dev/null
 		umount "/mnt/sd-$(echo "$d" | tr / -)" 2>/dev/null
 	done
