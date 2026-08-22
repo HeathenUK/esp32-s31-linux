@@ -19,6 +19,16 @@
 # loader's search order - which is also why the image has to be built with the
 # real layout preserved. See rootfs/mkxipstage.py.
 
+# These overlays are READ-ONLY: they are built from lowerdir alone, with no
+# upperdir, because the flash images are cramfs and the point is to execute in
+# place rather than to allow writes. So /usr/bin, /usr/lib, /usr/libexec and
+# /lib cannot be written at runtime - `touch /usr/bin/x` gives EROFS.
+#
+# To replace a file there while the board is running, write to the SD copy
+# underneath - /mnt/sd-usr-bin, /mnt/sd-usr-lib and so on - and remember the
+# flash layer still wins for anything present in both. A script pushed to
+# /usr/bin appears to succeed and changes nothing.
+
 XIP_MNT=/mnt/xip
 XIP2_MNT=/mnt/xip2
 

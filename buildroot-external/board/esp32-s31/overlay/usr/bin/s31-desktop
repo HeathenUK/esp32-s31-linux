@@ -51,7 +51,18 @@ start_server() {
 	# drops it with a warning. Only misc has real fonts here - 334 pcf files
 	# and the "fixed" alias every Xt application needs to start.
 	FP=/usr/share/fonts/X11/misc
-	args="-fb /dev/fb0 -dpi 100 -nolisten tcp"
+	# -seat is what turns udev input on, and it is not optional. kdrive only
+	# calls config_init() - the hot-plug path - when dixSettingSeatId is set,
+	# and that is set by -seat alone:
+	#
+	#     if (dixSettingSeatId) /* Enable input hot-plugging */
+	#         config_init();                 hw/kdrive/src/kinput.c
+	#
+	# Without it the server links libudev, maps it, and opens no devices at
+	# all, with nothing in the log to say why. With it, it finds them itself:
+	# event0 (mouse), event2 and event3 (keyboard), and correctly skips
+	# event1, the receiver's consumer-control node.
+	args="-fb /dev/fb0 -dpi 100 -nolisten tcp -seat seat0"
 	[ -f "$FP/fonts.dir" ] && args="$args -fp $FP"
 	# No -keybd or -mouse. The server is built with udev, so it enumerates
 	# input itself and picks up hotplugged devices while running. Naming
