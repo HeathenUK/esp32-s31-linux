@@ -172,85 +172,67 @@ opensbi: toolchain | $(OPENSBI_OUT)
 DEFCONFIG ?= esp32s31_defconfig
 LINUX_TARGET ?= xipImage
 
-# Kernel config, split in two on purpose.
-#
-# These overrides used to be applied unconditionally, which quietly defeated
-# DEFCONFIG: `make imager` selected esp32s31_imager_defconfig and then had DRM,
-# Wi-Fi, HID, CMA, CRAMFS and PROFILING switched back on over the top. The
-# imager only writes an SD card, so all of that is dead weight, and it grew the
-# imager kernel to 6,570,053 bytes against a 6,291,456 partition - which is
-# worse than it sounds, because flashing it at 0x400000 reaches 0xA44045 and
-# overwrites the start of the rootfs partition holding XIP image 1.
-#
-# LINUX_BASE_CONFIG is what any kernel for this board needs. Everything else is
-# the running system's feature set, and the imager overrides it to empty.
-LINUX_BASE_CONFIG = \
-	--set-str BUILTIN_DTB_SOURCE "espressif/esp32s31_generic" \
-	--enable RISCV_ISA_C \
-	--disable HZ_250 \
-	--enable HZ_100 \
-	--set-val HZ 100 \
-	--disable RISCV_ISA_V \
-	--disable RISCV_ISA_V_DEFAULT_ENABLE \
-	--enable RISCV_ISA_ZBA \
-	--enable RISCV_ISA_ZBB \
-	--enable RISCV_ISA_ZBC \
-	--set-val LOG_BUF_SHIFT 14
-
-LINUX_FEATURE_CONFIG = \
-	--enable PROFILING \
-	--enable DRM \
-	--enable DRM_ESP32S31_LCD \
-	--enable BACKLIGHT_CLASS_DEVICE \
-	--enable DRM_PANEL \
-	--enable DRM_PANEL_SIMPLE \
-	--enable VT \
-	--enable VT_CONSOLE \
-	--enable FB \
-	--enable FRAMEBUFFER_CONSOLE \
-	--enable INPUT \
-	--enable INPUT_EVDEV \
-	--enable INPUT_KEYBOARD \
-	--enable CFG80211 \
-	--disable CFG80211_WEXT \
-	--disable MAC80211 \
-	--enable CFG80211_CERTIFICATION_ONUS \
-	--disable CFG80211_REQUIRE_SIGNED_REGDB \
-	--disable CFG80211_USE_KERNEL_REGDB_KEYS \
-	--disable CFG80211_CRDA_SUPPORT \
-	--enable HID \
-	--enable HID_GENERIC \
-	--enable USB_HID \
-	--enable DEBUG_FS \
-	--enable CMA \
-	--enable DMA_CMA \
-	--set-val CMA_SIZE_MBYTES 0 \
-	--disable DYNAMIC_DEBUG \
-	--disable USB_DWC2_DEBUG \
-	--disable USB_DWC2_DEBUG_PERIODIC \
-	--enable HID_SUPPORT \
-	--enable DRM_FBDEV_EMULATION \
-	--enable FRAMEBUFFER_CONSOLE \
-	--disable DRM_DEBUG_MODESET_LOCK \
-	--enable INPUT_MISC \
-	--enable INPUT_UINPUT \
-	--enable HIGH_RES_TIMERS \
-	--enable NO_HZ_IDLE \
-	--enable FILE_LOCKING \
-	--enable CRAMFS \
-	--enable CRAMFS_MTD \
-	--disable CRAMFS_BLOCKDEV \
-	--enable DRM_ESP32S31_PPA \
-	--disable FTRACE \
-	--disable ENABLE_DEFAULT_TRACERS \
-	--disable BLK_DEV_IO_TRACE
-
-LINUX_CONFIG_OPTS ?= $(LINUX_BASE_CONFIG) $(LINUX_FEATURE_CONFIG)
-
 linux: toolchain | $(LINUX_OUT)
 	@echo "--- Linux ---"
 	$(MAKE) -C $(LINUX_DIR) O=$(LINUX_OUT) ARCH=riscv CROSS_COMPILE="$(CROSS_COMPILE)" $(DEFCONFIG)
-	$(LINUX_DIR)/scripts/config --file $(LINUX_OUT)/.config $(LINUX_CONFIG_OPTS)
+	$(LINUX_DIR)/scripts/config --file $(LINUX_OUT)/.config \
+		--set-str BUILTIN_DTB_SOURCE "espressif/esp32s31_generic" \
+		--enable RISCV_ISA_C \
+		--enable PROFILING \
+		--disable HZ_250 \
+		--enable HZ_100 \
+		--set-val HZ 100 \
+		--disable RISCV_ISA_V \
+		--disable RISCV_ISA_V_DEFAULT_ENABLE \
+		--enable RISCV_ISA_ZBA \
+		--enable RISCV_ISA_ZBB \
+		--enable RISCV_ISA_ZBC \
+		--enable DRM \
+		--enable DRM_ESP32S31_LCD \
+		--enable BACKLIGHT_CLASS_DEVICE \
+		--enable DRM_PANEL \
+		--enable DRM_PANEL_SIMPLE \
+		--enable VT \
+		--enable VT_CONSOLE \
+		--enable FB \
+		--enable FRAMEBUFFER_CONSOLE \
+		--enable INPUT \
+		--enable INPUT_EVDEV \
+		--enable INPUT_KEYBOARD \
+		--enable CFG80211 \
+		--disable CFG80211_WEXT \
+		--disable MAC80211 \
+		--enable CFG80211_CERTIFICATION_ONUS \
+		--disable CFG80211_REQUIRE_SIGNED_REGDB \
+		--disable CFG80211_USE_KERNEL_REGDB_KEYS \
+		--disable CFG80211_CRDA_SUPPORT \
+		--enable HID \
+		--enable HID_GENERIC \
+		--enable USB_HID \
+		--enable DEBUG_FS \
+		--set-val LOG_BUF_SHIFT 14 \
+		--enable CMA \
+		--enable DMA_CMA \
+		--set-val CMA_SIZE_MBYTES 0 \
+		--disable DYNAMIC_DEBUG \
+		--disable USB_DWC2_DEBUG \
+		--disable USB_DWC2_DEBUG_PERIODIC \
+		--enable HID_SUPPORT \
+		--enable DRM_FBDEV_EMULATION \
+		--enable FRAMEBUFFER_CONSOLE \
+		--disable DRM_DEBUG_MODESET_LOCK \
+		--enable INPUT_MISC \
+		--enable INPUT_UINPUT \
+		--enable HIGH_RES_TIMERS \
+		--enable NO_HZ_IDLE \
+		--enable FILE_LOCKING \
+		--enable CRAMFS \
+		--enable CRAMFS_MTD \
+		--disable CRAMFS_BLOCKDEV \
+		--enable DRM_ESP32S31_PPA \
+		--disable FTRACE \
+		--disable ENABLE_DEFAULT_TRACERS \
+		--disable BLK_DEV_IO_TRACE
 	$(MAKE) -C $(LINUX_DIR) O=$(LINUX_OUT) ARCH=riscv CROSS_COMPILE="$(CROSS_COMPILE)" olddefconfig
 	$(MAKE) -C $(LINUX_DIR) O=$(LINUX_OUT) ARCH=riscv CROSS_COMPILE="$(CROSS_COMPILE)" \
 		KCFLAGS="-march=$(S31_SAFE_ISA) $(S31_COMMON_FLAGS)" -j$(JOBS) $(LINUX_TARGET) dtbs
@@ -492,8 +474,7 @@ imager: toolchain rootfs
 		$(IMAGER_STAGE) $(CURDIR)/imager/sdrecv
 	$(MAKE) linux DEFCONFIG=esp32s31_imager_defconfig \
 		LINUX_OUT=$(IMAGER_OUT) XIP_IMAGE=$(IMAGER_IMAGE) \
-		FDT_DTB=$(BUILD_DIR)/imager.dtb \
-		LINUX_CONFIG_OPTS='$(LINUX_BASE_CONFIG)'
+		FDT_DTB=$(BUILD_DIR)/imager.dtb
 
 flash-imager:
 	$(ESPFLASH) $(LINUX_OFFSET) $(call flashfile,$(IMAGER_IMAGE))
