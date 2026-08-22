@@ -1292,9 +1292,34 @@ More time has gone on driving the board than on the board itself. Rules:
 
 ## Next
 
-1. Confirm by eye that Weston paints. Everything else is downstream of that.
-2. Finish the swap comparison: truncate the log per run, complete zram-only and
-   both, add a low-swappiness run.
-3. Then the accelerated-compositor work in `docs/weston-acceleration-plan.md`,
-   which needs `drm_simple_display_pipe` replaced by a full CRTC plus planes
-   before PPA can be used at all.
+The display stack is **pivoting from Wayland to X11** - see
+`docs/desktop-plan.md` for the reasoning and the measured budget. The short
+version: the goal is real desktop applications, FLTK is the toolkit that fits,
+and FLTK on Wayland needs Pango and glib (~2.4 MB) while FLTK on X11 needs
+neither. X11 and Wayland are alternatives, not additions, so the comparison is
+X11's cost against Wayland's, not against zero.
+
+Measured so far:
+
+    X11Libre Xfbdev   1.60 MB    against 3.0 MB for Xorg 21 plus modules
+    X11 client libs   1.92 MB
+    FLTK 1.3.7        1.28 MB    X11 backend, zero Wayland linkage
+    freed by Weston  ~2.30 MB
+
+1. **Confirm Xfbdev paints on the panel.** Everything else is downstream. It
+   draws into `/dev/fb0`, which here is DRM fbdev emulation; fbcon reaches the
+   plane update path that way, so an X server should, but this is untested and
+   the whole pivot rests on it. Use `s31-desktop server`, which starts the
+   server alone and paints a flat colour, before adding a window manager or a
+   terminal. If it does not reach the plane, fall back to Xorg + modesetting,
+   which talks DRM directly and costs 3.0 MB.
+2. Confirm the reduced render size and 1:1 centred placement survive - the
+   server must not be given an explicit `-screen`.
+3. Trim the kernel (Bluetooth, IPv6, netfilter, unused drivers). The budget
+   closes only just, and this is where the margin comes from.
+4. Then the FLTK applications themselves: file manager, terminal, calculator.
+
+Weston stays in the build until step 1 passes. It costs nothing on the SD
+rootfs, and only the XIP flash images are budget-constrained.
+
+`docs/weston-acceleration-plan.md` is superseded unless the pivot is reversed.

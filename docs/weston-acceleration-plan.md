@@ -1,5 +1,13 @@
 # Accelerated Weston on the Korvo-1
 
+> **Superseded (2026-08-22).** The display stack has pivoted from Wayland to
+> X11 - see `docs/desktop-plan.md`. This plan is kept because its analysis of
+> the PPA and of what the DRM driver needs (a full CRTC plus planes, rather
+> than `drm_simple_display_pipe`) still applies to any compositor, and because
+> it is the fallback if the pivot is reversed. The Weston-specific parts are
+> not being worked on.
+
+
 Goal: Weston on the LCD with as much of the work in hardware as this SoC allows.
 
 ## What the hardware actually offers
