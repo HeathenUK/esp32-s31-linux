@@ -298,14 +298,20 @@ XIP_ROOTFS_IMG := $(BUILD_DIR)/rootfs-xip.cramfs
 #
 # Deliberately narrow. An XIP cramfs cannot compress text - it has to be
 # executable in place - so the closure has to fit the rootfs partition
-# uncompressed. Staging everything Weston can load comes to 6.35 MB. Left out:
-# the ivi/kiosk/fullscreen/screen-share shells, which this board never loads,
-# and weston-keyboard, an on-screen keyboard that is useless here and costs a
-# resident client. weston-desktop-shell IS included despite dragging in 823 KB
-# of cairo, because it is the shell surface and faulting it off the SD card is
-# what this whole mechanism exists to avoid.
-XIP_ROOTS ?= usr/bin/weston usr/lib/libweston-15/*.so \
-	usr/lib/weston/desktop-shell.so usr/libexec/weston-desktop-shell
+# uncompressed.
+#
+# These are the X11 desktop's hot binaries; mkxipstage.py resolves each one's
+# shared-library closure, so listing the executables is enough. Only text
+# benefits, which is why fonts and the xkb rule files are not here: they are
+# data, read once at startup, and belong on the card.
+#
+# Weston's roots are kept below rather than deleted, because Xfbdev reaching the
+# DRM plane update path through fbdev emulation is still unconfirmed. To fall
+# back, override on the command line rather than editing:
+#
+#   make xip-rootfs XIP_ROOTS='usr/bin/weston usr/lib/libweston-15/*.so \
+#       usr/lib/weston/desktop-shell.so usr/libexec/weston-desktop-shell'
+XIP_ROOTS ?= usr/bin/Xfbdev usr/bin/evilwm usr/bin/xterm usr/bin/xsetroot
 
 xip-rootfs: rootfs
 	@echo "--- userspace XIP image ---"
@@ -344,7 +350,11 @@ initramfs: linux rootfs
 # EXCLUDE_DIR keeps this from duplicating what the first image already holds.
 # overlayfs merges both layers, so an object only needs to exist in one.
 XIP2_STAGE := $(BUILD_DIR)/xipstage2
-XIP2_ROOTS ?= usr/bin/foot
+#
+# foot was here and is gone: it is a Wayland-native terminal, so it has no
+# client under X11. xterm replaces it in the first image. xkbcomp runs once per
+# server start rather than continuously, so it is here rather than there.
+XIP2_ROOTS ?= usr/bin/xkbcomp usr/bin/nnn usr/bin/bc
 
 xip2-rootfs: xip-rootfs
 	@echo "--- second userspace XIP image ---"

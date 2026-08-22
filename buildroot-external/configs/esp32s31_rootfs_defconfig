@@ -107,10 +107,42 @@ BR2_PACKAGE_NCURSES=y
 BR2_PACKAGE_NCURSES_WCHAR=y
 BR2_PACKAGE_NNN=y
 BR2_PACKAGE_BC=y
+# ---------------------------------------------------------------------------
+# X11 desktop. This replaces Wayland rather than joining it - see
+# docs/desktop-plan.md. Weston is still built above only as a fallback until
+# Xfbdev is confirmed painting on the panel; it costs nothing on the SD rootfs,
+# and only the XIP flash images are budget-constrained. Drop it once proven.
+#
+# Measured: Xfbdev 1.60 MB, X client libs 1.92 MB, FLTK 1.28 MB.
 BR2_PACKAGE_XORG7=y
 BR2_PACKAGE_CAIRO_XLIB=y
 BR2_PACKAGE_FLTK=y
 BR2_PACKAGE_X11LIBRE_XSERVER=y
+
+# evilwm is about 30 KB and gives real window management - move, resize, focus,
+# virtual desktops - without a toolkit, a config parser or an icon theme.
+BR2_PACKAGE_EVILWM=y
+BR2_PACKAGE_XTERM=y
+
+# Core bitmap fonts. xterm and any Xt app need "fixed" to start at all, and
+# these are tens of KB against a scalable face's several hundred.
+BR2_PACKAGE_XFONT_ENCODINGS=y
+BR2_PACKAGE_XFONT_FONT_ALIAS=y
+BR2_PACKAGE_XFONT_FONT_MISC_MISC=y
+BR2_PACKAGE_XFONT_FONT_UTIL=y
+
+# DejaVu Sans as well as Mono: FLTK renders through Xft, which needs a scalable
+# face, and Mono alone leaves proportional text unresolvable.
+BR2_PACKAGE_DEJAVU_SANS=y
+
+# The server needs a keymap compiled at runtime, so xkbcomp and the rule files
+# have to be on the target. This is the one unmeasured cost in the plan.
+BR2_PACKAGE_XKEYBOARD_CONFIG=y
+BR2_PACKAGE_XAPP_XKBCOMP=y
+
+# xsetroot paints the root window; without it X starts on the stipple pattern
+# and it is genuinely hard to tell a working server from a half-broken one.
+BR2_PACKAGE_XAPP_XSETROOT=y
 
 # Buildroot's default wget line sets --connect-timeout but no --read-timeout,
 # so a server that accepts the connection and then stops sending hangs forever:

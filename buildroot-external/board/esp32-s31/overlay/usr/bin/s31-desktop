@@ -1,0 +1,95 @@
+#!/bin/sh
+#
+# Bring up the X11 desktop, one component at a time.
+#
+# Deliberately not a startx script. Each stage is started and checked
+# separately, because the failure that matters here - whether Xfbdev's writes
+# to /dev/fb0 actually reach the DRM plane update path - looks identical to a
+# window manager crash or a missing font if the whole stack is launched at once
+# and only the end result is observed.
+#
+#   s31-desktop            server + wm + a terminal
+#   s31-desktop server     just the server, to test paint in isolation
+#   s31-desktop stop
+#
+# /dev/fb0 on this board is the DRM driver's fbdev emulation, so the server
+# inherits the reduced render size (see the lcd driver's render= parameter) and
+# the 1:1 centred placement rather than a stretched upscale. Do not pass
+# -screen: forcing a size here would silently undo that.
+
+DISPLAY=:0
+export DISPLAY
+XSRV=/usr/bin/Xfbdev
+LOG=/tmp/xfbdev.log
+
+die() { echo "s31-desktop: $*" >&2; exit 1; }
+
+# kdrive was built without udev, so input devices are named explicitly rather
+# than discovered. Match on the capability bits in /proc/bus/input/devices:
+# EV=120013 marks a keyboard, and a mouse advertises REL axes.
+find_input() {
+	want=$1
+	awk -v want="$want" '
+		/^I:/ { ev=""; rel=""; hand="" }
+		/^B: EV=/ { ev=$3 }
+		/^B: REL=/ { rel=$3 }
+		/^H: Handlers=/ { hand=$0 }
+		/^$/ {
+			if (hand ~ /event/) {
+				n=hand; sub(/.*(event)/,"event",n); sub(/ .*/,"",n)
+				if (want=="kbd" && hand ~ /kbd/) print "/dev/input/" n
+				if (want=="mouse" && hand ~ /mouse/) print "/dev/input/" n
+			}
+		}
+	' /proc/bus/input/devices 2>/dev/null | head -1
+}
+
+start_server() {
+	[ -x "$XSRV" ] || die "$XSRV missing - is the XIP overlay mounted?"
+	[ -c /dev/fb0 ] || die "/dev/fb0 missing - is DRM fbdev emulation on?"
+	pidof Xfbdev >/dev/null 2>&1 && die "Xfbdev already running"
+
+	args="-fb /dev/fb0 -dpi 100 -nolisten tcp"
+	k=$(find_input kbd);   [ -n "$k" ] && args="$args -keybd evdev,,device=$k"
+	m=$(find_input mouse); [ -n "$m" ] && args="$args -mouse evdev,,device=$m"
+	echo "s31-desktop: $XSRV $args"
+	[ -z "$k" ] && echo "s31-desktop: WARNING no keyboard found"
+	[ -z "$m" ] && echo "s31-desktop: WARNING no mouse found"
+
+	$XSRV $args >"$LOG" 2>&1 &
+	# The server has to create the socket before any client can connect;
+	# polling for it beats a fixed sleep, which is either racy or slow.
+	i=0
+	while [ $i -lt 100 ]; do
+		[ -S /tmp/.X11-unix/X0 ] && break
+		pidof Xfbdev >/dev/null 2>&1 || { echo "--- $LOG ---"; cat "$LOG"; die "server exited"; }
+		i=$((i+1))
+		usleep 100000 2>/dev/null || sleep 1
+	done
+	[ -S /tmp/.X11-unix/X0 ] || { echo "--- $LOG ---"; cat "$LOG"; die "no socket after 10s"; }
+	echo "s31-desktop: server up on $DISPLAY"
+}
+
+case "${1:-all}" in
+server)
+	start_server
+	# A flat colour proves the paint path end to end: if this reaches the
+	# panel, the server is talking to the plane. The stipple default is
+	# hard to tell apart from a stale framebuffer.
+	xsetroot -solid steelblue 2>/dev/null && echo "s31-desktop: root painted"
+	;;
+all)
+	start_server
+	xsetroot -solid steelblue 2>/dev/null || echo "s31-desktop: xsetroot failed"
+	evilwm & sleep 1
+	pidof evilwm >/dev/null 2>&1 || echo "s31-desktop: WARNING evilwm did not start"
+	xterm -fa 'DejaVu Sans Mono' -fs 9 -bg black -fg green &
+	echo "s31-desktop: up. 's31-desktop stop' to tear down."
+	;;
+stop)
+	for p in xterm evilwm Xfbdev; do killall "$p" 2>/dev/null; done
+	echo "s31-desktop: stopped"
+	;;
+*)
+	echo "Usage: $0 {all|server|stop}"; exit 1 ;;
+esac
