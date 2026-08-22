@@ -484,6 +484,7 @@ against System.map. 586 samples at 100 Hz is 5.9 s against 5.58 s of wall clock
 for the run, so **the CPU is essentially never idle during SD reads**. It is not
 waiting for the card; it is executing.
 
+    (before relocating the hot path to RAM)
     workqueue / completion       18.9%
     scheduler / context switch   15.4%
     mmc core / block layer       12.6%
@@ -513,6 +514,15 @@ means not deferring at all, and the bottom half calls into the mmc core where
 that is not safe. `finish_task_switch` at 12.3% should be read with the usual
 caveat - it is where the CPU lands after any switch - but with the CPU ~100%
 busy these are real switches rather than returns from idle.
+
+**The profiler cannot see .text.fast.** `do_profile_hits()` computes
+`pc = (addr - _stext) >> prof_shift` and drops anything with `pc >= prof_len`,
+where `prof_len` covers only `_stext.._etext`. Relocated code lives after
+`_etext`, so every sample in it is discarded. A re-profile after moving the hot
+path showed 286 samples against 586 before and 0.0% in `.text.fast` - that is
+not a halving of CPU time, it is the profiler no longer counting what moved.
+Confirm with `/proc/stat` instead, which is independent: `idle` is still 0
+during a 2000-request run, so the path is still CPU-bound, just cheaper.
 
 Two traps when repeating this:
 
