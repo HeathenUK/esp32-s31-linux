@@ -66,7 +66,7 @@ IDF_EXPORT := $(shell test -f /opt/esp-idf/export.sh && echo /opt/esp-idf/export
 	buildroot-menuconfig buildroot-clean clean fullclean flash-opensbi flash-linux  \
 	xip-rootfs flash-xip-rootfs \
 	flash-rootfs xip2-rootfs flash-xip2-rootfs bootloader flash-bootloader erase \
-	imager flash-imager
+	imager flash-imager reset
 
 all: toolchain download opensbi linux initramfs
 
@@ -258,6 +258,16 @@ XIP2_PARTITION_SIZE ?= 1441792
 # partition stays at 0x400000 and rootfs takes every byte the kernel does not
 # need. Keep this in step with bootloader/partitions.csv.
 LINUX_PARTITION_SIZE ?= 6291456
+
+# Flashing knobs. These were hardcoded to /dev/ttyUSB0 and a bare `esptool`,
+# which is a Linux-only assumption: on macOS the adapter is /dev/cu.usbserial-*
+# and a bare `esptool` picks up whatever is on PATH. Homebrew's 5.2.0 fails on
+# this part in ways that do not name the cause, so point at the IDF one.
+# Override either on the command line.
+SERIAL_PORT ?= $(firstword $(wildcard /dev/cu.usbserial-* /dev/ttyUSB0))
+ESPTOOL ?= $(firstword $(wildcard $(HOME)/.espressif/python_env/idf6*/bin/esptool) esptool)
+ESPTOOL_BAUD ?= 2000000
+ESPFLASH = $(ESPTOOL) -p $(SERIAL_PORT) -b $(ESPTOOL_BAUD) write-flash
 BUILDROOT_MAKE = $(MAKE) -C $(BUILDROOT_DIR) O=$(BUILDROOT_OUT) \
 	BR2_EXTERNAL=$(BUILDROOT_EXTERNAL) BR2_DL_DIR=$(BUILDROOT_DL_DIR)
 
@@ -348,7 +358,7 @@ xip-rootfs: rootfs
 	echo "XIP image $$XIP_SIZE bytes, $$(($(ROOTFS_PARTITION_SIZE) - $$XIP_SIZE)) bytes free in the rootfs partition"
 
 flash-xip-rootfs:
-	esptool -p /dev/ttyUSB0 -b 2000000 write-flash $(ROOTFS_OFFSET) $(XIP_ROOTFS_IMG)
+	$(ESPFLASH) $(ROOTFS_OFFSET) $(XIP_ROOTFS_IMG)
 
 # Historical/user-facing name for the root filesystem image.
 initramfs: linux rootfs
@@ -393,7 +403,7 @@ xip2-rootfs: xip-rootfs
 	echo "xip2 image $$SZ bytes, $$(($(XIP2_PARTITION_SIZE) - $$SZ)) bytes free"
 
 flash-xip2-rootfs:
-	esptool -p /dev/ttyUSB0 -b 2000000 write-flash $(XIP2_OFFSET) $(XIP2_ROOTFS_IMG)
+	$(ESPFLASH) $(XIP2_OFFSET) $(XIP2_ROOTFS_IMG)
 
 
 bootloader:
@@ -402,11 +412,75 @@ bootloader:
 	@echo "Using ESP-IDF from $(IDF_EXPORT)"
 	bash -c "source $(IDF_EXPORT) && cd $(CURDIR)/bootloader && idf.py build"
 
+# ---------------------------------------------------------------------------
+# Restored in full. Commit 717bffe ("reclaim the dead persist partition")
+# deleted this whole block along with the persist target it was actually meant
+# to remove. Nine targets went with it - including `clean` and `fullclean`,
+# which then silently did nothing, and the entire SD imager flow that
+# docs/sd-imager.md documents. `make imager` printed "Nothing to be done" and
+# was easy to read as a no-op rather than a missing rule.
+
+buildroot-menuconfig: | $(BUILDROOT_OUT)
+	$(BUILDROOT_MAKE) esp32s31_rootfs_defconfig
+	$(BUILDROOT_MAKE) menuconfig
+
+buildroot-clean:
+	rm -rf $(BUILDROOT_OUT)
+
+clean:
+	rm -rf $(BUILD_DIR)
+
+fullclean: clean
+	@test ! -e $(TOOLCHAIN_DIR) || chmod -R u+w $(TOOLCHAIN_DIR)
+	rm -rf $(TOOLCHAIN_DIR)
+
+flash-opensbi:
+	$(ESPFLASH) $(OPENSBI_OFFSET) $(FW_PAYLOAD)
+
+flash-linux:
+	$(ESPFLASH) $(LINUX_OFFSET) $(XIP_IMAGE)
+
+# The flash `rootfs` partition holds the userspace XIP image, NOT the squashfs.
+# Flashing the squashfs here would silently destroy the XIP image and take the
+# desktop back to faulting its text off the SD card, so this is an alias for
+# the thing that actually belongs there.
+flash-rootfs: flash-xip-rootfs
+
+# SD imager: a throwaway kernel carrying an initramfs, flashed over the normal
+# kernel only for as long as it takes to write the microSD card, then flashed
+# back with flash-linux. See docs/sd-imager.md.
+IMAGER_OUT := $(BUILD_DIR)/linux-imager
+IMAGER_IMAGE := $(BUILD_DIR)/xipImage-imager
+IMAGER_STAGE := $(CURDIR)/imager/initramfs
+
+imager: toolchain rootfs
+	@echo "--- SD imager kernel ---"
+	$(CROSS_COMPILE)gcc -Os -static \
+		-march=$(S31_USER_ISA) -mabi=ilp32 \
+		-o $(CURDIR)/imager/sdrecv $(CURDIR)/imager/sdrecv.c
+	$(CROSS_COMPILE)strip $(CURDIR)/imager/sdrecv
+	$(CURDIR)/imager/mkinitramfs.sh $(BUILDROOT_OUT)/target \
+		$(IMAGER_STAGE) $(CURDIR)/imager/sdrecv
+	$(MAKE) linux DEFCONFIG=esp32s31_imager_defconfig \
+		LINUX_OUT=$(IMAGER_OUT) XIP_IMAGE=$(IMAGER_IMAGE) \
+		FDT_DTB=$(BUILD_DIR)/imager.dtb
+
+flash-imager:
+	$(ESPFLASH) $(LINUX_OFFSET) $(IMAGER_IMAGE)
+
+# Reset the board and hand the console back. esptool drives the strapping and
+# reset lines properly; hand-rolled DTR/RTS toggling looks equivalent and is
+# not - it leaves the reset non-deterministic, which shows up later as
+# intermittent silence on the console and gets misread as a boot failure.
+reset:
+	@$(ESPTOOL) -p $(SERIAL_PORT) --after hard-reset chip-id >/dev/null 2>&1 || true
+	@echo "reset $(SERIAL_PORT)"
+
 flash-bootloader:
 	@if [ -z "$(IDF_EXPORT)" ]; then echo "ERROR: ESP-IDF export.sh not found under $(HOME)"; exit 1; fi
 	@echo "--- Flash Bootloader ---"
 	@echo "Using ESP-IDF from $(IDF_EXPORT)"
-	bash -c "source $(IDF_EXPORT) && cd $(CURDIR)/bootloader && idf.py flash -p /dev/ttyUSB0 -b 2000000"
+	bash -c "source $(IDF_EXPORT) && cd $(CURDIR)/bootloader && idf.py flash -p $(SERIAL_PORT) -b $(ESPTOOL_BAUD)"
 
 flash-all: flash-opensbi flash-linux flash-rootfs flash-bootloader
 
