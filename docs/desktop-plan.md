@@ -71,15 +71,42 @@ first time round. Dropping the Wayland stack frees roughly 2.3 MB -
 libweston-15 444 kB, libinput 366 kB, libxkbcommon 279 kB, drm-backend 141 kB,
 the wayland libs ~180 kB, weston, desktop-shell and its cairo.
 
-## The X server problem
+## X servers: three real options
 
-There is no lightweight X server any more. `hw/kdrive/` in xorg-server 21.1.23
-contains only `ephyr`; **Xfbdev was removed upstream years ago**, so buildroot's
-"KDrive / TinyX" option yields only Xephyr, which needs a host X server and is
-useless standalone. Real X11 means the full Xorg server plus a video driver.
+Upstream xorg-server dropped the small servers - `hw/kdrive/` in 21.1.23
+contains only `ephyr`, and buildroot's "KDrive / TinyX" option therefore yields
+only Xephyr, which needs a host X server and is useless standalone. But that is
+true of upstream only; the ecosystem kept them alive.
 
-Sizing that is the open question - the modular build has not produced an
-installed binary yet.
+**1. Full Xorg 21.1.23 + modesetting.** Measured:
+
+    Xorg binary            2,248,288
+    /usr/lib/xorg modules    778,240
+    total                  ~3.0 MB
+
+`modesetting_drv.so` is built, so this drives our DRM driver rather than
+/dev/fb0 - which means the PPA scaling, `render=` and 1:1 placement survive.
+Known-good, largest, and already builds here.
+
+**2. X11Libre/xserver.** An actively maintained fork of xorg-server, ~23.7k
+commits, which explicitly restores "Xfbdev, the generic framebuffer Xserver for
+Linux". Modern code, so no toolchain archaeology, and a framebuffer server
+without Xorg's module machinery. Not packaged in buildroot; needs a custom
+package. Size unmeasured.
+
+**3. tinycorelinux/tinyx.** The classic TinyX resurrected - Xvesa and Xfbdev,
+deliberately omitting xkb, xinput, xinerama and GL. Smallest of the three, but
+based on **xorg-server 1.2.0 (2007)**, chosen because 1.3.0 made xinput and xkb
+mandatory. Eighteen-year-old code against GCC 15 and musl is a real risk, and
+dropping xkb means keyboard handling via console keymaps.
+
+Note that an fbdev server is not obviously worse for us than modesetting: our
+DRM driver provides fbdev emulation, and fbcon already runs through it at
+640x384 1:1 with PPA scaling. So /dev/fb0 writes still reach the DRM plane
+update path. Worth confirming rather than assuming.
+
+Recommendation: try X11Libre's Xfbdev first - modern and small - and fall back
+to the measured 3.0 MB Xorg + modesetting, which is known to build here.
 
 ## Ruled out, with reasons
 
@@ -105,13 +132,15 @@ argument for X11 on a machine this small, independent of flash cost.
 
 ## Open questions
 
-  1. What does a full Xorg server plus fbdev or modesetting driver actually
-     weigh? Everything else is measured; this is not.
+  1. What does X11Libre's Xfbdev weigh, and does it build against musl with a
+     modern toolchain? Full Xorg is measured at 3.0 MB; this is the one that
+     could be materially smaller.
   2. If X11 replaces Wayland entirely, does the total fit in ~7.4 MB of flash
      with the hot path prioritised and the rest paging from SD?
-  3. Does an X server on /dev/fb0 bypass the DRM atomic path, and with it the
-     PPA scaling, `render=` and the 1:1 placement? If so the memory saving from
-     X11's model may be given straight back in larger buffers.
+  3. Confirm that an X server on /dev/fb0 still reaches the DRM plane update
+     path through our fbdev emulation, and so keeps PPA scaling, `render=` and
+     1:1 placement. fbcon does; an X server should, but it has not been tested.
+     Moot if modesetting is used instead.
   4. How much can the kernel be trimmed - Bluetooth, IPv6, netfilter, unused
      drivers - and does repartitioning help, given only `linux` needs 4 MiB
      alignment and `rootfs` does not?
