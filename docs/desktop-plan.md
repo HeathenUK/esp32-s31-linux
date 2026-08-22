@@ -175,6 +175,44 @@ Per-client Wayland buffers dominate: foot alone held 1.5-2.2 MB of shm at
 send drawing commands and the server owns the pixels - which is a genuine
 argument for X11 on a machine this small, independent of flash cost.
 
+## The data is bigger than the code
+
+Measured on the built target, and this reversed where the attention should go:
+
+    /usr/share/fonts        14,548,554     before trimming
+      dejavu                 9,630,900     21 files
+      X11 core                4,917,654    391 files
+    /usr/share/X11/xkb        3,379,850    290 files
+
+    Xfbdev                    1,597,644
+    xterm                       827,944
+    xkbcomp                     183,512
+    evilwm                      123,724
+    xsetroot                     16,972
+    all five binaries         2,749,796
+
+The whole X11 desktop's executable code is 2.75 MB. The fonts alone were five
+times that. None of it is text, so none of it can execute in place - it is read
+off the SD card, which is the slow path this project has spent the most effort
+on.
+
+DejaVu's serif and condensed families default to y in buildroot and were
+5,355,836 of that 9.6 MB. Nothing here asks for them, so they are off, leaving
+4,275,064. **Buildroot does not clean the target directory on a reconfigure**,
+so switching a family off leaves the files installed and the image unchanged
+unless the package is dircleaned (`make <pkg>-dirclean`) and the stale
+directory deleted.
+
+fontconfig ships no cache. Buildroot cannot generate one, because fontconfig
+caches are architecture-specific and a host-built cache would be wrong on
+riscv - so it is built once on the target, before the server starts, and kept
+in /var. Without it every Xft lookup walks the entire font directory off the
+card.
+
+The xkb rule files are the remaining 3.4 MB and are not yet trimmed. They are
+read once per server start by xkbcomp, so they cost startup latency rather than
+steady-state, and a single-layout subset should cut most of it. Not yet done.
+
 ## Open questions
 
   1. ~~What does X11Libre's Xfbdev weigh, and does it build against musl?~~
