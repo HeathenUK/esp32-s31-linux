@@ -97,9 +97,16 @@ static, so the nearest *exported* symbol is arbitrary (it claimed
 `pthread_barrierattr_setpshared + 0x18a`). Disassembling the addresses is what
 identified them.
 
-**It is diffuse generic overhead, not a hotspot.** Syscall entry and exit, a
-GEM handle lookup per ioctl (`drm_gem_object_lookup()` walks an XArray), and
-lock atomics. Xorg's own code is under 1%.
+**Read this as CPU time only.** `xprof` samples `PERF_COUNT_SW_CPU_CLOCK`,
+which ticks only while the task is running, so it describes the fraction of the
+ioctl that burns CPU and says nothing about the fraction that sleeps. An earlier
+`/proc/profile` run came back flat with idle present, which is what established
+that the ioctl mostly *waits*. Both results are true and they are about
+different halves of the same call.
+
+Of the CPU half: syscall entry and exit, a GEM handle lookup per ioctl
+(`drm_gem_object_lookup()` walks an XArray), and lock atomics. Xorg's own code
+is under 1% - it is generic machinery, not anything X computes.
 
 That also explains why `.text.fast` never helped this path, twice: like reclaim,
 it is bound by data traversal and atomics rather than instruction fetch, and the
@@ -112,9 +119,10 @@ one cursor ioctl per motion event.
 
 In priority order.
 
-1. **Reduce the number of cursor ioctls.** Each costs ~5 ms of largely
-   irreducible generic overhead, so the win is in doing fewer of them. X sends
-   one per motion event; the input device reports at 125 Hz. With the no-op commits gone there are still ~312
+1. **X's per-motion-event cost outside the ioctl.** With the ioctl down to
+   2 ms, injecting motion still only sustains 78-85 events/s against the 125
+   requested, i.e. ~12 ms per event. The ioctl is now a sixth of that. The rest
+   is X's own motion handling and is the largest remaining item. With the no-op commits gone there are still ~312
    *genuine* primary commits during pointer motion, on a desktop where nothing
    should be redrawing. Same question one level down: what damages the
    framebuffer? The instrument is already in place and this is the same class
@@ -186,3 +194,36 @@ To restore a shippable kernel: put back `--disable PROFILING` in the Makefile
 
 `/etc/init.d/S40xorg` **on the SD card** has been edited to set `RENDER`,
 `UPSCALE` and `LD_PRELOAD`. Those are card-side only and are not in the repo.
+
+## The fix that came out of it: legacy cursor callbacks
+
+`drm_mode_cursor_common()` has two paths, and the CRTC's `->cursor` pointer
+picks between them:
+
+	drm_modeset_lock(&crtc->mutex, &ctx);      /* both paths pay this */
+	if (crtc->cursor)
+		return drm_mode_cursor_universal(...);   /* + lock, state, lookup, commit */
+	if (req->flags & DRM_MODE_CURSOR_MOVE)
+		return crtc->funcs->cursor_move(crtc, req->x, req->y);
+
+Setting `crtc->cursor` - which this driver did, to make the cursor plane work at
+all - put every pointer move through the atomic machinery. Removing it and
+supplying `cursor_set2`/`cursor_move` instead:
+
+	DRM_IOCTL_MODE_CURSOR   4467 -> 1995 us per call   (500 injected events)
+	primary-plane commits   hundreds -> zero
+
+Verified it is not just the cursor switching itself off: `cursor_moves` and
+cache flushes each track injected events 1:1 (508->810 for 300 events), and a
+scanout capture shows the pointer drawing correctly.
+
+**It does not avoid the lock.** `drm_modeset_lock(&crtc->mutex)` is taken before
+the branch on both paths, so a cursor ioctl can still wait behind an in-flight
+primary commit - the mechanism the flat `/proc/profile` pointed at. The gain is
+that pointer motion no longer *generates* commits for later ones to stall
+behind. The first draft of this change claimed it bypassed the lock; reading the
+function rather than assuming is what caught that.
+
+The simple-pipe CRTC funcs cannot be re-declared - their members are file-static
+in `drm_simple_kms_helper.c` - so the struct is copied at runtime and the two
+cursor entries added.
