@@ -239,7 +239,6 @@ linux: toolchain | $(LINUX_OUT)
 		--disable FTRACE \
 		--disable ENABLE_DEFAULT_TRACERS \
 		--disable BLK_DEV_IO_TRACE \
-		--disable PROFILING \
 		--disable IPV6
 	$(MAKE) -C $(LINUX_DIR) O=$(LINUX_OUT) ARCH=riscv CROSS_COMPILE="$(CROSS_COMPILE)" olddefconfig
 	$(MAKE) -C $(LINUX_DIR) O=$(LINUX_OUT) ARCH=riscv CROSS_COMPILE="$(CROSS_COMPILE)" \
