@@ -208,3 +208,25 @@ BR2_PACKAGE_XAPP_XSETROOT=y
 # Note the primary URL uses the http+ prefix, forcing plain HTTP; the same file
 # over HTTPS downloads in seconds. Bound the read so a stall fails over.
 BR2_WGET="wget -nd -t 3 --connect-timeout=15 --read-timeout=30"
+
+# A package manager, so the board stops being a fixed image.
+#
+# opkg is the only real candidate here. Buildroot offers opkg and rpm and
+# nothing else - no apk, no dpkg - and rpm's database and Python tooling are far
+# too heavy for 15.4 MB. opkg is C, embedded-targeted, and its .ipk format is
+# just ar+tar.gz, which matters because we have to build every package
+# ourselves.
+#
+# That last point is the real constraint, and it rules out the usual answer of
+# "point it at a distro mirror". This target is riscv32 ilp32 with a custom
+# vendor extension (xespv2p2); Debian, Alpine, Fedora and OpenWrt are all
+# riscv64-only, so no upstream binary feed exists or ever will. The feed has to
+# come from our own Buildroot output - see docs/packaging.md.
+#
+# Cost: opkg pulls in libarchive. Both live on the microSD, which has 106 GB
+# free, and in XIP flash they would cost no RSS at all.
+BR2_PACKAGE_OPKG=y
+
+# Host side: opkg-build and opkg-make-index turn Buildroot's per-package output
+# into .ipk files and an index.
+BR2_PACKAGE_HOST_OPKG_UTILS=y
