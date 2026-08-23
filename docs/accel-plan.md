@@ -132,8 +132,15 @@ This is a genuine constraint of the 640x384 choice, not a defect in the engine,
 and it is worth knowing if the memory situation ever allows a return to native
 resolution: at 800x480 the damage copy should use GDMA, not the PPA.
 
-The channel is requested and a `gdma_memcpy` debugfs trigger is wired up so the
-comparison can be re-run, but nothing in the commit path uses it yet.
+Both the damage path and the whole-surface copy now prefer GDMA when the
+geometry allows it, and decline cleanly when it does not. Verified at 800x320:
+`gdma_rows` climbs, the engine does the work.
+
+It buys the desktop nothing. 800x320 with GDMA active against 640x384 without
+gave repaint means of 35.5 and 36.2 ms - and 800x320 costs more framebuffer,
+which pushed xcalc back into swap (8 kB resident against 416). The copy was
+never the bottleneck. This is kept because it is correct and free when the
+geometry suits it, not because it made anything faster.
 
 The prediction that its fixed cost might undercut the PPA's was wrong - both
 sit around 480 us - but its bandwidth is the best available. The channel came
