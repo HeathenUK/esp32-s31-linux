@@ -9,6 +9,34 @@ context reset - it records what is true now and what has already failed.
 
 ## Never hand-roll the tooling
 
+**The scripts already exist, in `scripts/board/`. Use them.** Every one of them
+has been re-written from scratch mid-task at least twice, badly, while the
+original sat a directory away:
+
+    scripts/board/reset.py                      # reset the board
+    scripts/board/runsh.py  <script.sh> [t] [w] # run a shell script on it
+    scripts/board/deploy_bin.py <f.b64> <dest>  # ship a binary to it
+    scripts/board/screenshot.py <out.png>       # capture the real panel
+
+**Do not write a DTR/RTS reset sequence.** Not once, not "just quickly". DTR
+drives EN and RTS drives IO0, both inverted, and any sequence that fails to
+drive EN low leaves the reset dependent on the pins' prior state - sometimes it
+resets, sometimes it does nothing, sometimes it parks the board in download
+mode where the ROM emits a few bytes and then goes silent forever. That makes
+"no output" mean nothing at all, and it has already poisoned four consecutive
+diagnoses. `scripts/board/reset.py` calls esptool, which does it correctly.
+
+**Do not write another serial-console runner.** `runsh.py` ships the script as
+a file (flattening it into `; ` one-liners breaks every multi-line construct
+and yields empty output that looks like a hardware fault), and it tolerates the
+login race - the LCD driver prints mode-set messages exactly when getty shows
+its prompt, so a naive matcher reports NO_SHELL on a healthy board. **Retry
+before concluding the board is dead.**
+
+**Do not re-derive the screenshot path.** The scanout address is allocated, not
+fixed, and `/dev/fb0` is fbdev emulation rather than what Xorg actually paints.
+`screenshot.py` handles both.
+
 There is a correct tool for each of these and improvising has repeatedly wasted
 whole afternoons:
 
