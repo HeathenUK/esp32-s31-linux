@@ -375,6 +375,63 @@ flash-backed, because font files are opened transiently while rendering rather
 than held mapped. Only the A/B found it. Do not diagnose this class of problem
 by reading /proc/<pid>/maps.
 
+## What the 53-minute trace showed: no leak, the working set simply does not fit
+
+Recorded with s31-deskmon during real use, ending in an OOM kill:
+
+    t=128    X VmData 7,924   majflt 1,504   swap 7,836
+    t=905    X VmData 7,888   majflt 1,504   swap 7,836
+    t=1803   X VmData 7,888   majflt 1,504   swap 7,836
+    t=3300   X VmData 7,888   majflt 1,504   swap 7,836
+    t=3467   X VmData 9,564   majflt 2,190   memavail 1,216  -> OOM killed X
+
+**The server did not grow.** Flat for 53 minutes, with major faults frozen at
+1,504 - almost no paging while idle. Earlier claims in this session that X leaks
+on pointer motion were wrong: one was a client's startup allocation caught by a
+badly placed sample window, and one was the benchmark itself, which created a
+uinput device per run that the server hot-plugged and never released.
+
+The truth is in the client columns: **st at 8 kB RSS, xfiles at 8 kB.** The
+applications were entirely swapped out and left there. The desktop was not
+degrading over time; it was parked, holding a steady ~5 fps, with everything on
+the SD card. Touching an application faults it back - at t=3467 xfiles went
+8 -> 96 kB and swap fell from 7,836 to 3,860 as pages returned - until memory
+runs out and the OOM killer takes the server.
+
+### Where the memory goes
+
+With **no clients connected at all**:
+
+    X VmRSS                     2,876 kB
+    largest single anon mapping 2,456 kB  (rss 1,932-2,008)
+    /dev/fb0 mapping              480 kB  (the framebuffer, correct)
+
+A 2.4 MB anonymous allocation in a server with nothing connected, against a
+480 kB framebuffer. 640x384x4 is 983 kB and twice that is 1.97 MB, which is
+suggestive of a 32-bit internal representation of a 16-bit screen, but that is
+inference and not established.
+
+Tried and rejected, all measured:
+
+    -bs (no backing store)   5 updates vs 27 baseline - no help
+    -depth 16                not a kdrive option
+    -screen 640x384x16       WORSE: VmData 3,764 vs 3,256, anon 2,964 vs 2,456,
+                             because the server then allocates its own
+                             framebuffer instead of using /dev/fb0's
+
+### The arithmetic that matters
+
+    MemTotal            15,456 kB
+    unreclaimable slab   4,300 kB
+    X with no clients    2,876 kB
+    -> under 8 MB for every application, before page cache
+
+Weston's RSS on this board was measured at 92 kB with XIP, against this server's
+2,876 kB. That is a 30x difference in the one resource that is actually scarce,
+and it is the strongest argument yet for revisiting the display server - except
+that no off-the-shelf glib-free Wayland file manager exists, which is the
+constraint that sent us to X11 in the first place.
+
 ## Open questions
 
   1. ~~What does X11Libre's Xfbdev weigh, and does it build against musl?~~
