@@ -1,8 +1,9 @@
 # Pointer latency: what it actually was
 
-Status at the time of writing: the diagnosis is settled and proven, the fix is
-implemented but **not yet validated**. Read the "state of the tree" section
-before continuing.
+Status: **root cause found and fixed** - a cursor ioctl was triggering a
+full-screen copy of a surface nothing had drawn to. Cursor ioctl 10,514 ->
+4,467 us. Read "what is still open" for where to go next, and "state of the
+tree" before building anything.
 
 ## The symptom
 
@@ -44,6 +45,60 @@ The decisive experiment, using the `ppa_min_bytes` runtime knob:
 	everything on the CPU        23,514 us      <- slower commit, worse cursor
 
 Making the commit slower made the cursor worse. That is causation.
+
+## The root cause
+
+A legacy cursor ioctl pulls the primary plane into its atomic state via
+`drm_atomic_add_affected_planes()`, so the primary plane's update ran on every
+pointer move. It arrives with **the same framebuffer and no damage blob**, and
+`drm_atomic_helper_damage_iter_init()` reports **the whole plane** when the blob
+is absent. So each pointer move ran a full 640x384 copy of a surface nothing
+had drawn to.
+
+Measured on a **bare server with no clients at all**: 280 primary commits per
+500 pointer events. Clients were irrelevant - 214 with jwm, 231 with jwm and
+st. X generates them by itself.
+
+That single fact retro-explains the entire investigation:
+
+- the ioctl cost 10.5 ms because it waited on the CRTC lock while a
+  full-surface copy ran that had nothing to copy
+- the cursor "overlapped the damage" 51% of the time because the damage *was*
+  the whole screen
+- deferring the copy could not help, because the work was both large and always
+  colliding
+
+The fix is to skip when the framebuffer is unchanged and there are no damage
+clips. X always supplies clips for real damage through DirtyFB, so that
+combination means nothing was drawn.
+
+	cursor ioctl        10,514 -> 4,467 us per call
+	copy overlaps          400 -> 5
+	copy syncs             403 -> 6
+	skipped no-op commits    0 -> 607
+
+Verified by capturing the scanout buffer afterwards: rendering unaffected, no
+dropped updates.
+
+## What is still open
+
+In priority order.
+
+1. **The remaining 4.5 ms.** With the no-op commits gone there are still ~312
+   *genuine* primary commits during pointer motion, on a desktop where nothing
+   should be redrawing. Same question one level down: what damages the
+   framebuffer? The instrument is already in place and this is the same class
+   of bug, so there is a reasonable chance of another large win.
+2. **Profile X's userspace.** `CONFIG_PERF_EVENTS=y` is now on in the
+   diagnostic kernel, so `perf` is finally buildable
+   (`BR2_PACKAGE_LINUX_TOOLS_PERF`). X spends roughly 4.5 ms of *user* time per
+   motion event even with no clients, and that has never been attributed - it
+   is the last black box in the pointer path.
+3. **Memory.** The standing constraint, untouched by any of this: X carries
+   ~2.8 MB swapped and clients page out under a full desktop, which is what
+   makes launching an app slow. See `accel-plan.md` and `etc/s31-swap.conf`.
+4. **Restore a shippable kernel** - see below. Should happen before any of the
+   above is called finished.
 
 ## The remedy that did not work
 
