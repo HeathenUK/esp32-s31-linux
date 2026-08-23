@@ -11,7 +11,11 @@
  * So: allocate two dumb buffers, blit a rectangle between them both ways, and
  * report where the crossover actually falls.
  *
- * Usage: ppabench [iterations]
+ * The crossover moves with load, so this takes the surface size as arguments:
+ * the desktop owns most of CMA, and measuring with it running - which is the
+ * only condition that matters - means fitting in what is left.
+ *
+ * Usage: ppabench [iterations] [surface_w surface_h]
  */
 
 #include <fcntl.h>
@@ -82,14 +86,15 @@ int main(int argc, char **argv)
 {
 	int iters = argc > 1 ? atoi(argv[1]) : 20;
 	/* Two of these have to fit in free CMA, which the desktop mostly owns. */
-	uint32_t W = 640, H = 384;
+	uint32_t W = argc > 3 ? (uint32_t)atoi(argv[2]) : 640;
+	uint32_t H = argc > 3 ? (uint32_t)atoi(argv[3]) : 384;
 	uint32_t sh, dh, sp, dp;
 	uint64_t ssz, dsz;
 	void *smap, *dmap;
 	int fd, i, k;
 	static const uint32_t sizes[][2] = {
 		{ 16, 16 }, { 32, 32 }, { 64, 64 }, { 128, 128 },
-		{ 256, 256 }, { 400, 300 }, { 640, 384 },
+		{ 256, 256 }, { 320, 240 }, { 400, 300 }, { 640, 384 },
 	};
 
 	fd = open("/dev/dri/card0", O_RDWR);
@@ -111,6 +116,9 @@ int main(int argc, char **argv)
 	for (k = 0; k < (int)(sizeof(sizes) / sizeof(sizes[0])); k++) {
 		uint32_t w = sizes[k][0], h = sizes[k][1];
 		size_t bytes = (size_t)w * h * 2;
+
+		if (w > W || h > H)
+			continue;
 		double t0, cpu_ms, ppa_ms;
 		struct drm_esp32s31_ppa_copy c = {
 			.src_handle = sh, .dst_handle = dh,
