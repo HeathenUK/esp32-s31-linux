@@ -45,7 +45,61 @@ Memory, measured on the board rather than assumed:
 XIP is working exactly as intended: `/usr/bin/Xorg` maps 1,832 kB at **Rss 0**,
 as do libc, libfreetype and libpixman. Binaries in flash cost no RAM at all.
 
+### Later the same day: the mouse
+
+Three changes, in the order they had to happen:
+
+1. **The native mode killed a pointless PPA pass.** Xorg picked the driver's
+   reduced 640x384 mode, which made `esp32s31_lcd_scaling()` true, so every
+   commit went through a PPA copy that was not scaling anything (640x384 lands
+   1:1 centred at +80+48). Driver cost 12.8-15.9% -> 0.1-0.6% of a core.
+2. **The PPA was sleeping, not working.** 6.2 ms per operation was
+   `wait_for_completion()` parking the caller on a loaded machine. Spinning
+   300 us first: 14,527 us -> 276 us under load. The engine actually sustains
+   ~100 MB/s against the CPU's 22.6 MB/s, so it is worth using above ~7.3 kB
+   per operation - below that its ~250 us of setup dominates.
+3. **A DRM cursor plane, composited in the driver.** X's software cursor cost a
+   *fixed* ~19 ms per pointer move - 11 ms user, 8 ms system - and it was fixed,
+   not proportional: dropping the screen 36% moved it 11 ms -> 10 ms. Pointer
+   motion went 17.3-25.7 fps -> 43.1-45.2 fps. Then the commit tail was made to
+   skip `drm_atomic_helper_wait_for_vblanks()` for cursor-only commits, which
+   had been pinning cursor updates to the 42 Hz frame rate and backing up X's
+   input queue: 540/532/630 moves per 500 injected events, i.e. one-for-one.
+
+LCD_CAM scans out one linear buffer and cannot overlay a second, so the cursor
+is still composited in software - just in the driver, on ~2 KB, instead of in X
+across the whole damage pipeline. It costs a private 768 KB scanout buffer,
+because X writes its framebuffer from userspace and only *then* calls DirtyFB,
+so the driver can never lift the cursor out first and save-under would go stale.
+
+### And then memory, again
+
+With the desktop up, `xcalc` sat at **8 kB resident** and everything else was
+swapped. Clicks and hovers were slow because a click had to fault the whole
+client back in - nothing to do with drawing. Two reversals fixed it:
+
+- **zram off.** It was enabled to kill a 1174.9 ms repaint tail and did (65.5
+  ms). That tail is now 44.5 ms *without* it, because the cursor plane and the
+  mode change removed the work causing it - so zram was charging 2.8-3.2 MB of
+  RAM, several times MemAvailable, for nothing. See `etc/s31-swap.conf`.
+- **640x384.** The reasons for the native mode were both gone (the PPA is cheap,
+  the cursor is the driver's), and it costs 553 kB more of framebuffer plus 36%
+  more drawing. At 640x384 every client is fully resident: st swap 0, xcalc
+  swap 0. See `etc/X11/xorg.conf`.
+
+Both are recorded with their tables in those files, including what they cost.
+
 Things measured and rejected, so they are not retried:
+
+- **Reclaim in `.text.fast`.** kswapd0 was the largest consumer after X
+  (12.7-18%), so vmscan/rmap/workingset/swap/page_io/swap_state and the lzo
+  codec were relocated to RAM, 33 kB of it. 17.1 vs 17.6 kswapd ticks/s - no
+  difference. Reclaim is bound by data, not instruction fetch; the 5.98x
+  flash-vs-RAM figure only applies to code that refetches itself.
+- **zram compaction.** Freed 0 kB. zsmalloc's 2.5x packing overhead is
+  size-class granularity plus incompressible pages, not fragmentation.
+- **Running Xorg from the SD instead of XIP flash.** 4x *worse* (4.7 fps): the
+  1.9 MB of page cache it needs costs more than any instruction-fetch gain.
 
 - **Pruning X extensions** (DRI2/DRI3/Present/XVideo/RECORD/DGA/VidMode/
   X-Resource/DBE). X anon 6,040 -> 6,028 kB. Noise. The 6 MB is heap, not
