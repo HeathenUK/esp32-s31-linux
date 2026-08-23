@@ -107,7 +107,7 @@ for kernel work; the rootfs only needs rebuilding when userspace changes.
   Those `boot:` log lines come from it. Repartitioning means reflashing all
   three.
 - **The kernel does not fit with both profiling and the radios.** The linux
-  partition is 5,439,488 bytes and there is no slack. In-core profiling
+  partition is 5,636,096 bytes and there is very little slack. In-core profiling
   (`CONFIG_PROFILING`, which *selects* `PERF_EVENTS`) and Wi-Fi + Bluetooth +
   sound are mutually exclusive: the three features are ~500 KB, the partition
   has ~53 KB spare. **This is a deliberate, reversible trade, not a bug** -
@@ -119,6 +119,14 @@ for kernel work; the rootfs only needs rebuilding when userspace changes.
   - Every committed defconfig has `CONFIG_PROFILING=y`; the Makefile's
     `--disable PROFILING` is what actually turns it off. Do not read the
     defconfig and conclude profiling is on.
+- **Compiling sound out makes the speaker whine.** The speaker amplifier is
+  enabled by a **GPIO hog** on GPIO7 (`esp32s31_generic.dts`), which the DTS
+  holds high unconditionally, on the stated basis that "output muting is the
+  codec's job". Drop `CONFIG_SND_SOC_ES8389` and nothing ever initialises or
+  mutes the ES8389 - so the amp faithfully amplifies an unconfigured DAC and
+  the board sits there whining. **If sound is ever compiled out, the hog has to
+  go to `output-low` in the same change** (which needs `make linux` *and*
+  `make opensbi`). Verified: restoring the codec silences it.
 - **`CONFIG_BT` and `CONFIG_SND` are not in the committed defconfig**, yet the
   board has working Bluetooth and audio - they have been living as uncommitted
   working-tree edits, so a clean checkout builds a kernel with no sound. Check

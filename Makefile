@@ -241,6 +241,9 @@ linux: toolchain | $(LINUX_OUT)
 		--disable BLK_DEV_IO_TRACE \
 		--disable PROFILING \
 		--disable PERF_EVENTS \
+		--disable BPF_SYSCALL \
+		--disable BPF_JIT \
+		--disable PERF_EVENTS \
 		--disable IPV6
 	$(MAKE) -C $(LINUX_DIR) O=$(LINUX_OUT) ARCH=riscv CROSS_COMPILE="$(CROSS_COMPILE)" olddefconfig
 	$(MAKE) -C $(LINUX_DIR) O=$(LINUX_OUT) ARCH=riscv CROSS_COMPILE="$(CROSS_COMPILE)" \
@@ -270,12 +273,12 @@ coremark: rootfs
 
 # Keep this decimal because POSIX test(1) and truncate(1) do not accept the
 # partition table's 0x-prefixed value.
-ROOTFS_PARTITION_SIZE ?= 7143424
+ROOTFS_PARTITION_SIZE ?= 6946816
 XIP2_PARTITION_SIZE ?= 1441792
 # The XIP kernel must start on a 4-MiB Sv32 megapage boundary, so the linux
 # partition stays at 0x400000 and rootfs takes every byte the kernel does not
 # need. Keep this in step with bootloader/partitions.csv.
-LINUX_PARTITION_SIZE ?= 5439488
+LINUX_PARTITION_SIZE ?= 5636096
 
 # Flashing knobs. These were hardcoded to /dev/ttyUSB0 and a bare `esptool`,
 # which is a Linux-only assumption: on macOS the adapter is /dev/cu.usbserial-*
