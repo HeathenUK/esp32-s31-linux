@@ -48,12 +48,8 @@ whole afternoons:
   (`~/.espressif/python_env/idf6.0_py3.12_env/bin/esptool`). Homebrew's 5.2.0
   has no S31 stub and fails in confusing ways. Build output lives in a Docker
   volume - copy it to `images/` first.
-- **Reset**: esptool, never a hand-rolled DTR/RTS toggle. A bad reset makes
-  silence non-deterministic and poisons every diagnosis downstream.
-- **Run something on the board**: `scratchpad/runsh2.py`, which ships a script
-  as a file. Do not flatten multi-line scripts into `; ` one-liners. The login
-  prompt races with driver messages, so retry rather than concluding the board
-  is dead.
+- **Reset / run / deploy / screenshot**: `scripts/board/`, as above. Not a
+  scratchpad copy, not a fresh one written inline.
 - **Timeouts**: size them to the work (flash ~40 s, `make linux` ~200 s, a board
   script ~60 s). A long default looks like progress while nothing happens.
 
