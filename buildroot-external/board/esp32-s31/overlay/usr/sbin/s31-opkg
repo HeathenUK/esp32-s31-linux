@@ -1,0 +1,20 @@
+#!/bin/sh
+# opkg wrapper that installs where this board can actually accept files.
+#
+# /usr/bin, /usr/lib and /lib are read-only overlays stacking two cramfs XIP
+# images over the ext4 root, and they have no upperdir - so nothing can be
+# written to them at runtime and a plain "opkg install" fails with
+# "Read-only file system" on any package that ships a binary or a library.
+#
+# A non-recursive bind mount of / exposes the ext4 underneath without those
+# overlays on top. Packages land there, and the overlay picks them up at the
+# next boot because the ext4 root is its lowest lowerdir. So an install needs a
+# reboot to become visible, which is the price of userspace running from XIP
+# flash at zero RSS.
+#
+# Usage: s31-opkg <any opkg arguments>
+set -e
+ROOT=/mnt/realroot
+mkdir -p "$ROOT"
+mountpoint -q "$ROOT" || mount --bind / "$ROOT"
+exec opkg --offline-root "$ROOT" "$@"

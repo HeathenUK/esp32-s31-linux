@@ -61,7 +61,47 @@ Wi-Fi outage, and the card has the space. An HTTP feed served from the
 development host over `wlan0` is the alternative when the feed is being
 regenerated frequently, since it avoids recopying the card.
 
-## Status
+## The catch: the target filesystem is read-only where packages want to write
 
-Not yet built. opkg and host opkg-utils are enabled in the rootfs defconfig; the
-generator described above is the next step.
+`/usr/bin`, `/usr/lib` and `/lib` are overlays stacking two cramfs XIP images
+over the ext4 root:
+
+	overlay /usr/bin overlay ro,lowerdir=/mnt/xip/usr/bin:/mnt/xip2/usr/bin:/mnt/sd-usr-bin
+
+They are mounted **ro and have no upperdir**, so nothing can be written to them
+at runtime and a plain `opkg install` fails with "Read-only file system" for any
+package shipping a binary or a library. This is not a misconfiguration - it is
+what makes userspace cost zero RSS, which is the single most valuable property
+this board has.
+
+The way in is a **non-recursive bind mount of `/`**, which exposes the ext4 root
+without those overlays stacked on top. Packages install there, and the overlay
+picks them up at the next boot because the ext4 root is its lowest lowerdir.
+`/usr/sbin/s31-opkg` wraps this:
+
+	mount --bind / /mnt/realroot
+	opkg --offline-root /mnt/realroot "$@"
+
+**An install therefore needs a reboot to become visible.** That is the price of
+XIP userspace, and it is worth paying.
+
+## Status: working end to end
+
+	70 .ipk built from a 108-package Buildroot build
+	index 17,666 bytes
+	opkg 0.7.0 on the target, feed fetched over Wi-Fi
+
+Proved against an empty root rather than by inference - installing `bc` into a
+fresh directory delivered `/usr/bin/bc` and `/usr/bin/dc`, since installing over
+an already-populated rootfs cannot distinguish "installed" from "was already
+there".
+
+Two gaps remain:
+
+- **No dependency data.** `make show-info` did not return parseable JSON, so
+  control files carry no `Depends:`. opkg installs happily without it but will
+  not pull dependencies automatically.
+- **The feed only contains what has already been built.** Adding genuinely new
+  software still means enabling it in Buildroot and regenerating the feed. The
+  win is that a *small* rootfs can ship while a *large* set of packages stays
+  installable on demand - not that arbitrary upstream software appears.
