@@ -6,7 +6,22 @@
 # of every boot: ifup -a blocked trying to DHCP an interface that will never
 # exist, printing "Cannot find device eth0" and then failing.
 #
-# wlan0 is deliberately not brought up here. It needs wpa_supplicant with
-# credentials that are not in this tree, so it is configured at runtime.
 auto lo
 iface lo inet loopback
+
+# wlan0 carries no credentials here - they live in /etc/wpa_supplicant.conf
+# (mode 600), which is written on the device and deliberately kept out of this
+# tree. The stanza itself is safe to ship, and shipping it is the point: it was
+# previously configured by hand on the card, so a re-image silently lost the
+# network.
+#
+# pre-up runs a helper rather than wpa_supplicant directly because ifupdown has
+# no notion of waiting for a WPA association: it starts udhcpc the moment pre-up
+# returns, while the hidden-SSID scan and handshake still have ~7 s to run. DHCP
+# then times out and ifup reports the interface "already configured" with no
+# address, which looks exactly like wrong credentials. Debian solves this with
+# the wpasupplicant package's ifupdown glue; Buildroot does not ship it.
+auto wlan0
+iface wlan0 inet dhcp
+	pre-up /etc/network/wlan0-up.sh
+	post-down killall wpa_supplicant 2>/dev/null || true
