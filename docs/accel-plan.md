@@ -12,8 +12,8 @@ elsewhere it says so.
 | CPU | anything | `memcpy`, per-pixel C | used below the threshold |
 | PPA SRM | scale, rotate, mirror | `esp32s31_ppa_scale_rect()` | used above the threshold |
 | PPA BLEND | two-layer alpha, solid fill | internal, debugfs only | implemented, unused |
-| AXI GDMA | `DMA_MEMCPY`, `DMA_MEMSET` | dmaengine | **untested** |
-| AHB GDMA | `DMA_MEMCPY` | dmaengine | untested |
+| AXI GDMA | `DMA_MEMCPY`, `DMA_MEMSET` | dmaengine | fastest, but 1D only - see below |
+| AHB GDMA | `DMA_MEMCPY` | dmaengine | untested; same 1D limitation applies |
 | BitScrambler | stream bit manipulation | — | ruled out, see below |
 
 ## The cost model
