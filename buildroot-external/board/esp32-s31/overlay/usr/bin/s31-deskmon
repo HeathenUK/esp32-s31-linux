@@ -1,0 +1,95 @@
+#!/bin/sh
+#
+# Sample the desktop's memory and repaint behaviour while somebody uses it.
+#
+# This exists because the failure that matters here is intermittent and could
+# not be provoked to order: the X server was seen growing from 7,872 kB to
+# 58,912 kB of VmData in sixty seconds of pointer motion, ending in an OOM kill,
+# and then four identical forty-second probes showed no growth at all. Trying to
+# reproduce it by hand measured the harness more often than the desktop - a
+# benchmark that created a uinput device per run leaked memory into the very
+# server it was measuring, and probe windows that straddled a client's startup
+# reported its initial allocation as a leak.
+#
+# So: stop provoking, start recording. Leave this running during real use and
+# the trace shows what preceded the degradation.
+#
+# Each sample is appended and synced, so an OOM kill or a hard reset still
+# leaves everything up to that moment on the card.
+#
+#   s31-deskmon [interval_seconds] [outfile]
+#
+# Columns: uptime, X VmData/VmRSS/VmSwap/majflt/cpu_ticks, plane updates since
+# the previous sample, MemAvailable, swap in use, and RSS per client.
+
+INTERVAL=${1:-5}
+OUT=${2:-/root/deskmon.csv}
+U=/sys/kernel/debug/esp32s31_lcd/updates
+
+mount -t debugfs none /sys/kernel/debug 2>/dev/null
+
+field() {	# $1=file $2=key   ("VmData:  1234 kB" -> 1234)
+	awk -v k="^$2:" '$0 ~ k { print $2; exit }' "$1" 2>/dev/null
+}
+
+updates() {
+	sed -n 's/^updates=\([0-9]*\).*/\1/p' "$U" 2>/dev/null
+}
+
+swap_used() {
+	awk '/^SwapTotal/ { t = $2 } /^SwapFree/ { f = $2 } END { print t - f }' \
+		/proc/meminfo
+}
+
+if [ ! -f "$OUT" ]; then
+	echo "uptime,xdata_kb,xrss_kb,xswap_kb,xmajflt,xcpu_ticks,updates,memavail_kb,swap_kb,jwm_kb,st_kb,xfiles_kb,xcalc_kb" > "$OUT"
+fi
+
+prev_updates=$(updates)
+[ -z "$prev_updates" ] && prev_updates=0
+
+while :; do
+	P=$(pidof Xfbdev 2>/dev/null)
+	if [ -z "$P" ]; then
+		# Record the absence rather than exiting: the interesting case is
+		# the server dying, and a trace that stops says less than one that
+		# says "gone".
+		printf '%s,,,,,,,%s,%s,,,,\n' \
+			"$(awk '{printf "%.0f", $1}' /proc/uptime)" \
+			"$(awk '/MemAvailable/ { print $2 }' /proc/meminfo)" \
+			"$(swap_used)" >> "$OUT"
+		sync
+		sleep "$INTERVAL"
+		continue
+	fi
+
+	now=$(updates)
+	[ -z "$now" ] && now=$prev_updates
+	delta=$((now - prev_updates))
+	prev_updates=$now
+
+	set -- ""
+	for c in jwm st xfiles xcalc; do
+		q=$(pidof "$c" 2>/dev/null | awk '{ print $1 }')
+		if [ -n "$q" ]; then
+			set -- "$@" "$(awk '{ print $24 * 4 }' /proc/"$q"/stat 2>/dev/null)"
+		else
+			set -- "$@" ""
+		fi
+	done
+	shift	# drop the leading placeholder
+
+	printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
+		"$(awk '{printf "%.0f", $1}' /proc/uptime)" \
+		"$(field /proc/"$P"/status VmData)" \
+		"$(field /proc/"$P"/status VmRSS)" \
+		"$(field /proc/"$P"/status VmSwap)" \
+		"$(awk '{ print $12 }' /proc/"$P"/stat 2>/dev/null)" \
+		"$(awk '{ print $14 + $15 }' /proc/"$P"/stat 2>/dev/null)" \
+		"$delta" \
+		"$(awk '/MemAvailable/ { print $2 }' /proc/meminfo)" \
+		"$(swap_used)" \
+		"$1" "$2" "$3" "$4" >> "$OUT"
+	sync
+	sleep "$INTERVAL"
+done
