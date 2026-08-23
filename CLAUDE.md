@@ -70,6 +70,23 @@ whole afternoons:
   volume - copy it to `images/` first.
 - **Reset / run / deploy / screenshot**: `scripts/board/`, as above. Not a
   scratchpad copy, not a fresh one written inline.
+- **Write the microSD**: the **SD imager**, `docs/sd-imager.md`. The card is
+  soldered down, so it is written in place over the console:
+
+      make imager && make flash-imager
+      imager/send_image.py build/buildroot/images/rootfs.ext2 --port /dev/cu.usbserial-130
+      make flash-linux flash-xip-rootfs        # BOTH - see below
+
+  Do **not** dribble files onto the card over the serial console instead. The
+  imager exists precisely so that does not happen, and once `wlan0` is up
+  `wget` from a host HTTP server is faster still (191 KB/s measured, against
+  minutes for the same file in printf chunks).
+
+  The imager kernel is **larger than the linux partition and overruns into
+  rootfs by design** - that is expected and fine, because it is transient. It
+  does mean the restore is **two** commands: flashing only the kernel back
+  leaves a corrupt userspace XIP image, and the symptom is cramfs failing to
+  mount, which points nowhere near the cause.
 - **Timeouts**: size them to the work (flash ~40 s, `make linux` ~200 s, a board
   script ~60 s). A long default looks like progress while nothing happens.
 
@@ -110,6 +127,12 @@ for kernel work; the rootfs only needs rebuilding when userspace changes.
   builtin DTB, so rebuilding only OpenSBI silently leaves the old tree in force.
 - **Buildroot ignores unknown defconfig symbols.** Always grep the generated
   `.config` to confirm a package is actually enabled.
+- **`/usr/bin`, `/usr/lib` and `/lib` are read-only overlays** stacking two
+  cramfs XIP images over the ext4 root, with **no upperdir**. Nothing can be
+  written to them at runtime, so installing anything fails with "Read-only file
+  system". Write to the ext4 underneath via a non-recursive `mount --bind /`
+  (`/usr/sbin/s31-opkg` does this) and reboot for the overlay to restack. This
+  is what makes userspace cost zero RSS - it is the feature, not a defect.
 - **The SD card holds state the repo does not.** `/etc/init.d/S40xorg` and
   friends have been edited in place. Re-imaging loses it.
 
