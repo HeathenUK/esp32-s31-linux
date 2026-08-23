@@ -28,10 +28,21 @@ diagnoses. `scripts/board/reset.py` calls esptool, which does it correctly.
 
 **Do not write another serial-console runner.** `runsh.py` ships the script as
 a file (flattening it into `; ` one-liners breaks every multi-line construct
-and yields empty output that looks like a hardware fault), and it tolerates the
-login race - the LCD driver prints mode-set messages exactly when getty shows
-its prompt, so a naive matcher reports NO_SHELL on a healthy board. **Retry
-before concluding the board is dead.**
+and yields empty output that looks like a hardware fault), and it handles both
+ways the console lies:
+
+- *Kernel messages on the login line.* The LCD driver prints mode-set messages
+  exactly when getty shows its prompt, so the prompt is not last in the buffer.
+  It searches the whole buffer. (`rstrip().endswith('# ')` can never be true -
+  rstrip removes the trailing space it then tests for.)
+- *Racing the boot.* Reaching a prompt from a hard reset takes ~50 s here,
+  because X starts on the way. It now watches for `login:`/the prompt and
+  returns the moment either appears, so a booted board answers in <1 s and a
+  booting one is tracked, not slept through.
+
+**`NO_SHELL` now means something.** The message says whether the board was
+emitting bytes (alive, still booting) or silent (off, held in reset, or in
+download mode). Read it instead of re-running blind.
 
 **Do not re-derive the screenshot path.** The scanout address is allocated, not
 fixed, and `/dev/fb0` is fbdev emulation rather than what Xorg actually paints.
@@ -69,6 +80,23 @@ for kernel work; the rootfs only needs rebuilding when userspace changes.
 - **The loader app is `hello_world.bin` at 0x20000**, not `bootloader.bin`.
   Those `boot:` log lines come from it. Repartitioning means reflashing all
   three.
+- **The kernel does not fit with both profiling and the radios.** The linux
+  partition is 5,439,488 bytes and there is no slack. In-core profiling
+  (`CONFIG_PROFILING`, which *selects* `PERF_EVENTS`) and Wi-Fi + Bluetooth +
+  sound are mutually exclusive: the three features are ~500 KB, the partition
+  has ~53 KB spare. **This is a deliberate, reversible trade, not a bug** -
+  radios and sound get compiled out to make room whenever X is being profiled,
+  because they are not needed to profile X. Put them back afterwards.
+  - `--disable PROFILING` alone does **not** clear `PERF_EVENTS`. PROFILING
+    *selects* it, and clearing a selector leaves the selectee set; `olddefconfig`
+    then keeps it because it is user-selectable in its own right. Disable both.
+  - Every committed defconfig has `CONFIG_PROFILING=y`; the Makefile's
+    `--disable PROFILING` is what actually turns it off. Do not read the
+    defconfig and conclude profiling is on.
+- **`CONFIG_BT` and `CONFIG_SND` are not in the committed defconfig**, yet the
+  board has working Bluetooth and audio - they have been living as uncommitted
+  working-tree edits, so a clean checkout builds a kernel with no sound. Check
+  the working tree, not just HEAD, before concluding what the board runs.
 - **A DTS edit needs both `make linux` and `make opensbi`** - the kernel uses a
   builtin DTB, so rebuilding only OpenSBI silently leaves the old tree in force.
 - **Buildroot ignores unknown defconfig symbols.** Always grep the generated
