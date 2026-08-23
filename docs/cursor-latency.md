@@ -80,11 +80,41 @@ combination means nothing was drawn.
 Verified by capturing the scanout buffer afterwards: rendering unaffected, no
 dropped updates.
 
+## Where the remaining ~5 ms goes
+
+Sampled with `rootfs/xprof.c`, a ~100-line `perf_event_open()` profiler (there
+is no perf tool here and buildroot cannot easily build one). 4117 samples at
+1 kHz across the X server during continuous pointer motion:
+
+	kernel  13.2%  xas_find              XArray traversal
+	kernel  11.2%  finish_task_switch    i.e. waiting, not working
+	user    10.5%  libc +0x5b3c6         `ecall; ret` - the syscall return site
+	user     8.7%  libc +0x5cc22..5cc5a  lr.w/sc.w atomic retry loop
+	user     0.8%  Xorg itself
+
+Symbol names from `nm -D` are useless here - musl's string and lock helpers are
+static, so the nearest *exported* symbol is arbitrary (it claimed
+`pthread_barrierattr_setpshared + 0x18a`). Disassembling the addresses is what
+identified them.
+
+**It is diffuse generic overhead, not a hotspot.** Syscall entry and exit, a
+GEM handle lookup per ioctl (`drm_gem_object_lookup()` walks an XArray), and
+lock atomics. Xorg's own code is under 1%.
+
+That also explains why `.text.fast` never helped this path, twice: like reclaim,
+it is bound by data traversal and atomics rather than instruction fetch, and the
+5.98x flash-vs-RAM penalty only applies to code that refetches itself.
+
+The lever this points at is **fewer ioctls**, not faster ones - X issues roughly
+one cursor ioctl per motion event.
+
 ## What is still open
 
 In priority order.
 
-1. **The remaining 4.5 ms.** With the no-op commits gone there are still ~312
+1. **Reduce the number of cursor ioctls.** Each costs ~5 ms of largely
+   irreducible generic overhead, so the win is in doing fewer of them. X sends
+   one per motion event; the input device reports at 125 Hz. With the no-op commits gone there are still ~312
    *genuine* primary commits during pointer motion, on a desktop where nothing
    should be redrawing. Same question one level down: what damages the
    framebuffer? The instrument is already in place and this is the same class
