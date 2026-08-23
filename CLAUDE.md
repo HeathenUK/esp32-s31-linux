@@ -1,8 +1,17 @@
 # Working on this board
 
 Linux 6.12 on an ESP32-S31-Korvo-1 V1.1: dual hart (hart0 runs ESP-IDF and owns
-the radios and audio, hart1 runs Linux), RV32 soft-float, **15.4 MB of usable
-RAM**, kernel executing XIP from 80 MHz flash, rootfs on microSD.
+the radios and audio, hart1 runs Linux), **15.4 MB of usable RAM**, kernel
+executing XIP from 80 MHz flash, rootfs on microSD.
+
+**It is not a soft-float machine.** The kernel reports
+`rv32imafc_zicntr_zicsr_zifencei_zca_zcf_zba_zbb_zbc_zbs`: `f` is a real
+single-precision FPU and `zcf` its compressed loads and stores, with
+`CONFIG_FPU=y` so the kernel saves and restores that state. What *is*
+soft-float is the **ABI** - `-mabi=ilp32` passes floats in integer registers
+while still computing them in F registers. There is no `d`, so
+**`float` is hardware and fast, `double` is a library call and slow**. Do not
+reach for `double` here, and do not describe the board as soft-float.
 
 Every rule below cost hours to learn. Read `docs/current-state.md` first after a
 context reset - it records what is true now and what has already failed.
