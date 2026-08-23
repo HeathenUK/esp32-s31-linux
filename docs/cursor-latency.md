@@ -45,7 +45,23 @@ The decisive experiment, using the `ppa_min_bytes` runtime knob:
 
 Making the commit slower made the cursor worse. That is causation.
 
-## The fix
+## The remedy that did not work
+
+Deferring the copy was tried and **measured worse**, so it is not the answer:
+
+	copy inside the commit    10,514 us per cursor ioctl
+	copy deferred to a work   12,773 us per cursor ioctl
+	copy: deferred=791 sync=403 overlap=400
+
+51% of cursor moves overlap the pending damage and so wait regardless - and
+they then wait on a *scheduled* work item rather than an inline copy, which
+adds queueing latency to the same work. Deferral only pays when the cursor
+rarely collides with the damage; here it collides constantly.
+
+The diagnosis above still stands. What has to change is the collision rate or
+the length of the commit, not where the copy runs.
+
+## The mechanism, for reference
 
 Move the damage copy out of the locked commit. The commit records the damage
 rectangles, takes a reference on the framebuffer, schedules a work item and
