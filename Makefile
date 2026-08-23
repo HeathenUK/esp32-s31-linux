@@ -269,12 +269,12 @@ coremark: rootfs
 
 # Keep this decimal because POSIX test(1) and truncate(1) do not accept the
 # partition table's 0x-prefixed value.
-ROOTFS_PARTITION_SIZE ?= 6946816
+ROOTFS_PARTITION_SIZE ?= 7143424
 XIP2_PARTITION_SIZE ?= 1441792
 # The XIP kernel must start on a 4-MiB Sv32 megapage boundary, so the linux
 # partition stays at 0x400000 and rootfs takes every byte the kernel does not
 # need. Keep this in step with bootloader/partitions.csv.
-LINUX_PARTITION_SIZE ?= 5636096
+LINUX_PARTITION_SIZE ?= 5439488
 
 # Flashing knobs. These were hardcoded to /dev/ttyUSB0 and a bare `esptool`,
 # which is a Linux-only assumption: on macOS the adapter is /dev/cu.usbserial-*
@@ -362,7 +362,11 @@ XIP_ROOTFS_IMG := $(BUILD_DIR)/rootfs-xip.cramfs
 # alike. Staging it beside FLTK instead would put it in the smaller image and
 # duplicate nothing, but leave the shared stack in the partition with the least
 # room. Measured: this is what makes both images fit.
-XIP_ROOTS ?= usr/bin/Xfbdev usr/bin/jwm usr/bin/xsetroot \
+XIP_ROOTS ?= usr/bin/Xorg \
+	usr/lib/xorg/modules/drivers/modesetting_drv.so \
+	usr/lib/xorg/modules/input/evdev_drv.so \
+	usr/lib/xorg/modules/libshadow.so \
+	usr/bin/st usr/bin/xsetroot \
 	usr/lib/libXft.so \
 	usr/share/fonts/X11/misc/6x13.pcf.gz \
 	usr/share/fonts/X11/misc/6x13-ISO8859-1.pcf.gz \
@@ -452,7 +456,14 @@ XIP2_STAGE := $(BUILD_DIR)/xipstage2
 # the same overlay, so image 1 sees these without carrying its own copy.
 # xkbcomp is here rather than image 1 because it runs once, when the server
 # starts, and never again - the least hot thing in the desktop.
-XIP2_ROOTS ?= usr/bin/xcalc usr/bin/st usr/bin/xfiles usr/bin/xkbcomp
+# Image 2 holds everything that uses the Athena toolkit - jwm and xcalc - so
+# libXaw7, libXt, libXmu, libICE and libSM are staged once, here. Splitting
+# those two across images duplicates 800 kB of libraries and overflows both.
+# xkbcomp is deliberately NOT here, and neither is libxkbfile - 288,820 bytes
+# between them. Xorg forks xkbcomp once at startup to compile the keymap and
+# never runs it again, so putting it in flash buys a one-second-faster server
+# start and takes that space away from every binary that runs continuously.
+XIP2_ROOTS ?= usr/bin/xcalc usr/bin/jwm usr/bin/xfiles
 
 # Staged separately from image creation, because image 1 has to know what is
 # in here before it stages itself - see the EXCLUDE_DIR note in xip-rootfs.

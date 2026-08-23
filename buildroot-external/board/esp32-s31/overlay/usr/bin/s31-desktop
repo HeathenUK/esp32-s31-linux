@@ -3,8 +3,7 @@
 # Bring up the X11 desktop, one component at a time.
 #
 # Deliberately not a startx script. Each stage is started and checked
-# separately, because the failure that matters here - whether Xfbdev's writes
-# to /dev/fb0 actually reach the DRM plane update path - looks identical to a
+# separately, because a server that fails to find a screen looks identical to a
 # window manager crash or a missing font if the whole stack is launched at once
 # and only the end result is observed.
 #
@@ -12,15 +11,18 @@
 #   s31-desktop server     just the server, to test paint in isolation
 #   s31-desktop stop
 #
-# /dev/fb0 on this board is the DRM driver's fbdev emulation, so the server
-# inherits the reduced render size (see the lcd driver's render= parameter) and
-# the 1:1 centred placement rather than a stretched upscale. Do not pass
-# -screen: forcing a size here would silently undo that.
+# This is Xorg with the modesetting driver, talking to /dev/dri/card0 directly.
+# It replaced kdrive's Xfbdev, which reached the panel through fbdev emulation -
+# and that path is capped at 20 fps no matter what anything above it does,
+# because deferred I/O damages the plane from a HZ/20 timer. Going straight to
+# DRM removes the cap entirely. Everything about the mode comes from the
+# connector, so there is still no -screen here: forcing a size would undo the
+# driver's 1:1 centred placement (see its render= parameter).
 
 DISPLAY=:0
 export DISPLAY
-XSRV=/usr/bin/Xfbdev
-LOG=/tmp/xfbdev.log
+XSRV=/usr/bin/Xorg
+LOG=/tmp/xorg.log
 
 die() { echo "s31-desktop: $*" >&2; exit 1; }
 
@@ -41,8 +43,8 @@ warm_font_cache() {
 
 start_server() {
 	[ -x "$XSRV" ] || die "$XSRV missing - is the XIP overlay mounted?"
-	[ -c /dev/fb0 ] || die "/dev/fb0 missing - is DRM fbdev emulation on?"
-	pidof Xfbdev >/dev/null 2>&1 && die "Xfbdev already running"
+	[ -c /dev/dri/card0 ] || die "/dev/dri/card0 missing - is the DRM driver up?"
+	pidof Xorg >/dev/null 2>&1 && die "Xorg already running"
 	warm_font_cache
 
 	# Name the font path explicitly. The default list also contains 100dpi,
@@ -51,37 +53,31 @@ start_server() {
 	# drops it with a warning. Only misc has real fonts here - 334 pcf files
 	# and the "fixed" alias every Xt application needs to start.
 	FP=/usr/share/fonts/X11/misc
-	args="-fb /dev/fb0 -dpi 100 -nolisten tcp -softCursor -seat seat0"
-	[ -f "$FP/fonts.dir" ] && args="$args -fp $FP"
-	# No device arguments. -seat makes kdrive call config_init(), which is
-	# its udev path, and that handles both enumeration at startup and
-	# hot-plug afterwards. Verified on hardware: 3 input fds at startup with
-	# no arguments at all, 4 after plugging one in, pointer moving in both
-	# cases.
+	# -keeptty is not optional here. Without it Xorg looks for a free VT to
+	# take over, and this kernel is built without VT support at all - there
+	# is no /dev/tty0 to open, so the server exits before it ever probes the
+	# GPU. With it, Xorg stays on the tty it was launched from.
 	#
-	# An earlier version of this script named every device explicitly,
-	# because a test appeared to show udev delivering no events. That test
-	# was wrong: it hot-plugged a virtual mouse into a server already wedged
-	# by repeated add/remove cycles, which makes it log "Failed to open evdev
-	# device" and ignore the device from then on. On a fresh server udev
-	# works. If this looks broken again, restart the server before concluding
-	# anything - and note that naming devices by hand cannot work anyway,
-	# because a wireless keyboard publishes a phantom mouse and a mouse
-	# receiver publishes a consumer-control keyboard, so which node is "real"
-	# depends on USB enumeration order.
+	# No input device arguments: Xorg's config backend enumerates via udev
+	# and handles hot-plug, the same as kdrive's did. Naming devices by hand
+	# cannot work anyway, because a wireless keyboard publishes a phantom
+	# mouse and a mouse receiver publishes a consumer-control keyboard, so
+	# which node is "real" depends on USB enumeration order.
+	args=":0 -keeptty -dpi 100 -nolisten tcp -logfile $LOG -config /etc/X11/xorg.conf"
+	[ -f "$FP/fonts.dir" ] && args="$args -fp $FP"
 	echo "s31-desktop: $XSRV $args"
 
-	$XSRV $args >"$LOG" 2>&1 &
+	$XSRV $args >/tmp/xorg.stderr 2>&1 &
 	# The server has to create the socket before any client can connect;
 	# polling for it beats a fixed sleep, which is either racy or slow.
 	i=0
 	while [ $i -lt 100 ]; do
 		[ -S /tmp/.X11-unix/X0 ] && break
-		pidof Xfbdev >/dev/null 2>&1 || { echo "--- $LOG ---"; cat "$LOG"; die "server exited"; }
+		pidof Xorg >/dev/null 2>&1 || { echo "--- $LOG ---"; tail -30 "$LOG" 2>/dev/null; cat /tmp/xorg.stderr; die "server exited"; }
 		i=$((i+1))
 		usleep 100000 2>/dev/null || sleep 1
 	done
-	[ -S /tmp/.X11-unix/X0 ] || { echo "--- $LOG ---"; cat "$LOG"; die "no socket after 10s"; }
+	[ -S /tmp/.X11-unix/X0 ] || { echo "--- $LOG ---"; tail -30 "$LOG" 2>/dev/null; die "no socket after 10s"; }
 	echo "s31-desktop: server up on $DISPLAY"
 }
 
@@ -92,8 +88,9 @@ server)
 	# panel, the server is talking to the plane. The stipple default is
 	# hard to tell apart from a stale framebuffer.
 	xsetroot -solid steelblue 2>/dev/null && echo "s31-desktop: root painted"
-	# Xfbdev leaves the root cursor as None, so the pointer is invisible
-	# and moving it damages nothing at all - which reads as dead input.
+	# Set a real root cursor: with the root left as None the pointer is
+	# invisible and moving it damages nothing at all, which reads as dead
+	# input rather than as a missing cursor.
 	xsetroot -cursor_name left_ptr 2>/dev/null
 	;;
 all)
@@ -116,7 +113,7 @@ all)
 	echo "s31-desktop: up. 's31-desktop stop' to tear down."
 	;;
 stop)
-	for p in st xterm xfiles xcalc jwm evilwm Xfbdev; do killall "$p" 2>/dev/null; done
+	for p in st xfiles xcalc jwm Xorg; do killall "$p" 2>/dev/null; done
 	echo "s31-desktop: stopped"
 	;;
 *)

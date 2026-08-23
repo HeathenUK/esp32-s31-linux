@@ -90,18 +90,12 @@ BR2_TARGET_ROOTFS_SQUASHFS4_XZ=y
 BR2_TARGET_ROOTFS_SQUASHFS_EXTREME_COMP=y
 # BR2_TARGET_ROOTFS_TAR is not set
 
-# Weston with the DRM backend and the pixman software renderer. No mesa3d, no
-# GL and no GBM: this SoC has no GPU, and PPA is a fixed-function 2D engine that
-# glamor cannot use. See docs/weston-acceleration-plan.md.
-BR2_PACKAGE_WESTON=y
-BR2_PACKAGE_WESTON_DRM=y
-# foot: an off-the-shelf wayland-native terminal with real damage tracking,
-# for comparison against the weston toytoolkit demo client
-# foot needs a real monospace font; the image had none at all, and
-# weston-terminal was falling back to a cairo builtin.
-BR2_PACKAGE_DEJAVU=y
-BR2_PACKAGE_DEJAVU_MONO=y
-BR2_PACKAGE_FOOT=y
+# Weston and the Wayland stack are GONE. The desktop is X11: Weston's closure
+# was 6,894,592 bytes and adding the toolkit a desktop needs took it to
+# 12,322,960 against 7.4 MB of XIP flash. Kept out entirely rather than built
+# and unused - an unused package still lands in the rootfs image and still has
+# to be excluded from every staging decision by hand.
+# foot is Wayland-native and has no compositor to talk to; st replaced it.
 BR2_PACKAGE_HOST_CRAMFS=y
 BR2_PACKAGE_NCURSES=y
 BR2_PACKAGE_NCURSES_WCHAR=y
@@ -115,7 +109,8 @@ BR2_PACKAGE_BC=y
 #
 # Measured: Xfbdev 1.60 MB, X client libs 1.92 MB, FLTK 1.28 MB.
 BR2_PACKAGE_XORG7=y
-BR2_PACKAGE_CAIRO_XLIB=y
+# Cairo was for Weston's clients. Nothing in this desktop draws with it.
+# BR2_PACKAGE_CAIRO_XLIB is not set
 # FLTK is OFF. libfltk.so.1.3 has DT_NEEDED libstdc++.so.6, and
 # post-build.sh deletes libstdc++ from the target - so every byte of it was
 # unloadable on the board, including the 1,323,008 it occupied in XIP image 2.
@@ -128,7 +123,22 @@ BR2_PACKAGE_CAIRO_XLIB=y
 # apps" means unantialiased fixed-pitch bitmaps and DejaVu is unreachable.
 # It is 83 KB; freetype and fontconfig are already paid for by the server.
 BR2_PACKAGE_XLIB_LIBXFT=y
-BR2_PACKAGE_X11LIBRE_XSERVER=y
+# Xorg with the builtin modesetting driver, replacing Xfbdev. Xfbdev goes
+# through fbdev emulation and its 50 ms deferred-I/O timer, which caps any
+# client at 20 fps; modesetting talks DRM directly with dumb buffers and atomic
+# commits - exactly the path Weston used on this driver. The reason for trying
+# it is memory, not the cap: Xfbdev is 2,876 kB resident with no clients
+# connected, dominated by a single 2,456 kB anonymous mapping, and the desktop's
+# working set does not fit in 15,456 kB as a result.
+BR2_PACKAGE_XSERVER_XORG_SERVER=y
+BR2_PACKAGE_XSERVER_XORG_SERVER_MODULAR=y
+BR2_PACKAGE_XDRIVER_XF86_INPUT_EVDEV=y
+# X11Libre's Xfbdev stays built for now so the two can be compared on hardware
+# before one is removed.
+# X11Libre's Xfbdev is off: superseded by Xorg with the modesetting driver.
+# Xfbdev went through fbdev emulation, whose 50 ms deferred-I/O timer caps any
+# client at 20 fps, and was 2,876 kB resident before a single client connected.
+# BR2_PACKAGE_X11LIBRE_XSERVER is not set
 
 
 # evilwm is about 30 KB and gives real window management - move, resize, focus,

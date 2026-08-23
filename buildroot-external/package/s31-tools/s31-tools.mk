@@ -70,6 +70,8 @@ define S31_TOOLS_BUILD_CMDS
 	$(TARGET_CC) $(TARGET_CFLAGS) $(TARGET_LDFLAGS) \
 		$(@D)/xptr.c -o $(@D)/xptr -lX11
 	$(TARGET_CC) $(TARGET_CFLAGS) $(TARGET_LDFLAGS) \
+		$(@D)/xfill.c -o $(@D)/xfill -lX11
+	$(TARGET_CC) $(TARGET_CFLAGS) $(TARGET_LDFLAGS) \
 		$(@D)/inputlat.c -o $(@D)/inputlat
 	$(TARGET_CC) $(TARGET_CFLAGS) $(TARGET_LDFLAGS) \
 		$(@D)/mousebench.c -o $(@D)/mousebench
@@ -116,6 +118,7 @@ define S31_TOOLS_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0755 $(@D)/fbdump $(TARGET_DIR)/usr/sbin/fbdump
 	$(INSTALL) -D -m 0755 $(@D)/fbdefio $(TARGET_DIR)/usr/sbin/fbdefio
 	$(INSTALL) -D -m 0755 $(@D)/xptr $(TARGET_DIR)/usr/sbin/xptr
+	$(INSTALL) -D -m 0755 $(@D)/xfill $(TARGET_DIR)/usr/sbin/xfill
 	$(INSTALL) -D -m 0755 $(@D)/inputlat $(TARGET_DIR)/usr/sbin/inputlat
 	$(INSTALL) -D -m 0755 $(@D)/mousebench $(TARGET_DIR)/usr/sbin/mousebench
 	$(INSTALL) -D -m 0755 $(@D)/swapbench $(TARGET_DIR)/usr/sbin/swapbench
