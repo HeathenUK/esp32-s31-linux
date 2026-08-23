@@ -4,7 +4,67 @@ Read this first after a context reset. It records what is true of the board
 right now, what is in flight, and — most importantly — what has already been
 tried and failed, so it is not tried again.
 
-## Where the desktop stands
+## Where the desktop stands (2026-08-23)
+
+**Xorg + modesetting, jwm, st, xcalc, xfiles.** Weston, foot, X11Libre's Xfbdev
+and cairo have been removed from the build entirely. Everything below the next
+`---` describes the *current* stack; the Weston material further down is kept
+because its measurements and dead ends are still instructive, but it is history.
+
+The server talks to `/dev/dri/card0` directly. That matters for one specific
+reason: Xfbdev reached the panel through DRM's fbdev emulation, whose deferred
+I/O timer fires at `HZ/20` and caps **any** fbdev client at 20 fps regardless of
+what sits above it. That ceiling is gone.
+
+What the display path actually costs, measured with `xfill` (one long-lived
+connection doing nothing but full-root damage, XSync per fill - so no process
+startup is included):
+
+    bare server           4.6 ms median   211 fps sustained
+    + jwm + st            9.2 ms median    max 58 ms
+    + xcalc + xfiles     32.1 ms median    max 1174.9 ms   <- the problem
+    after idling          4.6 ms median   190 fps (clients page out)
+
+**The graphics stack is not the bottleneck.** The server repaints the whole
+screen 211 times a second. Two things dominate instead:
+
+1. **Process startup: 330 ms for one `xsetroot`** - about 50x the cost of
+   drawing. Launching is the slow part of this desktop, not rendering.
+2. **The swap tail.** With four clients open ~7-9 MB is in swap and a single
+   repaint could exceed a second. zram now absorbs it: max 1174.9 -> 65.5 ms.
+   See `etc/s31-swap.conf` for the table and the trade it costs.
+
+Memory, measured on the board rather than assumed:
+
+    Xorg, no clients      3,092 kB anon   (Xfbdev was 2,876 kB - a wash)
+    + jwm                   +448 kB
+    + st                    +660 kB
+    unreclaimable slab     4,352 kB       <- 28% of RAM, largest single item
+    of which kernfs_node     764 kB (8,878 objects), inode 364, dentry 272
+
+XIP is working exactly as intended: `/usr/bin/Xorg` maps 1,832 kB at **Rss 0**,
+as do libc, libfreetype and libpixman. Binaries in flash cost no RAM at all.
+
+Things measured and rejected, so they are not retried:
+
+- **Pruning X extensions** (DRI2/DRI3/Present/XVideo/RECORD/DGA/VidMode/
+  X-Resource/DBE). X anon 6,040 -> 6,028 kB. Noise. The 6 MB is heap, not
+  extension code.
+- **`vm.vfs_cache_pressure=500`** to make the kernel drop metadata instead of
+  swapping X. Made it worse and wedged the board - with root on a slow card,
+  every dropped dentry has to be re-read.
+- **Investigating slab further** needs `CONFIG_SLUB_DEBUG`, which is mutually
+  exclusive with the `CONFIG_SLUB_TINY` this board ships, so the diagnostic
+  changes the allocator being diagnosed. A throwaway build was used once to get
+  the breakdown above and then reverted.
+
+Worth knowing: `SReclaimable` reads **0** under `SLUB_TINY` even with ~1.3 MB of
+dentry/inode cache present, so `MemAvailable` understates what is really
+reclaimable here.
+
+---
+
+## Historical: the Weston era
 
 Weston runs on the panel. Behaviour is BIMODAL, not uniformly slow. Measured
 2026-08-20, desktop-shell, uinput injection, detector null-validated (see below):
