@@ -580,3 +580,40 @@ diagnostic build, not a shipping one.
 The genuine 6.12 -> 7.1 memory gain (+1116 kB MemAvailable, measured with the
 same script at the same point) comes from the kernel's own allocator and
 memory-management work, not from anything configurable.
+
+
+## 7.3: actively worse for this board
+
+7.3 is in the merge window now. Checked against mainline since v7.2:
+
+- **`riscv: further remove XIP`** (Jisheng Zhang, 2026-08-07, 4 files -148/+3)
+  is *in* 7.3. It deletes `vmlinux-xip.lds.S` and the remaining scaffolding that
+  7.2 still carried orphaned. **Our revert would become two commits instead of
+  one.**
+- **The riscv content is server-class**: Ssqosid (QoS), Ssccfg/Smcdeleg (counter
+  delegation), Smcsrind/Sscsrind (indirect CSR access), plus cpufeature/hwprobe
+  entries for Ziccamoa, Ziccif, Ziccrse, Za64rs, Zicclsm. None of it means
+  anything on a 15.4 MB microcontroller.
+- **The mm content is routine**: page-allocator refactors, lockdep annotations,
+  uffd-wp batching, memory hotplug. Nothing aimed at footprint.
+- `riscv: Standardize extension capitalization` touches nine files including
+  `cpufeature.c`, so it will likely conflict with our F-without-D patch.
+
+**The trend is the point.** XIP went in 7.1 and its remains go in 7.3; each
+release makes the downstream revert larger, while offering this board nothing.
+The cost curve rises monotonically and the benefit curve is flat.
+
+## Where to rest
+
+	6.18.46 LTS   works, maintained into 2027+   <- longevity
+	7.1.10        works, newest usable           <- current board state
+	7.2           builds, silent before console
+	7.3           adds cost, no benefit
+
+7.1 is a stable series, not LTS, so it will EOL when 7.2/7.3 mature. 6.18 is the
+LTS and the sensible resting place if the board is to be left alone.
+
+**Note: the 6.18 tree does not yet carry the F-without-D fix.** It was found
+while working on 7.1, so a 6.18 image built today still has the FPU disabled and
+will SIGILL on any floating-point userspace. Apply
+`scripts/apply-s31-fixes-7x.py` to that tree before using it.
