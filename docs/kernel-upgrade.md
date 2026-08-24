@@ -172,7 +172,61 @@ Two routes, and they are genuinely different in kind:
 Route 2 is worth measuring rather than assuming, now that the desktop is gone
 and text mode has ~5 MB free.
 
-## Status: boots to userspace, init segfaults
+## Status: 6.18 boots and runs
+
+	kernel     6.18.46
+	xip        3 cramfs mounts, 2 overlays  (userspace still runs from flash)
+	bluetooth  hci0
+	sound      Korvo1, simple-card
+	drm        card0
+	wifi       associated to the AP
+	opkg       0.7.0
+	memory     15 MB total, 6 MB available
+
+### The bug that stopped it: a signal frame sized without our record
+
+`init` reached userspace, ran the first line of `/init`, and then died with
+`epc = ra = 0`. Three things had to be established to find it, and two of the
+obvious suspects were wrong:
+
+1. Tracing `START_THREAD` showed exec was **fine** - `/init` and `/bin/mount`
+   both got sane entry points and load biases. So it was not PIE loading.
+2. The oops register dump had `a7 = 0x5f` = **95, `waitid`** - so init was
+   asleep waiting for the `mount` child, and died on the way *out* of a
+   syscall, not in userspace code.
+3. Tracing `ra`/`epc` across syscalls for pid 1 caught the culprit:
+   **syscall 139, `rt_sigreturn`**. init took SIGCHLD, ran a handler, and
+   returning from it restored a corrupt context.
+
+The cause: `get_rt_frame_size()` had lost its
+
+	total_context_size += ESP32S31_EXT_SC_SIZE;
+
+`save_esp32s31_ext_state()` appends an extension record to every signal frame,
+so the frame must be sized for it. Without that line the record is written
+**past the end of the frame, over the user stack**, and `rt_sigreturn` then
+restores whatever survived.
+
+It went missing because upstream changed the adjacent line from `has_vector()`
+to `has_vector() || has_xtheadvector()`, so the hunk's context no longer
+matched and the auto-applier skipped it - a one-line omission that only
+manifests on the first signal a process receives.
+
+**The lesson is about the tooling, not the kernel:** a patch hunk that fails to
+apply silently is far more expensive than one that fails loudly. Count `.rej`
+files, and when a file is partially applied by hand, diff the result against the
+old tree rather than assuming the remaining hunks were cosmetic.
+
+### Still open
+
+- **`Illegal instruction` (SIGILL)** from some userspace - seen in
+  `dbus-daemon` inside `libexpat`, and from `ifup`. The affected commands still
+  complete (Wi-Fi associates), so it is not fatal, but it is real and
+  unexplained. Suspect the F-extension or custom-extension state, since the
+  ABI is ilp32 on a hart that has `f`.
+- An `awk` SIGSEGV early in boot, possibly the same cause.
+
+## Superseded: what it looked like before the fix
 
 With the runtime-const fix, 6.18 boots through the whole kernel - DRM, the
 hosted radio transport, `wlan0`, `hci0`, microSD, EXT4 - and then:

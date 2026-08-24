@@ -15,16 +15,12 @@ diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users
  subdir-y += thead
 diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port618/arch/riscv/configs/esp32s31_defconfig linux-618-port/arch/riscv/configs/esp32s31_defconfig
 --- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port618/arch/riscv/configs/esp32s31_defconfig	2026-08-23 21:38:03.024662418 +0100
-+++ linux-618-port/arch/riscv/configs/esp32s31_defconfig	2026-08-24 10:44:35.960885557 +0100
-@@ -109,7 +109,7 @@
- CONFIG_FPU=y
- 
- # Kernel command line
--CONFIG_CMDLINE="console=tty0 console=ttyS0,1000000n8 root=/dev/mmcblk0 rootfstype=ext4 rw rootwait init=/init profile=6"
-+CONFIG_CMDLINE="earlycon=esp32s31uart,mmio32,0x2038a000,1000000n8 console=tty0 console=ttyS0,1000000n8 root=/dev/mmcblk0 rootfstype=ext4 rw rootwait init=/init profile=6"
- CONFIG_CMDLINE_FORCE=y
- 
- # Built-in DTB (no external loader needed)
++++ linux-618-port/arch/riscv/configs/esp32s31_defconfig	2026-08-24 13:14:19.074505395 +0100
+@@ -318,3 +318,4 @@
+ # kernel functions cost what - and without it, attributing cost is guesswork
+ # against a +/-40% noise floor.
+ CONFIG_PROFILING=y
++CONFIG_DEBUG_KERNEL=y
 diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port618/arch/riscv/include/asm/cacheflush.h linux-618-port/arch/riscv/include/asm/cacheflush.h
 --- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port618/arch/riscv/include/asm/cacheflush.h	2026-08-24 10:12:11.811057686 +0100
 +++ linux-618-port/arch/riscv/include/asm/cacheflush.h	2026-08-24 10:13:44.014169337 +0100
@@ -89,6 +85,25 @@ diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users
 +#endif /* CONFIG_XIP_KERNEL */
 +
  #endif /* _ASM_RISCV_RUNTIME_CONST_H */
+diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port618/arch/riscv/kernel/signal.c linux-618-port/arch/riscv/kernel/signal.c
+--- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port618/arch/riscv/kernel/signal.c	2026-08-24 10:12:11.824226840 +0100
++++ linux-618-port/arch/riscv/kernel/signal.c	2026-08-24 13:09:13.483355991 +0100
+@@ -283,6 +283,15 @@
+ 		if (cal_all || riscv_v_vstate_query(task_pt_regs(current)))
+ 			total_context_size += riscv_v_sc_size;
+ 	}
++#ifdef CONFIG_SOC_ESP32S31
++	/*
++	 * save_esp32s31_ext_state() always appends a record, so the frame has
++	 * to be sized for it. Without this the record is written past the end
++	 * of the frame, over the user stack, and rt_sigreturn then restores a
++	 * corrupt context - which shows up as a jump to 0 on the first signal.
++	 */
++	total_context_size += ESP32S31_EXT_SC_SIZE;
++#endif
+ 
+ 	frame_size += total_context_size;
+ 
 diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port618/arch/riscv/mm/cacheflush.c linux-618-port/arch/riscv/mm/cacheflush.c
 --- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port618/arch/riscv/mm/cacheflush.c	2026-08-24 10:12:11.825485464 +0100
 +++ linux-618-port/arch/riscv/mm/cacheflush.c	2026-08-24 10:13:44.014352795 +0100
