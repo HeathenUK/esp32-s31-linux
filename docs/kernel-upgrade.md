@@ -67,16 +67,47 @@ compiler then found, was genuine API churn:
 All of it is in `patches/0001-esp32s31-6.18-api-fixes.patch`: 20 files, 387
 lines.
 
-## Status
+## Making it fit: done
 
-The 6.18 kernel **builds**. It is 5,946,229 bytes against a 5,636,096 byte
-partition - 310 KB over - because 6.18 is larger than 6.12 and this
-configuration carries sound, Bluetooth and Wi-Fi.
+6.18 is bigger than 6.12, and this configuration carries sound, Bluetooth and
+Wi-Fi. The space came from the userspace XIP image, which was 6.9 MB of Xorg,
+its modules and X11 fonts for a board that now boots to text mode:
 
-The space exists: the userspace XIP image is 6.9 MB of Xorg, its modules and
-X11 fonts, and the board now boots to text mode. Trimming `XIP_ROOTS` to what
-a text system actually runs frees several megabytes to move into the kernel
-partition.
+	XIP image   6,926,336 -> 3,596,288 bytes   (XIP_ROOTS trimmed to the text set)
+	linux       0x560000  -> 0x620000          6,422,528 bytes
+	rootfs      0x960000/0x6A0000 -> 0xA20000/0x5E0000
 
-**Not yet booted on hardware.** Building is not working; see
-`docs/current-state.md` for what has to be re-verified after any kernel change.
+The 6.18 kernel is 5,966,709 bytes and now has 455 KB spare. The desktop root
+set is kept as `XIP_ROOTS_DESKTOP` - it was tuned by measurement and should not
+be re-derived.
+
+**This layout is live and verified with the 6.12 kernel**: Wi-Fi, sound, both
+cramfs XIP mounts and opkg all work on it.
+
+## Status: builds and fits, does not boot
+
+The 6.18 kernel produces **no console output at all**. The loader runs, reaches
+its usual hand-off point and jumps; with 6.12 the "Linux version" banner appears
+at exactly that instant, and with 6.18 nothing follows.
+
+Established so far:
+
+- **Not the partition geometry.** The flashed table decodes exactly as intended,
+  and the 6.12 kernel boots from the same layout.
+- **Not a loader restart loop.** One boot banner, no loader error, no reset.
+- **Not the image header.** Both images carry the same `RISCV` magic and header
+  layout; only the size field differs.
+- **Not a missing device tree - but that *was* one bug.**
+  `CONFIG_BUILTIN_DTB_SOURCE` was renamed `CONFIG_BUILTIN_DTB_NAME`, so the
+  Makefile's `--set-str` set a symbol that no longer exists and the first
+  attempt linked **no DTB at all**. The Makefile now sets both names. Fixing it
+  grew the image by the size of the DTB, and changed nothing about the silence.
+- **It dies before `earlycon`.** Adding
+  `earlycon=esp32s31uart,mmio32,0x2038a000,1000000n8` produced no output either,
+  so it is failing in early assembly or the XIP page-table setup, before console
+  init.
+
+The next place to look is the XIP early-boot path - `head.S`, and the 4K
+leaf-mapping code in `create_kernel_page_table()` that this board needs because
+RV32 folds the PMD. A `.text.fast`-style direct UART poke in `head.S` would
+localise it, since there is no console to print from yet.

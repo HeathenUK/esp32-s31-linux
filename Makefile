@@ -183,6 +183,7 @@ linux: toolchain | $(LINUX_OUT)
 	$(MAKE) -C $(LINUX_DIR) O=$(LINUX_OUT) ARCH=riscv CROSS_COMPILE="$(CROSS_COMPILE)" $(DEFCONFIG)
 	$(LINUX_DIR)/scripts/config --file $(LINUX_OUT)/.config \
 		--set-str BUILTIN_DTB_SOURCE "espressif/esp32s31_generic" \
+		--set-str BUILTIN_DTB_NAME "espressif/esp32s31_generic" \
 		--enable RISCV_ISA_C \
 		--enable PROFILING \
 		--disable HZ_250 \
@@ -273,12 +274,12 @@ coremark: rootfs
 
 # Keep this decimal because POSIX test(1) and truncate(1) do not accept the
 # partition table's 0x-prefixed value.
-ROOTFS_PARTITION_SIZE ?= 6946816
+ROOTFS_PARTITION_SIZE ?= 6160384
 XIP2_PARTITION_SIZE ?= 1441792
 # The XIP kernel must start on a 4-MiB Sv32 megapage boundary, so the linux
 # partition stays at 0x400000 and rootfs takes every byte the kernel does not
 # need. Keep this in step with bootloader/partitions.csv.
-LINUX_PARTITION_SIZE ?= 5636096
+LINUX_PARTITION_SIZE ?= 6422528
 
 # Flashing knobs. These were hardcoded to /dev/ttyUSB0 and a bare `esptool`,
 # which is a Linux-only assumption: on macOS the adapter is /dev/cu.usbserial-*
@@ -366,7 +367,16 @@ XIP_ROOTFS_IMG := $(BUILD_DIR)/rootfs-xip.cramfs
 # alike. Staging it beside FLTK instead would put it in the smaller image and
 # duplicate nothing, but leave the shared stack in the partition with the least
 # room. Measured: this is what makes both images fit.
-XIP_ROOTS ?= usr/bin/Xorg \
+# Text mode: the desktop is put aside, so the XIP image holds what a text
+# system actually runs. This dropped the image from 6,926,336 to 3,596,288
+# bytes, and that 3.3 MB is what let the kernel partition grow enough for 6.18.
+#
+# To go back to X, use the desktop set below - it is kept because it was tuned
+# by measurement, not guesswork (see the note above about which binaries go in
+# which image, and why libXft belongs here).
+XIP_ROOTS ?= bin/busybox usr/bin/opkg usr/sbin/wpa_supplicant usr/sbin/iw
+
+XIP_ROOTS_DESKTOP := usr/bin/Xorg \
 	usr/lib/xorg/modules/drivers/modesetting_drv.so \
 	usr/lib/xorg/modules/input/evdev_drv.so \
 	usr/lib/xorg/modules/libshadow.so \
