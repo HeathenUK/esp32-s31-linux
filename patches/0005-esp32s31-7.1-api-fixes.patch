@@ -16,13 +16,13 @@ diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users
  subdir-y += thead
 diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port71xip/arch/riscv/configs/esp32s31_defconfig linux-71-port/arch/riscv/configs/esp32s31_defconfig
 --- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port71xip/arch/riscv/configs/esp32s31_defconfig	2026-08-23 21:38:03.024662418 +0100
-+++ linux-71-port/arch/riscv/configs/esp32s31_defconfig	2026-08-24 14:26:12.481145910 +0100
++++ linux-71-port/arch/riscv/configs/esp32s31_defconfig	2026-08-24 15:37:09.089233049 +0100
 @@ -109,7 +109,7 @@
  CONFIG_FPU=y
  
  # Kernel command line
 -CONFIG_CMDLINE="console=tty0 console=ttyS0,1000000n8 root=/dev/mmcblk0 rootfstype=ext4 rw rootwait init=/init profile=6"
-+CONFIG_CMDLINE="dw_mmc.lost_irq_poll=0 console=tty0 console=ttyS0,1000000n8 root=/dev/mmcblk0 rootfstype=ext4 rw rootwait init=/init profile=6"
++CONFIG_CMDLINE="dw_mmc.lost_irq_poll=0 dw_mmc.low_pwr=0 console=tty0 console=ttyS0,1000000n8 root=/dev/mmcblk0 rootfstype=ext4 rw rootwait init=/init profile=6"
  CONFIG_CMDLINE_FORCE=y
  
  # Built-in DTB (no external loader needed)
@@ -258,16 +258,17 @@ diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users
  		.of_match_table = esp32s31_axi_of_match,
 diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port71xip/drivers/gpu/drm/espressif/esp32s31-lcd.c linux-71-port/drivers/gpu/drm/espressif/esp32s31-lcd.c
 --- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port71xip/drivers/gpu/drm/espressif/esp32s31-lcd.c	2026-08-23 20:19:50.264325652 +0100
-+++ linux-71-port/drivers/gpu/drm/espressif/esp32s31-lcd.c	2026-08-24 14:16:09.387280497 +0100
-@@ -49,6 +49,7 @@
++++ linux-71-port/drivers/gpu/drm/espressif/esp32s31-lcd.c	2026-08-24 15:45:07.667005502 +0100
+@@ -49,6 +49,8 @@
  #include <uapi/drm/esp32s31_drm.h>
  #include <drm/drm_drv.h>
  #include <drm/drm_fb_dma_helper.h>
 +#include <drm/clients/drm_client_setup.h>
++#include <drm/drm_print.h>
  #include <drm/drm_fbdev_dma.h>
  #include <drm/drm_gem_dma_helper.h>
  #include <drm/drm_gem_framebuffer_helper.h>
-@@ -2383,6 +2384,7 @@
+@@ -2383,6 +2385,7 @@
  	.ioctls			= esp32s31_lcd_ioctls,
  	.num_ioctls		= ARRAY_SIZE(esp32s31_lcd_ioctls),
  	DRM_GEM_DMA_DRIVER_OPS_VMAP,
@@ -275,7 +276,7 @@ diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users
  	.name			= DRIVER_NAME,
  	.desc			= "Espressif ESP32-S31 LCD_CAM",
  	.major			= 1,
-@@ -2743,8 +2745,8 @@
+@@ -2743,8 +2746,8 @@
  	 * every flip event carrying an invented timestamp, and a compositor
  	 * scheduling from it repainted about once every 12 seconds.
  	 */
@@ -286,7 +287,7 @@ diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users
  
  	lcd->irq = platform_get_irq(pdev, 0);
  	if (lcd->irq < 0)
-@@ -2891,7 +2893,7 @@
+@@ -2891,7 +2894,7 @@
  	if (ret)
  		return ret;
  
@@ -295,6 +296,18 @@ diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users
  	return 0;
  }
  
+diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port71xip/drivers/gpu/drm/Kconfig linux-71-port/drivers/gpu/drm/Kconfig
+--- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port71xip/drivers/gpu/drm/Kconfig	2026-08-24 14:15:11.617842784 +0100
++++ linux-71-port/drivers/gpu/drm/Kconfig	2026-08-24 15:44:40.947407657 +0100
+@@ -343,6 +343,8 @@
+ source "drivers/gpu/drm/tidss/Kconfig"
+ source "drivers/gpu/drm/tilcdc/Kconfig"
+ source "drivers/gpu/drm/tiny/Kconfig"
++
++source "drivers/gpu/drm/espressif/Kconfig"
+ source "drivers/gpu/drm/tve200/Kconfig"
+ source "drivers/gpu/drm/tyr/Kconfig"
+ source "drivers/gpu/drm/udl/Kconfig"
 diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port71xip/drivers/gpu/drm/Makefile linux-71-port/drivers/gpu/drm/Makefile
 --- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port71xip/drivers/gpu/drm/Makefile	2026-08-24 14:15:11.618621373 +0100
 +++ linux-71-port/drivers/gpu/drm/Makefile	2026-08-24 14:16:09.158830241 +0100
@@ -331,7 +344,7 @@ diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users
  obj-$(CONFIG_STARFIVE_JH8100_INTC)	+= irq-starfive-jh8100-intc.o
 diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port71xip/drivers/mmc/host/dw_mmc.c linux-71-port/drivers/mmc/host/dw_mmc.c
 --- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port71xip/drivers/mmc/host/dw_mmc.c	2026-08-24 14:15:11.643437759 +0100
-+++ linux-71-port/drivers/mmc/host/dw_mmc.c	2026-08-24 14:40:53.987889606 +0100
++++ linux-71-port/drivers/mmc/host/dw_mmc.c	2026-08-24 15:40:45.495468710 +0100
 @@ -959,14 +959,47 @@
  			 * isn't still owned by IDMAC as IDMAC's write
  			 * ops and CPU's read ops are asynchronous.
@@ -388,6 +401,19 @@ diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users
  
  			des0 = IDMAC_DES0_OWN | IDMAC_DES0_DIC | IDMAC_DES0_CH;
  			if (is_64bit)
+@@ -995,10 +1028,10 @@
+ 			/* Save pointer to the last descriptor */
+ 			if (is_64bit) {
+ 				desc64_last = desc64;
+-				desc64++;
++				desc64 += 4;
+ 			} else {
+ 				desc_last = desc;
+-				desc++;
++				desc += 4;
+ 			}
+ 		}
+ 	}
 @@ -1014,6 +1047,18 @@
  		desc_last->des0 |= cpu_to_le32(IDMAC_DES0_LD);
  	}
@@ -407,6 +433,15 @@ diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users
  	return 0;
  err_own_bit:
  	/* restore the descriptor chain as it's polluted */
+@@ -1539,7 +1584,7 @@
+ 
+ 		/* enable clock; only low power if no SDIO */
+ 		clk_en_a = SDMMC_CLKEN_ENABLE;
+-		if (!test_bit(DW_MMC_CARD_NO_LOW_PWR, &host->flags))
++		if (low_pwr && !test_bit(DW_MMC_CARD_NO_LOW_PWR, &host->flags))
+ 			clk_en_a |= SDMMC_CLKEN_LOW_PWR;
+ 		mci_writel(host, CLKENA, clk_en_a);
+ 
 @@ -3226,6 +3271,79 @@
  	return IRQ_HANDLED;
  }
@@ -496,7 +531,7 @@ diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users
  
  	ret = mmc_add_host(mmc);
  	if (ret)
-@@ -3726,6 +3844,8 @@
+@@ -3726,8 +3844,11 @@
  	timer_setup(&host->cmd11_timer, dw_mci_cmd11_timer, 0);
  	timer_setup(&host->cto_timer, dw_mci_cto_timer, 0);
  	timer_setup(&host->dto_timer, dw_mci_dto_timer, 0);
@@ -504,7 +539,10 @@ diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users
 +		      CLOCK_MONOTONIC, HRTIMER_MODE_REL);
  
  	spin_lock_init(&host->lock);
++	spin_lock_init(&host->irq_handler_lock);
  	spin_lock_init(&host->irq_lock);
+ 
+ 	dw_mci_init_fault(host);
 diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port71xip/drivers/mmc/host/dw_mmc.h linux-71-port/drivers/mmc/host/dw_mmc.h
 --- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port71xip/drivers/mmc/host/dw_mmc.h	2026-08-24 14:15:11.644574351 +0100
 +++ linux-71-port/drivers/mmc/host/dw_mmc.h	2026-08-24 14:16:09.142043601 +0100

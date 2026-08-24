@@ -371,3 +371,80 @@ confirmed set. The residual fault is somewhere else in the 7.1 dw_mmc rework.
 
 **7.1 is not yet usable.** It is much closer than 7.2, and the failure is now
 confined to one driver rather than "the kernel is silent".
+
+
+## 7.1.10 works
+
+	kernel     7.1.10
+	xip        2 cramfs mounts, 2 overlays
+	drm        card0
+	sound      Korvo1, simple-card
+	bluetooth  hci0
+	wifi       associated
+	opkg       0.7.0
+	rootfs     ext4 on microSD, mounted rw
+
+Four more faults had to be found, and every one of them was a **silently
+dropped patch hunk** caused by 7.1 restructuring the code the BSP patches.
+
+### The dw_mmc slot refactor, in detail
+
+7.1 removed `struct dw_mci_slot` and merged `dw_mci_prepare_desc64`/`desc32`
+into one `dw_mci_prepare_desc()`. That broke four things:
+
+1. **The descriptor writeback** at the end of preparation. Without it the IDMAC
+   reads stale descriptors: `mintsts=0x200` (DRTO) and "error -110 whilst
+   initialising SD card".
+2. **The OWN-bit poll.** 7.1 replaced the open-coded loop with
+   `readl_poll_timeout_atomic()`, which reads the descriptor without
+   invalidating - so the IDMAC's clear of OWN is invisible and the poll spins on
+   a stale value until it times out. Restored as a noncoherent branch.
+3. **`spin_lock_init(&host->irq_handler_lock)`.** The lock is declared and taken
+   by our budget-loop handler on every interrupt, but its initialiser was
+   dropped. It survived only because `devm_kzalloc()` happens to zero it.
+4. **The descriptor stride - the one that actually mattered.** The BSP spaces
+   descriptors `desc += 4`, i.e. **one per 64-byte cache line**, so a CPU write
+   to one descriptor cannot clobber a neighbour the engine owns. This is a
+   *four-part coordinated change*: ring capacity
+   (`DESC_RING_BUF_SZ / (sizeof(desc) * 4)`), the forward-link addresses
+   (`(i + 1) * 4`), and the advance in both prepare paths. The first three
+   applied; **the advance did not**, so `dw_mci_idmac_init()` laid the ring out
+   with 64-byte spacing while `prepare_desc()` walked it in 16-byte steps and
+   filled descriptors the chain never pointed at.
+
+With those fixed, EXT4 mounts and the system boots. Two retried `data error`
+lines remain per boot and the filesystem is clean afterwards.
+
+### And the DRM driver was not being built at all
+
+`drivers/gpu/drm/Kconfig` had lost its `source "drivers/gpu/drm/espressif/Kconfig"`
+line, so `CONFIG_DRM_ESP32S31_LCD` did not exist and the driver was silently
+absent - which is why 7.0 and the first 7.1 boots had no `/dev/dri`. It also
+needs `#include <drm/drm_print.h>` now, since `drm_warn`/`drm_info`/`drm_err`
+no longer arrive transitively.
+
+**Counting call sites against a known-good tree is what found all of these** -
+that, and one `defined but not used` warning. The patch tooling reported a
+clean apply every time.
+
+## 7.2: still silent
+
+7.2 now builds **with DRM enabled** (6,205,513 bytes, 217 KB free), which
+required one more API change: `struct drm_atomic_state` is renamed
+`drm_atomic_commit` throughout the plane-helper path. Note the earlier "7.2
+builds" claim was weaker than it looked - DRM was not being compiled at all.
+
+It still produces no console output. Ruled out with evidence: the XIP revert
+(7.1 boots with the same revert), the dw_mmc refactor, DRM, the partition
+geometry, the image header, and the config delta against working 7.1 - which is
+now down to `ARCH_USERFLAGS`, `GENERIC_BITREVERSE`, `NET_VENDOR_ALIBABA` and the
+SBI earlycon symbols. The `GENERIC_LIB_*DI3` difference was checked and is
+benign: both kernels define `__ashldi3`/`__ashrdi3`/`__lshrdi3`.
+
+`CONFIG_ARCH_USERFLAGS="-march=rv32g -mabi=ilp32d"` appears in 7.2 and not 7.1.
+`rv32g` implies **D**, and this hart has `f` without `d`. That is worth chasing -
+if it reaches the vDSO, every userspace call into it would trap - but it does
+not obviously explain a hang before console init.
+
+**7.2 needs a real early-boot channel** (OpenSBI console driver, or JTAG) rather
+than another hypothesis.
