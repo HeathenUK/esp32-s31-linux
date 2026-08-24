@@ -741,3 +741,33 @@ bits are masked during IDMAC transfers and only the PIO path ever writes them
 back, so the condition is permanently true during DMA) but it was a guess at a
 symptom, and with `pending` fixed the poll timer is no longer hot. Left alone
 deliberately; revisit only with a measurement.
+
+## Does 7.1's swap rework buy us anything? Measured: no
+
+7.1 carries the swap-table rework (`mm/swap_table.h` exists; 6.12 has no such
+file), which replaces the flat `swap_map` byte array and the separate swap
+cgroup array with per-cluster tables allocated on demand. It is real and we get
+it for free. It is also, here, worth nothing measurable, for two reasons.
+
+**We barely swap.** In text mode the board runs with a 64 MB SD swapfile
+(`ZRAM_MB=0`, `SD_SWAP=1`) of which **36 kB is in use**, against 5.8 MB
+MemAvailable. There is no swap traffic for a faster swap path to speed up. The
+rework's wins - cheaper swap-cache lookup, less lock contention - are aimed at
+many-core servers under swap pressure, which is the opposite of this board.
+
+**The static saving is inside the noise.** Attaching and detaching the swapfile
+three times per kernel, reading MemFree either side:
+
+	          attach cost (kB)
+	 6.12       24, 56, 24
+	 7.1        16, 40, 24
+
+The ranges overlap; there is no signal. That is unsurprising in hindsight -
+`swap_map` for 64 MB of swap is 16 kB, so the most the old scheme could have
+been wasting was tens of kilobytes.
+
+**Where it would matter** is a desktop under memory pressure, which is the load
+that made swap interesting in the first place and which is currently set aside.
+If X comes back, re-measure then rather than assuming this result carries over -
+and note that the earlier zram decision flipped once the thing it was
+compensating for was fixed, so neither result is permanent.
