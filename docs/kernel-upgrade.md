@@ -515,3 +515,68 @@ cleanly. The MemAvailable figure is the one to act on.
 
 An earlier single 6.12 run read 997.55, below the entire five-run range, which
 is the usual reminder that one run is not a measurement.
+
+
+## Does 7.2 or HEAD offer more CPU or RAM?
+
+Short answer: **no material gain over 7.1, and the one promising lever measures
+far smaller than it looks.**
+
+### What 7.2 actually adds
+
+- **New MM options are hardening, not savings.** The only `mm/Kconfig` symbols
+  7.2 adds over 7.1 are `KMALLOC_PARTITION_CACHES/RANDOM/TYPED`, which partition
+  kmalloc caches against heap exploits. They *cost* memory.
+- **`arch/riscv/mm` changes are three files and mostly cosmetic**: a
+  `dev_assign_dma_coherent()` rename, a `new_vmalloc[]` array that becomes
+  64-bit-only (a few bytes on RV32), and a swiotlb refinement. **We allocate no
+  swiotlb at all**, so the last one buys nothing here.
+
+### The one real difference: PAGE_BLOCK_MAX_ORDER
+
+`CONFIG_PAGE_BLOCK_MAX_ORDER` exists in **7.1 and 7.2 but not 6.12**. It sets
+the pageblock order independently of `MAX_PAGE_ORDER`, and
+`CMA_MIN_ALIGNMENT_PAGES` is `pageblock_nr_pages` - so it controls the
+granularity of the CMA pool.
+
+This is exactly what the framebuffer node in `esp32s31.dtsi` says is
+impossible: "Shrinking it is also not possible without patching
+ARCH_FORCE_MAX_ORDER into arch/riscv/Kconfig, which does not define it." That
+remains true (no riscv version defines it), but `PAGE_BLOCK_MAX_ORDER` reaches
+the same result from the other side. With `=8` the granularity drops from 4 MiB
+to 1 MiB and a 2 MiB pool is accepted, where 3 MiB was previously rejected
+outright.
+
+**And it is worth almost nothing.** Measured, fresh boot and 25 s settle per arm:
+
+	                4 MiB CMA    2 MiB CMA
+	MemAvailable      5684 kB      5820 kB    +136 kB
+	MemFree           2680 kB      2744 kB
+	CmaTotal/CmaFree  4096/404     2048/640
+	Slab              4380 kB      4232 kB
+
+The boot line makes it look like +2 MB ("13068K/16384K available" against
+"11020K"), and that is misleading: the pool is `reusable`, so the kernel already
+lends free CMA to movable allocations. `CmaFree` was only 404 kB of 4096 - the
+other 3.6 MB was in use as page cache, and counted toward `MemAvailable` all
+along. Shrinking the pool moves memory between buckets rather than creating it.
+
+**Kept at 4 MiB.** The 136 kB does not justify losing the headroom the desktop
+would need if it ever comes back, and the DTS records why 4 MiB was chosen.
+
+### Where the memory actually is
+
+	MemTotal   15440 kB
+	Slab        4232 kB   <-- all SUnreclaim, SReclaimable = 0
+	KernelStack  328 kB
+	PageTables   296 kB
+	VmallocUsed  400 kB
+
+**Slab is the target, and it is version-independent.** `SLUB_TINY` is already
+enabled, so the obvious lever is spent. Naming the consumers needs
+`CONFIG_SLUB_DEBUG` for `/proc/slabinfo`, which costs memory itself - a
+diagnostic build, not a shipping one.
+
+The genuine 6.12 -> 7.1 memory gain (+1116 kB MemAvailable, measured with the
+same script at the same point) comes from the kernel's own allocator and
+memory-management work, not from anything configurable.
