@@ -245,6 +245,10 @@ linux: toolchain | $(LINUX_OUT)
 		--disable BPF_SYSCALL \
 		--disable BPF_JIT \
 		--disable PERF_EVENTS \
+		--disable PREEMPT_LAZY \
+		--disable PREEMPT \
+		--disable PREEMPT_VOLUNTARY \
+		--enable PREEMPT_NONE \
 		--disable IPV6
 	$(MAKE) -C $(LINUX_DIR) O=$(LINUX_OUT) ARCH=riscv CROSS_COMPILE="$(CROSS_COMPILE)" olddefconfig
 	$(MAKE) -C $(LINUX_DIR) O=$(LINUX_OUT) ARCH=riscv CROSS_COMPILE="$(CROSS_COMPILE)" \

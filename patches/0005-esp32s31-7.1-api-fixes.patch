@@ -144,6 +144,129 @@ diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users
  	frame_size += total_context_size;
  
  	frame_size = round_up(frame_size, 16);
+diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port71xip/arch/riscv/kernel/traps.c linux-71-port/arch/riscv/kernel/traps.c
+--- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port71xip/arch/riscv/kernel/traps.c	2026-08-24 14:13:52.536869497 +0100
++++ linux-71-port/arch/riscv/kernel/traps.c	2026-08-24 22:30:17.139436258 +0100
+@@ -144,6 +144,24 @@
+ 
+ #if defined(CONFIG_XIP_KERNEL) && defined(CONFIG_RISCV_ALTERNATIVE)
+ #define __trap_section __noinstr_section(".xip.traps")
++#elif defined(CONFIG_XIP_KERNEL) && defined(CONFIG_SOC_ESP32S31)
++/*
++ * Put trap entry in RAM rather than XIP flash.
++ *
++ * riscv uses the generic entry framework from 7.x, so the whole syscall
++ * entry/exit path is __always_inline C from kernel/entry/ compiled into
++ * do_trap_ecall_u here - where 6.12 did it in entry.S assembly. Left in
++ * .noinstr.text it is fetched from 80 MHz flash on every syscall, every
++ * interrupt and every page fault. Measured on this board, a read()+write()
++ * pair costs 15.2 us on 6.12 against 43.0 us on 7.1.
++ *
++ * The cost of moving it: these functions leave the
++ * [__noinstr_text_start, __noinstr_text_end] range, so they are no longer
++ * blacklisted from kprobes and are invisible to objtool's noinstr validation.
++ * Neither is built in the shipping config (no FTRACE, no KPROBES), and
++ * __noinstr_section still suppresses instrumentation of the code itself.
++ */
++#define __trap_section __noinstr_section(".text..fast")
+ #else
+ #define __trap_section noinstr
+ #endif
+@@ -436,7 +454,7 @@
+ 	irq_exit_rcu();
+ }
+ 
+-asmlinkage void noinstr do_irq(struct pt_regs *regs)
++asmlinkage void __trap_section do_irq(struct pt_regs *regs)
+ {
+ 	irqentry_state_t state = irqentry_enter(regs);
+ 
+diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port71xip/arch/riscv/kernel/vmlinux-xip.lds.S linux-71-port/arch/riscv/kernel/vmlinux-xip.lds.S
+--- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port71xip/arch/riscv/kernel/vmlinux-xip.lds.S	2026-08-24 14:15:11.601577334 +0100
++++ linux-71-port/arch/riscv/kernel/vmlinux-xip.lds.S	2026-08-24 22:54:20.362872433 +0100
+@@ -94,12 +94,24 @@
+  * read .text. The file size on disk is mostly symbols, relocations and debug
+  * info - vmscan.o is 39,160 bytes on disk and 11,002 bytes of code.
+  *
+- * traps.o and irq.o are deliberately absent. Including them lost the irq
+- * tracepoints (/sys/kernel/tracing/events/irq disappeared), removing the
+- * instrument needed to measure any of this.
++ * traps.o and irq.o were deliberately absent on 6.12: including them lost the
++ * irq tracepoints (/sys/kernel/tracing/events/irq disappeared), removing the
++ * instrument needed to measure any of this. That objection no longer applies -
++ * the shipping config disables FTRACE and ENABLE_DEFAULT_TRACERS, so those
++ * tracepoints are not built either way - and on 7.x the cost moved here.
++ *
++ * riscv is converted to the generic entry framework in 7.x, so the whole
++ * syscall entry/exit path is now C (kernel/entry/) inlined into
++ * do_trap_ecall_u in traps.o, where 6.12 did it in entry.S assembly. Measured
++ * on this board, a read()+write() pair costs 15.2 us on 6.12 and 43.0 us on
++ * 7.1 - 2.83x - which is what makes a loaded desktop 4x slower while a bare
++ * one is only 9% slower. That path refetches itself constantly, which is
++ * exactly the case the 5.98x flash-vs-RAM figure applies to.
+  */
+ #define S31_FAST_OBJS	*hrtimer.o *timer.o *tick-sched.o *tick-common.o \
+ 			*timekeeping.o *clockevents.o \
++			*riscv/kernel/traps.o *riscv/kernel/irq.o *riscv/mm/fault.o \
++			*kernel/entry/common.o *kernel/entry/syscall-common.o \
+ 			*dw_mmc.o *dw_mmc-pltfm.o *blk-mq.o \
+ 			*blk-core.o *bio.o *blk-merge.o *blk-mq-sched.o \
+ 			*mmc_ops.o *sd_ops.o \
+@@ -125,6 +137,28 @@
+ 		*(EXCLUDE_FILE(S31_FAST_OBJS) .sched.text)		\
+ 		__sched_text_end = .;
+ 
++/*
++ * NOINSTR_TEXT has to be excluded for the same reason as SCHED_TEXT above.
++ * The generic entry code (irqentry_enter/irqentry_exit, run on every page
++ * fault and every interrupt) and the riscv trap handlers are noinstr, so they
++ * live in .noinstr.text rather than .text and the stock NOINSTR_TEXT collects
++ * them into the flash .text - which wins, because it is emitted first.
++ *
++ * Cost: these functions leave [__noinstr_text_start, __noinstr_text_end], so
++ * they are no longer blacklisted from kprobes and objtool cannot validate
++ * their noinstr-ness. Neither KPROBES nor FTRACE is built in the shipping
++ * config, and the compiler still suppresses instrumentation of the code.
++ */
++#undef NOINSTR_TEXT
++#define NOINSTR_TEXT							\
++		ALIGN_FUNCTION();					\
++		__noinstr_text_start = .;				\
++		*(EXCLUDE_FILE(S31_FAST_OBJS) .noinstr.text)		\
++		__cpuidle_text_start = .;				\
++		*(.cpuidle.text)					\
++		__cpuidle_text_end = .;					\
++		__noinstr_text_end = .;
++
+ #undef TEXT_TEXT
+ #define TEXT_TEXT							\
+ 		ALIGN_FUNCTION();					\
+@@ -192,9 +226,23 @@
+ 	 */
+ 	. = ALIGN(16);
+ 	__text_fast_start = .;
++	/*
++	 * The input section is .text..fast, with two dots, and that is
++	 * load-bearing. From 7.x TEXT_MAIN is unconditionally
++	 *
++	 *     .text .text.[_0-9A-Za-df-rt-z]* ...
++	 *
++	 * which matches .text.fast, so the flash .text above - emitted
++	 * first - claimed every __fasttext function from any object not
++	 * named in S31_FAST_OBJS, and the attribute became a silent no-op.
++	 * 6.12 defined TEXT_MAIN as plain .text without LTO, so it worked
++	 * there. The double dot is the kernel's own convention for exactly
++	 * this (.data..percpu, .bss..page_aligned) and no MAIN glob matches
++	 * it.
++	 */
+ 	.text.fast : AT(ADDR(.text.fast) - LOAD_OFFSET) {
+-		*(.text.fast)
+-		S31_FAST_OBJS(.text .text.* .sched.text)
++		*(.text..fast)
++		S31_FAST_OBJS(.text .text.* .sched.text .noinstr.text)
+ 		/*
+ 		 * Whole objects, by name, rather than an attribute sprinkled
+ 		 * through generic kernel code. Measured with a 72 KB body on
 diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port71xip/arch/riscv/mm/cacheflush.c linux-71-port/arch/riscv/mm/cacheflush.c
 --- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port71xip/arch/riscv/mm/cacheflush.c	2026-08-24 14:15:11.602171588 +0100
 +++ linux-71-port/arch/riscv/mm/cacheflush.c	2026-08-24 14:16:09.384460613 +0100
@@ -953,6 +1076,37 @@ diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users
  obj-$(CONFIG_KGDB_SERIAL_CONSOLE) += kgdboc.o
  obj-$(CONFIG_SERIAL_NUVOTON_MA35D1) += ma35d1_serial.o
 +obj-$(CONFIG_SERIAL_ESP32)		+= esp32_uart.o
+diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port71xip/include/linux/compiler_types.h linux-71-port/include/linux/compiler_types.h
+--- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port71xip/include/linux/compiler_types.h	2026-08-24 14:15:11.682227413 +0100
++++ linux-71-port/include/linux/compiler_types.h	2026-08-24 22:30:17.139254639 +0100
+@@ -466,7 +466,7 @@
+  * code the traces show is hot - RAM is scarce here.
+  */
+ #ifdef CONFIG_SOC_ESP32S31
+-#define __fasttext	__section(".text.fast")
++#define __fasttext	__section(".text..fast")
+ #else
+ #define __fasttext
+ #endif
+diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port71xip/kernel/Kconfig.preempt linux-71-port/kernel/Kconfig.preempt
+--- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port71xip/kernel/Kconfig.preempt	2026-08-23 13:29:34.000000000 +0100
++++ linux-71-port/kernel/Kconfig.preempt	2026-08-24 21:52:02.404997174 +0100
+@@ -22,7 +22,14 @@
+ config PREEMPT_NONE
+ 	bool "No Forced Preemption (Server)"
+ 	depends on !PREEMPT_RT
+-	depends on ARCH_NO_PREEMPT
++	# Upstream restricts this to ARCH_NO_PREEMPT, on the assumption that
++	# PREEMPT_LAZY supersedes it for throughput on architectures that can
++	# preempt. That assumption does not hold here: PREEMPT_BUILD selects
++	# UNINLINE_SPIN_UNLOCK, which turns every spin_unlock into an
++	# out-of-line call, and on this board out-of-line kernel code is
++	# fetched from 80 MHz XIP flash. 6.12 ran PREEMPT_NONE; keep the model
++	# selectable so the comparison is like for like. See
++	# docs/kernel-upgrade.md.
+ 	select PREEMPT_NONE_BUILD if !PREEMPT_DYNAMIC
+ 	help
+ 	  This is the traditional Linux preemption model, geared towards
 diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port71xip/sound/drivers/esp32s31-audio.c linux-71-port/sound/drivers/esp32s31-audio.c
 --- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port71xip/sound/drivers/esp32s31-audio.c	2026-08-17 15:33:24.399814731 +0100
 +++ linux-71-port/sound/drivers/esp32s31-audio.c	2026-08-24 14:16:09.389052045 +0100

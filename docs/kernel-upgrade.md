@@ -771,3 +771,68 @@ that made swap interesting in the first place and which is currently set aside.
 If X comes back, re-measure then rather than assuming this result carries over -
 and note that the earlier zram decision flipped once the thing it was
 compensating for was fixed, so neither result is permanent.
+
+## Why 7.1 was slower, and what fixed it
+
+The regression was not where it looked. Measured, fresh boot per arm:
+
+	                        6.12      7.1 before    7.1 after
+	 read()+write() pair   15.2 us      43.0 us       9.0 us
+	 bare X repaint        43.0 ms      47.0 ms      49.7 ms
+	 loaded X repaint      ~95 ms      ~375 ms      ~290 ms
+	 SD 4k O_DIRECT       3.4-3.8 ms    4.6 ms        4.6 ms
+	 SD sequential        12.6 MB/s    2.35 MB/s    10.4 MB/s
+
+**The finding: syscalls cost 2.83x more on 7.1.** riscv is converted to the
+generic entry framework in 7.x, so the whole syscall entry/exit path is
+`__always_inline` C from `kernel/entry/` compiled into `do_trap_ecall_u`, where
+6.12 did it in `entry.S` assembly. That code sat in flash `.text` and is
+refetched on every syscall, interrupt and page fault - which is exactly the case
+the 5.98x flash-vs-RAM penalty applies to. A bare X repaint is mostly userspace
+pixel work and barely noticed; a thrashing desktop is nothing but syscalls,
+faults and interrupts.
+
+**And `.text.fast` had been silently broken on 7.x the whole time.** From 7.x
+`TEXT_MAIN` is unconditionally
+
+	.text .text.[_0-9A-Za-df-rt-z]* ...
+
+which matches `.text.fast` (`f` is in `f-r`). The flash `.text` output section is
+emitted first, so it claimed every `__fasttext` function from any object not
+named in `S31_FAST_OBJS`, and the attribute became a no-op. 6.12 defined
+`TEXT_MAIN` as plain `.text` without LTO, so it worked there. The section is now
+`.text..fast` - the double dot is the kernel's own convention for this
+(`.data..percpu`, `.bss..page_aligned`) and no MAIN glob matches it.
+
+Result: **9.0 us per syscall pair, 4.7x better than 7.1 was and 1.67x better
+than 6.12 ever managed.**
+
+### What that did and did not buy
+
+The loaded desktop went from ~375 ms to ~290 ms per repaint - real, about 25%,
+but **not** the 4x. It remains ~3x worse than 6.12 and that is unexplained.
+Since syscalls are now faster than 6.12, whatever is left is elsewhere. Do not
+re-litigate the syscall path.
+
+Note the noise: loaded-desktop medians across the last three builds ran
+258/241/242, 293/271/274 and 312/316/276. Those builds are **not** separable at
+that spread; only the move from ~375 is outside it.
+
+### Tested and rejected, with numbers
+
+- **Preemption model.** 6.12 is `PREEMPT_NONE`; 7.1 defaults to `PREEMPT_LAZY`,
+  which selects `UNINLINE_SPIN_UNLOCK` and turns every `spin_unlock` into an
+  out-of-line call into flash. Plausible, and wrong: forcing `PREEMPT_NONE`
+  (which needs a Kconfig patch, since upstream now gates it on
+  `ARCH_NO_PREEMPT`) gave loaded medians of 399/412/265 against 366/386/372.
+  **Kept anyway**, because it removes a config difference from the kernel being
+  compared against, but it bought nothing measurable.
+- **Userspace XIP.** Suspected broken on 7.1 because Xorg's text mapping showed
+  452 kB resident. 6.12 shows 332 kB in the same state - same mechanism, not the
+  differentiator.
+- **Swap.** 7.1's pure swap-in is *faster* (10.9-11.6 MB/s against 5.0-5.6).
+- **SD.** Real but small: 13-31% per request, not 4x. An earlier reading of 75
+  and 302 ms/req was a cold-start artefact that five repeats did not reproduce.
+- **MGLRU, THP, memcg, zswap.** None built in either kernel.
+- **Debug/hardening config.** No KASAN, LOCKDEP, FORTIFY or HARDENED_USERCOPY
+  difference.
