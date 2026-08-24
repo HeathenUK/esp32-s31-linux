@@ -13,6 +13,18 @@ diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users
  subdir-y += starfive
 +DTC_FLAGS_espressif/esp32s31_generic := -@
  subdir-y += thead
+diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port618/arch/riscv/configs/esp32s31_defconfig linux-618-port/arch/riscv/configs/esp32s31_defconfig
+--- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port618/arch/riscv/configs/esp32s31_defconfig	2026-08-23 21:38:03.024662418 +0100
++++ linux-618-port/arch/riscv/configs/esp32s31_defconfig	2026-08-24 10:44:35.960885557 +0100
+@@ -109,7 +109,7 @@
+ CONFIG_FPU=y
+ 
+ # Kernel command line
+-CONFIG_CMDLINE="console=tty0 console=ttyS0,1000000n8 root=/dev/mmcblk0 rootfstype=ext4 rw rootwait init=/init profile=6"
++CONFIG_CMDLINE="earlycon=esp32s31uart,mmio32,0x2038a000,1000000n8 console=tty0 console=ttyS0,1000000n8 root=/dev/mmcblk0 rootfstype=ext4 rw rootwait init=/init profile=6"
+ CONFIG_CMDLINE_FORCE=y
+ 
+ # Built-in DTB (no external loader needed)
 diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port618/arch/riscv/include/asm/cacheflush.h linux-618-port/arch/riscv/include/asm/cacheflush.h
 --- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port618/arch/riscv/include/asm/cacheflush.h	2026-08-24 10:12:11.811057686 +0100
 +++ linux-618-port/arch/riscv/include/asm/cacheflush.h	2026-08-24 10:13:44.014169337 +0100
@@ -44,6 +56,39 @@ diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users
  
  #include <asm/ptrace.h>
  #include <asm/insn-def.h>
+diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port618/arch/riscv/include/asm/runtime-const.h linux-618-port/arch/riscv/include/asm/runtime-const.h
+--- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port618/arch/riscv/include/asm/runtime-const.h	2026-08-23 13:27:10.000000000 +0100
++++ linux-618-port/arch/riscv/include/asm/runtime-const.h	2026-08-24 11:07:44.764367626 +0100
+@@ -2,6 +2,22 @@
+ #ifndef _ASM_RISCV_RUNTIME_CONST_H
+ #define _ASM_RISCV_RUNTIME_CONST_H
+ 
++/*
++ * XIP kernels cannot use the patched form. runtime_const_init() rewrites the
++ * lui/addi parcels of an instruction in place, and under CONFIG_XIP_KERNEL
++ * .text lives in the read-only flash window - so the fixup either faults or is
++ * silently dropped, leaving the constant unpatched.
++ *
++ * This is the breakage referred to in commit 9b3a2be84803 ("riscv: Remove
++ * support for XIP kernel"): "it is broken again since commit a44fb5722199
++ * (riscv: Add runtime constant support)". Upstream deleted XIP rather than fix
++ * it, so downstream has to. The generic fallback just uses the symbols
++ * directly, which costs a load and is entirely correct.
++ */
++#ifdef CONFIG_XIP_KERNEL
++#include <asm-generic/runtime-const.h>
++#else
++
+ #include <asm/asm.h>
+ #include <asm/alternative.h>
+ #include <asm/cacheflush.h>
+@@ -265,4 +281,6 @@
+ 	}
+ }
+ 
++#endif /* CONFIG_XIP_KERNEL */
++
+ #endif /* _ASM_RISCV_RUNTIME_CONST_H */
 diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port618/arch/riscv/mm/cacheflush.c linux-618-port/arch/riscv/mm/cacheflush.c
 --- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port618/arch/riscv/mm/cacheflush.c	2026-08-24 10:12:11.825485464 +0100
 +++ linux-618-port/arch/riscv/mm/cacheflush.c	2026-08-24 10:13:44.014352795 +0100

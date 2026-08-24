@@ -84,13 +84,74 @@ be re-derived.
 **This layout is live and verified with the 6.12 kernel**: Wi-Fi, sound, both
 cramfs XIP mounts and opkg all work on it.
 
-## Status: builds and fits, does not boot
+## Why upstream removed it, and why that matters to us
 
-The 6.18 kernel produces **no console output at all**. The loader runs, reaches
-its usual hand-off point and jumps; with 6.12 the "Linux version" banner appears
-at exactly that instant, and with 6.18 nothing follows.
+Commit `9b3a2be84803` ("riscv: Remove support for XIP kernel", Nam Cao,
+2026-04-04):
 
-Established so far:
+> XIP has a history of being broken for long periods of time. In 2023, it was
+> broken for 18 months before getting fixed. In 2024 it was 4 months. And now
+> it is broken again since commit a44fb5722199 ("riscv: Add runtime constant
+> support"), 10 months ago. These are clear signs that XIP feature is not being
+> used. [...] Remove XIP support. Revert is possible if someone shows up
+> complaining.
+
+So it went for lack of users, not because it is unfixable - and the middle
+sentence is the operative one for us.
+
+**Runtime constants are incompatible with XIP, and that is what stopped our
+first 6.18 boot dead.** `runtime_const_init()` rewrites the `lui`/`addi`
+parcels of an instruction *in place*; under `CONFIG_XIP_KERNEL` that memory is
+the read-only flash window, so the fixup faults or is silently dropped. Its
+only user is `fs/dcache.c`, from `dcache_init_early()` - early enough in
+`start_kernel()` that there is no console yet, which is exactly why the board
+was silent rather than printing an oops.
+
+The fix is three lines: under `CONFIG_XIP_KERNEL`, include
+`asm-generic/runtime-const.h` instead, which just uses the symbols directly.
+`arch/riscv/include/asm/runtime-const.h` in the port does this. With it, 6.18
+boots through DRM, the hosted radio, `wlan0`, `hci0`, microSD and EXT4.
+
+## Reaching 7.1 / 7.2
+
+Two routes, and they are genuinely different in kind:
+
+1. **Revert the removal.** `9b3a2be84803` (17 files, -351/+37) and
+   `8b5b048277e2`-era "riscv: further remove XIP" (4 files, -148/+3) are both
+   published, so XIP can be restored onto 7.2 mechanically - roughly 500 lines -
+   plus the runtime-const fix above, which upstream never made. We would then be
+   maintaining a feature mainline deleted, but the commit explicitly invites it:
+   "Revert is possible if someone shows up complaining."
+2. **Stop using XIP.** `annoyedmilk/esp32-s31-linux` runs 7.1 on this same SoC by
+   copying the kernel into PSRAM at `0x50000000` and booting a BusyBox
+   initramfs - so the removal costs them nothing. That is the cheaper path in
+   maintenance and the expensive one in RAM: our kernel is ~6 MB of the 15.4 MB
+   total, and memory is the binding constraint on this board. It would also
+   *gain* speed, since kernel code from flash is ~6x slower than from RAM.
+
+Route 2 is worth measuring rather than assuming, now that the desktop is gone
+and text mode has ~5 MB free.
+
+## Status: boots to userspace, init segfaults
+
+With the runtime-const fix, 6.18 boots through the whole kernel - DRM, the
+hosted radio transport, `wlan0`, `hci0`, microSD, EXT4 - and then:
+
+	init[1]: unhandled signal 11 code 0x1 at 0x00000000
+	epc : 00000000 ra : 00000000   cause: 0000000c
+	Kernel panic - not syncing: Attempted to kill init!
+
+`epc` and `ra` both zero means the process entered userspace with a zeroed
+context, i.e. the ELF entry point came out as 0. Userspace here is PIE (see
+`s31-pie-cases`), so the interpreter's load bias is the thing to suspect.
+
+Ruled out already: the `esp32s31_ext` field is in `struct thread_struct` at the
+same position as 6.12, and `flush_icache_pte()`'s signature and callers are
+identical between the two, so neither the custom extension state nor the
+I-cache path explains it.
+
+Earlier, before the runtime-const fix, it produced no output at all. Also
+established then:
 
 - **Not the partition geometry.** The flashed table decodes exactly as intended,
   and the 6.12 kernel boots from the same layout.
