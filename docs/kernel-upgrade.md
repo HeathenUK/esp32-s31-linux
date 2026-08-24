@@ -325,3 +325,49 @@ characters straight to `UART_FIFO_REG` at `0x2038a000` from `head.S` produced no
 output *even on the 6.18 kernel that boots*, which is what proved the technique
 dead rather than the kernel. Always run that control before trusting a silent
 instrument.
+
+
+## Version bisect: 7.0 works, 7.1 is close, 7.2 is silent
+
+With no early-boot output channel available, boot-versus-silence is itself a
+usable signal. Porting to each release in turn located the faults precisely.
+
+| Base | Result |
+|---|---|
+| **6.18.46 LTS** | **works fully** - DRM, sound, BT, Wi-Fi, XIP mounts, opkg |
+| **7.0** | **works** - shell, Wi-Fi, opkg (DRM did not probe; unexplained) |
+| 7.1.10 + XIP revert | boots, SD detected, data read errors during transfers |
+| 7.2 + XIP revert | silent before console init |
+
+**7.0 booting is the important result: it proves the XIP revert is sound.** 7.0
+carries XIP in tree, needs no revert, and runs the same BSP - so nothing between
+6.19 and 7.0 broke XIP beyond the runtime-const fix. Whatever stops 7.2 arrived
+in 7.1 or 7.2.
+
+### 7.1: the dw_mmc slot refactor
+
+7.1 removed the `dw_mci_slot` abstraction and merged
+`dw_mci_prepare_desc64`/`desc32` into one `dw_mci_prepare_desc()`. Three of the
+BSP's cache-coherency hunks therefore had nowhere to land, and **failed
+silently**:
+
+1. `dw_mci_idmac_sync_for_device()` at the end of descriptor preparation - the
+   writeback that publishes the ring before the IDMAC reads it. Missing it gave
+   `mintsts=0x200` (DRTO) and "error -110 whilst initialising SD card".
+2. The open-coded OWN-bit poll, which 7.1 replaced with
+   `readl_poll_timeout_atomic()`. That reads the descriptor **without
+   invalidating**, so on this SoC the IDMAC's clear of OWN is invisible and the
+   poll spins on a stale value. Restored as a noncoherent branch that
+   invalidates each iteration.
+3. Both were caught by *counting call sites against the working 7.0 tree* and by
+   a `defined but not used` warning - not by anything the patch tooling said.
+
+With those two fixed the card initialises and `mmcblk0` appears, the interrupt
+storm ("interrupt status did not quiesce", our own message from the budget loop)
+is gone, and the kernel reaches ~4 s before data read errors during real
+transfers. Every remaining coherency call site has been checked to be present,
+in the same enclosing function as 7.0, and the `IDMAC_DESC_NONCOHERENT` quirk is
+confirmed set. The residual fault is somewhere else in the 7.1 dw_mmc rework.
+
+**7.1 is not yet usable.** It is much closer than 7.2, and the failure is now
+confined to one driver rather than "the kernel is silent".

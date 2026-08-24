@@ -1,0 +1,508 @@
+diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/arch/riscv/boot/dts/Makefile linux-70-port/arch/riscv/boot/dts/Makefile
+--- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/arch/riscv/boot/dts/Makefile	2026-08-24 14:02:23.988802038 +0100
++++ linux-70-port/arch/riscv/boot/dts/Makefile	2026-08-24 14:03:20.166026463 +0100
+@@ -1,4 +1,5 @@
+ # SPDX-License-Identifier: GPL-2.0
++subdir-y += espressif
+ subdir-y += allwinner
+ subdir-y += andes
+ subdir-y += anlogic
+@@ -10,5 +11,6 @@
+ subdir-y += sophgo
+ subdir-y += spacemit
+ subdir-y += starfive
++DTC_FLAGS_espressif/esp32s31_generic := -@
+ subdir-y += tenstorrent
+ subdir-y += thead
+diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/arch/riscv/include/asm/cacheflush.h linux-70-port/arch/riscv/include/asm/cacheflush.h
+--- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/arch/riscv/include/asm/cacheflush.h	2026-08-24 14:02:23.989578871 +0100
++++ linux-70-port/arch/riscv/include/asm/cacheflush.h	2026-08-24 14:04:16.417805135 +0100
+@@ -35,10 +35,12 @@
+ 	flush_dcache_folio(page_folio(page));
+ }
+ 
+-#define flush_icache_user_page(vma, pg, addr, len)	\
+-do {							\
+-	if (vma->vm_flags & VM_EXEC)			\
+-		flush_icache_mm(vma->vm_mm, 0);		\
++#define flush_icache_user_page(vma, pg, addr, len)		\
++do {								\
++	if (vma->vm_flags & VM_EXEC) {				\
++		esp32s31_cache_sync_for_exec(page_to_phys(pg), PAGE_SIZE); \
++		flush_icache_mm(vma->vm_mm, 0);			\
++	}							\
+ } while (0)
+ 
+ #ifdef CONFIG_64BIT
+diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/arch/riscv/include/asm/processor.h linux-70-port/arch/riscv/include/asm/processor.h
+--- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/arch/riscv/include/asm/processor.h	2026-08-24 14:02:23.992338748 +0100
++++ linux-70-port/arch/riscv/include/asm/processor.h	2026-08-24 14:03:20.167934963 +0100
+@@ -11,6 +11,7 @@
+ #include <linux/prctl.h>
+ 
+ #include <vdso/processor.h>
++#include <asm/esp32s31_ext.h>
+ 
+ #include <asm/ptrace.h>
+ #include <asm/insn-def.h>
+diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/arch/riscv/include/asm/runtime-const.h linux-70-port/arch/riscv/include/asm/runtime-const.h
+--- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/arch/riscv/include/asm/runtime-const.h	2026-04-12 21:48:06.000000000 +0100
++++ linux-70-port/arch/riscv/include/asm/runtime-const.h	2026-08-24 14:04:16.425388764 +0100
+@@ -2,6 +2,14 @@
+ #ifndef _ASM_RISCV_RUNTIME_CONST_H
+ #define _ASM_RISCV_RUNTIME_CONST_H
+ 
++/*
++ * runtime_const_init() rewrites lui/addi parcels in place; under XIP that
++ * memory is read-only flash. This is the breakage named in 9b3a2be84803.
++ */
++#ifdef CONFIG_XIP_KERNEL
++#include <asm-generic/runtime-const.h>
++#else
++
+ #ifdef MODULE
+   #error "Cannot use runtime-const infrastructure from modules"
+ #endif
+@@ -269,4 +277,6 @@
+ 	}
+ }
+ 
++#endif /* CONFIG_XIP_KERNEL */
++
+ #endif /* _ASM_RISCV_RUNTIME_CONST_H */
+diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/arch/riscv/include/uapi/asm/sigcontext.h linux-70-port/arch/riscv/include/uapi/asm/sigcontext.h
+--- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/arch/riscv/include/uapi/asm/sigcontext.h	2026-08-24 14:02:23.994614915 +0100
++++ linux-70-port/arch/riscv/include/uapi/asm/sigcontext.h	2026-08-24 14:03:20.167292963 +0100
+@@ -9,6 +9,7 @@
+ #include <asm/ptrace.h>
+ 
+ /* The Magic number for signal context frame header. */
++#define RISCV_ESP32S31_EXT_MAGIC	0x53333145
+ #define RISCV_V_MAGIC	0x53465457
+ #define RISCV_ZICFISS_MAGIC		0x9487
+ #define END_MAGIC	0x0
+diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/arch/riscv/Kconfig.socs linux-70-port/arch/riscv/Kconfig.socs
+--- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/arch/riscv/Kconfig.socs	2026-08-24 14:02:23.996729792 +0100
++++ linux-70-port/arch/riscv/Kconfig.socs	2026-08-24 14:04:16.418949761 +0100
+@@ -117,6 +117,9 @@
+ config SOC_ESP32S31
+ 	bool "Espressif ESP32-S31 SoC"
+ 	select ESP32S31_CLIC
++	# Not in ESP32S31_CACHE: CACHEMAINT_FOR_DMA is a menuconfig, and selecting
++	# from inside it loops with ERRATA_STARFIVE_JH7100.
++	select DMA_DIRECT_REMAP
+ 	help
+ 	  This enables support for the Espressif ESP32-S31 SoC.
+ 	  With MMU enabled the kernel runs in Supervisor mode behind OpenSBI.
+diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/arch/riscv/kernel/signal.c linux-70-port/arch/riscv/kernel/signal.c
+--- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/arch/riscv/kernel/signal.c	2026-08-24 14:02:24.004392712 +0100
++++ linux-70-port/arch/riscv/kernel/signal.c	2026-08-24 14:04:16.425578306 +0100
+@@ -369,6 +369,15 @@
+ 	if (total_context_size)
+ 		total_context_size += sizeof(struct __riscv_ctx_hdr);
+ 
++#ifdef CONFIG_SOC_ESP32S31
++	/*
++	 * save_esp32s31_ext_state() always appends a record, so the frame
++	 * must be sized for it or it lands over the user stack and
++	 * rt_sigreturn restores a corrupt context.
++	 */
++	total_context_size += ESP32S31_EXT_SC_SIZE;
++#endif
++
+ 	frame_size += total_context_size;
+ 
+ 	frame_size = round_up(frame_size, 16);
+diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/arch/riscv/mm/cacheflush.c linux-70-port/arch/riscv/mm/cacheflush.c
+--- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/arch/riscv/mm/cacheflush.c	2026-08-24 14:02:24.005795963 +0100
++++ linux-70-port/arch/riscv/mm/cacheflush.c	2026-08-24 14:04:16.418135761 +0100
+@@ -99,9 +99,23 @@
+ #ifdef CONFIG_MMU
+ void flush_icache_pte(struct mm_struct *mm, pte_t pte)
+ {
+-	struct folio *folio = page_folio(pte_page(pte));
++	struct folio *folio;
++
++	/*
++	 * XIP cramfs text is mapped with remap_pfn_range() from a flash window
++	 * below PHYS_RAM_BASE, so it has no memmap entry and page_folio()
++	 * would walk a wild pointer during execve.
++	 */
++	if (!pfn_valid(pte_pfn(pte))) {
++		flush_icache_mm(mm, false);
++		return;
++	}
++
++	folio = page_folio(pte_page(pte));
+ 
+ 	if (!test_bit(PG_dcache_clean, &folio->flags.f)) {
++		esp32s31_cache_sync_for_exec(page_to_phys(pte_page(pte)),
++					    PAGE_SIZE);
+ 		flush_icache_mm(mm, false);
+ 		set_bit(PG_dcache_clean, &folio->flags.f);
+ 	}
+diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/drivers/cache/Kconfig linux-70-port/drivers/cache/Kconfig
+--- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/drivers/cache/Kconfig	2026-08-24 14:02:24.011128757 +0100
++++ linux-70-port/drivers/cache/Kconfig	2026-08-24 14:04:16.419207178 +0100
+@@ -17,7 +17,7 @@
+ 	# RV32/Sv32 has no PTE memory-type bits.  Use the generic remapped
+ 	# coherent-allocation path and this driver's cache maintenance hooks for
+ 	# non-coherent peripherals such as the DesignWare GMAC and SDMMC.
+-	select DMA_DIRECT_REMAP
++	# DMA_DIRECT_REMAP is selected by SOC_ESP32S31.
+ 	select RISCV_DMA_NONCOHERENT
+ 	select RISCV_NONSTANDARD_CACHE_OPS
+ 	help
+diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/drivers/clk/clk-esp32s31.c linux-70-port/drivers/clk/clk-esp32s31.c
+--- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/drivers/clk/clk-esp32s31.c	2026-08-18 13:50:15.268445929 +0100
++++ linux-70-port/drivers/clk/clk-esp32s31.c	2026-08-24 14:04:16.424572680 +0100
+@@ -390,15 +390,17 @@
+ 	return ESP32S31_MPLL_RATE / (div + 1);
+ }
+ 
+-static long esp32s31_txc_round_rate(struct clk_hw *hw, unsigned long rate,
+-				    unsigned long *parent_rate)
++static int esp32s31_txc_determine_rate(struct clk_hw *hw,
++				      struct clk_rate_request *req)
+ {
+-	if (rate >= 125000000)
+-		return 125000000;
+-	if (rate >= 25000000)
+-		return 25000000;
++	if (req->rate >= 125000000)
++		req->rate = 125000000;
++	else if (req->rate >= 25000000)
++		req->rate = 25000000;
++	else
++		req->rate = 2500000;
+ 
+-	return 2500000;
++	return 0;
+ }
+ 
+ static int esp32s31_txc_set_rate(struct clk_hw *hw, unsigned long rate,
+@@ -446,7 +448,7 @@
+ 	.prepare = esp32s31_clk_prepare,
+ 	.unprepare = esp32s31_clk_unprepare,
+ 	.recalc_rate = esp32s31_clk_recalc_rate,
+-	.round_rate = esp32s31_txc_round_rate,
++	.determine_rate = esp32s31_txc_determine_rate,
+ 	.set_rate = esp32s31_txc_set_rate,
+ };
+ 
+diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/drivers/counter/esp32s31-pcnt.c linux-70-port/drivers/counter/esp32s31-pcnt.c
+--- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/drivers/counter/esp32s31-pcnt.c	2026-08-16 10:58:27.895820642 +0100
++++ linux-70-port/drivers/counter/esp32s31-pcnt.c	2026-08-24 14:04:16.423812222 +0100
+@@ -165,4 +165,4 @@
+ 
+ MODULE_DESCRIPTION("ESP32-S31 pulse counter driver");
+ MODULE_LICENSE("GPL");
+-MODULE_IMPORT_NS(COUNTER);
++MODULE_IMPORT_NS("COUNTER");
+diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/drivers/counter/esp32s31-system-timers.c linux-70-port/drivers/counter/esp32s31-system-timers.c
+--- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/drivers/counter/esp32s31-system-timers.c	2026-08-16 10:58:27.895897558 +0100
++++ linux-70-port/drivers/counter/esp32s31-system-timers.c	2026-08-24 14:04:16.424129847 +0100
+@@ -128,4 +128,4 @@
+ module_platform_driver(esp32s31_system_timer_driver);
+ MODULE_DESCRIPTION("ESP32-S31 SYSTIMER and RTC timer counter driver");
+ MODULE_LICENSE("GPL");
+-MODULE_IMPORT_NS(COUNTER);
++MODULE_IMPORT_NS("COUNTER");
+diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/drivers/crypto/esp32s31-crypto.c linux-70-port/drivers/crypto/esp32s31-crypto.c
+--- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/drivers/crypto/esp32s31-crypto.c	2026-08-16 10:58:27.941984822 +0100
++++ linux-70-port/drivers/crypto/esp32s31-crypto.c	2026-08-24 14:04:16.423012596 +0100
+@@ -817,8 +817,7 @@
+ static struct akcipher_alg s31_rsa_alg = {
+ 	.encrypt = s31_rsa_encrypt,
+ 	.decrypt = s31_rsa_decrypt,
+-	.sign = s31_rsa_decrypt,
+-	.verify = s31_rsa_encrypt,
++	/* .sign/.verify moved to the "sig" alg type. */
+ 	.set_pub_key = s31_rsa_set_pub_key,
+ 	.set_priv_key = s31_rsa_set_priv_key,
+ 	.max_size = s31_rsa_max_size,
+diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/drivers/crypto/Makefile linux-70-port/drivers/crypto/Makefile
+--- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/drivers/crypto/Makefile	2026-08-24 14:02:24.019343553 +0100
++++ linux-70-port/drivers/crypto/Makefile	2026-08-24 14:03:20.005002426 +0100
+@@ -38,6 +38,7 @@
+ obj-$(CONFIG_CRYPTO_DEV_TALITOS) += talitos.o
+ obj-$(CONFIG_CRYPTO_DEV_TEGRA) += tegra/
+ obj-$(CONFIG_CRYPTO_DEV_VIRTIO) += virtio/
++obj-$(CONFIG_CRYPTO_DEV_ESP32S31) += esp32s31-crypto.o
+ #obj-$(CONFIG_CRYPTO_DEV_VMX) += vmx/
+ obj-$(CONFIG_CRYPTO_DEV_BCM_SPU) += bcm/
+ obj-y += inside-secure/
+diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/drivers/dma/esp32s31-axi-gdma.c linux-70-port/drivers/dma/esp32s31-axi-gdma.c
+--- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/drivers/dma/esp32s31-axi-gdma.c	2026-08-20 11:36:05.450050153 +0100
++++ linux-70-port/drivers/dma/esp32s31-axi-gdma.c	2026-08-24 14:04:16.421134220 +0100
+@@ -1294,7 +1294,7 @@
+ 
+ static struct platform_driver esp32s31_axi_driver = {
+ 	.probe = esp32s31_axi_probe,
+-	.remove_new = esp32s31_axi_remove,
++	.remove = esp32s31_axi_remove,
+ 	.driver = {
+ 		.name = "esp32s31-axi-gdma",
+ 		.of_match_table = esp32s31_axi_of_match,
+diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/drivers/gpu/drm/espressif/esp32s31-lcd.c linux-70-port/drivers/gpu/drm/espressif/esp32s31-lcd.c
+--- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/drivers/gpu/drm/espressif/esp32s31-lcd.c	2026-08-23 20:19:50.264325652 +0100
++++ linux-70-port/drivers/gpu/drm/espressif/esp32s31-lcd.c	2026-08-24 14:04:16.422255262 +0100
+@@ -49,6 +49,7 @@
+ #include <uapi/drm/esp32s31_drm.h>
+ #include <drm/drm_drv.h>
+ #include <drm/drm_fb_dma_helper.h>
++#include <drm/clients/drm_client_setup.h>
+ #include <drm/drm_fbdev_dma.h>
+ #include <drm/drm_gem_dma_helper.h>
+ #include <drm/drm_gem_framebuffer_helper.h>
+@@ -2383,6 +2384,7 @@
+ 	.ioctls			= esp32s31_lcd_ioctls,
+ 	.num_ioctls		= ARRAY_SIZE(esp32s31_lcd_ioctls),
+ 	DRM_GEM_DMA_DRIVER_OPS_VMAP,
++	DRM_FBDEV_DMA_DRIVER_OPS,
+ 	.name			= DRIVER_NAME,
+ 	.desc			= "Espressif ESP32-S31 LCD_CAM",
+ 	.major			= 1,
+@@ -2743,8 +2745,8 @@
+ 	 * every flip event carrying an invented timestamp, and a compositor
+ 	 * scheduling from it repainted about once every 12 seconds.
+ 	 */
+-	hrtimer_init(&lcd->vblank_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+-	lcd->vblank_timer.function = esp32s31_lcd_vblank_tick;
++	hrtimer_setup(&lcd->vblank_timer, esp32s31_lcd_vblank_tick,
++		      CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+ 
+ 	lcd->irq = platform_get_irq(pdev, 0);
+ 	if (lcd->irq < 0)
+@@ -2891,7 +2893,7 @@
+ 	if (ret)
+ 		return ret;
+ 
+-	drm_fbdev_dma_setup(drm, 16);
++	drm_client_setup_with_fourcc(drm, DRM_FORMAT_RGB565);
+ 	return 0;
+ }
+ 
+diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/drivers/gpu/drm/Makefile linux-70-port/drivers/gpu/drm/Makefile
+--- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/drivers/gpu/drm/Makefile	2026-08-24 14:02:24.022735137 +0100
++++ linux-70-port/drivers/gpu/drm/Makefile	2026-08-24 14:03:20.020590225 +0100
+@@ -208,6 +208,7 @@
+ obj-$(CONFIG_DRM_INGENIC) += ingenic/
+ obj-$(CONFIG_DRM_LOGICVC) += logicvc/
+ obj-$(CONFIG_DRM_MEDIATEK) += mediatek/
++obj-y			+= espressif/
+ obj-$(CONFIG_DRM_MESON)	+= meson/
+ obj-y			+= panel/
+ obj-y			+= bridge/
+diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/drivers/iio/proximity/esp32s31-comparator.c linux-70-port/drivers/iio/proximity/esp32s31-comparator.c
+--- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/drivers/iio/proximity/esp32s31-comparator.c	2026-08-16 10:58:29.846234726 +0100
++++ linux-70-port/drivers/iio/proximity/esp32s31-comparator.c	2026-08-24 14:04:16.423366346 +0100
+@@ -80,7 +80,7 @@
+ 					    const struct iio_chan_spec *chan,
+ 					    enum iio_event_type type,
+ 					    enum iio_event_direction dir,
+-					    int state)
++					    bool state)
+ {
+ 	struct esp32s31_cmpr *cmpr = iio_priv(indio_dev);
+ 	u32 bit = esp32s31_cmpr_event_bit(chan->channel, dir);
+diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/drivers/irqchip/Makefile linux-70-port/drivers/irqchip/Makefile
+--- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/drivers/irqchip/Makefile	2026-08-24 14:02:24.038355853 +0100
++++ linux-70-port/drivers/irqchip/Makefile	2026-08-24 14:03:20.062830996 +0100
+@@ -106,6 +106,7 @@
+ obj-$(CONFIG_RISCV_APLIC)		+= irq-riscv-aplic-main.o irq-riscv-aplic-direct.o
+ obj-$(CONFIG_RISCV_APLIC_MSI)		+= irq-riscv-aplic-msi.o
+ obj-$(CONFIG_RISCV_IMSIC)		+= irq-riscv-imsic-state.o irq-riscv-imsic-early.o irq-riscv-imsic-platform.o
++obj-$(CONFIG_ESP32S31_CLIC)		+= irq-esp32s31-clic.o
+ obj-$(CONFIG_RISCV_RPMI_SYSMSI)		+= irq-riscv-rpmi-sysmsi.o
+ obj-$(CONFIG_SIFIVE_PLIC)		+= irq-sifive-plic.o
+ obj-$(CONFIG_STARFIVE_JH8100_INTC)	+= irq-starfive-jh8100-intc.o
+diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/drivers/mmc/host/dw_mmc.c linux-70-port/drivers/mmc/host/dw_mmc.c
+--- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/drivers/mmc/host/dw_mmc.c	2026-08-24 14:02:24.047367774 +0100
++++ linux-70-port/drivers/mmc/host/dw_mmc.c	2026-08-24 14:04:16.418666219 +0100
+@@ -3630,7 +3630,7 @@
+ 	/* Must precede mmc_add_host(): the core enables it during card init. */
+ 	ret = dw_mci_hsq_init(host, mmc);
+ 	if (ret)
+-		goto err_host_allocated;
++		return ret;
+ 
+ 	ret = mmc_add_host(mmc);
+ 	if (ret)
+@@ -4032,8 +4032,8 @@
+ 	timer_setup(&host->cmd11_timer, dw_mci_cmd11_timer, 0);
+ 	timer_setup(&host->cto_timer, dw_mci_cto_timer, 0);
+ 	timer_setup(&host->dto_timer, dw_mci_dto_timer, 0);
+-	hrtimer_init(&host->irq_poll_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+-	host->irq_poll_timer.function = dw_mci_irq_poll_timer;
++	hrtimer_setup(&host->irq_poll_timer, dw_mci_irq_poll_timer,
++		      CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+ 
+ 	spin_lock_init(&host->lock);
+ 	spin_lock_init(&host->irq_lock);
+diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/drivers/mmc/host/dw_mmc.h linux-70-port/drivers/mmc/host/dw_mmc.h
+--- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/drivers/mmc/host/dw_mmc.h	2026-08-24 14:02:24.048445025 +0100
++++ linux-70-port/drivers/mmc/host/dw_mmc.h	2026-08-24 14:03:20.004289217 +0100
+@@ -285,6 +285,8 @@
+ };
+ 
+ /* Support for longer data read timeout */
++#define DW_MMC_QUIRK_IDMAC_DESC_NONCOHERENT    BIT(1)
++#define DW_MMC_QUIRK_LOST_IRQ_POLL             BIT(2)
+ #define DW_MMC_QUIRK_EXTENDED_TMOUT            BIT(0)
+ /* Force 32-bit access to the FIFO */
+ #define DW_MMC_QUIRK_FIFO64_32                 BIT(1)
+diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/drivers/mtd/devices/Makefile linux-70-port/drivers/mtd/devices/Makefile
+--- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/drivers/mtd/devices/Makefile	2026-08-24 14:02:24.049625984 +0100
++++ linux-70-port/drivers/mtd/devices/Makefile	2026-08-24 14:03:20.095697303 +0100
+@@ -16,6 +16,7 @@
+ obj-$(CONFIG_MTD_SPEAR_SMI)	+= spear_smi.o
+ obj-$(CONFIG_MTD_SST25L)	+= sst25l.o
+ obj-$(CONFIG_MTD_BCM47XXSFLASH)	+= bcm47xxsflash.o
++obj-$(CONFIG_MTD_ESP32S31_FLASH)	+= esp32s31_flash.o
+ obj-$(CONFIG_MTD_ST_SPI_FSM)    += st_spi_fsm.o
+ obj-$(CONFIG_MTD_POWERNV_FLASH)	+= powernv_flash.o
+ obj-$(CONFIG_MTD_INTEL_DG)	+= mtd_intel_dg.o
+diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/drivers/net/ethernet/espressif/esp32s31-hosted-sram.c linux-70-port/drivers/net/ethernet/espressif/esp32s31-hosted-sram.c
+--- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/drivers/net/ethernet/espressif/esp32s31-hosted-sram.c	2026-08-17 06:43:50.473348108 +0100
++++ linux-70-port/drivers/net/ethernet/espressif/esp32s31-hosted-sram.c	2026-08-24 14:07:08.952991442 +0100
+@@ -11,6 +11,7 @@
+ #include <linux/completion.h>
+ #include <linux/cpufreq.h>
+ #include <linux/delay.h>
++#include <linux/hex.h>
+ #include <linux/etherdevice.h>
+ #include <linux/fs.h>
+ #include <linux/interrupt.h>
+@@ -1485,7 +1486,7 @@
+ 	.target_index = s31_cpufreq_target_index,
+ 	.get = s31_cpufreq_get,
+ 	.init = s31_cpufreq_init,
+-	.attr = cpufreq_generic_attr,
++	/* cpufreq_generic_attr removed; the core publishes it. */
+ 	.name = "esp32s31-idf",
+ };
+ 
+@@ -2105,7 +2106,7 @@
+ 
+ static struct platform_driver s31_hosted_driver = {
+ 	.probe = s31_hosted_probe,
+-	.remove_new = s31_hosted_remove,
++	.remove = s31_hosted_remove,
+ 	.driver = {
+ 		.name = "esp32s31-hosted-sram",
+ 		.of_match_table = s31_hosted_of_match,
+diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/drivers/nvmem/Makefile linux-70-port/drivers/nvmem/Makefile
+--- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/drivers/nvmem/Makefile	2026-08-24 14:02:24.060399698 +0100
++++ linux-70-port/drivers/nvmem/Makefile	2026-08-24 14:03:20.096609554 +0100
+@@ -8,6 +8,7 @@
+ obj-$(CONFIG_NVMEM_LAYOUTS)	+= nvmem_layouts.o
+ nvmem_layouts-y			:= layouts.o
+ obj-y				+= layouts/
++obj-$(CONFIG_NVMEM_ESP32S31_EFUSE)	+= esp32s31-efuse.o
+ 
+ # Devices
+ obj-$(CONFIG_NVMEM_AN8855_EFUSE)	+= nvmem-an8855-efuse.o
+diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/drivers/phy/Makefile linux-70-port/drivers/phy/Makefile
+--- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/drivers/phy/Makefile	2026-08-24 14:02:24.061655281 +0100
++++ linux-70-port/drivers/phy/Makefile	2026-08-24 14:03:20.076276502 +0100
+@@ -10,6 +10,7 @@
+ obj-$(CONFIG_PHY_CAN_TRANSCEIVER)	+= phy-can-transceiver.o
+ obj-$(CONFIG_PHY_GOOGLE_USB)		+= phy-google-usb.o
+ obj-$(CONFIG_PHY_LPC18XX_USB_OTG)	+= phy-lpc18xx-usb-otg.o
++obj-$(CONFIG_PHY_ESP32S31_USB)		+= phy-esp32s31-usb.o
+ obj-$(CONFIG_PHY_XGENE)			+= phy-xgene.o
+ obj-$(CONFIG_PHY_PISTACHIO_USB)		+= phy-pistachio-usb.o
+ obj-$(CONFIG_PHY_SNPS_EUSB2)		+= phy-snps-eusb2.o
+diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/drivers/pinctrl/pinctrl-esp32s31.c linux-70-port/drivers/pinctrl/pinctrl-esp32s31.c
+--- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/drivers/pinctrl/pinctrl-esp32s31.c	2026-08-16 10:58:31.653293403 +0100
++++ linux-70-port/drivers/pinctrl/pinctrl-esp32s31.c	2026-08-24 14:04:16.420091261 +0100
+@@ -396,14 +396,8 @@
+ 					  ngroups, NULL);
+ 	if (ret < 0)
+ 		goto err_free;
+-	{
+-		struct function_desc *function = pinmux_generic_get_function(pctldev,
+-									 ret);
+-
+-		/* pinmux_generic_add_function returns the existing selector too. */
+-		function->func.groups = group_names;
+-		function->func.ngroups = ngroups;
+-	}
++	/* function_desc holds a const struct pinfunction * now; add_function
++	 * already builds it from the groups passed above. */
+ 
+ 	*maps = map;
+ 	*num_maps = nmaps;
+@@ -790,9 +784,13 @@
+ 			mask = GPIO_PIN_PAD_DRIVER;
+ 			val = param == PIN_CONFIG_DRIVE_OPEN_DRAIN ? mask : 0;
+ 			break;
+-		case PIN_CONFIG_OUTPUT:
+-			pctl->gc.direction_output(&pctl->gc, pin, arg);
++		case PIN_CONFIG_LEVEL: {	/* PIN_CONFIG_OUTPUT before 6.18 */
++			int err = pctl->gc.direction_output(&pctl->gc, pin, arg);
++
++			if (err)
++				return err;
+ 			continue;
++		}
+ 		default:
+ 			return -ENOTSUPP;
+ 		}
+@@ -874,8 +872,8 @@
+ 	return 0;
+ }
+ 
+-static void esp32s31_gpio_set(struct gpio_chip *gc, unsigned int offset,
+-			      int value)
++static int esp32s31_gpio_set(struct gpio_chip *gc, unsigned int offset,
++			     int value)
+ {
+ 	struct esp32s31_pinctrl *pctl = gpiochip_get_data(gc);
+ 	u32 reg;
+@@ -885,6 +883,8 @@
+ 	else
+ 		reg = value ? GPIO_OUT1_W1TS : GPIO_OUT1_W1TC;
+ 	writel_relaxed(BIT(offset % 32), pctl->gpio_base + reg);
++
++	return 0;
+ }
+ 
+ static int esp32s31_gpio_direction_output(struct gpio_chip *gc,
+@@ -928,9 +928,9 @@
+ 	return 0;
+ }
+ 
+-static void esp32s31_gpio_set_multiple(struct gpio_chip *gc,
+-				       unsigned long *mask,
+-				       unsigned long *bits)
++static int esp32s31_gpio_set_multiple(struct gpio_chip *gc,
++				      unsigned long *mask,
++				      unsigned long *bits)
+ {
+ 	struct esp32s31_pinctrl *pctl = gpiochip_get_data(gc);
+ 	u64 m = esp32s31_bitmap_to_u64(mask);
+@@ -940,6 +940,8 @@
+ 	writel_relaxed((u32)(m & ~b), pctl->gpio_base + GPIO_OUT_W1TC);
+ 	writel_relaxed((u32)((m & b) >> 32), pctl->gpio_base + GPIO_OUT1_W1TS);
+ 	writel_relaxed((u32)((m & ~b) >> 32), pctl->gpio_base + GPIO_OUT1_W1TC);
++
++	return 0;
+ }
+ 
+ static int esp32s31_gpio_set_config(struct gpio_chip *gc, unsigned int offset,
+diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/sound/soc/codecs/es8389.c linux-70-port/sound/soc/codecs/es8389.c
+--- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port70/sound/soc/codecs/es8389.c	2026-08-17 23:13:18.938143267 +0100
++++ linux-70-port/sound/soc/codecs/es8389.c	2026-08-24 14:04:16.425160222 +0100
+@@ -74,8 +74,8 @@
+ static int es8389_dmic_set(struct snd_kcontrol *kcontrol,
+ 	struct snd_ctl_elem_value *ucontrol)
+ {
+-	struct snd_soc_component *component = snd_soc_dapm_kcontrol_component(kcontrol);
+-	struct snd_soc_dapm_context *dapm = snd_soc_dapm_kcontrol_dapm(kcontrol);
++	struct snd_soc_component *component = snd_soc_dapm_kcontrol_to_component(kcontrol);
++	struct snd_soc_dapm_context *dapm = snd_soc_dapm_kcontrol_to_dapm(kcontrol);
+ 	struct es8389_private *es8389 = snd_soc_component_get_drvdata(component);
+ 	struct soc_enum *e = (struct soc_enum *)kcontrol->private_value;
+ 	unsigned int val;

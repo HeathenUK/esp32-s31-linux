@@ -28,3 +28,5 @@ linux-72-port/
 __pycache__/
 Packages.stamps
 images/feed/
+linux-70-port/
+linux-71-port/
