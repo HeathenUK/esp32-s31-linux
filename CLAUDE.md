@@ -119,14 +119,30 @@ for kernel work; the rootfs only needs rebuilding when userspace changes.
   - Every committed defconfig has `CONFIG_PROFILING=y`; the Makefile's
     `--disable PROFILING` is what actually turns it off. Do not read the
     defconfig and conclude profiling is on.
-- **Compiling sound out makes the speaker whine.** The speaker amplifier is
-  enabled by a **GPIO hog** on GPIO7 (`esp32s31_generic.dts`), which the DTS
-  holds high unconditionally, on the stated basis that "output muting is the
-  codec's job". Drop `CONFIG_SND_SOC_ES8389` and nothing ever initialises or
-  mutes the ES8389 - so the amp faithfully amplifies an unconfigured DAC and
-  the board sits there whining. **If sound is ever compiled out, the hog has to
-  go to `output-low` in the same change** (which needs `make linux` *and*
-  `make opensbi`). Verified: restoring the codec silences it.
+- **A speaker whine appeared while sound was compiled out, and only a hard
+  power cycle cleared it.** The cause is **not established** - treat the
+  following as observations, not a mechanism:
+  - It began after flashing a kernel with `CONFIG_SND_SOC_ES8389` off, and the
+    amplifier enable is a **GPIO hog** on GPIO7 (`esp32s31_generic.dts`) held
+    high unconditionally because "output muting is the codec's job" - so the
+    plausible story is an enabled amp with nothing initialising the codec.
+  - **But restoring the codec driver did NOT silence it.** Nor did muting
+    DACL/DACR, zeroing the ADC->DAC mixer, unbinding the driver, or driving
+    GPIO7 either way. The codec was verifiably in the driver's STANDBY state
+    (`0x00=0x3E`, `0x03=0x00`, `0x61=0x59`, `0x64=0x00`) with the DAC muted
+    (`0x40=0x03`) *while it was still whining*.
+  - **An esptool reset is not a power cycle.** It pulls the SoC's EN line only;
+    the codec and amplifier have their own power domain and survive it. That is
+    what makes this class of fault look software-shaped when it is not.
+  - Separately and definitely true: `GPIO_ENABLE` bit 7 was **clear**, so the
+    hog never programmed the pad and GPIO7 was floating, and `devmem` writes to
+    `GPIO_OUT` did not reach the pin either (the IO MUX has to route the pad to
+    the GPIO function first). **Any `gpio-hog` on this board may be a no-op** -
+    check `/sys/kernel/debug/gpio` *and* the register, because debugfs happily
+    reports a level it is not driving.
+
+  To actually establish cause, flash a sound-less kernel and power-cycle: if it
+  whines from cold, it is the config; if not, it was a latched analog state.
 - **`CONFIG_BT` and `CONFIG_SND` are not in the committed defconfig**, yet the
   board has working Bluetooth and audio - they have been living as uncommitted
   working-tree edits, so a clean checkout builds a kernel with no sound. Check
