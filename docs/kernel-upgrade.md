@@ -670,3 +670,48 @@ is where to look next, not at the bus or the card.
 **Verdict: on current evidence 6.12 is the better performer for anything that
 touches storage, and 7.1 is better only on memory headroom.** 7.1 should not be
 treated as a straight upgrade until the SD path is back to ~12 MB/s.
+
+
+## The SD regression on 7.1: localised, not yet fixed
+
+**Symptom.** 7.1 reads the card at ~2.2 MB/s against 6.12's 12.6 MB/s.
+
+**Localised to one thing.** Per 16 MB read:
+
+	           requests   avg request   interrupts   irqs/request
+	6.12         ~76        225 KB          242          ~3
+	7.1.10        76        225 KB         3661          ~48
+
+The block layer is merging identically - 76 requests of 225 KB on both. 7.1
+takes **one interrupt per 4 KB descriptor** where 6.12 takes about three per
+request. `IDMAC_DES0_DIC` ("disable interrupt on completion"), which should
+suppress intermediate completions, is not reaching the engine. Instrumenting the
+handler confirmed it: 92% of interrupts have both MINTSTS and IDSTS pending,
+with `IDSTS = 0x102` - IDMAC RI, per descriptor.
+
+**Four hypotheses tested and eliminated**, each with a measurement:
+
+1. **Chain bit.** 7.1 clears `IDMAC_DES0_CH` on the last descriptor where the
+   BSP keeps it ("keep CH set for chained mode"). Restoring it changed nothing
+   (1.62 MB/s).
+2. **PIO fallback.** `err_own_bit` was made visible; it fires **zero** times, so
+   DMA is genuinely running.
+3. **The descriptor code itself.** 6.12's `dw_mci_prepare_desc64/32` were
+   transplanted verbatim with a dispatcher, replacing the hand-patched merged
+   version. Still 2.22 MB/s. **This rules out the rewrite as the cause** and is
+   kept, since it removes a hand-written OWN-bit loop in favour of proven code.
+4. **Interrupt configuration.** `IDINTEN`, the RXDR/TXDR masking, the block
+   queue limits (`max_segments` 64, `max_segment_size` 4096, `max_sectors_kb`
+   256) and the negotiated bus (40 MHz, 4-bit, sd high-speed) are all identical
+   between the two kernels.
+
+**Where to look next.** The descriptors are prepared by identical code and the
+engine still ignores DIC, so the suspicion is that the writeback which publishes
+them is not taking effect on 7.1 - `dma_sync_single_for_device()` returns early
+if `dev->dma_coherent` is set, which would make every BSP sync a silent no-op
+while the `IDMAC_DESC_NONCOHERENT` quirk still reports true. The DTS carries
+`dma-noncoherent`, and `dev->dma_coherent = coherent` is identical in both
+trees, so the next step is to confirm at runtime whether
+`arch_sync_dma_for_device()` is actually reached on 7.1 - not to guess again.
+
+**Status: not fixed.** 6.12 remains the better performer for storage.
