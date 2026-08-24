@@ -266,3 +266,62 @@ The next place to look is the XIP early-boot path - `head.S`, and the 4K
 leaf-mapping code in `create_kernel_page_table()` that this board needs because
 RV32 folds the PMD. A `.text.fast`-style direct UART poke in `head.S` would
 localise it, since there is no console to print from yet.
+
+
+## What annoyedmilk/esp32-s31-linux teaches about 7.1
+
+That project runs **7.1 on this same SoC**, so it is worth being precise about
+why, and their kernel patches are public (`linux/patches/`, nine files, ~20 KB
+total against our 146 files).
+
+**They never use XIP.** Their loader "copies the exact Linux image ... through
+the cacheable aperture at `0x50000000`" and boots a BusyBox **initramfs**, so
+the kernel runs from PSRAM. Removing XIP in 7.1 cost them nothing.
+
+Their `0001-riscv-esp32s31-soc-support.patch` and our BSP agree, line for line,
+on every early-boot arch detail:
+
+- `.balign 64` before `handle_exception`, because stvec is forced to CLIC mode
+- `ori a0, a0, 3` on the trap vector for the CLIC mode bits
+- avoiding `csrw CSR_IE/CSR_IP` in `_start_kernel` and using
+  `csrc sstatus, 2` instead - **`sie`/`sip` are not implemented on this hart**,
+  so writing them traps before a handler exists
+- carrying `esp32_uart.c` out-of-tree with its Kconfig and Makefile entries
+  restored, since 7.x deleted it from mainline
+
+We already do all of that, and it is present and identical in both our 6.18 and
+7.2 ports. So the arch bring-up is not what stops 7.2.
+
+**By elimination, our 7.2 failure is in the XIP path** - the one part of the
+system their build does not exercise, and therefore the one part their work
+cannot validate for us.
+
+### Why we cannot simply copy their approach
+
+Running from RAM would sidestep XIP entirely and unblock 7.x. It is not
+available to us at this feature set: the image header reports
+`img_size = 0x899000`, so text+data+bss is **~9 MB of our 15.4 MB**. Their
+kernel is far smaller - initramfs, no DRM, no X, no sound stack. For us the
+kernel lives in flash precisely because the RAM is not there.
+
+### What is actually needed next
+
+An output channel that works before the console. Three candidates, in order of
+cost:
+
+1. **SBI early console.** Their README notes "its SBI early console hands off to
+   UART0", so *their* OpenSBI implements the legacy console extension. Ours
+   apparently does not - `earlycon=sbi` with `CONFIG_RISCV_SBI_V01` produced
+   nothing. Rebuilding OpenSBI with console support would give a channel that
+   works from the first kernel instruction.
+2. **JTAG.** `openocd-esp32` is installed on the host; halting the hart would
+   show exactly where it spins.
+3. **A version bisect** - port to 7.0 (last release with XIP in tree, no revert
+   needed) and then 7.1. If 7.0 boots, the fault is in 7.1/7.2 churn; if it does
+   not, it is in the 6.19-7.0 range and the revert is a red herring.
+
+**A raw UART poke does not work and should not be tried again.** Writing
+characters straight to `UART_FIFO_REG` at `0x2038a000` from `head.S` produced no
+output *even on the 6.18 kernel that boots*, which is what proved the technique
+dead rather than the kernel. Always run that control before trusting a silent
+instrument.

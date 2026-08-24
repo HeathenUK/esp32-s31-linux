@@ -14,6 +14,24 @@ diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users
 +DTC_FLAGS_espressif/esp32s31_generic := -@
  subdir-y += tenstorrent
  subdir-y += thead
+diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port72xip/arch/riscv/configs/esp32s31_defconfig linux-72-port/arch/riscv/configs/esp32s31_defconfig
+--- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port72xip/arch/riscv/configs/esp32s31_defconfig	2026-08-23 21:38:03.024662418 +0100
++++ linux-72-port/arch/riscv/configs/esp32s31_defconfig	2026-08-24 13:28:00.738955304 +0100
+@@ -109,7 +109,7 @@
+ CONFIG_FPU=y
+ 
+ # Kernel command line
+-CONFIG_CMDLINE="console=tty0 console=ttyS0,1000000n8 root=/dev/mmcblk0 rootfstype=ext4 rw rootwait init=/init profile=6"
++CONFIG_CMDLINE="earlycon=sbi console=tty0 console=ttyS0,1000000n8 root=/dev/mmcblk0 rootfstype=ext4 rw rootwait init=/init profile=6"
+ CONFIG_CMDLINE_FORCE=y
+ 
+ # Built-in DTB (no external loader needed)
+@@ -318,3 +318,5 @@
+ # kernel functions cost what - and without it, attributing cost is guesswork
+ # against a +/-40% noise floor.
+ CONFIG_PROFILING=y
++CONFIG_RISCV_SBI_V01=y
++CONFIG_SERIAL_EARLYCON_RISCV_SBI=y
 diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port72xip/arch/riscv/include/asm/cacheflush.h linux-72-port/arch/riscv/include/asm/cacheflush.h
 --- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port72xip/arch/riscv/include/asm/cacheflush.h	2026-08-24 12:38:30.419122117 +0100
 +++ linux-72-port/arch/riscv/include/asm/cacheflush.h	2026-08-24 12:39:52.968541540 +0100
@@ -98,6 +116,36 @@ diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users
  	help
  	  This enables support for the Espressif ESP32-S31 SoC.
  	  With MMU enabled the kernel runs in Supervisor mode behind OpenSBI.
+diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port72xip/arch/riscv/kernel/head.S linux-72-port/arch/riscv/kernel/head.S
+--- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port72xip/arch/riscv/kernel/head.S	2026-08-24 12:38:30.431697247 +0100
++++ linux-72-port/arch/riscv/kernel/head.S	2026-08-24 13:31:47.951202746 +0100
+@@ -50,6 +50,7 @@
+ 	.endm
+ #endif
+ 
++
+ SYM_CODE_START(_start)
+ 	/*
+ 	 * Image header expected by Linux boot-loaders. The image header data
+diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port72xip/arch/riscv/kernel/signal.c linux-72-port/arch/riscv/kernel/signal.c
+--- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port72xip/arch/riscv/kernel/signal.c	2026-08-24 12:38:30.434541040 +0100
++++ linux-72-port/arch/riscv/kernel/signal.c	2026-08-24 13:19:37.993947582 +0100
+@@ -361,6 +361,15 @@
+ 
+ 	if (is_shstk_enabled(current))
+ 		total_context_size += riscv_zicfiss_sc_size;
++#ifdef CONFIG_SOC_ESP32S31
++	/*
++	 * save_esp32s31_ext_state() always appends a record, so the frame has
++	 * to be sized for it - otherwise it is written past the end of the
++	 * frame, over the user stack, and rt_sigreturn restores a corrupt
++	 * context. See docs/kernel-upgrade.md.
++	 */
++	total_context_size += ESP32S31_EXT_SC_SIZE;
++#endif
+ 
+ 	/*
+ 	 * Preserved a __riscv_ctx_hdr for END signal context header if an
 diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port72xip/arch/riscv/mm/cacheflush.c linux-72-port/arch/riscv/mm/cacheflush.c
 --- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port72xip/arch/riscv/mm/cacheflush.c	2026-08-24 12:38:30.436021513 +0100
 +++ linux-72-port/arch/riscv/mm/cacheflush.c	2026-08-24 12:39:52.968727122 +0100
