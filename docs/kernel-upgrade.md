@@ -14,9 +14,15 @@ This board executes its kernel from flash because it has 15.4 MB of RAM. So the
 practical ceiling is v7.0 - and v7.0 is not in kernel.org's maintained list, so
 it gets no fixes.
 
-**Target: 6.18 LTS.** It keeps XIP, it is six releases newer than 6.12, and it
-is maintained. Going to 7.x would mean re-adding and then carrying a feature
-mainline deleted, which is a standing maintenance cost for no benefit here.
+**The last kernel with *working* XIP is 6.14**, not 6.18:
+
+	v6.12 .. v6.14   riscv runtime-const absent   XIP works
+	v6.15 .. v7.0    runtime-const present        XIP present but BROKEN
+	v7.1+            XIP removed
+
+So "6.18 still has XIP" is true and misleading - it is broken there too, and the
+runtime-const fix below is needed on *any* base past 6.14. Choosing 6.18 buys
+LTS maintenance, not working XIP.
 
 ## The BSP is small, which is what makes this tractable
 
@@ -111,6 +117,40 @@ The fix is three lines: under `CONFIG_XIP_KERNEL`, include
 `asm-generic/runtime-const.h` instead, which just uses the symbols directly.
 `arch/riscv/include/asm/runtime-const.h` in the port does this. With it, 6.18
 boots through DRM, the hosted radio, `wlan0`, `hci0`, microSD and EXT4.
+
+## 7.2, attempted
+
+Done, and it builds. `patches/0003-revert-riscv-remove-xip.patch` is commit
+`9b3a2be84803` reversed - 973 lines, 17 files - and reverts cleanly onto 7.2
+apart from two hunks: `xip_fixup.h` (patch cannot name a file it is re-creating
+from a deletion, so it lands as `Oops.rej`) and two `!XIP_KERNEL` guards in
+`arch/riscv/Kconfig` whose context drifted. Note the follow-up "riscv: further
+remove XIP" landed in the 7.3 merge window, so **7.2 needs only the one
+revert**.
+
+On top of that, 7.2 needs everything 6.18 needed **plus** six more API changes:
+
+| Change | Fix |
+|---|---|
+| `clk_ops.round_rate` removed | `determine_rate(hw, struct clk_rate_request *)`, reports through the request |
+| ASoC `pcm_construct` | renamed `pcm_new`; our callback already had the right signature |
+| `snd_soc_dapm_kcontrol_component/dapm` | `..._to_component` / `..._to_dapm` |
+| cfg80211 `get_station` | takes `struct wireless_dev *`, not `struct net_device *` |
+| `bin2hex` | moved to `linux/hex.h` |
+| `esp32_uart.c` `.remove_new` | it is our file now, so it never got upstream's conversion |
+
+`patches/0002-esp32s31-7.2-api-fixes.patch`: 31 files, 682 lines. It builds at
+6,094,841 bytes with 327 KB spare.
+
+**It does not boot** - completely silent, like 6.18 was before the DTB fix. But
+the config is verifiably right this time (`XIP_KERNEL=y`, `XIP_PHYS_ADDR`,
+`BUILTIN_DTB_NAME` populated, runtime-const falling back), so this is a
+different and so-far unidentified fault, and it needs its own early-boot
+investigation.
+
+**6.18 is much further along** - it boots the entire kernel and reaches
+userspace. That is the honest reason to prefer it today, as opposed to the
+reason originally given here, which was wrong: 6.18's in-tree XIP is broken too.
 
 ## Reaching 7.1 / 7.2
 
