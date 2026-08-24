@@ -106,6 +106,19 @@ diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users
  	help
  	  This enables support for the Espressif ESP32-S31 SoC.
  	  With MMU enabled the kernel runs in Supervisor mode behind OpenSBI.
+diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port71xip/arch/riscv/kernel/cpufeature.c linux-71-port/arch/riscv/kernel/cpufeature.c
+--- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port71xip/arch/riscv/kernel/cpufeature.c	2026-08-24 14:15:11.595910960 +0100
++++ linux-71-port/arch/riscv/kernel/cpufeature.c	2026-08-24 16:17:00.658379606 +0100
+@@ -146,7 +146,8 @@
+ 	 * Due to extension ordering, d is checked before f, so no deferral
+ 	 * is required.
+ 	 */
+-	if (!__riscv_isa_extension_available(isa_bitmap, RISCV_ISA_EXT_d)) {
++	if (!IS_ENABLED(CONFIG_SOC_ESP32S31) &&
++	    !__riscv_isa_extension_available(isa_bitmap, RISCV_ISA_EXT_d)) {
+ 		pr_warn_once("This kernel does not support systems with F but not D\n");
+ 		return -EINVAL;
+ 	}
 diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port71xip/arch/riscv/kernel/signal.c linux-71-port/arch/riscv/kernel/signal.c
 --- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port71xip/arch/riscv/kernel/signal.c	2026-08-24 14:15:11.600757953 +0100
 +++ linux-71-port/arch/riscv/kernel/signal.c	2026-08-24 14:16:09.389743464 +0100
@@ -344,7 +357,7 @@ diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users
  obj-$(CONFIG_STARFIVE_JH8100_INTC)	+= irq-starfive-jh8100-intc.o
 diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port71xip/drivers/mmc/host/dw_mmc.c linux-71-port/drivers/mmc/host/dw_mmc.c
 --- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port71xip/drivers/mmc/host/dw_mmc.c	2026-08-24 14:15:11.643437759 +0100
-+++ linux-71-port/drivers/mmc/host/dw_mmc.c	2026-08-24 15:40:45.495468710 +0100
++++ linux-71-port/drivers/mmc/host/dw_mmc.c	2026-08-24 16:17:00.657226278 +0100
 @@ -959,14 +959,47 @@
  			 * isn't still owned by IDMAC as IDMAC's write
  			 * ops and CPU's read ops are asynchronous.

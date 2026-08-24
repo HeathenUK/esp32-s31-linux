@@ -448,3 +448,70 @@ not obviously explain a hang before console init.
 
 **7.2 needs a real early-boot channel** (OpenSBI console driver, or JTAG) rather
 than another hypothesis.
+
+
+## The F-without-D limitation: why everything floating-point was broken
+
+Every kernel past 6.12 rejected this hart's FPU outright. `/proc/cpuinfo` told
+the story once it was compared side by side:
+
+	6.12:  rv32imafc_..._zca_zcf_...   f and zcf present
+	7.1:   rv32imac_..._zca_...        both gone
+
+Upstream added a validator for the `f` extension after 6.12:
+
+	static int riscv_ext_f_validate(...)
+	{
+		if (!IS_ENABLED(CONFIG_FPU))
+			return -EINVAL;
+		if (!__riscv_isa_extension_available(isa_bitmap, RISCV_ISA_EXT_d)) {
+			pr_warn_once("This kernel does not support systems with F but not D\n");
+			return -EINVAL;
+		}
+		return 0;
+	}
+
+**It requires D.** This hart is `rv32imafc` - F with no D - so `f` was dropped
+from the ISA bitmap, `has_fpu()` returned false, `start_thread()` never set
+`SR_FS_INITIAL`, and `sstatus.FS` stayed **Off**. With FS off, *any* access to
+an FP CSR is an illegal instruction. That is the whole explanation for the
+"Illegal instruction" messages seen from `ifup`, `dbus-daemon` inside
+`libexpat`, `awk` and CoreMark on 6.18, 7.0 and 7.1.
+
+Decoding the trap made it unambiguous: `badaddr = 0x00132073` is
+`csrs fflags, t1`, and `status: 80018020` has FS = 0.
+
+The support is real on our side - the BSP already patches `fpu.S` to save and
+restore F-only state with `fsw`/`flw`, because this hardware has always been
+F-without-D. Upstream simply declined to support the combination. Relaxing the
+check for `CONFIG_SOC_ESP32S31` restores `rv32imafc..._zcf_...`, and `fptest`
+passes: float add, float mul, double add and `ceilf` all correct.
+
+**This is worth reporting upstream.** F-without-D is a legal RISC-V
+configuration, the kernel's own `fpu.S` can be built for it, and the rejection
+is a policy choice rather than a technical limit.
+
+## Does 7.1 actually perform better than 6.12?
+
+Measured on the board, text mode, five CoreMark runs per arm, fresh boot each:
+
+	              6.12        7.1.10
+	median       1013.63     1018.69     +0.5%
+	spread        0.26%       0.13%
+	MemAvailable  4868 kB     5984 kB     +1116 kB (+23%)
+
+**The CPU difference is real but negligible**; the ranges do not overlap
+(6.12 peaks at 1014.04, 7.1 bottoms at 1018.17), so +0.5% is a genuine
+measurement rather than noise, and it is not worth an upgrade on its own.
+
+**The memory difference is the real gain: 23% more MemAvailable at idle.** On a
+board where memory is the binding constraint that matters far more than half a
+percent of CPU.
+
+Caveat worth stating: CoreMark is a pure integer CPU benchmark and exercises
+none of the memory-management work, so it is the *wrong* instrument for the
+question - it is reported here only because it is the arm that can be compared
+cleanly. The MemAvailable figure is the one to act on.
+
+An earlier single 6.12 run read 997.55, below the entire five-run range, which
+is the usual reminder that one run is not a measurement.

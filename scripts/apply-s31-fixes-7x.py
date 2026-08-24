@@ -90,3 +90,25 @@ p='drivers/gpu/drm/espressif/esp32s31-lcd.c'; s=rd(p)
 if '#include <drm/drm_print.h>' not in s:
     a='#include <drm/drm_fbdev_dma.h>'
     if a in s: wr(p, s.replace(a,'#include <drm/drm_print.h>\n'+a,1)); print('  drm_print.h')
+
+# 7. Upstream rejects F-without-D ("This kernel does not support systems with F
+#    but not D"), added after 6.12. This hart is rv32imafc - F, no D - so the
+#    check leaves has_fpu() false, sstatus.FS never gets enabled, and every
+#    userspace FP operation traps as an illegal instruction. Our fpu.S already
+#    saves and restores F-only state with fsw/flw, so the support is real.
+p='arch/riscv/kernel/cpufeature.c'
+if os.path.exists(B+p):
+    s=rd(p)
+    old = """	if (!__riscv_isa_extension_available(isa_bitmap, RISCV_ISA_EXT_d)) {
+		pr_warn_once("This kernel does not support systems with F but not D\\n");
+		return -EINVAL;
+	}"""
+    new = """	if (!IS_ENABLED(CONFIG_SOC_ESP32S31) &&
+	    !__riscv_isa_extension_available(isa_bitmap, RISCV_ISA_EXT_d)) {
+		pr_warn_once("This kernel does not support systems with F but not D\\n");
+		return -EINVAL;
+	}"""
+    if old in s:
+        wr(p, s.replace(old,new,1)); print('  F-without-D validator relaxed')
+    elif 'IS_ENABLED(CONFIG_SOC_ESP32S31) &&' in s:
+        print('  F-without-D already relaxed')
