@@ -363,7 +363,7 @@ diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users
  obj-$(CONFIG_STARFIVE_JH8100_INTC)	+= irq-starfive-jh8100-intc.o
 diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port71xip/drivers/mmc/host/dw_mmc.c linux-71-port/drivers/mmc/host/dw_mmc.c
 --- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port71xip/drivers/mmc/host/dw_mmc.c	2026-08-24 14:15:11.643437759 +0100
-+++ linux-71-port/drivers/mmc/host/dw_mmc.c	2026-08-24 20:02:35.338305355 +0100
++++ linux-71-port/drivers/mmc/host/dw_mmc.c	2026-08-24 20:53:08.684988472 +0100
 @@ -928,26 +928,23 @@
  	return 0;
  }
@@ -610,7 +610,15 @@ diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users
  static int dw_mci_idmac_start_dma(struct dw_mci *host, unsigned int sg_len)
  {
  	u32 temp;
-@@ -1539,7 +1635,7 @@
+@@ -1032,6 +1128,7 @@
+ 	if (ret)
+ 		goto out;
+ 
++
+ 	/* drain writebuffer */
+ 	wmb();
+ 
+@@ -1539,7 +1636,7 @@
  
  		/* enable clock; only low power if no SDIO */
  		clk_en_a = SDMMC_CLKEN_ENABLE;
@@ -619,16 +627,7 @@ diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users
  			clk_en_a |= SDMMC_CLKEN_LOW_PWR;
  		mci_writel(host, CLKENA, clk_en_a);
  
-@@ -3031,8 +3127,6 @@
- 	struct dw_mci *host = dev_id;
- 	u32 pending;
- 
--	pending = mci_readl(host, MINTSTS); /* read-only mask reg */
--
- 	if (pending) {
- 		/*
- 		 * Stamp both completions here, from one read of the pending
-@@ -3226,6 +3320,79 @@
+@@ -3226,6 +3323,79 @@
  	return IRQ_HANDLED;
  }
  
@@ -708,7 +707,7 @@ diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users
  static int dw_mci_init_host_caps(struct dw_mci *host)
  {
  	const struct dw_mci_drv_data *drv_data = host->drv_data;
-@@ -3324,7 +3491,7 @@
+@@ -3324,7 +3494,7 @@
  	/* Must precede mmc_add_host(): the core enables it during card init. */
  	ret = dw_mci_hsq_init(host, mmc);
  	if (ret)
@@ -717,7 +716,7 @@ diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users
  
  	ret = mmc_add_host(mmc);
  	if (ret)
-@@ -3726,8 +3893,11 @@
+@@ -3726,8 +3896,11 @@
  	timer_setup(&host->cmd11_timer, dw_mci_cmd11_timer, 0);
  	timer_setup(&host->cto_timer, dw_mci_cto_timer, 0);
  	timer_setup(&host->dto_timer, dw_mci_dto_timer, 0);

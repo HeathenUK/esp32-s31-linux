@@ -149,6 +149,13 @@ for kernel work; the rootfs only needs rebuilding when userspace changes.
   the working tree, not just HEAD, before concluding what the board runs.
 - **A DTS edit needs both `make linux` and `make opensbi`** - the kernel uses a
   builtin DTB, so rebuilding only OpenSBI silently leaves the old tree in force.
+- **Grep the build log for `warning:`, not just `error:`.** A dropped
+  `pending = mci_readl(host, MINTSTS);` in the 7.1 dw_mmc port left the MMC
+  interrupt handler branching on an uninitialised stack value - 2.35 MB/s
+  instead of 12.6, console floods, and boots that hung in different places each
+  time. GCC had printed `'pending' is used uninitialized` on every build for
+  days. **Non-deterministic symptoms from a deterministic image mean
+  uninitialised memory** - check the warnings before theorising.
 - **Buildroot ignores unknown defconfig symbols.** Always grep the generated
   `.config` to confirm a package is actually enabled.
 - **`/usr/bin`, `/usr/lib` and `/lib` are read-only overlays** stacking two

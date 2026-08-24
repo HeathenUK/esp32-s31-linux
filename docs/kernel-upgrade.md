@@ -672,46 +672,72 @@ touches storage, and 7.1 is better only on memory headroom.** 7.1 should not be
 treated as a straight upgrade until the SD path is back to ~12 MB/s.
 
 
-## The SD regression on 7.1: localised, not yet fixed
+## The SD regression on 7.1: fixed
 
-**Symptom.** 7.1 reads the card at ~2.2 MB/s against 6.12's 12.6 MB/s.
+**Symptom.** 7.1 read the card at 2.35 MB/s against 6.12's 12.6 MB/s, took one
+interrupt per 4 KB descriptor instead of ~3 per request, and - once the card
+happened to come up in the wrong state - flooded the console with "interrupt
+status did not quiesce" and never mounted the rootfs at all.
 
-**Localised to one thing.** Per 16 MB read:
+**Cause.** The port dropped one line from `dw_mci_interrupt_once()`:
 
-	           requests   avg request   interrupts   irqs/request
-	6.12         ~76        225 KB          242          ~3
-	7.1.10        76        225 KB         3661          ~48
+	 	u32 pending;
+	 
+	-	pending = mci_readl(host, MINTSTS); /* read-only mask reg */
+	-
+	 	if (pending) {
 
-The block layer is merging identically - 76 requests of 225 KB on both. 7.1
-takes **one interrupt per 4 KB descriptor** where 6.12 takes about three per
-request. `IDMAC_DES0_DIC` ("disable interrupt on completion"), which should
-suppress intermediate completions, is not reaching the engine. Instrumenting the
-handler confirmed it: 92% of interrupts have both MINTSTS and IDSTS pending,
-with `IDSTS = 0x102` - IDMAC RI, per descriptor.
+`pending` was left **uninitialised**, so the handler dispatched on whatever was
+on the stack. Every branch - clear the error, clear DATA_OVER, clear CMD_DONE -
+is guarded by a bit test against that garbage, so the real status bits were
+usually never written back. The interrupt therefore re-asserted immediately,
+which is both the per-descriptor interrupt storm and the quiesce flood; and
+because the bottom half that resets the controller after an error is starved by
+that storm, a card that hit a command timeout during init could never recover.
 
-**Four hypotheses tested and eliminated**, each with a measurement:
+The non-determinism was the tell and should have been read as one much earlier:
+identical images alternately booted, hung at the first command, or hung after
+enumeration, because an uninitialised stack slot is not the same twice.
+
+**GCC had been reporting it the whole time:**
+
+	drivers/mmc/host/dw_mmc.c:3139:12: warning: 'pending' is used uninitialized
+
+It was missed because the build log was being grepped for `error:` only. Grep
+for `warning:` too - see the note in `CLAUDE.md`.
+
+**Result**, three 16 MB reads per arm, cache dropped between each, fresh boot per
+arm, same script both sides:
+
+	                mean       throughput   interrupts / 48 MB
+	 6.12        1.267 s        12.6 MB/s          793
+	 7.1 before       -          2.35 MB/s      ~11,000
+	 7.1 after   1.540 s        10.4 MB/s          721
+
+The 6.12 arm reproduces its historical 12.6 MB/s exactly, which validates the
+method. Interrupt count is now marginally *better* than 6.12, so the remaining
+**~18% gap is not interrupt overhead** and is something else in 7.1 - worth a
+look if storage throughput ever becomes the binding constraint, but it is no
+longer a regression of a different order.
+
+### Four hypotheses tested and eliminated before finding it
+
+Recorded because each cost a build/flash/measure cycle and none should be
+re-tried:
 
 1. **Chain bit.** 7.1 clears `IDMAC_DES0_CH` on the last descriptor where the
-   BSP keeps it ("keep CH set for chained mode"). Restoring it changed nothing
-   (1.62 MB/s).
-2. **PIO fallback.** `err_own_bit` was made visible; it fires **zero** times, so
-   DMA is genuinely running.
-3. **The descriptor code itself.** 6.12's `dw_mci_prepare_desc64/32` were
-   transplanted verbatim with a dispatcher, replacing the hand-patched merged
-   version. Still 2.22 MB/s. **This rules out the rewrite as the cause** and is
-   kept, since it removes a hand-written OWN-bit loop in favour of proven code.
-4. **Interrupt configuration.** `IDINTEN`, the RXDR/TXDR masking, the block
-   queue limits (`max_segments` 64, `max_segment_size` 4096, `max_sectors_kb`
-   256) and the negotiated bus (40 MHz, 4-bit, sd high-speed) are all identical
-   between the two kernels.
+   BSP keeps it. Restoring it changed nothing (1.62 MB/s).
+2. **PIO fallback.** `err_own_bit` was made visible; it fires **zero** times.
+3. **The descriptor code.** 6.12's `dw_mci_prepare_desc64/32` were transplanted
+   verbatim with a dispatcher. Still 2.22 MB/s. **Kept anyway**, since it
+   replaces a hand-written OWN-bit loop with proven code.
+4. **DMA coherency.** The theory was that `dma_sync_single_for_device()` was a
+   no-op leaving the engine on stale descriptors. Instrumented directly:
+   `dma_coherent=0 noncoherent_quirk=1`, so the syncs are real. Dead.
 
-**Where to look next.** The descriptors are prepared by identical code and the
-engine still ignores DIC, so the suspicion is that the writeback which publishes
-them is not taking effect on 7.1 - `dma_sync_single_for_device()` returns early
-if `dev->dma_coherent` is set, which would make every BSP sync a silent no-op
-while the `IDMAC_DESC_NONCOHERENT` quirk still reports true. The DTS carries
-`dma-noncoherent`, and `dev->dma_coherent = coherent` is identical in both
-trees, so the next step is to confirm at runtime whether
-`arch_sync_dma_for_device()` is actually reached on 7.1 - not to guess again.
-
-**Status: not fixed.** 6.12 remains the better performer for storage.
+A fifth change - gating the poll timer's raw `RINTSTS` RXDR/TXDR test on
+`host->sg` - was written, tested and **reverted**. The reasoning was sound (those
+bits are masked during IDMAC transfers and only the PIO path ever writes them
+back, so the condition is permanently true during DMA) but it was a guess at a
+symptom, and with `pending` fixed the poll timer is no longer hot. Left alone
+deliberately; revisit only with a measurement.
