@@ -617,3 +617,56 @@ LTS and the sensible resting place if the board is to be left alone.
 while working on 7.1, so a 6.18 image built today still has the FPU disabled and
 will SIGILL on any floating-point userspace. Apply
 `scripts/apply-s31-fixes-7x.py` to that tree before using it.
+
+
+## Real-workload benchmark: 7.1.10 against 6.12
+
+Same microSD, same rootfs, same binaries, same corpus (4 MB and 16 MB built from
+real `/usr/bin` content). Only the kernel differs. Caches dropped before every
+timed run; three iterations per arm; fresh boot per arm.
+
+	task (seconds, lower better)   6.12              7.1.10
+	gzip 4 MB                      18.71 21.85 19.74  20.73 18.47 18.82
+	sha256sum 16 MB                 5.31  5.36  5.22  11.91 12.19  5.40
+	grep 16 MB                     39.72 39.37 54.49  72.74 64.63 52.70
+	tar /usr                       21.01 20.83 20.83  43.96 40.21 22.54
+	find / -xdev                    6.30  6.26  6.18   7.96  6.96  6.74
+
+	MemAvailable at settle          4836 kB           5788 kB   +952 kB (+20%)
+	raw SD read (16 MB, dd)        12.6 MB/s          2.35 MB/s  5.4x SLOWER
+
+### What it says
+
+- **CPU-bound work is at parity.** `gzip` of a cached 4 MB file is ~19-21 s on
+  both, consistent with the CoreMark result (+0.5%). There is no CPU win in 7.1
+  and there is no CPU loss.
+- **Memory is a real win: +952 kB MemAvailable (+20%)**, matching the earlier
+  +1116 kB measurement. On this board that is the gain worth having.
+- **Storage is a serious regression: 7.1 reads the card at 2.35 MB/s against
+  6.12's 12.6 MB/s.** Everything that touches the SD inherits it - `sha256sum`,
+  `grep` and `tar` are all roughly 2x slower, and the variance is much worse
+  (`tar` ranges 22.5-44.0 s where 6.12 sits at 20.8-21.0 s).
+
+### It is not what it looks like
+
+Three plausible causes were checked and eliminated:
+
+- **Not retried errors.** `data error` count was 3 before the workload and 3
+  after; the errors happen at init, not under load.
+- **Not bus negotiation.** Both kernels end up identical: 40 MHz, 4-bit,
+  `sd high-speed`, "new high speed SDXC card". An earlier 20 MHz reading came
+  from a pre-fix boot and was misleading.
+- **Not optional.** Removing the per-descriptor cache invalidate makes the board
+  fail to boot at all, so the invalidate is load-bearing, not overhead that can
+  simply be deleted.
+
+The cost is in the descriptor coherency path that had to be **rewritten** for
+7.1 - upstream replaced the open-coded OWN-bit loop with
+`readl_poll_timeout_atomic()`, which cannot invalidate between reads, so the
+loop was written back by hand. 6.12 carries the same logic as an applied patch
+hunk and is fast; the hand-written 7.1 version is correct but expensive. That
+is where to look next, not at the bus or the card.
+
+**Verdict: on current evidence 6.12 is the better performer for anything that
+touches storage, and 7.1 is better only on memory headroom.** 7.1 should not be
+treated as a straight upgrade until the SD path is back to ~12 MB/s.
