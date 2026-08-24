@@ -25,3 +25,6 @@ imager/sdrecv
 imager/__pycache__/
 linux-618-port/
 linux-72-port/
+__pycache__/
+Packages.stamps
+images/feed/
