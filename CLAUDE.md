@@ -55,7 +55,15 @@ download mode). Read it instead of re-running blind.
 
 **Do not re-derive the screenshot path.** The scanout address is allocated, not
 fixed, and `/dev/fb0` is fbdev emulation rather than what Xorg actually paints.
-`screenshot.py` handles both.
+`screenshot.py` handles both - and the **geometry is not always 800x480**. If
+the CMA pool is exhausted by client buffers the driver logs `no scanout buffer
+... scaling off` and scans out the client plane directly at 640x384 / 491,520
+bytes. Assuming 800x480 then decodes 1280-byte rows as 1600 and reads 276,480
+bytes past the end, producing a tiled, sheared image with RGB noise across the
+bottom third that looks like a dead panel. The debugfs `size=` field does not
+help - it still reports the native 768,000 in that mode. Take the geometry from
+the last `scanout started` line, and the address from debugfs `scanout=`, not
+from dmesg (which records it at mode-set time and goes stale).
 
 There is a correct tool for each of these and improvising has repeatedly wasted
 whole afternoons:
