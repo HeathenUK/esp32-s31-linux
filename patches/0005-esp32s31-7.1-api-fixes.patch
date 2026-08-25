@@ -400,7 +400,7 @@ diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users
  		.of_match_table = esp32s31_axi_of_match,
 diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port71xip/drivers/gpu/drm/espressif/esp32s31-lcd.c linux-71-port/drivers/gpu/drm/espressif/esp32s31-lcd.c
 --- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port71xip/drivers/gpu/drm/espressif/esp32s31-lcd.c	2026-08-23 20:19:50.264325652 +0100
-+++ linux-71-port/drivers/gpu/drm/espressif/esp32s31-lcd.c	2026-08-24 15:45:07.667005502 +0100
++++ linux-71-port/drivers/gpu/drm/espressif/esp32s31-lcd.c	2026-08-25 06:04:25.373280570 +0100
 @@ -49,6 +49,8 @@
  #include <uapi/drm/esp32s31_drm.h>
  #include <drm/drm_drv.h>
@@ -418,7 +418,48 @@ diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users
  	.name			= DRIVER_NAME,
  	.desc			= "Espressif ESP32-S31 LCD_CAM",
  	.major			= 1,
-@@ -2743,8 +2746,8 @@
+@@ -2390,7 +2393,30 @@
+ };
+ 
+ /*
+- * Complete cursor-only commits without waiting for vblank.
++ * Complete commits without waiting for vblank.
++ *
++ * Default flipped to false 2026-08-25, on measurement. A full-screen xfill
++ * repaint takes ~42 ms of actual work, against a frame period of 23.7 ms at
++ * this panel's 42 Hz, so waiting rounds every repaint up to two whole frames -
++ * 47.45 ms - and the measured median lands there exactly. Alternating the
++ * toggle within one boot, three pairs:
++ *
++ *     wait_vblank=Y   49.2  49.9  49.7 ms   (max 77-103)
++ *     wait_vblank=N   42.6  42.4  41.0 ms   (max 54-76)
++ *
++ * 15% off the median and a third off the tail. The gap histogram is the proof
++ * that this is quantisation rather than work: gap_frames showed 61 updates at
++ * exactly 2 frame periods and none at 1.
++ *
++ * The cost is that a primary-plane copy can now race scanout, so a full-screen
++ * update can tear. Scanout is free-running cyclic DMA into a buffer the driver
++ * copies into, so there is no client buffer being recycled underneath - the
++ * exposure is a visible seam, not corruption. Verified against the panel at
++ * 640x384: clean. Set it back at runtime if a workload makes tearing obvious:
++ *
++ *     echo Y > /sys/module/esp32s31_lcd/parameters/wait_vblank
++ *
++ * Original rationale, still true, for cursor-only commits:
+  *
+  * The default commit tail ends in drm_atomic_helper_wait_for_vblanks(), so
+  * every atomic commit blocks until the next frame boundary - 23.7 ms at this
+@@ -2406,7 +2432,7 @@
+  * The wait is kept for anything touching the primary plane, where it still
+  * does its job of stopping a client reusing a buffer that is being displayed.
+  */
+-static bool wait_vblank = true;
++static bool wait_vblank;	/* measured: see above */
+ module_param(wait_vblank, bool, 0644);
+ MODULE_PARM_DESC(wait_vblank,
+ 		 "hold the CRTC lock waiting for vblank after a non-cursor commit");
+@@ -2743,8 +2769,8 @@
  	 * every flip event carrying an invented timestamp, and a compositor
  	 * scheduling from it repainted about once every 12 seconds.
  	 */
@@ -429,7 +470,7 @@ diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users
  
  	lcd->irq = platform_get_irq(pdev, 0);
  	if (lcd->irq < 0)
-@@ -2891,7 +2894,7 @@
+@@ -2891,7 +2917,7 @@
  	if (ret)
  		return ret;
  

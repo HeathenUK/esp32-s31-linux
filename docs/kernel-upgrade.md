@@ -836,3 +836,69 @@ that spread; only the move from ~375 is outside it.
 - **MGLRU, THP, memcg, zswap.** None built in either kernel.
 - **Debug/hardening config.** No KASAN, LOCKDEP, FORTIFY or HARDENED_USERCOPY
   difference.
+
+## Repaint is not slower on 7.1 - it is quantised to the panel
+
+An earlier note here claimed 7.1 repainted more slowly than 6.12 (43.0 against
+49.7 ms). **That was wrong**, and worth recording as a measurement error rather
+than quietly deleting: the two figures came from two different scripts run on
+single boots. With one script across three boots each:
+
+	 6.12   47.3  43.7  47.1  46.8  47.1  43.5     median 46.95
+	 7.1    42.0  38.9  48.1  49.6  47.0  47.0     median 47.0
+
+Identical central tendency. 7.1 has the wider spread, and any single pair of
+boots can be made to show either kernel winning.
+
+**What actually sets the number.** The panel runs at 42 Hz, a frame period of
+23.725 ms, and the driver's own gap histogram shows where the time goes:
+
+	gap_frames=0,0,61,15,1,3   frame_period_ns=23725333
+
+61 updates took exactly two frame periods and **none took one**.
+2 x 23.725 = 47.45 ms, which is the median on both kernels. A full-screen xfill
+repaint is ~42 ms of real work against a 23.7 ms frame, so waiting for vblank
+always rounds it up to two whole frames.
+
+The driver is not the cost. Splitting one run on 7.1: `upd_ns` is 9.5 ms per
+update (~20% of the repaint), of which the PPA is 0.66 ms and cache flushes
+0.30 ms. The rest is X's software fill - `AccelMethod none` with a shadow
+framebuffer, which is the documented ceiling. Proof that driver time is not
+what is being measured: one boot chose the CPU path instead of the PPA and
+`upd_ns` collapsed from 9.7 ms to 0.45 ms per update **with no change at all to
+the repaint median** (47.0 against 48.1).
+
+### The fix, and what it costs
+
+`wait_vblank` now defaults to false. Alternating the toggle within one boot,
+which controls for the boot-to-boot spread above:
+
+	 wait_vblank=Y   49.2  49.9  49.7 ms    max 77-103
+	 wait_vblank=N   42.6  42.4  41.0 ms    max 54-76
+
+15% off the median and a third off the tail, and it carries into the loaded
+desktop: 238.5/241.4/239.1 ms against 275-315 before.
+
+The cost is a possible tear on full-screen primary-plane updates, since the copy
+can now race scanout. There is no client buffer being recycled underneath -
+scanout is free-running cyclic DMA into a buffer the driver copies into - so the
+exposure is a seam, not corruption, and the panel was checked at 640x384. It is
+a runtime toggle:
+
+	echo Y > /sys/module/esp32s31_lcd/parameters/wait_vblank
+
+### Raising the panel refresh: considered, not done
+
+60 Hz would need pclk 25.6 MHz against the present 18 MHz (Espressif's own
+value for this ST7262E43). It is not obviously a win and was not attempted
+blind:
+
+- It would help the **common** case - typical desktop damage is ~69 KB, ~6 ms of
+  work, so those repaints are pure one-frame waits and would go 23.7 -> 16.7 ms.
+- It would **hurt** full-screen updates: 42 ms of work against a 16.7 ms frame
+  is three frames, 50 ms, worse than the 47.45 it costs now.
+- It raises scanout DMA from 32.3 to 46 MB/s of continuous PSRAM reads on a
+  board where memory bandwidth, not CPU, is the binding constraint.
+
+Worth measuring if small-update latency ever becomes the complaint; the arms are
+`.clock` in `espressif_sub3_mode` and a `make linux`.
