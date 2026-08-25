@@ -435,3 +435,50 @@ and the window stacking differs trial to trial, so each trial does different
 work. Before more sweeps are worth running, the scenarios need to restore
 identical state between trials, and trial counts need to go to 30-50. Adding
 knobs to a harness this noisy just manufactures more retracted findings.
+
+### Making the scenarios deterministic - what it was worth
+
+The scenarios were rebuilt so every trial does identical work: fixed targets
+derived from the launch geometry, `raise` restores the stacking before each
+trial, `key` types the same glyph and backspaces it, `move` and `drag` alternate
+direction so the pointer and window stay put.
+
+Repeatability within one boot, identical config, three repeats each:
+
+	           rep1   rep2   rep3    spread
+	 click     64.5   68.3   60.7     +/-6%
+	 key       84.9   76.1   86.1     +/-7%
+	 raise     40.9   65.1   85.4     +/-108%, monotonic
+
+click and key went from 40-80% spread to +/-6-7%. **`raise` is excluded**: it
+does not scatter, it *climbs* - 40.9, 65.1, 85.4 - so something degrades as the
+raise/lower cycle repeats, and that needs finding before the row is usable.
+
+**One target was accumulating and nearly cost another false result.** The click
+scenario aimed at an xcalc digit, so forty trials entered a forty-digit number:
+the display kept growing and the damage changed trial to trial. A sweep run that
+way had its control read 167 ms on the first arm and 67 ms on the repeat. Aiming
+at AC instead - which always leaves the display showing 0 - took the control to
+94.9 and 94.1, **0.8% apart**.
+
+### Sweep 3: ppa_min_bytes, with a control that reproduces
+
+	 ppa_min_bytes        click first    key first
+	 131072 (default)        94.9          97.6
+	 0 (always PPA)          94.8          -
+	 99999999 (never PPA)    86.2          86.5
+	 131072 (repeat)         94.1          88.9
+
+Confirmed over three further pairs: default 108.3 / 106.1, never-PPA 100.2 /
+98.2 - **~7.5% better with the PPA off**, consistently, with the default
+reproducing to 2%.
+
+Small but real, and the mechanism is consistent with `accel-plan.md`: the
+crossover there is a *throughput* crossover measured on an idle board, while
+this is *latency* under a loaded desktop, where the engine's fixed completion
+wait is contended. The latency crossover is evidently higher than 128 KB.
+
+**The default is left at 131072 for now.** 7.5% does not justify overriding a
+threshold that was measured properly for large blits, and the trade against
+whole-surface copies has not been measured under this harness. The right next
+step is a size-resolved comparison rather than an all-or-nothing switch.

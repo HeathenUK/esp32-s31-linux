@@ -54,6 +54,32 @@
 #define MAXTRIAL   200
 #define MAXEVENT   4096
 
+/*
+ * Fixed interaction targets, in the 640x384 render area (the pointer lives
+ * there, not in the 800x480 panel). Derived from the layout the harness
+ * launches: xterm -geometry 44x12+16+48, xcalc +330+60, xterm 40x8+40+250.
+ *
+ * These exist because the first version aimed at "whatever is under the
+ * pointer" and alternated corners, so window stacking differed from trial to
+ * trial and each trial did different work. Median-of-8 then varied 40-80%
+ * between passes, which is far too coarse to see anything worth tuning.
+ */
+#define T1_TITLE_X  150		/* xterm 1 title bar */
+#define T1_TITLE_Y   59
+#define T1_BODY_X   150		/* xterm 1 client area, for focus */
+#define T1_BODY_Y   120
+#define T2_TITLE_X  150		/* xterm 2 title bar */
+#define T2_TITLE_Y  242
+/*
+ * xcalc's AC (clear), not a digit. Clicking a digit ACCUMULATES: forty trials
+ * enter a forty-digit number, the display keeps growing, and the damage
+ * changes trial to trial - which quietly destroyed a sweep whose control
+ * read 167 ms on the first arm and 67 ms on the repeat. AC always leaves the
+ * display showing 0, so every trial repaints the same thing.
+ */
+#define CALC_KEY_X  535
+#define CALC_KEY_Y   85
+
 static unsigned long fb_base;
 static size_t fb_size = 0x00200000UL;
 static unsigned long pool_base;
@@ -288,6 +314,7 @@ int main(int argc, char **argv)
 	ioctl(fd, UI_SET_KEYBIT, KEY_ENTER);
 	ioctl(fd, UI_SET_KEYBIT, KEY_TAB);
 	ioctl(fd, UI_SET_KEYBIT, KEY_ESC);
+	ioctl(fd, UI_SET_KEYBIT, KEY_BACKSPACE);
 	ioctl(fd, UI_SET_KEYBIT, KEY_LEFTALT);
 	memset(&us, 0, sizeof(us));
 	us.id.bustype = BUS_USB;
@@ -335,7 +362,7 @@ int main(int argc, char **argv)
 				continue;
 			}
 			t_inject = now_ms();
-			rel(fd, 6, 3);
+			rel(fd, (i & 1) ? -6 : 6, (i & 1) ? -3 : 3);
 			watch_until_quiet(fb, t_inject, &w);
 			first[i] = w.first;
 			settle[i] = w.last;
@@ -405,12 +432,14 @@ int main(int argc, char **argv)
 	 * as a dead desktop rather than an unfocused one.
 	 */
 	if (!strcmp(scen, "key")) {
-		warp(fd, 300, 200);
+		warp(fd, T1_BODY_X, T1_BODY_Y);
 		emit(fd, EV_KEY, BTN_LEFT, 1); syn(fd);
 		emit(fd, EV_KEY, BTN_LEFT, 0); syn(fd);
 		usleep(500000);
-		printf("clicked at 300,200 to take focus\n");
+		printf("focused xterm 1 at %d,%d\n", T1_BODY_X, T1_BODY_Y);
 	}
+	if (!strcmp(scen, "click"))
+		warp(fd, CALC_KEY_X, CALC_KEY_Y);
 
 	/* --------------- latency scenarios --------------- */
 	for (i = 0; i < trials; i++) {
@@ -423,16 +452,34 @@ int main(int argc, char **argv)
 			continue;
 		}
 
+		/*
+		 * Restore identical state before each trial, so every trial
+		 * does the same work. Without this the numbers describe the
+		 * drifting layout rather than the system.
+		 */
+		if (!strcmp(scen, "raise")) {
+			/* put xterm 2 on top, so raising xterm 1 is the same
+			 * job every time */
+			warp(fd, T2_TITLE_X, T2_TITLE_Y);
+			emit(fd, EV_KEY, BTN_LEFT, 1); syn(fd);
+			emit(fd, EV_KEY, BTN_LEFT, 0); syn(fd);
+			usleep(400000);
+			warp(fd, T1_TITLE_X, T1_TITLE_Y);
+			usleep(200000);
+			if (!wait_quiet(fb, 3000)) {
+				first[i] = settle[i] = -1;
+				printf("  trial %2d: no quiet after restore\n", i);
+				continue;
+			}
+		}
+
 		t_inject = now_ms();
 		if (!strcmp(scen, "key")) {
-			tap(fd, KEY_1 + (i % 9));
+			tap(fd, KEY_A);		/* same glyph every trial */
 		} else if (!strcmp(scen, "click")) {
 			emit(fd, EV_KEY, BTN_LEFT, 1); syn(fd);
 			emit(fd, EV_KEY, BTN_LEFT, 0); syn(fd);
 		} else if (!strcmp(scen, "raise")) {
-			/* alternate corners so a different window comes up */
-			warp(fd, (i & 1) ? 200 : 460, (i & 1) ? 140 : 260);
-			t_inject = now_ms();
 			emit(fd, EV_KEY, BTN_LEFT, 1); syn(fd);
 			emit(fd, EV_KEY, BTN_LEFT, 0); syn(fd);
 		} else if (!strcmp(scen, "menu")) {
@@ -449,7 +496,9 @@ int main(int argc, char **argv)
 			emit(fd, EV_KEY, BTN_RIGHT, 1); syn(fd);
 			emit(fd, EV_KEY, BTN_RIGHT, 0); syn(fd);
 		} else if (!strcmp(scen, "move")) {
-			rel(fd, 12, 7);
+			/* alternate, so the pointer stays in one region
+			 * instead of walking across differing content */
+			rel(fd, (i & 1) ? -12 : 12, (i & 1) ? -7 : 7);
 		} else {
 			fprintf(stderr, "unknown scenario '%s'\n", scen);
 			return 1;
@@ -460,6 +509,16 @@ int main(int argc, char **argv)
 		settle[i] = w.last;
 		printf("  trial %2d: first %6.1f  settle %6.1f  frames %d\n",
 		       i, w.first, w.last, w.frames);
+
+		/*
+		 * Undo the character. Otherwise the cursor advances, the glyph
+		 * lands somewhere new each trial, and after ~40 of them the
+		 * line wraps and one trial repaints the whole terminal.
+		 */
+		if (!strcmp(scen, "key")) {
+			tap(fd, KEY_BACKSPACE);
+			usleep(250000);
+		}
 
 		/* close a menu again so the next trial starts from the same state */
 		if (!strcmp(scen, "menu")) {
