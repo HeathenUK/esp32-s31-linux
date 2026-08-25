@@ -988,3 +988,35 @@ The SD gap is the one unexplained regression left. It is the same signature as
 the syscall problem that was fixed - a per-operation cost, flat across request
 sizes - so more of the block or MMC path still sitting in flash is the obvious
 place to look next, using the `.text..fast` mechanism that is now working.
+
+### Storage after the DMA relocation, and where it stops paying
+
+	                 7.1 before   7.1 now      6.12
+	 4k O_DIRECT    4.34-4.88    4.10-4.53   3.40-3.48 ms
+	 256k O_DIRECT 18.75-19.38  17.50-18.75  15.62-16.25 ms
+	 sequential      9.52 MB/s   10.1-12.7    13.33 MB/s
+
+The gap to 6.12 is now roughly 6% on sequential and 12-20% per request, down
+from 1.2-1.4x across the board.
+
+**Two further relocations were tried and are not kept:**
+
+- `arch_sync_dma_for_device` - a serious regression, sequential down to
+  4.0-5.3 MB/s. It is the cache-maintenance routine and `.text..fast` is cached
+  PSRAM. See the note in the linker script; do not retry.
+- `sbitmap.o` and `blk-mq-tag.o` (the tag allocator, which runs on every
+  request) - no gain and marginally worse: 4k 4.26-4.65 against 4.10-4.53, 256k
+  18.12-19.38 against 17.50-18.75, sequential 10.06-11.19 against 10.1-12.7.
+  Reverted.
+
+That second null is the useful boundary. The relocations that paid - the
+generic entry path, then the DMA mapping path - were on the *per-operation*
+path and refetch constantly. The tag allocator is on the same path and did not
+pay, so "is it hot" is not sufficient; the win comes from code that thrashes
+the 16 KB icache, and adding more to `.text..fast` also shifts everything after
+it, changing alignment. Measure each addition rather than assuming it composes.
+
+Still in flash on the SD path, unmeasured: `sg_next` (neither object pattern
+matches it, and an `__fasttext` annotation attempt did not apply cleanly), and
+the slab path - `__kmalloc_noprof`, `kfree`, `kmem_cache_free`. slub is large
+enough that its RAM cost needs weighing against the gain.

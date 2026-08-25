@@ -183,8 +183,8 @@ diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users
  
 diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port71xip/arch/riscv/kernel/vmlinux-xip.lds.S linux-71-port/arch/riscv/kernel/vmlinux-xip.lds.S
 --- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port71xip/arch/riscv/kernel/vmlinux-xip.lds.S	2026-08-24 14:15:11.601577334 +0100
-+++ linux-71-port/arch/riscv/kernel/vmlinux-xip.lds.S	2026-08-25 18:26:49.167093886 +0100
-@@ -94,12 +94,47 @@
++++ linux-71-port/arch/riscv/kernel/vmlinux-xip.lds.S	2026-08-25 18:53:46.282772746 +0100
+@@ -94,12 +94,46 @@
   * read .text. The file size on disk is mostly symbols, relocations and debug
   * info - vmscan.o is 39,160 bytes on disk and 11,002 bytes of code.
   *
@@ -230,12 +230,11 @@ diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users
  			*timekeeping.o *clockevents.o \
 +			*riscv/kernel/traps.o *riscv/kernel/irq.o *riscv/mm/fault.o \
 +			*dma/direct.o *dma/mapping.o \
-+			*scatterlist.o \
 +			*kernel/entry/common.o *kernel/entry/syscall-common.o \
  			*dw_mmc.o *dw_mmc-pltfm.o *blk-mq.o \
  			*blk-core.o *bio.o *blk-merge.o *blk-mq-sched.o \
  			*mmc_ops.o *sd_ops.o \
-@@ -125,6 +160,28 @@
+@@ -125,6 +159,28 @@
  		*(EXCLUDE_FILE(S31_FAST_OBJS) .sched.text)		\
  		__sched_text_end = .;
  
@@ -264,7 +263,7 @@ diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users
  #undef TEXT_TEXT
  #define TEXT_TEXT							\
  		ALIGN_FUNCTION();					\
-@@ -192,9 +249,23 @@
+@@ -192,9 +248,23 @@
  	 */
  	. = ALIGN(16);
  	__text_fast_start = .;
