@@ -387,3 +387,51 @@ min 4000.3 and max 4013.9 across all ten trials - that is the 4000 ms watchdog
 firing every time, meaning the screen never went quiet after a keystroke in that
 configuration. Something repaints continuously there and needs finding before
 the row means anything.
+
+### Sweep results: two nulls, and what they say about the method
+
+**Sweep 1 - render resolution. Null, and the premise was wrong.**
+The idea was that a 640x384 client mode forces a scaling pass on every commit,
+so `render=800x480` would remove it. It would not: `upscale` is **N**, so the
+smaller desktop is *centred* in the panel, not scaled. There was never a pass to
+remove. Three arms, fresh boot each, A and C identical:
+
+	                  A (640)   B (800)   C (640, repeat)
+	 drag first       1050.6     155.5      115.5
+	 key settle        125.4     203.3      232.4
+	 raise settle      581.9     684.0      350.5
+
+**A and C are the same configuration and differ by up to 9x.** Every A-vs-B
+difference is inside that. An earlier single-run reading of this sweep showed
+drag at 44 ms against 122 ms and looked like a large win; it was noise.
+
+**Sweep 2 - `ppa_min_bytes`. Null.**
+Alternating *within one boot*, the control reproduced well (default 120.3 ->
+116.0 on click, 105.5 -> 100.2 on raise) and never-PPA looked 40% faster on
+raise - plausible, since a window raise damages ~120 KB, right at the documented
+128 KB crossover, against the PPA's fixed ~500 us completion cost. Three
+confirming pairs:
+
+	 pass    default   never-PPA
+	  1       134.4      105.2
+	  2       116.6       84.7
+	  3        74.9      104.0
+
+The sign reverses in pass 3, and the default arm alone spans 74.9-134.4 across
+one boot. Null.
+
+### What actually limits this work now
+
+**Within-boot alternation is mandatory** - fresh-boot-per-arm variance (up to 9x
+on identical config) swamps everything. That is why the `wait_vblank` result was
+trustworthy and these were not.
+
+**But within-boot variance is still ~40-80% on a median of 8 trials**, so the
+harness can currently only resolve effects larger than about 2x. Nothing in the
+remaining knob list is that big.
+
+The variance is in the *scenarios*, not the timing: `raise` alternates corners
+and the window stacking differs trial to trial, so each trial does different
+work. Before more sweeps are worth running, the scenarios need to restore
+identical state between trials, and trial counts need to go to 30-50. Adding
+knobs to a harness this noisy just manufactures more retracted findings.
