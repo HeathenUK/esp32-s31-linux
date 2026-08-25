@@ -157,3 +157,48 @@ X is 45-67%. That is where the time is, and reaching it needs the driver that
 the numbers above do not justify. The kernel display path is close to finished;
 further work here is refinement, not the main lever. The main levers left are
 memory (clients still page out under a full desktop) and X's own cost.
+
+
+## Which crossover governs what - and a knob that does not do what it says
+
+Three numbers in this repo have been used interchangeably and should not be.
+
+- **`accel-plan.md`'s ~128 KB crossover** was measured through `ppabench`, which
+  drives the **ioctl** path: syscall, GEM lookups, and the cache maintenance the
+  kernel does because DMA memory here is cached. It is the right number for
+  deciding whether an accelerated **X driver** is worth writing.
+- **`esp32s31-ppa.c`'s "worth using above roughly 1 KB"** is a **kernel-side**
+  fill measurement, and it compares against 22.6 MB/s - the CPU figure this file
+  later corrected to ~102 MB/s, because 22.6 was X's fill rate including X's own
+  overhead. Recomputed against 102 MB/s the same table puts the fill crossover
+  nearer 32 KB, not 1 KB.
+- **`ppa_min_bytes` (131072)** governs the **kernel's damage copy**, which
+  touches no ioctl at all. It was set from the first number, so an in-kernel
+  decision is being made from a userspace-path measurement.
+
+### Measured, kernel side, at full-screen damage
+
+`xfill` on the desktop, alternating within one boot, control repeated:
+
+	                repaint median        flush per update
+	 always-PPA   27.3 28.7 28.0 25.7 ms     295-372 us
+	 never-PPA         29.7  29.4 ms        1117-1161 us
+
+**The PPA is ~7-8% faster at 491,520 bytes, and the reason is cache maintenance,
+not bandwidth.** The CPU path writes the scanout buffer with the CPU, so the
+written region has to be flushed for the scanout DMA - 3-4x the flush cost. The
+engine writes by DMA and the flush largely goes away. That is a better argument
+for the engine than the MB/s figures, and it is invisible in any benchmark that
+does not count cache maintenance.
+
+### The knob does not disable the engine
+
+`ppa_min_bytes=99999999` still leaves `ppa_ops` at roughly one per update - 55
+and 51 in the arms above, against 48 and 50 for always-PPA. **It does not gate
+every use of the PPA**, only the damage copy, so a sweep across it compares two
+configurations that both use the engine.
+
+That explains four null desktop sweeps: the arms were never as separated as the
+knob's name implies. Any future comparison must check `ppa_ops` in the debugfs
+rather than trusting the parameter, and if a true "no PPA at all" arm is wanted
+it needs a real switch adding.
