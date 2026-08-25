@@ -902,3 +902,55 @@ blind:
 
 Worth measuring if small-update latency ever becomes the complaint; the arms are
 `.clock` in `espressif_sub3_mode` and a `make linux`.
+
+## The "loaded desktop is 3x slower on 7.1" result was an artefact
+
+It was not real, and the retraction is more useful than the number was.
+
+The loaded benchmark launched **two `st` terminals**, and `st` busy-redraws for
+about 25-30 seconds after it starts - measured on one instance, per 10 s window:
+
+	st      803  786  429  0  0  0    jiffies (~80%, 79%, 43% of the core)
+	xterm   177    0    0             idle almost immediately
+
+So the benchmark was timing *how far through st's spin-down the run happened to
+land*. Tracking both together makes it unambiguous - repaint median follows st's
+CPU exactly, on both kernels:
+
+	           7.1                        6.12
+	 r1    354.9 ms / 3903 jiffies     128.3 ms / 3435
+	 r2    243.8 ms / 1416             87.5 ms /  876
+	 r4    143.8 ms /  979              4.3 ms /    0
+	 r6     10.1 ms /    0              4.1 ms /    0
+
+Both collapse to single-digit milliseconds once the terminals stop. 6.12 got
+there in four rounds and 7.1 in six, which is the entire reason 6.12 "looked"
+three times faster.
+
+**The desktop does not use st.** `/etc/system.jwmrc` launches `xterm`. The
+spinner was introduced by the measurement harness, not by the system under test.
+
+### The real numbers, with clients that behave
+
+jwm + 2 xterm + xcalc, settled, three runs:
+
+	 6.12    19.7  22.8  19.1 ms
+	 7.1     18.6  15.9  15.6 ms
+
+And with non-spinning clients but no window manager occlusion (jwm + xcalc):
+
+	 6.12    47.8  47.7 ms
+	 7.1     34.4  33.2 ms
+
+**7.1 is faster in both.** There is no loaded-repaint regression to fix.
+
+### What to take from this
+
+- A client that spins invalidates any whole-desktop measurement, and the spin
+  can be transient - so a single arm measured shortly after launch is worthless.
+  Sample per-process `utime+stime` alongside the result and check it is flat
+  before believing anything.
+- Scheduler tuning was attempted against this (`RUN_TO_PARITY`,
+  `base_slice_ns`, `DELAY_DEQUEUE`) and appeared to give 31%. It was noise on
+  top of the spin-down; the "improvement" reversed when the default was
+  re-measured last. `SCHED_DEBUG` was enabled for that and has been reverted.
