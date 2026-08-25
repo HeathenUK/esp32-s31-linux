@@ -65,10 +65,19 @@
 
         <TaskList maxwidth="256"/>
 
-        <Swallow width="32" height="32" name="xclock">xclock</Swallow>
 
         <Dock/>
-        <Clock format="%l:%M %p"><Button mask="123">exec:xclock</Button></Clock>
+    <!--
+      No Clock element. jwm redraws it on its poll tick whether or not the
+      displayed text changed, which cost ~3.4 plane updates per second with the
+      desktop completely idle - measured 17 repaints per 5 s with it, 0 without.
+      At 24-48 ms per repaint that is roughly a tenth of the machine spent
+      ticking a clock. Note it was already digital and showing only hours and
+      minutes: the format is not what costs, the unconditional redraw is.
+
+      The xclock Swallow above it was removed too, but that one was always a
+      no-op - the xclock binary is not in the image.
+    -->
 
     </Tray>
 

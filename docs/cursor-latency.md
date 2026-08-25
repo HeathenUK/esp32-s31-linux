@@ -280,3 +280,60 @@ first. The driver's comment promises it stays on line one and it no longer does.
 One frame at the panel's 42 Hz is 23.8 ms. Typing at 104 ms to first pixel is
 four frames, and the click and typing tails - 1.8 s and 2.4 s - are the
 "it stopped responding" complaint.
+
+### Baseline with a deterministic layout, and the first real win
+
+Window geometry must be fixed before any of this means anything. An early run
+had the terminals minimised, so `drag` and `raise` clicked bare root and the
+suite was measuring the layout rather than the system. The harness
+(`scripts/board/desk-interactivity.sh`) now launches clients with explicit
+`-geometry` and refuses to measure until per-process client CPU is flat.
+
+**jwm's taskbar clock cost ~3.4 plane updates per second with the desktop
+completely idle.** Measured with `jwm -restart` between arms and the baseline
+re-measured last, idle updates per 5 s:
+
+	 both (xclock swallow + Clock)     24, 17, 17
+	 digital Clock only                24, 17, 18
+	 no Pager                          17, 17, 18
+	 no Clock at all                    3,  0,  0
+	 both, repeated last               18, 17, 18
+
+Two things fall out. The `xclock` Swallow was **always a no-op** - the xclock
+binary is not in the image - so every one of those repaints came from jwm's
+built-in `<Clock>`. And that clock is **already digital, showing only hours and
+minutes**: making it digital does not help, because jwm redraws it on its poll
+tick whether or not the text changed. Only removing it reaches zero. At 24-48 ms
+per repaint that is roughly a tenth of the machine spent ticking a clock. It is
+removed from the overlay `system.jwmrc`.
+
+Baseline after that, fresh boot, fixed geometry, clients settled, idle repaints
+0 per 5 s:
+
+	 scenario     first: med / p90      settle: med / p90
+	 move          42.7 /   92.5         66.3 / 2199.8
+	 click        122.6 /  134.1        529.9 / 1659.4
+	 key          100.8 /  124.1        134.2 / 1326.7
+	 drag          62.5 / 3328.2         63.3 / 3328.2
+	 raise         68.8 /  102.1        429.0 / 2397.7
+	 dragfps       15.9 fps, worst frame gap 136.1 ms
+
+`menu` returns no samples - its right-click coordinate is outside the 640x384
+render area and needs fixing before that row means anything.
+
+### Three ways this harness voided its own results
+
+Recorded because each produced a full page of plausible numbers:
+
+- **A periodic background repaint makes the whole method fail.** The harness
+  waits for the screen to go still before injecting, so it can attribute the
+  change. With the clock present the screen never goes still and nearly every
+  trial is skipped - which reads as a dead desktop.
+- **`pkill` does not exist in busybox.** A sweep called it, the shell printed
+  "pkill: not found" to stderr, and the run carried on with jwm never restarted:
+  four arms of identical config, all looking reasonable. The harness now
+  preflights every binary it needs and aborts if one is missing. `killall` and
+  `kill $(pidof x)` are the busybox-safe forms.
+- **Repeated `jwm -restart` destabilises the machine.** An A/B that restarted
+  jwm per arm drifted until jwm was burning ~50% CPU during a supposedly idle
+  window and the idle repaint rates inverted. Use a fresh boot per arm.
