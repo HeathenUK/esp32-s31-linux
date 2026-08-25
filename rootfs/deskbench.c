@@ -161,13 +161,41 @@ static void rel(int fd, int dx, int dy)
 	syn(fd);
 }
 
+/*
+ * Step the pointer in small increments.
+ *
+ * X accelerates relative motion above its threshold (4 px by default), so one
+ * large move lands nowhere near where it was asked to: a warp to 150,59 put
+ * the cursor at roughly 275,107, over the terminal's text area instead of its
+ * title bar. Every coordinate in this file was therefore wrong by an amount
+ * that depended on the distance travelled, which is why the raise scenario
+ * kept missing and voiding trials. Two pixels per event stays under any sane
+ * threshold and keeps the mapping 1:1.
+ *
+ * xset would fix the acceleration instead, but it is not in the image - and
+ * neither was pkill, which silently voided an earlier sweep. Depending on a
+ * tool that might be missing is how that happens, so this is self-contained.
+ */
+static void rel_step(int fd, int dx, int dy)
+{
+	while (dx || dy) {
+		int sx = dx > 2 ? 2 : (dx < -2 ? -2 : dx);
+		int sy = dy > 2 ? 2 : (dy < -2 ? -2 : dy);
+
+		rel(fd, sx, sy);
+		dx -= sx;
+		dy -= sy;
+		usleep(1200);
+	}
+}
+
 /* Relative pointers have no home, so slam into the corner and step out. */
 static void warp(int fd, int x, int y)
 {
-	rel(fd, -4000, -4000);
-	usleep(60000);
-	rel(fd, x, y);
-	usleep(60000);
+	rel(fd, -4000, -4000);		/* accelerated, but it only overshoots */
+	usleep(80000);
+	rel_step(fd, x, y);
+	usleep(80000);
 }
 
 static void tap(int fd, int code)

@@ -24,6 +24,10 @@ i=0; while [ $i -lt 40 ]; do [ -e /tmp/.X11-unix/X0 ] && break; sleep 1; i=$((i+
 sleep 10
 export DISPLAY=:0
 xsetroot -cursor_name left_ptr
+# Flat pointer: X accelerates large relative motions, so deskbench's
+# warp (slam to corner, then one big rel move) lands nowhere near the
+# requested coordinate - measured 275,107 when it asked for 150,59.
+xset m 1 0
 pidof jwm >/dev/null || { jwm >/dev/null 2>&1 & }
 sleep 6
 xterm -geometry 44x12+16+48 >/dev/null 2>&1 & sleep 7

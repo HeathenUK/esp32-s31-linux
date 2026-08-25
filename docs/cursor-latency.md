@@ -482,3 +482,54 @@ wait is contended. The latency crossover is evidently higher than 128 KB.
 threshold that was measured properly for large blits, and the trade against
 whole-surface copies has not been measured under this harness. The right next
 step is a size-resolved comparison rather than an all-or-nothing switch.
+
+### Retraction: the ppa_min_bytes result does not hold
+
+Two further passes, adding `ppa_spin_us` as a third arm:
+
+	                     pass 1    pass 2
+	 default spin=300     100.1     127.7
+	 spin=0                88.4     150.1
+	 never-PPA            108.2      73.8
+	 default (repeat)      91.9      98.6
+
+Both arms reverse sign between passes, and pass 2's own control drifted 29%
+(127.7 -> 98.6). The earlier "~7.5% better with the PPA off", which had looked
+solid over two agreeing pairs, was luck. **Treat it as withdrawn.**
+
+The lesson is about the control, not the knob: a control that reproduces to 0.8%
+*once* proves nothing. It has to reproduce across every pass of the sweep, and
+here it did not.
+
+### Are we misusing the PPA? The docs disagree with each other
+
+Worth recording, because two files in this repo give different answers and the
+desktop harness is too noisy to settle it.
+
+`accel-plan.md` says the engine has a fixed cost of "a few hundred
+microseconds" and a crossover near **128 KB**, which is where
+`ppa_min_bytes=131072` comes from. But `esp32s31-ppa.c` already measured that
+claim and corrected it - programming the engine is a **constant 13 us**, and
+everything else scales with size:
+
+	 fill        total    setup     wait     effective
+	  32x32       73 us    13 us     33 us     62 MB/s
+	 128x128     349 us    13 us    314 us    104 MB/s
+	 800x480    4024 us    13 us   3991 us    192 MB/s
+
+On that basis the driver concludes the PPA is worth using **above roughly 1 KB**
+- a 23x23 rect - which is two orders of magnitude below the threshold actually
+in force. If the driver's numbers are right then the board is *under*-using the
+engine, not misusing it, and `ppa_min_bytes` is far too high.
+
+**This cannot be settled with the desktop harness**, whose control drifts more
+than the effect. The right instrument already exists: `rootfs/ppabench.c` drives
+the PPA against `memcpy` on the same buffers and produced the numbers in
+`accel-plan.md` in the first place. Re-run it across sizes, on an idle board and
+under load, and reconcile the two documents before touching the threshold.
+
+The one open question it should answer: `ppa_spin_us=300` makes the driver poll
+for completion before sleeping, which is free on an idle board and is CPU stolen
+from X on a busy one. That is the plausible mechanism for the engine helping in
+a microbenchmark and not on a desktop - but it is a hypothesis, and the data
+above does not support it either way.
