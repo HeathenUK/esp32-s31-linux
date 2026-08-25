@@ -227,3 +227,56 @@ function rather than assuming is what caught that.
 The simple-pipe CRTC funcs cannot be re-declared - their members are file-static
 in `drm_simple_kms_helper.c` - so the struct is copied at runtime and the two
 cursor entries added.
+
+## deskbench: measuring the desktop the way it is used
+
+`rootfs/deskbench.c` drives real interactions through uinput and times them
+against the framebuffer the display engine is scanning out. It exists because
+`xfill` measures how fast X can repaint the root window, which is not what a
+desktop feels like.
+
+Two numbers per trial, answering different questions:
+
+- **first** - input to the first pixel changing anywhere. Responsiveness; this
+  is what makes the machine feel alive or dead.
+- **settle** - input to the last pixel changing before the screen goes quiet.
+  Completion. A window raise can start in 20 ms and still take 400 ms to
+  finish, and only this number sees it.
+
+Scenarios: `move` (cursor), `click`, `key` (types into whatever it clicks on
+first - jwm gives focus on click, and without that the trials time out and read
+as a dead desktop), `drag` (button held, **per-move lag**), `dragfps`
+(continuous, smoothness and stutter), `raise`, `menu`.
+
+**drag reports lag, not frame rate, and that distinction matters.** A window can
+update at a steady 20 fps while trailing the pointer by a third of a second -
+which is exactly what people describe as "it feels slow". `dragfps` is kept
+separately for stutter.
+
+Two rules the harness enforces, both learned the hard way:
+
+- **Wait for the screen to go still before injecting.** A framebuffer diff
+  cannot attribute a change to your input, so without a quiet period an
+  unrelated repaint reads as instant latency.
+- **Never measure until the clients are idle.** `st` busy-redraws for 25-30 s
+  after launch and dominates everything; the harness script polls per-process
+  `utime+stime` and refuses to start until it is flat. See
+  [[s31-spinning-client-invalidates]].
+
+It also parses `scanout=` from **any** line of the driver's debugfs, not the
+first. The driver's comment promises it stays on line one and it no longer does.
+
+### Baseline, 7.1, jwm + 2 xterm + xcalc, settled
+
+	 scenario        first: med / p90        settle: med / p90
+	 cursor move      40.1 /  160.6           40.2 /  299.8
+	 click           121.9 /  146.4          340.3 / 1789.6
+	 typing          104.1 /  173.0          183.6 / 2363.9
+	 window drag      48.5 /  953.1           68.5 / 1225.2
+	 window raise     63.0 /   87.3          289.0 /  692.8
+	 menu open        71.4 /  192.4          461.4 /  927.7
+	 drag smoothness  13.9 fps, worst frame gap 189.8 ms
+
+One frame at the panel's 42 Hz is 23.8 ms. Typing at 104 ms to first pixel is
+four frames, and the click and typing tails - 1.8 s and 2.4 s - are the
+"it stopped responding" complaint.
