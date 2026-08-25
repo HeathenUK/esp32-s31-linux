@@ -954,3 +954,37 @@ And with non-spinning clients but no window manager occlusion (jwm + xcalc):
   `base_slice_ns`, `DELAY_DEQUEUE`) and appeared to give 31%. It was noise on
   top of the spin-down; the "improvement" reversed when the default was
   re-measured last. `SCHED_DEBUG` was enabled for that and has been reverted.
+
+## Final comparison, after the fixes
+
+All of today's work is in: the dw_mmc MINTSTS restore, the generic-entry path in
+RAM, `.text..fast` repaired, `wait_vblank` off by default, and the scanout
+buffer reserved early. Measured on a fresh boot per kernel, with only the
+instruments whose spread is small enough to trust.
+
+	                        6.12                7.1            winner
+	 syscall pair      15.35 15.90 15.40    9.15 9.00 8.95    7.1, 1.7x
+	 SD 4k O_DIRECT     3.40-3.48 ms        4.34-4.88 ms      6.12, 1.3x
+	 SD 256k O_DIRECT  15.62-16.25 ms      18.75-19.38 ms     6.12, 1.2x
+	 SD sequential      13.33 MB/s           9.52 MB/s        6.12, 1.4x
+	 bare X repaint    43.6 43.4 43.5      43.6 43.3 43.3     tie
+	 MemAvailable         4756 kB             5704 kB         7.1, +948 kB
+	 Slab (unreclaimable) 4024 kB             4264 kB         6.12, -240 kB
+
+**It is not better across the board, and the repaint row deserves reading
+carefully.** 7.1 only reaches parity there *because* of the `wait_vblank`
+change; without it 7.1 measures ~50 ms against 6.12's 43. That fix has not been
+applied to 6.12, which would presumably gain the same ~15%. So repaint is a tie
+only under a change 6.12 has not been given.
+
+**Where each is genuinely ahead:**
+
+- 7.1 for anything syscall, fault or interrupt bound - 1.7x - and for ~1 MB more
+  MemAvailable.
+- 6.12 for storage, consistently, 1.2-1.4x depending on request size, and for
+  240 kB less unreclaimable slab.
+
+The SD gap is the one unexplained regression left. It is the same signature as
+the syscall problem that was fixed - a per-operation cost, flat across request
+sizes - so more of the block or MMC path still sitting in flash is the obvious
+place to look next, using the `.text..fast` mechanism that is now working.
