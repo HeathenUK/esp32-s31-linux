@@ -400,7 +400,7 @@ diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users
  		.of_match_table = esp32s31_axi_of_match,
 diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port71xip/drivers/gpu/drm/espressif/esp32s31-lcd.c linux-71-port/drivers/gpu/drm/espressif/esp32s31-lcd.c
 --- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port71xip/drivers/gpu/drm/espressif/esp32s31-lcd.c	2026-08-23 20:19:50.264325652 +0100
-+++ linux-71-port/drivers/gpu/drm/espressif/esp32s31-lcd.c	2026-08-25 06:04:25.373280570 +0100
++++ linux-71-port/drivers/gpu/drm/espressif/esp32s31-lcd.c	2026-08-25 12:19:15.190478994 +0100
 @@ -49,6 +49,8 @@
  #include <uapi/drm/esp32s31_drm.h>
  #include <drm/drm_drv.h>
@@ -410,7 +410,69 @@ diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users
  #include <drm/drm_fbdev_dma.h>
  #include <drm/drm_gem_dma_helper.h>
  #include <drm/drm_gem_framebuffer_helper.h>
-@@ -2383,6 +2385,7 @@
+@@ -668,6 +670,9 @@
+  * would make the compositor pace its repaints against a clock that does not
+  * exist.
+  */
++/* Defined below; get_modes is the first point the scanout size is known. */
++static int esp32s31_lcd_alloc_scanout(struct esp32s31_lcd *lcd);
++
+ static int esp32s31_lcd_get_modes(struct drm_connector *connector)
+ {
+ 	struct esp32s31_lcd *lcd = to_esp32s31_lcd(connector->dev);
+@@ -688,6 +693,25 @@
+ 	drm_mode_copy(&lcd->native, native);
+ 	lcd->native_valid = true;
+ 
++	/*
++	 * First moment the size is known, so take the scanout buffer here
++	 * rather than lazily at the first modeset that wants scaling.
++	 *
++	 * It is permanent either way - the allocator is idempotent and nothing
++	 * frees it - so allocating late only means allocating at the worst
++	 * moment. The region is `reusable` CMA, which the kernel fills with
++	 * movable pages whenever the display is not using it (CmaFree is
++	 * already 1356 kB of 4096 kB at boot with no X), so a 750 KB contiguous
++	 * request has to *migrate* those pages out. Under desktop memory
++	 * pressure on a 15 MB machine that migration fails, and the driver
++	 * silently drops scaling and drives the panel at the client's smaller
++	 * timing - which changes what the user sees and what every measurement
++	 * measures. Probe itself is too early: get_modes has not run there.
++	 */
++	if (esp32s31_lcd_alloc_scanout(lcd))
++		drm_warn(&lcd->drm,
++			 "scanout buffer not reserved (CMA busy already); scaling may be lost\n");
++
+ 	if (!esp32s31_lcd_parse_render(native, &pl)) {
+ 		if (render && *render)
+ 			drm_warn(&lcd->drm,
+@@ -958,14 +982,19 @@
+ 	if (scaling) {
+ 		if (esp32s31_lcd_alloc_scanout(lcd)) {
+ 			/*
+-			 * The reserved pool allocates in power-of-two page
+-			 * orders, so two 640x480 client buffers round to 1 MB
+-			 * each and take the whole 2 MB region, leaving nothing
+-			 * for this. Say so rather than silently falling back to
+-			 * driving the panel at the smaller mode's timing.
++			 * Not "the client buffers took it" - that wording
++			 * described the old 2 MB coherent pool, whose
++			 * power-of-two allocator rounded two 640x480 clients to
++			 * 1 MB each. Today's region is 4 MB of page-granular
++			 * CMA, and the real failure is migration: `reusable`
++			 * CMA is full of ordinary movable pages, and freeing a
++			 * contiguous run needs somewhere to move them to, which
++			 * a 15 MB machine under desktop pressure does not have.
++			 * Probe now reserves this buffer up front, so reaching
++			 * here means that reservation was skipped or failed.
+ 			 */
+ 			drm_err(&lcd->drm,
+-				"no scanout buffer for %ux%u (pool exhausted by the client buffers); scaling off\n",
++				"no scanout buffer for %ux%u (CMA migration failed; buffer not reserved at probe); scaling off\n",
+ 				lcd->native.hdisplay, lcd->native.vdisplay);
+ 			scaling = false;
+ 		} else {
+@@ -2383,6 +2412,7 @@
  	.ioctls			= esp32s31_lcd_ioctls,
  	.num_ioctls		= ARRAY_SIZE(esp32s31_lcd_ioctls),
  	DRM_GEM_DMA_DRIVER_OPS_VMAP,
@@ -418,7 +480,7 @@ diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users
  	.name			= DRIVER_NAME,
  	.desc			= "Espressif ESP32-S31 LCD_CAM",
  	.major			= 1,
-@@ -2390,7 +2393,30 @@
+@@ -2390,7 +2420,30 @@
  };
  
  /*
@@ -450,7 +512,7 @@ diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users
   *
   * The default commit tail ends in drm_atomic_helper_wait_for_vblanks(), so
   * every atomic commit blocks until the next frame boundary - 23.7 ms at this
-@@ -2406,7 +2432,7 @@
+@@ -2406,7 +2459,7 @@
   * The wait is kept for anything touching the primary plane, where it still
   * does its job of stopping a client reusing a buffer that is being displayed.
   */
@@ -459,7 +521,7 @@ diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users
  module_param(wait_vblank, bool, 0644);
  MODULE_PARM_DESC(wait_vblank,
  		 "hold the CRTC lock waiting for vblank after a non-cursor commit");
-@@ -2743,8 +2769,8 @@
+@@ -2743,8 +2796,8 @@
  	 * every flip event carrying an invented timestamp, and a compositor
  	 * scheduling from it repainted about once every 12 seconds.
  	 */
@@ -470,12 +532,36 @@ diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users
  
  	lcd->irq = platform_get_irq(pdev, 0);
  	if (lcd->irq < 0)
-@@ -2891,7 +2917,7 @@
+@@ -2891,7 +2944,31 @@
  	if (ret)
  		return ret;
  
 -	drm_fbdev_dma_setup(drm, 16);
 +	drm_client_setup_with_fourcc(drm, DRM_FORMAT_RGB565);
++
++	/*
++	 * Reserve the scanout buffer now, at probe, while the machine is still
++	 * empty - not lazily at the first modeset that needs scaling.
++	 *
++	 * The buffer is permanent either way: the allocator is idempotent and
++	 * nothing ever frees it. Taking it late only means taking it at the
++	 * worst possible moment. The region is `reusable` CMA, so the kernel
++	 * fills whatever the display is not using with movable pages - at boot
++	 * with no X running, CmaFree is already down to 1356 kB of 4096 kB -
++	 * and satisfying a 750 KB contiguous request then means *migrating*
++	 * those pages out. On a 15 MB machine under desktop memory pressure
++	 * that migration fails, dma_alloc_coherent returns NULL, and the driver
++	 * silently drops scaling and drives the panel at the client's smaller
++	 * timing instead. That also changes what every measurement is measuring.
++	 *
++	 * native comes from the connector's get_modes, which has run by now via
++	 * drm_dev_register(), so the size is known here.
++	 */
++	if (lcd->scan_cpu)
++		drm_info(drm, "scanout buffer reserved: %zu bytes\n", lcd->scan_size);
++	else
++		drm_info(drm, "scanout buffer deferred; get_modes has not run yet\n");
++
  	return 0;
  }
  

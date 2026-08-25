@@ -1437,3 +1437,46 @@ Weston stays in the build until step 1 passes. It costs nothing on the SD
 rootfs, and only the XIP flash images are budget-constrained.
 
 `docs/weston-acceleration-plan.md` is superseded unless the pivot is reversed.
+
+
+## The CMA pool did not run out of room - it ran out of migratable pages
+
+Symptom: with the desktop up, the driver logged
+
+	*ERROR* no scanout buffer for 800x480 (pool exhausted by the client
+	buffers); scaling off
+
+and drove the panel at the client's 640x384 timing instead. Screenshots taken
+afterwards were tiled and sheared with RGB noise across the bottom third,
+because `screenshot.py` assumed 800x480 and read 768,000 bytes from a
+491,520-byte buffer.
+
+**The message's diagnosis was wrong, and so was its name.** "Client buffers"
+described the *old* 2 MB coherent pool, whose `bitmap_find_free_region()`
+allocator rounded to power-of-two page orders and turned two 640x480 clients
+into 1 MB each. That region is now 4 MB of page-granular CMA, and the clients
+are nowhere near filling it.
+
+What actually happens is that `reusable` CMA is **shared with ordinary movable
+allocations**. Measured on this board:
+
+	 CmaTotal 4096 kB, CmaFree 1356 kB   at boot, with no X running at all
+
+2.7 MB of the region is already holding page cache and anonymous pages before
+the desktop starts. Satisfying a 750 KB *contiguous* request therefore means
+migrating those pages somewhere else, and on a 15 MB machine under desktop
+pressure that migration fails. `dma_alloc_coherent()` returns NULL, and the
+driver silently degrades. This is the flip side of the `reusable` choice
+recorded in the DTS - it is what stops the region costing 4 MB of MemTotal, and
+the price is that a late contiguous allocation can fail.
+
+**Fix: take the buffer early.** It was allocated lazily at the first modeset
+that wanted scaling. It is permanent either way - the allocator is idempotent
+and nothing ever frees it - so allocating late only meant allocating at the
+worst possible moment. It is now taken in `get_modes()`, the first point the
+size is known. Probe itself is too early: `get_modes` has not run by the end of
+`drm_dev_register()`, and an attempt there reported "native mode unknown".
+
+Verified: the scanout buffer now lands at **0x50800000**, the base of the
+region, rather than 0x50900000 a megabyte in - it is allocated before anything
+else can take that ground - and a full desktop keeps scaled 800x480.
