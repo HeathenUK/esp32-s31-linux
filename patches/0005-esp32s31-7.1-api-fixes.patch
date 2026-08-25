@@ -183,8 +183,8 @@ diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users
  
 diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port71xip/arch/riscv/kernel/vmlinux-xip.lds.S linux-71-port/arch/riscv/kernel/vmlinux-xip.lds.S
 --- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port71xip/arch/riscv/kernel/vmlinux-xip.lds.S	2026-08-24 14:15:11.601577334 +0100
-+++ linux-71-port/arch/riscv/kernel/vmlinux-xip.lds.S	2026-08-24 22:54:20.362872433 +0100
-@@ -94,12 +94,24 @@
++++ linux-71-port/arch/riscv/kernel/vmlinux-xip.lds.S	2026-08-25 18:26:49.167093886 +0100
+@@ -94,12 +94,47 @@
   * read .text. The file size on disk is mostly symbols, relocations and debug
   * info - vmscan.o is 39,160 bytes on disk and 11,002 bytes of code.
   *
@@ -204,15 +204,38 @@ diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users
 + * 7.1 - 2.83x - which is what makes a loaded desktop 4x slower while a bare
 + * one is only 9% slower. That path refetches itself constantly, which is
 + * exactly the case the 5.98x flash-vs-RAM figure applies to.
++ *
++ * The DMA mapping path is here for the same reason. mmc and blk-mq were
++ * already in RAM but dma_direct_map_sg and dma_map_sg_attrs were still in
++ * flash, and every SD request runs both. Measured, 5 reps:
++ *
++ *	                 before        after        6.12
++ *	 4k O_DIRECT   4.34-4.88 ms  4.10-4.53 ms  3.40-3.48
++ *	 256k O_DIRECT 18.75-19.38   17.50-18.12   15.62-16.25
++ *	 sequential     9.52 MB/s    10.1-12.7     13.33
++ *
++ * arch_sync_dma_for_device is DELIBERATELY NOT HERE, and this is the whole
++ * point. Putting it in RAM was tried and is a serious regression: sequential
++ * reads collapsed from 9.52 MB/s to 4.0-5.3, and 256 KB requests went erratic,
++ * alternating 18 and 69-75 ms. It reproduced exactly on a second boot.
++ *
++ * It is the cache-maintenance routine. .text..fast is ordinary cached PSRAM,
++ * so running the flush and invalidate loops from there lets them evict their
++ * own cache lines while they work, and every iteration refetches the code it
++ * is executing. Cache maintenance has to stay somewhere the maintenance does
++ * not reach - which XIP flash is. Do not move it, and be wary of any other
++ * code that operates on the caches.
   */
  #define S31_FAST_OBJS	*hrtimer.o *timer.o *tick-sched.o *tick-common.o \
  			*timekeeping.o *clockevents.o \
 +			*riscv/kernel/traps.o *riscv/kernel/irq.o *riscv/mm/fault.o \
++			*dma/direct.o *dma/mapping.o \
++			*scatterlist.o \
 +			*kernel/entry/common.o *kernel/entry/syscall-common.o \
  			*dw_mmc.o *dw_mmc-pltfm.o *blk-mq.o \
  			*blk-core.o *bio.o *blk-merge.o *blk-mq-sched.o \
  			*mmc_ops.o *sd_ops.o \
-@@ -125,6 +137,28 @@
+@@ -125,6 +160,28 @@
  		*(EXCLUDE_FILE(S31_FAST_OBJS) .sched.text)		\
  		__sched_text_end = .;
  
@@ -241,7 +264,7 @@ diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users
  #undef TEXT_TEXT
  #define TEXT_TEXT							\
  		ALIGN_FUNCTION();					\
-@@ -192,9 +226,23 @@
+@@ -192,9 +249,23 @@
  	 */
  	. = ALIGN(16);
  	__text_fast_start = .;
