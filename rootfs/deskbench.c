@@ -436,7 +436,15 @@ int main(int argc, char **argv)
 			emit(fd, EV_KEY, BTN_LEFT, 1); syn(fd);
 			emit(fd, EV_KEY, BTN_LEFT, 0); syn(fd);
 		} else if (!strcmp(scen, "menu")) {
-			warp(fd, 700, 440);	/* bare root, below the windows */
+			/*
+			 * Bare root, top-right: clear of xterm at +16+48 and
+			 * of xcalc at +330+60 (which spans to about x=560).
+			 * The pointer space is the 640x384 render area, not
+			 * the 800x480 panel - warping to 700,440 lands
+			 * outside it entirely and every trial reports nothing
+			 * changed, which reads as a broken menu.
+			 */
+			warp(fd, 600, 20);
 			t_inject = now_ms();
 			emit(fd, EV_KEY, BTN_RIGHT, 1); syn(fd);
 			emit(fd, EV_KEY, BTN_RIGHT, 0); syn(fd);

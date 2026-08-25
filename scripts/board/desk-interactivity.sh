@@ -32,6 +32,11 @@ xterm -geometry 40x8+40+250   >/dev/null 2>&1 & sleep 7
 cj() { for p in $(pidof xterm xcalc jwm xclock); do awk '{print $14+$15}' /proc/$p/stat; done | awk '{s+=$1} END{print s+0}'; }
 q=0
 for w in 1 2 3 4 5 6 7 8; do A=$(cj); sleep 5; B=$(cj); D=$((B-A)); [ $D -lt 30 ] && q=$((q+1)) || q=0; [ $q -ge 2 ] && break; done
+# Record the scanout mode with every run. Some earlier runs were in scaled
+# 800x480 and others in unscaled 640x384 after a CMA allocation failure, which
+# is different work per repaint and silently voids cross-run comparisons.
+echo "SCANOUT $(dmesg | grep -a 'scanout started' | tail -1 | sed 's/.*: "//')"
+dmesg | grep -aq 'scaling off' && echo "WARNING: scaling was dropped this boot - results not comparable"
 echo "ARM clock=$CLOCK clients=$(pidof jwm xterm xcalc | wc -w) xclock=$(pidof xclock|wc -w) MemAvail=$(awk '/^MemAvailable/{print $2}' /proc/meminfo) settle_w=$w"
 U=/sys/kernel/debug/esp32s31_lcd/updates
 A=$(tr ' ' '\n' < $U | grep '^updates=' | cut -d= -f2); sleep 5

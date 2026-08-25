@@ -337,3 +337,53 @@ Recorded because each produced a full page of plausible numbers:
 - **Repeated `jwm -restart` destabilises the machine.** An A/B that restarted
   jwm per arm drifted until jwm was burning ~50% CPU during a supposedly idle
   window and the idle repaint rates inverted. Use a fresh boot per arm.
+
+### The baseline that counts, and why the earlier one did not
+
+Every run now records the scanout mode, because some earlier runs were in scaled
+800x480 and others in unscaled 640x384 after a CMA allocation failure. Those are
+different work per repaint - scaling puts a PPA pass on every commit - so the
+earlier table mixed two configurations and cannot be compared across rows. The
+harness prints the `scanout started` line and warns if `scaling off` appears
+anywhere in dmesg.
+
+`menu` also produced no samples until now: it warped to 700,440, which is
+outside the 640x384 pointer space entirely. The pointer lives in the render
+area, not the 800x480 panel.
+
+**Baseline: 7.1, scaled 800x480, taskbar clock removed, fixed geometry, clients
+settled, 0 idle repaints per 5 s.**
+
+	 scenario   first: med /   p90     settle: med /   p90
+	 move         78.5 / 1953.2         299.4 / 2243.9
+	 click       111.7 /  224.4         731.4 / 2444.9
+	 key         100.8 /  130.8         174.4 /  811.6
+	 drag        122.2 / 2828.2         381.6 / 2867.5
+	 raise        78.0 /  143.8         334.0 / 1476.7
+	 menu         69.8 /  133.9         111.2 / 1504.1
+	 dragfps      14.2 fps, worst frame gap 202.7 ms
+
+### Sweep 1: does the scaling pass cost interactivity?
+
+Setting `render=800x480` before X starts makes the client mode equal the panel
+mode, so `esp32s31_lcd_scaling()` is false and the per-commit PPA pass goes
+away. X then draws 36% more pixels. One run each, fresh boot per arm:
+
+	                render=640x384      render=800x480
+	 drag first        122.2 ms            44.3 ms
+	 drag settle       381.6 ms            45.2 ms
+	 move first         78.5 ms            75.2 ms
+	 click first       111.7 ms           145.8 ms
+	 raise settle      334.0 ms           640.3 ms
+	 dragfps          14.2 fps            15.0 fps
+
+**Drag is much better without the scaling pass; click and raise are worse.**
+That is a real trade and not yet a decision: these are single runs against p90s
+in the seconds, which is exactly the noise floor this project has been caught by
+before. It needs repeats with the baseline re-measured last.
+
+**One row is not a measurement at all.** `key settle` read 4003.9 ms median with
+min 4000.3 and max 4013.9 across all ten trials - that is the 4000 ms watchdog
+firing every time, meaning the screen never went quiet after a keystroke in that
+configuration. Something repaints continuously there and needs finding before
+the row means anything.
