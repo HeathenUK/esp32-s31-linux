@@ -8,7 +8,10 @@ S31_TOOLS_VERSION = 1.0
 S31_TOOLS_SITE = $(BR2_EXTERNAL_ESP32_S31_PATH)/../rootfs
 S31_TOOLS_SITE_METHOD = local
 S31_TOOLS_LICENSE = GPL-2.0-only
-S31_TOOLS_DEPENDENCIES = dtc pixman xlib_libX11
+# X11 and pixman left with the Xorg stack. The X-only instruments (xptr, xfill,
+# xprof, pixbench) are kept in rootfs/ because they document measurements still
+# cited in docs/, but they are no longer built into the image.
+S31_TOOLS_DEPENDENCIES = dtc
 
 S31_TOOLS_ESP_HOSTED_DIR = $(BR2_EXTERNAL_ESP32_S31_PATH)/../esp-hosted-fg
 S31_TOOLS_PROTO_DIR = $(S31_TOOLS_ESP_HOSTED_DIR)/common/proto
@@ -68,10 +71,6 @@ define S31_TOOLS_BUILD_CMDS
 	$(TARGET_CC) $(TARGET_CFLAGS) $(TARGET_LDFLAGS) \
 		$(@D)/fbdefio.c -o $(@D)/fbdefio
 	$(TARGET_CC) $(TARGET_CFLAGS) $(TARGET_LDFLAGS) \
-		$(@D)/xptr.c -o $(@D)/xptr -lX11
-	$(TARGET_CC) $(TARGET_CFLAGS) $(TARGET_LDFLAGS) \
-		$(@D)/xfill.c -o $(@D)/xfill -lX11
-	$(TARGET_CC) $(TARGET_CFLAGS) $(TARGET_LDFLAGS) \
 		$(@D)/inputlat.c -o $(@D)/inputlat
 	$(TARGET_CC) $(TARGET_CFLAGS) $(TARGET_LDFLAGS) \
 		$(@D)/mousebench.c -o $(@D)/mousebench
@@ -81,9 +80,6 @@ define S31_TOOLS_BUILD_CMDS
 		$(@D)/sdlat.c -o $(@D)/sdlat
 	$(TARGET_CC) $(TARGET_CFLAGS) $(TARGET_LDFLAGS) \
 		$(@D)/cmdlat.c -o $(@D)/cmdlat
-	$(TARGET_CC) $(TARGET_CFLAGS) $(TARGET_LDFLAGS) \
-		$(@D)/pixbench.c -o $(@D)/pixbench -lpixman-1 \
-		-I$(STAGING_DIR)/usr/include/pixman-1
 endef
 
 define S31_TOOLS_INSTALL_TARGET_CMDS
@@ -117,14 +113,11 @@ define S31_TOOLS_INSTALL_TARGET_CMDS
 		$(TARGET_DIR)/usr/bin/s31-audio-stream-stats
 	$(INSTALL) -D -m 0755 $(@D)/fbdump $(TARGET_DIR)/usr/sbin/fbdump
 	$(INSTALL) -D -m 0755 $(@D)/fbdefio $(TARGET_DIR)/usr/sbin/fbdefio
-	$(INSTALL) -D -m 0755 $(@D)/xptr $(TARGET_DIR)/usr/sbin/xptr
-	$(INSTALL) -D -m 0755 $(@D)/xfill $(TARGET_DIR)/usr/sbin/xfill
 	$(INSTALL) -D -m 0755 $(@D)/inputlat $(TARGET_DIR)/usr/sbin/inputlat
 	$(INSTALL) -D -m 0755 $(@D)/mousebench $(TARGET_DIR)/usr/sbin/mousebench
 	$(INSTALL) -D -m 0755 $(@D)/swapbench $(TARGET_DIR)/usr/sbin/swapbench
 	$(INSTALL) -D -m 0755 $(@D)/sdlat $(TARGET_DIR)/usr/sbin/sdlat
 	$(INSTALL) -D -m 0755 $(@D)/cmdlat $(TARGET_DIR)/usr/sbin/cmdlat
-	$(INSTALL) -D -m 0755 $(@D)/pixbench $(TARGET_DIR)/usr/sbin/pixbench
 	ln -sfn esp-hosted-ctl $(TARGET_DIR)/usr/sbin/test.out
 endef
 

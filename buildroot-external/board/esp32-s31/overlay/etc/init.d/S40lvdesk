@@ -1,0 +1,25 @@
+#!/bin/sh
+#
+# The LVGL desktop, replacing the X11 session.
+#
+# No X server: lvdesk draws straight into /dev/fb0 (DRM fbdev emulation) and
+# reads evdev itself. Xorg cost ~4.7 MB RSS against this program's ~1.3 MB.
+#
+case "$1" in
+  start)
+	printf "Starting lvdesk: "
+	[ -e /dev/fb0 ] || { echo "no /dev/fb0 (DRM_FBDEV_EMULATION off?)"; exit 1; }
+	setsid /usr/sbin/lvdesk >/var/log/lvdesk.log 2>&1 </dev/null &
+	echo "OK"
+	;;
+  stop)
+	printf "Stopping lvdesk: "
+	killall lvdesk 2>/dev/null
+	echo "OK"
+	;;
+  restart|reload)
+	"$0" stop; sleep 1; "$0" start
+	;;
+  *)
+	echo "Usage: $0 {start|stop|restart}"; exit 1
+esac

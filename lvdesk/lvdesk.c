@@ -35,10 +35,12 @@
 
 #include "lvgl.h"
 #include "src/drivers/lv_drivers.h"
+/* fbdev only: see lv_conf.h, LV_USE_LINUX_DRM is off so libdrm is not linked */
 
-#define TERM_COLS   62
-#define TERM_ROWS   18
-#define TASKBAR_H   26
+#define TERM_COLS   74
+#define TERM_ROWS   28
+#define TASKBAR_H   22
+#define HDR_H       20
 
 struct term {
 	lv_obj_t *win;
@@ -54,6 +56,8 @@ struct term {
 
 static struct term term;
 static lv_obj_t *taskbar;
+static lv_obj_t *sysinfo;
+static char sysinfo_last[192];
 static int kbd_fd = -1;
 static int shift;
 
@@ -202,14 +206,20 @@ static void term_poll(void)
 	}
 	if (term.dirty) {
 		char *p = term.render;
+		char saved;
 		int r;
 
+		/* draw a block where the cursor is, then put the cell back */
+		saved = term.grid[term.cy][term.cx];
+		if (saved == ' ')
+			term.grid[term.cy][term.cx] = '_';
 		for (r = 0; r < TERM_ROWS; r++) {
 			memcpy(p, term.grid[r], TERM_COLS);
 			p += TERM_COLS;
 			*p++ = '\n';
 		}
 		*p = 0;
+		term.grid[term.cy][term.cx] = saved;
 		lv_label_set_text(term.label, term.render);
 		term.dirty = 0;
 	}
@@ -232,6 +242,41 @@ static void term_spawn(void)
 	fcntl(fd, F_SETFL, O_NONBLOCK);
 	term.fd = fd;
 	term.child = pid;
+}
+
+static void sysinfo_update(void)
+{
+	char buf[192], line[96];
+	unsigned long total = 0, avail = 0;
+	double up = 0;
+	FILE *f;
+
+	if (!sysinfo)
+		return;
+	f = fopen("/proc/meminfo", "r");
+	if (f) {
+		while (fgets(line, sizeof(line), f)) {
+			sscanf(line, "MemTotal: %lu kB", &total);
+			sscanf(line, "MemAvailable: %lu kB", &avail);
+		}
+		fclose(f);
+	}
+	f = fopen("/proc/uptime", "r");
+	if (f) { if (fscanf(f, "%lf", &up) != 1) up = 0; fclose(f); }
+	snprintf(buf, sizeof(buf),
+		 "mem  %lu / %lu kB free\nup   %.0f min\nui   lvgl %s",
+		 avail, total, up / 60.0, LVGL_VERSION_INFO);
+	/*
+	 * Only touch the label when the text actually changed. lv_label_set_text
+	 * invalidates unconditionally, and an unconditional periodic redraw is
+	 * exactly what jwm's clock did on the X desktop - ~3.4 plane updates a
+	 * second with the machine idle, on a panel where a repaint costs 24-48
+	 * ms. Do not reintroduce it here.
+	 */
+	if (strcmp(buf, sysinfo_last) != 0) {
+		strncpy(sysinfo_last, buf, sizeof(sysinfo_last) - 1);
+		lv_label_set_text(sysinfo, buf);
+	}
 }
 
 /* ------------------------------------------------------------------ window */
@@ -262,15 +307,32 @@ static lv_obj_t *make_window(const char *title, int x, int y, int w, int h)
 	lv_obj_set_pos(win, x, y);
 	lv_win_add_title(win, title);
 	hdr = lv_win_get_header(win);
+	/* lv_win's default header is enormous on a 384 px tall screen */
+	lv_obj_set_height(hdr, HDR_H);
+	lv_obj_set_style_pad_all(hdr, 2, 0);
+	lv_obj_set_style_text_font(hdr, &lv_font_unscii_8, 0);
+	lv_obj_set_style_bg_color(hdr, lv_color_hex(0x3a6ea5), 0);
+	lv_obj_set_style_text_color(hdr, lv_color_hex(0xffffff), 0);
+	lv_obj_set_style_radius(win, 0, 0);
+	lv_obj_set_style_pad_all(win, 0, 0);
+	lv_obj_set_style_border_width(win, 1, 0);
 	lv_obj_add_flag(hdr, LV_OBJ_FLAG_CLICKABLE);
 	lv_obj_add_event_cb(hdr, drag_cb, LV_EVENT_PRESSING, win);
 	lv_obj_add_event_cb(win, raise_cb, LV_EVENT_PRESSED, win);
 
 	/* task bar entry */
 	btn = lv_button_create(taskbar);
-	lv_obj_set_height(btn, TASKBAR_H - 6);
+	lv_obj_set_size(btn, 92, TASKBAR_H - 6);
+	lv_obj_set_style_pad_all(btn, 1, 0);
+	lv_obj_set_style_radius(btn, 2, 0);
+	lv_obj_set_style_text_font(btn, &lv_font_unscii_8, 0);
 	lv_obj_add_event_cb(btn, raise_cb, LV_EVENT_CLICKED, win);
-	lv_label_set_text(lv_label_create(btn), title);
+	{
+		lv_obj_t *l = lv_label_create(btn);
+
+		lv_label_set_text(l, title);
+		lv_obj_center(l);
+	}
 	return win;
 }
 
@@ -338,6 +400,17 @@ int main(void)
 	term_spawn();
 	term.dirty = 1;
 
+	/* a second window: proves stacking, dragging and the task bar */
+	{
+		lv_obj_t *sys = make_window("System", 320, 150, 300, 150);
+		lv_obj_t *c = lv_win_get_content(sys);
+
+		lv_obj_set_style_pad_all(c, 4, 0);
+		sysinfo = lv_label_create(c);
+		lv_obj_set_style_text_font(sysinfo, &lv_font_unscii_8, 0);
+		lv_label_set_text(sysinfo, "reading /proc...");
+	}
+
 	for (;;) {
 		uint32_t now;
 
@@ -347,7 +420,10 @@ int main(void)
 		usleep(5000);
 		lv_tick_inc(5);
 		now = lv_tick_get();
-		if (now - last > 10000) { last = now; }	/* room for a clock */
+		if (now - last > 5000) {
+			last = now;
+			sysinfo_update();
+		}
 	}
 	return 0;
 }

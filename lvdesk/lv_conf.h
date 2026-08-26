@@ -1489,7 +1489,7 @@
  *============================================================================*/
 
 /** Driver for /dev/dri/card */
-#define LV_USE_LINUX_DRM 1
+#define LV_USE_LINUX_DRM 0
 
 #if LV_USE_LINUX_DRM
 /** Legacy behavior, slated for removal: the backend is inferred from
