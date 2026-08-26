@@ -168,7 +168,49 @@ UI process is 7.5x smaller.** Verified from a cold boot: lvdesk autostarts,
 `cursor_blink` stays 0, and the text mapping stays at Rss 0.
 
 
-## The "multi-second tail": warm-up, not a defect
+## The "multi-second tail": RETRACTED TWICE - it is the instrument
+
+**Second retraction. The warm-up explanation below is wrong too, and the
+profiling that was meant to confirm it refuted it instead.**
+
+Profiled properly, sampling faults and page cache alongside the latency:
+
+	 t=78 s    majflt=+0  lvdesk_majflt=+0  cached=2488 kB   p90 3144
+	 t=135 s   majflt=+0  lvdesk_majflt=+0  cached=2492 kB   p90 1381
+	 t=185 s   majflt=+0  lvdesk_majflt=+0  cached=2492 kB   p90 3639
+	 t=265 s   majflt=+0  lvdesk_majflt=+0  cached=2492 kB   p90 1599
+	 t=327 s   majflt=+0  lvdesk_majflt=+0  cached=2492 kB   p90 3397
+
+**Zero major faults, page cache flat to 4 kB, and no decay.** There is no
+warm-up. The earlier decay was chance.
+
+What it actually is: **`deskbench` itself.** It hashes all 4 MB of the reserved
+pool on every sample - 524 kB of PSRAM read per digest - and polls flat out.
+Measured during a run on this single 320 MHz core:
+
+	 deskbench   636 jiffies / 12 s   ~53% of the core
+	 lvdesk      437 jiffies / 34 s   ~13%
+
+The harness takes half the machine and then reports the stalls it caused.
+Trials skipped as "screen never went quiet" are the sampler failing to keep up,
+not the desktop failing to paint. Hours went into looking for those stalls in
+udev, wifi, swap and page-cache warm-up; none of them were the cause.
+
+Making it cheaper was tried and **made it worse**: scoping the hash to the
+scanout buffer and sleeping 2 ms between samples halved harness CPU and broke
+detection - successful trials fell from 25 of 25 to 2-7, medians rose into the
+hundreds of ms. Reverted, and the cost is now declared in the source instead of
+hidden.
+
+**So: medians from this harness are sound and reproducible - 39.5, 39.8, 40.1 ms
+across three runs of 25. Tails are not, and an absolute p90 or max from it
+should not be quoted as a property of the system.** Comparisons between two
+systems measured the same way remain fair, which is what the X11-to-LVGL
+figures rest on.
+
+The original, also-wrong explanation follows.
+
+## The "multi-second tail": warm-up, not a defect (WRONG - see above)
 
 Early runs reported typing p90s of 2-3.7 seconds, which would be the single
 worst thing about this desktop if it were real. It is not a steady-state

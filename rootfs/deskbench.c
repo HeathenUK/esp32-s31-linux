@@ -156,6 +156,28 @@ static int query_scanout(void)
 	return fb_base ? 0 : -2;
 }
 
+/*
+ * Hash the whole reserved pool, flat out. This is EXPENSIVE and it perturbs
+ * what it measures - see below - but every attempt to make it cheaper has made
+ * it wrong, so the cost is accepted and declared rather than hidden.
+ *
+ * It hashes all 4 MB of the reserved region on every sample - 524 kB
+ * of PSRAM read per digest, polled flat out. Measured, the harness then burned
+ * 636 jiffies in 12 s, about 53% of this single core, against the desktop's
+ * 13%. It was causing the multi-second stalls it was reporting: trials were
+ * skipped as "never went quiet" because the sampler could not keep up, and
+ * several hours were spent looking for those stalls in udev, wifi, swap and
+ * page-cache warm-up. None of them were the cause. The instrument was.
+ *
+ * Scoping the hash to fb_size at fb_base and sleeping 2 ms between samples was
+ * tried: harness CPU halved, and detection broke badly - successful trials fell
+ * from 25 of 25 to 2-7, with medians in the hundreds of ms. Reverted.
+ *
+ * So: MEDIANS FROM THIS HARNESS ARE SOUND, TAILS ARE NOT. Comparisons between
+ * two systems measured the same way remain fair, which is what the X11-to-LVGL
+ * numbers rest on. Do not quote an absolute p90 or max from it as a property of
+ * the system under test.
+ */
 static uint32_t digest(const volatile uint8_t *fb)
 {
 	uint32_t h = 2166136261u;
