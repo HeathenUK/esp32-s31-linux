@@ -62,3 +62,53 @@ prove the stack, not to style it.
 - No `deskbench` comparison yet. That harness is stack-agnostic and its X
   baseline is directly comparable, so it is the next thing.
 - The PPA draw unit, which is the reason LVGL is interesting on this SoC at all.
+
+## After the strip: measured
+
+X11 removed entirely, LVGL starting from `S40lvdesk` at boot.
+
+	                          X11 desktop      LVGL desktop
+	 key -> first pixel        100.8 ms        38.5 / 45.7 / 43.3 ms
+	 key -> settle             174.4 ms         83.3 ms
+	 compositor/server RSS    ~4,700 kB        1,200 kB
+	 MemAvailable, desktop up  ~2,644 kB       3,640-3,912 kB
+	 idle CPU of the UI         -               8.8% of a core
+	 idle plane updates        3.4/s (clock)    5.1/s
+
+**Typing is 2.4x faster to first pixel and 2.1x to settle**, and the UI process
+is a quarter the size.
+
+Space, which is where the strip really shows:
+
+	 rootfs packages       46 -> 31
+	 /usr/bin on the card  9,704 -> 5,176 kB
+	 /usr/lib on the card 24,868 -> 18,964 kB
+	 xip2 flash image  3,878,912 -> 4,096 bytes
+
+That is 10.4 MB back on the card and effectively a whole 1.4 MB flash partition
+freed.
+
+## Two things this pass got wrong, both found by measuring
+
+**The main loop busy-polled.** `lv_timer_handler()` plus a 5 ms `usleep` is 200
+wakeups a second, and measured **89 jiffies per 5 s - about 18% of a core with
+the desktop completely idle**. That is the same waste as jwm's taskbar clock,
+which this project removed from the X desktop, and it would have shipped
+invisibly. Replaced with `poll()` on the pty and keyboard fds, with the timeout
+taken from LVGL's own next-timer deadline: idle CPU halved to 8.8% and typing
+latency did not move.
+
+**The System window repainted unconditionally.** `lv_label_set_text()`
+invalidates whether or not the text changed, so a periodic update is a periodic
+repaint. It now compares first and shows uptime in minutes rather than seconds,
+so the string is stable between updates.
+
+## Open
+
+- **Idle plane updates are 5.1/s and unexplained.** X without its clock managed
+  0-3 per 5 s, so LVGL is currently *worse* at rest. The sysinfo window is no
+  longer the cause. Needs finding before this can be called finished.
+- The DRM backend still blocks (see above); fbdev costs a shadow copy.
+- `lvdesk` lives on the ext4 root, not in the XIP image, so its ~600 KB of text
+  is resident instead of executing in place from flash. Putting it in the XIP
+  stage should take RSS from 1,200 kB to a few hundred.

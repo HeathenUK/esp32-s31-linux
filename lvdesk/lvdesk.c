@@ -25,6 +25,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/input.h>
+#include <poll.h>
 #include <pty.h>
 #include <signal.h>
 #include <stdio.h>
@@ -411,17 +412,43 @@ int main(void)
 		lv_label_set_text(sysinfo, "reading /proc...");
 	}
 
+	/*
+	 * Block on the input fds instead of spinning.
+	 *
+	 * The first version called lv_timer_handler() and slept 5 ms in a loop,
+	 * which is 200 wakeups a second and measured 89 jiffies per 5 s - about
+	 * 18% of a core with the desktop idle. That is the same class of waste
+	 * as the taskbar clock this project removed from jwm, and it would have
+	 * shipped invisibly.
+	 *
+	 * poll() on the pty and the keyboard with a timeout set by LVGL's own
+	 * next-timer deadline gives idle cost near zero while still waking
+	 * immediately on a keystroke, so typing latency does not pay for it.
+	 */
 	for (;;) {
-		uint32_t now;
+		struct pollfd fds[2];
+		uint32_t next;
+		int n = 0, ms;
 
-		lv_timer_handler();
+		next = lv_timer_handler();
+		if (next == LV_NO_TIMER_READY || next > 30)
+			next = 30;
+
+		if (term.fd >= 0) { fds[n].fd = term.fd; fds[n].events = POLLIN; n++; }
+		if (kbd_fd >= 0)  { fds[n].fd = kbd_fd;  fds[n].events = POLLIN; n++; }
+
+		ms = (int)next;
+		if (n)
+			poll(fds, n, ms);
+		else
+			usleep(ms * 1000);
+		lv_tick_inc(ms);
+
 		term_poll();
 		kbd_poll();
-		usleep(5000);
-		lv_tick_inc(5);
-		now = lv_tick_get();
-		if (now - last > 5000) {
-			last = now;
+
+		if (lv_tick_get() - last > 5000) {
+			last = lv_tick_get();
 			sysinfo_update();
 		}
 	}
