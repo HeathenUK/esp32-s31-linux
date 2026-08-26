@@ -89,3 +89,28 @@ Userspace. With the LVGL desktop running, `lvdesk` is 1,264 kB RSS and the
 largest other process is a 580 kB shell. The X11 stack it replaced was ~4.7 MB
 for Xorg alone, which was worth removing - but even so, the kernel's own
 metadata outweighs everything userspace does on this board.
+
+
+## Measured: what turning debugfs off actually returns
+
+`make linux DIAG=0` compiles out `CONFIG_DEBUG_FS`. Same workload, LVGL desktop
+running, both measured on a cold boot:
+
+	                    DIAG=1        DIAG=0 (ship)
+	 Slab              4,448 kB        4,040 kB
+	 MemAvailable      3,584-3,648     4,020 kB
+	 kernel image      6,021,185       5,787,553 bytes
+
+**About 400 kB of slab and 400 kB of MemAvailable, plus 233 kB of flash.**
+
+That is less than this document first suggested. The earlier reading paired
+`debugfs_inode_cache` (311 kB) with `kernfs_node_cache` (783 kB) and implied
+roughly 1.1 MB was available. It is not: **most of those kernfs nodes back
+sysfs, which stays**, and only debugfs's share leaves. 400 kB on a 15.4 MB
+board is still worth having - it is two thirds of the LVGL desktop's entire
+resident size - but the 1.1 MB figure was wrong and should not be quoted.
+
+The cost is that `/sys/kernel/debug` disappears, taking the LCD driver's
+counters, the PPA register dump and `deskbench`'s scanout discovery with it. So
+`DIAG=1` stays the default for development and `DIAG=0` is the shipping build,
+exactly as `CONFIG_PROFILING` is already handled.

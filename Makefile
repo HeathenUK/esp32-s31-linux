@@ -170,6 +170,21 @@ opensbi: toolchain | $(OPENSBI_OUT)
 	rm -f $(BUILD_DIR)/staged_fw_jump.bin $(BUILD_DIR)/offset.bin
 
 DEFCONFIG ?= esp32s31_defconfig
+
+# Diagnostic surfaces, on by default.
+#
+# DIAG=0 builds the shipping kernel with debugfs compiled out. Measured on this
+# board, debugfs_inode_cache alone is 311 kB and it backs a large share of the
+# 9,108 kernfs nodes (783 kB) - see docs/where-the-ram-goes.md. The cost of
+# turning it off is real: the LCD driver's counters, the PPA registers and
+# deskbench's scanout discovery all live under /sys/kernel/debug. Same trade
+# already made for CONFIG_PROFILING - develop with it, ship without it.
+DIAG ?= 1
+ifeq ($(DIAG),0)
+DIAG_TWEAKS := --disable DEBUG_FS
+else
+DIAG_TWEAKS := --enable DEBUG_FS
+endif
 LINUX_TARGET ?= xipImage
 
 # An oversized kernel is fatal, because it silently runs past its partition into
@@ -216,7 +231,7 @@ linux: toolchain | $(LINUX_OUT)
 		--enable HID \
 		--enable HID_GENERIC \
 		--enable USB_HID \
-		--enable DEBUG_FS \
+		$(DIAG_TWEAKS) \
 		--set-val LOG_BUF_SHIFT 14 \
 		--enable CMA \
 		--enable DMA_CMA \
