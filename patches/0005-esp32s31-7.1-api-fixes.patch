@@ -587,6 +587,21 @@ diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users
  	return 0;
  }
  
+diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port71xip/drivers/gpu/drm/espressif/Kconfig linux-71-port/drivers/gpu/drm/espressif/Kconfig
+--- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port71xip/drivers/gpu/drm/espressif/Kconfig	2026-08-20 22:50:37.877738684 +0100
++++ linux-71-port/drivers/gpu/drm/espressif/Kconfig	2026-08-26 08:27:08.586773758 +0100
+@@ -5,6 +5,11 @@
+ 	depends on ARCH_ESPRESSIF || COMPILE_TEST
+ 	select DRM_GEM_DMA_HELPER
+ 	select DRM_KMS_HELPER
++	# The driver calls drm_client_setup_with_fourcc(), so it has to
++	# select this - DRM_CLIENT_SELECTION is a prompt-less tristate and
++	# cannot be turned on from a defconfig or kconfig-tweak. Without it
++	# DRM_FBDEV_EMULATION stays invisible and /dev/fb0 never appears.
++	select DRM_CLIENT_SELECTION
+ 	select DRM_PANEL_BRIDGE
+ 	select DRM_BRIDGE_CONNECTOR
+ 	select DRM_DISPLAY_HELPER
 diff -ruN --no-dereference -x '*.rej' -x '*.orig' /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port71xip/drivers/gpu/drm/Kconfig linux-71-port/drivers/gpu/drm/Kconfig
 --- /private/tmp/claude-501/-Users-gadyke-esp32-s31-linux/a3bd6c0f-a207-47f4-a361-ed252dbfd1da/scratchpad/kup/port71xip/drivers/gpu/drm/Kconfig	2026-08-24 14:15:11.617842784 +0100
 +++ linux-71-port/drivers/gpu/drm/Kconfig	2026-08-24 15:44:40.947407657 +0100

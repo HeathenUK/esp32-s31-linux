@@ -225,6 +225,7 @@ linux: toolchain | $(LINUX_OUT)
 		--disable USB_DWC2_DEBUG \
 		--disable USB_DWC2_DEBUG_PERIODIC \
 		--enable HID_SUPPORT \
+		--enable DRM_CLIENT_SELECTION \
 		--enable DRM_FBDEV_EMULATION \
 		--enable FRAMEBUFFER_CONSOLE \
 		--disable DRM_DEBUG_MODESET_LOCK \
@@ -249,6 +250,7 @@ linux: toolchain | $(LINUX_OUT)
 		--disable PREEMPT \
 		--disable PREEMPT_VOLUNTARY \
 		--enable PREEMPT_NONE \
+		--enable DRM_FBDEV_EMULATION \
 		--disable IPV6
 	$(MAKE) -C $(LINUX_DIR) O=$(LINUX_OUT) ARCH=riscv CROSS_COMPILE="$(CROSS_COMPILE)" olddefconfig
 	$(MAKE) -C $(LINUX_DIR) O=$(LINUX_OUT) ARCH=riscv CROSS_COMPILE="$(CROSS_COMPILE)" \

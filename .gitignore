@@ -30,3 +30,7 @@ Packages.stamps
 images/feed/
 linux-70-port/
 linux-71-port/
+
+# LVGL upstream checkout and built app binaries
+/lvgl/
+/lvdesk/*.bin
