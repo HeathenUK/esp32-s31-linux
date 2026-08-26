@@ -255,3 +255,56 @@ Recorded so none of it is retried:
 - **Removing `FRAMEBUFFER_CONSOLE` from the config.** It has
   `default DRM_FBDEV_EMULATION`, so `olddefconfig` puts it straight back and the
   kernel builds byte-identical. Would have bought ~16 kB anyway.
+
+
+## RETRACTION: the LVGL latency figures were measuring the console
+
+Recording the panel to video exposed this, and no amount of measurement had.
+The first clip showed the **framebuffer console** drawing over the LVGL desktop:
+boot messages and an `esp32-s31 login:` prompt, with the System window faintly
+behind them.
+
+The injected keystrokes were reaching the **VT console**, which echoed them and
+repainted the panel. `deskbench` hashes the framebuffer and cannot tell who
+painted, and `latprobe` counts plane updates and cannot either. **Every LVGL
+typing figure reported before this measured fbcon's echo, not the desktop.**
+
+With fbcon unbound so that only lvdesk draws:
+
+	 reported earlier (fbcon echoing)      21 ms median
+	 lvdesk actually rendering            ~100 ms median
+
+**So the claim that LVGL types 2.4x faster than X11 is withdrawn.** On typing
+latency the two are about the same. LVGL's real wins - 624 kB against ~4,700 kB
+resident, and ~1.4 MB more MemAvailable - stand, because those were measured
+directly and not through the framebuffer.
+
+Two real bugs were found on the way, both hidden by fbcon doing the work:
+
+- **lvdesk only read the keyboard that existed at start-up.** `kbd_open()`
+  scanned once and kept the first device with a letter key, so anything plugged
+  in later was ignored. It now opens every keyboard and rescans every 2 s.
+- **Stale keyboard fds were never dropped.** The kernel reuses the same
+  major:minor for the next uinput device, so a dead fd looked identical to a
+  fresh one by `st_rdev`; the desktop kept the corpse and ignored the new
+  keyboard, which showed as every second test run timing out.
+
+## Where the ~100 ms actually goes: fbdev emulation
+
+`rootfs/fbpoke.c` writes **one pixel** to `/dev/fb0` and times how long it takes
+to reach the panel. No toolkit, no input stack:
+
+	 fbpoke: n=20  mean 83.1  min 57.6  max 351.8 ms
+
+**About 83 ms of the ~100 ms is the fbdev emulation layer**, which batches damage
+through a deferred-io worker on a timer. Only ~17 ms is input, shell echo and
+LVGL's own rendering. Nothing above fbdev can fix it - the per-row terminal
+rewrite and the LVGL tick correction, both real improvements, moved the total by
+nothing at all.
+
+**The fix is to drive KMS directly and delete the fbdev layer.** That is blocked
+on two things: LVGL's DRM backend stalls against this driver waiting for a
+page-flip completion (recorded above), and `libdrm` left the image with Xorg, so
+it needs adding back to the rootfs and re-imaging. Expect ~20-25 ms - one panel
+frame - if it works, which would be a 4x improvement and the thing that finally
+makes this feel instant.

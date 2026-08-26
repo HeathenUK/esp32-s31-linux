@@ -26,6 +26,8 @@
 #include <fcntl.h>
 #include <linux/input.h>
 #include <poll.h>
+#include <sys/stat.h>
+#include <time.h>
 #include <pty.h>
 #include <signal.h>
 #include <stdio.h>
@@ -45,12 +47,13 @@
 
 struct term {
 	lv_obj_t *win;
-	lv_obj_t *label;
+	lv_obj_t *rows[TERM_ROWS];	/* one label per row - see term_poll */
+	int rowdirty[TERM_ROWS];
 	int fd;			/* pty master */
 	pid_t child;
 	char grid[TERM_ROWS][TERM_COLS + 1];
 	int cx, cy;
-	char render[(TERM_COLS + 2) * TERM_ROWS + 1];
+	char render[TERM_COLS + 2];
 	int dirty;
 	int esc;		/* inside an escape sequence */
 };
@@ -59,7 +62,10 @@ static struct term term;
 static lv_obj_t *taskbar;
 static lv_obj_t *sysinfo;
 static char sysinfo_last[192];
-static int kbd_fd = -1;
+#define MAXKBD 8
+static int kbd_fds[MAXKBD];
+static int kbd_n;
+static uint32_t kbd_scan_at;
 static int shift;
 
 /* ---------------------------------------------------------------- keyboard */
@@ -88,56 +94,108 @@ static const char keymap[][2] = {
 	[KEY_TAB] = {'\t', '\t'}, [KEY_ESC] = {27, 27},
 };
 
-static void kbd_open(void)
+/*
+ * Open every keyboard, and keep looking.
+ *
+ * This used to scan once at startup and keep the first device with a letter
+ * key. Anything plugged in afterwards - or any virtual keyboard created by a
+ * test harness - was never read, so the desktop simply ignored it. That was
+ * invisible while the framebuffer console was bound, because fbcon echoed the
+ * keystrokes itself and the panel changed anyway; with fbcon unbound the
+ * desktop turned out not to respond to a hotplugged keyboard at all.
+ */
+static void kbd_scan(void)
 {
-	char path[64];
-	int i, fd;
 	unsigned long bits[KEY_MAX / (8 * sizeof(long)) + 1];
+	char path[64];
+	int i, fd, j, known;
 
-	for (i = 0; i < 16; i++) {
+	for (i = 0; i < 32 && kbd_n < MAXKBD; i++) {
 		snprintf(path, sizeof(path), "/dev/input/event%d", i);
 		fd = open(path, O_RDONLY | O_NONBLOCK);
 		if (fd < 0)
 			continue;
+		/* already have this one? compare by device node identity */
+		known = 0;
+		for (j = 0; j < kbd_n; j++) {
+			struct stat a, b;
+
+			if (!fstat(fd, &a) && !fstat(kbd_fds[j], &b) &&
+			    a.st_rdev == b.st_rdev) { known = 1; break; }
+		}
+		if (known) { close(fd); continue; }
+
 		memset(bits, 0, sizeof(bits));
 		if (ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(bits)), bits) < 0) {
 			close(fd);
 			continue;
 		}
-		/* a keyboard has a letter key; a mouse does not */
 		if (bits[KEY_A / (8 * sizeof(long))] &
 		    (1UL << (KEY_A % (8 * sizeof(long))))) {
-			kbd_fd = fd;
+			kbd_fds[kbd_n++] = fd;
 			printf("lvdesk: keyboard on %s\n", path);
-			return;
+		} else {
+			close(fd);
 		}
-		close(fd);
 	}
-	printf("lvdesk: no keyboard found\n");
+}
+
+static void kbd_open(void)
+{
+	kbd_n = 0;
+	kbd_scan();
+	if (!kbd_n)
+		printf("lvdesk: no keyboard yet; will keep looking\n");
 }
 
 static void kbd_poll(void)
 {
 	struct input_event ev;
+	int i;
 
-	if (kbd_fd < 0)
-		return;
-	while (read(kbd_fd, &ev, sizeof(ev)) == sizeof(ev)) {
-		char c;
+	/* pick up devices that appeared after start-up */
+	if (lv_tick_get() - kbd_scan_at > 2000) {
+		kbd_scan_at = lv_tick_get();
+		kbd_scan();
+	}
 
-		if (ev.type != EV_KEY)
-			continue;
-		if (ev.code == KEY_LEFTSHIFT || ev.code == KEY_RIGHTSHIFT) {
-			shift = !!ev.value;
+	for (i = 0; i < kbd_n; i++) {
+		int n;
+
+		/*
+		 * Drop devices that have gone away. The kernel reuses the same
+		 * major:minor for the next uinput device, so a stale fd looks
+		 * identical to a fresh one by st_rdev - keep it and the new
+		 * keyboard is never opened, which showed up as the desktop
+		 * ignoring every second test run.
+		 */
+		n = read(kbd_fds[i], &ev, sizeof(ev));
+		if (n < 0 && (errno == ENODEV || errno == EBADF)) {
+			close(kbd_fds[i]);
+			kbd_fds[i] = kbd_fds[--kbd_n];
+			kbd_scan_at = 0;	/* rescan now */
+			i--;
 			continue;
 		}
-		if (!ev.value)			/* key up */
+		if (n != sizeof(ev))
 			continue;
-		if (ev.code >= sizeof(keymap) / sizeof(keymap[0]))
-			continue;
-		c = keymap[ev.code][shift ? 1 : 0];
-		if (c && term.fd >= 0)
-			write(term.fd, &c, 1);
+		do {
+			char c;
+
+			if (ev.type != EV_KEY)
+				continue;
+			if (ev.code == KEY_LEFTSHIFT || ev.code == KEY_RIGHTSHIFT) {
+				shift = !!ev.value;
+				continue;
+			}
+			if (!ev.value)
+				continue;
+			if (ev.code >= sizeof(keymap) / sizeof(keymap[0]))
+				continue;
+			c = keymap[ev.code][shift ? 1 : 0];
+			if (c && term.fd >= 0)
+				if (write(term.fd, &c, 1) < 0) { }
+		} while (read(kbd_fds[i], &ev, sizeof(ev)) == sizeof(ev));
 	}
 }
 
@@ -145,10 +203,14 @@ static void kbd_poll(void)
 
 static void term_scroll(void)
 {
+	int r;
+
 	memmove(term.grid[0], term.grid[1], sizeof(term.grid[0]) * (TERM_ROWS - 1));
 	memset(term.grid[TERM_ROWS - 1], ' ', TERM_COLS);
 	term.grid[TERM_ROWS - 1][TERM_COLS] = 0;
 	term.cy = TERM_ROWS - 1;
+	for (r = 0; r < TERM_ROWS; r++)	/* scrolling moves every row */
+		term.rowdirty[r] = 1;
 }
 
 static void term_putc(char c)
@@ -168,11 +230,14 @@ static void term_putc(char c)
 	case 27: term.esc = 1; return;
 	case '\r': term.cx = 0; return;
 	case '\n':
+		term.rowdirty[term.cy] = 1;
 		term.cx = 0;
 		if (++term.cy >= TERM_ROWS) term_scroll();
+		term.rowdirty[term.cy] = 1;
 		return;
 	case '\b':
 		if (term.cx > 0) term.cx--;
+		term.rowdirty[term.cy] = 1;
 		return;
 	case '\t':
 		term.cx = (term.cx + 8) & ~7;
@@ -182,6 +247,7 @@ static void term_putc(char c)
 	default:
 		if ((unsigned char)c < 32) return;
 		term.grid[term.cy][term.cx] = c;
+		term.rowdirty[term.cy] = 1;
 		if (++term.cx >= TERM_COLS) {
 			term.cx = 0;
 			if (++term.cy >= TERM_ROWS) term_scroll();
@@ -206,22 +272,37 @@ static void term_poll(void)
 		term.fd = -1;
 	}
 	if (term.dirty) {
-		char *p = term.render;
+		/*
+		 * Repaint only the rows that changed.
+		 *
+		 * This used to rebuild the whole 74x28 grid into one string and
+		 * hand it to lv_label_set_text on every keystroke, which makes
+		 * LVGL re-lay-out and redraw ~2000 glyphs to show one
+		 * character. Measured, typing latency was ~450 ms with half the
+		 * trials timing out - worse than the X11 desktop this replaced,
+		 * and it threw away the dirty-rectangle rendering that is the
+		 * entire reason for preferring LVGL here.
+		 *
+		 * One label per row means a keystroke invalidates one row.
+		 */
+		char line[TERM_COLS + 2];
 		char saved;
 		int r;
 
-		/* draw a block where the cursor is, then put the cell back */
 		saved = term.grid[term.cy][term.cx];
 		if (saved == ' ')
 			term.grid[term.cy][term.cx] = '_';
+		term.rowdirty[term.cy] = 1;
+
 		for (r = 0; r < TERM_ROWS; r++) {
-			memcpy(p, term.grid[r], TERM_COLS);
-			p += TERM_COLS;
-			*p++ = '\n';
+			if (!term.rowdirty[r])
+				continue;
+			memcpy(line, term.grid[r], TERM_COLS);
+			line[TERM_COLS] = 0;
+			lv_label_set_text(term.rows[r], line);
+			term.rowdirty[r] = 0;
 		}
-		*p = 0;
 		term.grid[term.cy][term.cx] = saved;
-		lv_label_set_text(term.label, term.render);
 		term.dirty = 0;
 	}
 }
@@ -412,12 +493,16 @@ int main(void)
 	lv_obj_set_style_bg_color(content, lv_color_hex(0x000000), 0);
 	lv_obj_set_style_pad_all(content, 4, 0);
 	lv_obj_remove_flag(content, LV_OBJ_FLAG_SCROLLABLE);
-	term.label = lv_label_create(content);
-	lv_obj_set_style_text_font(term.label, &lv_font_unscii_8, 0);
-	lv_obj_set_style_text_color(term.label, lv_color_hex(0x33ff66), 0);
 	memset(term.grid, ' ', sizeof(term.grid));
-	for (int r = 0; r < TERM_ROWS; r++) term.grid[r][TERM_COLS] = 0;
-	lv_label_set_text(term.label, "");
+	for (int r = 0; r < TERM_ROWS; r++) {
+		term.grid[r][TERM_COLS] = 0;
+		term.rows[r] = lv_label_create(content);
+		lv_obj_set_style_text_font(term.rows[r], &lv_font_unscii_8, 0);
+		lv_obj_set_style_text_color(term.rows[r], lv_color_hex(0x33ff66), 0);
+		lv_obj_set_style_pad_all(term.rows[r], 0, 0);
+		lv_obj_set_pos(term.rows[r], 0, r * 8);
+		lv_label_set_text(term.rows[r], "");
+	}
 	term_spawn();
 	term.dirty = 1;
 
@@ -446,8 +531,8 @@ int main(void)
 	 * immediately on a keystroke, so typing latency does not pay for it.
 	 */
 	for (;;) {
-		struct pollfd fds[2];
-		uint32_t next;
+		struct pollfd fds[2 + MAXKBD];
+		uint32_t next, elapsed;
 		int n = 0, ms;
 
 		next = lv_timer_handler();
@@ -455,17 +540,40 @@ int main(void)
 			next = 30;
 
 		if (term.fd >= 0) { fds[n].fd = term.fd; fds[n].events = POLLIN; n++; }
-		if (kbd_fd >= 0)  { fds[n].fd = kbd_fd;  fds[n].events = POLLIN; n++; }
+		for (int ki = 0; ki < kbd_n && n < 2 + MAXKBD; ki++) {
+			fds[n].fd = kbd_fds[ki]; fds[n].events = POLLIN; n++;
+		}
 
+		/*
+		 * Feed LVGL the time that actually elapsed, not the timeout we
+		 * asked for. poll() returns the instant a key or pty byte
+		 * arrives, so passing the timeout made LVGL's clock run fast
+		 * whenever anything was happening - which is exactly when its
+		 * timing matters.
+		 */
 		ms = (int)next;
-		if (n)
-			poll(fds, n, ms);
-		else
-			usleep(ms * 1000);
-		lv_tick_inc(ms);
+		{
+			struct timespec a, b;
+
+			clock_gettime(CLOCK_MONOTONIC, &a);
+			if (n)
+				poll(fds, n, ms);
+			else
+				usleep(ms * 1000);
+			clock_gettime(CLOCK_MONOTONIC, &b);
+			elapsed = (uint32_t)((b.tv_sec - a.tv_sec) * 1000 +
+					     (b.tv_nsec - a.tv_nsec) / 1000000);
+		}
+		lv_tick_inc(elapsed ? elapsed : 1);
 
 		term_poll();
 		kbd_poll();
+		/*
+		 * Draw now if the terminal changed. Without this the new text
+		 * waits for the next trip round the loop, adding a whole poll
+		 * period to every keystroke.
+		 */
+		lv_timer_handler();
 
 		if (lv_tick_get() - last > 5000) {
 			last = lv_tick_get();
