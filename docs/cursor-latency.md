@@ -533,3 +533,53 @@ for completion before sleeping, which is free on an idle board and is CPU stolen
 from X on a busy one. That is the plausible mechanism for the engine helping in
 a microbenchmark and not on a desktop - but it is a hypothesis, and the data
 above does not support it either way.
+
+
+## latprobe: measuring latency without being the load
+
+`rootfs/latprobe.c` exists because `deskbench` cannot answer this question
+honestly. Hashing the framebuffer costs 524 kB of PSRAM read per sample, polled
+flat out - 636 jiffies in 12 s, about **53% of this single core** - so it
+competes with the thing it is timing and then reports the stalls it caused.
+
+The driver already publishes what is needed:
+
+	 updates=N           plane updates so far
+	 last_update_ns=T    when the newest happened, ktime_get_ns()
+
+`ktime_get_ns()` and `clock_gettime(CLOCK_MONOTONIC)` are the same clock, so
+**the poll rate stops setting the accuracy**. Poll `updates` slowly and cheaply,
+and when it moves take the latency from the driver's timestamp - when the update
+actually happened, not when this process noticed. A 10 ms poll of a ~600 byte
+seq_file is unmeasurable against the core.
+
+### What it changes
+
+Typing into the LVGL terminal, four runs of 25:
+
+	                 deskbench          latprobe
+	 harness CPU   ~53% of the core    unmeasurable
+	 samples       13-24 of 25         25 of 25, 0 timeouts
+	 median         40 ms               21 ms
+	 p90            50 ms               32 ms
+	 max         3,700 ms               40 ms
+
+Medians: 23.5, 21.1, 20.8, 21.3 ms. **There is no tail.** Every multi-second
+figure reported from this desktop was the instrument, and the desktop is roughly
+twice as fast as `deskbench` made it look - a median of 21 ms is inside one
+23.8 ms panel frame.
+
+### What this does and does not invalidate
+
+The X11-to-LVGL comparison used `deskbench` on both sides, so **the ratio still
+stands**; what was wrong was the absolute figures, inflated on both sides by the
+same overhead. X11 measured with `latprobe` would also come in lower than the
+100.8 ms on record. That comparison cannot be re-run now - X is removed from the
+image - so the honest statement is that LVGL is about 2.4x faster to first pixel
+than X11 was, and that its true latency is ~21 ms rather than the ~40 ms
+previously quoted.
+
+**Use `latprobe` for anything where the tail matters.** `deskbench` keeps its
+uses - it needs no debugfs, so it works on `DIAG=0` kernels, and it can watch
+scenarios like drag and raise that have no driver-side signal - but its p90 and
+max are its own, not the system's.
