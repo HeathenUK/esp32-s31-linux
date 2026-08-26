@@ -38,7 +38,7 @@
 
 #include "lvgl.h"
 #include "src/drivers/lv_drivers.h"
-/* fbdev only: see lv_conf.h, LV_USE_LINUX_DRM is off so libdrm is not linked */
+#include "kms.h"
 
 #define TERM_COLS   74
 #define TERM_ROWS   28
@@ -421,6 +421,54 @@ static lv_obj_t *make_window(const char *title, int x, int y, int w, int h)
 	return win;
 }
 
+
+/* ---------------------------------------------------------------- display */
+
+static int direct_render;
+
+/*
+ * Damage is accumulated across the frame and posted once.
+ *
+ * DIRTYFB is a synchronous atomic commit, so its cost is per call rather than
+ * per pixel; LVGL can issue several flushes for one frame, and posting each
+ * one separately would multiply the commits without reducing the work.
+ */
+static int dmg_valid, dmg_x1, dmg_y1, dmg_x2, dmg_y2;
+
+static void kms_flush_cb(lv_display_t *d, const lv_area_t *area, uint8_t *px)
+{
+	if (!direct_render) {
+		int32_t w = lv_area_get_width(area);
+		int32_t h = lv_area_get_height(area);
+		uint8_t *dst = kms_map + area->y1 * kms_pitch + area->x1 * 2;
+		const uint8_t *src = px;
+		int32_t y;
+
+		for (y = 0; y < h; y++) {
+			memcpy(dst, src, w * 2);
+			src += w * 2;
+			dst += kms_pitch;
+		}
+	}
+
+	if (!dmg_valid) {
+		dmg_x1 = area->x1; dmg_y1 = area->y1;
+		dmg_x2 = area->x2; dmg_y2 = area->y2;
+		dmg_valid = 1;
+	} else {
+		if (area->x1 < dmg_x1) dmg_x1 = area->x1;
+		if (area->y1 < dmg_y1) dmg_y1 = area->y1;
+		if (area->x2 > dmg_x2) dmg_x2 = area->x2;
+		if (area->y2 > dmg_y2) dmg_y2 = area->y2;
+	}
+
+	if (lv_display_flush_is_last(d)) {
+		kms_dirty(dmg_x1, dmg_y1, dmg_x2, dmg_y2);
+		dmg_valid = 0;
+	}
+	lv_display_flush_ready(d);
+}
+
 /* -------------------------------------------------------------------- main */
 
 int main(void)
@@ -433,21 +481,51 @@ int main(void)
 	lv_init();
 
 	/*
-	 * fbdev, not DRM. LVGL's DRM backend page-flips and waits for a
-	 * completion event; against this driver it did the modeset, logged
-	 * "render=640x384 centred", and then blocked forever - 0 CPU jiffies
-	 * in 5 s holding /dev/dri/card0, with the driver's update counter
-	 * never moving. X never hit it because ShadowFB makes modesetting use
-	 * dirty-rect updates rather than page flips.
+	 * KMS directly, through kms.c - no fbdev, no libdrm.
 	 *
-	 * fbdev emulation costs a shadow buffer and a copy, which is not free
-	 * on a bandwidth-bound board, so the DRM path is worth returning to.
+	 * fbdev emulation was costing 83.1 ms of the desktop's ~100 ms
+	 * keystroke latency (measured by fbpoke, which writes one pixel to
+	 * /dev/fb0 and times the plane update). That is its deferred-I/O
+	 * worker batching damage on a timer, and no amount of making the
+	 * toolkit above it cheaper can touch it.
+	 *
+	 * Rendering is DIRECT into the mapped dumb buffer whenever the
+	 * driver's pitch matches, so there is no shadow buffer and no copy at
+	 * all: LVGL draws the damaged rectangle straight into the framebuffer
+	 * the driver will read, and the flush callback only has to post a
+	 * damage rectangle. That removes ~491 KB of shadow and a full-screen
+	 * memcpy per frame on a board where bandwidth is the ceiling.
 	 */
-	disp = lv_linux_fbdev_create();
-	if (!disp) { printf("lvdesk: fbdev create failed\n"); return 1; }
-	lv_linux_fbdev_set_file(disp, "/dev/fb0");
-	printf("lvdesk: %dx%d\n", (int)lv_display_get_horizontal_resolution(disp),
-	       (int)lv_display_get_vertical_resolution(disp));
+	if (kms_open("/dev/dri/card0") < 0) {
+		printf("lvdesk: no KMS\n");
+		return 1;
+	}
+
+	disp = lv_display_create(kms_w, kms_h);
+	if (!disp) { printf("lvdesk: display create failed\n"); return 1; }
+	lv_display_set_color_format(disp, LV_COLOR_FORMAT_RGB565);
+	lv_display_set_flush_cb(disp, kms_flush_cb);
+
+	if (kms_pitch == kms_w * 2) {
+		lv_display_set_buffers(disp, kms_map, NULL, kms_size,
+				       LV_DISPLAY_RENDER_MODE_DIRECT);
+		direct_render = 1;
+	} else {
+		/*
+		 * A padded pitch means LVGL cannot render in place, because it
+		 * assumes a packed stride. Fall back to partial rendering with
+		 * a row-by-row copy in the flush callback.
+		 */
+		static uint8_t partial_buf[640 * 48 * 2];
+
+		lv_display_set_buffers(disp, partial_buf, NULL,
+				       sizeof(partial_buf),
+				       LV_DISPLAY_RENDER_MODE_PARTIAL);
+		printf("lvdesk: pitch %u != %u, partial mode\n",
+		       kms_pitch, kms_w * 2);
+	}
+	printf("lvdesk: %dx%d %s\n", (int)kms_w, (int)kms_h,
+	       direct_render ? "direct" : "partial");
 
 	lv_evdev_discovery_start(NULL, NULL);	/* mouse; keyboard handled above */
 	kbd_open();

@@ -1,0 +1,212 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * A minimal KMS backend: dumb buffer + SETCRTC + DIRTYFB, no libdrm.
+ *
+ * Two reasons this exists rather than using LVGL's lv_linux_drm driver.
+ *
+ *  - libdrm is not in the rootfs. It left with Xorg, and adding it back means
+ *    a Buildroot rebuild and an SD re-image to save ~40 lines of ioctl
+ *    marshalling. The uapi headers ship in the toolchain sysroot, so the
+ *    ioctls can be issued directly.
+ *
+ *  - LVGL's DRM backend page-flips and waits for the completion event. Against
+ *    this driver that blocks forever (0 CPU jiffies holding /dev/dri/card0,
+ *    the driver's update counter never moving). X never hit it because
+ *    ShadowFB makes modesetting use DirtyFB instead of flips - so that is what
+ *    this does. One fb, set once with SETCRTC, then damage rectangles.
+ *
+ * DIRTYFB lands in drm_atomic_helper_dirtyfb() because the driver creates its
+ * framebuffers with drm_gem_fb_create_with_dirty(). It turns into an atomic
+ * commit carrying damage clips, which is the driver's fast path: it copies and
+ * cache-flushes the damaged scanlines only.
+ */
+
+#include <errno.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
+#include <unistd.h>
+
+#include <drm/drm.h>
+#include <drm/drm_mode.h>
+
+#include "kms.h"
+
+static int kms_fd = -1;
+static uint32_t kms_fb_id;
+static uint32_t kms_handle;
+
+uint8_t *kms_map;
+uint32_t kms_w, kms_h, kms_pitch, kms_size;
+
+static uint32_t crtc_id, conn_id;
+
+static void *xcalloc(size_t n, size_t sz)
+{
+	void *p = calloc(n ? n : 1, sz);
+
+	if (!p) { fprintf(stderr, "kms: out of memory\n"); exit(1); }
+	return p;
+}
+
+int kms_open(const char *path)
+{
+	struct drm_mode_card_res res;
+	struct drm_mode_get_connector conn;
+	struct drm_mode_modeinfo *modes = NULL, mode;
+	struct drm_mode_create_dumb creq;
+	struct drm_mode_map_dumb mreq;
+	struct drm_mode_fb_cmd fb;
+	struct drm_mode_crtc crtc;
+	uint32_t *conn_ids, *crtc_ids;
+	unsigned int i;
+	int found = 0;
+
+	kms_fd = open(path, O_RDWR | O_CLOEXEC);
+	if (kms_fd < 0) { perror("kms: open"); return -1; }
+
+	/*
+	 * Becoming master is what evicts the in-kernel fbdev client. Without
+	 * it fbcon keeps painting the panel underneath us - which is exactly
+	 * the fault that made every earlier latency figure measure the VT
+	 * console's echo rather than this process's rendering.
+	 */
+	if (ioctl(kms_fd, DRM_IOCTL_SET_MASTER, 0) < 0 && errno != EINVAL)
+		fprintf(stderr, "kms: SET_MASTER: %s (continuing)\n", strerror(errno));
+
+	/* Resources come in two passes: counts, then the arrays. */
+	memset(&res, 0, sizeof(res));
+	if (ioctl(kms_fd, DRM_IOCTL_MODE_GETRESOURCES, &res) < 0) {
+		perror("kms: GETRESOURCES"); return -1;
+	}
+	if (!res.count_connectors || !res.count_crtcs) {
+		fprintf(stderr, "kms: no connectors or crtcs\n"); return -1;
+	}
+	conn_ids = xcalloc(res.count_connectors, sizeof(*conn_ids));
+	crtc_ids = xcalloc(res.count_crtcs, sizeof(*crtc_ids));
+	res.connector_id_ptr = (uint64_t)(uintptr_t)conn_ids;
+	res.crtc_id_ptr = (uint64_t)(uintptr_t)crtc_ids;
+	res.fb_id_ptr = res.encoder_id_ptr = 0;
+	res.count_fbs = res.count_encoders = 0;
+	if (ioctl(kms_fd, DRM_IOCTL_MODE_GETRESOURCES, &res) < 0) {
+		perror("kms: GETRESOURCES(2)"); return -1;
+	}
+
+	/* First connected connector with a mode wins; this panel is the only one. */
+	for (i = 0; i < res.count_connectors && !found; i++) {
+		memset(&conn, 0, sizeof(conn));
+		conn.connector_id = conn_ids[i];
+		if (ioctl(kms_fd, DRM_IOCTL_MODE_GETCONNECTOR, &conn) < 0)
+			continue;
+		if (conn.connection != 1 || !conn.count_modes)
+			continue;
+		free(modes);
+		modes = xcalloc(conn.count_modes, sizeof(*modes));
+		conn.modes_ptr = (uint64_t)(uintptr_t)modes;
+		conn.props_ptr = conn.prop_values_ptr = conn.encoders_ptr = 0;
+		conn.count_props = conn.count_encoders = 0;
+		if (ioctl(kms_fd, DRM_IOCTL_MODE_GETCONNECTOR, &conn) < 0)
+			continue;
+		if (!conn.count_modes)
+			continue;
+		mode = modes[0];		/* preferred mode is first */
+		conn_id = conn.connector_id;
+		found = 1;
+	}
+	if (!found) { fprintf(stderr, "kms: no connected connector\n"); return -1; }
+
+	crtc_id = crtc_ids[0];		/* one CRTC on this driver */
+
+	kms_w = mode.hdisplay;
+	kms_h = mode.vdisplay;
+
+	/* RGB565: the panel scans it out and the plane refuses anything else. */
+	memset(&creq, 0, sizeof(creq));
+	creq.width = kms_w;
+	creq.height = kms_h;
+	creq.bpp = 16;
+	if (ioctl(kms_fd, DRM_IOCTL_MODE_CREATE_DUMB, &creq) < 0) {
+		perror("kms: CREATE_DUMB"); return -1;
+	}
+	kms_handle = creq.handle;
+	kms_pitch = creq.pitch;
+	kms_size = creq.size;
+
+	/*
+	 * Legacy ADDFB rather than ADDFB2: depth 16 / bpp 16 is translated to
+	 * DRM_FORMAT_RGB565 by the core, and it avoids having to spell out the
+	 * fourcc and per-plane arrays.
+	 */
+	memset(&fb, 0, sizeof(fb));
+	fb.width = kms_w;
+	fb.height = kms_h;
+	fb.pitch = kms_pitch;
+	fb.bpp = 16;
+	fb.depth = 16;
+	fb.handle = kms_handle;
+	if (ioctl(kms_fd, DRM_IOCTL_MODE_ADDFB, &fb) < 0) {
+		perror("kms: ADDFB"); return -1;
+	}
+	kms_fb_id = fb.fb_id;
+
+	memset(&mreq, 0, sizeof(mreq));
+	mreq.handle = kms_handle;
+	if (ioctl(kms_fd, DRM_IOCTL_MODE_MAP_DUMB, &mreq) < 0) {
+		perror("kms: MAP_DUMB"); return -1;
+	}
+	kms_map = mmap(NULL, kms_size, PROT_READ | PROT_WRITE, MAP_SHARED,
+		       kms_fd, mreq.offset);
+	if (kms_map == MAP_FAILED) { perror("kms: mmap"); return -1; }
+	memset(kms_map, 0, kms_size);
+
+	memset(&crtc, 0, sizeof(crtc));
+	crtc.crtc_id = crtc_id;
+	crtc.fb_id = kms_fb_id;
+	crtc.set_connectors_ptr = (uint64_t)(uintptr_t)&conn_id;
+	crtc.count_connectors = 1;
+	crtc.mode = mode;
+	crtc.mode_valid = 1;
+	if (ioctl(kms_fd, DRM_IOCTL_MODE_SETCRTC, &crtc) < 0) {
+		perror("kms: SETCRTC"); return -1;
+	}
+
+	free(conn_ids); free(crtc_ids); free(modes);
+	printf("kms: %ux%u pitch %u (%u bytes) on crtc %u connector %u\n",
+	       kms_w, kms_h, kms_pitch, kms_size, crtc_id, conn_id);
+	return 0;
+}
+
+/*
+ * One DIRTYFB per frame, not per flush. The commit is synchronous, so the
+ * cost is per call and LVGL in partial mode can issue many flushes for one
+ * frame; the caller accumulates and posts the union once.
+ */
+int kms_dirty(int x1, int y1, int x2, int y2)
+{
+	struct drm_mode_fb_dirty_cmd d;
+	struct drm_clip_rect clip;
+
+	if (x1 > x2 || y1 > y2)
+		return 0;
+	if (x1 < 0) x1 = 0;
+	if (y1 < 0) y1 = 0;
+	if (x2 >= (int)kms_w) x2 = kms_w - 1;
+	if (y2 >= (int)kms_h) y2 = kms_h - 1;
+
+	clip.x1 = x1; clip.y1 = y1;
+	clip.x2 = x2 + 1; clip.y2 = y2 + 1;	/* exclusive */
+
+	memset(&d, 0, sizeof(d));
+	d.fb_id = kms_fb_id;
+	d.num_clips = 1;
+	d.clips_ptr = (uint64_t)(uintptr_t)&clip;
+	if (ioctl(kms_fd, DRM_IOCTL_MODE_DIRTYFB, &d) < 0) {
+		if (errno != ENOSYS && errno != EINVAL)
+			perror("kms: DIRTYFB");
+		return -1;
+	}
+	return 0;
+}

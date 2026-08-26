@@ -308,3 +308,81 @@ page-flip completion (recorded above), and `libdrm` left the image with Xorg, so
 it needs adding back to the rootfs and re-imaging. Expect ~20-25 ms - one panel
 frame - if it works, which would be a 4x improvement and the thing that finally
 makes this feel instant.
+
+## KMS directly: 100 ms -> 24 ms
+
+`fbpoke` had established that writing a *single pixel* to `/dev/fb0` took a mean
+of 83.1 ms to reach the panel - 83 of the desktop's ~100 ms keystroke latency,
+with no toolkit or input stack involved at all. That is fbdev emulation's
+deferred-I/O worker batching damage on a timer. Nothing done above it could
+touch it, which is why the per-row terminal rewrite and the LVGL tick fix - both
+correct - moved the total by nothing.
+
+`lvdesk/kms.c` replaces the fbdev backend with the KMS ioctls directly.
+
+**No libdrm.** It came in as an Xorg dependency and left with X, and adding it
+back means a Buildroot rebuild and an SD re-image. The uapi headers
+(`drm/drm.h`, `drm/drm_mode.h`) ship in the toolchain sysroot, so the ~10 ioctls
+libdrm would have wrapped are issued directly. This is ~210 lines.
+
+**No page flips.** LVGL's own `lv_linux_drm` backend flips and waits for the
+completion event, and against this driver that blocks forever (0 CPU jiffies
+holding `/dev/dri/card0`, the driver's update counter never moving). X never hit
+it because ShadowFB makes modesetting use `DirtyFB` instead - so this does the
+same: one framebuffer, `SETCRTC` once, then `DIRTYFB` damage rectangles.
+`DIRTYFB` reaches `drm_atomic_helper_dirtyfb()` because the driver creates
+framebuffers with `drm_gem_fb_create_with_dirty()`, and becomes an atomic commit
+carrying damage clips - the driver's fast path, which copies and cache-flushes
+the damaged scanlines only.
+
+**No shadow buffer and no copy.** The dumb buffer's pitch is 1280, exactly
+`width * 2`, so LVGL renders in `LV_DISPLAY_RENDER_MODE_DIRECT` straight into
+the framebuffer the driver reads. There is no intermediate surface. The code
+keeps a partial-mode fallback with a row-by-row copy for the case where a
+driver returns a padded pitch, but this one does not. Damage is accumulated
+across the frame and posted with one `DIRTYFB` at
+`lv_display_flush_is_last()`, because the commit is synchronous and its cost is
+per call rather than per pixel.
+
+Measured with `latprobe` (injects a key through uinput, reads the driver's
+`updates=`/`last_update_ns=` from debugfs), 25 trials per run:
+
+	                          median   p90    max   timeouts
+	 fbdev emulation           99.8   ~130      -      0
+	 KMS direct                23.6   27.3   30.3      0
+	 KMS direct                25.6   27.8   29.1      0
+	 KMS direct                24.1   27.3   34.6      0
+	 KMS direct (after restart) 23.3   28.8   32.1      0
+
+**4.1x, and the tail collapsed with it** - max 34.6 ms against a former median
+of 100. 24 ms is one panel frame, so this is now quantised by scanout rather
+than by software, which is where it should stop.
+
+`VmRSS` is 428-596 kB (Xorg was ~4,700 kB).
+
+### The control that makes the number believable
+
+The previous set of LVGL latency figures were wrong because fbcon was drawing
+over the desktop and the probe was timing *the VT console's echo*. Neither
+`deskbench` (which hashes the framebuffer) nor `latprobe` (which counts plane
+updates) can attribute *who* painted, so the instrument cannot detect this on
+its own.
+
+So the run is now controlled: stop `lvdesk` and re-probe. With it stopped,
+**7 of 8 trials time out**; restart it and the median returns to 23.3 ms. That
+establishes the probe is measuring this process's rendering and nothing else.
+
+Two further checks: `/sys/kernel/debug/dri/0/clients` shows exactly one client
+holding `master`, and a screenshot shows the injected characters at the shell
+prompt with no console text anywhere on the panel.
+
+Holding DRM master is also what *fixes* the fbcon overdraw properly, rather than
+by the manual `echo 0 > /sys/class/vtconsole/vtcon1/bind` used while
+diagnosing it: becoming master evicts the in-kernel fbdev client for as long as
+lvdesk runs, and hands the panel back when it exits.
+
+### Still to do
+
+`/usr/bin/lvdesk` in the XIP overlay is still the fbdev build. The overlay is
+read-only, so shipping this needs a rootfs rebuild and an SD re-image; until
+then it runs from `/root/lvdesk.new`.

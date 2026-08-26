@@ -1509,7 +1509,7 @@
 #endif /*LV_USE_LINUX_DRM*/
 
 /** Driver for /dev/fb */
-#define LV_USE_LINUX_FBDEV 1
+#define LV_USE_LINUX_FBDEV 0
 
 #if LV_USE_LINUX_FBDEV
 /** BSD-flavored framebuffer device */
