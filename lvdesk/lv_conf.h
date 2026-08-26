@@ -803,10 +803,10 @@
 #define LV_THEME_DEFAULT_DARK 0
 
 /** Grow on press */
-#define LV_THEME_DEFAULT_GROW 1
+#define LV_THEME_DEFAULT_GROW 0
 
 /** Transition time (ms) */
-#define LV_THEME_DEFAULT_TRANSITION_TIME 80
+#define LV_THEME_DEFAULT_TRANSITION_TIME 0
 
 #endif /*LV_USE_THEME_DEFAULT*/
 

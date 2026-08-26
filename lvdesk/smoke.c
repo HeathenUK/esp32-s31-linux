@@ -26,11 +26,15 @@ int main(void)
 	lv_obj_set_style_text_color(label, lv_color_hex(0xffffff), 0);
 	lv_obj_center(label);
 
-	for (int i = 0; i < 400; i++) {
+	/*
+	 * Loop forever with a completely static screen. If the driver still
+	 * counts plane updates, the periodic repaint is in LVGL or the fbdev
+	 * path, not in lvdesk.
+	 */
+	for (;;) {
 		lv_timer_handler();
-		lv_tick_inc(10);
-		usleep(10000);
+		lv_tick_inc(20);
+		usleep(20000);
 	}
-	printf("SMOKE: done\n");
 	return 0;
 }

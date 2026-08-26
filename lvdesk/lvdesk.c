@@ -317,6 +317,9 @@ static lv_obj_t *make_window(const char *title, int x, int y, int w, int h)
 	lv_obj_set_style_radius(win, 0, 0);
 	lv_obj_set_style_pad_all(win, 0, 0);
 	lv_obj_set_style_border_width(win, 1, 0);
+	lv_obj_set_scrollbar_mode(win, LV_SCROLLBAR_MODE_OFF);
+	lv_obj_set_scrollbar_mode(lv_win_get_content(win), LV_SCROLLBAR_MODE_OFF);
+	lv_obj_remove_flag(lv_win_get_content(win), LV_OBJ_FLAG_SCROLLABLE);
 	lv_obj_add_flag(hdr, LV_OBJ_FLAG_CLICKABLE);
 	lv_obj_add_event_cb(hdr, drag_cb, LV_EVENT_PRESSING, win);
 	lv_obj_add_event_cb(win, raise_cb, LV_EVENT_PRESSED, win);
@@ -368,9 +371,25 @@ int main(void)
 	lv_evdev_discovery_start(NULL, NULL);	/* mouse; keyboard handled above */
 	kbd_open();
 
+	/*
+	 * The simple theme, and no scrollbars anywhere.
+	 *
+	 * The default theme animates state transitions and LVGL fades
+	 * scrollbars in and out; both are animations, and an animation is a
+	 * repaint every frame on a panel where a repaint costs 24-48 ms. The
+	 * desktop measured 5.1 plane updates a second doing nothing at all.
+	 */
+	{
+		lv_theme_t *th = lv_theme_simple_init(disp);
+
+		if (th)
+			lv_display_set_theme(disp, th);
+	}
+
 	scr = lv_screen_active();
 	lv_obj_set_style_bg_color(scr, lv_color_hex(0x1d3050), 0);
 	lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
+	lv_obj_set_scrollbar_mode(scr, LV_SCROLLBAR_MODE_OFF);
 
 	/* task bar, pinned to the bottom */
 	taskbar = lv_obj_create(scr);
@@ -381,6 +400,7 @@ int main(void)
 	lv_obj_set_style_radius(taskbar, 0, 0);
 	lv_obj_set_style_bg_color(taskbar, lv_color_hex(0x2b2b2b), 0);
 	lv_obj_remove_flag(taskbar, LV_OBJ_FLAG_SCROLLABLE);
+	lv_obj_set_scrollbar_mode(taskbar, LV_SCROLLBAR_MODE_OFF);
 
 	clock_lbl = lv_label_create(taskbar);
 	lv_label_set_text(clock_lbl, "lvdesk");

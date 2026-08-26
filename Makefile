@@ -380,27 +380,18 @@ XIP_ROOTFS_IMG := $(BUILD_DIR)/rootfs-xip.cramfs
 # To go back to X, use the desktop set below - it is kept because it was tuned
 # by measurement, not guesswork (see the note above about which binaries go in
 # which image, and why libXft belongs here).
-XIP_ROOTS ?= bin/busybox usr/bin/opkg usr/sbin/wpa_supplicant usr/sbin/iw
+XIP_ROOTS ?= bin/busybox usr/bin/opkg usr/sbin/wpa_supplicant usr/sbin/iw usr/bin/lvdesk
 
-XIP_ROOTS_DESKTOP := usr/bin/Xorg \
-	usr/lib/xorg/modules/drivers/modesetting_drv.so \
-	usr/lib/xorg/modules/input/evdev_drv.so \
-	usr/lib/xorg/modules/libshadow.so \
-	usr/bin/st usr/bin/xsetroot \
-	usr/lib/libXft.so \
-	usr/share/fonts/X11/misc/6x13.pcf.gz \
-	usr/share/fonts/X11/misc/6x13-ISO8859-1.pcf.gz \
-	usr/share/fonts/X11/misc/6x13B.pcf.gz \
-	usr/share/fonts/X11/misc/6x13B-ISO8859-1.pcf.gz \
-	usr/share/fonts/X11/misc/6x13O-ISO8859-1.pcf.gz \
-	usr/share/fonts/X11/misc/6x12-ISO8859-1.pcf.gz \
-	usr/share/fonts/X11/misc/8x13.pcf.gz \
-	usr/share/fonts/X11/misc/8x13-ISO8859-1.pcf.gz \
-	usr/share/fonts/X11/misc/8x13B-ISO8859-1.pcf.gz \
-	usr/share/fonts/X11/misc/10x20-ISO8859-1.pcf.gz \
-	usr/share/fonts/X11/misc/cursor.pcf.gz \
-	usr/share/fonts/X11/misc/fonts.alias \
-	usr/share/fonts/dejavu/DejaVuSansMono.ttf
+# XIP_ROOTS_DESKTOP was defined here and referenced NOWHERE - dead since the
+# desktop was set aside for text mode, so anything listed in it was silently
+# not staged. lvdesk goes in XIP_ROOTS above, which is the variable the rule
+# actually reads. Check `grep -c` on a make variable before trusting it.
+#
+# The whole X stack used to be listed here - the server, its modesetting and
+# evdev modules, libXft, st, xsetroot and a dozen PCF fonts. It is one binary
+# now. lvdesk statically carries LVGL and its fonts, so its exclusive closure
+# is the binary plus libc, and putting it in flash takes its ~600 kB of text
+# out of RSS entirely - the same reason /usr/bin/Xorg used to live here.
 
 xip-rootfs: rootfs
 	@echo "--- userspace XIP image ---"
@@ -483,7 +474,10 @@ XIP2_STAGE := $(BUILD_DIR)/xipstage2
 # between them. Xorg forks xkbcomp once at startup to compile the keymap and
 # never runs it again, so putting it in flash buys a one-second-faster server
 # start and takes that space away from every binary that runs continuously.
-XIP2_ROOTS ?= usr/bin/xcalc usr/bin/jwm usr/bin/xfiles
+# Nothing here now. The second image existed to hold X clients (xcalc, jwm,
+# xfiles); with those gone it stages empty at 4,096 bytes and its 1.4 MB
+# partition is free for whatever needs it next.
+XIP2_ROOTS ?=
 
 # Staged separately from image creation, because image 1 has to know what is
 # in here before it stages itself - see the EXCLUDE_DIR note in xip-rootfs.

@@ -112,3 +112,57 @@ so the string is stable between updates.
 - `lvdesk` lives on the ext4 root, not in the XIP image, so its ~600 KB of text
   is resident instead of executing in place from flash. Putting it in the XIP
   stage should take RSS from 1,200 kB to a few hundred.
+
+## Making it snappy: three defects, all found by measuring
+
+**1. The framebuffer console was repainting the panel five times a second.**
+Enabling `DRM_FBDEV_EMULATION` to get `/dev/fb0` also brings up fbcon, whose
+text cursor blinks underneath whatever is drawing. Toggled live, with the
+default re-measured last:
+
+	 cursor_blink ON     50 plane updates / 10 s
+	 cursor_blink OFF     1
+	 ON again (control)  50
+
+Fixed in `S40lvdesk` with
+`echo 0 > /sys/class/graphics/fbcon/cursor_blink`. This is the third instance
+of the same bug in this project - jwm's taskbar clock, then lvdesk's own System
+window, now fbcon. **Anything that blinks costs a repaint, and a repaint here is
+24-48 ms.**
+
+It also halved settle latency, because a keystroke's repaint no longer queues
+behind the console's:
+
+	 key -> settle   83.3 ms -> 40.2 ms
+
+**2. The main loop busy-polled.** `lv_timer_handler()` plus a 5 ms `usleep` is
+200 wakeups a second: 89 jiffies per 5 s, about 18% of a core with the desktop
+idle. Replaced with `poll()` on the pty and keyboard fds, timeout taken from
+LVGL's own next-timer deadline. Idle CPU halved; typing latency unchanged.
+
+**3. lvdesk paid full RSS for its text.** It was installed to `/usr/sbin`, and
+`S05xip` overlays only `usr/lib`, `usr/bin`, `usr/libexec` and `lib` - so a
+binary in `/usr/sbin` can never come from the XIP image. Moved to `/usr/bin` and
+added to `XIP_ROOTS`:
+
+	 RSS   1,200 kB -> 624 kB
+	 /usr/bin/lvdesk text mapping   Rss 0 kB
+
+`XIP_ROOTS_DESKTOP` turned out to be **defined and referenced nowhere** - dead
+since the text-mode pivot, so anything listed in it was silently not staged.
+That is why adding lvdesk there did nothing. Check a make variable is actually
+read before trusting it.
+
+## Final, against the X11 desktop it replaced
+
+	                          X11          LVGL
+	 key -> first pixel     100.8 ms     35.5 / 39.1 / 43.7 ms
+	 key -> settle          174.4 ms     40.2 ms
+	 UI process RSS        ~4,700 kB       624 kB
+	 MemAvailable          ~2,644 kB     3,584-3,648 kB
+	 idle plane updates       3.4/s         0.2/s
+	 idle UI CPU               -             8%
+
+**Typing is about 2.6x faster to first pixel and 4.3x faster to settle, and the
+UI process is 7.5x smaller.** Verified from a cold boot: lvdesk autostarts,
+`cursor_blink` stays 0, and the text mapping stays at Rss 0.

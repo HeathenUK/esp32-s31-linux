@@ -9,7 +9,16 @@ case "$1" in
   start)
 	printf "Starting lvdesk: "
 	[ -e /dev/fb0 ] || { echo "no /dev/fb0 (DRM_FBDEV_EMULATION off?)"; exit 1; }
-	setsid /usr/sbin/lvdesk >/var/log/lvdesk.log 2>&1 </dev/null &
+	# /usr/bin, not /usr/sbin: S05xip overlays usr/lib, usr/bin, usr/libexec
+	# and lib only, so a binary in /usr/sbin can never come from the XIP
+	# image and pays full RSS for its text.
+	# Stop the framebuffer console blinking its cursor underneath us. fbcon
+	# comes up with DRM_FBDEV_EMULATION and its cursor repaints the panel
+	# about five times a second forever: measured 50 plane updates per 10 s
+	# with it on against 1 with it off, on a panel where a repaint costs
+	# 24-48 ms. Same class of waste as jwm's taskbar clock.
+	echo 0 > /sys/class/graphics/fbcon/cursor_blink 2>/dev/null
+	setsid /usr/bin/lvdesk >/var/log/lvdesk.log 2>&1 </dev/null &
 	echo "OK"
 	;;
   stop)
