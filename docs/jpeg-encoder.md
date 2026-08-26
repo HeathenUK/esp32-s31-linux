@@ -77,3 +77,50 @@ the reserved window". That window is the **CMA pool lvdesk allocates its
 framebuffer from**, so encoding into it overwrites the desktop - the panel went
 solid grey mid-session. Stopping lvdesk first is a workaround; the fix is for
 the driver to own a buffer rather than accepting an address.
+
+
+## Three more bugs, from actually reading the vendor code
+
+Prompted by tiny386's P4 screenshot path, which does at least one thing this
+driver was not.
+
+**The encoder must not be given Huffman tables.** `esp_driver_jpeg`'s encode
+path never writes the DHT registers - it only emits the DHT *marker* in
+software. The registers exist for the decoder, which has to load whatever
+tables arrive in the file it is handed. The encoder has the standard tables
+built in, so programming them here was overwriting good tables with a
+hand-rolled encoding of the same data. (The min-code format was wrong too:
+absent bit lengths want a 0xFFFF sentinel and each code is left-justified by
+`15 - i`. Both are now moot, and the code is gone.)
+
+**Cache maintenance, in both directions, in the right order.** DMA memory is
+cached on this SoC, so the source must be flushed before the engine reads it -
+tiny386 does exactly this - and the destination invalidated. The order matters:
+invalidating the destination *after* writing the header discards the header, and
+the file then starts with whatever pixels were in that memory. Invalidate first,
+then write the header, then start.
+
+**SOS must be the last marker.** The header is padded to a cache line so the DMA
+can append at an aligned offset, and that padding was a COM segment emitted
+*after* SOS. Everything after SOS is entropy-coded data, so its 0xFF read as an
+unstuffed marker and every decoder stopped there. Padding now goes before SOS,
+sized so that SOS's own 14 bytes land on the boundary.
+
+With those fixed the output is no longer uniform: it has real structure that
+tracks the screen. It is still not a correct picture - the geometry or the
+sampling of the source fetch is wrong - so the remaining suspect is the 2D-DMA
+block geometry (`hb`/`vb`, macro-block size) or `pixel_reverse` for RGB565 byte
+order.
+
+## The bring-up interface was dangerous, and is gone
+
+It took a destination physical address and bounds-checked it against the
+reserved window. That window is a **reusable** CMA pool: when it is not holding
+DMA buffers it holds movable pages, page cache included. Writing into it
+corrupted the running system twice - once painting over lvdesk's framebuffer so
+the panel went solid grey, and once zeroing the pages backing busybox, after
+which `ls` and `cat` no longer existed.
+
+The driver now owns a 512 KB buffer from `dma_alloc_coherent()`, the debugfs
+write takes only `<src> <w> <h> <quality>`, and the result is read back from a
+`jpeg_out` blob. Nothing in the loop touches `/dev/mem`.
