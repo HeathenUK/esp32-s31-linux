@@ -469,6 +469,160 @@ static void kms_flush_cb(lv_display_t *d, const lv_area_t *area, uint8_t *px)
 	lv_display_flush_ready(d);
 }
 
+
+/* ---------------------------------------------------------------- pointer */
+
+/*
+ * The mouse is read here rather than through LVGL's evdev backend, for the
+ * same reason the keyboard is.
+ *
+ * LVGL's lv_evdev discovery creates a pointer indev of the right type, on the
+ * right display, for the right device node - and then never reports a single
+ * motion event. Proven from both ends: `cat /dev/input/event4` while injecting
+ * captured 704 bytes (44 events) off the very node LVGL had open, while every
+ * one of LVGL's pointer indevs sat at 0,0 state=0 forever. Its indevs also
+ * accumulate, one per device that comes and goes, because its de-duplication
+ * compares st_dev/st_ino and the kernel recycles both for the next uinput
+ * device - the same trap that hid the keyboard bug here.
+ *
+ * So: read evdev directly, accumulate into a position, and feed LVGL through a
+ * custom indev read callback. That also lets the mouse fds join the main
+ * poll() set, so motion wakes the loop immediately instead of waiting up to
+ * LVGL's 30 ms read timer.
+ */
+#define MAXMOUSE 8
+/* pty + slack + every keyboard and mouse we may have open */
+#define NFDS        (2 + MAXKBD + MAXMOUSE)
+static int mouse_fds[MAXMOUSE];
+static int mouse_n;
+static uint32_t mouse_scan_at;
+static int32_t ptr_x, ptr_y;
+static int ptr_pressed;
+static lv_obj_t *cursor_obj;
+static lv_indev_t *mouse_indev;
+
+static int is_mouse(int fd)
+{
+	unsigned long rel[REL_MAX / (8 * sizeof(long)) + 1] = { 0 };
+	unsigned long key[KEY_MAX / (8 * sizeof(long)) + 1] = { 0 };
+	int has_rel, has_btn, has_a;
+
+	if (ioctl(fd, EVIOCGBIT(EV_REL, sizeof(rel)), rel) < 0)
+		return 0;
+	if (ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(key)), key) < 0)
+		return 0;
+	has_rel = !!(rel[REL_X / (8 * sizeof(long))] &
+		     (1UL << (REL_X % (8 * sizeof(long)))));
+	has_btn = !!(key[BTN_LEFT / (8 * sizeof(long))] &
+		     (1UL << (BTN_LEFT % (8 * sizeof(long)))));
+	has_a = !!(key[KEY_A / (8 * sizeof(long))] &
+		   (1UL << (KEY_A % (8 * sizeof(long)))));
+	return has_rel && has_btn && !has_a;
+}
+
+static void mouse_scan(void)
+{
+	char path[64];
+	int i, fd, j, known;
+
+	for (i = 0; i < 32 && mouse_n < MAXMOUSE; i++) {
+		snprintf(path, sizeof(path), "/dev/input/event%d", i);
+		fd = open(path, O_RDONLY | O_NONBLOCK);
+		if (fd < 0)
+			continue;
+		known = 0;
+		for (j = 0; j < mouse_n; j++) {
+			struct stat a, b;
+
+			if (!fstat(fd, &a) && !fstat(mouse_fds[j], &b) &&
+			    a.st_rdev == b.st_rdev) { known = 1; break; }
+		}
+		if (known) { close(fd); continue; }
+		if (!is_mouse(fd)) { close(fd); continue; }
+		mouse_fds[mouse_n++] = fd;
+		printf("lvdesk: mouse on %s\n", path);
+	}
+}
+
+static void mouse_poll(void)
+{
+	struct input_event ev;
+	int32_t w = lv_display_get_horizontal_resolution(NULL);
+	int32_t h = lv_display_get_vertical_resolution(NULL);
+	int i;
+
+	if (lv_tick_get() - mouse_scan_at > 2000) {
+		mouse_scan_at = lv_tick_get();
+		mouse_scan();
+	}
+
+	for (i = 0; i < mouse_n; i++) {
+		int n = read(mouse_fds[i], &ev, sizeof(ev));
+
+		/* Same stale-fd rule as the keyboard: st_rdev is recycled. */
+		if (n < 0 && (errno == ENODEV || errno == EBADF)) {
+			close(mouse_fds[i]);
+			mouse_fds[i] = mouse_fds[--mouse_n];
+			mouse_scan_at = 0;
+			i--;
+			continue;
+		}
+		if (n != sizeof(ev))
+			continue;
+		do {
+			if (ev.type == EV_REL) {
+				if (ev.code == REL_X) ptr_x += ev.value;
+				else if (ev.code == REL_Y) ptr_y += ev.value;
+			} else if (ev.type == EV_KEY && ev.code == BTN_LEFT) {
+				ptr_pressed = !!ev.value;
+			}
+		} while (read(mouse_fds[i], &ev, sizeof(ev)) == sizeof(ev));
+	}
+
+	if (ptr_x < 0) ptr_x = 0;
+	if (ptr_y < 0) ptr_y = 0;
+	if (ptr_x > w - 1) ptr_x = w - 1;
+	if (ptr_y > h - 1) ptr_y = h - 1;
+}
+
+static void mouse_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
+{
+	LV_UNUSED(indev);
+	data->point.x = ptr_x;
+	data->point.y = ptr_y;
+	data->state = ptr_pressed ? LV_INDEV_STATE_PRESSED
+				  : LV_INDEV_STATE_RELEASED;
+}
+
+static void mouse_init(void)
+{
+	/*
+	 * A visible cursor. LVGL will run a pointer indev with no cursor
+	 * object and draw nothing at all, which is indistinguishable from a
+	 * dead input path in a screenshot - the same trap that made every X11
+	 * pointer measurement here read 0 fps until a root cursor was set.
+	 */
+	cursor_obj = lv_obj_create(lv_layer_sys());
+	lv_obj_remove_style_all(cursor_obj);
+	lv_obj_set_size(cursor_obj, 7, 11);
+	lv_obj_set_style_bg_color(cursor_obj, lv_color_white(), 0);
+	lv_obj_set_style_bg_opa(cursor_obj, LV_OPA_COVER, 0);
+	lv_obj_set_style_border_color(cursor_obj, lv_color_black(), 0);
+	lv_obj_set_style_border_width(cursor_obj, 1, 0);
+	lv_obj_remove_flag(cursor_obj, LV_OBJ_FLAG_CLICKABLE);
+
+	mouse_indev = lv_indev_create();
+	lv_indev_set_type(mouse_indev, LV_INDEV_TYPE_POINTER);
+	lv_indev_set_read_cb(mouse_indev, mouse_read_cb);
+	lv_indev_set_cursor(mouse_indev, cursor_obj);
+
+	ptr_x = lv_display_get_horizontal_resolution(NULL) / 2;
+	ptr_y = lv_display_get_vertical_resolution(NULL) / 2;
+	mouse_scan();
+	if (!mouse_n)
+		printf("lvdesk: no mouse yet; will keep looking\n");
+}
+
 /* -------------------------------------------------------------------- main */
 
 int main(void)
@@ -527,7 +681,7 @@ int main(void)
 	printf("lvdesk: %dx%d %s\n", (int)kms_w, (int)kms_h,
 	       direct_render ? "direct" : "partial");
 
-	lv_evdev_discovery_start(NULL, NULL);	/* mouse; keyboard handled above */
+	mouse_init();			/* pointer and keyboard are both read here */
 	kbd_open();
 
 	/*
@@ -609,7 +763,7 @@ int main(void)
 	 * immediately on a keystroke, so typing latency does not pay for it.
 	 */
 	for (;;) {
-		struct pollfd fds[2 + MAXKBD];
+		struct pollfd fds[NFDS];
 		uint32_t next, elapsed;
 		int n = 0, ms;
 
@@ -618,8 +772,11 @@ int main(void)
 			next = 30;
 
 		if (term.fd >= 0) { fds[n].fd = term.fd; fds[n].events = POLLIN; n++; }
-		for (int ki = 0; ki < kbd_n && n < 2 + MAXKBD; ki++) {
+		for (int ki = 0; ki < kbd_n && n < NFDS; ki++) {
 			fds[n].fd = kbd_fds[ki]; fds[n].events = POLLIN; n++;
+		}
+		for (int mi = 0; mi < mouse_n && n < NFDS; mi++) {
+			fds[n].fd = mouse_fds[mi]; fds[n].events = POLLIN; n++;
 		}
 
 		/*
@@ -646,6 +803,7 @@ int main(void)
 
 		term_poll();
 		kbd_poll();
+		mouse_poll();
 		/*
 		 * Draw now if the terminal changed. Without this the new text
 		 * waits for the next trip round the loop, adding a whole poll

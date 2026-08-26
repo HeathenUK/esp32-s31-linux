@@ -386,3 +386,74 @@ lvdesk runs, and hands the panel back when it exits.
 `/usr/bin/lvdesk` in the XIP overlay is still the fbdev build. The overlay is
 read-only, so shipping this needs a rootfs rebuild and an SD re-image; until
 then it runs from `/root/lvdesk.new`.
+
+## The pointer: LVGL's evdev backend does not deliver motion
+
+With the desktop finally fast, the mouse turned out not to work at all - and it
+had been invisible in every measurement to date, because `latprobe` and
+`deskbench` both inject *keys*.
+
+The symptom was that no window could be dragged and no cursor appeared. Two
+faults, one hiding the other.
+
+**There was no cursor object.** LVGL will run a pointer indev with no cursor
+attached, and then move, press and drag entirely correctly while drawing
+nothing. In a screenshot that is indistinguishable from a dead input path -
+exactly the trap recorded in `docs/cursor-latency.md`, where every X11 pointer
+measurement read 0 fps until `xsetroot -cursor_name left_ptr` was run.
+
+**LVGL's evdev backend never reported motion.** Proven from both ends rather
+than inferred:
+
+- `lv_evdev_discovery_start()` fired its callback for the device, and the indev
+  it created was `LV_INDEV_TYPE_POINTER` on the correct display.
+- Instrumenting `lv_indev_get_point()` every 5 s showed every pointer indev at
+  `0,0 state=0` for as long as the desktop ran.
+- `cat /dev/input/event4 > /tmp/ev.bin` **while injecting, on the very node
+  LVGL had open**, captured 704 bytes - 44 events. The kernel was delivering
+  motion; LVGL was not acting on it.
+- The device itself was correct: `/proc/bus/input/devices` showed `EV=7`
+  (SYN/KEY/REL), `REL=3` (X and Y) and `BTN_LEFT`.
+- `struct input_event` is 16 bytes under this toolchain, matching the kernel,
+  so the 32-bit `time_t` ABI trap that breaks uinput on musl is not in play.
+- Its indevs also *accumulate*, one per device that comes and goes, because
+  de-duplication compares `st_dev`/`st_ino` and the kernel recycles both for
+  the next uinput device. That is the same trap that hid the keyboard bug here.
+
+The fix is not to debug someone else's driver. The keyboard was already read
+directly for a different reason, so the mouse is now read the same way:
+`mouse_scan()` picks devices with `REL_X` and `BTN_LEFT` but not `KEY_A` (so
+keyboards are excluded), `mouse_poll()` accumulates deltas and button state,
+and a custom `lv_indev` read callback hands LVGL the result. Stale descriptors
+are dropped on `ENODEV`, because `st_rdev` is recycled.
+
+A side benefit: the mouse descriptors join the main `poll()` set, so motion
+wakes the loop immediately instead of waiting up to LVGL's 30 ms read timer.
+
+Latency is unchanged by the rework - **median 25.9 / 24.8 / 23.9 ms**, no
+timeouts - with `VmRSS` at 360 kB and 7.3% of one core when idle.
+
+### Two things this leaves
+
+- **Windows are not clamped to the display.** A drag that walks a window off
+  the left edge leaves it there. Harmless, but it is why the first drag test
+  looked like a repaint fault.
+- **New input devices take up to 2 s to be noticed**, because that is the
+  rescan interval. Fine for a human plugging in a mouse; it matters for
+  automated injection, where an injector that starts too soon has its first
+  events delivered to a device nothing has opened yet. `uinject` therefore
+  takes `UINJECT_SETTLE`, and the first recording made with a 400 ms settle
+  silently lost the typing and the drag press.
+
+## Recording the panel
+
+`rootfs/uinject.c` injects pointer and keyboard events and does nothing else.
+`deskbench` also injects, but it hashes the framebuffer every iteration at ~53%
+of the core, which is fine when it is the instrument and ruinous when the point
+is to film how the desktop behaves.
+
+The pipeline: `fbcap` RLE-compresses frames of the scanout buffer into RAM,
+`tftp -p` puts the file on a host TFTP server (busybox has no `nc` and no
+`httpd`, and `wget --post-file` sends 6 bytes), `scripts/board/fbcap-decode.py`
+writes PNGs, and ffmpeg encodes. A clean desktop compresses **54-59x**, against
+5.1x when fbcon was drawing over it.
