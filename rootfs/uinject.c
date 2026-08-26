@@ -133,6 +133,21 @@ static int keycode(char c, int *shift)
 	}
 }
 
+static void key(int code)
+{
+	emit(kbd_fd, EV_KEY, code, 1); syn(kbd_fd);
+	emit(kbd_fd, EV_KEY, code, 0); syn(kbd_fd);
+	msleep(90);
+}
+
+static void ctrl_key(int code)
+{
+	emit(kbd_fd, EV_KEY, KEY_LEFTCTRL, 1); syn(kbd_fd);
+	key(code);
+	emit(kbd_fd, EV_KEY, KEY_LEFTCTRL, 0); syn(kbd_fd);
+	msleep(90);
+}
+
 static void type(const char *s, int delay)
 {
 	for (; *s; s++) {
@@ -162,6 +177,21 @@ int main(int argc, char **argv)
 
 	if (!strcmp(what, "type")) {
 		type(argc > 2 ? argv[2] : "hello\n", argc > 3 ? atoi(argv[3]) : 90);
+	} else if (!strcmp(what, "keytest")) {
+		/*
+		 * Exactly the keys that used to be dropped: the keymap was
+		 * sized by its highest initialiser (KEY_SPACE, 57) so every
+		 * code above that did nothing, and Ctrl was never decoded.
+		 */
+		type("echo ", 90);
+		key(KEY_KP7); key(KEY_KP8); key(KEY_KP9);   /* keypad */
+		key(KEY_ENTER);
+		msleep(600);
+		key(KEY_UP);				    /* history */
+		msleep(600);
+		ctrl_key(KEY_C);			    /* interrupt */
+		msleep(400);
+		type("echo ok\n", 90);
 	} else if (!strcmp(what, "park")) {
 		/*
 		 * Move somewhere distinctive and hold the device open, so the

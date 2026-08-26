@@ -501,3 +501,45 @@ garbage into a shared log. It also left the board silent through two resets
 before the cause was found.
 
 Keep backups outside `/etc/init.d` (`/root/initd-backups/` here).
+
+## Keys that did nothing
+
+Reported from real use: some keys never typed. Two separate faults.
+
+**The keymap was sized by its highest initialiser.** `keymap[][2]` ended at
+`KEY_SPACE` (57), and `kbd_poll` bounds-checks against `sizeof(keymap)`, so
+**every keycode above 57 was silently discarded**: all four arrows, Home, End,
+Insert, Delete, PageUp/PageDown, the entire numeric keypad, every function key,
+and `KEY_102ND` (the extra key beside left shift on ISO keyboards). They did not
+type the wrong character, they did nothing - a much harder symptom to place than
+a mis-mapping. The array is now sized `KEY_CNT` explicitly.
+
+**Ctrl and Alt were never decoded**, so Ctrl-C typed a `c` and nothing running
+in the shell could be interrupted. Ctrl now maps to control codes, Alt sends an
+ESC prefix as xterm does, and Caps Lock inverts letter case. Keys that are not
+characters send proper sequences (`\033[A` and friends), so shell history and
+line editing work.
+
+Verified by injecting through uinput: `echo 789` from the **keypad**, Up
+recalling it from **history**, **Ctrl-C** producing `^C`, and the full
+`abcdefghijklmnopqrstuvwxyz` arriving intact.
+
+That last result matters, because it **rules the decode path out** of the
+remaining complaint: ordinary lowercase letters such as `s` also failing. Those
+are not a keymap gap - `KEY_S` is 31, well inside even the old array - and
+synthetic events for every letter arrive correctly. The fault is upstream, in
+the physical keyboard's HID path, and `rootfs/keylog.c` exists to find it: it
+logs every `EV_KEY` and `MSC_SCAN` from every evdev node with the device name,
+which separates "the kernel never delivered it" from "the desktop dropped it".
+
+The board has an **8BitDo Retro Keyboard Receiver** presenting three HID
+interfaces, one of which logs `device has no listeners, quitting` - it produces
+no input device at all, so anything reported only there is lost before
+userspace sees it.
+
+## Windows could be dragged off the screen
+
+There is no window manager to rescue a window here, so `drag_cb` now clamps:
+at least `KEEP_ON_SCREEN` (48 px) stays within the display on each axis, and a
+window cannot be pushed under the taskbar or above the top edge. Clicking a
+window's header also raises it, which previously only the taskbar button did.

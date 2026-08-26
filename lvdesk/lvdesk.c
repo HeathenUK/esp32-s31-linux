@@ -44,6 +44,8 @@
 #define TERM_ROWS   28
 #define TASKBAR_H   22
 #define HDR_H       20
+/* how much of a window must stay on screen when dragged */
+#define KEEP_ON_SCREEN 48
 
 struct term {
 	lv_obj_t *win;
@@ -66,12 +68,21 @@ static char sysinfo_last[192];
 static int kbd_fds[MAXKBD];
 static int kbd_n;
 static uint32_t kbd_scan_at;
-static int shift;
+static int shift, mod_ctrl, mod_alt, mod_caps;
 
 /* ---------------------------------------------------------------- keyboard */
 
-/* Enough of a US layout to use a shell. evdev keycode -> ascii. */
-static const char keymap[][2] = {
+/*
+ * A US layout, and the keys that are not characters.
+ *
+ * Sized KEY_CNT explicitly. It used to be sized implicitly by its highest
+ * initialiser, which was KEY_SPACE (57), and kbd_poll bounds-checks against
+ * that size - so every key above 57 was silently dropped: the arrows, Home,
+ * End, Delete, PageUp/Down, the whole numeric keypad, every function key, and
+ * KEY_102ND on ISO keyboards. They did not type the wrong thing, they did
+ * nothing at all, which is a much harder symptom to place.
+ */
+static const char keymap[KEY_CNT][2] = {
 	[KEY_1] = {'1', '!'}, [KEY_2] = {'2', '@'}, [KEY_3] = {'3', '#'},
 	[KEY_4] = {'4', '$'}, [KEY_5] = {'5', '%'}, [KEY_6] = {'6', '^'},
 	[KEY_7] = {'7', '&'}, [KEY_8] = {'8', '*'}, [KEY_9] = {'9', '('},
@@ -92,8 +103,47 @@ static const char keymap[][2] = {
 	[KEY_SLASH] = {'/', '?'}, [KEY_SPACE] = {' ', ' '},
 	[KEY_ENTER] = {'\r', '\r'}, [KEY_BACKSPACE] = {0x7f, 0x7f},
 	[KEY_TAB] = {'\t', '\t'}, [KEY_ESC] = {27, 27},
+	/* The extra key ISO keyboards have beside the left shift. */
+	[KEY_102ND] = {'\\', '|'},
+	/* Keypad, always numeric - there is no NumLock LED to disagree with. */
+	[KEY_KP0] = {'0', '0'}, [KEY_KP1] = {'1', '1'}, [KEY_KP2] = {'2', '2'},
+	[KEY_KP3] = {'3', '3'}, [KEY_KP4] = {'4', '4'}, [KEY_KP5] = {'5', '5'},
+	[KEY_KP6] = {'6', '6'}, [KEY_KP7] = {'7', '7'}, [KEY_KP8] = {'8', '8'},
+	[KEY_KP9] = {'9', '9'}, [KEY_KPDOT] = {'.', '.'},
+	[KEY_KPSLASH] = {'/', '/'}, [KEY_KPASTERISK] = {'*', '*'},
+	[KEY_KPMINUS] = {'-', '-'}, [KEY_KPPLUS] = {'+', '+'},
+	[KEY_KPENTER] = {'\r', '\r'}, [KEY_KPEQUAL] = {'=', '='},
 };
 
+/* Keys that send a sequence rather than a character. */
+static const char *keyseq(int code)
+{
+	switch (code) {
+	case KEY_UP:		return "\033[A";
+	case KEY_DOWN:		return "\033[B";
+	case KEY_RIGHT:		return "\033[C";
+	case KEY_LEFT:		return "\033[D";
+	case KEY_HOME:		return "\033[H";
+	case KEY_END:		return "\033[F";
+	case KEY_PAGEUP:	return "\033[5~";
+	case KEY_PAGEDOWN:	return "\033[6~";
+	case KEY_INSERT:	return "\033[2~";
+	case KEY_DELETE:	return "\033[3~";
+	case KEY_F1:		return "\033OP";
+	case KEY_F2:		return "\033OQ";
+	case KEY_F3:		return "\033OR";
+	case KEY_F4:		return "\033OS";
+	case KEY_F5:		return "\033[15~";
+	case KEY_F6:		return "\033[17~";
+	case KEY_F7:		return "\033[18~";
+	case KEY_F8:		return "\033[19~";
+	case KEY_F9:		return "\033[20~";
+	case KEY_F10:		return "\033[21~";
+	case KEY_F11:		return "\033[23~";
+	case KEY_F12:		return "\033[24~";
+	default:		return NULL;
+	}
+}
 /*
  * Open every keyboard, and keep looking.
  *
@@ -148,6 +198,50 @@ static void kbd_open(void)
 		printf("lvdesk: no keyboard yet; will keep looking\n");
 }
 
+/*
+ * One key press to the bytes a terminal expects.
+ *
+ * Ctrl was previously ignored entirely, so Ctrl-C typed a 'c' and there was no
+ * way to interrupt anything running in the shell.
+ */
+static void kbd_key(int code)
+{
+	const char *seq = keyseq(code);
+	char buf[8], c;
+	int n = 0;
+
+	if (term.fd < 0)
+		return;
+	if (seq) {
+		if (write(term.fd, seq, strlen(seq)) < 0) { }
+		return;
+	}
+	if (code < 0 || code >= KEY_CNT)
+		return;
+	c = keymap[code][shift ? 1 : 0];
+	if (!c)
+		return;
+
+	/* Caps Lock affects letters only, and inverts rather than forces. */
+	if (mod_caps) {
+		if (c >= 'a' && c <= 'z') c -= 32;
+		else if (c >= 'A' && c <= 'Z') c += 32;
+	}
+
+	if (mod_ctrl) {
+		if (c >= 'a' && c <= 'z') c = c - 'a' + 1;
+		else if (c >= 'A' && c <= 'Z') c = c - 'A' + 1;
+		else if (c == ' ' || c == '@') c = 0;
+		else if (c >= '[' && c <= '_') c = c - '@';
+		else if (c == '?') c = 0x7f;
+	}
+
+	if (mod_alt)			/* Alt is ESC-prefix, as xterm does */
+		buf[n++] = 27;
+	buf[n++] = c;
+	if (write(term.fd, buf, n) < 0) { }
+}
+
 static void kbd_poll(void)
 {
 	struct input_event ev;
@@ -180,21 +274,22 @@ static void kbd_poll(void)
 		if (n != sizeof(ev))
 			continue;
 		do {
-			char c;
-
 			if (ev.type != EV_KEY)
 				continue;
-			if (ev.code == KEY_LEFTSHIFT || ev.code == KEY_RIGHTSHIFT) {
-				shift = !!ev.value;
+			switch (ev.code) {
+			case KEY_LEFTSHIFT: case KEY_RIGHTSHIFT:
+				shift = !!ev.value; continue;
+			case KEY_LEFTCTRL: case KEY_RIGHTCTRL:
+				mod_ctrl = !!ev.value; continue;
+			case KEY_LEFTALT: case KEY_RIGHTALT:
+				mod_alt = !!ev.value; continue;
+			case KEY_CAPSLOCK:
+				if (ev.value == 1) mod_caps = !mod_caps;
 				continue;
 			}
-			if (!ev.value)
+			if (!ev.value)		/* release; 2 is autorepeat */
 				continue;
-			if (ev.code >= sizeof(keymap) / sizeof(keymap[0]))
-				continue;
-			c = keymap[ev.code][shift ? 1 : 0];
-			if (c && term.fd >= 0)
-				if (write(term.fd, &c, 1) < 0) { }
+			kbd_key(ev.code);
 		} while (read(kbd_fds[i], &ev, sizeof(ev)) == sizeof(ev));
 	}
 }
@@ -367,11 +462,35 @@ static void drag_cb(lv_event_t *e)
 {
 	lv_obj_t *win = lv_event_get_user_data(e);
 	lv_indev_t *indev = lv_indev_active();
+	int32_t sw = lv_display_get_horizontal_resolution(NULL);
+	int32_t sh = lv_display_get_vertical_resolution(NULL);
+	int32_t w = lv_obj_get_width(win);
+	int32_t x, y;
 	lv_point_t v;
 
 	if (!indev) return;
 	lv_indev_get_vect(indev, &v);
-	lv_obj_set_pos(win, lv_obj_get_x(win) + v.x, lv_obj_get_y(win) + v.y);
+	x = lv_obj_get_x(win) + v.x;
+	y = lv_obj_get_y(win) + v.y;
+
+	/*
+	 * Keep the title bar reachable. Without this a window can be dragged
+	 * clean off any edge and there is no way to get it back - there is no
+	 * window manager here to rescue it, and it looked like a repaint fault
+	 * the first time it happened.
+	 */
+	if (x > sw - KEEP_ON_SCREEN) x = sw - KEEP_ON_SCREEN;
+	if (x < KEEP_ON_SCREEN - w) x = KEEP_ON_SCREEN - w;
+	if (y < 0) y = 0;
+	if (y > sh - TASKBAR_H - HDR_H) y = sh - TASKBAR_H - HDR_H;
+
+	lv_obj_set_pos(win, x, y);
+}
+
+/* Clicking a window raises it, as well as its taskbar button. */
+static void win_press_cb(lv_event_t *e)
+{
+	lv_obj_move_foreground(lv_event_get_user_data(e));
 }
 
 static void raise_cb(lv_event_t *e)
@@ -403,6 +522,7 @@ static lv_obj_t *make_window(const char *title, int x, int y, int w, int h)
 	lv_obj_remove_flag(lv_win_get_content(win), LV_OBJ_FLAG_SCROLLABLE);
 	lv_obj_add_flag(hdr, LV_OBJ_FLAG_CLICKABLE);
 	lv_obj_add_event_cb(hdr, drag_cb, LV_EVENT_PRESSING, win);
+	lv_obj_add_event_cb(hdr, win_press_cb, LV_EVENT_PRESSED, win);
 	lv_obj_add_event_cb(win, raise_cb, LV_EVENT_PRESSED, win);
 
 	/* task bar entry */
