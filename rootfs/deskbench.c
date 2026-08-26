@@ -96,6 +96,33 @@ static double now_ms(void)
 	return t.tv_sec * 1000.0 + t.tv_nsec / 1e6;
 }
 
+/*
+ * Fallback for kernels built with DIAG=0: no debugfs, so the live scanout
+ * address is unavailable and the last mode-set line in dmesg is the best we
+ * have. It goes stale if the buffer moves, which is exactly the bug that
+ * produced a torn, tiled screenshot once - so it is a fallback, not a default.
+ */
+static int query_scanout_dmesg(void)
+{
+	FILE *f = popen("dmesg | grep -a 'scanout started' | tail -1", "r");
+	char buf[512], *p;
+
+	if (!f)
+		return -1;
+	if (!fgets(buf, sizeof(buf), f)) { pclose(f); return -1; }
+	pclose(f);
+	p = strstr(buf, "fb=0x");
+	if (!p)
+		return -1;
+	fb_base = strtoul(p + 5, NULL, 16);
+	p = strstr(buf, " bytes");
+	if (p) {
+		while (p > buf && *(p - 1) != ' ') p--;
+		fb_size = strtoul(p, NULL, 10);
+	}
+	return fb_base ? 0 : -1;
+}
+
 static int query_scanout(void)
 {
 	char buf[1024], *p = NULL;
@@ -117,6 +144,7 @@ static int query_scanout(void)
 	fclose(f);
 	if (!p)
 		return -1;
+	/* fall through: caller retries via dmesg if this fails */
 	fb_base = strtoul(p + 8, NULL, 0);
 	p = strstr(buf, "size=");
 	if (p) {
@@ -305,6 +333,8 @@ int main(int argc, char **argv)
 	setvbuf(stdout, NULL, _IOLBF, 0);
 
 	rc = query_scanout();
+	if (rc < 0)
+		rc = query_scanout_dmesg();
 	if (rc < 0) {
 		fprintf(stderr, "cannot read scanout address from %s (%d)\n",
 			LCD_DEBUGFS, rc);

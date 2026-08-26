@@ -166,3 +166,50 @@ read before trusting it.
 **Typing is about 2.6x faster to first pixel and 4.3x faster to settle, and the
 UI process is 7.5x smaller.** Verified from a cold boot: lvdesk autostarts,
 `cursor_blink` stays 0, and the text mapping stays at Rss 0.
+
+
+## The "multi-second tail": warm-up, not a defect
+
+Early runs reported typing p90s of 2-3.7 seconds, which would be the single
+worst thing about this desktop if it were real. It is not a steady-state
+property. Measured against time since boot, 25 trials each:
+
+	 t=161 s   median 39.5   p90 2128.7   max 3748.1
+	 t=297 s   median 43.0   p90 1264.4   max 2741.3
+	 t=400 s   median 40.8   p90  884.6   max 2473.0
+	 t=559 s   median 36.9   p90   43.1   max   46.6
+
+**The median is flat at ~40 ms throughout; only the tail decays**, and by about
+nine minutes after boot it is gone. Steady state is 37 ms median, 43 ms p90,
+47 ms max.
+
+Two candidates were tested and are **not** the cause:
+
+- **udevd.** It had burned 654 jiffies and looked obvious. Killing it outright
+  left the tail unchanged (p90 3758 after, 2180 before).
+- **Wi-Fi.** Its chatter lands in the middle of runs, so it looked obvious too.
+  Bringing `wlan0` down did not help, and the control arm with wifi back up had
+  the *best* p90 of the four (46.2 ms). The improvement tracked uptime, not
+  radio state.
+
+What is left, and fits every observation, is **page cache warm-up**: major
+faults against the SD card while libc, LVGL's data and the shell are still cold.
+lvdesk's own text is already XIP and costs no faults, which is why the median is
+unaffected - it is everything else that is cold.
+
+**Do not quote an early-boot p90 as this desktop's latency.** Measure after the
+system has settled, or state the uptime alongside the number.
+
+## What was investigated and turned out not to matter
+
+Recorded so none of it is retried:
+
+- **Swap.** 30 trials with swap on, off, off again and on as a control: median
+  38-41 ms and p90 50-56 ms in every arm. Only 144 kB was in use. No effect.
+- **fbcon's memory.** Unbinding it at runtime moved MemAvailable by 16 kB,
+  inside the control's own drift. The framebuffer it provides is not waste - it
+  is the buffer LVGL draws into. It stays: boot messages on the panel are worth
+  more than 16 kB.
+- **Removing `FRAMEBUFFER_CONSOLE` from the config.** It has
+  `default DRM_FBDEV_EMULATION`, so `olddefconfig` puts it straight back and the
+  kernel builds byte-identical. Would have bought ~16 kB anyway.
