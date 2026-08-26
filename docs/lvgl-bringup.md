@@ -457,3 +457,47 @@ The pipeline: `fbcap` RLE-compresses frames of the scanout buffer into RAM,
 `httpd`, and `wget --post-file` sends 6 bytes), `scripts/board/fbcap-decode.py`
 writes PNGs, and ffmpeg encodes. A clean desktop compresses **54-59x**, against
 5.1x when fbcon was drawing over it.
+
+## Shipping it: XIP flash, and what that costs
+
+None of the above was actually *shipped* - it ran from `/root/lvdesk.new`,
+while `S40lvdesk` still started the stale fbdev binary baked into the XIP
+overlay. Making it real did **not** need an SD re-image: `/usr/bin` comes from a
+cramfs in **SPI flash**, not the card, so it is `make xip-rootfs xip2-rootfs`
+followed by `make flash-xip-rootfs flash-xip2-rootfs`. Only `/etc` lives on the
+ext4 root, and that is writable in place.
+
+With X gone the whole userspace closure now fits in the first image: **XIP
+4,268,032 bytes with 1,892,352 free**, and xip2 is empty (4,096 bytes).
+
+Running from XIP is not free, and the trade is worth stating with numbers.
+One boot, arms alternated, control repeated:
+
+	                 latprobe median (3 runs)      VmRSS
+	 XIP flash      30.3  30.4  30.7 ms            76 kB
+	 SD / ext4      26.6  28.5  27.9 ms           648 kB
+	 XIP again      30.2  30.2  28.0 ms            76 kB
+
+**XIP costs ~2.3 ms (8%) and saves 572 kB.** The control repeating at
+30.2/30.2/28.0 is what makes the 2.3 ms believable at all - it is barely outside
+the spread, and a single pair of runs would not have supported it.
+
+Keep XIP. Memory is the binding constraint on this board, the 8% is small
+against the 3.3x already won, and the SD arm degrades much worse under a full
+desktop because its 648 kB of text is evictable and has to be faulted back from
+the card. That is the documented 4x.
+
+Shipped, from a cold boot with no intervention: **~30 ms median keystroke
+latency, `VmRSS` 76 kB, MemAvailable 3,228 kB.** Against Xorg's ~4,700 kB RSS
+and the ~100 ms this desktop started at.
+
+### `S40lvdesk.bak` in /etc/init.d starts a second desktop
+
+Backing up an init script *in place* runs it. busybox `rcS` globs
+`/etc/init.d/S??*`, and `S40lvdesk.bak` matches - so two copies of the desktop
+started, the first took DRM master and the second failed with
+`SET_MASTER: Resource busy` / `SETCRTC: Permission denied`, writing interleaved
+garbage into a shared log. It also left the board silent through two resets
+before the cause was found.
+
+Keep backups outside `/etc/init.d` (`/root/initd-backups/` here).

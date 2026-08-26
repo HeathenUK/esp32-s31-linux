@@ -164,6 +164,10 @@ for kernel work; the rootfs only needs rebuilding when userspace changes.
   time. GCC had printed `'pending' is used uninitialized` on every build for
   days. **Non-deterministic symptoms from a deterministic image mean
   uninitialised memory** - check the warnings before theorising.
+- **A backup in `/etc/init.d` is executed.** busybox `rcS` globs
+  `/etc/init.d/S??*`, so `S40lvdesk.bak` runs alongside `S40lvdesk` - two
+  desktops, the second failing to take DRM master, and a board that sat silent
+  through two resets before the cause was obvious. Keep backups somewhere else.
 - **Buildroot ignores unknown defconfig symbols.** Always grep the generated
   `.config` to confirm a package is actually enabled.
 - **`/usr/bin`, `/usr/lib` and `/lib` are read-only overlays** stacking two
