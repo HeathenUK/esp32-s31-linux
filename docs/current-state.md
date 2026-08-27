@@ -683,6 +683,49 @@ at full speed immediately and never touch swap. And Weston's anonymous memory
 falling 2096 -> 688 kB is the shadow framebuffer, not client buffers - see the
 correction under PPA below.
 
+## The damage copy is done inline, not deferred (2026-08-27)
+
+**DIRTYFB was more than twice as expensive as it needed to be**, and the cost
+was invisible because it was charged to the *next* commit.
+
+The driver used to hand the damage copy to a kworker so that a cursor move
+would not hold the CRTC lock across it. But DIRTYFB is a **synchronous** atomic
+commit, so a client that damages every frame never escapes the copy - it pays
+on the following commit, where `copy_sync()` calls `flush_work()` and blocks
+until the kworker runs. That appears as fixed per-commit overhead rather than
+as pixel cost, which is exactly why it looked like DRM machinery.
+
+Measured with `lvdesk/dirtybench.c` (times the ioctl directly, no debugfs), 50
+reps, median:
+
+                          deferred   inline
+     single 64x16          3.66 ms   1.62 ms
+     2 opposite corners    3.80 ms   1.71 ms
+     4 scattered           3.99 ms   1.86 ms
+
+2.15-2.26x, and the tail moves with it (p90 4.10 -> 2.31 ms). The driver's own
+counters account for all of it: **107 `flush_work()` waits over ~400 commits,
+787 ms in total - 7.4 ms per wait**, which is what getting a kworker scheduled
+costs on this board. 107 x 7.4 / 400 = 1.97 ms per commit against a measured
+difference of 1.96.
+
+The rationale was also dormant. lvdesk draws its pointer in LVGL and never
+touches the DRM cursor plane - `cursor_moves` and cursor `fb_changes` both read
+0 - so this was an X11-era optimisation still being paid for by a client that
+cannot benefit from it. `defer_copy=` remains for a client that does drive the
+cursor plane.
+
+**`upd_ns` had been lying the whole time.** The early-out for an unchanged
+plane is a `goto arm_event`, and `arm_event` ends with `t_enter =
+ktime_get_ns() - t_enter` - so every skipped commit subtracted an
+*uninitialised* stack value and added the result. The counter read 3.08 seconds
+per commit, which is roughly uptime. GCC did not warn. Any earlier reading of
+it is void.
+
+Where the 3.66 ms actually went, once the counter was fixed: 2.50 ms inside
+`pipe_update` (of which only 0.11 ms cache flush and 0.32 ms PPA/GDMA copy were
+real pixel work) and ~1.0 ms in the DRM atomic machinery outside it.
+
 ## PPA (Pixel Processing Accelerator)
 
 Working under Linux as of 2026-08-21: `drivers/gpu/drm/espressif/esp32s31-ppa.c`,
