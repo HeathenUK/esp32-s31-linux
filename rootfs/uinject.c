@@ -232,9 +232,16 @@ int main(int argc, char **argv)
 		/* click X Y - drive a specific control, e.g. a tray icon. */
 		move_to(argc > 2 ? atoi(argv[2]) : 0,
 			argc > 3 ? atoi(argv[3]) : 0, 12, 12);
-		msleep(120);
+		msleep(200);
 		click(1);
-		msleep(60);
+		/*
+		 * Hold the button. The desktop samples the button as a *level*
+		 * when it drains evdev, so if the press and the release are
+		 * both queued before it reads, it sees no press at all and the
+		 * click is silently lost. A human holds a button for ~100 ms;
+		 * 250 ms is comfortably longer than any drain.
+		 */
+		msleep(250);
 		click(0);
 	} else if (!strcmp(what, "wheel")) {
 		/* wheel N - N notches, negative scrolls the other way. */

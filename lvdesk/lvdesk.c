@@ -880,6 +880,7 @@ static void wpa_cleanup(void)
 			unlink(wpa_paths[i]);
 }
 
+static int wpa_log;
 static int wpa_cmd_fd = -1;	/* request/reply */
 static int wpa_ev_fd = -1;	/* ATTACHed: unsolicited events */
 
@@ -943,12 +944,31 @@ static int wpa_req(const char *cmd, char *buf, size_t len)
 	if (wpa_cmd_fd < 0)
 		return -1;
 	setsockopt(wpa_cmd_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+	/*
+	 * Drain anything still queued before asking a new question.
+	 *
+	 * This is a datagram socket and each request is answered separately.
+	 * If one request ever times out its reply still arrives, and the next
+	 * recv() then returns that stale answer - so every later request is
+	 * off by one and the socket never recovers. SCAN_RESULTS reading the
+	 * reply to SCAN is exactly the desync that left the panel showing
+	 * "scanning..." for ever.
+	 */
+	while (recv(wpa_cmd_fd, buf, len - 1, MSG_DONTWAIT) > 0)
+		;
+
 	if (send(wpa_cmd_fd, cmd, strlen(cmd), 0) < 0)
 		return -1;
 	n = recv(wpa_cmd_fd, buf, len - 1, 0);
-	if (n < 0)
+	if (n < 0) {
+		if (wpa_log)
+			fprintf(stderr, "[wpa %s -> timeout]\n", cmd);
 		return -1;
+	}
 	buf[n] = 0;
+	if (wpa_log)
+		fprintf(stderr, "[wpa %s -> %d bytes: %.40s]\n", cmd, n, buf);
 	return n;
 }
 
@@ -969,7 +989,28 @@ static void wpa_events_open(void)
 	 * scan - which is why the panel came up empty.
 	 */
 	send(wpa_ev_fd, "ATTACH", 6, 0);
-	recv(wpa_ev_fd, reply, sizeof(reply) - 1, MSG_DONTWAIT);
+	{
+		struct timeval tv = { .tv_sec = 1, .tv_usec = 0 };
+		int n;
+
+		/*
+		 * Wait for the ATTACH acknowledgement rather than reading with
+		 * MSG_DONTWAIT, which returns EAGAIN before the daemon has had
+		 * a chance to answer - so a failed ATTACH looked identical to a
+		 * successful one and the events simply never came.
+		 */
+		setsockopt(wpa_ev_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+		n = recv(wpa_ev_fd, reply, sizeof(reply) - 1, 0);
+		if (n > 0)
+			reply[n] = 0;
+		if (n <= 0 || strncmp(reply, "OK", 2) != 0) {
+			fprintf(stderr, "lvdesk: wpa ATTACH failed (%.8s)\n",
+				n > 0 ? reply : "no reply");
+			close(wpa_ev_fd);
+			wpa_ev_fd = -1;
+			return;
+		}
+	}
 	fcntl(wpa_ev_fd, F_SETFL, O_NONBLOCK);
 }
 
@@ -1448,8 +1489,13 @@ static const void *pop_owner;		/* which icon opened it */
 static lv_obj_t *vol_slider, *vol_label;
 static lv_obj_t *wifi_list, *wifi_status;
 
+static void wifi_scan_restore(void);
+static void scan_watch_stop(void);
+
 static void popover_close(void)
 {
+	scan_watch_stop();
+	wifi_scan_restore();	/* never leave scan_ssid cleared behind us */
 	if (pop_obj) { lv_obj_delete(pop_obj); pop_obj = NULL; }
 	if (pop_scrim) { lv_obj_delete(pop_scrim); pop_scrim = NULL; }
 	pop_owner = NULL;
@@ -1533,6 +1579,7 @@ static lv_obj_t *popover_open(lv_obj_t *anchor, int w, int h)
  * CTRL-EVENT-* messages to report the outcome.
  */
 #define AP_MAX 16
+#define ARRAY_LEN(a) (sizeof(a) / sizeof((a)[0]))
 
 struct ap {
 	char ssid[33];
@@ -1605,20 +1652,30 @@ static void wifi_render(void)
 		return;
 	lv_obj_clean(wifi_list);
 	for (i = 0; i < ap_n; i++) {
-		lv_obj_t *b;
-		char label[64];
+		lv_obj_t *b, *mark;
+		const char *glyph;
+
+		b = lv_list_add_button(wifi_list, NULL, aps[i].ssid);
 
 		/*
-		 * A tick for a stored network and a dot for the one in use -
-		 * the same two states every network menu shows, so the user
-		 * can tell "click and it just joins" from "this will ask".
+		 * The state glyph goes on the *right*, not in front of the
+		 * name. Prefixing it indented that one entry and left every
+		 * other SSID starting a character further left - a ragged list
+		 * that the eye reads as a mistake. Right-aligned, the names
+		 * form one column and the markers form another, which is what
+		 * every network menu does.
 		 */
-		snprintf(label, sizeof(label), "%s%s%s",
-			 aps[i].current ? LV_SYMBOL_OK " " :
-			 aps[i].saved ? LV_SYMBOL_SAVE " " : "  ",
-			 aps[i].ssid,
-			 ap_needs_key(&aps[i]) ? "" : "  (open)");
-		b = lv_list_add_button(wifi_list, NULL, label);
+		glyph = aps[i].current ? LV_SYMBOL_OK :
+			aps[i].saved ? LV_SYMBOL_SAVE :
+			ap_needs_key(&aps[i]) ? "" : LV_SYMBOL_EYE_OPEN;
+		if (*glyph) {
+			mark = lv_label_create(b);
+			lv_label_set_text(mark, glyph);
+			lv_obj_set_style_text_font(mark, FONT_UI, 0);
+			lv_obj_add_flag(mark, LV_OBJ_FLAG_IGNORE_LAYOUT);
+			lv_obj_align(mark, LV_ALIGN_RIGHT_MID, -2, 0);
+			lv_obj_remove_flag(mark, LV_OBJ_FLAG_CLICKABLE);
+		}
 		lv_obj_set_style_text_font(b, FONT_UI, 0);
 		lv_obj_set_style_pad_ver(b, 2, 0);
 		lv_obj_add_event_cb(b, wifi_connect_cb, LV_EVENT_CLICKED,
@@ -1629,6 +1686,8 @@ static void wifi_render(void)
 				      ap_n == 1 ? "" : "s");
 }
 
+static void wifi_show_results(void);
+
 static void wifi_show_results(void)
 {
 	char buf[4096];
@@ -1637,8 +1696,18 @@ static void wifi_show_results(void)
 
 	if (!wifi_list)
 		return;
-	if (wpa_req("SCAN_RESULTS", buf, sizeof(buf)) < 0)
+	if (wpa_req("SCAN_RESULTS", buf, sizeof(buf)) < 0) {
+		/*
+		 * Never leave the panel on "scanning...". A request that fails
+		 * used to return here silently, and the label then said the
+		 * scan was still running for ever - a UI parked in a state it
+		 * can never leave is worse than one that admits it failed.
+		 */
+		if (wifi_status)
+			lv_label_set_text(wifi_status, LV_SYMBOL_WARNING
+					  "  no scan results");
 		return;
+	}
 	ap_n = 0;
 	while ((p = strchr(p, '\n')) && ap_n < AP_MAX) {
 		char line[192], *q, *f[5];
@@ -1673,6 +1742,36 @@ static void wifi_show_results(void)
 		aps[ap_n].current = 0;
 		ap_n++;
 	}
+	/*
+	 * A hidden network does not beacon, so the one we are associated to
+	 * can be missing from a broad scan. Put it in from STATUS - a picker
+	 * that omits the network you are on looks broken.
+	 */
+	if (wpa_req("STATUS", buf, sizeof(buf)) > 0) {
+		const char *ss = strstr(buf, "\nssid=");
+
+		if (ss) {
+			char name[33];
+			int i;
+
+			ss += 6;
+			for (i = 0; ss[i] && ss[i] != '\n' &&
+				    i < (int)sizeof(name) - 1; i++)
+				name[i] = ss[i];
+			name[i] = 0;
+			for (j = 0; j < ap_n; j++)
+				if (strcmp(aps[j].ssid, name) == 0)
+					break;
+			if (j == ap_n && ap_n < AP_MAX) {
+				snprintf(aps[ap_n].ssid, sizeof(aps[0].ssid),
+					 "%s", name);
+				snprintf(aps[ap_n].flags, sizeof(aps[0].flags),
+					 "%s", "[WPA2-PSK-CCMP][ESS]");
+				aps[ap_n].current = 0;
+				ap_n++;
+			}
+		}
+	}
 	wifi_mark_saved();
 	wifi_render();
 }
@@ -1704,13 +1803,100 @@ static void wifi_show_status(void)
 	}
 }
 
+/*
+ * Ask for a *broad* scan, then put the configuration back.
+ *
+ * A network with scan_ssid=1 - which a hidden SSID needs, and pistorm is
+ * hidden - makes wpa_supplicant send a directed probe for the configured SSIDs
+ * only, and this FullMAC driver answers with just those. Measured with the BSS
+ * table flushed each time: scan_ssid=1 returns **1** network, scan_ssid=0
+ * returns **14**, and iw's own broad scan returns 17. That is why the panel
+ * only ever listed the network it was already on.
+ *
+ * (An earlier measurement said scan_ssid made no difference. It did not flush
+ * the table first, so it was counting the residue of a previous broad scan.
+ * Flush between arms or the answer is meaningless.)
+ *
+ * So clear the flag for the duration of a user-requested scan and restore it
+ * when the results arrive. SAVE_CONFIG is never called here, so the file on
+ * disk keeps scan_ssid=1 and the hidden network still connects on boot.
+ */
+static int hidden_ids[8];
+static int hidden_n;
+static lv_timer_t *scan_watch;
+
+/*
+ * A scan that never reports back must still end. wpa_supplicant can drop a
+ * CTRL-EVENT-SCAN-RESULTS if the driver aborts, and without this the label
+ * stays on "scanning..." with no way out but closing the panel.
+ */
+static void scan_timeout_cb(lv_timer_t *t)
+{
+	lv_timer_delete(t);
+	scan_watch = NULL;
+	wifi_scan_restore();
+	if (!wifi_list)
+		return;
+	wifi_show_results();		/* whatever the table has by now */
+	if (ap_n == 0 && wifi_status)
+		lv_label_set_text(wifi_status, LV_SYMBOL_WARNING
+				  "  scan timed out");
+}
+
+static void scan_watch_stop(void)
+{
+	if (scan_watch) {
+		lv_timer_delete(scan_watch);
+		scan_watch = NULL;
+	}
+}
+
+static void wifi_scan_restore(void)
+{
+	char cmd[64], rep[32];
+	int i;
+
+	for (i = 0; i < hidden_n; i++) {
+		snprintf(cmd, sizeof(cmd), "SET_NETWORK %d scan_ssid 1",
+			 hidden_ids[i]);
+		wpa_req(cmd, rep, sizeof(rep));
+	}
+	hidden_n = 0;
+}
+
+static void wifi_scan_broaden(void)
+{
+	char buf[1024], cmd[64], rep[32];
+	const char *p = buf;
+
+	wifi_scan_restore();		/* never stack two of these */
+	if (wpa_req("LIST_NETWORKS", buf, sizeof(buf)) < 0)
+		return;
+	while ((p = strchr(p, '\n')) && hidden_n < (int)ARRAY_LEN(hidden_ids)) {
+		int id;
+
+		p++;
+		if (*p < '0' || *p > '9')
+			continue;
+		id = atoi(p);
+		snprintf(cmd, sizeof(cmd), "GET_NETWORK %d scan_ssid", id);
+		if (wpa_req(cmd, rep, sizeof(rep)) <= 0 || rep[0] != '1')
+			continue;
+		snprintf(cmd, sizeof(cmd), "SET_NETWORK %d scan_ssid 0", id);
+		if (wpa_req(cmd, rep, sizeof(rep)) > 0)
+			hidden_ids[hidden_n++] = id;
+	}
+}
+
 static void wifi_scan_cb(lv_event_t *e)
 {
 	char buf[64];
 
 	(void)e;
 	buf[0] = 0;
+	wifi_scan_broaden();
 	if (wpa_req("SCAN", buf, sizeof(buf)) < 0) {
+		wifi_scan_restore();
 		if (wifi_status)
 			lv_label_set_text(wifi_status, LV_SYMBOL_WARNING
 					  "  supplicant not answering");
@@ -1718,18 +1904,20 @@ static void wifi_scan_cb(lv_event_t *e)
 	}
 	/*
 	 * Report a refusal rather than sitting on "scanning..." for ever.
-	 * wpa_supplicant answers FAIL-BUSY when a scan is already running and
-	 * plain FAIL when the driver will not start one - both look identical
-	 * to a user otherwise, and the first version showed neither.
+	 * FAIL-BUSY means a scan is already running - which is what repeated
+	 * presses of Rescan produce - and plain FAIL means the driver refused.
 	 */
 	if (strncmp(buf, "FAIL", 4) == 0) {
+		wifi_scan_restore();
 		if (wifi_status)
-			lv_label_set_text_fmt(wifi_status, LV_SYMBOL_WARNING
-					      "  scan: %.24s", buf);
+			lv_label_set_text_fmt(wifi_status, LV_SYMBOL_WIFI
+					      "  busy, try again");
 		return;
 	}
 	if (wifi_status)
 		lv_label_set_text(wifi_status, LV_SYMBOL_WIFI "  scanning...");
+	scan_watch_stop();
+	scan_watch = lv_timer_create(scan_timeout_cb, 12000, NULL);
 	/* Results arrive as CTRL-EVENT-SCAN-RESULTS; see wifi_ev_poll(). */
 }
 
@@ -1888,7 +2076,11 @@ static int wifi_ev_poll(void)
 	while ((n = recv(wpa_ev_fd, buf, sizeof(buf) - 1, MSG_DONTWAIT)) > 0) {
 		buf[n] = 0;
 		busy = 1;
+		if (wpa_log)
+			fprintf(stderr, "[wpa event: %.60s]\n", buf);
 		if (strstr(buf, "CTRL-EVENT-SCAN-RESULTS")) {
+			scan_watch_stop();
+			wifi_scan_restore();
 			wifi_show_results();
 			/*
 			 * The first scan after associating often comes back
@@ -2326,6 +2518,7 @@ static void mouse_init(void)
 int main(void)
 {
 	term_log = getenv("LVDESK_TERMLOG") != NULL;
+	wpa_log = getenv("LVDESK_WPALOG") != NULL;
 	atexit(wpa_cleanup);
 	wpa_events_open();
 	lv_display_t *disp;
