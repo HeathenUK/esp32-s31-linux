@@ -1,0 +1,68 @@
+esp32s31: stop RX halting after one period
+
+Capture had never worked: recording failed with EIO after exactly one period,
+which is what made "bring up I2S capture" look like unfinished bring-up rather
+than a one-bit bug.
+
+hw_params builds a single control word from the TX field definitions and writes
+it to whichever direction is being configured. Every field it sets sits at the
+same bit in both registers - msb_shift 13, tdm_en 19, bck_div_num 26:21,
+checked against the SoC header - except the one at bit 4:
+
+    TX_CONF bit 4      tx_stop_en    stop when the FIFO empties
+    RX_CONF bits 5:4   rx_stop_mode  0 = run until rx_start clears
+                                     1 = also stop when in_suc_eof is 1
+
+So writing the transmit value into RX_CONF asked the receiver to stop as soon
+as the first DMA descriptor completed. One period, then nothing.
+
+There is a second, unrelated trap worth recording: the RX path of the AHB GDMA
+keeps one descriptor per period and rejects period_len > 4095, while the I2S
+driver advertises period_bytes_max = 4096. A capture that picks the advertised
+maximum therefore fails in dmaengine_prep_dma_cyclic(), which the PCM layer
+reports as -ENOMEM from soc_component_trigger - not an obvious pointer to an
+off-by-one. Periods of 4095 bytes or fewer work; the advertised limit should
+be lowered for capture, which is left for the mic bring-up.
+
+With this, recording runs continuously and returns full-length files. The mic
+input path itself is still not producing live audio - two captures come back
+byte-identical, every sample a constant -5504 - so the ADC routing remains to
+be brought up.
+
+--- a/sound/soc/espressif/esp32s31-i2s.c
++++ b/sound/soc/espressif/esp32s31-i2s.c
+@@ -45,6 +45,8 @@
+ #define ESP32S31_I2S_TX_START		BIT(2)
+ #define ESP32S31_I2S_TX_SLAVE_MOD	BIT(3)
+ #define ESP32S31_I2S_TX_STOP_EN		BIT(4)
++/* RX_CONF instead has a two-bit stop *mode* here; 0 = run until stopped. */
++#define ESP32S31_I2S_RX_STOP_MODE	GENMASK(5, 4)
+ #define ESP32S31_I2S_TX_CHAN_EQUAL	BIT(5)
+ #define ESP32S31_I2S_TX_MONO		BIT(6)
+ #define ESP32S31_I2S_TX_BIG_ENDIAN	BIT(7)
+@@ -267,10 +269,23 @@
+ 	i2s->sysclk_hz = mclk;
+ 
+ 	/* Philips I2S: data delayed one BCLK from the word select edge. */
+-	conf = ESP32S31_I2S_TX_MSB_SHIFT | ESP32S31_I2S_TX_STOP_EN |
+-	       ESP32S31_I2S_TX_TDM_EN |
++	conf = ESP32S31_I2S_TX_MSB_SHIFT | ESP32S31_I2S_TX_TDM_EN |
+ 	       FIELD_PREP(ESP32S31_I2S_TX_BCK_DIV_NUM, bck_div - 1);
+ 	/*
++	 * TX_STOP_EN is bit 4 of TX_CONF and belongs to transmit alone. RX_CONF
++	 * uses bits [5:4] for rx_stop_mode, where 1 means "stop when rx_start
++	 * is 0 **or in_suc_eof is 1**" - so writing the transmit value into
++	 * RX_CONF halted capture the instant the first DMA descriptor
++	 * completed. That is why recording produced exactly one period and then
++	 * failed with EIO, and why capture had never worked.
++	 *
++	 * Every other field this builds sits at the same position in both
++	 * registers (msb_shift 13, tdm_en 19, bck_div_num 26:21, checked
++	 * against the SoC header), so only this one has to be conditional.
++	 */
++	if (playback)
++		conf |= ESP32S31_I2S_TX_STOP_EN;
++	/*
+ 	 * Slots are exactly as wide as the samples, so the slot width, the
+ 	 * half-frame width and the WS pulse width are all the sample width.
+ 	 */
