@@ -20,7 +20,10 @@ booting one the moment getty appears, and neither costs a fixed delay.
 Every step here is therefore send-then-wait-for-a-token. The timeouts are
 backstops for a board that has genuinely died, not the normal path.
 """
-import base64, sys, time, serial
+import base64, os, sys, time, serial
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import console
 
 PORT, BAUD = '/dev/cu.usbserial-130', 1000000
 
@@ -47,22 +50,17 @@ def run(path, timeout=240, boot_wait=0, shell_wait=75.0):
         # Ignore the echoed command line; match the token on a line of its own.
         return until(lambda b: ('\n' + tok) in b or b.startswith(tok), limit)
 
-    ready = lambda b: b.rstrip().endswith('#')
-    out, ok = until(lambda b: ready(b) or 'login:' in b, shell_wait, prod=b'\n')
-    alive = bool(out.strip())
-    if ok and not ready(out):
-        p.write(b'root\n')
-        tail, ok = until(lambda b: '# ' in b or 'assword' in b, 20.0)
-        if 'assword' in tail:
-            p.write(b'\n')
-            tail, ok = until(lambda b: '# ' in b, 20.0)
-        out += tail
-    if '# ' not in out:
+    # Reaching a prompt from a hard reset takes ~85 s here, so any fixed window
+    # shorter than that turns "reset, then run" into a guaranteed NO_SHELL -
+    # which is why the first call after a reset used to fail and the second
+    # succeed. console.wait_for_shell extends its deadline while bytes are
+    # still arriving, so a booting board is tracked and a silent one still
+    # fails fast. shell_wait is kept as the floor for callers that pass one.
+    try:
+        out = console.wait_for_shell(p, cap=max(shell_wait, console.HARD_CAP))
+    except console.NoShell as e:
         p.close()
-        why = ('board is alive - still booting or busy, never reached a prompt'
-               if alive else
-               'no bytes at all - board is off, held in reset, or in download mode')
-        return 'NO_SHELL after %.0fs (%s): %r' % (shell_wait, why, out[-200:])
+        return 'NO_SHELL (%s)' % e
 
     # Quiet the console so kernel messages do not interleave into the results.
     cmd('dmesg -n 1', 'Q_OK')

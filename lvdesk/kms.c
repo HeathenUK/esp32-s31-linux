@@ -283,33 +283,62 @@ int kms_open(const char *path)
 }
 
 /*
- * One DIRTYFB per frame, not per flush. The commit is synchronous, so the
- * cost is per call and LVGL in partial mode can issue many flushes for one
- * frame; the caller accumulates and posts the union once.
+ * One DIRTYFB per frame, not per flush - but carrying every rectangle rather
+ * than their bounding box.
+ *
+ * The commit is synchronous, so its cost is per *call*: LVGL can issue several
+ * flushes for one frame and posting each separately would multiply the commits
+ * without reducing the work. That is why the caller accumulates.
+ *
+ * What it must not do is accumulate into a union. DIRTYFB takes a clip *list*,
+ * and the driver iterates it (drm_atomic_for_each_plane_damage), copying and
+ * cache-flushing each rectangle on its own. Two small changes at opposite
+ * corners of the screen have a bounding box of the whole screen, so the union
+ * turned a few kilobytes of real damage into a full 768,000-byte copy.
  */
-int kms_dirty(int x1, int y1, int x2, int y2)
+int kms_dirty_rects(const struct kms_rect *r, int n)
 {
+	struct drm_clip_rect clip[KMS_MAX_CLIPS];
 	struct drm_mode_fb_dirty_cmd d;
-	struct drm_clip_rect clip;
+	int i, m = 0;
 
-	if (x1 > x2 || y1 > y2)
+	if (n > KMS_MAX_CLIPS)
+		n = KMS_MAX_CLIPS;
+
+	for (i = 0; i < n; i++) {
+		int x1 = r[i].x1, y1 = r[i].y1, x2 = r[i].x2, y2 = r[i].y2;
+
+		if (x1 > x2 || y1 > y2)
+			continue;
+		if (x1 < 0) x1 = 0;
+		if (y1 < 0) y1 = 0;
+		if (x2 >= (int)kms_w) x2 = kms_w - 1;
+		if (y2 >= (int)kms_h) y2 = kms_h - 1;
+		if (x1 > x2 || y1 > y2)
+			continue;
+
+		clip[m].x1 = x1; clip[m].y1 = y1;
+		clip[m].x2 = x2 + 1; clip[m].y2 = y2 + 1;	/* exclusive */
+		m++;
+	}
+	if (!m)
 		return 0;
-	if (x1 < 0) x1 = 0;
-	if (y1 < 0) y1 = 0;
-	if (x2 >= (int)kms_w) x2 = kms_w - 1;
-	if (y2 >= (int)kms_h) y2 = kms_h - 1;
-
-	clip.x1 = x1; clip.y1 = y1;
-	clip.x2 = x2 + 1; clip.y2 = y2 + 1;	/* exclusive */
 
 	memset(&d, 0, sizeof(d));
 	d.fb_id = kms_fb_id;
-	d.num_clips = 1;
-	d.clips_ptr = (uint64_t)(uintptr_t)&clip;
+	d.num_clips = m;
+	d.clips_ptr = (uint64_t)(uintptr_t)clip;
 	if (ioctl(kms_fd, DRM_IOCTL_MODE_DIRTYFB, &d) < 0) {
 		if (errno != ENOSYS && errno != EINVAL)
 			perror("kms: DIRTYFB");
 		return -1;
 	}
 	return 0;
+}
+
+int kms_dirty(int x1, int y1, int x2, int y2)
+{
+	struct kms_rect r = { x1, y1, x2, y2 };
+
+	return kms_dirty_rects(&r, 1);
 }

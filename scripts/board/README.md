@@ -83,3 +83,28 @@ were found only by measuring the harness separately.
   cost in the capture path (15% down to 5.5% at 10 fps when removed) and it also
   floods the ring buffer, scrolling away the `scanout started` line that tooling
   parses geometry from. Use `dev_dbg` for anything per-frame.
+
+## Why a call sometimes said NO_SHELL and the retry worked
+
+Fixed 2026-08-27; `console.py` now holds the logic and `runsh`/`deploy_bin`
+share it. Three separate faults, all in the tooling rather than the board, and
+all of them capable of being misread as a hardware failure:
+
+- **`deploy_bin` never logged in.** It waited for a `#` prompt, but a freshly
+  booted board sits at `login:`. So a deploy to a just-booted board could never
+  succeed, however long the timeout, and appeared to work only when an earlier
+  `runsh` call had happened to log in first.
+- **A fixed 75 s window against an ~85 s boot.** Reaching a prompt from a hard
+  reset takes ~85 s here, so "reset, then run" always failed on the first call
+  and always succeeded on the second. The wait now extends while bytes are
+  still arriving and fails fast when nothing ever comes.
+- **The board prints at two bauds.** The second-stage bootloader talks at
+  **115200** and only then does the console switch to **1 Mbps** - verified by
+  reading the same reset at both. At 1 Mbps that phase is unreadable or drops
+  entirely to framing errors, so a healthy board looks silent for the first
+  seconds. Reporting that as "off, held in reset, or in download mode" is the
+  most misleading thing this tooling can say, and it did.
+
+Separately, **`deploy_bin` now runs `sync`.** ext4 defers allocation, so a
+board reset shortly after a deploy left a *zero-length* file with the right
+name and mode - a deploy that reported success and had silently vanished.

@@ -18,7 +18,14 @@ the 480 us measured.
 This also explains the asymmetry that confused things for a long time:
 kernel-heavy work is hit hard (`sched_yield` 4.3x slower under load) while
 pure-userspace work is barely touched (`cpubench` -12%), because userspace runs
-from PSRAM and only the kernel runs from flash. An earlier "icache thrash is
+from PSRAM and only the kernel runs from flash.
+
+> Since that was written, some userspace *does* run from flash (the XIP cramfs
+> images), and it was measured on 2026-08-27: identical code is only **1.5%**
+> slower from XIP flash than from RAM, inside the noise, against the kernel's
+> 5.98x. The asymmetry is the icache, not the medium - the tick path evicts
+> itself every tick, a userspace loop does not. See `docs/current-state.md`.
+ An earlier "icache thrash is
 disproved" note was wrong: that test used a userspace workload and never
 exercised the flash path.
 

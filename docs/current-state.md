@@ -979,6 +979,33 @@ throwaway diagnostic kernel the top caches are `kernfs_node_cache` 748 kB
 328 kB, `dentry` 256 kB. The kernfs nodes are real devices in sysfs, so
 shrinking that means removing drivers.
 
+**Hot userspace text in RAM: rejected, 2026-08-27, null result.** The idea was
+the userspace analogue of `.text..fast` - move the hot part of a binary out of
+XIP flash into RAM and keep most of the speed for a fraction of the RSS. It
+does not pay, because **there is no speed to recover**.
+
+Measured with `rootfs/footprintbench.c` (400 functions, 28.7 KB of text, well
+past the 16 KB icache), the *same binary* staged into the XIP image and copied
+to ext4, five interleaved runs each:
+
+     XIP flash   33.5 32.9 32.7 33.0 33.6 ns/call   mean 33.14   spread  2.7%
+     RAM         31.6 31.9 32.5 31.8 35.5 ns/call   mean 32.66   spread 12%
+
+1.5% apart, with the RAM arm's own spread at 12%. Splitting hot text out would
+cost ~600 kB of RSS on a board where memory is the binding constraint, and buy
+nothing measurable.
+
+Two things this corrects. First, the "XIP costs a measured 8%" figure that
+motivated the idea **does not exist** - the 8% in these notes is `__queue_work`
+in the dw_mmc path, unrelated. Second, the kernel's 5.98x flash-vs-RAM result
+does *not* generalise to userspace: the kernel thrashes a 16 KB icache from the
+timer path on every tick, while a userspace loop has the external-memory cache
+mostly to itself.
+
+It is also now a small target. `/mnt/xip/usr/bin` holds **lvdesk and opkg** and
+nothing else - the X stack that made userspace XIP worth 572 kB is gone, so the
+only binary this could apply to is lvdesk.
+
 **XIP works, and it is verified, not assumed.** `rootfs/xipmap.c` mmaps a file
 and prints the kernel's own accounting for that VMA:
 

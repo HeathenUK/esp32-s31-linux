@@ -553,13 +553,83 @@ static lv_obj_t *make_window(const char *title, int x, int y, int w, int h)
 static int direct_render;
 
 /*
- * Damage is accumulated across the frame and posted once.
+ * Damage is accumulated across the frame and posted once - as a list of
+ * rectangles, not as their bounding box.
  *
  * DIRTYFB is a synchronous atomic commit, so its cost is per call rather than
  * per pixel; LVGL can issue several flushes for one frame, and posting each
- * one separately would multiply the commits without reducing the work.
+ * one separately would multiply the commits without reducing the work. So the
+ * accumulation is still one commit per frame.
+ *
+ * But it must not accumulate into a *union*. DIRTYFB carries a clip list and
+ * the driver copies each rectangle separately, so two small changes at
+ * opposite corners - a keystroke in a terminal and a clock tick in the taskbar
+ * - have a bounding box of the entire screen, and the union turned a few
+ * kilobytes of real damage into a full-screen copy.
+ *
+ * The driver keeps 8 rectangles and falls back to a full-surface copy beyond
+ * that, so KMS_MAX_CLIPS matches it: past that point extra rectangles buy
+ * nothing and the cheapest thing to do is merge.
  */
-static int dmg_valid, dmg_x1, dmg_y1, dmg_x2, dmg_y2;
+static struct kms_rect dmg[KMS_MAX_CLIPS];
+static int dmg_n;
+
+static long rect_area(const struct kms_rect *r)
+{
+	return (long)(r->x2 - r->x1 + 1) * (r->y2 - r->y1 + 1);
+}
+
+static void rect_merge(struct kms_rect *a, const struct kms_rect *b)
+{
+	if (b->x1 < a->x1) a->x1 = b->x1;
+	if (b->y1 < a->y1) a->y1 = b->y1;
+	if (b->x2 > a->x2) a->x2 = b->x2;
+	if (b->y2 > a->y2) a->y2 = b->y2;
+}
+
+/*
+ * Add a rectangle, merging rather than growing the list without limit.
+ *
+ * Overlapping rectangles are merged on sight: copying an overlap twice is
+ * wasted bandwidth, which is the whole thing being economised here. When the
+ * list is full, merge the pair whose union wastes the least - 28 comparisons
+ * at KMS_MAX_CLIPS=8, which is nothing against a copy.
+ */
+static void dmg_add(const struct kms_rect *n)
+{
+	int i, j, bi = 0, bj = 1;
+	long best = -1;
+
+	for (i = 0; i < dmg_n; i++) {
+		if (n->x1 <= dmg[i].x2 && dmg[i].x1 <= n->x2 &&
+		    n->y1 <= dmg[i].y2 && dmg[i].y1 <= n->y2) {
+			rect_merge(&dmg[i], n);
+			return;
+		}
+	}
+
+	if (dmg_n < KMS_MAX_CLIPS) {
+		dmg[dmg_n++] = *n;
+		return;
+	}
+
+	/* Full: append by merging into the cheapest existing pair. */
+	for (i = 0; i < dmg_n; i++)
+		for (j = i + 1; j < dmg_n; j++) {
+			struct kms_rect u = dmg[i];
+			long waste;
+
+			rect_merge(&u, &dmg[j]);
+			waste = rect_area(&u) - rect_area(&dmg[i]) -
+				rect_area(&dmg[j]);
+			if (best < 0 || waste < best) {
+				best = waste; bi = i; bj = j;
+			}
+		}
+	rect_merge(&dmg[bi], &dmg[bj]);
+	dmg[bj] = dmg[dmg_n - 1];
+	dmg[dmg_n - 1] = *n;
+}
 
 static void kms_flush_cb(lv_display_t *d, const lv_area_t *area, uint8_t *px)
 {
@@ -577,20 +647,15 @@ static void kms_flush_cb(lv_display_t *d, const lv_area_t *area, uint8_t *px)
 		}
 	}
 
-	if (!dmg_valid) {
-		dmg_x1 = area->x1; dmg_y1 = area->y1;
-		dmg_x2 = area->x2; dmg_y2 = area->y2;
-		dmg_valid = 1;
-	} else {
-		if (area->x1 < dmg_x1) dmg_x1 = area->x1;
-		if (area->y1 < dmg_y1) dmg_y1 = area->y1;
-		if (area->x2 > dmg_x2) dmg_x2 = area->x2;
-		if (area->y2 > dmg_y2) dmg_y2 = area->y2;
+	{
+		struct kms_rect r = { area->x1, area->y1, area->x2, area->y2 };
+
+		dmg_add(&r);
 	}
 
 	if (lv_display_flush_is_last(d)) {
-		kms_dirty(dmg_x1, dmg_y1, dmg_x2, dmg_y2);
-		dmg_valid = 0;
+		kms_dirty_rects(dmg, dmg_n);
+		dmg_n = 0;
 	}
 	lv_display_flush_ready(d);
 }

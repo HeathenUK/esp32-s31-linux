@@ -12,6 +12,7 @@ in checked-in tooling.
 import base64, gzip, os, sys, time, serial
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import console
 from runsh import PORT, BAUD
 
 
@@ -38,16 +39,25 @@ def deploy(path, dest, timeout=300, shell_wait=75.0):
         p.write(('%s; echo %s\n' % (c, tok)).encode())
         return until(lambda b: ('\n' + tok) in b, limit)
 
-    _, ok = until(lambda b: b.rstrip().endswith('#'), shell_wait, prod=b'\n')
-    if not ok:
-        p.close(); return 'NO_SHELL'
+    # Log in if the board is at a login prompt, and track a boot in progress
+    # rather than timing out through it. Waiting only for '#' meant a freshly
+    # booted board - which sits at "login:" - could never be deployed to.
+    try:
+        console.wait_for_shell(p)
+    except console.NoShell as e:
+        p.close(); return 'NO_SHELL: %s' % e
 
     cmd('rm -f /tmp/x.b64', 'RM_OK')
     for i in range(0, len(data), 512):
         _, got = cmd("printf %%s '%s' >> /tmp/x.b64" % data[i:i+512], 'C_OK', 15.0)
         if not got:
             p.close(); return 'STALLED at byte %d of %d' % (i, len(data))
-    out, ok = cmd('base64 -d /tmp/x.b64 | gunzip > %s && chmod +x %s && ls -l %s'
+    # sync, or the file exists only in page cache. ext4 defers allocation, so a
+    # board reset shortly after a deploy leaves a *zero-length* file with the
+    # right name and mode - which looks like a successful deploy that somehow
+    # had no effect, and cost a whole measurement round exactly that way.
+    out, ok = cmd('base64 -d /tmp/x.b64 | gunzip > %s && chmod +x %s && '
+                  'sync && ls -l %s'
                   % (dest, dest, dest), 'DEPLOY_OK', timeout)
     p.close()
     return out if ok else 'DEPLOY_FAILED: ' + out[-300:]
