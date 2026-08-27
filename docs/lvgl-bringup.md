@@ -543,3 +543,80 @@ There is no window manager to rescue a window here, so `drag_cb` now clamps:
 at least `KEEP_ON_SCREEN` (48 px) stays within the display on each axis, and a
 window cannot be pushed under the taskbar or above the top edge. Clicking a
 window's header also raises it, which previously only the taskbar button did.
+
+## Latency and idle cost: what worked and what did not
+
+Five performance ideas, measured with a fresh boot per arm and three runs of 25
+trials each. **Two of the five were null**, and one of the nulls corrected the
+model that had been driving the work.
+
+### Null: rendering at native 800x480
+
+The reduced 640x384 mode was chosen when memory was the binding constraint.
+With lvdesk at 76 kB RSS and ~2.7 MB free it is affordable again, so it was
+worth retrying:
+
+	                  latprobe median      MemAvailable
+	 640x384         30.0  30.1  30.4 ms      2744 kB
+	 800x480         29.7  29.9  29.0 ms      2520 kB
+
+Within noise, for 224 kB. And `ppa_ops` stayed at one per update in both arms -
+the PPA pass is the *damage copy*, not the scaling, so native does not remove
+it. Native remains worth having for appearance (it fills the panel instead of
+centring with black borders); it is not a performance change.
+
+### Null: driving the panel at 60 Hz
+
+The panel entry says 18 MHz over htotal 861 x vtotal 496, which is ~42 Hz, and
+one frame is 23.8 ms - suspiciously close to the measured latency. 800x480
+panels of this class normally run 25-33 MHz, so `pclk_khz=` was added to
+override it. 25,623 kHz gives a confirmed 60 Hz mode... and changes the measured
+latency by nothing:
+
+	 42 Hz    30.0  30.1  30.4 ms
+	 60 Hz    32.1  30.7  29.6 ms
+
+**Because latprobe measures inject -> the driver's commit counter, not photons.**
+Scanout was never in the number. The ~30 ms was software pipeline the whole
+time, and the resemblance to a frame period was a coincidence that had been
+quietly steering the investigation. The parameter is kept - it is useful for
+smoother motion - but it buys no latency.
+
+### Real: redraw on input instead of on LVGL's timer
+
+`lv_timer_handler()` only repaints when the refresh period has elapsed, and
+`LV_DEF_REFR_PERIOD` is 24 ms. A keystroke arriving just after a repaint waits
+most of a period for no reason - ~12 ms on average. Calling `lv_refr_now()`
+after the input polls removes it:
+
+	 before   30.0  30.1  30.4 ms
+	 after    27.3  26.9  27.5 ms
+
+~11%, and it is the largest remaining term that is actually ours to fix.
+
+### Real: back off the poll loop when nothing is happening
+
+An idle desktop should cost nothing. Measured by displacement - the only method
+that works here - it cost **13.6%**: CoreMark 876 with lvdesk running against
+1014 with it stopped. `/proc/PID/stat` had said 7.9%, and `top` said 62% system,
+which is the known USB-interrupt accounting phantom; neither is trustworthy.
+
+LVGL's refresh timer is always roughly due, so taking its deadline literally
+wakes the loop ~40 times a second forever. There are no animations here, so the
+only reasons to wake are input, terminal output and the 5 s clock. Sleeping
+longer once the desktop has been quiet for a few rounds:
+
+	                       CoreMark idle    keystroke p90
+	 no backoff              876   (13.6%)     ~32 ms
+	 backoff 250 ms          976    (3.1%)   52-92 ms
+	 backoff 100 ms          950    (5.9%)   30-36 ms
+
+250 ms recovers more CPU but wrecks the tail, because a device that appears
+while the loop is asleep is not in the poll set until the next 2 s rescan -
+which is exactly what an injected-input harness does on every run. **100 ms is
+the trade**: most of the saving, tail intact.
+
+The first version of this backoff measured as "changes nothing" and was nearly
+recorded as a third null. It was a bug: `next` is already clamped to 30, and the
+condition read `next > IDLE_POLL_MS`, which is never true. A null result that
+arrives *too neatly* deserves one look at whether the change is even reachable.

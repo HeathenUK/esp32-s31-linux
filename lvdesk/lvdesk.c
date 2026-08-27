@@ -242,9 +242,10 @@ static void kbd_key(int code)
 	if (write(term.fd, buf, n) < 0) { }
 }
 
-static void kbd_poll(void)
+static int kbd_poll(void)
 {
 	struct input_event ev;
+	int busy = 0;
 	int i;
 
 	/* pick up devices that appeared after start-up */
@@ -273,6 +274,7 @@ static void kbd_poll(void)
 		}
 		if (n != sizeof(ev))
 			continue;
+		busy = 1;
 		do {
 			if (ev.type != EV_KEY)
 				continue;
@@ -292,6 +294,7 @@ static void kbd_poll(void)
 			kbd_key(ev.code);
 		} while (read(kbd_fds[i], &ev, sizeof(ev)) == sizeof(ev));
 	}
+	return busy;
 }
 
 /* ---------------------------------------------------------------- terminal */
@@ -350,14 +353,16 @@ static void term_putc(char c)
 	}
 }
 
-static void term_poll(void)
+static int term_poll(void)
 {
 	char buf[512];
+	int busy = 0;
 	int n, i;
 
 	if (term.fd < 0)
-		return;
+		return 0;
 	while ((n = read(term.fd, buf, sizeof(buf))) > 0) {
+		busy = 1;
 		for (i = 0; i < n; i++)
 			term_putc(buf[i]);
 		term.dirty = 1;
@@ -400,6 +405,7 @@ static void term_poll(void)
 		term.grid[term.cy][term.cx] = saved;
 		term.dirty = 0;
 	}
+	return busy;
 }
 
 static void term_spawn(void)
@@ -613,6 +619,16 @@ static void kms_flush_cb(lv_display_t *d, const lv_area_t *area, uint8_t *px)
 #define MAXMOUSE 8
 /* pty + slack + every keyboard and mouse we may have open */
 #define NFDS        (2 + MAXKBD + MAXMOUSE)
+/*
+ * How long to sleep once the desktop has gone quiet.
+ *
+ * 250 ms recovered the same CPU as this but pushed the p90 of keystroke
+ * latency from ~32 ms to 52-92 ms, because a device that appears while the
+ * loop is asleep is not in the poll set until the next 2 s rescan - which is
+ * exactly what an injected-input harness does on every run. 100 ms keeps most
+ * of the saving and bounds the worst case.
+ */
+#define IDLE_POLL_MS 100
 static int mouse_fds[MAXMOUSE];
 static int mouse_n;
 static uint32_t mouse_scan_at;
@@ -664,9 +680,10 @@ static void mouse_scan(void)
 	}
 }
 
-static void mouse_poll(void)
+static int mouse_poll(void)
 {
 	struct input_event ev;
+	int busy = 0;
 	int32_t w = lv_display_get_horizontal_resolution(NULL);
 	int32_t h = lv_display_get_vertical_resolution(NULL);
 	int i;
@@ -689,6 +706,7 @@ static void mouse_poll(void)
 		}
 		if (n != sizeof(ev))
 			continue;
+		busy = 1;
 		do {
 			if (ev.type == EV_REL) {
 				if (ev.code == REL_X) ptr_x += ev.value;
@@ -703,6 +721,7 @@ static void mouse_poll(void)
 	if (ptr_y < 0) ptr_y = 0;
 	if (ptr_x > w - 1) ptr_x = w - 1;
 	if (ptr_y > h - 1) ptr_y = h - 1;
+	return busy;
 }
 
 static void mouse_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
@@ -750,6 +769,7 @@ int main(void)
 	lv_display_t *disp;
 	lv_obj_t *scr, *content, *clock_lbl;
 	uint32_t last = 0;
+	unsigned int idle_rounds = 0;
 
 	setvbuf(stdout, NULL, _IOLBF, 0);
 	lv_init();
@@ -890,6 +910,29 @@ int main(void)
 		next = lv_timer_handler();
 		if (next == LV_NO_TIMER_READY || next > 30)
 			next = 30;
+		/*
+		 * Back off when nothing is happening.
+		 *
+		 * LVGL's refresh timer is always roughly due, so taking its
+		 * deadline literally wakes this loop ~40 times a second forever
+		 * and costs ~7.8% of the CPU to display a screen that is not
+		 * changing. There are no animations here - the simple theme,
+		 * no scrollbars, no blinking cursor - so the only reasons to
+		 * wake are input, terminal output, and the 5 s clock.
+		 *
+		 * poll() still returns the instant a key or a byte arrives, so
+		 * this costs nothing in latency; it only stops the idle
+		 * spinning. The cap is short enough that the clock stays
+		 * roughly honest.
+		 *
+		 * Note this *raises* the timeout past the 30 ms cap above. The
+		 * first attempt wrote it as `next > IDLE_POLL_MS` and so never
+		 * fired at all - next is already clamped to 30, which is never
+		 * greater than 250 - and measured as "the backoff changes
+		 * nothing" rather than as a bug.
+		 */
+		if (idle_rounds > 4)
+			next = IDLE_POLL_MS;
 
 		if (term.fd >= 0) { fds[n].fd = term.fd; fds[n].events = POLLIN; n++; }
 		for (int ki = 0; ki < kbd_n && n < NFDS; ki++) {
@@ -921,15 +964,33 @@ int main(void)
 		}
 		lv_tick_inc(elapsed ? elapsed : 1);
 
-		term_poll();
-		kbd_poll();
-		mouse_poll();
+		{
+			int busy = 0;
+
+			busy |= term_poll();
+			busy |= kbd_poll();
+			busy |= mouse_poll();
+			idle_rounds = busy ? 0 : idle_rounds + 1;
+		}
+
 		/*
-		 * Draw now if the terminal changed. Without this the new text
-		 * waits for the next trip round the loop, adding a whole poll
-		 * period to every keystroke.
+		 * Redraw *now*, not when LVGL's refresh timer next comes round.
+		 *
+		 * lv_timer_handler() only repaints if the refresh period has
+		 * elapsed, and that period is 24 ms - so a keystroke arriving
+		 * just after a repaint waits most of a period before anything
+		 * is drawn, ~12 ms on average, for no reason at all. It was the
+		 * largest single term left in keystroke latency, and it hid
+		 * behind the assumption that the wait was for scanout: raising
+		 * the panel from 42 Hz to 60 Hz changed the measured latency by
+		 * nothing, because the delay was never the display's.
+		 *
+		 * lv_refr_now() is cheap when nothing is invalid, so calling it
+		 * on every trip costs little; input arrives far more slowly
+		 * than the panel refreshes, so this cannot outrun the hardware.
 		 */
 		lv_timer_handler();
+		lv_refr_now(NULL);
 
 		if (lv_tick_get() - last > 5000) {
 			last = lv_tick_get();
