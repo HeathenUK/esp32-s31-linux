@@ -1017,7 +1017,18 @@ static void wpa_events_open(void)
 /* ------------------------------------------------------------ alsa mixer */
 
 static snd_mixer_t *mixer;
-static snd_mixer_elem_t *mixer_elem;
+/*
+ * Every element with a playback volume, not just the first.
+ *
+ * This codec exposes the two sides as *separate* elements, DACL and DACR, so
+ * setting "the first one" moved the left channel and left the right where it
+ * was. snd_mixer_selem_set_playback_volume_all() only covers the channels
+ * within one element, which is not the same thing.
+ */
+#define MIXER_MAX_ELEMS 8
+static snd_mixer_elem_t *mixer_elems[MIXER_MAX_ELEMS];
+static int mixer_nelem;
+static snd_mixer_elem_t *mixer_elem;	/* the first, for reading back */
 static long mixer_min, mixer_max;
 
 static void audio_open(void)
@@ -1046,8 +1057,10 @@ static void audio_open(void)
 			continue;
 		if (!snd_mixer_selem_has_playback_volume(e))
 			continue;
-		mixer_elem = e;
-		break;
+		if (mixer_nelem < MIXER_MAX_ELEMS)
+			mixer_elems[mixer_nelem++] = e;
+		if (!mixer_elem)
+			mixer_elem = e;
 	}
 	if (mixer_elem)
 		snd_mixer_selem_get_playback_volume_range(mixer_elem,
@@ -1070,12 +1083,14 @@ static int audio_get_pct(void)
 static void audio_set_pct(int pct)
 {
 	long v;
+	int i;
 
 	audio_open();
 	if (!mixer_elem || mixer_max <= mixer_min)
 		return;
 	v = mixer_min + (mixer_max - mixer_min) * pct / 100;
-	snd_mixer_selem_set_playback_volume_all(mixer_elem, v);
+	for (i = 0; i < mixer_nelem; i++)
+		snd_mixer_selem_set_playback_volume_all(mixer_elems[i], v);
 }
 
 /*
@@ -1092,39 +1107,66 @@ static void audio_set_pct(int pct)
  */
 static void audio_bong(void)
 {
-	static const int rate = 48000, ms = 180;
+	static const int rate = 48000, ms = 180, chans = 2;
 	pid_t pid = fork();
 	snd_pcm_t *pcm;
 	int16_t *buf;
-	int frames = rate * ms / 1000, i;
+	int frames = rate * ms / 1000, i, err;
 
 	if (pid != 0)
 		return;			/* parent carries on; reaped in the loop */
 
-	if (snd_pcm_open(&pcm, "plughw:0,0", SND_PCM_STREAM_PLAYBACK, 0) < 0)
-		_exit(0);
-	if (snd_pcm_set_params(pcm, SND_PCM_FORMAT_S16_LE,
-			       SND_PCM_ACCESS_RW_INTERLEAVED, 1, rate, 1,
-			       200000) < 0) {
-		snd_pcm_close(pcm);
-		_exit(0);
-	}
-	buf = malloc(frames * sizeof(*buf));
-	if (!buf) { snd_pcm_close(pcm); _exit(0); }
 	/*
-	 * Two partials an octave apart with an exponential decay - a "bong"
-	 * rather than a beep. Raised-cosine attack so it does not click.
+	 * **Stereo.** This was opened with one channel and left plughw to
+	 * convert, which is how it came out silent - aplay plays the same tone
+	 * happily at 2ch/48k/S16_LE, so the output path was never the problem.
+	 *
+	 * Every failure is reported. The first version returned _exit(0) on
+	 * each error, so a codec that refused the parameters was
+	 * indistinguishable from a tone that played - and this project already
+	 * has the scar from instruments that called audio working while it
+	 * played noise.
+	 */
+	err = snd_pcm_open(&pcm, "plughw:0,0", SND_PCM_STREAM_PLAYBACK, 0);
+	if (err < 0) {
+		fprintf(stderr, "lvdesk: bong: open: %s\n", snd_strerror(err));
+		_exit(1);
+	}
+	err = snd_pcm_set_params(pcm, SND_PCM_FORMAT_S16_LE,
+				 SND_PCM_ACCESS_RW_INTERLEAVED, chans, rate, 1,
+				 300000);
+	if (err < 0) {
+		fprintf(stderr, "lvdesk: bong: params: %s\n", snd_strerror(err));
+		snd_pcm_close(pcm);
+		_exit(1);
+	}
+	buf = malloc((size_t)frames * chans * sizeof(*buf));
+	if (!buf) { snd_pcm_close(pcm); _exit(1); }
+
+	/*
+	 * Two partials an octave apart under an exponential decay - a "bong"
+	 * rather than a beep - with a raised-cosine attack so it does not
+	 * click. The same sample goes to both channels.
 	 */
 	for (i = 0; i < frames; i++) {
 		double t = (double)i / rate;
-		double env = exp(-t * 14.0);
+		double env = exp(-t * 8.0);
 		double atk = t < 0.004 ? (1.0 - cos(t / 0.004 * 3.14159)) / 2 : 1.0;
 		double v = sin(2 * 3.14159 * 660.0 * t) * 0.7 +
 			   sin(2 * 3.14159 * 1320.0 * t) * 0.3;
+		int16_t sample = (int16_t)(v * env * atk * 11000);
 
-		buf[i] = (int16_t)(v * env * atk * 9000);
+		buf[i * chans] = sample;
+		buf[i * chans + 1] = sample;
 	}
-	snd_pcm_writei(pcm, buf, frames);
+
+	err = snd_pcm_writei(pcm, buf, frames);
+	if (err < 0) {
+		fprintf(stderr, "lvdesk: bong: write: %s\n", snd_strerror(err));
+		snd_pcm_close(pcm);
+		free(buf);
+		_exit(1);
+	}
 	snd_pcm_drain(pcm);
 	snd_pcm_close(pcm);
 	free(buf);
