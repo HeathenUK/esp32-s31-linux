@@ -620,3 +620,62 @@ The first version of this backoff measured as "changes nothing" and was nearly
 recorded as a third null. It was a bug: `next` is already clamped to 30, and the
 condition read `next > IDLE_POLL_MS`, which is never true. A null result that
 arrives *too neatly* deserves one look at whether the change is even reachable.
+
+## Latency was never waiting for the display
+
+Two plausible ideas, both measured, both null - and the second one corrected the
+model that generated them.
+
+**Rendering at the panel's native 800x480** instead of 640x384, fresh boot per
+arm, three runs of 25 trials each:
+
+	                 median latency        MemAvailable
+	 640x384       30.0  30.1  30.4 ms       2744 kB
+	 800x480       29.7  29.9  29.0 ms       2520 kB
+
+Within noise, and it costs 224 kB. The PPA pass it was supposed to remove did
+not go away either - `ppa_ops` stayed at one per update, because that engine is
+doing the *damage copy*, not the scaling. Native remains worth having for
+appearance (it removes the black borders); it is not a performance change.
+
+**Raising the panel from 42 Hz to 60 Hz** (pixel clock 18 -> 25.623 MHz, which
+the fractional divider reaches and the panel accepts):
+
+	 42 Hz        30.0  30.1  30.4 ms
+	 60 Hz        32.1  30.7  29.6 ms
+
+Nothing. And that is the useful result, because it says the latency was never
+scanout-bound. `latprobe` measures an injected key to the *driver's commit
+counter* - it stops before the panel is involved at all, so no refresh rate can
+change it. The number had been read as "one frame period" for a long time on the
+strength of it being close to 23.8 ms.
+
+`pclk_khz` survives as a module parameter (0 = the panel's own), because the
+knob is cheap and the next question about smoothness will want it. The default
+is unchanged.
+
+## What the latency actually was
+
+**LVGL's refresh timer.** `lv_timer_handler()` only repaints once
+`LV_DEF_REFR_PERIOD` has elapsed, and that is 24 ms - so a keystroke arriving
+just after a repaint waits most of a period before anything is drawn, ~12 ms on
+average, for no reason. Calling `lv_refr_now()` once input has been processed:
+
+	 before        30.0  30.1  30.4 ms
+	 after         27.3  26.9  27.5 ms
+
+~10%, and the remaining tail is the pipeline rather than any single wait.
+
+## Idle cost
+
+The loop took LVGL's refresh deadline literally and woke ~40 times a second
+forever, costing **7.8% of the CPU to display a screen that was not changing**.
+There are no animations here - simple theme, no scrollbars, no blinking cursor -
+so the only reasons to wake are input, terminal output and the 5 s clock. Once
+five rounds pass with nothing to do, the poll timeout goes to 250 ms; any input
+still returns from `poll()` instantly.
+
+	 idle CPU      7.8%  ->  4.0%
+	 latency       26.9-27.5  ->  27.7-28.5 ms
+
+About 1 ms of latency for half the idle cost.
