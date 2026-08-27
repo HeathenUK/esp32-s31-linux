@@ -181,3 +181,68 @@ result back base64 over the console.
   arrive in the file.
 - The encode is polled rather than interrupt-driven. The codec has its own
   interrupt (101) and at 7 ms a sleeping wait would free the CPU.
+
+## What it costs to record, and where the cost was
+
+The point of the encoder is MJPEG capture of the running system that does not
+change the system it is recording. Measured by CoreMark throughput displacement
+(the only method that works here - see `docs/current-state.md` on why absolute
+CPU% lies), full 800x480 frames:
+
+	                                      10 fps        20 fps
+	 shell loop (echo + usleep)            -42%           -
+	 fork-free pacer                       -23%          -42%
+	 no per-frame ioremap, scoped flush    -20%           -
+	 codec interrupt instead of polling    -15%          -27%
+	 no per-frame dev_info                 -5.5%         -10%
+
+Five things, in the order they were found, and the last one dwarfed the rest:
+
+1. **The harness forked.** `usleep` is a busybox applet, so pacing the loop in
+   shell forked a process per frame and cost more than the encode did.
+   `rootfs/jpegcap.c` opens the control file once and paces with
+   `clock_nanosleep`. **Measure the harness before optimising the driver.**
+2. **`ioremap_wc()`/`iounmap()` per frame** to write the header, left over from
+   when the destination was a physical address from userspace. The buffer comes
+   from `dma_alloc_coherent()` and already has a kernel mapping; each
+   map/unmap pair edits the vmalloc area and flushes the TLB.
+3. **Invalidating the whole 512 KB output buffer** every frame when only the
+   header region needs it.
+4. **Polling.** ~7 ms per frame of `cpu_relax()`, then of `usleep_range()`.
+   The codec has its own interrupt; wiring it saved ~5 points.
+5. **`dev_info()` on every encode.** This was the largest single cost by far -
+   from -15% to -5.5% at 10 fps. It writes to a 1 Mbps serial console
+   synchronously, so a ~100-byte line is ~1 ms of console time per frame, and
+   it also floods the ring buffer and scrolls away the `scanout started` line
+   that tooling parses geometry from. It is `dev_dbg` now.
+
+**No source flush.** The vendor's screenshot path flushes its input, but that
+path encodes a buffer the CPU has just written. This encodes the scanout buffer,
+which the display driver fills by DMA and has already cache-maintained. Cleaning
+768 KB per frame cost time and evicted whatever the rest of the system was
+working on. A caller handing in a CPU-written buffer must flush it itself.
+
+### The floor, and what is left
+
+The engine takes ~7.3 ms per full frame, so at 10 fps it is busy 7.3% of the
+time, and it reads 768 KB of PSRAM per frame - 7.7 MB/s - on a board where
+PSRAM bandwidth is the ceiling for everything. Encoding a 23x smaller frame at
+the same rate only recovered 4.7 of 19.7 points at the time it was tried, so
+bandwidth is a real but secondary term.
+
+At -5.5% for 10 fps this is usable for measurement. Getting further means not
+encoding frames that nobody changed: the display driver already tracks damage,
+so a capture driven from its commit path would cost nothing on an idle desktop
+and full price only while something is moving - which is exactly when a
+recording is worth having.
+
+### Would moving the encode to hart0 help?
+
+Not for the part that is left. What remains is the engine's own duty cycle and
+its PSRAM traffic, and neither moves if a different hart programs the registers
+- the DMA reads the same 768 KB either way. Worse, the JPEG codec and the PPA
+share the 2D-DMA, and reorder only exists on TX channel 0, so both must use it:
+splitting ownership across harts means one of them races the other through a
+channel it cannot see. hart0 would only be attractive for **egress** - it owns
+the radio natively, so it could stream frames off the board without Linux
+touching the network stack - and that is a separate problem from encoding.

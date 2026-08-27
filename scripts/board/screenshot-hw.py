@@ -26,9 +26,15 @@ D=/sys/kernel/debug/esp32s31_ppa
 U=/sys/kernel/debug/esp32s31_lcd/updates
 [ -e $D/jpeg ] || {{ echo "NOJPEG"; exit 1; }}
 A=$(busybox tr ' ' '\\n' < $U | busybox sed -n 's/^scanout=0x//p')
+# The scanout buffer is always the panel's native size - the driver scales
+# the client into it - so 800x480 is the right default. dmesg is only a
+# cross-check, and it may well have scrolled away.
+W=800; H=480
 G=$(dmesg | busybox grep "scanout started" | busybox tail -1)
-W=$(echo "$G" | busybox sed -n 's/.*"\\([0-9]*\\)x\\([0-9]*\\)".*/\\1/p')
-H=$(echo "$G" | busybox sed -n 's/.*"\\([0-9]*\\)x\\([0-9]*\\)".*/\\2/p')
+DW=$(echo "$G" | busybox sed -n 's/.*"\\([0-9]*\\)x\\([0-9]*\\)".*/\\1/p')
+DH=$(echo "$G" | busybox sed -n 's/.*"\\([0-9]*\\)x\\([0-9]*\\)".*/\\2/p')
+[ -n "$DW" ] && W=$DW
+[ -n "$DH" ] && H=$DH
 echo "GEOM $A $W $H"
 echo "$A $W $H {QUALITY}" > $D/jpeg || {{ echo "ENCFAIL"; exit 1; }}
 echo "LEN $(cat $D/jpeg_last_len) NS $(cat $D/jpeg_last_ns)"
