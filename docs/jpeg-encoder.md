@@ -246,3 +246,63 @@ splitting ownership across harts means one of them races the other through a
 channel it cannot see. hart0 would only be attractive for **egress** - it owns
 the radio natively, so it could stream frames off the board without Linux
 touching the network stack - and that is a separate problem from encoding.
+
+## The recorder
+
+The screenshot path was never going to be a recording path: single-buffered,
+one frame per debugfs read, base64 over a 1 Mbps console. And debugfs is not
+compiled into a shipping kernel here, so turning it on to take a measurement
+would change the thing being measured.
+
+What exists now:
+
+- **A DRM ioctl**, alongside the PPA's, on the existing card. No new subsystem,
+  no kernel size, available on any kernel that has the display driver.
+  `DRM_IOCTL_ESP32S31_JPEG_REC` (start/stop/status) and
+  `DRM_IOCTL_ESP32S31_JPEG_FRAME` (drain one frame).
+- **Frames captured on damage, not on a timer.** The display driver calls
+  `esp32s31_jpeg_rec_notify()` from its commit path, so an idle desktop commits
+  nothing and costs nothing. A timer would pay full price to film a still image.
+- **The encode runs on a workqueue.** The commit path can sleep, but holding it
+  for the ~7.3 ms an encode takes would delay the display and produce exactly
+  the stutter one is trying to measure.
+- **Frames accumulate in a vmalloc ring in kernel RAM**, drained only after the
+  recording stops - so the transfer costs nothing during the measured window.
+  Not a DMA-able allocation: a 1 MB contiguous buffer would have to come from
+  the same CMA pool the framebuffers live in and would fail exactly when the
+  desktop is busy. The engine writes its usual coherent buffer and the ~20 KB
+  result is copied out.
+- **The ring stops when full rather than wrapping.** A recording that quietly
+  discards its own beginning is worse than a short one.
+
+`rootfs/mjpegrec.c` drives it: `mjpegrec out.mjpeg <secs> [fps] [quality]
+[ring_kb]`. The output is concatenated JPEGs - which is what MJPEG is - and
+ffmpeg reads it with `-f mjpeg`. A sidecar `.txt` carries the capture
+timestamps, because frames are produced on damage and are deliberately *not*
+evenly spaced.
+
+### What it costs
+
+Measured with the activity held constant, which is the only fair comparison -
+the earlier numbers in this file conflated the recorder's cost with the cost of
+whatever was making the screen change:
+
+	                                   CoreMark    recorder
+	 idle desktop, no recording           897         -
+	 idle desktop, recording              882       1.7%
+	 screen changing, no recording        734         -
+	 screen changing, recording           716       2.4%
+
+**2.4% while actually recording** (45 frames in 25 s, none dropped), against
+15% for the timer-driven path at 10 fps and 42% where this started. Idle costs
+1.7% and captures 5 frames in 30 seconds - the System window's clock, which is
+genuinely all that changed.
+
+### One trap worth keeping
+
+The notify has to be **at the `arm_event:` label**, not on the fall-through
+before it. Every ordinary commit reaches that label through one of three
+`goto`s - cursor-only moves, the scaled path, the no-damage case - so a hook
+placed just above it saw **zero commits** while the desktop was visibly
+animating. The counter that proved this (`commits seen` in the stop message) is
+still there.
