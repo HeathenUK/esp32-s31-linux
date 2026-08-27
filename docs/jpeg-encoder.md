@@ -124,3 +124,60 @@ which `ls` and `cat` no longer existed.
 The driver now owns a 512 KB buffer from `dma_alloc_coherent()`, the debugfs
 write takes only `<src> <w> <h> <quality>`, and the result is read back from a
 `jpeg_out` blob. Nothing in the loop touches `/dev/mem`.
+
+
+## Working
+
+Two more faults, and one of them was not the driver at all.
+
+**The scanout address is allocated, not fixed.** It moved from `0x50800000` to
+`0x50900000` when the display client restarted, and the encoder was being
+pointed at the old one. That produced a perfectly valid JPEG of a buffer nobody
+was displaying any more, which is indistinguishable from an encoder bug and
+sent several hours in the wrong direction. `screenshot.py` has always read this
+address from debugfs for exactly this reason; the rule was written down in this
+repo and ignored anyway. Never hardcode it.
+
+**Macro-block reorder has its own enable bit.** Setting
+`out_macro_block_size` to 16x16 is not sufficient - `out_reorder_en_chn`
+(OUT_CONF0 bit 16) is what actually turns the raster fetch into the MCU order
+the encoder consumes, and **only TX channel 0 has the feature at all**. Without
+it the picture is recognisable but sheared, with a sawtooth along every edge
+whose period is the fetch block width. That is why sweeping the block width
+changed the artefact without ever fixing it: the geometry was right the whole
+time and the reordering was simply off.
+
+The bit is cleared again after each encode, because the PPA shares TX0 and does
+not want reordering.
+
+### Numbers
+
+800x480 RGB565 to baseline JPEG, 4:2:0, read straight off the panel:
+
+	 quality   bytes    encode
+	   30      12,422   7.28 ms
+	   50      14,096   7.13 ms
+	   70      16,569   7.16 ms
+	   85      19,745   7.24 ms
+	   95      26,255   7.42 ms
+
+Five consecutive runs at q85 produced **19,745 bytes every time**. Encode time
+is independent of quality, as it should be for a fixed-function DCT - only the
+entropy-coded output changes size.
+
+For comparison, the software path reads all 768,000 bytes of the frame over the
+console; this compresses in 7 ms and transfers ~20 KB.
+
+`scripts/board/screenshot-hw.py` drives it end to end: it reads the live
+scanout address and geometry from debugfs, triggers the encode, and pulls the
+result back base64 over the console.
+
+### Still worth doing
+
+- The destination is invalidated in full (512 KB) on every encode. Only the
+  header and the produced payload actually need it.
+- Decode is unimplemented. The hardware supports it, and unlike encode it *does*
+  need the DHT registers programmed, because it must load whatever tables
+  arrive in the file.
+- The encode is polled rather than interrupt-driven. The codec has its own
+  interrupt (101) and at 7 ms a sleeping wait would free the CPU.
