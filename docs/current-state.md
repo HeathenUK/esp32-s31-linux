@@ -726,6 +726,41 @@ Where the 3.66 ms actually went, once the counter was fixed: 2.50 ms inside
 `pipe_update` (of which only 0.11 ms cache flush and 0.32 ms PPA/GDMA copy were
 real pixel work) and ~1.0 ms in the DRM atomic machinery outside it.
 
+## The kworker hand-off costs ~8 ms, and it is NOT the tick rate (2026-08-27)
+
+The 2x win from doing the damage copy inline is real and reproduces. **The
+explanation first offered for it was wrong**, and the correction matters more
+than the guess did.
+
+The hypothesis was that `CONFIG_PREEMPT_NONE` plus `CONFIG_HZ=100` sets the
+granularity: a woken kworker cannot preempt a running task, so it waits for a
+scheduling point, and a jiffy is 10 ms. The measured 7.4 ms sat neatly inside
+that. Tested by building HZ=250, where a jiffy is 4 ms:
+
+     flush_work() wait   HZ=100  7.4 ms      HZ=250  8.0 ms
+
+Unchanged. **The wait is not tick-quantised**, so the mechanism is not the tick
+rate and is currently *not established*. Recorded as an open question rather
+than a story, because a plausible-but-wrong cause is what sent this the wrong
+way once already.
+
+HZ=250 is worse on everything measured here, so it was reverted:
+
+                        HZ=100    HZ=250
+     SD 4k seq p50      3.76 ms   4.00 ms
+     SD 4k rand p50     3.79 ms   3.93 ms
+     DIRTYFB inline     1.62 ms   2.08 ms
+
+That also **fails to reproduce the note in `docs/hot-text-plan.md`** that HZ
+250 -> 100 "made SD worse (12.07 -> 16.93 ms per request)". It does not, on
+this kernel: 100 is slightly better. The Makefile has been forcing HZ=100 since
+regardless, so the tree and that note had disagreed for a long time. `KHZ=250`
+now switches it, so the next person can retest in one flag rather than an edit.
+
+**The ~10 ms fixed cost per SD request is not tick-quantised either.** The p50
+is 3.7-3.8 ms (card and bus) and the cost lives in the tail - p99 10-16 ms, max
+to 34 ms - which did not move with HZ. Task #21 stays open, minus one theory.
+
 ## PPA (Pixel Processing Accelerator)
 
 Working under Linux as of 2026-08-21: `drivers/gpu/drm/espressif/esp32s31-ppa.c`,

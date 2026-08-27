@@ -202,6 +202,24 @@ DEFCONFIG ?= esp32s31_defconfig
 # Clearing PROFILING alone does NOT clear PERF_EVENTS: PROFILING selects it,
 # and olddefconfig keeps it because it is user-selectable in its own right.
 # Both have to be named, in both directions.
+# Tick rate: `make linux KHZ=250`.
+#
+# A switch because the tree and the notes disagree. docs/hot-text-plan.md says
+# HZ 250 -> 100 was tried, "made SD worse (12.07 -> 16.93 ms per request)" and
+# was reverted - yet the build has been forcing HZ=100 ever since. Whichever is
+# right, it should be one flag to test rather than an edit.
+#
+# It matters more than a tick rate usually would, because this kernel is
+# PREEMPT_NONE: a woken kthread or kworker cannot preempt a running task and
+# waits for a scheduling point, so a jiffy is the granularity of every thread
+# hand-off. At HZ=100 that is 10 ms.
+KHZ ?= 100
+ifeq ($(KHZ),250)
+HZ_TWEAKS := --enable HZ_250 --disable HZ_100 --set-val HZ 250
+else
+HZ_TWEAKS := --disable HZ_250 --enable HZ_100 --set-val HZ 100
+endif
+
 PROF ?= 0
 ifeq ($(PROF),1)
 PROF_TWEAKS := --enable PROFILING --enable PERF_EVENTS
@@ -231,9 +249,7 @@ linux: toolchain | $(LINUX_OUT)
 		--set-str BUILTIN_DTB_NAME "espressif/esp32s31_generic" \
 		--enable RISCV_ISA_C \
 		--enable PROFILING \
-		--disable HZ_250 \
-		--enable HZ_100 \
-		--set-val HZ 100 \
+		$(HZ_TWEAKS) \
 		--disable RISCV_ISA_V \
 		--disable RISCV_ISA_V_DEFAULT_ENABLE \
 		--enable RISCV_ISA_ZBA \

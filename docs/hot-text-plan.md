@@ -42,6 +42,12 @@ exercised the flash path.
   (median 1432 vs 1487 us) and made SD worse (12.07 -> 16.93 ms per request).
   Fewer ticks, but each still costs 860 us. Reverted.
 
+  > **Does not reproduce, 2026-08-27.** The build has been forcing HZ=100 ever
+  > since regardless of that "reverted", and re-measured on the 7.1 kernel
+  > HZ=100 is slightly *better*: SD 4k p50 3.76 ms against 4.00 at HZ=250, and
+  > DIRTYFB 1.62 ms against 2.08. HZ=100 kept. `make linux KHZ=250` switches
+  > it now instead of an edit.
+
 ## Plan
 
 ### Phase 0 - quantify the payoff before doing any linker work
