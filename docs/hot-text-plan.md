@@ -130,3 +130,39 @@ whole objects before TEXT_TEXT sees them.
 IRQ 20 runs two handlers and the first, `20300000.usb`, returned `unhandled` on
 all 1365 invocations at 0.093 ms each - 127 ms of pure waste in a 3 s trace.
 Whatever registered that second handler should not have.
+
+## What else was worth adding (2026-08-27)
+
+Profiled with `/proc/profile` on a `PROF=1` kernel and measured three arms.
+**The input path went in; nothing else did.**
+
+    A  baseline                              idle 946.2   under load 459.0
+    B  input.o + evdev.o in .text..fast      idle 960.7   under load 476.4
+    C  control: cold fs/ext4/xattr.o in RAM  idle 929.1   under load 426.3
+
+CoreMark under continuous pointer motion, 5 runs per arm, fresh boot per arm.
+B is **+3.8% under load** for **18 KB** of RAM, and the ranges do not overlap.
+C exists because moving 18 KB out of flash relocates everything after it: a
+cold object of the same size made things **7.1% worse**, so this is the input
+path and not code-layout luck.
+
+Three things this run established that are worth keeping:
+
+- **The profile is otherwise flat.** After the tick path (already moved, and
+  structurally invisible to the profiler because samples past `_etext` are
+  discarded), the top non-idle symbol is `input_event` at 12.8% and everything
+  after it is under 5%. There is no third obvious candidate: the remaining
+  cost is spread thin, so further additions buy little and cost RAM each.
+- **Fix the harness first.** A shell loop respawning `uinject drag` profiled
+  fork, exec and path lookup - `link_path_walk`, `path_openat`, `dup_mmap`,
+  `do_exit` all near the top. Idle went 50.8% -> 74.9% once the load came from
+  a single process, so about half the apparent work was the measurement.
+- **`memcpy` cannot go in `.text..fast`.** The relocation that populates that
+  section *is* a memcpy, so it would be called at an address that has not been
+  written yet - the kernel dies before printing anything. Same self-reference
+  as `arch_sync_dma_for_device`.
+
+**Profiling no longer costs the radios.** `make linux PROF=1` fits with
+Bluetooth, Wi-Fi and sound all enabled - 6,103,417 bytes with 319 KB spare -
+because the linux partition was grown to 6,422,528. The note elsewhere that
+profiling and the radios are mutually exclusive is stale.

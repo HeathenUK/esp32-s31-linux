@@ -202,6 +202,23 @@ int main(int argc, char **argv)
 		 */
 		move_to(400, 200, 20, 30);
 		sleep(75);
+	} else if (!strcmp(what, "stress")) {
+		/*
+		 * Continuous pointer motion from ONE process, for profiling.
+		 *
+		 * A shell loop respawning `uinject drag` looks like a load but
+		 * is mostly fork, exec and path lookup: profiled that way, the
+		 * top kernel symbols were link_path_walk, path_openat, dup_mmap
+		 * and do_exit - the harness, not the desktop. busybox applets
+		 * fork, so a shell loop is never a cheap harness here.
+		 */
+		int secs = argc > 2 ? atoi(argv[2]) : 60;
+		time_t end = time(NULL) + secs;
+
+		while (time(NULL) < end) {
+			move_to(700, 400, 40, 8);
+			move_to(80, 60, 40, 8);
+		}
 	} else if (!strcmp(what, "drag")) {
 		move_to(250, 20, 10, 20);
 		click(1);

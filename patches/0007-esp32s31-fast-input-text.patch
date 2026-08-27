@@ -1,0 +1,95 @@
+esp32s31: put the input path in .text..fast
+
+Applies on top of 0005, which introduces .text..fast and S31_FAST_OBJS. Kept
+separate because 0005 was generated against a scratchpad baseline that no
+longer exists and cannot be regenerated.
+
+Chosen by profiling rather than by guessing. /proc/profile (there is no perf,
+no ftrace and no PMU on this board) under a *fork-free* pointer-motion load:
+
+    input_event                12.8% of non-idle    86 B
+    evdev_read                  2.1%               406 B
+    memset                      4.0%               248 B
+    memcpy                      2.0%               248 B
+    memmove                     1.9%               392 B
+    esp32s31_lcd_pipe_update    1.5%              1618 B
+
+The harness had to be fixed first. A shell loop respawning `uinject drag` put
+link_path_walk, path_openat, dup_mmap and do_exit at the top - fork, exec and
+path lookup, not the desktop. Removing it moved idle from 50.8% to 74.9% of
+samples, so roughly half the apparent load was the measurement. uinject gained
+a `stress` mode that injects from one process for that reason.
+
+Measured, CoreMark under continuous pointer motion, 5 runs per arm, fresh boot
+per arm:
+
+    A  baseline, input path in flash        idle 946.2   under load 459.0
+    B  input.o + evdev.o in .text..fast     idle 960.7   under load 476.4
+    C  control: cold fs/ext4/xattr.o in RAM idle 929.1   under load 426.3
+
+B is +3.8% under load and the three ranges do not overlap (A's best under load
+465.5, B's worst 472.7). C is the control for code layout, because moving 18 KB
+out of flash relocates everything after it: a *cold* object of similar size
+made things 7.1% *worse*, so the gain is specific to the input path rather than
+a generic effect of perturbing the layout, and is if anything understated.
+
+Cost: 18 KB of RAM (input.o 12,546 + evdev.o 5,980), 0.15% of what is usable.
+The .text..fast region goes 222,048 -> 240,576 bytes.
+
+**memcpy, memset and memmove are NOT included, and that is not a judgement
+call: putting them there does not boot.** .text..fast is relocated to RAM by
+the XIP copy in arch/riscv/mm/init.c, which is itself a memcpy - so a memcpy
+inside the region being copied is called at its RAM address before anything has
+been written there. Linux dies before printing a character; the last output is
+the loader's "hart1 released to OpenSBI", visible only at 115200 because the
+bootloader and the console run at different bauds. Same class of self-reference
+as arch_sync_dma_for_device, which is documented immediately above it.
+
+--- a/arch/riscv/kernel/vmlinux-xip.lds.S
++++ b/arch/riscv/kernel/vmlinux-xip.lds.S
+@@ -129,6 +129,35 @@
+  * not reach - which XIP flash is. Do not move it, and be wary of any other
+  * code that operates on the caches.
+  */
++/*
++ * The input path and the string helpers, added 2026-08-27 after profiling.
++ *
++ * /proc/profile under a *fork-free* pointer-motion load (uinject stress, one
++ * process - a shell loop respawning uinject profiles fork, exec and path
++ * lookup instead of the desktop, and did) put input_event at 12.8% of non-idle
++ * time on its own, with evdev_read 2.1%, memset 4.0%, memcpy 2.0% and memmove
++ * 1.9%. Together with the rest of those objects that is ~24% of busy time.
++ *
++ * The cost is 18 KB of RAM: input.o 12,546 + evdev.o 5,980. That is 0.15% of
++ * usable RAM, which is what makes this worth trying at all - the equivalent
++ * idea for *userspace* wanted ~600 KB and was rejected.
++ *
++ * **memcpy, memset and memmove are deliberately NOT here**, and it is not a
++ * judgement call: putting them here does not boot at all. Linux dies before it
++ * can print a character, and the loader's last words are "hart1 released to
++ * OpenSBI" - visible only at 115200, because the bootloader and the console
++ * run at different bauds.
++ *
++ * The reason is bootstrap, not performance. .text..fast sits between _sdata
++ * and __bss_start and is relocated to RAM by the XIP copy in
++ * arch/riscv/mm/init.c, which is itself `memcpy(to, from, data_sz)` - so a
++ * memcpy living in the region being copied is called at its RAM address before
++ * anything has been written there. Same class of self-reference as
++ * arch_sync_dma_for_device above: code that implements the mechanism cannot
++ * live in what the mechanism moves.
++ */
++#define S31_FAST_INPUT	*drivers/input/input.o *drivers/input/evdev.o
++
+ #define S31_FAST_OBJS	*hrtimer.o *timer.o *tick-sched.o *tick-common.o \
+ 			*timekeeping.o *clockevents.o \
+ 			*riscv/kernel/traps.o *riscv/kernel/irq.o *riscv/mm/fault.o \
+@@ -139,7 +168,8 @@
+ 			*mmc_ops.o *sd_ops.o \
+ 			*workqueue.o *mq-deadline.o \
+ 			*mmc/core/block.o *mmc/core/core.o \
+-			*sched/core.o *sched/build_utility.o
++			*sched/core.o *sched/build_utility.o \
++			S31_FAST_INPUT
+ 
+ /*
+  * SCHED_TEXT has to be excluded too, or the relocation silently half-works.

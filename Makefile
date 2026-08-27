@@ -179,6 +179,36 @@ DEFCONFIG ?= esp32s31_defconfig
 # turning it off is real: the LCD driver's counters, the PPA registers and
 # deskbench's scanout discovery all live under /sys/kernel/debug. Same trade
 # already made for CONFIG_PROFILING - develop with it, ship without it.
+# Profiling kernel: `make linux PROF=1`.
+#
+# /proc/profile needs CONFIG_PROFILING, which *selects* PERF_EVENTS - together
+# ~541 KB - and the linux partition has ~53 KB spare, so the radios and sound
+# come out to make room. That is a deliberate, reversible trade and it is the
+# only way to profile this kernel: there is no perf, no ftrace and no PMU.
+#
+# It is a switch rather than a hand-edit because the documented procedure used
+# to be "delete the --disable PROFILING line and keep a backup of the Makefile
+# in a scratchpad", which is one forgotten step away from shipping a kernel
+# with no Bluetooth and no sound. PROF defaults to 0; a shippable kernel is
+# what you get unless you ask otherwise.
+#
+# **This switch does NOT touch the radios or sound**, deliberately. Turning
+# features off to make room is a decision for whoever owns the board, not a
+# silent side effect of asking for a profile: it has to be requested
+# explicitly, on the command line, and put back afterwards. If the image no
+# longer fits, the size check below fails loudly - which is the correct
+# outcome, because it surfaces the trade instead of making it.
+#
+# Clearing PROFILING alone does NOT clear PERF_EVENTS: PROFILING selects it,
+# and olddefconfig keeps it because it is user-selectable in its own right.
+# Both have to be named, in both directions.
+PROF ?= 0
+ifeq ($(PROF),1)
+PROF_TWEAKS := --enable PROFILING --enable PERF_EVENTS
+else
+PROF_TWEAKS := --disable PROFILING --disable PERF_EVENTS
+endif
+
 DIAG ?= 1
 ifeq ($(DIAG),0)
 DIAG_TWEAKS := --disable DEBUG_FS
@@ -256,11 +286,9 @@ linux: toolchain | $(LINUX_OUT)
 		--disable FTRACE \
 		--disable ENABLE_DEFAULT_TRACERS \
 		--disable BLK_DEV_IO_TRACE \
-		--disable PROFILING \
-		--disable PERF_EVENTS \
+		$(PROF_TWEAKS) \
 		--disable BPF_SYSCALL \
 		--disable BPF_JIT \
-		--disable PERF_EVENTS \
 		--disable PREEMPT_LAZY \
 		--disable PREEMPT \
 		--disable PREEMPT_VOLUNTARY \
