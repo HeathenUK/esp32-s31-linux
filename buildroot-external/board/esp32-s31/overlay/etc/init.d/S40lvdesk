@@ -31,7 +31,10 @@ case "$1" in
 	# and lvdesk takes DRM master immediately afterwards, which suspends the
 	# in-kernel fbdev client altogether. The desktop then fills the panel
 	# instead of sitting in an 80 px black frame.
-	echo "" > /sys/module/esp32s31_lcd/parameters/render 2>/dev/null
+	# printf, not echo: echo appends a newline, the parameter becomes "\n"
+	# rather than empty, and the driver then rejects it as an unparseable
+	# render= and skips the native path altogether.
+	printf %s "" > /sys/module/esp32s31_lcd/parameters/render 2>/dev/null
 	for c in /sys/class/drm/card0-*/status; do
 		echo detect > "$c" 2>/dev/null
 	done
