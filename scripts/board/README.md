@@ -20,3 +20,66 @@ before concluding anything.
 `screenshot.py` reads the live scanout buffer over the serial console and writes
 a PNG. The scanout address is **allocated, not fixed** - it takes it from dmesg
 rather than hardcoding it.
+
+**`screenshot.py`'s note about the address is the rule, not a detail.** It moved
+from `0x50800000` to `0x50900000` the moment the display client restarted, and
+encoding the old one produced a perfectly valid JPEG of a buffer nobody was
+displaying - which is indistinguishable from a broken encoder and cost most of a
+day. Read it from `/sys/kernel/debug/esp32s31_lcd/updates` (`scanout=`) every
+time.
+
+## Capturing pictures and video
+
+    scripts/board/screenshot-hw.py <out.jpg> [quality]   # hardware JPEG grab
+    scripts/board/fbcap-decode.py <in.pac> <outdir>      # decode an fbcap file
+
+`screenshot-hw.py` is the fast one. It reads the live scanout address and
+geometry, asks the JPEG codec to compress the frame in ~7 ms, and pulls ~20 KB
+back base64 over the console. `screenshot.py` moves all 768,000 bytes instead
+and is the fallback for a kernel without the codec.
+
+For **video**, use the on-board recorder rather than pulling frames one at a
+time:
+
+    mjpegrec <out.mjpeg> <seconds> [max_fps] [quality] [ring_kb]
+
+It starts a recording through a DRM ioctl, the kernel captures a frame whenever
+the display commits, and everything is drained afterwards into one file. The
+output is concatenated JPEGs, which is what MJPEG is: `ffmpeg -f mjpeg -i
+out.mjpeg ...` reads it directly. A sidecar `.txt` carries the capture
+timestamps, because frames are produced on damage and are deliberately not
+evenly spaced.
+
+**Recording costs ~2.4% of the CPU while the screen is changing and ~1.7% when
+it is idle**, measured by CoreMark displacement with the activity held constant.
+That is low enough to film the system while measuring it, which is the whole
+point. Earlier approaches were not: a timer-driven loop cost 15% at 10 fps, and
+the first version cost 42%.
+
+## Driving the desktop, and measuring it
+
+    uinject <demo|drag|type|park|keytest> [args]   # inject input, nothing else
+    jpegcap <fps> <secs> [q] [w] [h]               # pace encodes without forking
+    keylog                                          # log every evdev key event
+
+`uinject` exists because `deskbench` hashes the framebuffer on every iteration
+and costs ~53% of the core doing it. That is fine when it *is* the instrument
+and ruinous when the point is to film or measure how the desktop behaves.
+
+`keylog` prints every `EV_KEY` and `MSC_SCAN` per device, which is what
+separates "the kernel never delivered that key" from "the desktop dropped it".
+
+## Two ways a measurement harness lies
+
+Both of these attributed their own cost to the thing being measured, and both
+were found only by measuring the harness separately.
+
+- **busybox applets fork.** Pacing a loop with `usleep` in shell forks a process
+  per iteration, and on this board that cost more than a hardware JPEG encode
+  did - 42% of the CPU against the driver's real 5%. `jpegcap` opens its control
+  file once and paces with `clock_nanosleep`.
+- **`dev_info()` in a hot path writes to a 1 Mbps serial console, synchronously.**
+  One ~100-byte line is about 1 ms. Logging per frame was the single largest
+  cost in the capture path (15% down to 5.5% at 10 fps when removed) and it also
+  floods the ring buffer, scrolling away the `scanout started` line that tooling
+  parses geometry from. Use `dev_dbg` for anything per-frame.

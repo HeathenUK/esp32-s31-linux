@@ -26,6 +26,20 @@ original sat a directory away:
     scripts/board/runsh.py  <script.sh> [t] [w] # run a shell script on it
     scripts/board/deploy_bin.py <f.b64> <dest>  # ship a binary to it
     scripts/board/screenshot.py <out.png>       # capture the real panel
+    scripts/board/screenshot-hw.py <out.jpg>    # same, via the JPEG codec, ~7 ms
+
+On the board itself, for recording and for driving the desktop:
+
+    mjpegrec <out.mjpeg> <secs> [fps] [q] [kb]  # record video, ~2.4% CPU
+    uinject <demo|drag|type|park|keytest>       # inject input and nothing else
+    jpegcap <fps> <secs>                        # pace encodes without forking
+    keylog                                      # every evdev key, per device
+
+See `scripts/board/README.md`. **Do not film the desktop by grabbing frames one
+at a time over the console** - `mjpegrec` records into kernel RAM on damage and
+is drained afterwards, so it costs ~2.4% while the screen is changing and ~1.7%
+idle. A timer-driven loop cost 15% and the naive version cost 42%, which is
+enough to change whatever you were trying to measure.
 
 **Do not write a DTR/RTS reset sequence.** Not once, not "just quickly". DTR
 drives EN and RTS drives IO0, both inverted, and any sequence that fails to
@@ -168,6 +182,16 @@ for kernel work; the rootfs only needs rebuilding when userspace changes.
   `/etc/init.d/S??*`, so `S40lvdesk.bak` runs alongside `S40lvdesk` - two
   desktops, the second failing to take DRM master, and a board that sat silent
   through two resets before the cause was obvious. Keep backups somewhere else.
+- **`dev_info()` in a per-frame path costs ~1 ms a frame.** It writes to a
+  1 Mbps serial console synchronously. Logging once per encoded frame was the
+  single largest cost in the capture path - 15% of the CPU down to 5.5% when
+  removed - and it floods the ring buffer badly enough to scroll away the
+  `scanout started` line that tooling parses panel geometry from. `dev_dbg` for
+  anything that happens per frame.
+- **busybox applets fork, so a shell loop is not a cheap harness.** Pacing with
+  `usleep` cost more per iteration than a hardware JPEG encode did, and was
+  charged to the driver until the harness was measured on its own. Write the
+  pacer in C (`rootfs/jpegcap.c`).
 - **Buildroot ignores unknown defconfig symbols.** Always grep the generated
   `.config` to confirm a package is actually enabled.
 - **`/usr/bin`, `/usr/lib` and `/lib` are read-only overlays** stacking two
