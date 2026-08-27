@@ -57,6 +57,12 @@ static int make_dev(const char *name, int keyboard)
 		ioctl(fd, UI_SET_EVBIT, EV_REL);
 		ioctl(fd, UI_SET_RELBIT, REL_X);
 		ioctl(fd, UI_SET_RELBIT, REL_Y);
+		/*
+		 * Without this the kernel drops every REL_WHEEL event, because
+		 * the device never claimed to have a wheel. Injecting them
+		 * "worked" silently and scrolling looked unimplemented.
+		 */
+		ioctl(fd, UI_SET_RELBIT, REL_WHEEL);
 		ioctl(fd, UI_SET_KEYBIT, BTN_LEFT);
 	}
 
@@ -118,6 +124,9 @@ static int keycode(char c, int *shift)
 	const char *p;
 
 	*shift = 0;
+	/* \b in a typed string means the Backspace key, for testing erase. */
+	if (c == '\b')
+		return KEY_BACKSPACE;
 	if ((p = strchr(row, c)))
 		return codes[p - row];
 	switch (c) {
@@ -202,6 +211,41 @@ int main(int argc, char **argv)
 		 */
 		move_to(400, 200, 20, 30);
 		sleep(75);
+	} else if (!strcmp(what, "key")) {
+		/* key N - press a raw keycode, e.g. 104 for PageUp. */
+		int k = argc > 2 ? atoi(argv[2]) : 0;
+
+		emit(kbd_fd, EV_KEY, k, 1); syn(kbd_fd);
+		emit(kbd_fd, EV_KEY, k, 0); syn(kbd_fd);
+	} else if (!strcmp(what, "dragto")) {
+		/* dragto x1 y1 x2 y2 - press at the first point, drag, release. */
+		move_to(argc > 2 ? atoi(argv[2]) : 0,
+			argc > 3 ? atoi(argv[3]) : 0, 12, 12);
+		msleep(150);
+		click(1);
+		msleep(120);
+		move_to(argc > 4 ? atoi(argv[4]) : 0,
+			argc > 5 ? atoi(argv[5]) : 0, 24, 22);
+		msleep(120);
+		click(0);
+	} else if (!strcmp(what, "click")) {
+		/* click X Y - drive a specific control, e.g. a tray icon. */
+		move_to(argc > 2 ? atoi(argv[2]) : 0,
+			argc > 3 ? atoi(argv[3]) : 0, 12, 12);
+		msleep(120);
+		click(1);
+		msleep(60);
+		click(0);
+	} else if (!strcmp(what, "wheel")) {
+		/* wheel N - N notches, negative scrolls the other way. */
+		int i, n = argc > 2 ? atoi(argv[2]) : -3;
+		int dir = n < 0 ? -1 : 1;
+
+		for (i = 0; i < (n < 0 ? -n : n); i++) {
+			emit(mouse_fd, EV_REL, REL_WHEEL, dir);
+			syn(mouse_fd);
+			msleep(60);
+		}
 	} else if (!strcmp(what, "stress")) {
 		/*
 		 * Continuous pointer motion from ONE process, for profiling.

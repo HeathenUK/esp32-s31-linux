@@ -17,7 +17,15 @@ cat /tmp/srcs | xargs -P "$(nproc)" -I{} sh -c \
 [ -s /tmp/lvfail ] && { echo "--- failures:"; head -3 /tmp/lvfail; grep -m5 'error:' /tmp/lverr; exit 1; }
 # lvdesk drives KMS itself; the other tools here are single-file.
 EXTRA=""
-if [ "$APP" = lvdesk ]; then EXTRA=/src/lvdesk/kms.c; fi
+LIBS=""
+if [ "$APP" = lvdesk ]; then
+  EXTRA=/src/lvdesk/kms.c
+  # ALSA's mixer API, not a fork to amixer - see the audio popover.
+  # ALSA lives in the buildroot sysroot, which SYSROOT has always pointed at
+  # and nothing used. Headers to compile against, the .so to link against; the
+  # board carries the runtime copy in /usr/lib.
+  LIBS="-I$SYSROOT/usr/include -L$SYSROOT/usr/lib -lasound"
+fi
 echo "linking $APP"
-$CC $CFLAGS -o $OUT /src/lvdesk/$APP.c $EXTRA /tmp/lvo/*.o -lm
+$CC $CFLAGS -o $OUT /src/lvdesk/$APP.c $EXTRA /tmp/lvo/*.o -lm $LIBS
 ls -la $OUT
