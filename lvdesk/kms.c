@@ -52,6 +52,57 @@ static void *xcalloc(size_t n, size_t sz)
 	return p;
 }
 
+/*
+ * Detach the kernel's console from the framebuffer before taking DRM master.
+ *
+ * Taking master makes the driver unregister fbdev emulation and hand back its
+ * framebuffer - the panel's worth of memory, and the reason 800x480 fits at
+ * all, since the private scanout buffer, the console's and this program's
+ * cannot all come out of one 4 MB CMA pool.
+ *
+ * But tearing fbdev out from under a console that is still being written to
+ * wedges the machine, and only sometimes: the same image reached a login
+ * prompt on one boot and hung at 29 s on the next. Unbinding first means there
+ * is no writer left to race with.
+ *
+ * Done here rather than in the init script so it ships with this binary, in
+ * the XIP image, which is reflashed without touching the SD card.
+ *
+ * Boot messages are still shown on the panel right up to this point - that is
+ * the whole reason the console is not simply compiled out.
+ */
+static void kms_release_console(void)
+{
+	char path[128], name[64];
+	int i;
+
+	for (i = 0; i < 8; i++) {
+		FILE *f;
+		int fd;
+
+		snprintf(path, sizeof(path),
+			 "/sys/class/vtconsole/vtcon%d/name", i);
+		f = fopen(path, "r");
+		if (!f)
+			continue;
+		name[0] = 0;
+		if (!fgets(name, sizeof(name), f))
+			name[0] = 0;
+		fclose(f);
+		if (!strstr(name, "frame buffer"))
+			continue;
+
+		snprintf(path, sizeof(path),
+			 "/sys/class/vtconsole/vtcon%d/bind", i);
+		fd = open(path, O_WRONLY);
+		if (fd < 0)
+			continue;
+		if (write(fd, "0\n", 2) == 2)
+			printf("kms: released the framebuffer console (vtcon%d)\n", i);
+		close(fd);
+	}
+}
+
 int kms_open(const char *path)
 {
 	struct drm_mode_card_res res;
@@ -64,6 +115,8 @@ int kms_open(const char *path)
 	uint32_t *conn_ids, *crtc_ids;
 	unsigned int i;
 	int found = 0;
+
+	kms_release_console();
 
 	kms_fd = open(path, O_RDWR | O_CLOEXEC);
 	if (kms_fd < 0) { perror("kms: open"); return -1; }

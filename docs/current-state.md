@@ -663,9 +663,18 @@ the desktop getting visibly smaller.
     640x384       2724 kB        768 kB     16.7 17.8 17.8       0    0  0
     400x240       3168 kB        796 kB     18.1 18.7 18.2       0    0 +256
 
-**640x384 is now the default.** It is exactly 1.25x in both axes, so it fills
-the panel with no pillarboxing and no aspect distortion, and it takes the whole
-win: 400x240 shrinks Weston no further and costs a soft 2x upscale.
+**640x384 was the default until 2026-08-27; native 800x480 is now.** The table
+above is Weston's, and Weston is gone - the desktop is lvdesk, which holds no
+shadow buffer at all (it renders straight into the dumb buffer with
+`LV_DISPLAY_RENDER_MODE_DIRECT`), so the memory argument that chose 640x384 no
+longer applies to the client that exists. What kept native out afterwards was
+three bugs, all now fixed: see `docs/native-800x480.md`. 640x384 remains
+available at runtime via `render=`, and the numbers here still stand for any
+client that does keep a full-size shadow.
+
+The original reasoning, for that case: 640x384 is exactly 1.25x in both axes, so
+it fills the panel with no pillarboxing and no aspect distortion, and it takes
+the whole win - 400x240 shrinks Weston no further and costs a soft 2x upscale.
 
 Two things worth reading off that table. Native **swaps during ordinary pointer
 motion** and needs three runs to reach full speed, which is the "takes a while

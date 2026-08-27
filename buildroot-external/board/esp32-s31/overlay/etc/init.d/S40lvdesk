@@ -17,27 +17,6 @@ case "$1" in
 	# frame. Testing for fb0 here would refuse to start on a kernel built
 	# without the emulation lvdesk no longer uses.
 	[ -e /dev/dri/card0 ] || { echo "no /dev/dri/card0"; exit 1; }
-	# Switch the panel to its native 800x480 before the desktop starts.
-	#
-	# The console boots at 640x384 and stays there, on purpose: booting with
-	# render= empty deadlocks fbcon. It is timing-dependent - the same image
-	# hung at 3.8 s on one boot and 29.7 s on the next - and removing
-	# console=tty0 makes that identical kernel boot straight through, which
-	# places it in fbcon's console path. The commit hands its copy to a work
-	# item because it runs with the CRTC lock held, and fbcon writes with the
-	# console lock held; that is the pair to unpick.
-	#
-	# Switching here is a different matter: userspace is up, fbcon is idle,
-	# and lvdesk takes DRM master immediately afterwards, which suspends the
-	# in-kernel fbdev client altogether. The desktop then fills the panel
-	# instead of sitting in an 80 px black frame.
-	# printf, not echo: echo appends a newline, the parameter becomes "\n"
-	# rather than empty, and the driver then rejects it as an unparseable
-	# render= and skips the native path altogether.
-	printf %s "" > /sys/module/esp32s31_lcd/parameters/render 2>/dev/null
-	for c in /sys/class/drm/card0-*/status; do
-		echo detect > "$c" 2>/dev/null
-	done
 	# /usr/bin, not /usr/sbin: S05xip overlays usr/lib, usr/bin, usr/libexec
 	# and lib only, so a binary in /usr/sbin can never come from the XIP
 	# image and pays full RSS for its text.
@@ -54,6 +33,18 @@ case "$1" in
   stop)
 	printf "Stopping lvdesk: "
 	killall lvdesk 2>/dev/null
+	# lvdesk unbinds the framebuffer console on the way in (so that tearing
+	# fbdev out from under an active console writer cannot race), and it is
+	# usually killed rather than exiting cleanly, so put the console back
+	# here. The driver re-creates the fbdev client when DRM master is
+	# dropped; without this rebind that new framebuffer exists but nothing
+	# paints the console onto it.
+	sleep 1
+	for v in /sys/class/vtconsole/vtcon*; do
+		case "$(cat "$v/name" 2>/dev/null)" in
+		*"frame buffer"*) echo 1 > "$v/bind" 2>/dev/null ;;
+		esac
+	done
 	echo "OK"
 	;;
   restart|reload)
