@@ -112,7 +112,33 @@ int kms_open(const char *path)
 			continue;
 		if (!conn.count_modes)
 			continue;
-		mode = modes[0];		/* preferred mode is first */
+
+		/*
+		 * Take the LARGEST mode, not the first.
+		 *
+		 * The driver advertises a reduced mode ahead of the panel's own
+		 * so that fbdev emulation - and therefore the boot console -
+		 * allocates a framebuffer at the smaller size. That matters
+		 * because all of this comes out of one 4 MB CMA pool: at the
+		 * panel's native size the console's copy is 768,000 bytes, the
+		 * driver's private scanout buffer is another 768,000, and this
+		 * program's render target is 770,048 more. The third
+		 * allocation is simply refused.
+		 *
+		 * Letting the console keep the small mode while the desktop
+		 * takes the panel's own costs 491,520 instead of 768,000 for
+		 * something nobody is looking at, and the three together then
+		 * fit with room to spare.
+		 */
+		{
+			unsigned int best = 0, k;
+
+			for (k = 1; k < conn.count_modes; k++)
+				if ((uint32_t)modes[k].hdisplay * modes[k].vdisplay >
+				    (uint32_t)modes[best].hdisplay * modes[best].vdisplay)
+					best = k;
+			mode = modes[best];
+		}
 		conn_id = conn.connector_id;
 		found = 1;
 	}
@@ -128,8 +154,32 @@ int kms_open(const char *path)
 	creq.width = kms_w;
 	creq.height = kms_h;
 	creq.bpp = 16;
-	if (ioctl(kms_fd, DRM_IOCTL_MODE_CREATE_DUMB, &creq) < 0) {
-		perror("kms: CREATE_DUMB"); return -1;
+	/*
+	 * Retry briefly. Taking DRM master makes the driver release fbdev
+	 * emulation's framebuffer - the panel's worth of memory that the
+	 * console was holding - but it does that from a work item, so the
+	 * memory may not be back by the time this asks for it. Without the
+	 * retry the desktop loses a race it would win a millisecond later and
+	 * exits with "Out of memory".
+	 */
+	{
+		int tries;
+
+		for (tries = 0; tries < 20; tries++) {
+			if (ioctl(kms_fd, DRM_IOCTL_MODE_CREATE_DUMB, &creq) == 0)
+				break;
+			if (errno != ENOMEM) {
+				perror("kms: CREATE_DUMB");
+				return -1;
+			}
+			usleep(50000);
+		}
+		if (tries == 20) {
+			perror("kms: CREATE_DUMB");
+			return -1;
+		}
+		if (tries)
+			printf("kms: dumb buffer took %d retries\n", tries);
 	}
 	kms_handle = creq.handle;
 	kms_pitch = creq.pitch;
