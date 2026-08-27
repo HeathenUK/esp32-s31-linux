@@ -1592,7 +1592,8 @@ struct ap {
 static struct ap aps[AP_MAX];
 static int ap_n;
 static int scan_retried;
-static lv_obj_t *pw_box;
+static int ap_sel = -1;	/* row the user has selected */
+static lv_obj_t *pw_box, *pw_kb;
 static int pw_target = -1;
 
 static int ap_needs_key(const struct ap *a)
@@ -1642,7 +1643,23 @@ static void wifi_mark_saved(void)
 }
 
 static void wifi_connect_cb(lv_event_t *e);
+static void wifi_render(void);
 static void pw_close(void);
+
+static void wifi_select_cb(lv_event_t *e)
+{
+	int idx = (int)(intptr_t)lv_event_get_user_data(e);
+
+	/*
+	 * Selecting a row reveals a Connect button on it rather than joining
+	 * straight away - the two-step Windows and KDE use. On a touch panel a
+	 * single tap that immediately demands a passphrase for whichever
+	 * network the finger landed on is a nuisance; this makes joining
+	 * deliberate, and costs one tap only when actually joining.
+	 */
+	ap_sel = (ap_sel == idx) ? -1 : idx;
+	wifi_render();
+}
 
 static void wifi_render(void)
 {
@@ -1656,14 +1673,52 @@ static void wifi_render(void)
 		const char *glyph;
 
 		b = lv_list_add_button(wifi_list, NULL, aps[i].ssid);
+		lv_obj_set_style_text_font(b, FONT_UI, 0);
+		lv_obj_set_style_pad_ver(b, 2, 0);
+		/*
+		 * Centre the name across the row. The row grows when it holds
+		 * a Connect button, and the list's flex leaves the label at the
+		 * top while the button - aligned RIGHT_MID - stays centred, so
+		 * the two sat at different heights in the same highlight.
+		 */
+		lv_obj_set_flex_align(b, LV_FLEX_ALIGN_START,
+				      LV_FLEX_ALIGN_CENTER,
+				      LV_FLEX_ALIGN_CENTER);
+		lv_obj_set_height(b, 22);
+		lv_obj_add_event_cb(b, wifi_select_cb, LV_EVENT_CLICKED,
+				    (void *)(intptr_t)i);
+		if (i == ap_sel)
+			lv_obj_set_style_bg_color(b,
+						  lv_color_hex(COL_HDR_FOCUS), 0);
+
+		if (i == ap_sel && !aps[i].current) {
+			lv_obj_t *cb = lv_button_create(b);
+			lv_obj_t *cl;
+
+			lv_obj_set_size(cb, 62, 18);
+			lv_obj_set_style_radius(cb, 0, 0);
+			lv_obj_set_style_pad_all(cb, 0, 0);
+			lv_obj_set_style_shadow_width(cb, 0, 0);
+			lv_obj_set_style_bg_color(cb,
+						  lv_color_hex(COL_HDR), 0);
+			lv_obj_add_flag(cb, LV_OBJ_FLAG_IGNORE_LAYOUT);
+			lv_obj_align(cb, LV_ALIGN_RIGHT_MID, -2, 0);
+			lv_obj_add_event_cb(cb, wifi_connect_cb,
+					    LV_EVENT_CLICKED,
+					    (void *)(intptr_t)i);
+			cl = lv_label_create(cb);
+			lv_label_set_text(cl, "Connect");
+			lv_obj_set_style_text_font(cl, FONT_UI, 0);
+			lv_obj_center(cl);
+			continue;
+		}
 
 		/*
 		 * The state glyph goes on the *right*, not in front of the
 		 * name. Prefixing it indented that one entry and left every
 		 * other SSID starting a character further left - a ragged list
 		 * that the eye reads as a mistake. Right-aligned, the names
-		 * form one column and the markers form another, which is what
-		 * every network menu does.
+		 * form one column and the markers form another.
 		 */
 		glyph = aps[i].current ? LV_SYMBOL_OK :
 			aps[i].saved ? LV_SYMBOL_SAVE :
@@ -1676,10 +1731,6 @@ static void wifi_render(void)
 			lv_obj_align(mark, LV_ALIGN_RIGHT_MID, -2, 0);
 			lv_obj_remove_flag(mark, LV_OBJ_FLAG_CLICKABLE);
 		}
-		lv_obj_set_style_text_font(b, FONT_UI, 0);
-		lv_obj_set_style_pad_ver(b, 2, 0);
-		lv_obj_add_event_cb(b, wifi_connect_cb, LV_EVENT_CLICKED,
-				    (void *)(intptr_t)i);
 	}
 	if (wifi_status)
 		lv_label_set_text_fmt(wifi_status, "%d network%s", ap_n,
@@ -1962,6 +2013,7 @@ static void wifi_join(int idx, const char *psk)
 
 static void pw_close(void)
 {
+	if (pw_kb) { lv_obj_delete(pw_kb); pw_kb = NULL; }
 	if (pw_box) { lv_obj_delete(pw_box); pw_box = NULL; }
 	pw_ta = NULL;
 	pw_target = -1;
@@ -1997,7 +2049,9 @@ static void pw_prompt(int idx)
 	pw_close();
 	pw_box = lv_obj_create(lv_layer_top());
 	lv_obj_set_size(pw_box, 320, 116);
-	lv_obj_set_pos(pw_box, (sw - 320) / 2, 40);
+	/* Sit clear of the keyboard below. */
+	lv_obj_set_pos(pw_box, (sw - 320) / 2,
+		       sh - TASKBAR_H - 150 - 116 - 10);
 	lv_obj_set_style_radius(pw_box, 0, 0);
 	lv_obj_set_style_bg_color(pw_box, lv_color_hex(COL_PANEL), 0);
 	lv_obj_set_style_border_color(pw_box, lv_color_hex(COL_HDR_FOCUS), 0);
@@ -2035,13 +2089,18 @@ static void pw_prompt(int idx)
 	lv_obj_center(lv_label_create(b));
 	lv_label_set_text(lv_obj_get_child(b, 0), "Join");
 
+	/*
+	 * The keyboard is a sibling of the prompt, not a child of it. Making
+	 * it a child so that deleting the prompt took it away also clipped it
+	 * to the prompt's 116 px, leaving one visible row of keys. It is
+	 * deleted explicitly in pw_close() instead.
+	 */
 	kb = lv_keyboard_create(lv_layer_top());
 	lv_obj_set_size(kb, sw, 150);
 	lv_obj_set_pos(kb, 0, sh - TASKBAR_H - 150);
+	lv_obj_set_style_radius(kb, 0, 0);
 	lv_keyboard_set_textarea(kb, pw_ta);
-	lv_obj_set_parent(kb, pw_box);		/* deleted with the prompt */
-	lv_obj_set_pos(kb, -8, 108);
-	lv_obj_set_size(kb, sw - 8, 150);
+	pw_kb = kb;
 
 	pw_target = idx;
 }
@@ -2151,6 +2210,7 @@ static void tray_wifi_cb(lv_event_t *e)
 
 	/* Show what is known now, then scan - as a network menu behaves. */
 	scan_retried = 0;
+	ap_sel = -1;
 	wifi_show_status();
 	wifi_show_results();
 	wifi_scan_cb(NULL);
