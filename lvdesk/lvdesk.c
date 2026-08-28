@@ -87,7 +87,25 @@
 #define TERM_SCROLLBACK	200
 /* Lines per wheel notch. Three felt sluggish in use; five is about what a
  * desktop terminal does and still lands inside one damage rectangle. */
-#define TERM_WHEEL_LINES	5
+#define TERM_WHEEL_LINES	8
+
+/*
+ * Pointer acceleration, libinput's "adaptive" profile in miniature: below a
+ * threshold speed the pointer stays 1:1 so slow movement keeps full precision,
+ * above it the delta is scaled up so one sweep can still cross the screen.
+ * Velocity is in device units per millisecond, the same unit libinput uses.
+ *
+ * This matters more here than on a desktop: 800x480 is small, but the mouse
+ * still has to reach a 10x10 close button at one end and a tray icon at the
+ * other.  float, not double - this hart has single-precision hardware and
+ * double is a library call.
+ */
+#define PTR_ACCEL_THRESHOLD	0.30f	/* units/ms before any speed-up */
+#define PTR_ACCEL_SLOPE		1.60f	/* how fast the factor climbs */
+#define PTR_ACCEL_MAX		3.00f	/* cap, or fast flicks become unaimable */
+
+/* Drag a window this close to an edge to snap it there, as every desktop does. */
+#define SNAP_EDGE		12
 #define TERM_CW		8
 #define TERM_CH		8
 #define TERM_COLS   74
@@ -866,6 +884,7 @@ static void sysinfo_update(void)
  */
 
 #define WPA_CTRL_DIR	"/var/run/wpa_supplicant"
+#define WPA_REPLY_MS	200	/* cap on any control-socket stall, in ms */
 #define WPA_IFACE	"wlan0"
 
 static char wpa_paths[2][108];	/* our bound names, removed at exit */
@@ -936,14 +955,13 @@ static int wpa_connect(const char *tag)
  */
 static int wpa_req(const char *cmd, char *buf, size_t len)
 {
-	struct timeval tv = { .tv_sec = 1, .tv_usec = 0 };
+	struct pollfd pfd;
 	int n;
 
 	if (wpa_cmd_fd < 0)
 		wpa_cmd_fd = wpa_connect("cmd");
 	if (wpa_cmd_fd < 0)
 		return -1;
-	setsockopt(wpa_cmd_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
 	/*
 	 * Drain anything still queued before asking a new question.
@@ -960,10 +978,29 @@ static int wpa_req(const char *cmd, char *buf, size_t len)
 
 	if (send(wpa_cmd_fd, cmd, strlen(cmd), 0) < 0)
 		return -1;
-	n = recv(wpa_cmd_fd, buf, len - 1, 0);
-	if (n < 0) {
+	/*
+	 * Bounded, not blocking. This runs inside an LVGL event callback, so a
+	 * slow reply stalls the whole desktop - no repaint, no pointer. It used
+	 * to be a blocking recv with a one-second SO_RCVTIMEO, which is a
+	 * one-second freeze every time wpa_supplicant was busy, and that is
+	 * most of what made the panel feel unresponsive.
+	 *
+	 * A local unix socket answers in microseconds, so WPA_REPLY_MS is
+	 * generous for a reply that is coming and cheap for one that is not.
+	 * Slow work (SCAN) is not waited for here at all: it returns OK at once
+	 * and the results arrive as a CTRL-EVENT on the attached socket.
+	 */
+	pfd.fd = wpa_cmd_fd;
+	pfd.events = POLLIN;
+	if (poll(&pfd, 1, WPA_REPLY_MS) <= 0) {
 		if (wpa_log)
 			fprintf(stderr, "[wpa %s -> timeout]\n", cmd);
+		return -1;
+	}
+	n = recv(wpa_cmd_fd, buf, len - 1, MSG_DONTWAIT);
+	if (n < 0) {
+		if (wpa_log)
+			fprintf(stderr, "[wpa %s -> no reply]\n", cmd);
 		return -1;
 	}
 	buf[n] = 0;
@@ -1222,6 +1259,7 @@ struct winrec {
 	int32_t rx, ry, rw, rh;		/* geometry to restore from maximise */
 	int maximised;
 	int minimised;
+	int snapped;			/* edge-tiled, so rx/ry still hold home */
 	lv_obj_t *maxicon;		/* swaps between maximise and restore */
 	lv_obj_t *grip;			/* bottom-right resize handle, or NULL */
 	void (*on_close)(void);		/* extra teardown, e.g. the terminal */
@@ -1259,13 +1297,52 @@ static void win_set_focus(struct winrec *w)
 					  lv_color_hex(COL_HDR_FOCUS), 0);
 }
 
+static void win_toggle_max(struct winrec *w);
+static void win_snap(struct winrec *w, int mode);
+
 /* Clicking a window raises it, as well as its taskbar button. */
 static void win_press_cb(lv_event_t *e)
 {
 	lv_obj_t *win = lv_event_get_user_data(e);
+	static uint32_t last_ms;
+	static lv_obj_t *last_win;
+	uint32_t now = lv_tick_get();
 
 	lv_obj_move_foreground(win);
 	win_set_focus(win_find(win));
+
+	/* Double-click the title bar toggles maximise, as everything does. */
+	if (win == last_win && now - last_ms < 400) {
+		win_toggle_max(win_find(win));
+		last_win = NULL;	/* a third click is not a second one */
+	} else {
+		last_ms = now;
+		last_win = win;
+	}
+}
+
+/*
+ * Dropping a drag against an edge snaps the window there. Checked on release
+ * rather than while dragging, so the window follows the pointer normally and
+ * only commits when the user lets go - dragging *through* an edge on the way
+ * somewhere else must not grab the window.
+ */
+static void drag_release_cb(lv_event_t *e)
+{
+	struct winrec *w = win_find(lv_event_get_user_data(e));
+	lv_indev_t *indev = lv_indev_active();
+	int32_t sw = lv_display_get_horizontal_resolution(NULL);
+	lv_point_t p;
+
+	if (!w || !indev)
+		return;
+	lv_indev_get_point(indev, &p);
+	if (p.y <= SNAP_EDGE)
+		win_snap(w, 2);
+	else if (p.x <= SNAP_EDGE)
+		win_snap(w, 0);
+	else if (p.x >= sw - SNAP_EDGE)
+		win_snap(w, 1);
 }
 
 static void raise_cb(lv_event_t *e)
@@ -1298,9 +1375,8 @@ static void win_close_cb(lv_event_t *e)
 		win_focus = NULL;
 }
 
-static void win_max_cb(lv_event_t *e)
+static void win_toggle_max(struct winrec *w)
 {
-	struct winrec *w = lv_event_get_user_data(e);
 	int32_t sw = lv_display_get_horizontal_resolution(NULL);
 	int32_t sh = lv_display_get_vertical_resolution(NULL);
 
@@ -1322,8 +1398,55 @@ static void win_max_cb(lv_event_t *e)
 	if (w->maxicon)
 		lv_image_set_src(w->maxicon, w->maximised ?
 				 &lvdesk_restore_img : &lvdesk_max_img);
+	w->snapped = 0;
 	lv_obj_move_foreground(w->win);
 	win_set_focus(w);
+}
+
+static void win_max_cb(lv_event_t *e)
+{
+	win_toggle_max(lv_event_get_user_data(e));
+}
+
+/*
+ * Edge snapping, as every desktop has: drag a window against the top edge to
+ * maximise it, or against a side to tile it over half the screen. On 800x480
+ * the half-tiles are the useful part - two windows side by side is most of
+ * what this screen can usefully show at once.
+ */
+static void win_snap(struct winrec *w, int mode)
+{
+	int32_t sw = lv_display_get_horizontal_resolution(NULL);
+	int32_t sh = lv_display_get_vertical_resolution(NULL);
+
+	if (!w || !w->win)
+		return;
+	/* Only remember home the first time, or snapping twice loses it. */
+	if (!w->maximised && !w->snapped) {
+		w->rx = lv_obj_get_x(w->win);
+		w->ry = lv_obj_get_y(w->win);
+		w->rw = lv_obj_get_width(w->win);
+		w->rh = lv_obj_get_height(w->win);
+	}
+	switch (mode) {
+	case 0:
+		lv_obj_set_pos(w->win, 0, 0);
+		lv_obj_set_size(w->win, sw / 2, sh - TASKBAR_H);
+		break;
+	case 1:
+		lv_obj_set_pos(w->win, sw / 2, 0);
+		lv_obj_set_size(w->win, sw - sw / 2, sh - TASKBAR_H);
+		break;
+	default:
+		lv_obj_set_pos(w->win, 0, 0);
+		lv_obj_set_size(w->win, sw, sh - TASKBAR_H);
+		break;
+	}
+	w->maximised = (mode == 2);
+	w->snapped = (mode != 2);
+	if (w->maxicon)
+		lv_image_set_src(w->maxicon, w->maximised ?
+				 &lvdesk_restore_img : &lvdesk_max_img);
 }
 
 /*
@@ -1460,6 +1583,7 @@ static lv_obj_t *make_window(const char *title, int x, int y, int w, int h)
 	lv_obj_add_flag(hdr, LV_OBJ_FLAG_CLICKABLE);
 	lv_obj_add_event_cb(hdr, drag_cb, LV_EVENT_PRESSING, win);
 	lv_obj_add_event_cb(hdr, win_press_cb, LV_EVENT_PRESSED, win);
+	lv_obj_add_event_cb(hdr, drag_release_cb, LV_EVENT_RELEASED, win);
 	lv_obj_add_event_cb(win, raise_cb, LV_EVENT_PRESSED, win);
 
 	/*
@@ -1626,6 +1750,8 @@ static lv_obj_t *popover_open(lv_obj_t *anchor, int w, int h)
 struct ap {
 	char ssid[33];
 	char flags[72];
+	int level;		/* dBm, as wpa_supplicant reports it */
+	int freq;		/* MHz, so the band can be shown */
 	int saved;		/* already in wpa_supplicant.conf */
 	int netid;		/* its id there, or -1 */
 	int current;
@@ -1635,8 +1761,52 @@ static struct ap aps[AP_MAX];
 static int ap_n;
 static int scan_retried;
 static int ap_sel = -1;	/* row the user has selected */
+/*
+ * ...remembered by name, not by index. The list is re-sorted on every scan, so
+ * an index selects a different network the moment signal strengths shuffle.
+ */
+static char ap_sel_ssid[33];
 static lv_obj_t *pw_box, *pw_kb;
 static int pw_target = -1;
+
+/*
+ * Signal for the link we are on, from SIGNAL_POLL. A hidden network never
+ * appears in a scan, so this is the only way to show a bar for it.
+ */
+static int wifi_link_level(void)
+{
+	char buf[512];
+	const char *p;
+
+	if (wpa_req("SIGNAL_POLL", buf, sizeof(buf)) <= 0)
+		return -100;
+	p = strstr(buf, "RSSI=");
+	return p ? atoi(p + 5) : -100;
+}
+
+/*
+ * Order the list the way every desktop does: whatever we are connected to
+ * first, then strongest signal down. Insertion sort - AP_MAX is 16 and this
+ * runs once per scan, so anything cleverer is wasted code.
+ */
+static void wifi_sort(void)
+{
+	int i, j;
+
+	for (i = 1; i < ap_n; i++) {
+		struct ap key = aps[i];
+
+		for (j = i - 1; j >= 0; j--) {
+			int better = key.current ||
+				     (!aps[j].current && key.level > aps[j].level);
+
+			if (!better)
+				break;
+			aps[j + 1] = aps[j];
+		}
+		aps[j + 1] = key;
+	}
+}
 
 static int ap_needs_key(const struct ap *a)
 {
@@ -1700,6 +1870,10 @@ static void wifi_select_cb(lv_event_t *e)
 	 * deliberate, and costs one tap only when actually joining.
 	 */
 	ap_sel = (ap_sel == idx) ? -1 : idx;
+	if (ap_sel >= 0)
+		snprintf(ap_sel_ssid, sizeof(ap_sel_ssid), "%s", aps[idx].ssid);
+	else
+		ap_sel_ssid[0] = 0;
 	wifi_render();
 }
 
@@ -1828,10 +2002,26 @@ static void wifi_show_results(void)
 		for (j = 0; j < ap_n; j++)
 			if (strcmp(aps[j].ssid, f[4]) == 0)
 				break;
-		if (j < ap_n)
+		if (j < ap_n) {
+			/*
+			 * Same network, another access point. Keep the
+			 * strongest rather than the first: SCAN_RESULTS is
+			 * *usually* ordered by signal but nothing guarantees
+			 * it, and picking the weaker one shows a bad bar for
+			 * a network that is actually fine.
+			 */
+			if (atoi(f[2]) > aps[j].level) {
+				aps[j].level = atoi(f[2]);
+				aps[j].freq = atoi(f[1]);
+				snprintf(aps[j].flags, sizeof(aps[j].flags),
+					 "%s", f[3]);
+			}
 			continue;
+		}
 		snprintf(aps[ap_n].ssid, sizeof(aps[ap_n].ssid), "%s", f[4]);
 		snprintf(aps[ap_n].flags, sizeof(aps[ap_n].flags), "%s", f[3]);
+		aps[ap_n].freq = atoi(f[1]);
+		aps[ap_n].level = atoi(f[2]);
 		aps[ap_n].current = 0;
 		ap_n++;
 	}
@@ -1861,11 +2051,33 @@ static void wifi_show_results(void)
 				snprintf(aps[ap_n].flags, sizeof(aps[0].flags),
 					 "%s", "[WPA2-PSK-CCMP][ESS]");
 				aps[ap_n].current = 0;
+				/*
+				 * No scan line for a hidden network, so no
+				 * level. Ask for the live one instead of
+				 * showing an empty bar for the network we are
+				 * actually using.
+				 */
+				aps[ap_n].level = wifi_link_level();
+				aps[ap_n].freq = 0;
 				ap_n++;
 			}
 		}
 	}
 	wifi_mark_saved();
+	wifi_sort();
+	/* Follow the selection across the re-sort, or drop it if it is gone. */
+	ap_sel = -1;
+	if (ap_sel_ssid[0]) {
+		int k;
+
+		for (k = 0; k < ap_n; k++)
+			if (!strcmp(aps[k].ssid, ap_sel_ssid)) {
+				ap_sel = k;
+				break;
+			}
+		if (ap_sel < 0)
+			ap_sel_ssid[0] = 0;
+	}
 	wifi_render();
 }
 
@@ -2520,6 +2732,22 @@ static int mouse_poll(void)
 	int32_t w = lv_display_get_horizontal_resolution(NULL);
 	int32_t h = lv_display_get_vertical_resolution(NULL);
 	int i;
+	int rdx = 0, rdy = 0;			/* raw delta this poll */
+	static float carry_x, carry_y;		/* sub-pixel remainder */
+	static uint32_t last_move_ms;
+	/*
+	 * LVDESK_PTR_ACCEL=0 turns the curve off. The injector moves by
+	 * relative deltas and assumes 1:1, so every coordinate-based test
+	 * lands somewhere else once acceleration is on - the harness has to be
+	 * able to ask for raw motion.
+	 */
+	static int accel_on = -1;
+
+	if (accel_on < 0) {
+		const char *e = getenv("LVDESK_PTR_ACCEL");
+
+		accel_on = !(e && !strcmp(e, "0"));
+	}
 
 	if (lv_tick_get() - mouse_scan_at > 2000) {
 		mouse_scan_at = lv_tick_get();
@@ -2542,8 +2770,8 @@ static int mouse_poll(void)
 		busy = 1;
 		do {
 			if (ev.type == EV_REL) {
-				if (ev.code == REL_X) ptr_x += ev.value;
-				else if (ev.code == REL_Y) ptr_y += ev.value;
+				if (ev.code == REL_X) rdx += ev.value;
+				else if (ev.code == REL_Y) rdy += ev.value;
 				else if (ev.code == REL_WHEEL) wheel += ev.value;
 			} else if (ev.type == EV_KEY && ev.code == BTN_LEFT) {
 				int was = ptr_pressed;
@@ -2553,6 +2781,41 @@ static int mouse_poll(void)
 					press_edge = 1;
 			}
 		} while (read(mouse_fds[i], &ev, sizeof(ev)) == sizeof(ev));
+	}
+
+	if (rdx || rdy) {
+		uint32_t now = lv_tick_get();
+		uint32_t dt = now - last_move_ms;
+		float fx = rdx, fy = rdy, factor = 1.0f, speed;
+
+		/*
+		 * Velocity over the gap since the last motion, in units/ms.
+		 * The first sample after an idle period has a huge dt and so a
+		 * near-zero speed, which is right: a fresh movement should
+		 * start unaccelerated rather than leap.
+		 */
+		if (!dt)
+			dt = 1;
+		if (dt > 100)
+			dt = 100;
+		last_move_ms = now;
+		speed = (fabsf(fx) + fabsf(fy)) / (float)dt;
+		if (accel_on && speed > PTR_ACCEL_THRESHOLD) {
+			factor = 1.0f + (speed - PTR_ACCEL_THRESHOLD) *
+					PTR_ACCEL_SLOPE;
+			if (factor > PTR_ACCEL_MAX)
+				factor = PTR_ACCEL_MAX;
+		}
+		/*
+		 * Carry the fraction rather than truncating it, or slow
+		 * movement below one pixel per poll never moves at all.
+		 */
+		fx = fx * factor + carry_x;
+		fy = fy * factor + carry_y;
+		ptr_x += (int32_t)fx;
+		ptr_y += (int32_t)fy;
+		carry_x = fx - (float)(int32_t)fx;
+		carry_y = fy - (float)(int32_t)fy;
 	}
 
 	if (ptr_x < 0) ptr_x = 0;
