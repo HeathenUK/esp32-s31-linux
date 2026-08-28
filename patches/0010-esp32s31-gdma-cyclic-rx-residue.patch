@@ -1,0 +1,88 @@
+esp32s31: report a position for cyclic receive, and advertise the descriptor limit
+
+Three related defects in the capture path, found while trying to work out why
+every microphone recording came back byte-identical.
+
+**The AHB GDMA never reported a position for cyclic receive.** `tx_status()`
+had a branch for `cyclic_tx` and branches for the non-cyclic `active_tx` and
+`active_rx`, but nothing for `cyclic_rx` - which is the case an ALSA capture
+stream always takes. So `dma_set_residue()` was never called and the residue
+stayed at the zero `dma_cookie_status()` left, which the dmaengine PCM reads as
+"the whole buffer has been filled". The bookkeeping to answer properly was
+already there and maintained: receive keeps one descriptor per period and
+`rx_node` is the period the engine is filling.
+
+This is why recordings were **deterministic**: with the position pinned at the
+end of the buffer, `arecord` was handed the ring's stale contents rather than
+anything the DMA had written, so two captures were identical and no change to
+the codec's gain could ever alter the result. Every microphone measurement made
+before this is void - including the conclusion that the analog front end was at
+fault.
+
+**Reporting a position honestly makes the real fault visible**: capture now
+overruns continuously instead of returning stale data quietly. That is the
+receive clocking problem described in patch 0009, not a regression - a stream
+that reports no progress cannot report an overrun either.
+
+**A 4096-byte period was refused at trigger time.** A descriptor carries at
+most 4095 bytes and cyclic receive keeps one per period, so the default period
+an unconfigured `arecord` asks for came back as -ENOMEM from
+`soc_component_trigger`. The engine now advertises `max_seg_size`, and the PCM
+caps `period_bytes_max` at 4092 - the largest legal multiple of the 4-byte
+frame - so the constraint is negotiated instead of hit.
+
+--- a/drivers/dma/esp32s31-ahb-gdma.c
++++ b/drivers/dma/esp32s31-ahb-gdma.c
+@@ -864,6 +864,20 @@
+ 		dma_set_residue(state, desc->len - chan->tx_node *
+ 					(desc->len / desc->nperiods));
+ 	}
++	if (chan->cyclic_rx && chan->cyclic_rx->vd.tx.cookie == cookie) {
++		struct esp32s31_ahb_desc *desc = chan->cyclic_rx;
++
++		/*
++		 * Receive keeps one descriptor per period, so rx_node is the
++		 * period the engine is filling now and everything before it has
++		 * been written.  Without this the residue stays at whatever
++		 * dma_cookie_status left - zero - so the PCM layer reads the
++		 * position as a full buffer and declares an overrun the instant
++		 * capture starts, forever.
++		 */
++		dma_set_residue(state, desc->len - chan->rx_node *
++					(desc->len / desc->nperiods));
++	}
+ 	if (chan->active_tx && chan->active_tx->vd.tx.cookie == cookie)
+ 		dma_set_residue(state, chan->active_tx->len);
+ 	if (chan->active_rx && chan->active_rx->vd.tx.cookie == cookie)
+@@ -1087,6 +1101,13 @@
+ 	dma_dev->src_addr_widths = BIT(DMA_SLAVE_BUSWIDTH_1_BYTE);
+ 	dma_dev->dst_addr_widths = BIT(DMA_SLAVE_BUSWIDTH_1_BYTE);
+ 	dma_dev->residue_granularity = DMA_RESIDUE_GRANULARITY_DESCRIPTOR;
++	/*
++	 * One descriptor carries at most 4095 bytes, and cyclic receive keeps
++	 * one descriptor per period.  Advertising the limit lets clients - the
++	 * dmaengine PCM in particular - constrain themselves to it, rather than
++	 * asking for a 4096-byte period and being refused at trigger time.
++	 */
++	dma_set_max_seg_size(dev, AHB_DESC_MAX);
+ 	dma_dev->device_free_chan_resources = esp32s31_ahb_free_resources;
+ 	dma_dev->device_prep_dma_memcpy = esp32s31_ahb_prep_memcpy;
+ 	dma_dev->device_config = esp32s31_ahb_slave_config;
+--- a/sound/soc/espressif/esp32s31-i2s.c
++++ b/sound/soc/espressif/esp32s31-i2s.c
+@@ -487,7 +487,14 @@
+ 	.periods_min = 2,
+ 	.periods_max = ESP32S31_I2S_BUFFER_BYTES / 1024,
+ 	.period_bytes_min = 1024,
+-	.period_bytes_max = 4096,
++	/*
++	 * A GDMA descriptor carries at most 4095 bytes and receive keeps one
++	 * descriptor per period, so a 4096-byte period - which is what an
++	 * unconfigured arecord asks for - is rejected with -ENOMEM from
++	 * soc_component_trigger.  4092 is the largest legal multiple of the
++	 * 4-byte frame.
++	 */
++	.period_bytes_max = 4092,
+ 	.buffer_bytes_max = ESP32S31_I2S_BUFFER_BYTES,
+ };
+ 
