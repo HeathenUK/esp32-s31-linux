@@ -135,33 +135,64 @@ static void click(int down)
 }
 
 /* Only what the demo strings need. */
+/*
+ * A full US-layout map, including the shifted characters.
+ *
+ * This used to know a-z, space, newline, - . / and the digits 1, 2 and 3, and
+ * type() silently skipped anything else - so `echo abc...0123456789 > /tmp/f`
+ * arrived as `echo abc...123  /tmp/f`, with the redirect missing. That looks
+ * exactly like the desktop dropping keystrokes, and it very nearly got
+ * recorded as such. A harness that discards input without saying so cannot be
+ * used to investigate input being discarded.
+ */
 static int keycode(char c, int *shift)
 {
-	static const char *row = "abcdefghijklmnopqrstuvwxyz";
-	static const int codes[] = {
-		KEY_A, KEY_B, KEY_C, KEY_D, KEY_E, KEY_F, KEY_G, KEY_H, KEY_I,
-		KEY_J, KEY_K, KEY_L, KEY_M, KEY_N, KEY_O, KEY_P, KEY_Q, KEY_R,
-		KEY_S, KEY_T, KEY_U, KEY_V, KEY_W, KEY_X, KEY_Y, KEY_Z,
+	static const struct { char ch; int code; int shifted; } map[] = {
+		{ 'a', KEY_A, 0 }, { 'b', KEY_B, 0 }, { 'c', KEY_C, 0 },
+		{ 'd', KEY_D, 0 }, { 'e', KEY_E, 0 }, { 'f', KEY_F, 0 },
+		{ 'g', KEY_G, 0 }, { 'h', KEY_H, 0 }, { 'i', KEY_I, 0 },
+		{ 'j', KEY_J, 0 }, { 'k', KEY_K, 0 }, { 'l', KEY_L, 0 },
+		{ 'm', KEY_M, 0 }, { 'n', KEY_N, 0 }, { 'o', KEY_O, 0 },
+		{ 'p', KEY_P, 0 }, { 'q', KEY_Q, 0 }, { 'r', KEY_R, 0 },
+		{ 's', KEY_S, 0 }, { 't', KEY_T, 0 }, { 'u', KEY_U, 0 },
+		{ 'v', KEY_V, 0 }, { 'w', KEY_W, 0 }, { 'x', KEY_X, 0 },
+		{ 'y', KEY_Y, 0 }, { 'z', KEY_Z, 0 },
+		{ '0', KEY_0, 0 }, { '1', KEY_1, 0 }, { '2', KEY_2, 0 },
+		{ '3', KEY_3, 0 }, { '4', KEY_4, 0 }, { '5', KEY_5, 0 },
+		{ '6', KEY_6, 0 }, { '7', KEY_7, 0 }, { '8', KEY_8, 0 },
+		{ '9', KEY_9, 0 },
+		{ ' ', KEY_SPACE, 0 },   { '\n', KEY_ENTER, 0 },
+		{ '\t', KEY_TAB, 0 },    { '\b', KEY_BACKSPACE, 0 },
+		{ '-', KEY_MINUS, 0 },   { '=', KEY_EQUAL, 0 },
+		{ '[', KEY_LEFTBRACE, 0 }, { ']', KEY_RIGHTBRACE, 0 },
+		{ ';', KEY_SEMICOLON, 0 }, { '\'', KEY_APOSTROPHE, 0 },
+		{ '`', KEY_GRAVE, 0 },   { '\\', KEY_BACKSLASH, 0 },
+		{ ',', KEY_COMMA, 0 },   { '.', KEY_DOT, 0 },
+		{ '/', KEY_SLASH, 0 },
+		/* shifted */
+		{ '!', KEY_1, 1 }, { '@', KEY_2, 1 }, { '#', KEY_3, 1 },
+		{ '$', KEY_4, 1 }, { '%', KEY_5, 1 }, { '^', KEY_6, 1 },
+		{ '&', KEY_7, 1 }, { '*', KEY_8, 1 }, { '(', KEY_9, 1 },
+		{ ')', KEY_0, 1 }, { '_', KEY_MINUS, 1 }, { '+', KEY_EQUAL, 1 },
+		{ '{', KEY_LEFTBRACE, 1 }, { '}', KEY_RIGHTBRACE, 1 },
+		{ ':', KEY_SEMICOLON, 1 }, { '"', KEY_APOSTROPHE, 1 },
+		{ '~', KEY_GRAVE, 1 }, { '|', KEY_BACKSLASH, 1 },
+		{ '<', KEY_COMMA, 1 }, { '>', KEY_DOT, 1 },
+		{ '?', KEY_SLASH, 1 },
 	};
-	const char *p;
+	unsigned i;
 
 	*shift = 0;
-	/* \b in a typed string means the Backspace key, for testing erase. */
-	if (c == '\b')
-		return KEY_BACKSPACE;
-	if ((p = strchr(row, c)))
-		return codes[p - row];
-	switch (c) {
-	case ' ': return KEY_SPACE;
-	case '\n': return KEY_ENTER;
-	case '-': return KEY_MINUS;
-	case '.': return KEY_DOT;
-	case '/': return KEY_SLASH;
-	case '1': return KEY_1;
-	case '2': return KEY_2;
-	case '3': return KEY_3;
-	default: return 0;
+	if (c >= 'A' && c <= 'Z') {
+		*shift = 1;
+		c = c - 'A' + 'a';
 	}
+	for (i = 0; i < sizeof(map) / sizeof(map[0]); i++)
+		if (map[i].ch == c) {
+			*shift = *shift || map[i].shifted;
+			return map[i].code;
+		}
+	return 0;
 }
 
 static void key(int code)
@@ -184,9 +215,17 @@ static void type(const char *s, int delay)
 	for (; *s; s++) {
 		int shift, k = keycode(*s, &shift);
 
-		if (!k) continue;
+		if (!k) {
+			/* Loudly, so a silent drop is never mistaken for the
+			 * desktop losing a keystroke. */
+			fprintf(stderr, "uinject: cannot type '%c' (0x%02x)\n",
+				*s >= 32 ? *s : '?', (unsigned char)*s);
+			continue;
+		}
+		if (shift) { emit(kbd_fd, EV_KEY, KEY_LEFTSHIFT, 1); syn(kbd_fd); }
 		emit(kbd_fd, EV_KEY, k, 1); syn(kbd_fd);
 		emit(kbd_fd, EV_KEY, k, 0); syn(kbd_fd);
+		if (shift) { emit(kbd_fd, EV_KEY, KEY_LEFTSHIFT, 0); syn(kbd_fd); }
 		msleep(delay);
 	}
 }

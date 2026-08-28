@@ -1,0 +1,44 @@
+#!/bin/sh
+#
+# Start all init scripts in /etc/init.d, in numerical order.
+#
+# The only change from the stock Buildroot rcS is the timestamp either side of
+# each script, written to /dev/kmsg so it lands in dmesg with kernel timestamps
+# and survives to be read after boot.
+#
+# That instrumentation is not decoration. "Why does this take 83 seconds to
+# reach a desktop" was unanswerable from the console, because the two scripts
+# responsible printed nothing at all while they ran - one waited on udev, the
+# other read a 64 MB file. Two lines of shell turned that into a table:
+#
+#     S10udevd     34.0s  -> 0.52s   (trigger+settle no longer block the boot)
+#     S04s31-swap  15.7s  -> 0.56s   (ls -l instead of wc -c on the swapfile)
+#
+# Cost: one echo per script, ~19 lines in the kernel log.
+#
+for i in /etc/init.d/S??*; do
+
+	# Ignore dangling symlinks (if any).
+	[ ! -f "$i" ] && continue
+
+	echo "RCS $(cut -d' ' -f1 /proc/uptime) begin $i" > /dev/kmsg
+
+	case "$i" in
+		*.sh)
+			# Source shell script for speed.
+			(
+				trap - INT QUIT TSTP
+				set start
+				# shellcheck source=/dev/null
+				. "$i"
+			)
+			;;
+		*)
+			# No sh extension, so fork subprocess.
+			"$i" start
+			;;
+	esac
+
+	echo "RCS $(cut -d' ' -f1 /proc/uptime) end   $i" > /dev/kmsg
+done
+echo "RCS $(cut -d' ' -f1 /proc/uptime) rcS complete" > /dev/kmsg

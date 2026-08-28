@@ -34,7 +34,14 @@ case "$1" in
 		# applet, and `stat -c%s` fails as "not found" - which would
 		# leave have=0, rewriting 64 MB of zeros on every single boot.
 		want=$((SIZE_MB * 1048576))
-		have=$(wc -c < "$SWAP" 2>/dev/null || echo 0)
+		# ls -l, not wc -c. wc -c READS THE WHOLE FILE: 64 MB off the
+		# card at ~4.4 MB/s is 15.3 s, measured, on every single boot,
+		# to answer a question the directory entry already knows. It
+		# was the second largest cost in reaching a desktop. stat would
+		# be the obvious answer and this busybox genuinely lacks the
+		# applet (the note below is correct), but ls -l does not read
+		# the data.
+		have=$(ls -l "$SWAP" 2>/dev/null | awk "{print \$5}")
 		have=${have:-0}
 		if [ "$have" != "$want" ]; then
 			[ "$have" != "0" ] && printf 'Discarding short swap file (%s of %s bytes): ' "$have" "$want"

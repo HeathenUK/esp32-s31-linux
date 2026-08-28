@@ -189,6 +189,25 @@ static int kbd_n;
 static uint32_t kbd_scan_at;
 static int shift, mod_ctrl, mod_alt, mod_caps;
 
+/*
+ * Input loss, made visible.
+ *
+ * The kernel gives every evdev reader its own ring. If we do not read it for
+ * long enough it fills, the kernel THROWS AWAY the backlog and reports the
+ * loss exactly once, as EV_SYN/SYN_DROPPED. This used to be discarded by the
+ * "not EV_KEY, skip it" filter below, so a stall - a swap-in, a big repaint, a
+ * fork - silently ate every keystroke made during it. That is the shape of the
+ * complaint: not keys arriving late, but seconds of typing simply gone.
+ *
+ * Counted rather than merely fixed, because "did we drop input just now?" has
+ * no other answer on this board, and a silent drop is indistinguishable from a
+ * keyboard fault.
+ */
+static unsigned kbd_dropped;		/* SYN_DROPPED events seen */
+static unsigned kbd_write_fail;		/* keystrokes the pty refused */
+static uint32_t kbd_last_poll_ms;
+static uint32_t kbd_worst_stall_ms;
+
 /* ---------------------------------------------------------------- keyboard */
 
 /*
@@ -323,6 +342,36 @@ static void kbd_open(void)
  * Ctrl was previously ignored entirely, so Ctrl-C typed a 'c' and there was no
  * way to interrupt anything running in the shell.
  */
+/*
+ * Write to the pty, and do not lose the keystroke if it is momentarily full.
+ *
+ * The master is O_NONBLOCK so the desktop never blocks on a shell that is not
+ * reading, but the previous code was `if (write(...) < 0) { }` - the error
+ * discarded along with the character. A short retry covers the case that
+ * actually happens (the line discipline briefly full) without reintroducing a
+ * blocking write, and anything still unwritten is counted rather than ignored.
+ */
+static void term_write(const char *buf, int n)
+{
+	int tries = 0, off = 0;
+
+	while (off < n) {
+		int w = write(term.fd, buf + off, n - off);
+
+		if (w > 0) {
+			off += w;
+			continue;
+		}
+		if (errno != EAGAIN && errno != EINTR)
+			break;
+		if (++tries > 20)	/* ~10 ms; longer would stutter the UI */
+			break;
+		usleep(500);
+	}
+	if (off < n)
+		kbd_write_fail++;
+}
+
 static void kbd_key(int code)
 {
 	const char *seq;
@@ -380,7 +429,7 @@ static void kbd_key(int code)
 	if (term.fd < 0)
 		return;
 	if (seq) {
-		if (write(term.fd, seq, strlen(seq)) < 0) { }
+		term_write(seq, strlen(seq));
 		return;
 	}
 	if (code < 0 || code >= KEY_CNT)
@@ -406,7 +455,7 @@ static void kbd_key(int code)
 	if (mod_alt)			/* Alt is ESC-prefix, as xterm does */
 		buf[n++] = 27;
 	buf[n++] = c;
-	if (write(term.fd, buf, n) < 0) { }
+	term_write(buf, n);
 }
 
 static int kbd_poll(void)
@@ -416,6 +465,28 @@ static int kbd_poll(void)
 	int i;
 
 	switcher_timeout();
+
+	/*
+	 * How long since input was last looked at. A gap here is a gap in
+	 * which the kernel's evdev ring can fill and start discarding, so it
+	 * is the quantity to watch when input goes missing.
+	 */
+	{
+		uint32_t now = lv_tick_get();
+
+		if (kbd_last_poll_ms) {
+			uint32_t gap = now - kbd_last_poll_ms;
+
+			if (gap > kbd_worst_stall_ms)
+				kbd_worst_stall_ms = gap;
+			if (gap > 500) {
+				printf("lvdesk: input starved for %u ms\n",
+				       (unsigned)gap);
+				fflush(stdout);
+			}
+		}
+		kbd_last_poll_ms = now;
+	}
 
 	/* pick up devices that appeared after start-up */
 	if (lv_tick_get() - kbd_scan_at > 2000) {
@@ -445,6 +516,27 @@ static int kbd_poll(void)
 			continue;
 		busy = 1;
 		do {
+			/*
+			 * The kernel telling us it threw input away. Never
+			 * merely skip this: it is the only notification that
+			 * anything was lost.
+			 */
+			if (ev.type == EV_SYN && ev.code == SYN_DROPPED) {
+				kbd_dropped++;
+				printf("lvdesk: INPUT LOST - evdev overflow on "
+				       "fd %d (%u so far, worst stall %u ms)\n",
+				       kbd_fds[i], kbd_dropped,
+				       (unsigned)kbd_worst_stall_ms);
+				fflush(stdout);
+				/*
+				 * State after a drop is unknowable - a
+				 * modifier release may have been among the
+				 * lost events, which would leave Ctrl or Shift
+				 * stuck on. Clear them.
+				 */
+				shift = mod_ctrl = mod_alt = 0;
+				continue;
+			}
 			if (ev.type != EV_KEY)
 				continue;
 			switch (ev.code) {
