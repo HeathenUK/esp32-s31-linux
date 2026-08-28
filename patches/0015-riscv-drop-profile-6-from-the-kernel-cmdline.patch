@@ -1,0 +1,32 @@
+riscv: drop profile=6 from the kernel command line
+
+CONFIG_PROFILING was turned on to profile the SD path and the desktop, and
+profile=6 was added to CONFIG_CMDLINE to make the kernel allocate the profiling
+buffer. Both notes in docs/current-state.md say to take it out afterwards -
+"leaving it enabled costs 253 KB" - and it was never taken out.
+
+Measured on this tree, and the number is exactly the one the notes predicted:
+
+    xipImage 6086673 bytes,  82575 bytes free   with profile=6
+    xipImage 6086673 bytes, 335855 bytes free   without
+
+253,280 bytes back in the linux partition, on a board where the partition has
+had ~53 KB of slack at its tightest and where radios and sound have been
+compiled out to make room. Nothing else uses it: /proc/profile is only useful
+with a diagnostic kernel, and CONFIG_PROFILING is disabled by the Makefile's
+kconfig-tweak regardless of what the defconfig says.
+
+Note this file lives in linux-71-port/, which is gitignored, so a change made
+only there is lost on a clean checkout. That is why this is a patch.
+
+diff --git a/arch/riscv/configs/esp32s31_defconfig b/arch/riscv/configs/esp32s31_defconfig
+--- a/arch/riscv/configs/esp32s31_defconfig
++++ b/arch/riscv/configs/esp32s31_defconfig
+@@ -109,7 +109,7 @@ CONFIG_FPU=y
+ 
+ # Kernel command line
+-CONFIG_CMDLINE="dw_mmc.lost_irq_poll=0 dw_mmc.low_pwr=0 console=tty0 console=ttyS0,1000000n8 root=mtd:rootfs rootfstype=cramfs ro init=/init profile=6"
++CONFIG_CMDLINE="dw_mmc.lost_irq_poll=0 dw_mmc.low_pwr=0 console=tty0 console=ttyS0,1000000n8 root=mtd:rootfs rootfstype=cramfs ro init=/init"
+ CONFIG_CMDLINE_FORCE=y
+ 
+ # Built-in DTB (no external loader needed)

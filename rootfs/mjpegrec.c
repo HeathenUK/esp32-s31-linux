@@ -58,6 +58,18 @@ int main(int argc, char **argv)
 	fd = open("/dev/dri/card0", O_RDWR);
 	if (fd < 0) { perror("open card0"); return 1; }
 
+	/*
+	 * -d attaches to a recording that is already running instead of
+	 * starting one - which is how a boot is filmed: the kernel arms the
+	 * recorder at scanout, ~3 s before userspace exists, so by the time
+	 * anything can run there is already a ring full of the early console.
+	 * Starting a fresh recording here would throw exactly that away.
+	 */
+	if (argc > 1 && !strcmp(argv[1], "-d")) {
+		out = argc > 2 ? argv[2] : "panel.mjpeg";
+		goto drain;
+	}
+
 	ra.op = REC_START;
 	ra.ring_bytes = (uint32_t)ring_kb * 1024;
 	ra.max_fps = fps;
@@ -68,6 +80,7 @@ int main(int argc, char **argv)
 
 	sleep(secs);
 
+drain:
 	ra.op = REC_STOP;
 	if (ioctl(fd, IOCTL_REC, &ra) < 0) { perror("REC_STOP"); return 1; }
 	printf("captured %u frames, %u KB, %u dropped\n",
