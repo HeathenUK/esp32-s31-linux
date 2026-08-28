@@ -1,0 +1,194 @@
+esp32s31: film the boot - arm the MJPEG recorder at scanout
+
+Filming a boot has to start before userspace exists. The DRM driver is scanning
+out at 1.69 s and the ext4 root is not mounted until 4.94 s, so a recorder
+started from an init script misses the entire early console - which is the part
+worth filming. Arming it in the driver covers that window, and means the RAM
+ring only has to bridge ~3.3 s rather than the whole 65 s boot.
+
+That reframing is what makes this cheap. An earlier design streamed frames live
+off the board because it assumed the ring had to hold everything; it needed the
+radio up during hart0's splash, which starved the LCD scanout DMA and left the
+board unusable. Nothing here touches hart0 or the radio.
+
+**The trigger is LP_STORE12, and picking it took two wedges.** The properties
+wanted are: settable from a running system, survives the reboot that starts the
+filmed boot, cannot get stuck armed, and is not in flash. Measured:
+
+    warm reboot   value survives      -> arm, reboot, and that boot is filmed
+    EN reset      value cleared       -> cannot outlive unplugging the board
+    on read       cleared by the driver -> one arming films exactly one boot
+
+**Most of LP_STORE belongs to the ROM**, and reading zero at runtime does not
+mean a slot is free. esp_rom/esp32s31/rom/rtc.h assigns STORE1 to the slow-clock
+calibration, 2/3 to the boot time, 4 to the ROM log control and crystal
+frequency, 5 to the deep-sleep entry length, 6 to the wake entry address and
+reset cause, 7 to a memory CRC, 8 to the sleep wake stub, 9 to the LP core
+wakeup cause. STORE5 was tried first and read back zero on every boot because
+the ROM rewrites it - which looked like "the kernel cannot read this register
+early", a theory disproved by dumping STORE1 alongside it and finding the kernel
+and userspace agreed bit for bit. Writing STORE6 wedged hart0 outright, no
+console at either baud, because that is the wake entry address; only an EN reset
+recovered it. STORE10..15 are unclaimed.
+
+Verified end to end on the board:
+
+    [1.731] boot recording trigger: LP_STORE12 = 0x52454331 (armed)
+    [1.732] jpeg recording: 1024 KB ring, 256 frames max, q60, cap 5 fps
+    trigger afterwards: 0x00000000
+    captured 12 frames, 946 KB, 0 dropped, first stamp 1.797 s
+
+The first frame lands 66 ms after scanout starts and 3.1 s before the root
+filesystem is mounted, and decodes to a black panel - the framebuffer after
+Linux takes the display and before fbcon paints. Frame 1, at 1.95 s and 80 KB,
+is the console appearing.
+
+Defaults are off: rec_kb/rec_fps/rec_q describe the ring but nothing is armed
+without the trigger, so an ordinary boot pays one register read.
+
+The ring holds ~12 dense console frames at q60, so covering the full window to
+userspace needs either a larger ring or the continuous drainer that is the next
+piece of work. mjpegrec -d already attaches to a recording in progress.
+
+--- a/drivers/gpu/drm/espressif/esp32s31-lcd.c
++++ b/drivers/gpu/drm/espressif/esp32s31-lcd.c
+@@ -1159,6 +1159,9 @@
+ }
+ 
+ 
++/* Defined with the other module parameters, below the pipe callbacks. */
++static void esp32s31_lcd_rec_boot_arm(struct esp32s31_lcd *lcd);
++
+ static void esp32s31_lcd_pipe_enable(struct drm_simple_display_pipe *pipe,
+ 				     struct drm_crtc_state *crtc_state,
+ 				     struct drm_plane_state *plane_state)
+@@ -1368,6 +1371,8 @@
+ 	drm_info(&lcd->drm, "scanout started: " DRM_MODE_FMT " fb=%pad %zu bytes, pclk /%u\n",
+ 		 DRM_MODE_ARG(mode), &fb_addr, fb_bytes, prescale);
+ 
++	esp32s31_lcd_rec_boot_arm(lcd);
++
+ 	/*
+ 	 * Run the vblank timer for as long as the pipe is enabled, rather than
+ 	 * leaving it to .enable_vblank refcounting. Relying on the refcount left
+@@ -2027,6 +2032,120 @@
+  */
+ static bool gdma_copy = true;
+ module_param(gdma_copy, bool, 0644);
++
++/* ------------------------------------------------- record from boot ------- */
++
++/*
++ * Filming a boot has to start before userspace exists. The driver is scanning
++ * out at 1.69 s and the ext4 root is not mounted until 4.94 s, so a recorder
++ * armed from an init script misses the whole early console - which is the part
++ * worth filming. Arming here covers it, and the RAM ring only has to bridge
++ * those ~3.3 s rather than the whole 65 s boot.
++ *
++ * The trigger is a magic word in an LP_SYSTEM store register, and both the
++ * choice of register and the choice of *that* mechanism matter:
++ *
++ *   - It is NOT in flash. An earlier attempt put its trigger in hart0's NVS,
++ *     and backing the change out did nothing at all, because the stock
++ *     firmware kept acting on what had been written. See "Undo has to cover
++ *     flash state" in docs/current-state.md.
++ *   - It survives a warm reboot - measured - which is how a recording is
++ *     armed: write the word, reboot, and the next boot is filmed.
++ *   - It does NOT survive an EN reset or a power cycle - also measured - so it
++ *     cannot get stuck armed in a way that outlives unplugging the board.
++ *   - It is cleared here, on read, so one arming films exactly one boot.
++ *
++ * **Most of LP_STORE belongs to the ROM.** esp_rom/esp32s31/rom/rtc.h assigns
++ * STORE1 to the slow-clock calibration, 2 and 3 to the boot time, 4 to the ROM
++ * log control and crystal frequency, 5 to the deep-sleep entry length, 6 to
++ * the wake entry address and reset cause, 7 to a memory CRC, 8 to the sleep
++ * wake stub and 9 to the LP core wakeup cause. Reading zero at runtime does
++ * not mean a slot is free: STORE5 was tried first and read back zero every
++ * boot because the ROM rewrites it, and writing STORE6 wedged hart0 outright -
++ * no console at either baud - because that is where the wake entry address
++ * lives. Only an EN reset recovered it.
++ *
++ * STORE10..15 are unclaimed by the ROM. This uses STORE12.
++ */
++#define LP_STORE12_PA		0x2070005c
++#define REC_BOOT_MAGIC		0x52454331	/* "REC1" */
++
++static bool rec_boot;
++module_param(rec_boot, bool, 0644);
++MODULE_PARM_DESC(rec_boot,
++		 "record from boot regardless of the LP_STORE5 trigger");
++
++static uint rec_kb = 1024;
++module_param(rec_kb, uint, 0644);
++MODULE_PARM_DESC(rec_kb, "boot recording ring size in KB");
++
++static uint rec_fps = 5;
++module_param(rec_fps, uint, 0644);
++MODULE_PARM_DESC(rec_fps, "boot recording frame rate cap");
++
++static uint rec_q = 60;
++module_param(rec_q, uint, 0644);
++MODULE_PARM_DESC(rec_q, "boot recording JPEG quality");
++
++/*
++ * Read the trigger and clear it. Split out so the clear happens exactly once
++ * even though this is called from the pipe-enable path, which runs again on
++ * every mode set.
++ */
++static bool esp32s31_lcd_rec_boot_triggered(struct esp32s31_lcd *lcd)
++{
++	void __iomem *reg;
++	bool armed = false;
++	u32 val;
++
++	if (rec_boot)
++		return true;
++
++	reg = ioremap(LP_STORE12_PA, sizeof(u32));
++	if (!reg) {
++		drm_warn(&lcd->drm, "boot recording: cannot map LP_STORE12\n");
++		return false;
++	}
++	val = readl(reg);
++	if (val == REC_BOOT_MAGIC) {
++		writel(0, reg);		/* one arming films one boot */
++		armed = true;
++	}
++	/*
++	 * Report what was actually read. A silent "not armed" is
++	 * indistinguishable from "the register does not read back here", and
++	 * the two need completely different fixes.
++	 */
++	drm_info(&lcd->drm, "boot recording trigger: LP_STORE12 = 0x%08x%s\n",
++		 val, armed ? " (armed)" : "");
++	iounmap(reg);
++	return armed;
++}
++
++static void esp32s31_lcd_rec_boot_arm(struct esp32s31_lcd *lcd)
++{
++	static bool done;
++	int ret;
++
++	if (done)
++		return;
++	done = true;
++
++	if (!rec_kb || !esp32s31_lcd_rec_boot_triggered(lcd))
++		return;
++
++	/*
++	 * A failure here must not take the display down with it - the whole
++	 * point is to film a boot, and a boot that dies because the camera
++	 * could not start is worse than no film.
++	 */
++	ret = esp32s31_jpeg_rec_start(rec_kb * 1024, rec_fps, rec_q);
++	if (ret)
++		drm_warn(&lcd->drm, "boot recording refused: %d\n", ret);
++	else
++		drm_info(&lcd->drm, "boot recording armed: %u KB, %u fps, q%u\n",
++			 rec_kb, rec_fps, rec_q);
++}
+ MODULE_PARM_DESC(gdma_copy,
+ 		 "use the m2m GDMA channel for the damage copy");
+ 
