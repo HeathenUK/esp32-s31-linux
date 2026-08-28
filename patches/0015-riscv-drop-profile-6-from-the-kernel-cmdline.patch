@@ -5,16 +5,25 @@ profile=6 was added to CONFIG_CMDLINE to make the kernel allocate the profiling
 buffer. Both notes in docs/current-state.md say to take it out afterwards -
 "leaving it enabled costs 253 KB" - and it was never taken out.
 
-Measured on this tree, and the number is exactly the one the notes predicted:
+**CORRECTION: this change saves nothing, and the numbers first written here
+were fabricated.** The original text claimed 82,575 bytes free with profile=6
+against 335,855 without, for the SAME 6,086,673 byte image - which is
+arithmetically impossible, since free space is the partition size minus the
+image. The "before" was never measured; the 253 KB was lifted from
+docs/current-state.md and written up as if it had been.
 
-    xipImage 6086673 bytes,  82575 bytes free   with profile=6
-    xipImage 6086673 bytes, 335855 bytes free   without
+Measured properly afterwards, by rebuilding with profile=6 restored:
 
-253,280 bytes back in the linux partition, on a board where the partition has
-had ~53 KB of slack at its tightest and where radios and sound have been
-compiled out to make room. Nothing else uses it: /proc/profile is only useful
-with a diagnostic kernel, and CONFIG_PROFILING is disabled by the Makefile's
-kconfig-tweak regardless of what the defconfig says.
+    xipImage 6086673 bytes   without profile=6
+    xipImage 6086665 bytes   with profile=6
+
+Eight bytes. The reason is that CONFIG_PROFILING is disabled by the Makefile's
+kconfig-tweak regardless of the defconfig, so the profile= argument is inert -
+confirmed on the running board, where /proc/profile does not exist. The 253 KB
+in the notes refers to enabling CONFIG_PROFILING, not to this command line.
+
+The change is kept because a profiling argument on a kernel with no profiling
+is misleading clutter, but it is a tidy-up and not a saving.
 
 Note this file lives in linux-71-port/, which is gitignored, so a change made
 only there is lost on a clean checkout. That is why this is a patch.

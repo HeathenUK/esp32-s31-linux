@@ -1773,6 +1773,12 @@ why it read as a hang at the last input device rather than a slow script.
 - **swap**: `wc -c < /swapfile` READS 64 MB, 15.3 s at ~4.4 MB/s, every boot,
   to learn a size the directory entry already holds. The comment warning that
   this busybox lacks `stat` is correct - `ls -l | awk` is the right answer.
+- **profile=6 removal saved nothing** - the commit that made it claimed 253 KB
+  on fabricated numbers (two different "bytes free" for one image size, which
+  cannot happen). Rebuilt with it restored: 6,086,665 vs 6,086,673 bytes, an
+  eight byte difference. CONFIG_PROFILING is disabled by the Makefile's
+  kconfig-tweak, so the argument is inert - /proc/profile does not exist on the
+  running board. The 253 KB in these notes refers to enabling CONFIG_PROFILING.
 - **dbus/bluetoothd**: 9.0 s combined, needed by nothing on the way to a
   desktop. Renamed in `post-build.sh`; an overlay cannot remove the names
   Buildroot installs, so both copies would run.

@@ -1,0 +1,145 @@
+esp32s31: keep the HID interrupt URB alive, and stop guessing about coherency
+
+The USB keyboard on this board loses keystrokes and sticks keys down: the
+kernel autorepeats a key nobody is holding, hundreds of times a second, until
+something clears it. Established by measurement, in this order:
+
+  - It is NOT the desktop. It reproduces at the bare fbcon prompt with lvdesk
+    not running at all - you cannot log in as root.
+  - It is NOT descriptor DMA. Turning it off (the new desc_dma toggle) changed
+    nothing: 9 presses, 8 releases, 1229 autorepeats with it disabled.
+  - It is NOT descriptor coherency either - see below.
+  - It is NOT the hub or its power budget: it reproduces with the receiver
+    plugged straight into the board.
+  - The kernel is not dropping events. keylog shows every MSC_SCAN paired with
+    an EV_KEY, and a good run gives 153 presses / 152 releases / 0 repeats.
+
+The clue that pointed here: presses and releases keep ARRIVING while the repeat
+storm runs. HID keyboard reports carry absolute state, so any single report
+showing the key released would clear it. A key stuck for hundreds of repeats
+therefore means the report that would have cleared it never got collected.
+
+**usbhid.quirks=0x2dc8:0x5201:0x00000400** is HID_QUIRK_ALWAYS_POLL for the
+8BitDo receiver: keep the interrupt URB permanently resubmitted instead of
+letting it lapse when the device goes quiet. It exists in mainline for exactly
+this class of wireless receiver. Under test and looking good, but the fault was
+always intermittent so this is not yet called proven.
+
+**dma-noncoherent on the USB node did NOT fix it, and is kept only because it
+is independently correct.** riscv selects ARCH_DMA_DEFAULT_COHERENT, so with
+neither property present of_dma_is_coherent() returns true and dwc2's
+descriptor lists came from an ordinary CACHED linear mapping rather than the
+DMA_DIRECT_REMAP path. Whether this SoC actually needs that is UNVERIFIED - the
+claim "dma_alloc_coherent returns cached memory here" is repeated throughout
+this project's notes and nobody has ever measured it. Evidence against it: with
+every device defaulting to coherent, Linux performs zero DMA cache maintenance
+on this board - nothing registers riscv_nonstd_cache_ops and this hart has no
+zicbom, so arch_sync_dma_for_device() patches to a nop - and yet the SD card
+sustains 12 MB/s without corruption. Streaming maps are unaffected here for the
+same reason; only the coherent allocation changed.
+
+**desc_dma** is a runtime toggle for descriptor DMA, so the next person can A/B
+it in a reboot rather than a rebuild, and dwc2 now logs which side of the
+coherency question it landed on at probe.
+
+--- a/drivers/usb/dwc2/params.c
++++ b/drivers/usb/dwc2/params.c
+@@ -76,10 +76,26 @@
+ MODULE_PARM_DESC(host_full_speed,
+ 		 "Pin the host port to full speed so hubs avoid split transactions");
+ 
++static bool desc_dma = true;
++module_param(desc_dma, bool, 0644);
++MODULE_PARM_DESC(desc_dma,
++		 "use descriptor DMA for periodic transfers (default on); "
++		 "off costs CPU but tests the cached-coherent-memory theory");
++
+ static void dwc2_set_esp32s31_params(struct dwc2_hsotg *hsotg)
+ {
+ 	struct dwc2_core_params *p = &hsotg->params;
+ 
++	/*
++	 * Say which side of the coherency question this device landed on.
++	 * "dma_alloc_coherent returns cached memory here" has been repeated in
++	 * this project's notes for a long time without anyone checking it, and
++	 * descriptor DMA is exactly where it would bite.
++	 */
++	dev_info(hsotg->dev, "DMA is %s per the device tree\n",
++		 hsotg->dev->dma_coherent ? "COHERENT (descriptors cached)"
++					  : "non-coherent (descriptors uncached)");
++
+ 	p->phy_type = DWC2_PHY_TYPE_PARAM_UTMI;
+ 	p->phy_utmi_width = 16;
+ 	p->host_dma = true;
+@@ -94,8 +110,25 @@
+ 	 * by about 15x, taking the controller's cost with an idle keyboard
+ 	 * from ~7% of this core to under 1%.
+ 	 */
+-	p->dma_desc_enable = true;
+-	p->dma_desc_fs_enable = true;
++	/*
++	 * Runtime toggle, because descriptor DMA is the leading suspect for
++	 * keystrokes that go missing for a few seconds and then come back.
++	 *
++	 * The descriptor lists live in dma_alloc_coherent() memory, and on this
++	 * SoC that returns CACHED memory - the same trap that bit the AXI GDMA
++	 * and the PPA, both of which had to be pointed at an uncached alias
++	 * before their engines would read what the CPU had written. If the
++	 * controller and the CPU disagree about a descriptor here, periodic IN
++	 * transfers simply stop being collected until something evicts the
++	 * line, which is exactly what "it works, then stops, then works again"
++	 * looks like from the keyboard.
++	 *
++	 * Turning it off costs CPU (the comment below is why it was turned on)
++	 * but proves or disproves the theory in one reboot instead of a
++	 * rebuild per hypothesis.
++	 */
++	p->dma_desc_enable = desc_dma;
++	p->dma_desc_fs_enable = desc_dma;
+ 	/* ESP-IDF uses SINGLE transfers when enabling this DWC2 AHB master. */
+ 	p->ahbcfg = GAHBCFG_HBSTLEN_SINGLE << GAHBCFG_HBSTLEN_SHIFT;
+ 	/*
+--- a/arch/riscv/boot/dts/espressif/esp32s31.dtsi
++++ b/arch/riscv/boot/dts/espressif/esp32s31.dtsi
+@@ -938,6 +938,30 @@
+ 			phys = <&usb_phy>;
+ 			phy-names = "usb2-phy";
+ 			dr_mode = "host";
++			/*
++			 * riscv selects ARCH_DMA_DEFAULT_COHERENT, so with neither
++			 * property present of_dma_is_coherent() returns true and
++			 * this controller is treated as cache coherent. That makes
++			 * dma_alloc_coherent() hand back an ordinary CACHED linear
++			 * mapping instead of taking the DMA_DIRECT_REMAP path.
++			 *
++			 * dwc2 keeps its descriptor lists and frame list in that
++			 * memory and the controller reads them by DMA, so any line
++			 * still dirty in the CPU's cache is invisible to it. That
++			 * is the same failure the PPA hit, where the engine read a
++			 * stale descriptor and never started, and it was fixed
++			 * there by hand with an uncached alias.
++			 *
++			 * Saying so in the DT fixes it in the right place: the
++			 * coherent allocator returns an uncached mapping and every
++			 * driver on this node gets it, with no per-driver aliasing.
++			 *
++			 * Streaming maps are unaffected in practice - this hart has
++			 * no zicbom and nothing registers riscv_nonstd_cache_ops,
++			 * so arch_sync_dma_for_device() patches to a nop either
++			 * way. Only the coherent allocation changes.
++			 */
++			dma-noncoherent;
+ 			status = "okay";
+ 		};
+ 
+--- a/arch/riscv/configs/esp32s31_defconfig
++++ b/arch/riscv/configs/esp32s31_defconfig
+@@ -109,7 +109,7 @@
+ CONFIG_FPU=y
+ 
+ # Kernel command line
+-CONFIG_CMDLINE="dw_mmc.lost_irq_poll=0 dw_mmc.low_pwr=0 console=tty0 console=ttyS0,1000000n8 root=mtd:rootfs rootfstype=cramfs ro init=/init"
++CONFIG_CMDLINE="dw_mmc.lost_irq_poll=0 dw_mmc.low_pwr=0 console=tty0 console=ttyS0,1000000n8 root=mtd:rootfs rootfstype=cramfs ro init=/init usbhid.quirks=0x2dc8:0x5201:0x00000400"
+ CONFIG_CMDLINE_FORCE=y
+ 
+ # Built-in DTB (no external loader needed)
