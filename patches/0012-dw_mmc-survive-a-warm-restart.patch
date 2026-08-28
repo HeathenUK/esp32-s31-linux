@@ -27,9 +27,15 @@ and logs how long it actually waited. This costs nothing when the card is idle:
 the poll exits on its first read.
 
 *dw_mmc-pltfm had no .shutdown.* device_shutdown() runs on the reboot path, so
-that is the hook for leaving the card in a state the next boot can use. It now
-tears the host down - interrupts off, controller reset, transfers stopped - so
-a transfer is not in flight at the moment the SoC disappears.
+that is the hook for leaving the card in a state the next boot can use. It
+masks interrupts and stops the card clock, which is enough to guarantee no
+transfer is in flight across the SoC reset.
+
+The first version called dw_mci_remove() there instead, and that was worse than
+the bug it fixed: it tears down a host whose filesystem is still mounted, and
+the reboot hung in device_shutdown() - userspace finished, "Requesting system
+reboot" printed, and the board went silent without ever restarting. Only
+stopping the clock is safe here.
 
 **What this does not fix.** A card already stuck busy needs its power cycled;
 measured here, it stayed busy across repeated EN resets for ~20 minutes and
@@ -81,7 +87,7 @@ link on rv32 - a 64-bit divide pulls in __udivdi3. Use div_u64().
  	}
 --- a/drivers/mmc/host/dw_mmc-pltfm.c
 +++ b/drivers/mmc/host/dw_mmc-pltfm.c
-@@ -139,9 +139,33 @@
+@@ -139,9 +139,52 @@
  }
  EXPORT_SYMBOL_GPL(dw_mci_pltfm_remove);
  
@@ -104,8 +110,27 @@ link on rv32 - a 64-bit divide pulls in __udivdi3. Use div_u64().
 +{
 +	struct dw_mci *host = platform_get_drvdata(pdev);
 +
-+	if (host)
-+		dw_mci_remove(host);
++	if (!host)
++		return;
++	/*
++	 * Mask interrupts and stop the card clock. Nothing more.
++	 *
++	 * The first version called dw_mci_remove() here, which tears down a
++	 * host whose filesystem is still mounted - device_shutdown() runs
++	 * before the root goes away - and the reboot hung there: userspace
++	 * finished, "Requesting system reboot" printed, and the board went
++	 * silent without ever restarting. Worse than the problem it was
++	 * meant to fix.
++	 *
++	 * Stopping the clock is enough for the job: it guarantees no transfer
++	 * is in flight across the SoC reset. A card already programming
++	 * internally finishes on its own and releases DAT0, which the 5 s busy
++	 * wait on the way back in now waits for.
++	 */
++	mci_writel(host, INTMASK, 0);
++	mci_writel(host, RINTSTS, 0xffffffff);
++	mci_writel(host, CLKENA, 0);
++	mci_writel(host, CLKSRC, 0);
 +}
 +
  static struct platform_driver dw_mci_pltfm_driver = {
