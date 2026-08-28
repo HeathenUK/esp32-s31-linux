@@ -104,8 +104,18 @@
 #define PTR_ACCEL_SLOPE		1.60f	/* how fast the factor climbs */
 #define PTR_ACCEL_MAX		3.00f	/* cap, or fast flicks become unaimable */
 
-/* Drag a window this close to an edge to snap it there, as every desktop does. */
-#define SNAP_EDGE		12
+/*
+ * Snapping arms only when the pointer reaches the very edge of the screen, not
+ * merely near it. The pointer is clamped to the display, so shoving the mouse
+ * at an edge parks it exactly there and the gesture is unambiguous.
+ *
+ * A 12 px band was worse than no band. Putting a window along the top of the
+ * screen is an ordinary thing to want, and the title bar clamps at y=0 while
+ * the pointer keeps going, so that gesture always ended inside the band and
+ * always maximised on release. Straying near the top while still deciding
+ * where to drop lit the full-screen preview for the same reason.
+ */
+#define SNAP_EDGE		0
 #define TERM_CW		8
 #define TERM_CH		8
 #define TERM_COLS   74
@@ -147,6 +157,12 @@ static int term_log;
 
 /* Defined with the terminal, used by the keyboard handler above it. */
 static void term_scrollback(int lines);
+
+/*
+ * Whether the terminal is the window keys belong to. Defined down with the
+ * window records, which the keyboard handler sits above.
+ */
+static int term_focused(void);
 
 /*
  * The passphrase prompt, declared here because the keyboard handler has to
@@ -328,6 +344,16 @@ static void kbd_key(int code)
 		}
 		return;
 	}
+
+	/*
+	 * Everything below this point types into the terminal, so it only
+	 * happens when the terminal is the focused window. It used to read the
+	 * keyboard unconditionally: clicking the System window and typing
+	 * still ran the characters through the shell behind it, and a second
+	 * window wanting input could never have received any.
+	 */
+	if (!term_focused())
+		return;
 
 	if (code == KEY_PAGEUP)   { term_scrollback(term.nrows / 2); return; }
 	if (code == KEY_PAGEDOWN) { term_scrollback(-term.nrows / 2); return; }
@@ -1225,7 +1251,7 @@ static int snap_zone_at(int32_t x, int32_t y)
 		return 2;
 	if (x <= SNAP_EDGE)
 		return 0;
-	if (x >= sw - SNAP_EDGE)
+	if (x >= sw - 1 - SNAP_EDGE)
 		return 1;
 	return -1;
 }
@@ -1292,6 +1318,12 @@ static void snap_hint_update(int zone, lv_obj_t *above)
 		lv_obj_move_foreground(above);
 }
 
+/*
+ * Set while a press is actually moving a window, so the double-click test can
+ * tell a reposition from a click. Cleared when the next press is evaluated.
+ */
+static int drag_moved;
+
 static void drag_cb(lv_event_t *e)
 {
 	lv_obj_t *win = lv_event_get_user_data(e);
@@ -1319,6 +1351,8 @@ static void drag_cb(lv_event_t *e)
 	if (y > sh - TASKBAR_H - HDR_H) y = sh - TASKBAR_H - HDR_H;
 
 	lv_obj_set_pos(win, x, y);
+	if (v.x || v.y)
+		drag_moved = 1;
 
 	{
 		lv_point_t p;
@@ -1384,6 +1418,17 @@ static void win_set_focus(struct winrec *w)
 					  lv_color_hex(COL_HDR_FOCUS), 0);
 }
 
+/*
+ * Keyboard input follows the focus, as it does on every desktop. A minimised
+ * window is not focused, and once the terminal is closed term.win is NULL, so
+ * both cases fall out of the same test.
+ */
+static int term_focused(void)
+{
+	return term.win && win_focus && win_focus->win == term.win &&
+	       !win_focus->minimised;
+}
+
 static void win_toggle_max(struct winrec *w);
 static void win_snap(struct winrec *w, int mode);
 
@@ -1398,14 +1443,22 @@ static void win_press_cb(lv_event_t *e)
 	lv_obj_move_foreground(win);
 	win_set_focus(win_find(win));
 
-	/* Double-click the title bar toggles maximise, as everything does. */
-	if (win == last_win && now - last_ms < 400) {
+	/*
+	 * Double-click the title bar toggles maximise, as everything does -
+	 * but a press that moved the window is a drag, not a click. Without
+	 * that test, repositioning a window in two quick short drags read as
+	 * one double-click and maximised it mid-gesture, which is what
+	 * "it maximises on its own while I am still dragging" turned out to
+	 * be. Every desktop applies the same movement threshold.
+	 */
+	if (win == last_win && !drag_moved && now - last_ms < 400) {
 		win_toggle_max(win_find(win));
 		last_win = NULL;	/* a third click is not a second one */
 	} else {
 		last_ms = now;
 		last_win = win;
 	}
+	drag_moved = 0;
 }
 
 /*
@@ -1428,6 +1481,17 @@ static void drag_release_cb(lv_event_t *e)
 	snap_hint_update(-1, NULL);
 	if (zone >= 0)
 		win_snap(w, zone);
+}
+
+/*
+ * A press can be lost rather than released - and then RELEASED never arrives,
+ * so the snap preview would stay up over the whole screen with nothing
+ * dragging it.
+ */
+static void drag_cancel_cb(lv_event_t *e)
+{
+	(void)e;
+	snap_hint_update(-1, NULL);
 }
 
 static void raise_cb(lv_event_t *e)
@@ -1669,6 +1733,7 @@ static lv_obj_t *make_window(const char *title, int x, int y, int w, int h)
 	lv_obj_add_event_cb(hdr, drag_cb, LV_EVENT_PRESSING, win);
 	lv_obj_add_event_cb(hdr, win_press_cb, LV_EVENT_PRESSED, win);
 	lv_obj_add_event_cb(hdr, drag_release_cb, LV_EVENT_RELEASED, win);
+	lv_obj_add_event_cb(hdr, drag_cancel_cb, LV_EVENT_PRESS_LOST, win);
 	lv_obj_add_event_cb(win, raise_cb, LV_EVENT_PRESSED, win);
 
 	/*
@@ -3343,6 +3408,16 @@ int main(void)
 					    lv_color_hex(COL_PANEL_TEXT), 0);
 		lv_label_set_text(sysinfo, "reading /proc...");
 	}
+
+	/*
+	 * The terminal is what the desktop is for, so it starts focused and on
+	 * top. make_window() focuses whatever it just built, which left the
+	 * System window with the focus - harmless while the terminal read the
+	 * keyboard regardless, and a dead keyboard at boot once input started
+	 * following the focus.
+	 */
+	lv_obj_move_foreground(term.win);
+	win_set_focus(win_find(term.win));
 
 	/*
 	 * Block on the input fds instead of spinning.

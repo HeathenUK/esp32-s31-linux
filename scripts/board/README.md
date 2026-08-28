@@ -62,6 +62,23 @@ the first version cost 42%.
     jpegcap <fps> <secs> [q] [w] [h]               # pace encodes without forking
     keylog                                          # log every evdev key event
 
+**These live in `/root`, not on `$PATH`** - they are hand-deployed tools, not
+part of the image, so call them as `/root/uinject`. A bare `uinject` gives
+"not found", which reads as "the tool does not exist here" rather than "it is
+one directory away". Re-imaging the card loses them; rebuild from `rootfs/*.c`
+and ship them with `scripts/board/deploy.py`.
+
+`uinject` also understands `click X Y`, `dragto x1 y1 x2 y2`,
+`dragholdto x1 y1 x2 y2` (holds the button so the snap preview can be
+photographed), `dblclick X Y`, `wheel N` and `key CODE`. Every invocation homes
+the pointer to the top-left first and pays `UINJECT_SETTLE` ms (default 1500)
+before its first event, so two gestures in separate runs can never fall inside
+the desktop's 400 ms double-click window - `dblclick` exists for that reason.
+**Raise the settle to ~2500 ms when the desktop has just started**: discovery
+is on a 2 s rescan, and evdev only delivers events queued after the reader
+opens the node, so an early gesture is silently dropped and looks exactly like
+a broken drag.
+
 `uinject` exists because `deskbench` hashes the framebuffer on every iteration
 and costs ~53% of the core doing it. That is fine when it *is* the instrument
 and ruinous when the point is to film or measure how the desktop behaves.
