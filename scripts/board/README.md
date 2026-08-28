@@ -68,7 +68,15 @@ part of the image, so call them as `/root/uinject`. A bare `uinject` gives
 one directory away". Re-imaging the card loses them; rebuild from `rootfs/*.c`
 and ship them with `scripts/board/deploy.py`.
 
-`uinject` also understands `click X Y`, `dragto x1 y1 x2 y2`,
+`uinject` also understands `altkey CODE [n] [hold]`, which holds Alt, taps
+CODE n times and then releases Alt - Alt-Tab commits on the *release*, and the
+press and the release cannot be separate runs because the uinput device is
+destroyed on exit and the held modifier dies with it. `hold` keeps Alt down so
+the switcher can be photographed before it commits; kill that run and the
+release never arrives, so the next `altkey` steps a switcher that is still
+open. That contaminated a test once and read as a broken commit.
+
+It also understands `click X Y`, `dragto x1 y1 x2 y2`,
 `dragholdto x1 y1 x2 y2` (holds the button so the snap preview can be
 photographed), `dblclick X Y`, `wheel N` and `key CODE`. Every invocation homes
 the pointer to the top-left first and pays `UINJECT_SETTLE` ms (default 1500)

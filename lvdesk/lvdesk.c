@@ -165,6 +165,15 @@ static void term_scrollback(int lines);
 static int term_focused(void);
 
 /*
+ * Window-management shortcuts, likewise defined with the window records.
+ * wm_shortcut() returns 1 when it has consumed the key, so nothing reaches
+ * the focused window; switcher_end() commits an Alt-Tab when Alt is let go.
+ */
+static int wm_shortcut(int code);
+static void switcher_end(void);
+static void switcher_timeout(void);
+
+/*
  * The passphrase prompt, declared here because the keyboard handler has to
  * divert into it and sits above its definition.
  */
@@ -346,6 +355,15 @@ static void kbd_key(int code)
 	}
 
 	/*
+	 * Window management first. These belong to the desktop rather than to
+	 * any window, so they are taken before the focus gate below - and
+	 * before Alt turns into an ESC prefix, or Alt-Tab would type ESC TAB
+	 * into the shell, which is what it used to do.
+	 */
+	if (wm_shortcut(code))
+		return;
+
+	/*
 	 * Everything below this point types into the terminal, so it only
 	 * happens when the terminal is the focused window. It used to read the
 	 * keyboard unconditionally: clicking the System window and typing
@@ -397,6 +415,8 @@ static int kbd_poll(void)
 	int busy = 0;
 	int i;
 
+	switcher_timeout();
+
 	/* pick up devices that appeared after start-up */
 	if (lv_tick_get() - kbd_scan_at > 2000) {
 		kbd_scan_at = lv_tick_get();
@@ -433,7 +453,11 @@ static int kbd_poll(void)
 			case KEY_LEFTCTRL: case KEY_RIGHTCTRL:
 				mod_ctrl = !!ev.value; continue;
 			case KEY_LEFTALT: case KEY_RIGHTALT:
-				mod_alt = !!ev.value; continue;
+				mod_alt = !!ev.value;
+				/* Letting Alt go is what commits the choice. */
+				if (!mod_alt)
+					switcher_end();
+				continue;
 			case KEY_CAPSLOCK:
 				if (ev.value == 1) mod_caps = !mod_caps;
 				continue;
@@ -1321,8 +1345,22 @@ static void snap_hint_update(int zone, lv_obj_t *above)
 /*
  * Set while a press is actually moving a window, so the double-click test can
  * tell a reposition from a click. Cleared when the next press is evaluated.
+ * drag_px accumulates the distance travelled, which is what decides a drag has
+ * begun in earnest - see win_unsnap_for_drag().
  */
 static int drag_moved;
+static int drag_px;
+
+/* How far a press must travel before it counts as a drag rather than a click. */
+#define DRAG_UNSNAP_PX	8
+
+/*
+ * Defined down with the window records: restore a maximised or tiled window
+ * and place it under the pointer so the drag can carry it. Every desktop does
+ * this - without it, dragging a maximised window slides a full-screen window
+ * around and leaves it still flagged maximised, so its restore button lies.
+ */
+static int win_unsnap_for_drag(lv_obj_t *win, int32_t px);
 
 static void drag_cb(lv_event_t *e)
 {
@@ -1330,12 +1368,26 @@ static void drag_cb(lv_event_t *e)
 	lv_indev_t *indev = lv_indev_active();
 	int32_t sw = lv_display_get_horizontal_resolution(NULL);
 	int32_t sh = lv_display_get_vertical_resolution(NULL);
-	int32_t w = lv_obj_get_width(win);
+	int32_t w;
 	int32_t x, y;
-	lv_point_t v;
+	lv_point_t v, p;
 
 	if (!indev) return;
 	lv_indev_get_vect(indev, &v);
+	lv_indev_get_point(indev, &p);
+	if (v.x || v.y) {
+		drag_moved = 1;
+		drag_px += (v.x < 0 ? -v.x : v.x) + (v.y < 0 ? -v.y : v.y);
+	}
+	/*
+	 * Only once the press has really travelled. A maximised window must
+	 * survive being clicked, and a couple of pixels of hand tremor on the
+	 * title bar is a click.
+	 */
+	if (drag_px >= DRAG_UNSNAP_PX)
+		win_unsnap_for_drag(win, p.x);
+
+	w = lv_obj_get_width(win);
 	x = lv_obj_get_x(win) + v.x;
 	y = lv_obj_get_y(win) + v.y;
 
@@ -1351,15 +1403,7 @@ static void drag_cb(lv_event_t *e)
 	if (y > sh - TASKBAR_H - HDR_H) y = sh - TASKBAR_H - HDR_H;
 
 	lv_obj_set_pos(win, x, y);
-	if (v.x || v.y)
-		drag_moved = 1;
-
-	{
-		lv_point_t p;
-
-		lv_indev_get_point(indev, &p);
-		snap_hint_update(snap_zone_at(p.x, p.y), win);
-	}
+	snap_hint_update(snap_zone_at(p.x, p.y), win);
 }
 
 /*
@@ -1401,6 +1445,48 @@ static struct winrec *win_find(lv_obj_t *win)
 }
 
 /*
+ * Most-recently-used order, maintained alongside the stacking order because
+ * Alt-Tab needs it and stacking order cannot supply it: cycling by stacking
+ * order ping-pongs between the top two windows and never reaches the third,
+ * which is the complaint people have about the window managers that get this
+ * wrong. MAXWIN is 8, so a memmove-by-hand costs nothing worth measuring.
+ */
+static struct winrec *mru[MAXWIN];
+static int mru_n;
+
+static void mru_touch(struct winrec *w)
+{
+	int i, j;
+
+	if (!w)
+		return;
+	for (i = 0; i < mru_n; i++)
+		if (mru[i] == w)
+			break;
+	if (i == mru_n) {
+		if (mru_n >= MAXWIN)
+			return;
+		mru_n++;
+	}
+	for (j = i; j > 0; j--)
+		mru[j] = mru[j - 1];
+	mru[0] = w;
+}
+
+static void mru_drop(struct winrec *w)
+{
+	int i, j;
+
+	for (i = 0; i < mru_n; i++)
+		if (mru[i] == w) {
+			for (j = i; j < mru_n - 1; j++)
+				mru[j] = mru[j + 1];
+			mru_n--;
+			return;
+		}
+}
+
+/*
  * Focus is a colour change on two title bars, so repaint only those two.
  * Restyling every window unconditionally would damage all of them on each
  * click, which at 800x480 is most of the screen for no visible difference.
@@ -1416,6 +1502,25 @@ static void win_set_focus(struct winrec *w)
 	if (w)
 		lv_obj_set_style_bg_color(w->hdr,
 					  lv_color_hex(COL_HDR_FOCUS), 0);
+	mru_touch(w);
+}
+
+/*
+ * After a window is minimised or closed, hand the keyboard to the next one
+ * that can take it rather than dropping focus on the floor. Before input
+ * followed the focus this did not matter; now a focus of NULL is a dead
+ * keyboard, which looks exactly like the desktop having hung.
+ */
+static void win_focus_next(void)
+{
+	int i;
+
+	for (i = 0; i < mru_n; i++)
+		if (mru[i]->win && !mru[i]->minimised) {
+			win_set_focus(mru[i]);
+			return;
+		}
+	win_set_focus(NULL);
 }
 
 /*
@@ -1459,6 +1564,7 @@ static void win_press_cb(lv_event_t *e)
 		last_win = win;
 	}
 	drag_moved = 0;
+	drag_px = 0;
 }
 
 /*
@@ -1507,12 +1613,18 @@ static void raise_cb(lv_event_t *e)
 	win_set_focus(w);
 }
 
-static void win_close_cb(lv_event_t *e)
-{
-	struct winrec *w = lv_event_get_user_data(e);
+static void switcher_cancel(void);
 
+static void win_close(struct winrec *w)
+{
 	if (!w || !w->win)
 		return;
+	/*
+	 * A switcher on screen holds pointers to windows, one of which may be
+	 * this one. Drop it rather than commit it - Alt-F4 during an Alt-Tab
+	 * is a close, not a switch.
+	 */
+	switcher_cancel();
 	if (w->on_close)
 		w->on_close();
 	if (w->tbtn)
@@ -1520,8 +1632,170 @@ static void win_close_cb(lv_event_t *e)
 	lv_obj_delete(w->win);
 	w->win = NULL;
 	w->tbtn = NULL;
-	if (win_focus == w)
+	mru_drop(w);
+	if (win_focus == w) {
+		/* The header is gone, so clear it directly, then re-home. */
 		win_focus = NULL;
+		win_focus_next();
+	}
+}
+
+static void win_close_cb(lv_event_t *e)
+{
+	win_close(lv_event_get_user_data(e));
+}
+
+/* -------------------------------------------------------- window switching */
+
+/*
+ * Alt-Tab, in the shape every desktop uses: hold Alt, press Tab to walk a
+ * most-recently-used list with a switcher on screen, release Alt to commit.
+ * Shift-Alt-Tab walks the other way.
+ *
+ * Nothing is raised or focused *during* the walk, only on the release. That
+ * is what makes Alt-Tab-Tab-Tab one decision instead of three, and it keeps
+ * the desktop from repainting a window per step - on this panel a raise is a
+ * full-window damage rectangle, so cycling four windows the naive way would
+ * repaint most of the screen four times to show a choice that had not been
+ * made yet.
+ */
+#define SW_W		240
+#define SW_ROW_H	18
+
+/*
+ * A switcher that can only be dismissed by the Alt release is a switcher that
+ * stays on screen for ever if that release never arrives - and this board has
+ * been seen to lose one: a HID report went missing and the input core sat
+ * auto-repeating a key nobody was holding until the next report cleared it.
+ * So the walk also times out, committing whatever is highlighted, which is
+ * what letting go of Alt would have done anyway.
+ */
+#define SW_TIMEOUT_MS	4000
+
+static lv_obj_t *sw_panel;
+static lv_obj_t *sw_rows[MAXWIN];
+static struct winrec *sw_list[MAXWIN];
+static int sw_n, sw_i;
+static uint32_t sw_ms;
+
+static void switcher_paint(void)
+{
+	int i;
+
+	for (i = 0; i < sw_n; i++) {
+		int on = (i == sw_i);
+
+		lv_obj_set_style_bg_color(sw_rows[i],
+			lv_color_hex(on ? COL_HDR_FOCUS : COL_PANEL), 0);
+		lv_obj_set_style_text_color(sw_rows[i],
+			lv_color_hex(on ? COL_HDR_TEXT : COL_PANEL_TEXT), 0);
+	}
+}
+
+static void switcher_cancel(void)
+{
+	if (sw_panel) {
+		lv_obj_delete(sw_panel);
+		sw_panel = NULL;
+	}
+	sw_n = 0;
+}
+
+static void switcher_open(void)
+{
+	int32_t sw = lv_display_get_horizontal_resolution(NULL);
+	int32_t sh = lv_display_get_vertical_resolution(NULL);
+	int32_t h;
+	int i;
+
+	sw_n = 0;
+	for (i = 0; i < mru_n && sw_n < MAXWIN; i++)
+		if (mru[i]->win && !mru[i]->minimised)
+			sw_list[sw_n++] = mru[i];
+	if (sw_n < 2) {			/* nothing to switch between */
+		sw_n = 0;
+		return;
+	}
+
+	h = sw_n * SW_ROW_H + 8;
+	sw_panel = lv_obj_create(lv_screen_active());
+	lv_obj_remove_flag(sw_panel, LV_OBJ_FLAG_CLICKABLE);
+	lv_obj_remove_flag(sw_panel, LV_OBJ_FLAG_SCROLLABLE);
+	lv_obj_set_style_radius(sw_panel, 0, 0);
+	lv_obj_set_style_pad_all(sw_panel, 4, 0);
+	lv_obj_set_style_bg_color(sw_panel, lv_color_hex(COL_PANEL), 0);
+	lv_obj_set_style_border_width(sw_panel, 1, 0);
+	lv_obj_set_style_border_color(sw_panel, lv_color_hex(COL_HDR_FOCUS), 0);
+	lv_obj_set_size(sw_panel, SW_W, h);
+	lv_obj_set_pos(sw_panel, (sw - SW_W) / 2, (sh - TASKBAR_H - h) / 2);
+
+	for (i = 0; i < sw_n; i++) {
+		lv_obj_t *l = lv_label_create(sw_panel);
+
+		sw_rows[i] = l;
+		lv_obj_set_style_text_font(l, FONT_UI, 0);
+		lv_obj_set_style_pad_all(l, 2, 0);
+		lv_obj_set_style_bg_opa(l, LV_OPA_COVER, 0);
+		lv_obj_set_width(l, SW_W - 10);
+		lv_obj_set_pos(l, 0, i * SW_ROW_H);
+		lv_label_set_text(l, sw_list[i]->tlabel ?
+				  lv_label_get_text(sw_list[i]->tlabel) :
+				  "window");
+	}
+	sw_i = 0;
+	lv_obj_move_foreground(sw_panel);
+}
+
+static void switcher_end(void)
+{
+	struct winrec *w;
+
+	if (!sw_n)
+		return;
+	w = sw_list[sw_i];
+	switcher_cancel();
+	if (w && w->win && !w->minimised) {
+		lv_obj_move_foreground(w->win);
+		win_set_focus(w);
+	}
+}
+
+static void switcher_timeout(void)
+{
+	if (sw_n && lv_tick_get() - sw_ms > SW_TIMEOUT_MS)
+		switcher_end();
+}
+
+/*
+ * Returns 1 when the key belonged to the desktop rather than to a window.
+ */
+static int wm_shortcut(int code)
+{
+	if (!mod_alt)
+		return 0;
+
+	if (code == KEY_TAB) {
+		if (!sw_n) {
+			switcher_open();
+			if (!sw_n)
+				return 1;	/* one window: nothing to do */
+			sw_i = 1;		/* the one behind the current */
+		} else {
+			sw_i += shift ? -1 : 1;
+			if (sw_i < 0)
+				sw_i = sw_n - 1;
+			else if (sw_i >= sw_n)
+				sw_i = 0;
+		}
+		sw_ms = lv_tick_get();
+		switcher_paint();
+		return 1;
+	}
+	if (code == KEY_F4) {
+		win_close(win_focus);
+		return 1;
+	}
+	return 0;
 }
 
 static void win_toggle_max(struct winrec *w)
@@ -1596,6 +1870,30 @@ static void win_snap(struct winrec *w, int mode)
 	if (w->maxicon)
 		lv_image_set_src(w->maxicon, w->maximised ?
 				 &lvdesk_restore_img : &lvdesk_max_img);
+}
+
+static int win_unsnap_for_drag(lv_obj_t *win, int32_t px)
+{
+	struct winrec *w = win_find(win);
+	int32_t ow, off;
+
+	if (!w || !w->win || (!w->maximised && !w->snapped))
+		return 0;
+	ow = lv_obj_get_width(win);
+	/*
+	 * Keep the grab point at the same fraction along the title bar. Simply
+	 * restoring the size would leave a window grabbed near its middle
+	 * jumping out from under the pointer, which reads as the drag having
+	 * been dropped.
+	 */
+	off = ow > 0 ? (px - lv_obj_get_x(win)) * w->rw / ow : w->rw / 2;
+	lv_obj_set_size(win, w->rw, w->rh);
+	lv_obj_set_pos(win, px - off, lv_obj_get_y(win));
+	w->maximised = 0;
+	w->snapped = 0;
+	if (w->maxicon)
+		lv_image_set_src(w->maxicon, &lvdesk_max_img);
+	return 1;
 }
 
 /*
@@ -1681,16 +1979,43 @@ static lv_obj_t *hdr_button(lv_obj_t *hdr, const lv_image_dsc_t *icon,
  * brings it back. That is the contract everywhere - a minimised window has to
  * remain reachable, and the task bar is the only place left to reach it from.
  */
-static void win_min_cb(lv_event_t *e)
+static void win_minimise(struct winrec *w)
 {
-	struct winrec *w = lv_event_get_user_data(e);
-
 	if (!w || !w->win)
 		return;
 	lv_obj_add_flag(w->win, LV_OBJ_FLAG_HIDDEN);
 	w->minimised = 1;
 	if (win_focus == w)
-		win_set_focus(NULL);
+		win_focus_next();
+}
+
+static void win_min_cb(lv_event_t *e)
+{
+	win_minimise(lv_event_get_user_data(e));
+}
+
+/*
+ * A task bar button is a toggle, not just a raise: click the window that is
+ * already on top and it minimises, which is the contract on Windows, KDE and
+ * every panel that has ever had a task list. Raising an already-raised window
+ * does nothing visible, so without this the button is dead half the time.
+ */
+static void task_btn_cb(lv_event_t *e)
+{
+	lv_obj_t *win = lv_event_get_user_data(e);
+	struct winrec *w = win_find(win);
+
+	if (!w || !w->win)
+		return;
+	if (w->minimised) {
+		lv_obj_remove_flag(w->win, LV_OBJ_FLAG_HIDDEN);
+		w->minimised = 0;
+	} else if (win_focus == w) {
+		win_minimise(w);
+		return;
+	}
+	lv_obj_move_foreground(w->win);
+	win_set_focus(w);
 }
 
 static lv_obj_t *make_window(const char *title, int x, int y, int w, int h)
@@ -1761,7 +2086,7 @@ static lv_obj_t *make_window(const char *title, int x, int y, int w, int h)
 	lv_obj_set_style_bg_color(btn, lv_color_hex(COL_HDR), 0);
 	lv_obj_set_style_shadow_width(btn, 0, 0);
 	lv_obj_set_style_text_font(btn, FONT_UI, 0);
-	lv_obj_add_event_cb(btn, raise_cb, LV_EVENT_CLICKED, win);
+	lv_obj_add_event_cb(btn, task_btn_cb, LV_EVENT_CLICKED, win);
 	{
 		lv_obj_t *l = lv_label_create(btn);
 

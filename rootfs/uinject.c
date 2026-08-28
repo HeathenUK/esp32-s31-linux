@@ -239,6 +239,37 @@ int main(int argc, char **argv)
 
 		emit(kbd_fd, EV_KEY, k, 1); syn(kbd_fd);
 		emit(kbd_fd, EV_KEY, k, 0); syn(kbd_fd);
+	} else if (!strcmp(what, "altkey")) {
+		/*
+		 * altkey CODE [n] [hold] - hold Alt, tap CODE n times, then
+		 * release Alt (or keep holding it, if hold is non-zero).
+		 *
+		 * Alt-Tab commits on the Alt *release*, so the press and the
+		 * release cannot be separate uinject runs: the uinput device
+		 * is destroyed on exit and the held modifier dies with it,
+		 * which the desktop sees as a release it never asked for.
+		 * `hold` keeps the switcher on screen long enough to
+		 * photograph the state before it commits.
+		 */
+		int k = argc > 2 ? atoi(argv[2]) : KEY_TAB;
+		int n = argc > 3 ? atoi(argv[3]) : 1;
+		int hold = argc > 4 ? atoi(argv[4]) : 0;
+		int i;
+
+		emit(kbd_fd, EV_KEY, KEY_LEFTALT, 1); syn(kbd_fd);
+		msleep(150);
+		for (i = 0; i < n; i++) {
+			emit(kbd_fd, EV_KEY, k, 1); syn(kbd_fd);
+			msleep(80);
+			emit(kbd_fd, EV_KEY, k, 0); syn(kbd_fd);
+			msleep(250);
+		}
+		if (hold) {
+			sleep(20);
+		} else {
+			emit(kbd_fd, EV_KEY, KEY_LEFTALT, 0); syn(kbd_fd);
+			msleep(400);
+		}
 	} else if (!strcmp(what, "dragto")) {
 		/* dragto x1 y1 x2 y2 - press at the first point, drag, release. */
 		move_to_precise(argc > 2 ? atoi(argv[2]) : 0,
