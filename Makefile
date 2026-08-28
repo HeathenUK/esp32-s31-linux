@@ -289,6 +289,8 @@ linux: toolchain | $(LINUX_OUT)
 		--disable USB_DWC2_DEBUG \
 		--disable USB_DWC2_DEBUG_PERIODIC \
 		--enable HID_SUPPORT \
+		--enable REGULATOR \
+		--enable REGULATOR_FIXED_VOLTAGE \
 		--enable DRM_CLIENT_SELECTION \
 		--enable DRM_FBDEV_EMULATION \
 		--enable FRAMEBUFFER_CONSOLE \

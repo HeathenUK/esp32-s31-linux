@@ -1,0 +1,77 @@
+esp32s31: give Linux the microSD's power switch
+
+GPIO39 is BSP_SD_CTRL in Espressif's own board support - "active-low
+power/switch control" - and Linux neither knew about it nor drove it. Measured
+before wiring: GPIO_ENABLE1 bit 7 was 0, so the pad was not driven at all and
+floated low, which happens to mean "on". The card was therefore permanently
+powered and could never be cycled.
+
+That is why a wedged card was unrecoverable. esp_restart() resets the SoC and
+not the card, so a card interrupted mid-write keeps holding DAT0 low, the first
+CMD0 times out against it, and no reset available to software could clear it -
+only pulling the board's power did.
+
+With a fixed regulator on that GPIO and vmmc-supply on the host, the MMC core
+cycles the card as part of ordinary initialisation.
+
+**It recovered a wedged card in practice.** The board had been stuck on the
+flash rescue root across several EN resets and a Linux reboot; flashing this
+brought the card back on the next boot with no physical repower:
+
+	mmcblk0: mmc0:d555 SK128 119 GiB
+	root: microSD after 0s
+	/ is /dev/mmcblk0 on / type ext4 (rw,relatime)
+
+Worth recording that a *manual* toggle of the same pin from the rescue shell -
+enable the output, drive high ~4 s, drive low - did NOT revive it, even though
+GPIO_IN1 bit 7 confirmed the pin moved. Doing it through the regulator, as part
+of the MMC core's own power-up sequence, did. So the timing and ordering the
+core applies matter; poking the GPIO by hand is not equivalent.
+
+Needs CONFIG_REGULATOR and CONFIG_REGULATOR_FIXED_VOLTAGE, which were not set -
+see the Makefile change alongside this.
+
+--- a/arch/riscv/boot/dts/espressif/esp32s31_generic.dts
++++ b/arch/riscv/boot/dts/espressif/esp32s31_generic.dts
+@@ -36,8 +36,41 @@
+  * could load an overlay. These pins are shared with the module's SPI NAND;
+  * the board selects microSD by default.
+  */
++/*
++ * The card's power switch, which nothing was driving.
++ *
++ * GPIO39 is BSP_SD_CTRL in Espressif's own board support - "active-low
++ * power/switch control", asserted low - and until now Linux neither knew about
++ * it nor drove it, so the pin floated low (permanently on) and the card could
++ * never be power-cycled. That matters because esp_restart() resets the SoC and
++ * not the card: a card interrupted mid-write holds DAT0 low, the first CMD0
++ * times out against it, and nothing short of pulling the board's power clears
++ * it. With a regulator here the MMC core cycles the card as part of normal
++ * initialisation.
++ *
++ * Measured before wiring it: ENABLE1 bit 7 was 0, so the pad was not driven at
++ * all, and toggling it does move the pin (GPIO_IN1 bit 7 follows). What is NOT
++ * established is that a cycle here clears an already-wedged card - one attempt
++ * with ~4 s off did not revive one. It should stop the state arising, which is
++ * the more useful half.
++ */
++/ {
++	sd_pwr: regulator-sd-vcc {
++		compatible = "regulator-fixed";
++		regulator-name = "sd-vcc";
++		regulator-min-microvolt = <3300000>;
++		regulator-max-microvolt = <3300000>;
++		gpio = <&gpio 39 GPIO_ACTIVE_LOW>;
++		/* No enable-active-high: the switch asserts LOW, per the BSP. */
++		regulator-boot-on;
++		/* SD spec wants the rail stable before the first command. */
++		startup-delay-us = <20000>;
++	};
++};
++
+ &sdmmc {
+ 	status = "okay";
++	vmmc-supply = <&sd_pwr>;
+ };
+ 
+ / {
