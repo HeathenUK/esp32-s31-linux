@@ -1621,3 +1621,60 @@ hardcoded.
 Ordered S30, ahead of the desktop at S40: musl caches the timezone on first
 use, so a desktop that starts first shows UTC for ever - 12:23 on the panel
 against 13:23 on the console until the ordering was fixed.
+
+## Undo has to cover flash state, not just source (2026-08-28)
+
+**This cost hours and left the board completely unusable.** Read it before
+changing anything on hart0.
+
+Teaching the ESP-Hosted co-processor to associate early (so screen capture could
+start before Linux) meant writing two things into the `nvs` partition: a
+credential slot, and `state.auto_connect = 1`. Backing the change out did
+nothing at all, because the **stock** code reads `auto_connect` from NVS and
+associates on `WIFI_EVENT_STA_START` regardless of who put it there. The radio
+then powered up during the loader's splash and starved the LCD scanout DMA:
+
+- the splash tore and shifted, wrapping round the panel
+- it was **intermittent**, depending on when association landed
+- `git checkout` plus a rebuild produced a loader of byte-identical size and
+  changed nothing, which made it look like the revert had failed
+
+The fix was to erase the store:
+
+    esptool -p $PORT -b 2000000 erase-region 0x11000 0xF000    # nvs
+
+Linux's own credentials are in `/etc/wpa_supplicant.conf` on the card and are
+not affected.
+
+**The rule: the moment a change writes persistent flash - NVS, retention
+registers, the card - write down that it did and how to clear it. That note is
+the only undo.** Before concluding a revert has failed, ask what the change
+*persisted*.
+
+### Two more from the same incident
+
+- **The loader is three pieces and they must match**: `bootloader.bin` @ 0x2000,
+  `partition-table.bin` @ 0x8000, and the app `hello_world.bin` @ 0x20000.
+  Flashing only the app against a second-stage from another build boot-loops, or
+  hands off into silence with no console output at all.
+- **Old loader binaries in `images/` are not a rollback.** They carry partition
+  geometry compiled into `main.c` (twice) and reset ~350 ms in when it disagrees
+  with the current table - which it now does, since the linux partition grew to
+  6,422,528. `images/hart0.bin` (20 Aug) and `images/qio/hello_world.bin`
+  (21 Aug) both boot-loop. The only rollback is a rebuild from source, so do not
+  overwrite `images/hello_world.bin` without keeping the previous copy.
+
+### Also settled, and worth keeping
+
+hart0's link is fast enough for streamed screen capture: **25.8 Mbit/s
+(3.1 MB/s) sustained, essentially lossless**, measured by injecting raw
+Ethernet/IPv4/UDP through `esp_wifi_internal_tx()` - no lwIP, which hart0 cannot
+use because the hosted path hands receive to Linux. That is ~78 fps at a 40 KB
+frame, against a JPEG encoder that does 7.2 ms/frame. Serial is 8-25x too slow.
+The S31 has **no** hardware H.264 (`soc_caps.h`: JPEG and PPA only), so MJPEG is
+the codec.
+
+**But capture must not run during the loader's splash**: the probe saturating
+the link is what first tore the panel, before the NVS problem was understood.
+Whatever drives capture has to pace itself and stay off the bus while the
+loader owns the display.

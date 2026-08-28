@@ -125,6 +125,12 @@ for kernel work; the rootfs only needs rebuilding when userspace changes.
   constants compiled into `bootloader/main/main.c` (**twice**, ~line 71 and
   ~line 346). The loader validates and resets ~350 ms in when they disagree,
   which reads as the loader dying during PSRAM init.
+- **Reverting source is not undo if the change wrote flash.** NVS, retention
+  registers and the card all survive `git checkout` and a reflash, and the stock
+  code then keeps acting on what you stored. An early-association flag left in
+  NVS tore the LCD splash and cost hours, because a byte-identical rebuild
+  changed nothing. Clear the store: `esptool erase-region 0x11000 0xF000` is the
+  `nvs` partition. Record any flash state you write - that note is the only undo.
 - **The loader app is `hello_world.bin` at 0x20000**, not `bootloader.bin`.
   Those `boot:` log lines come from it. Repartitioning means reflashing all
   three.
