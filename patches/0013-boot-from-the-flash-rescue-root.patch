@@ -1,0 +1,28 @@
+riscv: boot the flash rescue root, not the microSD directly
+
+Pairs with the Makefile change that makes the XIP image bootable (an /init and
+six directories on an image that already carries busybox and its libraries).
+
+The old line ended `root=/dev/mmcblk0 rootfstype=ext4 rw rootwait`, and
+`rootwait` waits for ever. A card that is absent - or stuck busy after a warm
+restart, see patches/0012 - left the board on "Waiting for root device
+/dev/mmcblk0" with no console and no diagnosis.
+
+Now the kernel mounts the flash cramfs, which is always there, and /init hands
+over to the card when it appears (20 s limit) or drops to a shell and says why.
+The card, when present, supersedes it completely: / is /dev/mmcblk0 ext4 rw and
+every service starts exactly as before.
+
+`ro` because cramfs is read-only anyway, and the card is mounted rw by /init.
+
+--- a/arch/riscv/configs/esp32s31_defconfig
++++ b/arch/riscv/configs/esp32s31_defconfig
+@@ -109,7 +109,7 @@
+ CONFIG_FPU=y
+ 
+ # Kernel command line
+-CONFIG_CMDLINE="dw_mmc.lost_irq_poll=0 dw_mmc.low_pwr=0 console=tty0 console=ttyS0,1000000n8 root=/dev/mmcblk0 rootfstype=ext4 rw rootwait init=/init profile=6"
++CONFIG_CMDLINE="dw_mmc.lost_irq_poll=0 dw_mmc.low_pwr=0 console=tty0 console=ttyS0,1000000n8 root=mtd:rootfs rootfstype=cramfs ro init=/init profile=6"
+ CONFIG_CMDLINE_FORCE=y
+ 
+ # Built-in DTB (no external loader needed)
