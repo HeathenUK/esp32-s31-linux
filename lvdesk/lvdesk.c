@@ -164,6 +164,9 @@ static void term_scrollback(int lines);
  */
 static int term_focused(void);
 
+/* Title of the focused window, or NULL if nothing has focus. */
+static const char *win_focus_title(void);
+
 /*
  * Window-management shortcuts, likewise defined with the window records.
  * wm_shortcut() returns 1 when it has consumed the key, so nothing reaches
@@ -429,8 +432,46 @@ static void kbd_key(int code)
 	 * still ran the characters through the shell behind it, and a second
 	 * window wanting input could never have received any.
 	 */
-	if (!term_focused())
-		return;
+	if (!term_focused()) {
+		/*
+		 * The one path that could discard a keystroke without saying
+		 * so, and it was introduced the same day input started
+		 * following the focus. Before that the terminal read the
+		 * keyboard unconditionally and this failure mode did not
+		 * exist; afterwards, anything that left the focus elsewhere -
+		 * or nowhere - ate every key silently, which is
+		 * indistinguishable from a broken keyboard.
+		 *
+		 * Two changes. It says so, rate limited so a held key cannot
+		 * flood the log. And with NO window focused at all the
+		 * terminal takes the key rather than the desktop swallowing
+		 * it, because a keyboard that does nothing is a worse answer
+		 * than a keyboard that types into the only thing that accepts
+		 * typing.
+		 */
+		static uint32_t last_ms;
+		uint32_t now = lv_tick_get();
+
+		const char *who = win_focus_title();
+
+		if (!who) {
+			if (now - last_ms > 2000) {
+				last_ms = now;
+				printf("lvdesk: no window focused - routing keys "
+				       "to the terminal\n");
+				fflush(stdout);
+			}
+		} else {
+			if (now - last_ms > 2000) {
+				last_ms = now;
+				printf("lvdesk: INPUT DISCARDED - key %d, but "
+				       "'%s' has focus, not the terminal\n",
+				       code, who);
+				fflush(stdout);
+			}
+			return;
+		}
+	}
 
 	if (code == KEY_PAGEUP)   { term_scrollback(term.nrows / 2); return; }
 	if (code == KEY_PAGEDOWN) { term_scrollback(-term.nrows / 2); return; }
@@ -1630,6 +1671,14 @@ static void win_focus_next(void)
  * window is not focused, and once the terminal is closed term.win is NULL, so
  * both cases fall out of the same test.
  */
+static const char *win_focus_title(void)
+{
+	if (!win_focus || !win_focus->win)
+		return NULL;
+	return win_focus->tlabel ? lv_label_get_text(win_focus->tlabel)
+				 : "another window";
+}
+
 static int term_focused(void)
 {
 	return term.win && win_focus && win_focus->win == term.win &&
