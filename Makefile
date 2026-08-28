@@ -500,6 +500,54 @@ xip-image:
 		  echo '8x13bold "-misc-fixed-bold-r-normal--13-120-75-75-c-80-iso8859-1"'; \
 		} >> "$$FD/fonts.alias"; \
 	fi
+	@# A rescue root, so a board with no usable microSD still boots.
+	@#
+	@# The image already carries /bin/busybox and its library closure, so
+	@# making it bootable costs an /init and five directories. The kernel
+	@# now mounts THIS as root and the script below hands over to the card
+	@# when there is one - which is the only way to choose at runtime
+	@# without an initramfs, and an initramfs does not fit: the linux
+	@# partition has ~385 KB spare and a busybox one is several times that.
+	@mkdir -p $(XIP_STAGE)/proc $(XIP_STAGE)/sys $(XIP_STAGE)/dev \
+		 $(XIP_STAGE)/tmp $(XIP_STAGE)/mnt/sd $(XIP_STAGE)/etc \
+		 $(XIP_STAGE)/lib
+	@# chroot, not switch_root: busybox's switch_root refuses to run unless
+	@# the current root is ramfs/tmpfs, because it is written for an
+	@# initramfs that it can delete on the way out. This root is cramfs in
+	@# flash and stays where it is, so the mounts are moved across and the
+	@# card is entered with chroot - exec keeps PID 1.
+	@#
+	@# The ELF interpreter, which the closure walker does not include -
+	@# it follows NEEDED entries, and the interpreter is not one. Without
+	@# it every binary here fails to exec with ENOENT, which reads as "the
+	@# file is missing" when the file is plainly there. That is what made
+	@# the first rescue root panic with "Requested init /init failed (-2)".
+	@ln -sf ../usr/lib/libc.so \
+		$(XIP_STAGE)/lib/ld-musl-riscv32-sf.so.1
+	@printf '%s\n' \
+	  '#!/bin/busybox sh' \
+	  '# Flash rescue root. Hands over to the microSD when it appears.' \
+	  'B=/bin/busybox' \
+	  '$$B mount -t proc proc /proc 2>/dev/null' \
+	  '$$B mount -t sysfs sys /sys 2>/dev/null' \
+	  '$$B mount -t devtmpfs dev /dev 2>/dev/null' \
+	  'i=0' \
+	  'while [ $$i -lt 20 ]; do' \
+	  '        [ -b /dev/mmcblk0 ] && break' \
+	  '        $$B sleep 1; i=$$(($$i + 1))' \
+	  'done' \
+	  'if [ -b /dev/mmcblk0 ] && $$B mount -t ext4 /dev/mmcblk0 /mnt/sd; then' \
+	  '        $$B echo "root: microSD after $${i}s"' \
+	  '        for d in proc sys dev; do' \
+	  '                $$B mount --move /$$d /mnt/sd/$$d 2>/dev/null' \
+	  '        done' \
+	  '        exec $$B chroot /mnt/sd /init' \
+	  'fi' \
+	  '$$B echo "root: NO microSD after $${i}s - flash rescue root"' \
+	  '$$B echo "     the card is absent or stuck busy; see patches/0012"' \
+	  'exec $$B sh' \
+	  > $(XIP_STAGE)/init
+	@chmod 755 $(XIP_STAGE)/init
 	@# -X TWICE, deliberately. One -X aligns data to 8 bytes and the kernel
 	@# refuses the image with "data is not page aligned"; the second sets
 	@# opt_xip_mmu and aligns to a page. A single -X mounts, runs, and
