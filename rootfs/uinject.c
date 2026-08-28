@@ -250,6 +250,21 @@ int main(int argc, char **argv)
 			argc > 5 ? atoi(argv[5]) : 0, 24, 22);
 		msleep(120);
 		click(0);
+	} else if (!strcmp(what, "dragholdto")) {
+		/*
+		 * dragholdto x1 y1 x2 y2 - press, drag, and HOLD at the target
+		 * without releasing, so a mid-drag state (the snap preview)
+		 * can be captured. The device is destroyed on exit, which
+		 * releases the button, so the hold has to outlive the capture.
+		 */
+		move_to_precise(argc > 2 ? atoi(argv[2]) : 0,
+				argc > 3 ? atoi(argv[3]) : 0);
+		msleep(150);
+		click(1);
+		msleep(120);
+		move_to_precise(argc > 4 ? atoi(argv[4]) : 0,
+				argc > 5 ? atoi(argv[5]) : 0);
+		sleep(20);
 	} else if (!strcmp(what, "dblclick")) {
 		/*
 		 * dblclick X Y - two presses inside the desktop's 400 ms

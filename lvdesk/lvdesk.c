@@ -1212,6 +1212,86 @@ static void audio_bong(void)
 
 /* ------------------------------------------------------------------ window */
 
+/*
+ * Which edge zone is the pointer in: 0 left half, 1 right half, 2 maximise,
+ * -1 none. One function so the preview and the drop cannot disagree about
+ * where a window would land - if they can drift apart, eventually they will.
+ */
+static int snap_zone_at(int32_t x, int32_t y)
+{
+	int32_t sw = lv_display_get_horizontal_resolution(NULL);
+
+	if (y <= SNAP_EDGE)
+		return 2;
+	if (x <= SNAP_EDGE)
+		return 0;
+	if (x >= sw - SNAP_EDGE)
+		return 1;
+	return -1;
+}
+
+/*
+ * A translucent preview of where the window is about to land, which is what
+ * Windows, GNOME Shell and KWin all show once a drag reaches an edge. Without
+ * it, snapping is a surprise: the window jumps somewhere on release with no
+ * warning that anything was armed.
+ *
+ * It is only touched when the zone *changes*, not on every motion event. The
+ * preview covers half the screen, which is well past the point where the
+ * driver stops using the CPU for the copy, so repainting it per event would
+ * cost far more than the drag itself.
+ */
+static lv_obj_t *snap_hint;
+static int snap_hint_zone = -1;
+
+static void snap_hint_update(int zone, lv_obj_t *above)
+{
+	int32_t sw = lv_display_get_horizontal_resolution(NULL);
+	int32_t sh = lv_display_get_vertical_resolution(NULL);
+
+	if (zone == snap_hint_zone)
+		return;
+	snap_hint_zone = zone;
+
+	if (zone < 0) {
+		if (snap_hint)
+			lv_obj_add_flag(snap_hint, LV_OBJ_FLAG_HIDDEN);
+		return;
+	}
+	if (!snap_hint) {
+		snap_hint = lv_obj_create(lv_screen_active());
+		lv_obj_remove_flag(snap_hint, LV_OBJ_FLAG_CLICKABLE);
+		lv_obj_remove_flag(snap_hint, LV_OBJ_FLAG_SCROLLABLE);
+		lv_obj_set_style_radius(snap_hint, 0, 0);
+		lv_obj_set_style_bg_color(snap_hint,
+					  lv_color_hex(COL_HDR_FOCUS), 0);
+		lv_obj_set_style_bg_opa(snap_hint, 90, 0);
+		lv_obj_set_style_border_color(snap_hint,
+					      lv_color_hex(COL_HDR_FOCUS), 0);
+		lv_obj_set_style_border_width(snap_hint, 2, 0);
+		lv_obj_set_style_border_opa(snap_hint, LV_OPA_COVER, 0);
+	}
+	switch (zone) {
+	case 0:
+		lv_obj_set_pos(snap_hint, 0, 0);
+		lv_obj_set_size(snap_hint, sw / 2, sh - TASKBAR_H);
+		break;
+	case 1:
+		lv_obj_set_pos(snap_hint, sw / 2, 0);
+		lv_obj_set_size(snap_hint, sw - sw / 2, sh - TASKBAR_H);
+		break;
+	default:
+		lv_obj_set_pos(snap_hint, 0, 0);
+		lv_obj_set_size(snap_hint, sw, sh - TASKBAR_H);
+		break;
+	}
+	lv_obj_remove_flag(snap_hint, LV_OBJ_FLAG_HIDDEN);
+	/* Behind the window being dragged, in front of everything else. */
+	lv_obj_move_foreground(snap_hint);
+	if (above)
+		lv_obj_move_foreground(above);
+}
+
 static void drag_cb(lv_event_t *e)
 {
 	lv_obj_t *win = lv_event_get_user_data(e);
@@ -1239,6 +1319,13 @@ static void drag_cb(lv_event_t *e)
 	if (y > sh - TASKBAR_H - HDR_H) y = sh - TASKBAR_H - HDR_H;
 
 	lv_obj_set_pos(win, x, y);
+
+	{
+		lv_point_t p;
+
+		lv_indev_get_point(indev, &p);
+		snap_hint_update(snap_zone_at(p.x, p.y), win);
+	}
 }
 
 /*
@@ -1331,18 +1418,16 @@ static void drag_release_cb(lv_event_t *e)
 {
 	struct winrec *w = win_find(lv_event_get_user_data(e));
 	lv_indev_t *indev = lv_indev_active();
-	int32_t sw = lv_display_get_horizontal_resolution(NULL);
 	lv_point_t p;
+	int zone;
 
 	if (!w || !indev)
 		return;
 	lv_indev_get_point(indev, &p);
-	if (p.y <= SNAP_EDGE)
-		win_snap(w, 2);
-	else if (p.x <= SNAP_EDGE)
-		win_snap(w, 0);
-	else if (p.x >= sw - SNAP_EDGE)
-		win_snap(w, 1);
+	zone = snap_zone_at(p.x, p.y);
+	snap_hint_update(-1, NULL);
+	if (zone >= 0)
+		win_snap(w, zone);
 }
 
 static void raise_cb(lv_event_t *e)
