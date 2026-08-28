@@ -368,8 +368,18 @@ static void term_write(const char *buf, int n)
 			break;
 		usleep(500);
 	}
-	if (off < n)
+	if (off < n) {
+		/*
+		 * Report it. A counter nobody prints is not instrumentation -
+		 * this was incremented and never surfaced anywhere, which is
+		 * the same as not having it.
+		 */
 		kbd_write_fail++;
+		printf("lvdesk: INPUT LOST - pty refused %d of %d bytes "
+		       "(%u so far); the shell is not reading\n",
+		       n - off, n, kbd_write_fail);
+		fflush(stdout);
+	}
 }
 
 static void kbd_key(int code)

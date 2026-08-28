@@ -1,0 +1,59 @@
+#!/bin/sh
+#
+# Find out WHERE a keystroke was lost.
+#
+#   s31-keydiag start    begin recording what the kernel delivers
+#   ...type into the terminal, and note roughly how many characters...
+#   s31-keydiag stop     compare
+#
+# This exists because lvdesk's own logging can only see input that REACHED it.
+# If a wireless receiver never sends the report, the kernel never makes an
+# event, lvdesk never sees one, and there is nothing for it to log - the keys
+# are simply absent, with no error anywhere. That is the most likely cause of
+# the losses reported on this board, and it is invisible to the desktop.
+#
+# So record the kernel's side independently and compare three numbers:
+#
+#   typed by hand  vs  delivered by the kernel  vs  shown on screen
+#
+#   kernel < typed        the receiver or USB lost it. Nothing in software
+#                         can log this. Try the receiver without the hub, and
+#                         check whether it correlates with Wi-Fi traffic - both
+#                         receivers are 2.4 GHz and so is the board's radio.
+#   kernel = typed,       lvdesk lost it, and /var/log/lvdesk.log will say
+#   screen < typed        which: an evdev overflow, an input stall, or the pty
+#                         refusing the write.
+#
+LOG=/root/keydiag.log
+KEYLOG=/root/keylog
+
+case "$1" in
+  start)
+	[ -x "$KEYLOG" ] || { echo "no $KEYLOG - build rootfs/keylog.c"; exit 1; }
+	killall keylog 2>/dev/null
+	: > "$LOG"
+	setsid "$KEYLOG" >> "$LOG" 2>&1 </dev/null &
+	sleep 1
+	echo "recording. Type into the terminal, then: s31-keydiag stop"
+	;;
+  stop)
+	killall keylog 2>/dev/null
+	sleep 1
+	echo "--- key PRESSES the kernel delivered, per device ---"
+	# value=1 is a press; 2 is autorepeat, 0 is release.
+	awk -F: '/value=1$/ {n[$1]++} END {for (d in n) printf "  %-45s %d\n", d, n[d]}' "$LOG"
+	echo "--- did lvdesk report losing any? ---"
+	if grep -qiE 'INPUT LOST|starved' /var/log/lvdesk.log 2>/dev/null; then
+		grep -iE 'INPUT LOST|starved' /var/log/lvdesk.log | tail -10
+	else
+		echo "  nothing - lvdesk received and forwarded everything it was given"
+	fi
+	echo
+	echo "Compare: characters you typed / presses above / characters on screen."
+	echo "If the kernel count is short, the loss is before Linux - the receiver."
+	;;
+  *)
+	sed -n '3,8p' "$0"
+	exit 1
+	;;
+esac
