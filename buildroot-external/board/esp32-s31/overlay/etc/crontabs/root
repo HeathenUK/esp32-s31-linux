@@ -1,0 +1,6 @@
+# Persist the clock hourly.
+#
+# With no RTC the saved timestamp is the only thing standing between a power
+# cut and a boot back at the epoch. Saving only at shutdown would lose the lot
+# on an unclean loss of power, which on a dev board is most of them.
+0 * * * * /etc/init.d/S30clock save

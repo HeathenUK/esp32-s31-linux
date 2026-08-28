@@ -1,0 +1,78 @@
+#!/bin/sh
+#
+# Time, on a board with no real-time clock.
+#
+# The Korvo-1 has no RTC: no battery-backed chip on the I2C bus, and the SoC's
+# RTC domain is not backed either, so a cold boot starts at the epoch. That is
+# what made the desktop clock read 00:0x - it was showing uptime, honestly.
+#
+# Two halves, which is what every RTC-less Linux board does (Raspberry Pi OS
+# ships exactly this pair):
+#
+#   1. A saved timestamp, restored at boot. It cannot be *right*, but it is
+#      never absurd: the clock starts at the last time we knew, so file
+#      timestamps stay ordered and TLS certificates do not appear to be from
+#      the future. Never moves the clock backwards.
+#   2. ntpd, which corrects it once the network is up.
+#
+# Ordered S30, before the desktop at S40. The timezone and the restored
+# timestamp have to be in place before anything reads the clock: musl caches
+# the zone on first use, so a desktop that starts first shows UTC for ever,
+# and renaming this to run later is what put 12:23 on a 13:23 panel.
+#
+# Neither blocks the boot. ntpd is a daemon: it retries on its own schedule
+# while the rest of userspace carries on, so a board with no network - or one
+# whose Wi-Fi takes 60 s to associate, which is normal here - reaches the
+# desktop at exactly the same speed as one with a working uplink.
+
+STAMP=/var/lib/misc/fake-hwclock.data
+SERVERS="pool.ntp.org time.cloudflare.com"
+
+save_time() {
+	mkdir -p "$(dirname $STAMP)"
+	date -u '+%Y-%m-%d %H:%M:%S' > "$STAMP"
+}
+
+start() {
+	printf "Restoring clock: "
+	if [ -r "$STAMP" ]; then
+		SAVED=$(cat "$STAMP")
+		# Only ever forwards. If the current clock is already later -
+		# ntpd got there first, or this is a warm reboot that kept the
+		# time - leave it alone.
+		NOW=$(date -u '+%Y-%m-%d %H:%M:%S')
+		if [ "$SAVED" \> "$NOW" ]; then
+			date -u -s "$SAVED" >/dev/null 2>&1
+			echo "$SAVED"
+		else
+			echo "current clock is later, kept"
+		fi
+	else
+		echo "no saved time"
+	fi
+
+	printf "Starting ntpd: "
+	# -p per server. No -q and no -n: it forks and keeps the clock
+	# disciplined rather than making the boot wait for a UDP round trip
+	# that cannot succeed until the radio associates.
+	OPTS=""
+	for s in $SERVERS; do OPTS="$OPTS -p $s"; done
+	# "busybox ntpd", not "ntpd": the applet is compiled in, but the
+	# /usr/sbin/ntpd symlink only exists if the rootfs was installed with
+	# this busybox. Calling the applet by name works either way.
+	busybox ntpd $OPTS >/dev/null 2>&1 && echo "OK" || echo "FAIL"
+}
+
+stop() {
+	printf "Saving clock: "
+	save_time && echo "OK" || echo "FAIL"
+	killall ntpd busybox 2>/dev/null
+}
+
+case "$1" in
+	start) start ;;
+	stop) stop ;;
+	save) save_time ;;
+	restart|reload) stop; start ;;
+	*) echo "Usage: $0 {start|stop|save|restart}"; exit 1 ;;
+esac

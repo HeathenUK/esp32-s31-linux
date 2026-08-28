@@ -215,3 +215,11 @@ BR2_PACKAGE_OPKG=y
 # Host side: opkg-build and opkg-make-index turn Buildroot's per-package output
 # into .ipk files and an index.
 BR2_PACKAGE_HOST_OPKG_UTILS=y
+
+# Timezone. The board is in the UK, so BST has to be handled - and handled the
+# normal way, from the zoneinfo database, rather than by hardcoding an offset
+# that is wrong for half the year. TZ_ZONELIST trims the database to one
+# region; the full set is several MB of zones this board will never be in.
+BR2_TARGET_TZ_INFO=y
+BR2_TARGET_TZ_ZONELIST="europe"
+BR2_TARGET_LOCALTIME="Europe/London"

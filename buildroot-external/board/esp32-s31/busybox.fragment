@@ -1,2 +1,12 @@
 CONFIG_FEATURE_WGET_HTTPS=y
 # CONFIG_SSL_SERVER is not set
+
+# NTP client. This board has no RTC - no battery-backed chip on the Korvo-1
+# (an I2C scan finds only the codec at 0x10 and touch at 0x14), and the SoC's
+# RTC domain is not backed either - so every cold boot starts at the epoch
+# until something tells it the time. busybox's own client is ~15 KB against
+# chrony's ~400 KB, which matters on a 15.4 MB machine.
+CONFIG_NTPD=y
+# We are a client. Serving time to the network is not this board's job.
+# CONFIG_FEATURE_NTPD_SERVER is not set
+CONFIG_FEATURE_NTPD_CONF=y
