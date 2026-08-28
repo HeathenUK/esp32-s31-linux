@@ -1,0 +1,170 @@
+esp32s31: capture clocking and microphone routing (partial)
+
+Continues the capture work. Recording now runs and returns full-length files;
+the microphone front end is still not delivering audio, so this is progress
+with the remaining fault stated rather than a finished bring-up.
+
+**Only the transmitter's clocks reach the pins.** The pinmux routes signals 25
+and 27 - the TX section's BCK and WS - to the pads, so a receive-only master
+generates its clocks on the RX signal indices where nothing is listening. The
+codec then never sees a bit clock. Measured: with the transmitter idle the
+capture ring is never written, and it fills immediately once playback starts.
+hw_params now programs the transmitter's divider for capture too, and the
+trigger enables SIG_LOOPBACK (TX_CONF bit 30, "transmitter and receiver sharing
+the same WS and BCK") and runs the transmitter while capture is active. That is
+what the vendor BSP arranges by creating both channels and enabling both at
+init, leaving the transmitter emitting silence whenever nothing is played.
+
+**The codec's inputs were never connected in DAPM.** INPUT1 and INPUT2 are
+input *endpoints*, which DAPM leaves disconnected unless the machine wires them
+to something, so the capture chain - PGAL/PGAR into ADCL/ADCR - stayed powered
+down. The card now declares a Mic Array widget and routes both inputs to it.
+The vendor BSP confirms these are analog mics (digital_mic = false), and the
+ADC MUX already reads AMIC.
+
+**Still open.** A recording is dominated by a constant DC value: RMS 973 of
+32768 with essentially no energy in any AC bin. The routing moved the ambient
+bins off exactly zero, so part of the path is now live, but the front end is
+not capturing sound. Next: the ES8389 analog power-up for the ADC and PGA, and
+the mic gain - the driver defines PGA enums on MIC1_GAIN/MIC2_GAIN yet no such
+control appears in `amixer scontrols`, which is itself suspicious.
+
+--- a/sound/soc/espressif/esp32s31-i2s.c
++++ b/sound/soc/espressif/esp32s31-i2s.c
+@@ -45,6 +45,14 @@
+ #define ESP32S31_I2S_TX_START		BIT(2)
+ #define ESP32S31_I2S_TX_SLAVE_MOD	BIT(3)
+ #define ESP32S31_I2S_TX_STOP_EN		BIT(4)
++/* RX_CONF instead has a two-bit stop *mode* here; 0 = run until stopped. */
++#define ESP32S31_I2S_RX_STOP_MODE	GENMASK(5, 4)
++/*
++ * TX_CONF bit 30: transmitter and receiver share the same WS and BCK. Capture
++ * needs this because only the transmitter's clocks reach the pins - see the
++ * comment in the trigger.
++ */
++#define ESP32S31_I2S_SIG_LOOPBACK	BIT(30)
+ #define ESP32S31_I2S_TX_CHAN_EQUAL	BIT(5)
+ #define ESP32S31_I2S_TX_MONO		BIT(6)
+ #define ESP32S31_I2S_TX_BIG_ENDIAN	BIT(7)
+@@ -105,6 +113,7 @@
+ 	struct device *dev;
+ 	void __iomem *base;
+ 	void __iomem *clkrst;
++	bool tx_for_rx;		/* transmitter started to clock capture */
+ 	struct snd_dmaengine_dai_dma_data playback_dma;
+ 	struct snd_dmaengine_dai_dma_data capture_dma;
+ 	unsigned int sysclk_hz;
+@@ -264,13 +273,37 @@
+ 
+ 	esp32s31_i2s_calc_div(ESP32S31_I2S_XTAL_HZ, mclk, &integer, &num, &den);
+ 	esp32s31_i2s_set_mclk(i2s, playback, integer, num, den);
++	/*
++	 * Capture also needs the *transmitter's* clock programmed, because the
++	 * transmitter is what drives the pins: the pinmux routes signals 25 and
++	 * 27 - the TX section's BCK and WS - to the pads, so a receive-only
++	 * master generates its clocks on the RX signal indices where nothing is
++	 * listening. The codec then never sees a bit clock, never sends a
++	 * sample, and rx_start (R/W/SC) clears itself again, which is why
++	 * recording returned a buffer that was never written.
++	 */
++	if (!playback)
++		esp32s31_i2s_set_mclk(i2s, true, integer, num, den);
+ 	i2s->sysclk_hz = mclk;
+ 
+ 	/* Philips I2S: data delayed one BCLK from the word select edge. */
+-	conf = ESP32S31_I2S_TX_MSB_SHIFT | ESP32S31_I2S_TX_STOP_EN |
+-	       ESP32S31_I2S_TX_TDM_EN |
++	conf = ESP32S31_I2S_TX_MSB_SHIFT | ESP32S31_I2S_TX_TDM_EN |
+ 	       FIELD_PREP(ESP32S31_I2S_TX_BCK_DIV_NUM, bck_div - 1);
+ 	/*
++	 * TX_STOP_EN is bit 4 of TX_CONF and belongs to transmit alone. RX_CONF
++	 * uses bits [5:4] for rx_stop_mode, where 1 means "stop when rx_start
++	 * is 0 **or in_suc_eof is 1**" - so writing the transmit value into
++	 * RX_CONF halted capture the instant the first DMA descriptor
++	 * completed. That is why recording produced exactly one period and then
++	 * failed with EIO, and why capture had never worked.
++	 *
++	 * Every other field this builds sits at the same position in both
++	 * registers (msb_shift 13, tdm_en 19, bck_div_num 26:21, checked
++	 * against the SoC header), so only this one has to be conditional.
++	 */
++	if (playback)
++		conf |= ESP32S31_I2S_TX_STOP_EN;
++	/*
+ 	 * Slots are exactly as wide as the samples, so the slot width, the
+ 	 * half-frame width and the WS pulse width are all the sample width.
+ 	 */
+@@ -316,6 +349,32 @@
+ 	case SNDRV_PCM_TRIGGER_START:
+ 	case SNDRV_PCM_TRIGGER_RESUME:
+ 	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
++		/*
++		 * Capture rides on the transmitter's clocks.
++		 *
++		 * Only the TX section's BCK and WS reach the pads (pinmux
++		 * signals 25 and 27), so the receiver cannot clock the codec by
++		 * itself. SIG_LOOPBACK feeds those same signals to the receiver
++		 * internally, and the transmitter has to be running to generate
++		 * them at all - which is what the vendor BSP arranges by
++		 * creating both channels and enabling both at init, leaving the
++		 * transmitter emitting silence whenever nothing is played.
++		 *
++		 * Measured: with the transmitter idle the capture ring is never
++		 * written; start playback and it fills immediately.
++		 */
++		if (!playback) {
++			esp32s31_i2s_update(i2s->base, ESP32S31_I2S_TX_CONF, 0,
++					    ESP32S31_I2S_SIG_LOOPBACK);
++			esp32s31_i2s_update(i2s->base, ESP32S31_I2S_TX_CONF, 0,
++					    ESP32S31_I2S_TX_FIFO_RESET);
++			esp32s31_i2s_update(i2s->base, ESP32S31_I2S_TX_CONF,
++					    ESP32S31_I2S_TX_FIFO_RESET, 0);
++			esp32s31_i2s_commit(i2s, true);
++			esp32s31_i2s_update(i2s->base, ESP32S31_I2S_TX_CONF, 0,
++					    ESP32S31_I2S_TX_START);
++			i2s->tx_for_rx = true;
++		}
+ 		/* Clear the FIFO before running, or stale samples are emitted. */
+ 		esp32s31_i2s_update(i2s->base, reg, 0, ESP32S31_I2S_TX_RESET);
+ 		esp32s31_i2s_update(i2s->base, reg, ESP32S31_I2S_TX_RESET, 0);
+@@ -331,6 +390,14 @@
+ 	case SNDRV_PCM_TRIGGER_SUSPEND:
+ 	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
+ 		esp32s31_i2s_update(i2s->base, reg, ESP32S31_I2S_TX_START, 0);
++		/* Only stop the transmitter if capture is what started it. */
++		if (!playback && i2s->tx_for_rx) {
++			esp32s31_i2s_update(i2s->base, ESP32S31_I2S_TX_CONF,
++					    ESP32S31_I2S_TX_START, 0);
++			esp32s31_i2s_update(i2s->base, ESP32S31_I2S_TX_CONF,
++					    ESP32S31_I2S_SIG_LOOPBACK, 0);
++			i2s->tx_for_rx = false;
++		}
+ 		break;
+ 	default:
+ 		return -EINVAL;
+--- a/arch/riscv/boot/dts/espressif/esp32s31_generic.dts
++++ b/arch/riscv/boot/dts/espressif/esp32s31_generic.dts
+@@ -121,6 +121,23 @@
+ 		 * the frame size. Claiming an MCLK would lie to it.
+ 		 */
+ 
++		/*
++		 * The codec's INPUT1/INPUT2 are DAPM *input* endpoints, and
++		 * DAPM leaves an endpoint disconnected unless the machine wires
++		 * it to something. Without this the whole capture chain -
++		 * PGAL/PGAR into ADCL/ADCR - stays powered down, the codec
++		 * sends a constant sample forever, and a recording comes back
++		 * as unvarying DC that looks like a working DMA carrying
++		 * silence.
++		 *
++		 * The Korvo-1's mic array is analog on both inputs, which is
++		 * also what the vendor BSP says: digital_mic = false.
++		 */
++		simple-audio-card,widgets = "Microphone", "Mic Array";
++		simple-audio-card,routing =
++			"INPUT1", "Mic Array",
++			"INPUT2", "Mic Array";
++
+ 		simple-audio-card,cpu {
+ 			sound-dai = <&i2s0>;
+ 		};
