@@ -44,3 +44,22 @@ for dtbo in "${dtbo_dir}"/esp32s31-overlay-*.dtbo; do
 	}
 	cp "${dtbo}" "${install_dir}/"
 done
+
+# Push dbus and bluetoothd past the desktop.
+#
+# Buildroot's packages install them at S30/S40, ahead of lvdesk, and together
+# they cost 9.0 s of a boot (dbus 6.34 s, bluetoothd 2.67 s) that nothing on
+# the way to a desktop needs: lvdesk talks to wpa_supplicant over its own
+# control socket and does not use dbus at all. Moving them behind lvdesk took
+# the desktop from 33.2 s to 21.5 s. They still start, ~3 s later than the
+# desktop, so Bluetooth is available as before.
+#
+# Renamed here rather than in the overlay because the overlay cannot remove the
+# names Buildroot installs - it would leave both copies, and rcS would run each
+# service twice.
+for f in "${TARGET_DIR}/etc/init.d/S30dbus-daemon" ; do
+	[ -e "$f" ] && mv "$f" "${TARGET_DIR}/etc/init.d/S45dbus-daemon"
+done
+for f in "${TARGET_DIR}/etc/init.d/S40bluetoothd" ; do
+	[ -e "$f" ] && mv "$f" "${TARGET_DIR}/etc/init.d/S46bluetoothd"
+done
