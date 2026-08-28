@@ -1,0 +1,276 @@
+esp32s31: drain the recorder while it records, and stop it stealing DRM master
+
+Two changes that together turn a capture bounded by RAM into a session bounded
+by the SD card, and one bug that made the first attempt film nothing at all.
+
+**The buffer was not a ring.** It filled and stopped - the comment said so, on
+the reasoning that silently discarding the beginning is worse than a short
+file. True when nothing drained it. It is now genuinely circular with a
+consumer: seq and read count frames produced and consumed, frames are never
+split across the wrap, and when there is no room the NEWEST frame is dropped
+and counted. Nothing is silent: the sequence number is handed to userspace, so
+a gap is visible to whatever is writing the file.
+
+**Frames can be read while recording.** esp32s31_jpeg_rec_frame() used to
+return -EBUSY unless the recording had been stopped, which capped any recording
+at what fitted in RAM. It now pops the oldest frame whether or not the recorder
+is running, and only reclaims the space after the copy to userspace has
+succeeded, so a failed copy loses nothing.
+
+**DRIVER_RENDER, because the recorder was taking DRM master.** The first
+end-to-end attempt recorded 13 frames and then nothing for two and a half
+minutes. The drainer starts from an init script at S02 and opened
+/dev/dri/card0 - and the first process to open the primary node becomes DRM
+master, so lvdesk at S40 got "SET_MASTER: Resource busy", then "SETCRTC:
+Permission denied", and exited. The panel sat on a dead console; because
+nothing committed, the recorder faithfully filmed a blank screen. The ioctls
+were already DRM_RENDER_ALLOW, so a render node is all that was missing.
+
+**The boot buffer is 3 MB, and is handed back.** A dense console frame is ~85 KB
+at q60, so 1 MB held only 12 frames and 25 were dropped before the drainer
+attached - five seconds of boot lost. The drainer now drains the backlog and
+then restarts the recorder with the session settings, which frees the boot
+buffer and switches to the desktop's rate and quality. Holding 3 MB on a 15 MB
+machine matters; holding it only while the machine is otherwise empty does not.
+
+Measured end to end: armed at 1.73 s, 560 frames over 170 s of boot, desktop
+start and desktop use, 0 malformed frames, one sequence discontinuity - the
+handover itself.
+
+--- a/drivers/gpu/drm/espressif/esp32s31-ppa.c
++++ b/drivers/gpu/drm/espressif/esp32s31-ppa.c
+@@ -338,6 +338,13 @@
+ 	void *jpeg_rec_buf;
+ 	struct jpeg_rec_frame *jpeg_rec_index;
+ 	u32 jpeg_rec_size, jpeg_rec_used, jpeg_rec_n, jpeg_rec_max;
++	/*
++	 * Circular, with a consumer. jpeg_rec_head is where the next frame is
++	 * written; seq and read count frames produced and consumed, so
++	 * seq - read is what is waiting and a gap in the sequence numbers
++	 * handed to userspace is a dropped frame it can see and record.
++	 */
++	u32 jpeg_rec_head, jpeg_rec_seq, jpeg_rec_read, jpeg_rec_overrun;
+ 	u32 jpeg_rec_dropped, jpeg_rec_quality;
+ 	u32 jpeg_rec_notifies;	/* commits seen, before any rate limiting */
+ 	u32 jpeg_rec_src, jpeg_rec_w, jpeg_rec_h;
+@@ -2148,29 +2155,72 @@
+ 	u32 len = 0;
+ 	int ret;
+ 
+-	if (ppa->jpeg_rec_n >= ppa->jpeg_rec_max)
+-		return -ENOSPC;
++	u32 off, tail;
+ 
+ 	ret = esp32s31_jpeg_encode(src, w, h, ppa->jpeg_rec_quality, &len);
+ 	if (ret) {
+ 		ppa->jpeg_rec_dropped++;
+ 		return ret;
+ 	}
+-	if (ppa->jpeg_rec_used + len > ppa->jpeg_rec_size) {
+-		/* Ring full: stop rather than wrap. A recording that quietly
+-		 * discards its own beginning is worse than a short one. */
+-		WRITE_ONCE(ppa->jpeg_rec_running, false);
++
++	/*
++	 * Find contiguous room for the frame, treating the buffer as a ring
++	 * with the consumer's oldest unread frame as the tail. Frames are
++	 * never split across the wrap: the reader hands a single pointer to
++	 * userspace, and a JPEG in two pieces would need either a bounce
++	 * buffer or a two-part copy for no benefit.
++	 *
++	 * When there is no room the NEWEST frame is dropped, not the oldest.
++	 * This used to stop the recording instead, on the reasoning that
++	 * silently discarding the beginning was worse than a short file - true
++	 * when nothing drained the buffer, wrong now that something does. A
++	 * drop is counted and shows up as a gap in the sequence numbers, so it
++	 * is never silent.
++	 */
++	if (ppa->jpeg_rec_seq - ppa->jpeg_rec_read >= ppa->jpeg_rec_max) {
++		ppa->jpeg_rec_overrun++;
+ 		return -ENOSPC;
+ 	}
++	if (ppa->jpeg_rec_seq == ppa->jpeg_rec_read) {
++		/* Empty: take the whole buffer from the start. */
++		ppa->jpeg_rec_head = 0;
++		if (len > ppa->jpeg_rec_size) {
++			ppa->jpeg_rec_overrun++;
++			return -ENOSPC;
++		}
++		off = 0;
++	} else {
++		tail = ppa->jpeg_rec_index[ppa->jpeg_rec_read %
++					   ppa->jpeg_rec_max].off;
++		if (ppa->jpeg_rec_head >= tail) {
++			if (ppa->jpeg_rec_head + len <= ppa->jpeg_rec_size)
++				off = ppa->jpeg_rec_head;
++			else if (len < tail)
++				off = 0;		/* wrap to the front */
++			else {
++				ppa->jpeg_rec_overrun++;
++				return -ENOSPC;
++			}
++		} else if (ppa->jpeg_rec_head + len < tail) {
++			off = ppa->jpeg_rec_head;
++		} else {
++			ppa->jpeg_rec_overrun++;
++			return -ENOSPC;
++		}
++	}
+ 
+-	memcpy(ppa->jpeg_rec_buf + ppa->jpeg_rec_used, ppa->jpeg_buf, len);
+-	f = &ppa->jpeg_rec_index[ppa->jpeg_rec_n];
+-	f->off = ppa->jpeg_rec_used;
++	memcpy(ppa->jpeg_rec_buf + off, ppa->jpeg_buf, len);
++	f = &ppa->jpeg_rec_index[ppa->jpeg_rec_seq % ppa->jpeg_rec_max];
++	f->off = off;
+ 	f->len = len;
+ 	f->stamp_ns = ktime_get_ns();
+ 
++	ppa->jpeg_rec_head = off + len;
++	if (ppa->jpeg_rec_head >= ppa->jpeg_rec_size)
++		ppa->jpeg_rec_head = 0;
++	ppa->jpeg_rec_seq++;
+ 	ppa->jpeg_rec_used += len;
+-	ppa->jpeg_rec_n++;
++	ppa->jpeg_rec_n = ppa->jpeg_rec_seq - ppa->jpeg_rec_read;
+ 	return 0;
+ }
+ 
+@@ -2210,6 +2260,10 @@
+ 	ppa->jpeg_rec_max = frames;
+ 	ppa->jpeg_rec_used = 0;
+ 	ppa->jpeg_rec_n = 0;
++	ppa->jpeg_rec_head = 0;
++	ppa->jpeg_rec_seq = 0;
++	ppa->jpeg_rec_read = 0;
++	ppa->jpeg_rec_overrun = 0;
+ 	ppa->jpeg_rec_dropped = 0;
+ 	ppa->jpeg_rec_quality = quality;
+ 	ppa->jpeg_rec_min_gap_ns = max_fps ? NSEC_PER_SEC / max_fps : 0;
+@@ -2233,9 +2287,10 @@
+ 	WRITE_ONCE(ppa->jpeg_rec_running, false);
+ 	cancel_work_sync(&ppa->jpeg_rec_work);
+ 	dev_info(ppa->dev,
+-		 "jpeg recording stopped: %u frames, %u KB, %u dropped, %u commits seen\n",
+-		 ppa->jpeg_rec_n, ppa->jpeg_rec_used >> 10, ppa->jpeg_rec_dropped,
+-		 ppa->jpeg_rec_notifies);
++		 "jpeg recording stopped: %u produced, %u read, %u still held, %u KB, %u encoder-busy, %u overrun, %u commits seen\n",
++		 ppa->jpeg_rec_seq, ppa->jpeg_rec_read, ppa->jpeg_rec_n,
++		 ppa->jpeg_rec_used >> 10, ppa->jpeg_rec_dropped,
++		 ppa->jpeg_rec_overrun, ppa->jpeg_rec_notifies);
+ 	return 0;
+ }
+ EXPORT_SYMBOL_GPL(esp32s31_jpeg_rec_stop);
+@@ -2246,16 +2301,27 @@
+ 
+ 	if (!ppa)
+ 		return -ENODEV;
+-	*frames = ppa->jpeg_rec_n;
++	*frames = ppa->jpeg_rec_n;		/* waiting to be read */
+ 	*bytes = ppa->jpeg_rec_used;
+-	*dropped = ppa->jpeg_rec_dropped;
++	*dropped = ppa->jpeg_rec_dropped + ppa->jpeg_rec_overrun;
+ 	*running = READ_ONCE(ppa->jpeg_rec_running);
+ 	return 0;
+ }
+ EXPORT_SYMBOL_GPL(esp32s31_jpeg_rec_status);
+ 
+ /* Copy one recorded frame out. Recording must be stopped. */
+-int esp32s31_jpeg_rec_frame(u32 index, void __user *to, u32 *size, u64 *stamp_ns)
++/*
++ * Pop the oldest frame the recorder is holding, whether or not it is still
++ * recording. *seq is an output: the frame's sequence number, so a caller
++ * writing a file can see a gap and record that frames were lost rather than
++ * producing a video that silently skips.
++ *
++ * Reading while running is the whole point. Filming a boot through to the
++ * desktop is minutes of video against a buffer of a megabyte or two, so
++ * something has to be draining continuously; the previous rule that recording
++ * had to be stopped first capped a recording at whatever fitted in RAM.
++ */
++int esp32s31_jpeg_rec_frame(u32 *seq, void __user *to, u32 *size, u64 *stamp_ns)
+ {
+ 	struct esp32s31_ppa *ppa = esp32s31_ppa_instance;
+ 	struct jpeg_rec_frame *f;
+@@ -2265,17 +2331,23 @@
+ 		return -ENODEV;
+ 
+ 	mutex_lock(&ppa->jpeg_rec_lock);
+-	if (READ_ONCE(ppa->jpeg_rec_running)) { ret = -EBUSY; goto out; }
+-	if (!ppa->jpeg_rec_buf || index >= ppa->jpeg_rec_n) { ret = -ENOENT; goto out; }
++	if (!ppa->jpeg_rec_buf) { ret = -ENODEV; goto out; }
++	if (ppa->jpeg_rec_read == ppa->jpeg_rec_seq) { ret = -ENOENT; goto out; }
+ 
+-	f = &ppa->jpeg_rec_index[index];
++	f = &ppa->jpeg_rec_index[ppa->jpeg_rec_read % ppa->jpeg_rec_max];
+ 	if (*size < f->len) { *size = f->len; ret = -ENOSPC; goto out; }
+-	if (to && copy_to_user(to, ppa->jpeg_rec_buf + f->off, f->len))
++	if (to && copy_to_user(to, ppa->jpeg_rec_buf + f->off, f->len)) {
+ 		ret = -EFAULT;
+-	else {
+-		*size = f->len;
+-		*stamp_ns = f->stamp_ns;
++		goto out;
+ 	}
++	*size = f->len;
++	*stamp_ns = f->stamp_ns;
++	*seq = ppa->jpeg_rec_read;
++
++	/* Only now is the space reclaimed, so a failed copy loses nothing. */
++	ppa->jpeg_rec_used -= f->len;
++	ppa->jpeg_rec_read++;
++	ppa->jpeg_rec_n = ppa->jpeg_rec_seq - ppa->jpeg_rec_read;
+ out:
+ 	mutex_unlock(&ppa->jpeg_rec_lock);
+ 	return ret;
+--- a/drivers/gpu/drm/espressif/esp32s31-lcd.c
++++ b/drivers/gpu/drm/espressif/esp32s31-lcd.c
+@@ -2075,7 +2075,15 @@
+ MODULE_PARM_DESC(rec_boot,
+ 		 "record from boot regardless of the LP_STORE5 trigger");
+ 
+-static uint rec_kb = 1024;
++/*
++ * Sized for the gap between arming (1.7 s) and the drainer attaching, which is
++ * after the root filesystem mounts at ~4.9 s plus the init scripts ahead of it.
++ * A dense console frame is ~85 KB at q60, so a 1 MB buffer held only ~12 and
++ * dropped 25 - five seconds of boot lost. This is freed the moment the drainer
++ * hands over to the session settings, so it costs nothing for the rest of the
++ * run; it is only ever held while the machine is otherwise empty.
++ */
++static uint rec_kb = 3072;
+ module_param(rec_kb, uint, 0644);
+ MODULE_PARM_DESC(rec_kb, "boot recording ring size in KB");
+ 
+@@ -2921,7 +2929,7 @@
+ {
+ 	struct drm_esp32s31_jpeg_frame *args = data;
+ 
+-	return esp32s31_jpeg_rec_frame(args->index,
++	return esp32s31_jpeg_rec_frame(&args->index,
+ 				       u64_to_user_ptr(args->ptr),
+ 				       &args->size, &args->stamp_ns);
+ }
+@@ -3011,7 +3019,21 @@
+ DEFINE_DRM_GEM_DMA_FOPS(esp32s31_lcd_fops);
+ 
+ static const struct drm_driver esp32s31_lcd_driver = {
+-	.driver_features	= DRIVER_GEM | DRIVER_MODESET | DRIVER_ATOMIC,
++	/*
++	 * DRIVER_RENDER exists for the MJPEG recorder, which needs no
++	 * modesetting at all - its ioctls are already DRM_RENDER_ALLOW.
++	 *
++	 * Without a render node the recorder has to open the primary node, and
++	 * the FIRST process to open that becomes DRM master. A drainer started
++	 * from an init script therefore took master at S02 and the desktop
++	 * could not have it at S40: "SET_MASTER: Resource busy", then
++	 * "SETCRTC: Permission denied", and lvdesk exited. The panel sat on the
++	 * console showing nothing, and because nothing committed, the recorder
++	 * captured nothing either - a recording that silently filmed a dead
++	 * desktop for two and a half minutes.
++	 */
++	.driver_features	= DRIVER_GEM | DRIVER_MODESET | DRIVER_ATOMIC |
++				  DRIVER_RENDER,
+ 	.master_set		= esp32s31_lcd_master_set,
+ 	.master_drop		= esp32s31_lcd_master_drop,
+ 	.fops			= &esp32s31_lcd_fops,

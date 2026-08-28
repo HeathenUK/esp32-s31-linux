@@ -1678,3 +1678,77 @@ the codec.
 the link is what first tore the panel, before the NVS problem was understood.
 Whatever drives capture has to pace itself and stay off the bus while the
 loader owns the display.
+
+## Filming the board, boot to desktop (2026-08-28)
+
+**This works end to end.** 560 frames, 170 s, from 1.8 s after power-on through
+the boot console, lvdesk starting, and the desktop being driven, to a stop
+signal. Zero malformed frames.
+
+### How to run one
+
+    on the board:   s31-record arm      # then reboot to film the next boot
+                    reboot
+                    ...use the desktop...
+                    s31-record stop     # completes the file
+                    s31-record serve    # prints the curl line to fetch it
+    on the host:    curl -o session.mjpeg http://<board>:8080/
+                    scripts/board/mjpeg2mp4.py session.mjpeg out.mp4
+
+`s31-record start` films from now without a reboot, and misses the boot.
+
+### Why it is built this way
+
+- **The kernel arms the recorder at scanout, 1.7 s in.** The ext4 root is not
+  mounted until ~4.9 s, so anything started from an init script misses the
+  whole early console - which is the part worth filming. `/etc/init.d/S02s31-vidcap`
+  then *attaches* to that recording rather than starting a new one.
+- **The trigger is a magic word in LP_STORE12**, written by `s31-record arm`.
+  It survives a warm reboot, is cleared by an EN reset or a power cycle, and
+  the driver clears it on read, so one arming films exactly one boot and it can
+  never stick. **Deliberately not hart0's NVS**: a trigger in flash survives a
+  source revert and a reflash, which once left this board unusable.
+- **Most of LP_STORE belongs to the ROM.** `esp_rom/esp32s31/rom/rtc.h`:
+  STORE1 slow-clock calibration, 2/3 boot time, 4 ROM log control and crystal
+  frequency, 5 deep-sleep entry length, 6 wake entry address and reset cause,
+  7 memory CRC, 8 sleep wake stub, 9 LP core wakeup cause. **Reading zero at
+  runtime does not mean a slot is free**: STORE5 read back zero every boot
+  because the ROM rewrites it, and writing STORE6 wedged hart0 with no console
+  at either baud until an EN reset. STORE10..15 are unclaimed; this uses 12.
+- **Capture is per commit, not per panel refresh.** LCD_CAM scans out 59 times
+  a second whether or not a pixel changed, so filming every refresh would encode
+  identical frames: measured, every-other-refresh costs ~21% of a core and
+  ~440 KB/s on a completely static screen. Instead each frame carries its
+  capture time, the gap to the next is how long it was on screen, and
+  `mjpeg2mp4.py` turns that into real-time or constant-rate video on the host
+  for free. **30 fps and 59 fps produce identical files** - lvdesk commits
+  13-24 times a second during motion (measured: 41 ms best, 75-80 ms median),
+  so any cap above ~25 is already "every commit".
+- **The recorder must not open /dev/dri/card0.** The first process to open the
+  primary node becomes DRM master. A drainer started at S02 therefore took
+  master and lvdesk died at S40 with "SET_MASTER: Resource busy"; the panel
+  froze and, because nothing committed, the recording captured nothing. The
+  driver now advertises DRIVER_RENDER and the drainer opens `renderD128`.
+
+### Getting the file off
+
+The card is soldered, so it cannot be read on another machine. Measured:
+
+    console (base64 over serial)     ~65 KB/s     52 MB -> 13 minutes
+    network (s31-serve over Wi-Fi)   ~915 KB/s    52 MB -> 58 seconds
+
+**Never base64 a large file over the console.** It floods a 1 Mbps line for
+minutes, during which every other tool reports NO_SHELL - and if the thing that
+started it retries, it starts another. That failure mode cost most of an hour.
+`s31-serve` is one-shot: it serves the file and exits, leaving nothing running.
+
+### Two traps in reconstruction
+
+- **Slice the sidecar in ARRIVAL order. Do not sort it.** The sequence number
+  restarts when the drainer hands over from the boot recording to the session
+  one, so sorting interleaves the two runs and every byte offset after the
+  handover is wrong. It does not fail loudly: 106 of 560 frames decoded as
+  garbage while the total byte count still matched exactly, because the sizes
+  summed correctly even though the boundaries did not.
+- **One sequence discontinuity is expected** - it is the handover, not a lost
+  frame. `mjpegrec` reports it as a gap.

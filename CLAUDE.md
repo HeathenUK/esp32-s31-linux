@@ -206,6 +206,15 @@ for kernel work; the rootfs only needs rebuilding when userspace changes.
   system". Write to the ext4 underneath via a non-recursive `mount --bind /`
   (`/usr/sbin/s31-opkg` does this) and reboot for the overlay to restack. This
   is what makes userspace cost zero RSS - it is the feature, not a defect.
+- **Never base64 a large file over the serial console.** At ~65 KB/s a 52 MB
+  recording is 13 minutes during which the board is unusable and every other
+  tool reports NO_SHELL; a caller that retries starts another. Use
+  `s31-record serve` on the board and `curl` from the host - 915 KB/s measured.
+  Reading small things back over the console is fine and fast.
+- **Ask `scripts/board/alive.py` whether the board is alive**, not `runsh.py`.
+  NO_SHELL means "no prompt seen", which is equally true of a healthy board
+  sitting at a login prompt and a dead one. alive.py reports a stage and pokes
+  the console. A warm reboot takes ~85 s; polling before that is not evidence.
 - **The SD card holds state the repo does not.** `/etc/init.d/S40xorg` and
   friends have been edited in place. Re-imaging loses it.
 

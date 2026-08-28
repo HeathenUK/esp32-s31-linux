@@ -1,0 +1,78 @@
+#!/bin/sh
+#
+# Film the board.
+#
+#   s31-record arm     arm the NEXT boot, then reboot to film it
+#   s31-record start   start filming now (no reboot, misses the boot)
+#   s31-record stop    end the recording and complete the file
+#   s31-record status  is anything recording?
+#   s31-record serve   offer the file over HTTP and print the command to fetch it
+#
+# Arming writes a magic word to LP_STORE12. That register survives a warm
+# reboot - which is how a filmed boot is started - but not an EN reset or a
+# power cycle, and the kernel clears it as it reads it, so one arming films
+# exactly one boot and it can never get stuck armed.
+#
+# Deliberately NOT hart0's NVS: a trigger in flash survives a source revert and
+# a reflash, which once left this board unusable. See docs/current-state.md.
+#
+# Most of LP_STORE belongs to the ROM (clock calibration, boot time, the deep
+# sleep wake entry, the reset cause). STORE12 is one of the few it does not
+# touch. Do not "tidy" this to a lower-numbered slot: writing STORE6 wedges
+# hart0 hard enough that only an EN reset recovers it.
+#
+REC=/root/mjpegrec
+OUT=${2:-/root/session.mjpeg}
+LP_STORE12=0x2070005c
+
+case "$1" in
+  arm)
+	devmem $LP_STORE12 32 0x52454331
+	echo "armed ($(devmem $LP_STORE12 32)) - reboot now to film the next boot"
+	;;
+  start)
+	setsid $REC -c "$OUT" >/var/log/vidcap.log 2>&1 </dev/null &
+	echo "recording to $OUT"
+	;;
+  stop)
+	killall -TERM mjpegrec 2>/dev/null || { echo "nothing recording"; exit 1; }
+	# Wait for the rename rather than guessing: the final name appearing is
+	# the completion signal, and a .part left behind means it was cut short.
+	i=0
+	while [ $i -lt 30 ]; do
+		[ -f "$OUT" ] && break
+		sleep 1
+		i=$((i + 1))
+	done
+	sync
+	if [ -f "$OUT" ]; then
+		echo "complete: $OUT ($(wc -c < "$OUT") bytes)"
+		[ -f "$OUT.done" ] && cat "$OUT.done"
+	else
+		echo "WARNING: $OUT.part was never renamed - the file is short"
+	fi
+	;;
+  serve)
+	# The board has wget but no httpd and no nc, so files could only ever be
+	# pulled ONTO it. Going the other way was base64 over the console at
+	# ~65 KB/s - thirteen minutes for a 52 MB recording, during which the
+	# console is unusable and every other tool reports NO_SHELL. Over Wi-Fi
+	# the same file is 54 seconds. s31-serve is one-shot: it hands over the
+	# file and exits, so nothing is left listening.
+	[ -f "$OUT" ] || { echo "no $OUT - is the recording finished?"; exit 1; }
+	IP=$(ip -o -4 addr show wlan0 2>/dev/null | awk '{print $4}' | cut -d/ -f1)
+	[ -n "$IP" ] || { echo "wlan0 has no address; cannot serve"; exit 1; }
+	setsid /root/s31-serve "$OUT" 8080 >/tmp/s31-serve.log 2>&1 </dev/null &
+	sleep 1
+	cat /tmp/s31-serve.log
+	echo "on the host, run:"
+	echo "    curl -o session.mjpeg http://$IP:8080/"
+	;;
+  status)
+	$REC -s
+	;;
+  *)
+	sed -n '3,10p' "$0"
+	exit 1
+	;;
+esac

@@ -84,6 +84,39 @@ That is low enough to film the system while measuring it, which is the whole
 point. Earlier approaches were not: a timer-driven loop cost 15% at 10 fps, and
 the first version cost 42%.
 
+## Filming a whole session, boot to desktop
+
+    on the board          on the host
+    ------------          -----------
+    s31-record arm        (then reboot to film the next boot)
+    reboot
+    ...use the desktop...
+    s31-record stop       the file is complete when the final name appears
+    s31-record serve      curl -o session.mjpeg http://<board>:8080/
+                          scripts/board/mjpeg2mp4.py session.mjpeg out.mp4
+
+`s31-record start` films from now, without a reboot, and misses the boot.
+
+The kernel arms the recorder at scanout (1.7 s), long before userspace exists;
+`/etc/init.d/S02s31-vidcap` attaches to it and drains to the card. `stop` sends
+SIGTERM, so the drainer finishes its frame, writes the closing timestamp,
+fsyncs and renames `.part` to the final name - **that rename is the completion
+signal**, and a `.part` left behind means the session was cut short. It still
+plays, up to its last whole frame: MJPEG has no trailer to corrupt.
+
+Getting it off the board (the card is soldered, so it cannot be read elsewhere):
+
+| transport | 52 MB | notes |
+|---|---|---|
+| `s31-serve` over Wi-Fi | **58 s** (915 KB/s) | one-shot, exits after serving |
+| base64 over the console | 13 min (65 KB/s) | floods the line; **do not** |
+
+Reconstruction detail that matters: **slice the sidecar in arrival order, never
+sort it.** The sequence number restarts at the boot-to-session handover, so
+sorting scrambles every byte offset after it - and it fails quietly, because
+the sizes still sum to the right total. `mjpeg2mp4.py` does this correctly and
+warns about malformed frames and discontinuities.
+
 ## Driving the desktop, and measuring it
 
     uinject <demo|drag|type|park|keytest> [args]   # inject input, nothing else

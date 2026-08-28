@@ -1,0 +1,39 @@
+#!/bin/sh
+#
+# Drain the boot recording, if the kernel armed one.
+#
+# The DRM driver arms the MJPEG recorder at scanout, 1.7 s in, because the root
+# filesystem is not mounted until ~4.9 s and anything started from here would
+# miss the whole early console. By the time this runs there is already a buffer
+# holding those frames, so the drainer ATTACHES rather than starting a fresh
+# recording - starting one would throw exactly that away.
+#
+# S02, right after the root filesystem is grown and syslog is up: the buffer is
+# about a megabyte and the console fills it in a few seconds, so every second of
+# delay here is frames lost.
+#
+# Gated on the kernel having actually armed it (mjpegrec -s), or every boot
+# would quietly start filming itself to the card.
+#
+VIDCAP=/root/mjpegrec
+OUT=/root/session.mjpeg
+
+case "$1" in
+  start)
+	[ -x "$VIDCAP" ] || exit 0
+	[ -e /dev/dri/card0 ] || exit 0
+	if $VIDCAP -s >/dev/null 2>&1; then
+		printf "Draining the boot recording: "
+		setsid $VIDCAP -c "$OUT" >/var/log/vidcap.log 2>&1 </dev/null &
+		echo "OK"
+	fi
+	;;
+  stop)
+	# SIGTERM, not KILL: the drainer finishes the frame it is on, writes the
+	# closing timestamp, fsyncs and renames .part to the final name. That
+	# rename is what marks the file complete.
+	killall -TERM mjpegrec 2>/dev/null
+	sleep 2
+	sync
+	;;
+esac
