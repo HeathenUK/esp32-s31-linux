@@ -1,5 +1,33 @@
 # Talking to the board
 
+## Is the board alive? Ask `alive.py`, not `runsh.py`
+
+    scripts/board/alive.py             # poke it and report what stage it is at
+    scripts/board/alive.py --reset     # reset and watch a whole boot through
+
+`runsh.py`'s `NO_SHELL` answers "I did not see a prompt", which is true of at
+least five different situations - unpowered, hart0 up but no Linux, Linux
+wedged part way, sitting at `login:`, and sitting at a shell prompt. **The last
+two are healthy**, and an idle healthy board is byte-for-byte identical to a
+dead one on a serial line. Treating them alike produced two wrong diagnoses in
+one session: once "the kernel hangs" when it was booting perfectly, and once a
+real wedge that was nearly dismissed as the same false alarm.
+
+`alive.py` reports a stage - `NOTHING`, `HART0_ROM`, `HART0_APP`, `HANDOFF`,
+`KERNEL_EARLY`, `DISPLAY_UP`, `ROOT_MOUNTED`, `USERSPACE`, `LOGIN`, `SHELL` -
+with the lines it saw. Two things make that possible:
+
+- **It reads each phase at the baud that phase uses.** hart0's second-stage
+  bootloader talks at 115200 and the console only then switches to 1 Mbps, so
+  watching a reset at 1 Mbps shows the first seconds as framing garbage. Silence
+  early proves nothing.
+- **It pokes.** A newline at a login or shell prompt gets an answer, which is
+  the only way to tell idle from dead.
+
+A warm `reboot` takes ~85 s to come back. Polling before that and getting
+silence means "still booting", which is exactly what `SILENT` says.
+
+
 These exist because they have each been re-written from scratch several times,
 badly, in the middle of doing something else. Use them.
 
