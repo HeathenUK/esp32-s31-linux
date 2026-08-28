@@ -1,0 +1,117 @@
+dw_mmc: survive a warm restart with the card still busy
+
+A Linux-side `reboot` left the board hung on "Waiting for root device
+/dev/mmcblk0" for ever, and no number of esptool resets recovered it - only a
+physical repower did.
+
+**What happens.** Linux restarts through OpenSBI: hart1 raises an SBI system
+reset, hart0 sees it and calls esp_restart() (hosted_sram.c:581). That resets
+the SoC. It does *not* reset the microSD, which has its own power domain - so
+whatever the card was doing when the reboot landed carries straight into the
+next boot. A card interrupted mid-write holds DAT0 low, and the first thing
+initialisation does is send CMD0 into that busy line:
+
+	dw_mmc 20342000.mmc: Busy; trying anyway
+	mmc_host mmc0: Timeout sending command (cmd 0x202000 arg 0x0 status 0x80202000)
+
+repeated at 400/300/200/100 kHz until the core gives up. `rootwait` on the
+command line then waits for a device that will never appear, which is why the
+board looked wedged rather than reporting a fault.
+
+**Two changes.**
+
+*The busy wait was 500 ms.* The SD spec allows a card finishing an internal
+program to hold busy for seconds, so the old timeout expired and the driver
+sent CMD0 anyway - guaranteeing the timeout it then reported. It is 5 s now,
+and logs how long it actually waited. This costs nothing when the card is idle:
+the poll exits on its first read.
+
+*dw_mmc-pltfm had no .shutdown.* device_shutdown() runs on the reboot path, so
+that is the hook for leaving the card in a state the next boot can use. It now
+tears the host down - interrupts off, controller reset, transfers stopped - so
+a transfer is not in flight at the moment the SoC disappears.
+
+**What this does not fix.** A card already stuck busy needs its power cycled;
+measured here, it stayed busy across repeated EN resets for ~20 minutes and
+only a repower cleared it. The 5 s wait covers a card that is genuinely
+finishing work; .shutdown is what stops it being interrupted in the first
+place. After a repower the card enumerated first time with no busy or timeout
+lines at all.
+
+Note for anyone editing this: `(ktime_get_ns() - t0) / NSEC_PER_MSEC` does not
+link on rv32 - a 64-bit divide pulls in __udivdi3. Use div_u64().
+
+--- a/drivers/mmc/host/dw_mmc.c
++++ b/drivers/mmc/host/dw_mmc.c
+@@ -555,11 +555,33 @@
+ 		u64 t0 = ktime_get_ns();
+ 		bool waited = !!(mci_readl(host, STATUS) & SDMMC_STATUS_BUSY);
+ 
++		/*
++		 * 5 s, not 500 ms.
++		 *
++		 * A card interrupted mid-write holds DAT0 low until its
++		 * internal program finishes, and the SD spec allows that to
++		 * take seconds. esp_restart() resets the SoC but not the card's
++		 * own power, so a warm reboot lands here with the card still
++		 * busy from whatever was in flight - and 500 ms was not long
++		 * enough to outlast it. The controller then sent CMD0 anyway,
++		 * which timed out, init failed, and the board sat on
++		 * "Waiting for root device /dev/mmcblk0" for ever because the
++		 * command line says rootwait.
++		 *
++		 * Waiting costs nothing when the card is idle: the poll exits
++		 * on the first read.
++		 */
+ 		if (readl_poll_timeout_atomic(host->regs + SDMMC_STATUS,
+ 					      status,
+ 					      !(status & SDMMC_STATUS_BUSY),
+-					      10, 500 * USEC_PER_MSEC))
+-			dev_err(host->dev, "Busy; trying anyway\n");
++					      10, 5 * USEC_PER_SEC))
++			dev_err(host->dev,
++				"card still busy after 5s; trying anyway\n");
++		else if (waited)
++			/* div_u64, not '/': a 64-bit divide on rv32 pulls in
++			 * __udivdi3, which the kernel does not link. */
++			dev_info(host->dev, "card was busy for %llu ms\n",
++				 div_u64(ktime_get_ns() - t0, NSEC_PER_MSEC));
+ 
+ 		dw_mci_busy_account(ktime_get_ns() - t0, waited);
+ 	}
+--- a/drivers/mmc/host/dw_mmc-pltfm.c
++++ b/drivers/mmc/host/dw_mmc-pltfm.c
+@@ -139,9 +139,33 @@
+ }
+ EXPORT_SYMBOL_GPL(dw_mci_pltfm_remove);
+ 
++/*
++ * Quiesce the card before the SoC restarts.
++ *
++ * esp_restart() resets the SoC but not the microSD's own power domain, so
++ * whatever the card was doing when the reboot landed, it carries into the next
++ * boot. A card interrupted mid-write holds DAT0 low, the controller's first
++ * CMD0 then times out against a busy line, initialisation fails, and because
++ * the command line says rootwait the board waits on
++ * "Waiting for root device /dev/mmcblk0" for ever. Measured here: the card
++ * stayed busy across repeated EN resets and only a physical repower cleared it.
++ *
++ * device_shutdown() runs on the reboot path, so a .shutdown that tears the
++ * host down properly - interrupts off, controller reset, transfers stopped -
++ * is what stops a transfer being in flight at the moment the SoC disappears.
++ */
++static void dw_mci_pltfm_shutdown(struct platform_device *pdev)
++{
++	struct dw_mci *host = platform_get_drvdata(pdev);
++
++	if (host)
++		dw_mci_remove(host);
++}
++
+ static struct platform_driver dw_mci_pltfm_driver = {
+ 	.probe		= dw_mci_pltfm_probe,
+ 	.remove		= dw_mci_pltfm_remove,
++	.shutdown	= dw_mci_pltfm_shutdown,
+ 	.driver		= {
+ 		.name		= "dw_mmc",
+ 		.probe_type	= PROBE_PREFER_ASYNCHRONOUS,
