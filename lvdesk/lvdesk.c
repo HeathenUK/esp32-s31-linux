@@ -1967,7 +1967,7 @@ static void wifi_render(void)
 			lv_label_set_text(mark, glyph);
 			lv_obj_set_style_text_font(mark, FONT_UI, 0);
 			lv_obj_add_flag(mark, LV_OBJ_FLAG_IGNORE_LAYOUT);
-			lv_obj_align(mark, LV_ALIGN_RIGHT_MID, -2, 0);
+			lv_obj_align(mark, LV_ALIGN_RIGHT_MID, -40, 0);
 			lv_obj_remove_flag(mark, LV_OBJ_FLAG_CLICKABLE);
 		}
 
@@ -1977,22 +1977,24 @@ static void wifi_render(void)
 		 * read. The old single column overloaded one slot with three
 		 * unrelated meanings - connected, saved, open - and marked
 		 * *open* networks, the opposite of the padlock convention.
+		 *
+		 * Fixed offsets, so the columns line up down the whole list:
+		 * strength rightmost, padlock inside it, and the connected tick
+		 * further left again rather than displacing them on one row.
 		 */
 		{
 			lv_obj_t *ic = lv_image_create(b);
 
 			lv_image_set_src(ic, ap_bars_img(&aps[i]));
 			lv_obj_add_flag(ic, LV_OBJ_FLAG_IGNORE_LAYOUT);
-			lv_obj_align(ic, LV_ALIGN_RIGHT_MID,
-				     aps[i].current ? -24 : -6, 0);
+			lv_obj_align(ic, LV_ALIGN_RIGHT_MID, -6, 0);
 			lv_obj_remove_flag(ic, LV_OBJ_FLAG_CLICKABLE);
 			if (ap_needs_key(&aps[i])) {
 				lv_obj_t *lk = lv_image_create(b);
 
 				lv_image_set_src(lk, &lvdesk_lock_img);
 				lv_obj_add_flag(lk, LV_OBJ_FLAG_IGNORE_LAYOUT);
-				lv_obj_align(lk, LV_ALIGN_RIGHT_MID,
-					     aps[i].current ? -40 : -22, 0);
+				lv_obj_align(lk, LV_ALIGN_RIGHT_MID, -22, 0);
 				lv_obj_remove_flag(lk, LV_OBJ_FLAG_CLICKABLE);
 			}
 		}
@@ -2008,9 +2010,8 @@ static void wifi_render(void)
 		 * answer "am I online?" never did.
 		 */
 		if (cur >= 0)
-			lv_label_set_text_fmt(wifi_status, "%s  " LV_SYMBOL_OK
-					      "  %d dBm", aps[cur].ssid,
-					      aps[cur].level);
+			lv_label_set_text_fmt(wifi_status, "%s  %d dBm",
+					      aps[cur].ssid, aps[cur].level);
 		else
 			lv_label_set_text_fmt(wifi_status, "not connected  -  "
 					      "%d network%s", ap_n,
@@ -2285,7 +2286,7 @@ static void wifi_scan_cb(lv_event_t *e)
 		return;
 	}
 	if (wifi_status)
-		lv_label_set_text(wifi_status, LV_SYMBOL_WIFI "  scanning...");
+		lv_label_set_text(wifi_status, LV_SYMBOL_WIFI "  Scanning...");
 	scan_watch_stop();
 	scan_watch = lv_timer_create(scan_timeout_cb, 12000, NULL);
 	/* Results arrive as CTRL-EVENT-SCAN-RESULTS; see wifi_ev_poll(). */
@@ -2511,13 +2512,20 @@ static void tray_wifi_cb(lv_event_t *e)
 	 * whole row of a 242x164 popover on a label that is usually four words
 	 * - the list is the point of the panel, so give it the space.
 	 */
-	wifi_status = lv_label_create(pop);
-	lv_label_set_text(wifi_status, "...");
-	lv_obj_set_pos(wifi_status, 2, 5);
-
 	b = lv_button_create(pop);
 	lv_obj_set_pos(b, 158, 0);
 	lv_obj_set_size(b, 84, 22);
+
+	/*
+	 * Centred against the button's row, computed from the font rather than
+	 * guessed: a fixed offset left the text sitting high in the row, which
+	 * reads as a misalignment even when nobody can say why.
+	 */
+	wifi_status = lv_label_create(pop);
+	lv_label_set_text(wifi_status, "...");
+	lv_obj_set_style_text_font(wifi_status, FONT_UI, 0);
+	lv_obj_set_pos(wifi_status, 4,
+		       (22 - (int32_t)lv_font_get_line_height(FONT_UI)) / 2);
 	lv_obj_set_style_radius(b, 0, 0);
 	lv_obj_set_style_bg_color(b, lv_color_hex(COL_HDR_FOCUS), 0);
 	lv_obj_set_style_shadow_width(b, 0, 0);
