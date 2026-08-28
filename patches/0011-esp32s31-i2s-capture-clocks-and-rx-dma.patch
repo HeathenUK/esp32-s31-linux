@@ -1,0 +1,164 @@
+esp32s31: make the microphone capture, by clocking the receiver and fixing its DMA
+
+Capture ran end to end for the first time with this. Four separate faults, each
+of which alone was enough to produce silence, and all four were hidden behind
+the position bug fixed in patch 0010 - with the position pinned at the end of
+the buffer, ALSA served stale ring contents and every recording came back
+byte-identical no matter what the hardware did.
+
+**SIG_LOOPBACK was the wrong mechanism entirely.** It is a *digital* loopback
+that feeds the transmitter's data back into the receiver, so it can never carry
+the microphone. The driver's own note recorded the giveaway without drawing the
+conclusion: "start playback and the ring fills immediately" - that was the
+playback data going round the loop. What the receiver actually needs is the
+transmitter's *clocks*.
+
+**The receiver was a master with its clocks wired to nothing.** Only the
+transmitter's BCK and WS (matrix signals 25 and 27) reach the pads, GPIO3 and
+GPIO4. The receiver listens on its own indices, I_BCK 29 and I_WS 30. It now
+runs as a slave (RX_CONF bit 3) and the DTS routes 29 and 30 back in from the
+pads the transmitter drives.
+
+**The pad input buffers were off.** Routing a matrix input to a pad that is
+driven as an output reads nothing unless FUN_IE is set - the same trap the
+GPIO7 amplifier hog fell into. Without `input-enable` the stream starts, no
+sample ever arrives, and the read fails with EIO after ALSA's wait times out.
+
+**The transmitter stopped itself.** Running for its clocks alone, with no DMA
+behind it, TX_STOP_EN - left set by the last playback - halted it at the first
+end-of-frame. Measured directly: TX_CONF read 0xc0f214 at trigger and 0xc0f210
+a moment later, clocks dead.
+
+Two DMA defects came out of the same investigation. Receive descriptors were
+given a length equal to their size, but on receive that field is the hardware's
+report of what it stored - declaring it full retires the whole ring at once.
+And `rx_node` was never reset when a cyclic descriptor was installed, though
+the transmit path resets `tx_node`, so each stream inherited the previous one's
+index and reported most of a buffer before a sample arrived.
+
+**Status.** Recordings are full length, error free, and now differ run to run -
+RMS 667-730 out of 32768, where before every capture was byte-identical. The
+analog front end is live. What is *not* established is the microphone gain: the
+vendor's factory_demo sets 30 dB through PGA registers 0x72/0x73 and our driver
+exposes only the input-select bits, so those sit at their default. Playing noise
+through the speaker did not move the captured level beyond the run-to-run spread
+(quiet 667/730/728, noise 733/695/726), but the speaker is itself still faulty,
+so that test proves nothing either way.
+
+--- a/drivers/dma/esp32s31-ahb-gdma.c
++++ b/drivers/dma/esp32s31-ahb-gdma.c
+@@ -430,10 +430,13 @@
+ 			size_t chunk = min_t(size_t, remaining, AHB_DESC_MAX);
+ 			dma_addr_t next = j + 1 == count ? 0 :
+ 				pool_dma + (j + 1) * AHB_DESC_SIZE;
++			/* Receive reports its own length - see prep_dma_cyclic. */
+ 			u32 control = FIELD_PREP(AHB_DESC_BUF_SIZE, chunk) |
+-				FIELD_PREP(AHB_DESC_DATA_LEN, chunk) |
+ 				AHB_DESC_OWNER;
+ 
++			if (direction != DMA_DEV_TO_MEM)
++				control |= FIELD_PREP(AHB_DESC_DATA_LEN, chunk);
++
+ 			if (j + 1 == count)
+ 				control |= AHB_DESC_EOF;
+ 			writel(control, hw);
+@@ -526,10 +529,20 @@
+ 			size_t chunk = min_t(size_t, remaining, chunk_len);
+ 			dma_addr_t next = pool_dma +
+ 				((i + 1) % count) * AHB_DESC_SIZE;
++			/*
++			 * On a receive descriptor the length field is the
++			 * hardware's report of how much it stored, so software
++			 * leaves it zero; setting it to the buffer size says
++			 * the buffer is already full and the engine retires
++			 * the whole ring at once without ever waiting for the
++			 * peripheral.
++			 */
+ 			u32 control = FIELD_PREP(AHB_DESC_BUF_SIZE, chunk) |
+-				      FIELD_PREP(AHB_DESC_DATA_LEN, chunk) |
+ 				      AHB_DESC_OWNER;
+ 
++			if (direction != DMA_DEV_TO_MEM)
++				control |= FIELD_PREP(AHB_DESC_DATA_LEN, chunk);
++
+ 			/* EOF closes the period, so one interrupt per period. */
+ 			if (direction == DMA_MEM_TO_DEV && chunk == remaining)
+ 				control |= AHB_DESC_EOF;
+@@ -822,6 +835,13 @@
+ 				break;
+ 			chan->cyclic_rx = desc;
+ 			chan->cyclic_generation++;
++			/*
++			 * A fresh ring starts at its head.  Without this the
++			 * node index survives from the previous stream, so the
++			 * first position reported is most of a buffer and the
++			 * PCM layer calls an overrun before a sample arrives.
++			 */
++			chan->rx_node = 0;
+ 			list_del(&vd->node);
+ 			esp32s31_ahb_start_cyclic(chan);
+ 			break;
+--- a/sound/soc/espressif/esp32s31-i2s.c
++++ b/sound/soc/espressif/esp32s31-i2s.c
+@@ -303,6 +303,14 @@
+ 	 */
+ 	if (playback)
+ 		conf |= ESP32S31_I2S_TX_STOP_EN;
++	else
++		/*
++		 * Only the transmitter's BCK and WS reach the pads (GPIO3 and
++		 * GPIO4, matrix signals 25 and 27), so the receiver takes them
++		 * back in as a slave rather than generating its own on signal
++		 * indices 29 and 30, which are wired to nothing.
++		 */
++		conf |= ESP32S31_I2S_TX_SLAVE_MOD;
+ 	/*
+ 	 * Slots are exactly as wide as the samples, so the slot width, the
+ 	 * half-frame width and the WS pulse width are all the sample width.
+@@ -364,8 +372,15 @@
+ 		 * written; start playback and it fills immediately.
+ 		 */
+ 		if (!playback) {
+-			esp32s31_i2s_update(i2s->base, ESP32S31_I2S_TX_CONF, 0,
+-					    ESP32S31_I2S_SIG_LOOPBACK);
++			/*
++			 * The transmitter runs for its clocks alone here, with
++			 * no DMA behind it, so TX_STOP_EN - left set by the
++			 * last playback - stops it at the first end-of-frame.
++			 * The clocks then die and the slave receiver, which has
++			 * no others, never sees an edge.
++			 */
++			esp32s31_i2s_update(i2s->base, ESP32S31_I2S_TX_CONF,
++					    ESP32S31_I2S_TX_STOP_EN, 0);
+ 			esp32s31_i2s_update(i2s->base, ESP32S31_I2S_TX_CONF, 0,
+ 					    ESP32S31_I2S_TX_FIFO_RESET);
+ 			esp32s31_i2s_update(i2s->base, ESP32S31_I2S_TX_CONF,
+--- a/arch/riscv/boot/dts/espressif/esp32s31.dtsi
++++ b/arch/riscv/boot/dts/espressif/esp32s31.dtsi
+@@ -601,6 +601,26 @@
+ 					bias-disable;
+ 					input-enable;
+ 				};
++
++				/*
++				 * Capture runs the receiver as a slave off the
++				 * transmitter's clocks, because only the TX
++				 * section's BCK and WS (signals 25 and 27) reach
++				 * the pads. The receiver listens on its own
++				 * indices - I_BCK 29 and I_WS 30 - so those are
++				 * routed back in from the very pads the
++				 * transmitter drives. Without input-enable the
++				 * pad's input buffer stays off and the matrix
++				 * reads nothing, which looks exactly like a dead
++				 * microphone: the stream starts, no sample ever
++				 * arrives, and the read fails with EIO.
++				 */
++				rx-clk-pins {
++					pinmux = <ESP32S31_MATRIX_IN(3, 29, 0)>,
++						 <ESP32S31_MATRIX_IN(4, 30, 0)>;
++					bias-disable;
++					input-enable;
++				};
+ 			};
+ 
+ 			i2c1_default: i2c1-default-pins {
