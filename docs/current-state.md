@@ -1752,3 +1752,97 @@ started it retries, it starts another. That failure mode cost most of an hour.
   summed correctly even though the boundaries did not.
 - **One sequence discontinuity is expected** - it is the handover, not a lost
   frame. `mjpegrec` reports it as a gap.
+
+## Boot audit: 83 s to a desktop became 24 s (2026-08-28)
+
+Every line of the boot log was walked, with per-script timestamps written to
+`/dev/kmsg` from `rcS` - which is the only way to see this, because the two
+scripts that dominated the boot printed nothing at all while they ran. That is
+why it read as a hang at the last input device rather than a slow script.
+
+    S10udevd      34.0s -> 0.52s   coldplug now runs in the background
+    S04s31-swap   15.7s -> 0.56s   ls -l instead of wc -c on a 64 MB file
+    S30dbus       6.34s            moved behind lvdesk
+    S40bluetoothd 2.67s            moved behind lvdesk
+    desktop up    83.0s -> 24.2s
+
+- **udev**: `udevadm trigger` is 11.2 s here and the `settle` after it 20.9 s -
+  real work, not the 30 s timeout expiring. Nothing needs to wait: devtmpfs
+  makes the nodes, udev only applies rules, and lvdesk opens /dev/input itself
+  and rescans every 2 s.
+- **swap**: `wc -c < /swapfile` READS 64 MB, 15.3 s at ~4.4 MB/s, every boot,
+  to learn a size the directory entry already holds. The comment warning that
+  this busybox lacks `stat` is correct - `ls -l | awk` is the right answer.
+- **dbus/bluetoothd**: 9.0 s combined, needed by nothing on the way to a
+  desktop. Renamed in `post-build.sh`; an overlay cannot remove the names
+  Buildroot installs, so both copies would run.
+
+Everything left is under 1.7 s except **S40network at 54.4 s**, which starts at
+23.8 s - after the desktop - so it delays Wi-Fi and crond, not the desktop.
+That is the next target: `ifup -a` doing a hidden-SSID scan (`scan_ssid=1`
+forces active probing) plus DHCP.
+
+### The mmc errors are real but were NOT reproduced
+
+Seen once, at 9.5 s and 9.8 s of one boot:
+
+    data error: mintsts=0x00000200 idsts=0x00000102 rintsts=0x00010028
+    Unexpected data interrupt latency
+
+`mintsts` bit 9 is DRTO (data read timeout); `rintsts` carries a data CRC error
+with it. The driver recovered - nothing surfaced to the filesystem. **192 MB of
+sustained reads afterwards produced zero errors**, and no boot since has
+repeated them, so the trigger is unknown. Do not attribute them to the
+swapfile read without new evidence; that hypothesis was tested and failed.
+
+### xip2 is genuinely empty - 1.4 MB of flash doing nothing
+
+`cramfs: linear cramfs image on mtd:xip2 appears to be 4 KB in size` is not a
+mis-report. `images/rootfs-xip2.cramfs` is **4096 bytes** on the host too.
+Image 2 is built with EXCLUDE_DIR against image 1, and image 1 (5,259,264 of
+6,160,384 bytes) already holds the entire closure, so there is nothing left for
+image 2. The xip2 partition is 1,441,792 bytes, so **1,437,696 bytes of flash
+are reserved for an empty filesystem** - on a board where the linux partition
+has been down to ~53 KB of slack. Reclaiming it is free space, and `S05xip`
+would stop mounting a third overlay for nothing (1.63 s).
+
+### The remaining log noise is benign
+
+`supply ... not found, using dummy regulator` (panel, dwc2, es8389) is the
+DT declaring no regulator for rails that are hard-wired. `fifo-depth property
+not found` falls back to reading FIFOTH, which is correct. `Direct firmware
+load for regulatory.db failed` means no CRDA database - the radio uses its
+built-in defaults. `Console: colour dummy device` at 0.001 s and again at
+24.08 s is fbcon before the driver binds, and the desktop taking over.
+
+### Input: what was eliminated, and what remains
+
+**lvdesk does not drop keystrokes under test.** 36/36 characters at 90, 20 and
+5 ms per key, and again under 64 MB of concurrent I/O. But the harness lied
+first: `uinject`'s keycode map knew only a-z, space, newline, `- . /` and the
+digits 1, 2, 3, and skipped everything else silently, so `echo abc...0123456789
+> /tmp/f` arrived as `echo abc...123  /tmp/f`. That is indistinguishable from
+the desktop eating input. **Measure the harness before believing the result.**
+
+Two real hazards were found and fixed, neither yet observed in the wild:
+
+- **SYN_DROPPED was discarded.** Every evdev reader gets a kernel ring; if it
+  is not read for long enough the kernel throws the backlog away and reports it
+  exactly once as `EV_SYN`/`SYN_DROPPED`, which lvdesk's "not EV_KEY, skip it"
+  filter dropped. A stall therefore ate every keystroke made during it, with no
+  trace - the exact shape of "seconds of typing simply gone". Now counted and
+  logged, along with any gap over 500 ms between input polls, and modifiers are
+  cleared afterwards because a release may have been among the lost events.
+- **The pty write discarded the character with the error** (`if (write(...) <
+  0) { }`) when the non-blocking master returned EAGAIN. Now retried briefly,
+  then counted.
+
+**Still open, and the best remaining hypothesis: the 2.4 GHz receivers.** Both
+HID receivers are 2.4 GHz, on a bus-powered hub declaring `bMaxPower=100mA`
+while feeding 98 mA + 100 mA, centimetres from the board's own 2.4 GHz Wi-Fi
+antenna. Interference or brown-out would stop reports arriving for seconds with
+no USB error logged, because the receiver stays enumerated. Independent
+evidence that this path misbehaves already exists: the kernel was seen
+auto-repeating KEY_M that nobody was holding, which means a HID report was lost
+or garbled. Cheap tests: plug the receiver straight into the board with no hub,
+and check whether the loss correlates with Wi-Fi traffic.
