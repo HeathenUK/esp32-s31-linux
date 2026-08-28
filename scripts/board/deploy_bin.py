@@ -1,5 +1,9 @@
 """Ship a gzipped binary to the board over the 1 Mbps console, in printf chunks.
 
+PREFER scripts/board/deploy.py, which picks this or the network automatically.
+Measured: 734 KB takes >10 minutes here and 3.2 s over Wi-Fi. This path is the
+right answer only for small files, or when the board has no address.
+
 Input is gzip+base64; the board gunzips on arrival. For anything large prefer
 the network - at 1 Mbps with a round trip per chunk this is slow, and the whole
 point of the opkg feed is to stop moving files this way.

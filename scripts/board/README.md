@@ -108,3 +108,25 @@ all of them capable of being misread as a hardware failure:
 Separately, **`deploy_bin` now runs `sync`.** ext4 defers allocation, so a
 board reset shortly after a deploy left a *zero-length* file with the right
 name and mode - a deploy that reported success and had silently vanished.
+
+### deploy.py - the one to use
+
+    scripts/board/deploy.py <local-file> <dest-on-board>
+
+Picks the transport by size and by whether the board has an address:
+
+| transport | 734 KB | when |
+|---|---|---|
+| network (HTTP over Wi-Fi) | **3.2 s**, 226 KB/s | anything >= 32 KB with wlan0 up |
+| console (base64 over serial) | **> 10 minutes** | small files, or no network |
+
+Both ends are checksummed. A truncated transfer leaves a file of the right name
+and mode, which is indistinguishable from a good deploy until something behaves
+oddly hours later - so it is verified, not assumed.
+
+`deploy_bin.py` is the console path and still works; it is what deploy.py falls
+back to. Do not reach for it directly for anything large. Its docstring said
+"for anything large prefer the network" for months and that advice was ignored
+every time, because following it meant hand-rolling a server each session.
+`--console` forces it if you need to test that path.
+

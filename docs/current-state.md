@@ -1594,3 +1594,30 @@ size is known. Probe itself is too early: `get_modes` has not run by the end of
 Verified: the scanout buffer now lands at **0x50800000**, the base of the
 region, rather than 0x50900000 a megabyte in - it is allocated before anything
 else can take that ground - and a full desktop keeps scaled 800x480.
+
+## Timekeeping, and why there is no RTC driver (2026-08-28)
+
+**The board cannot keep time in hardware.** Measured, not assumed:
+
+- **No external RTC.** An I2C scan finds two devices - the ES8389 codec at 0x10
+  and touch at 0x14. No DS3231, no PCF8563, no coin cell.
+- **The SoC's RTC timer does not retain.** `rtc_timer@20800000` is a real
+  block, and reading it directly (write BIT(27) to +0x10 to latch, read +0x14
+  lo / +0x18 hi) gives 185,478,790 at 1391 s uptime and 10,904,651 at 80 s
+  uptime *after a reset* - both ~136 kHz, both proportional to uptime. It
+  restarts from zero on an esptool reset. It is an uptime counter, not a clock.
+
+So an RTC-class driver over it would be **worse than nothing**: Linux would get
+an RTC reading "1970 + uptime", `CONFIG_RTC_HCTOSYS` would set the system clock
+back to 1970 on every boot - overriding the saved timestamp - and `hwclock -w`
+would appear to work while persisting nothing.
+
+What ships instead (`/etc/init.d/S30clock`): a timestamp saved hourly by cron
+and at shutdown, restored at boot and only ever moved forwards, plus busybox
+ntpd as a retrying daemon. Same pair Raspberry Pi OS uses, for the same reason.
+Timezone is Europe/London from zoneinfo, so BST is handled rather than
+hardcoded.
+
+Ordered S30, ahead of the desktop at S40: musl caches the timezone on first
+use, so a desktop that starts first shows UTC for ever - 12:23 on the panel
+against 13:23 on the console until the ordering was fixed.
