@@ -68,7 +68,7 @@ IDF_EXPORT := $(shell test -f /opt/esp-idf/export.sh && echo /opt/esp-idf/export
 .PHONY: all download toolchain toolchain-source opensbi linux coremark rootfs initramfs s31-pie-cases \
 	buildroot-menuconfig buildroot-clean clean fullclean flash-opensbi flash-linux  \
 	xip-rootfs flash-xip-rootfs xip2-stage \
-	flash-rootfs xip2-rootfs flash-xip2-rootfs bootloader flash-bootloader erase \
+	flash-rootfs xip2-rootfs flash-xip2-rootfs xip-fast xip-image bootloader flash-bootloader erase \
 	imager flash-imager reset
 
 all: toolchain download opensbi linux initramfs
@@ -455,7 +455,21 @@ XIP_ROOTS ?= bin/busybox usr/bin/opkg usr/sbin/wpa_supplicant usr/sbin/iw usr/bi
 # is the binary plus libc, and putting it in flash takes its ~600 kB of text
 # out of RSS entirely - the same reason /usr/bin/Xorg used to live here.
 
-xip-rootfs: rootfs
+xip-rootfs: rootfs xip-image
+
+# Re-stage and re-pack the XIP image WITHOUT re-running Buildroot.
+#
+# Buildroot is the whole cost of xip-rootfs: measured 2m33s against 1.6s to
+# copy the result out and 42s to flash it, all to ship one changed binary. When
+# only an overlay file has changed - which is every lvdesk iteration - sync the
+# overlay into the target tree and repack. Use xip-rootfs when a *package*
+# changed; this is for iterating on our own binaries.
+xip-fast:
+	@echo "--- syncing overlay into the Buildroot target ---"
+	cp -a $(BUILDROOT_EXTERNAL)/board/esp32-s31/overlay/. $(BUILDROOT_OUT)/target/
+	@$(MAKE) xip-image
+
+xip-image:
 	@echo "--- userspace XIP image ---"
 	@command -v mkcramfs >/dev/null || test -x $(BUILDROOT_OUT)/host/bin/mkcramfs || \
 		{ echo "ERROR: mkcramfs not found; enable BR2_PACKAGE_HOST_CRAMFS" >&2; exit 1; }

@@ -96,6 +96,28 @@ static void move_to(int x, int y, int steps, int delay)
 	px = x; py = y;
 }
 
+/*
+ * Move slowly enough that the desktop's pointer acceleration never engages.
+ *
+ * lvdesk accelerates above 0.30 units/ms (libinput's adaptive profile in
+ * miniature), so the old fixed 12-step move overshot by up to 3x and every
+ * coordinate-based test landed somewhere else. Capping the per-step delta and
+ * spacing the steps keeps the measured speed below the threshold, so what we
+ * ask for is where the pointer ends up - with acceleration left on, which is
+ * how the desktop actually ships.
+ */
+#define PRECISE_STEP_PX	5
+#define PRECISE_DELAY_MS 20
+
+static void move_to_precise(int x, int y)
+{
+	int dx = x - px, dy = y - py;
+	int dist = (dx < 0 ? -dx : dx) + (dy < 0 ? -dy : dy);
+	int steps = dist / PRECISE_STEP_PX + 1;
+
+	move_to(x, y, steps, PRECISE_DELAY_MS);
+}
+
 static void home(void)
 {
 	emit(mouse_fd, EV_REL, REL_X, -4000);
@@ -219,8 +241,8 @@ int main(int argc, char **argv)
 		emit(kbd_fd, EV_KEY, k, 0); syn(kbd_fd);
 	} else if (!strcmp(what, "dragto")) {
 		/* dragto x1 y1 x2 y2 - press at the first point, drag, release. */
-		move_to(argc > 2 ? atoi(argv[2]) : 0,
-			argc > 3 ? atoi(argv[3]) : 0, 12, 12);
+		move_to_precise(argc > 2 ? atoi(argv[2]) : 0,
+				argc > 3 ? atoi(argv[3]) : 0);
 		msleep(150);
 		click(1);
 		msleep(120);
@@ -228,10 +250,23 @@ int main(int argc, char **argv)
 			argc > 5 ? atoi(argv[5]) : 0, 24, 22);
 		msleep(120);
 		click(0);
+	} else if (!strcmp(what, "dblclick")) {
+		/*
+		 * dblclick X Y - two presses inside the desktop's 400 ms
+		 * double-click window. Two separate uinject runs can never do
+		 * this: each pays the settle delay first.
+		 */
+		move_to_precise(argc > 2 ? atoi(argv[2]) : 0,
+				argc > 3 ? atoi(argv[3]) : 0);
+		msleep(200);
+		click(1); click(0);
+		msleep(90);
+		click(1); click(0);
+		msleep(400);
 	} else if (!strcmp(what, "click")) {
 		/* click X Y - drive a specific control, e.g. a tray icon. */
-		move_to(argc > 2 ? atoi(argv[2]) : 0,
-			argc > 3 ? atoi(argv[3]) : 0, 12, 12);
+		move_to_precise(argc > 2 ? atoi(argv[2]) : 0,
+				argc > 3 ? atoi(argv[3]) : 0);
 		msleep(200);
 		click(1);
 		/*

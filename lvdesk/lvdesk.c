@@ -1808,6 +1808,28 @@ static void wifi_sort(void)
 	}
 }
 
+/*
+ * dBm to a 0-4 bar count. -50 is excellent, -67 the practical target for
+ * everyday use, -70 and worse unreliable - the thresholds nm-applet and the
+ * rest of the industry draw their five icon levels on.
+ */
+static const void *ap_bars_img(const struct ap *a)
+{
+	int lvl = a->level;
+
+	if (!lvl)
+		return &lvdesk_sig0_img;
+	if (lvl >= -55)
+		return &lvdesk_sig4_img;
+	if (lvl >= -67)
+		return &lvdesk_sig3_img;
+	if (lvl >= -75)
+		return &lvdesk_sig2_img;
+	if (lvl >= -85)
+		return &lvdesk_sig1_img;
+	return &lvdesk_sig0_img;
+}
+
 static int ap_needs_key(const struct ap *a)
 {
 	return strstr(a->flags, "PSK") || strstr(a->flags, "WPA") ||
@@ -1891,6 +1913,9 @@ static void wifi_render(void)
 		b = lv_list_add_button(wifi_list, NULL, aps[i].ssid);
 		lv_obj_set_style_text_font(b, FONT_UI, 0);
 		lv_obj_set_style_pad_ver(b, 2, 0);
+		/* The list sits flush with the popover edge, so the first
+		 * character was being clipped by the border. */
+		lv_obj_set_style_pad_left(b, 6, 0);
 		/*
 		 * Centre the name across the row. The row grows when it holds
 		 * a Connect button, and the list's flex leaves the label at the
@@ -1936,9 +1961,7 @@ static void wifi_render(void)
 		 * that the eye reads as a mistake. Right-aligned, the names
 		 * form one column and the markers form another.
 		 */
-		glyph = aps[i].current ? LV_SYMBOL_OK :
-			aps[i].saved ? LV_SYMBOL_SAVE :
-			ap_needs_key(&aps[i]) ? "" : LV_SYMBOL_EYE_OPEN;
+		glyph = aps[i].current ? LV_SYMBOL_OK : "";
 		if (*glyph) {
 			mark = lv_label_create(b);
 			lv_label_set_text(mark, glyph);
@@ -1947,10 +1970,52 @@ static void wifi_render(void)
 			lv_obj_align(mark, LV_ALIGN_RIGHT_MID, -2, 0);
 			lv_obj_remove_flag(mark, LV_OBJ_FLAG_CLICKABLE);
 		}
+
+		/*
+		 * Strength and security as separate columns, which is what
+		 * every network menu does and what people already know how to
+		 * read. The old single column overloaded one slot with three
+		 * unrelated meanings - connected, saved, open - and marked
+		 * *open* networks, the opposite of the padlock convention.
+		 */
+		{
+			lv_obj_t *ic = lv_image_create(b);
+
+			lv_image_set_src(ic, ap_bars_img(&aps[i]));
+			lv_obj_add_flag(ic, LV_OBJ_FLAG_IGNORE_LAYOUT);
+			lv_obj_align(ic, LV_ALIGN_RIGHT_MID,
+				     aps[i].current ? -24 : -6, 0);
+			lv_obj_remove_flag(ic, LV_OBJ_FLAG_CLICKABLE);
+			if (ap_needs_key(&aps[i])) {
+				lv_obj_t *lk = lv_image_create(b);
+
+				lv_image_set_src(lk, &lvdesk_lock_img);
+				lv_obj_add_flag(lk, LV_OBJ_FLAG_IGNORE_LAYOUT);
+				lv_obj_align(lk, LV_ALIGN_RIGHT_MID,
+					     aps[i].current ? -40 : -22, 0);
+				lv_obj_remove_flag(lk, LV_OBJ_FLAG_CLICKABLE);
+			}
+		}
 	}
-	if (wifi_status)
-		lv_label_set_text_fmt(wifi_status, "%d network%s", ap_n,
-				      ap_n == 1 ? "" : "s");
+	if (wifi_status) {
+		int k, cur = -1;
+
+		for (k = 0; k < ap_n; k++)
+			if (aps[k].current) { cur = k; break; }
+		/*
+		 * Say what the state *is*. The panel used to leave "scanning..."
+		 * up even once results had arrived, so the one line that should
+		 * answer "am I online?" never did.
+		 */
+		if (cur >= 0)
+			lv_label_set_text_fmt(wifi_status, "%s  " LV_SYMBOL_OK
+					      "  %d dBm", aps[cur].ssid,
+					      aps[cur].level);
+		else
+			lv_label_set_text_fmt(wifi_status, "not connected  -  "
+					      "%d network%s", ap_n,
+					      ap_n == 1 ? "" : "s");
+	}
 }
 
 static void wifi_show_results(void);
@@ -2441,12 +2506,17 @@ static void tray_wifi_cb(lv_event_t *e)
 	if (!pop)
 		return;
 
+	/*
+	 * Status and Rescan share one row. They were stacked, which spent a
+	 * whole row of a 242x164 popover on a label that is usually four words
+	 * - the list is the point of the panel, so give it the space.
+	 */
 	wifi_status = lv_label_create(pop);
 	lv_label_set_text(wifi_status, "...");
-	lv_obj_set_pos(wifi_status, 0, 0);
+	lv_obj_set_pos(wifi_status, 2, 5);
 
 	b = lv_button_create(pop);
-	lv_obj_set_pos(b, 158, 16);
+	lv_obj_set_pos(b, 158, 0);
 	lv_obj_set_size(b, 84, 22);
 	lv_obj_set_style_radius(b, 0, 0);
 	lv_obj_set_style_bg_color(b, lv_color_hex(COL_HDR_FOCUS), 0);
@@ -2456,8 +2526,8 @@ static void tray_wifi_cb(lv_event_t *e)
 	lv_label_set_text(lv_obj_get_child(b, 0), "Rescan");
 
 	wifi_list = lv_list_create(pop);
-	lv_obj_set_size(wifi_list, 242, 122);
-	lv_obj_set_pos(wifi_list, 0, 42);
+	lv_obj_set_size(wifi_list, 242, 138);
+	lv_obj_set_pos(wifi_list, 0, 26);
 	lv_obj_set_style_radius(wifi_list, 0, 0);
 	lv_obj_set_style_pad_all(wifi_list, 0, 0);
 	lv_obj_set_style_text_font(wifi_list, FONT_UI, 0);
@@ -2673,6 +2743,7 @@ static void kms_flush_cb(lv_display_t *d, const lv_area_t *area, uint8_t *px)
  */
 #define IDLE_POLL_MS 100
 static int mouse_fds[MAXMOUSE];
+static int mouse_raw[MAXMOUSE];		/* synthetic: no pointer acceleration */
 static int mouse_n;
 static uint32_t mouse_scan_at;
 static int32_t ptr_x, ptr_y;
@@ -2720,6 +2791,26 @@ static void mouse_scan(void)
 		}
 		if (known) { close(fd); continue; }
 		if (!is_mouse(fd)) { close(fd); continue; }
+		{
+			/*
+			 * Injected devices bypass acceleration entirely.
+			 *
+			 * The test harness asks for absolute coordinates, and
+			 * a curve that scales deltas makes "click at 722,469"
+			 * land somewhere else. Pacing the injector under the
+			 * threshold is fragile - what the curve sees depends on
+			 * how many events a poll happens to drain. Since we own
+			 * both ends, say so explicitly instead: uinput devices
+			 * named uinject-* deliver their motion verbatim.
+			 */
+			char nm[64] = "";
+
+			ioctl(fd, EVIOCGNAME(sizeof(nm) - 1), nm);
+			mouse_raw[mouse_n] = !strncmp(nm, "uinject", 7);
+			if (mouse_raw[mouse_n])
+				printf("lvdesk: %s is synthetic, no accel\n",
+				       path);
+		}
 		mouse_fds[mouse_n++] = fd;
 		printf("lvdesk: mouse on %s\n", path);
 	}
@@ -2732,7 +2823,9 @@ static int mouse_poll(void)
 	int32_t w = lv_display_get_horizontal_resolution(NULL);
 	int32_t h = lv_display_get_vertical_resolution(NULL);
 	int i;
-	int rdx = 0, rdy = 0;			/* raw delta this poll */
+	int rdx = 0, rdy = 0;			/* delta to accelerate */
+	int vdx = 0, vdy = 0;			/* verbatim: synthetic devices */
+	uint32_t ev_ms = 0;			/* timestamp of the last motion */
 	static float carry_x, carry_y;		/* sub-pixel remainder */
 	static uint32_t last_move_ms;
 	/*
@@ -2761,6 +2854,7 @@ static int mouse_poll(void)
 		if (n < 0 && (errno == ENODEV || errno == EBADF)) {
 			close(mouse_fds[i]);
 			mouse_fds[i] = mouse_fds[--mouse_n];
+			mouse_raw[i] = mouse_raw[mouse_n];
 			mouse_scan_at = 0;
 			i--;
 			continue;
@@ -2770,9 +2864,25 @@ static int mouse_poll(void)
 		busy = 1;
 		do {
 			if (ev.type == EV_REL) {
-				if (ev.code == REL_X) rdx += ev.value;
-				else if (ev.code == REL_Y) rdy += ev.value;
-				else if (ev.code == REL_WHEEL) wheel += ev.value;
+				if (ev.code == REL_X) {
+					if (mouse_raw[i]) vdx += ev.value;
+					else rdx += ev.value;
+				} else if (ev.code == REL_Y) {
+					if (mouse_raw[i]) vdy += ev.value;
+					else rdy += ev.value;
+				} else if (ev.code == REL_WHEEL) {
+					wheel += ev.value;
+				}
+				if (ev.code == REL_X || ev.code == REL_Y)
+					/*
+					 * input_event_sec/usec, not .time: with
+					 * 64-bit time_t the kernel header drops
+					 * the timeval and these macros are the
+					 * portable spelling.
+					 */
+					ev_ms = (uint32_t)
+						(ev.input_event_sec * 1000 +
+						 ev.input_event_usec / 1000);
 			} else if (ev.type == EV_KEY && ev.code == BTN_LEFT) {
 				int was = ptr_pressed;
 
@@ -2783,21 +2893,32 @@ static int mouse_poll(void)
 		} while (read(mouse_fds[i], &ev, sizeof(ev)) == sizeof(ev));
 	}
 
+	/* Synthetic motion lands exactly where it was aimed. */
+	ptr_x += vdx;
+	ptr_y += vdy;
+
 	if (rdx || rdy) {
-		uint32_t now = lv_tick_get();
+		uint32_t now = ev_ms ? ev_ms : lv_tick_get();
 		uint32_t dt = now - last_move_ms;
 		float fx = rdx, fy = rdy, factor = 1.0f, speed;
 
 		/*
-		 * Velocity over the gap since the last motion, in units/ms.
+		 * Velocity from the *device's* timestamps, not from when we got
+		 * round to polling. Every pending event is drained per poll, so
+		 * timing this against the poll cadence measures how slow the UI
+		 * loop is rather than how fast the hand moved - a long poll made
+		 * gentle movement look like a flick and applied full
+		 * acceleration to it. libinput times its trackers off the event
+		 * clock for the same reason.
+		 *
 		 * The first sample after an idle period has a huge dt and so a
 		 * near-zero speed, which is right: a fresh movement should
 		 * start unaccelerated rather than leap.
 		 */
+		if (!last_move_ms || dt > 100)
+			dt = 100;
 		if (!dt)
 			dt = 1;
-		if (dt > 100)
-			dt = 100;
 		last_move_ms = now;
 		speed = (fabsf(fx) + fabsf(fy)) / (float)dt;
 		if (accel_on && speed > PTR_ACCEL_THRESHOLD) {
