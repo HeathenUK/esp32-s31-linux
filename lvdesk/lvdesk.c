@@ -2465,6 +2465,7 @@ static int mouse_n;
 static uint32_t mouse_scan_at;
 static int32_t ptr_x, ptr_y;
 static int ptr_pressed;
+static int press_edge;			/* a new press, not yet acted on */
 static int wheel;
 static lv_obj_t *cursor_obj;
 static lv_indev_t *mouse_indev;
@@ -2545,7 +2546,11 @@ static int mouse_poll(void)
 				else if (ev.code == REL_Y) ptr_y += ev.value;
 				else if (ev.code == REL_WHEEL) wheel += ev.value;
 			} else if (ev.type == EV_KEY && ev.code == BTN_LEFT) {
+				int was = ptr_pressed;
+
 				ptr_pressed = !!ev.value;
+				if (ptr_pressed && !was)
+					press_edge = 1;
 			}
 		} while (read(mouse_fds[i], &ev, sizeof(ev)) == sizeof(ev));
 	}
@@ -2576,9 +2581,55 @@ static int mouse_poll(void)
 	return busy;
 }
 
+/*
+ * Raise the window under the pointer, wherever in it the click landed.
+ *
+ * The window root carries a PRESSED handler, but LVGL events do not bubble by
+ * default, so a click on the content area or on any child - a terminal, a
+ * button, a list row - never reached it and only the title bar raised. Doing
+ * it here, on the press edge before the event is dispatched, covers every
+ * child that exists now or later without having to flag each one.
+ *
+ * The screen's children are in z-order, so searching back to front finds the
+ * topmost thing under the pointer. Stop at whatever that is: if it is a window
+ * raise it, and if it is not - the task bar, a tray popover - leave the stack
+ * alone, or a click on a popover would lift a window over the top of it.
+ */
+static void raise_under_pointer(int32_t x, int32_t y)
+{
+	lv_obj_t *scr = lv_screen_active();
+	int32_t i;
+
+	for (i = (int32_t)lv_obj_get_child_count(scr) - 1; i >= 0; i--) {
+		lv_obj_t *o = lv_obj_get_child(scr, i);
+		struct winrec *w;
+		lv_area_t a;
+
+		if (lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN))
+			continue;
+		lv_obj_get_coords(o, &a);
+		if (x < a.x1 || x > a.x2 || y < a.y1 || y > a.y2)
+			continue;
+		w = win_find(o);
+		if (w && !w->minimised) {
+			lv_obj_move_foreground(o);
+			win_set_focus(w);
+		}
+		return;
+	}
+}
+
 static void mouse_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
 {
 	LV_UNUSED(indev);
+	/*
+	 * Act on the press before LVGL hit-tests this read, so the window is
+	 * already on top when the click is dispatched into it.
+	 */
+	if (press_edge) {
+		press_edge = 0;
+		raise_under_pointer(ptr_x, ptr_y);
+	}
 	data->point.x = ptr_x;
 	data->point.y = ptr_y;
 	data->state = ptr_pressed ? LV_INDEV_STATE_PRESSED
