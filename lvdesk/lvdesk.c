@@ -3661,6 +3661,32 @@ static void kms_flush_cb(lv_display_t *d, const lv_area_t *area, uint8_t *px)
  * of the saving and bounds the worst case.
  */
 #define IDLE_POLL_MS 100
+
+/*
+ * Where the frame goes. LVDESK_PROF=1 only; off it costs one predictable
+ * branch per phase.
+ *
+ * There is no perf, no ftrace and no PMU in the shipping kernel, and the
+ * driver's own counters stop at the ioctl - so from the outside a slow desktop
+ * is a single number with no parts. The engine question ("would the PPA help?")
+ * cannot be answered without knowing whether the time is in LVGL's rasteriser,
+ * in the terminal grid, or in the commit, and those differ by two orders of
+ * magnitude here.
+ */
+static int prof_on;
+static uint64_t prof_wait, prof_input, prof_timer, prof_refr;
+static uint32_t prof_loops, prof_refrs;
+
+static uint64_t prof_ns(void)
+{
+	struct timespec t;
+
+	clock_gettime(CLOCK_MONOTONIC, &t);
+	return (uint64_t)t.tv_sec * 1000000000ull + t.tv_nsec;
+}
+
+#define PROF_START(v) uint64_t v = prof_on ? prof_ns() : 0
+#define PROF_ADD(acc, v) do { if (prof_on) (acc) += prof_ns() - (v); } while (0)
 static int mouse_fds[MAXMOUSE];
 static int mouse_raw[MAXMOUSE];		/* synthetic: no pointer acceleration */
 static int mouse_n;
@@ -3975,6 +4001,7 @@ static void mouse_init(void)
 int main(void)
 {
 	term_log = getenv("LVDESK_TERMLOG") != NULL;
+	prof_on = getenv("LVDESK_PROF") != NULL;
 	wpa_log = getenv("LVDESK_WPALOG") != NULL;
 	atexit(wpa_cleanup);
 	wpa_events_open();
@@ -4212,7 +4239,7 @@ int main(void)
 		uint32_t next, elapsed;
 		int n = 0, ms;
 
-		next = lv_timer_handler();
+		{ PROF_START(t0); next = lv_timer_handler(); PROF_ADD(prof_timer, t0); }
 		if (next == LV_NO_TIMER_READY || next > 30)
 			next = 30;
 		/*
@@ -4269,11 +4296,15 @@ int main(void)
 			clock_gettime(CLOCK_MONOTONIC, &b);
 			elapsed = (uint32_t)((b.tv_sec - a.tv_sec) * 1000 +
 					     (b.tv_nsec - a.tv_nsec) / 1000000);
+			if (prof_on)
+				prof_wait += (uint64_t)(b.tv_sec - a.tv_sec) *
+					1000000000ull + (b.tv_nsec - a.tv_nsec);
 		}
 		lv_tick_inc(elapsed ? elapsed : 1);
 
 		{
 			int busy = 0;
+			PROF_START(t0);
 
 			busy |= term_poll();
 			busy |= kbd_poll();
@@ -4281,6 +4312,7 @@ int main(void)
 			busy |= wifi_ev_poll();
 			waitpid(-1, NULL, WNOHANG);	/* reap the tone child */
 			idle_rounds = busy ? 0 : idle_rounds + 1;
+			PROF_ADD(prof_input, t0);
 		}
 
 		/*
@@ -4299,11 +4331,39 @@ int main(void)
 		 * on every trip costs little; input arrives far more slowly
 		 * than the panel refreshes, so this cannot outrun the hardware.
 		 */
-		lv_timer_handler();
-		lv_refr_now(NULL);
+		{ PROF_START(t0); lv_timer_handler(); PROF_ADD(prof_timer, t0); }
+		{
+			PROF_START(t0);
+			lv_refr_now(NULL);
+			PROF_ADD(prof_refr, t0);
+		}
+		prof_loops++;
 
 		if (lv_tick_get() - last > 5000) {
 			last = lv_tick_get();
+			if (prof_on && prof_loops) {
+				/*
+				 * Per LOOP, not per frame: the loop runs on
+				 * every input byte, so dividing by frames would
+				 * flatter the render and hide the input path.
+				 * refrs counts commits, from the driver's side.
+				 */
+				fprintf(stderr,
+					"prof: loops=%u wait=%llums input=%llums "
+					"timer=%llums refr=%llums "
+					"(per loop: input=%lluus timer=%lluus refr=%lluus)\n",
+					prof_loops,
+					(unsigned long long)(prof_wait / 1000000),
+					(unsigned long long)(prof_input / 1000000),
+					(unsigned long long)(prof_timer / 1000000),
+					(unsigned long long)(prof_refr / 1000000),
+					(unsigned long long)(prof_input / 1000 / prof_loops),
+					(unsigned long long)(prof_timer / 1000 / prof_loops),
+					(unsigned long long)(prof_refr / 1000 / prof_loops));
+				fflush(stderr);
+				prof_wait = prof_input = prof_timer = prof_refr = 0;
+				prof_loops = prof_refrs = 0;
+			}
 			sysinfo_update();
 			/*
 			 * Checked on the existing 5 s tick rather than given a

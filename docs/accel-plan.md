@@ -159,6 +159,69 @@ further work here is refinement, not the main lever. The main levers left are
 memory (clients still page out under a full desktop) and X's own cost.
 
 
+## The lvdesk era: where the time actually is (2026-08-29)
+
+Everything above was measured under X11. The desktop is now lvdesk driving KMS
+directly, so "X is 45-67%" no longer names the cost. The engine numbers stand;
+the conclusion needed re-measuring, and it comes out the same way, harder.
+
+`LVDESK_PROF=1` splits the main loop into its phases (poll wait, input, LVGL
+timers, `lv_refr_now`) and reports every 5 s. Measured while scrolling 2000
+lines through the terminal:
+
+    prof: loops=118 wait=5127ms input=2462ms timer=203ms refr=5579ms
+          (per loop: input=20869us timer=1720us refr=47283us)
+
+and the kernel's own counters over the same kind of workload:
+
+    272 updates, upd_ns 285.9 ms  ->  835-967 us per update, every run
+
+So per frame, under load:
+
+    LVGL rasteriser (lv_refr_now)   47.3 ms    68%
+    terminal input + grid            20.9 ms    30%
+    LVGL timers                       1.7 ms     2%
+    kernel display path (commit)       0.8 ms   ~1%
+
+**Hardware acceleration addresses the 1%.** That is the whole answer to "should
+we accelerate more": the PPA and GDMA already run where they win, the driver's
+commit path is under a millisecond, and nothing about blending or moving rects
+touches the 68%.
+
+### Why the rasteriser is slow, and it is not bandwidth
+
+The terminal is 61x36 characters. A full redraw writes ~140,000 pixels, 281 KB
+at 16 bpp - **2.8 ms** of memory traffic at the CPU's measured 102 MB/s. It
+takes 47 ms. The missing 44 ms is per-glyph overhead in LVGL's draw path: ~2200
+glyphs at **~21 us each**, for an 8x8 1bpp bitmap that a purpose-built blitter
+should place in well under a microsecond.
+
+This is why no accelerator helps. A glyph is ~256 bytes - the crossover is
+128 KB, and the PPA's fixed cost alone is ~480 us, twenty times the entire
+budget for drawing one character.
+
+### The options, by measured headroom
+
+1. **Draw the terminal grid directly instead of through LVGL labels** - targets
+   the 47 ms. One label per row already replaced one label per screen (which
+   cost 450 ms a keystroke); the next step is to stop using labels for the grid
+   at all and blit the font ourselves. Biggest prize by a wide margin.
+2. **Coalesce terminal scrolls** - targets part of the 21 ms. Bulk output
+   scrolls the grid once per line: ~11.5 KB of memmove (grid + attributes) each,
+   ~17 lines per loop under `seq`. The net scroll could be computed once.
+3. **Idle wakeup cost** - idle is 55 loops per 5 s at ~7 ms each, 7.6% of the
+   CPU to display a screen that is not changing. `lv_refr_now` costs 2.4 ms
+   with nothing invalid, and `kbd_scan`/`mouse_scan` open 32 device nodes every
+   2 s.
+4. **Accelerate the scroll itself** - the ONE place an engine genuinely applies.
+   Scrolling the framebuffer is ~750 KB, far above the 128 KB crossover, and
+   GDMA reaches 210 MB/s. But it only pays after (1), because today the whole
+   area is re-rasterised anyway and moving pixels that are about to be
+   overwritten buys nothing.
+
+Note the ordering: 4 is the only item on this list that is "more hardware
+acceleration", and it is last, and it is contingent on 1.
+
 ## Which crossover governs what - and a knob that does not do what it says
 
 Three numbers in this repo have been used interchangeably and should not be.
