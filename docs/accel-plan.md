@@ -500,6 +500,44 @@ per content update to keep a cursor move at ~0.3 ms, against X's 19 ms. Fixed
 the log message (patches/0020) so the next person does not spend the afternoon
 this cost.
 
+### The glyph atlas: three attempts, all wrong bitmaps (2026-08-29)
+
+The idea survived the canvas post-mortem because it avoided both of that
+attempt's failures: fill a buffer we own with our OWN blitter (not
+lv_draw_label) and present it as an lv_image (not a canvas, so no forced
+whole-object invalidation). The scaffolding all worked - image object, buffer
+sizing, memmove scroll, band invalidation, fallback to labels. What never
+worked was getting correct glyph bitmaps out of the font.
+
+Three attempts, each failing differently:
+
+1. `lv_font_get_glyph_bitmap(&g, NULL)` - **segfault before the first glyph**.
+   The API dereferences the draw buffer unconditionally; it is not optional.
+2. A real `lv_draw_buf_t`, reading the result as A8 - **457 lit pixels across
+   95 glyphs**, a blank terminal. `g.stride` is documented as "0 means no
+   padding", so indexing with `row * g.stride` reads row 0 for every row.
+3. `req_raw_bitmap = 1` and decoding A1 by hand - **650 lit pixels and visible
+   garbage** on screen, speckled columns rather than text.
+
+The thing that made attempt 3 legible at all: `fmt=1 box=2x7 stride=0` for `!`.
+**unscii-8 has variable-width glyphs**, not the fixed 8x8 cell the whole design
+assumed - so a fixed-cell atlas needs per-glyph box_w/box_h/ofs_x/ofs_y
+handling, and getting that subtly wrong produces exactly the speckle seen.
+
+Going further means depending on `lv_font_fmt_txt` internals - glyph index
+tables, bitmap formats, possible compression - which is the kind of
+internals-dependence that has cost this project repeatedly. Stopped and
+reverted.
+
+**Worth keeping regardless: the ink check.** Counting lit pixels in the atlas
+is what caught attempt 2. Without it the builder reported "95/95 glyphs" over
+an entirely empty table and the terminal simply rendered black - a success
+message over a broken result.
+
+If this is picked up again, start by dumping one known glyph's bytes and
+comparing them against what the label path draws, before wiring any of the
+rest. The scaffolding is not the hard part; the font is.
+
 ### The options, by measured headroom
 
 1. **Draw the terminal grid directly instead of through LVGL labels** - targets
