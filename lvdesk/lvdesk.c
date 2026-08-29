@@ -4039,7 +4039,82 @@ int main(void)
 	lv_display_set_color_format(disp, LV_COLOR_FORMAT_RGB565);
 	lv_display_set_flush_cb(disp, kms_flush_cb);
 
-	if (kms_pitch == kms_w * 2) {
+	/*
+	 * Bandwidth probe, LVDESK_PROF only.
+	 *
+	 * The dumb buffer is mapped WRITE-COMBINE: the driver uses the
+	 * drm_gem_dma helpers and does not set map_noncoherent, so userspace
+	 * gets an uncached mapping. Writes are combined and tolerable; READS
+	 * are uncached PSRAM, and a rasteriser blends - it reads the
+	 * destination it is about to write. Rendering DIRECT therefore does
+	 * every read-modify-write against uncached memory, which is invisible
+	 * in any "bytes moved" estimate and is the first thing to measure
+	 * before blaming LVGL.
+	 */
+	if (prof_on) {
+		struct timespec a, b;
+		void *heap = malloc(kms_size);
+		uint64_t fb_ns = 0, heap_ns = 0;
+
+		clock_gettime(CLOCK_MONOTONIC, &a);
+		memset(kms_map, 0, kms_size);
+		clock_gettime(CLOCK_MONOTONIC, &b);
+		fb_ns = (uint64_t)(b.tv_sec - a.tv_sec) * 1000000000ull +
+			(b.tv_nsec - a.tv_nsec);
+		if (heap) {
+			/*
+			 * Touch it FIRST. A fresh malloc of 768 KB is unfaulted
+			 * anonymous memory, so the first memset pays page faults
+			 * and zero-filling and measured 25 MB/s - slower than
+			 * the uncached framebuffer, which is nonsense and was
+			 * briefly believed.
+			 */
+			memset(heap, 1, kms_size);
+			clock_gettime(CLOCK_MONOTONIC, &a);
+			memset(heap, 0, kms_size);
+			clock_gettime(CLOCK_MONOTONIC, &b);
+			heap_ns = (uint64_t)(b.tv_sec - a.tv_sec) * 1000000000ull +
+				  (b.tv_nsec - a.tv_nsec);
+			/* read-modify-write, which is what blending does */
+			clock_gettime(CLOCK_MONOTONIC, &a);
+			for (size_t i = 0; i < kms_size / 2; i++)
+				((uint16_t *)kms_map)[i] += 1;
+			clock_gettime(CLOCK_MONOTONIC, &b);
+			{
+				struct timespec c, d;
+				uint64_t hrmw;
+
+				clock_gettime(CLOCK_MONOTONIC, &c);
+				for (size_t i = 0; i < kms_size / 2; i++)
+					((uint16_t *)heap)[i] += 1;
+				clock_gettime(CLOCK_MONOTONIC, &d);
+				hrmw = (uint64_t)(d.tv_sec - c.tv_sec) * 1000000000ull +
+				       (d.tv_nsec - c.tv_nsec);
+				fprintf(stderr, "prof: heap read-modify-write %llu us\n",
+					(unsigned long long)(hrmw / 1000));
+			}
+			fprintf(stderr, "prof: fb memset %llu us (%llu MB/s), "
+				"heap memset %llu us (%llu MB/s), "
+				"fb read-modify-write %llu us\n",
+				(unsigned long long)(fb_ns / 1000),
+				(unsigned long long)(fb_ns ? kms_size * 1000ull / fb_ns : 0),
+				(unsigned long long)(heap_ns / 1000),
+				(unsigned long long)(heap_ns ? kms_size * 1000ull / heap_ns : 0),
+				(unsigned long long)(((uint64_t)(b.tv_sec - a.tv_sec) * 1000000000ull +
+						      (b.tv_nsec - a.tv_nsec)) / 1000));
+			fflush(stderr);
+			free(heap);
+		}
+	}
+
+	/*
+	 * LVDESK_PARTIAL forces rendering into a normal (cached) heap buffer
+	 * with a copy out, so the two can be compared on the same board. The
+	 * DIRECT path was chosen to avoid a shadow buffer and a full-screen
+	 * copy, which is right if the COPY is the cost and wrong if rendering
+	 * against uncached memory is.
+	 */
+	if (kms_pitch == kms_w * 2 && !getenv("LVDESK_PARTIAL")) {
 		lv_display_set_buffers(disp, kms_map, NULL, kms_size,
 				       LV_DISPLAY_RENDER_MODE_DIRECT);
 		direct_render = 1;
@@ -4049,7 +4124,7 @@ int main(void)
 		 * assumes a packed stride. Fall back to partial rendering with
 		 * a row-by-row copy in the flush callback.
 		 */
-		static uint8_t partial_buf[640 * 48 * 2];
+		static uint8_t partial_buf[800 * 64 * 2];
 
 		lv_display_set_buffers(disp, partial_buf, NULL,
 				       sizeof(partial_buf),

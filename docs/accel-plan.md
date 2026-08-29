@@ -248,6 +248,55 @@ numbers. **Write to the pty instead:**
 That needs no focus, no pointer and no keyboard, and it reproduced to +-3%
 across three runs where injection had been swinging by 70%.
 
+### The main rasteriser: four theories tested, three dead
+
+The terminal is one client; the question was about LVGL's rasteriser generally.
+Measured with the pty harness, 1200 lines scrolled, repeats shown.
+
+**1. The framebuffer mapping is uncached, so blends crawl. FALSE.**
+The driver uses the drm_gem_dma helpers and does not set `map_noncoherent`, so
+the dumb buffer reaches userspace **write-combine**, and LVGL renders DIRECT
+into it. That looked damning - a rasteriser reads the destination it is about
+to write. It is not the problem:
+
+    fb   read-modify-write   13,289 us
+    heap read-modify-write   12,770 us     (cached, pre-faulted)
+
+**2. So render into cached memory and copy out. NO GAIN.**
+`LVDESK_PARTIAL=1` forces PARTIAL mode into a heap buffer with a copy in the
+flush callback, against DIRECT into the framebuffer:
+
+    DIRECT    2180  2140  2190 ms
+    PARTIAL   2130  2140  2140 ms
+
+1.5%, inside the noise. The DIRECT choice stands, and now for a measured
+reason rather than an assumed one. Note the copy is also not costing anything
+visible, which is the same finding from the other side.
+
+**3. Style lookups. NO GAIN.** `LV_OBJ_STYLE_CACHE` 0 -> 1: 2210/2320/2070
+against 2190/2150/2270. Reverted.
+
+**4. It is per-glyph cost. NOT ESTABLISHED, and the obvious model is wrong.**
+Same 1200 scrolled lines, varying only the glyphs per line:
+
+    BLANK   0 glyphs/line    3 updates    820  910 ms
+    SHORT   4 glyphs/line   11 updates   2140 2200 ms
+    LONG   60 glyphs/line    6 updates   1450 1580 ms
+
+Drawing glyphs is clearly a real fraction - blank lines are 2.5x cheaper than
+short ones. But **60 glyphs per line is cheaper than 4**, so cost does not
+scale with glyph count, and normalising per update does not rescue it either
+(273, 200, 241 ms per update respectively). The arms differ in how the pty
+data chunks against the poll loop, and this harness cannot separate
+per-render from per-line cost. **The earlier "~21 us per glyph" figure was an
+inference from 47 ms / 2200 glyphs and should not be quoted** - it assumes the
+model this experiment just contradicted.
+
+What survives: the cost is inside LVGL's draw path, it is not the memory it
+writes to, and it is not reachable by any engine on this SoC. Sizing a fix
+needs the per-render and per-line terms separated first - instrument
+`term_scroll` and `lv_refr_now` counts independently before writing anything.
+
 ### The options, by measured headroom
 
 1. **Draw the terminal grid directly instead of through LVGL labels** - targets
