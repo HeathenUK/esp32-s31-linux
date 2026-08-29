@@ -202,7 +202,13 @@
 #define LV_USE_VECTOR_GRAPHIC 0
 
 /** Render a widget and its children into an image buffer with lv_snapshot_take(). */
-#define LV_USE_SNAPSHOT 0
+/*
+ * Needed for the cached window drag: a window is rendered once into an image
+ * at the start of a drag and that image is moved, instead of re-rasterising
+ * the whole object tree on every frame. Dragging was 3-7 fps at ~78 ms a
+ * frame, and the terminal alone contributes 36 label objects to that tree.
+ */
+#define LV_USE_SNAPSHOT 1
 
 /** Backend that gives the SW renderer vector graphics support. */
 #define LV_USE_THORVG 0

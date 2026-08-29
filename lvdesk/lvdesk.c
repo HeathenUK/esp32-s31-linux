@@ -1737,6 +1737,66 @@ static int drag_px;
  */
 static int win_unsnap_for_drag(lv_obj_t *win, int32_t px);
 
+/*
+ * Cached window drag.
+ *
+ * Moving a window used to re-rasterise its entire object tree every frame:
+ * measured at 3-7 fps and ~78 ms per frame against a 16.7 ms budget, because
+ * LVGL redraws the old and new rectangles and every child in them - and a
+ * terminal window alone is 36 label objects.
+ *
+ * So render it ONCE when the drag starts and move the picture. The snapshot is
+ * an RGB565 image of the whole window, shown on the top layer while the real
+ * window is hidden; on release the window is placed and the image thrown away.
+ * Cost is one full render at drag start plus ~w*h*2 bytes for the duration -
+ * about 310 kB for a 500x310 window, on a board with roughly 3 MB free.
+ *
+ * Falls back to moving the window itself if the snapshot cannot be taken, so a
+ * memory shortage degrades to the old behaviour rather than breaking dragging.
+ */
+static lv_obj_t *drag_ghost;		/* image standing in for the window */
+static lv_draw_buf_t *drag_snap;	/* its pixels */
+static lv_obj_t *drag_ghost_win;	/* the window it is standing in for */
+
+static void drag_ghost_begin(lv_obj_t *win)
+{
+	if (drag_ghost || drag_snap)
+		return;
+	drag_snap = lv_snapshot_take(win, LV_COLOR_FORMAT_RGB565);
+	if (!drag_snap)
+		return;			/* no memory: drag the window itself */
+	drag_ghost = lv_image_create(lv_layer_top());
+	if (!drag_ghost) {
+		lv_draw_buf_destroy(drag_snap);
+		drag_snap = NULL;
+		return;
+	}
+	lv_image_set_src(drag_ghost, drag_snap);
+	lv_obj_remove_flag(drag_ghost, LV_OBJ_FLAG_CLICKABLE);
+	lv_obj_set_pos(drag_ghost, lv_obj_get_x(win), lv_obj_get_y(win));
+	lv_obj_add_flag(win, LV_OBJ_FLAG_HIDDEN);
+	drag_ghost_win = win;
+}
+
+/* Put the window back where the ghost ended up, and drop the ghost. */
+static void drag_ghost_end(void)
+{
+	if (drag_ghost_win && drag_ghost) {
+		lv_obj_set_pos(drag_ghost_win, lv_obj_get_x(drag_ghost),
+			       lv_obj_get_y(drag_ghost));
+		lv_obj_remove_flag(drag_ghost_win, LV_OBJ_FLAG_HIDDEN);
+	}
+	if (drag_ghost) {
+		lv_obj_delete(drag_ghost);
+		drag_ghost = NULL;
+	}
+	if (drag_snap) {
+		lv_draw_buf_destroy(drag_snap);
+		drag_snap = NULL;
+	}
+	drag_ghost_win = NULL;
+}
+
 static void drag_cb(lv_event_t *e)
 {
 	lv_obj_t *win = lv_event_get_user_data(e);
@@ -1762,9 +1822,21 @@ static void drag_cb(lv_event_t *e)
 	if (drag_px >= DRAG_UNSNAP_PX)
 		win_unsnap_for_drag(win, p.x);
 
-	w = lv_obj_get_width(win);
-	x = lv_obj_get_x(win) + v.x;
-	y = lv_obj_get_y(win) + v.y;
+	/*
+	 * Take the snapshot once the press has committed to being a drag - not
+	 * on the first pixel, or every click on a title bar would pay a full
+	 * window render.
+	 */
+	if (drag_px >= DRAG_UNSNAP_PX)
+		drag_ghost_begin(win);
+
+	{
+		lv_obj_t *moving = drag_ghost ? drag_ghost : win;
+
+		w = lv_obj_get_width(moving);
+		x = lv_obj_get_x(moving) + v.x;
+		y = lv_obj_get_y(moving) + v.y;
+	}
 
 	/*
 	 * Keep the title bar reachable. Without this a window can be dragged
@@ -1777,7 +1849,7 @@ static void drag_cb(lv_event_t *e)
 	if (y < 0) y = 0;
 	if (y > sh - TASKBAR_H - HDR_H) y = sh - TASKBAR_H - HDR_H;
 
-	lv_obj_set_pos(win, x, y);
+	lv_obj_set_pos(drag_ghost ? drag_ghost : win, x, y);
 	snap_hint_update(snap_zone_at(p.x, p.y), win);
 }
 
@@ -2021,6 +2093,7 @@ static void drag_release_cb(lv_event_t *e)
 	lv_indev_get_point(indev, &p);
 	zone = snap_zone_at(p.x, p.y);
 	snap_hint_update(-1, NULL);
+	drag_ghost_end();		/* before win_snap, which sets a position */
 	if (zone >= 0)
 		win_snap(w, zone);
 }
@@ -2034,6 +2107,12 @@ static void drag_cancel_cb(lv_event_t *e)
 {
 	(void)e;
 	snap_hint_update(-1, NULL);
+	/*
+	 * A lost press never delivers RELEASED, so without this the window
+	 * would stay hidden behind its own ghost - which looks exactly like it
+	 * vanished.
+	 */
+	drag_ghost_end();
 }
 
 static void raise_cb(lv_event_t *e)
@@ -3598,8 +3677,20 @@ static void dmg_add(const struct kms_rect *n)
 	dmg[dmg_n - 1] = *n;
 }
 
+/*
+ * Frames actually presented, counted where they are presented.
+ *
+ * The driver's `updates` counter was being read as fps and it is not: with
+ * DIRECT rendering LVGL writes straight into the scanout buffer, so that
+ * counter tracks damage-copy operations, not frames the panel shows. It read
+ * 9/s while LVGL was completing 60-126 refreshes a second.
+ */
+static uint32_t frames_flushed;
+
 static void kms_flush_cb(lv_display_t *d, const lv_area_t *area, uint8_t *px)
 {
+	if (lv_display_flush_is_last(d))
+		frames_flushed++;
 	if (!direct_render) {
 		int32_t w = lv_area_get_width(area);
 		int32_t h = lv_area_get_height(area);
@@ -3782,6 +3873,8 @@ static int press_edge;			/* a new press, not yet acted on */
 static int wheel;
 static lv_obj_t *cursor_obj;
 static int hw_cursor;
+#define FRAME_MS 16		/* 60 Hz panel */
+static uint32_t last_frame_ms;
 static int cursor_pending;
 /*
  * Set by SIGCHLD so the loop only reaps when there is something to reap. The
@@ -4521,8 +4614,38 @@ int main(void)
 		uint32_t next, elapsed;
 		int n = 0, ms;
 		int i_term, i_wifi, i_kbd, i_mouse, n_kbd, n_mouse;
+		int frame_due;
 
-		{ PROF_START(t0); next = lv_timer_handler(); PROF_ADD(prof_timer, t0); }
+		/*
+		 * Run LVGL at most once per frame period.
+		 *
+		 * poll() wakes on every input event - a mouse reports at
+		 * ~125 Hz - and each wake ran a full LVGL pass. Measured while
+		 * dragging: ~72 passes a second at 12.4 ms each, for ~10 frames
+		 * a second actually reaching the panel. Seven redraws out of
+		 * eight could never be seen.
+		 *
+		 * Input is still drained on every wake, so nothing is lost and
+		 * nothing waits more than one frame; only the redraw is paced.
+		 * An earlier attempt gated the SECOND lv_timer_handler call,
+		 * which is nearly free, and measured as no change - the pass
+		 * that matters is this one, because LVGL's refresh timer runs
+		 * inside it.
+		 */
+		{
+			uint32_t nowms = lv_tick_get();
+			uint32_t since = nowms - last_frame_ms;
+
+			frame_due = since >= FRAME_MS;
+			if (frame_due) {
+				last_frame_ms = nowms;
+				PROF_START(t0);
+				next = lv_timer_handler();
+				PROF_ADD(prof_timer, t0);
+			} else {
+				next = FRAME_MS - since;
+			}
+		}
 		if (next == LV_NO_TIMER_READY || next > 30)
 			next = 30;
 		/*
@@ -4689,11 +4812,13 @@ int main(void)
 		 * on every trip costs little; input arrives far more slowly
 		 * than the panel refreshes, so this cannot outrun the hardware.
 		 */
-		{ PROF_START(t0); lv_timer_handler(); PROF_ADD(prof_timer, t0); }
-		{
-			PROF_START(t0);
-			lv_refr_now(NULL);
-			PROF_ADD(prof_refr, t0);
+		if (frame_due) {
+			{ PROF_START(t0); lv_timer_handler(); PROF_ADD(prof_timer, t0); }
+			{
+				PROF_START(t0);
+				lv_refr_now(NULL);
+				PROF_ADD(prof_refr, t0);
+			}
 		}
 		prof_loops++;
 
@@ -4707,10 +4832,10 @@ int main(void)
 				 * refrs counts commits, from the driver's side.
 				 */
 				fprintf(stderr,
-					"prof: loops=%u wait=%llums input=%llums "
+					"prof: frames=%u loops=%u wait=%llums input=%llums "
 					"timer=%llums refr=%llums "
 					"(per loop: input=%lluus timer=%lluus refr=%lluus)\n",
-					prof_loops,
+					frames_flushed, prof_loops,
 					(unsigned long long)(prof_wait / 1000000),
 					(unsigned long long)(prof_input / 1000000),
 					(unsigned long long)(prof_timer / 1000000),
@@ -4732,6 +4857,7 @@ int main(void)
 				prof_wifi = prof_wait4 = prof_curs = 0;
 				lvp_dump();
 				fflush(stderr);
+				frames_flushed = 0;
 				prof_wait = prof_input = prof_timer = prof_refr = 0;
 				prof_loops = prof_refrs = 0;
 			}
