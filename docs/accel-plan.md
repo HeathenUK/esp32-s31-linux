@@ -473,6 +473,33 @@ work simply moves into term_poll and the canvas blit, for no net gain. Beating
 it needs a cheaper glyph path - the atlas, blitting pre-rendered cells - not a
 different place to put the pixels.
 
+### The "redundant" scanout copy is not redundant (2026-08-29)
+
+Chased because it looked like the largest free win left: the driver performs a
+CPU copy of every damage rectangle into a private buffer (`path: cpu=477`
+during one drag, ~119 MB and ~10 MB/s over a 12 s drag), while the boot log
+said the panel was scanning out the *client's* framebuffer:
+
+    enable scanout at 0x50800000, 768000 bytes, from plane fb
+
+If both were true the copy would be writing to memory nobody reads. **They are
+not both true.** The log line was wrong: its `"from %s"` tested
+`(plane_state && plane_state->fb)`, which is true whenever a client has a
+framebuffer at all, including every case where scanout is the private buffer.
+The line immediately above it gives the game away - `scaling: scanout buffer
+768000 bytes at 0x50800000` is the PRIVATE buffer, at the very same address.
+
+`esp32s31_lcd_composite()` returns **true unconditionally**, and its comment
+says why: this DMA engine cannot be retargeted mid-session (it fails -ENXIO),
+and a cursor appears long after `.enable` runs, so the driver always composites.
+The copy is how content reaches the panel. The visible cursor is the proof -
+it is composited into the private buffer, and it shows.
+
+So there is no free win here, and the documented trade stands: ~1 ms of copy
+per content update to keep a cursor move at ~0.3 ms, against X's 19 ms. Fixed
+the log message (patches/0020) so the next person does not spend the afternoon
+this cost.
+
 ### The options, by measured headroom
 
 1. **Draw the terminal grid directly instead of through LVGL labels** - targets

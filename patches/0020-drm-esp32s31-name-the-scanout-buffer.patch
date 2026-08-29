@@ -1,0 +1,47 @@
+drm/esp32s31: say which buffer scanout actually reads
+
+The diagnostic printed "from plane fb" whenever a client had a framebuffer at
+all - `(plane_state && plane_state->fb)` - which is true in every case where
+scanout is really the private compositing buffer. So it reported
+
+    scaling: scanout buffer 768000 bytes at 0x50800000     <- private buffer
+    enable scanout at 0x50800000, ... from plane fb        <- same address
+
+and the label is simply wrong. That cost an afternoon: if the panel really were
+scanning out the client's own buffer, then the per-frame damage copy into the
+private one would be writing to memory nobody reads, and removing it would be
+free. It is not free - esp32s31_lcd_composite() returns true unconditionally
+because this DMA engine cannot be retargeted mid-session (-ENXIO), so the copy
+is how content reaches the panel at all. The visible cursor was the proof: it
+is composited into the private buffer, and it appears.
+
+Report the buffer that feeds the DMA instead, by comparing against scan_phys.
+
+Cosmetic - no functional change - so it is not flashed on its own; it lands
+with the next kernel build.
+
+--- a/drivers/gpu/drm/espressif/esp32s31-lcd.c
++++ b/drivers/gpu/drm/espressif/esp32s31-lcd.c
+@@ -1347,9 +1347,21 @@
+ 	       lcd->base + LCD_MISC_REG);
+ 
+ 	lcd->dbg_scanout_addr = fb_addr;
++	/*
++	 * Report which buffer actually feeds the DMA, not merely whether a
++	 * plane framebuffer exists.
++	 *
++	 * The old test was `plane_state && plane_state->fb`, which is true
++	 * whenever a client has a framebuffer at all - including every case
++	 * where scanout is really the private compositing buffer. It therefore
++	 * printed "from plane fb" while the DMA read scan_phys, and cost an
++	 * afternoon chasing a copy that looked redundant: if the panel really
++	 * were scanning out the client's buffer, the per-frame damage copy into
++	 * the private one would be writing to memory nobody reads. It is not.
++	 */
+ 	drm_info(&lcd->drm, "diag: enable scanout at %pad, %zu bytes, from %s\n",
+ 		 &fb_addr, fb_bytes,
+-		 (plane_state && plane_state->fb) ? "plane fb" : "reserved fb");
++		 (fb_addr == lcd->scan_phys) ? "private buffer" : "plane fb");
+ 
+ 	ret = esp32s31_lcd_start_scanout(lcd, fb_addr, fb_bytes);
+ 	if (ret) {
