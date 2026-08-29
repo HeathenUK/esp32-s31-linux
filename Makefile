@@ -280,6 +280,9 @@ linux: toolchain | $(LINUX_OUT)
 		--enable HID \
 		--enable HID_GENERIC \
 		--enable USB_HID \
+		--enable HIDRAW \
+		--enable DEBUG_FS \
+		--enable USB_MON \
 		$(DIAG_TWEAKS) \
 		--set-val LOG_BUF_SHIFT 14 \
 		--enable CMA \

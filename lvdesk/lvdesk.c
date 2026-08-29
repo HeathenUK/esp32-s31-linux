@@ -167,6 +167,9 @@ static int term_focused(void);
 /* Title of the focused window, or NULL if nothing has focus. */
 static const char *win_focus_title(void);
 
+/* Hand a key to whichever window has focus; defined with the window records. */
+static void win_deliver_key(int code);
+
 /*
  * Window-management shortcuts, likewise defined with the window records.
  * wm_shortcut() returns 1 when it has consumed the key, so nothing reaches
@@ -210,6 +213,12 @@ static unsigned kbd_dropped;		/* SYN_DROPPED events seen */
 static unsigned kbd_write_fail;		/* keystrokes the pty refused */
 static uint32_t kbd_last_poll_ms;
 static uint32_t kbd_worst_stall_ms;
+
+/* A key repeating longer than this without a release is treated as stuck. */
+#define STUCK_REPEAT_MS		1500
+static int rep_code = -1;		/* keycode currently autorepeating */
+static uint32_t rep_start;
+static int rep_muted;
 
 /* ---------------------------------------------------------------- keyboard */
 
@@ -295,6 +304,40 @@ static const char *keyseq(int code)
  * keystrokes itself and the panel changed anyway; with fbcon unbound the
  * desktop turned out not to respond to a hotplugged keyboard at all.
  */
+/*
+ * Take exclusive ownership of an input device.
+ *
+ * Without this, every keystroke reaches the VT console as well as the desktop.
+ * /proc/bus/input/devices lists the keyboard as "Handlers=kbd event3", and
+ * `kbd` is the kernel's console keyboard handler - so typing into a desktop
+ * window ALSO typed into the getty behind it, with the console reacting to
+ * commands meant for the desktop's terminal. Every X server and Wayland
+ * compositor grabs its input devices for exactly this reason; this did not,
+ * and the mirroring was visible on the panel.
+ *
+ * LVDESK_NO_GRAB=1 disables it. That is not decoration: a grab also excludes
+ * every other evdev reader, so the input diagnostics that compare what the
+ * kernel delivered against what the desktop did with it need a way to watch.
+ */
+static void input_grab(int fd, const char *path)
+{
+	static int grab = -1;
+
+	if (grab < 0) {
+		const char *e = getenv("LVDESK_NO_GRAB");
+
+		grab = !(e && !strcmp(e, "1"));
+		if (!grab)
+			printf("lvdesk: LVDESK_NO_GRAB=1, input is shared with "
+			       "the console\n");
+	}
+	if (!grab)
+		return;
+	if (ioctl(fd, EVIOCGRAB, 1) < 0)
+		printf("lvdesk: could not grab %s (%s) - keys will also reach "
+		       "the console\n", path, strerror(errno));
+}
+
 static void kbd_scan(void)
 {
 	unsigned long bits[KEY_MAX / (8 * sizeof(long)) + 1];
@@ -323,6 +366,7 @@ static void kbd_scan(void)
 		}
 		if (bits[KEY_A / (8 * sizeof(long))] &
 		    (1UL << (KEY_A % (8 * sizeof(long))))) {
+			input_grab(fd, path);
 			kbd_fds[kbd_n++] = fd;
 			printf("lvdesk: keyboard on %s\n", path);
 		} else {
@@ -385,20 +429,27 @@ static void term_write(const char *buf, int n)
 	}
 }
 
+/*
+ * Keys go to the window that has focus. Full stop.
+ *
+ * A window does not have to know what to do with a keystroke to receive it:
+ * if it has no handler the key is CONSUMED by it and goes nowhere, exactly as
+ * it would on any other desktop. The alternative - passing it on to some other
+ * window that does understand keys - means typing into a selected window
+ * silently ends up somewhere else, which is worse than nothing happening.
+ *
+ * Only two things come before the focused window, and both are properly
+ * global rather than special cases:
+ *
+ *   - a modal prompt, which by definition owns the keyboard while it is up;
+ *   - window-management shortcuts, which belong to the desktop and not to any
+ *     window, and must be taken before Alt becomes an ESC prefix.
+ */
 static void kbd_key(int code)
 {
-	const char *seq;
-	char buf[8], c;
-	int n = 0;
-
-	/*
-	 * Scrollback is a terminal function, not a shell one, so these are
-	 * taken here rather than forwarded down the pty - the same choice
-	 * every terminal emulator makes with shift-PageUp.
-	 */
 	/*
 	 * While the passphrase prompt is up it owns the keyboard - otherwise
-	 * the characters would be typed into the shell behind it, which is
+	 * the characters would be typed into the window behind it, which is
 	 * both wrong and a way to leak a passphrase into a terminal.
 	 */
 	if (pw_ta) {
@@ -416,63 +467,29 @@ static void kbd_key(int code)
 		return;
 	}
 
-	/*
-	 * Window management first. These belong to the desktop rather than to
-	 * any window, so they are taken before the focus gate below - and
-	 * before Alt turns into an ESC prefix, or Alt-Tab would type ESC TAB
-	 * into the shell, which is what it used to do.
-	 */
+	/* Desktop shortcuts, before Alt turns into an ESC prefix. */
 	if (wm_shortcut(code))
 		return;
 
+	win_deliver_key(code);
+}
+
+/*
+ * The terminal's key handler, registered on its window record. Nothing else
+ * in the desktop refers to it: the dispatcher above knows only that the
+ * focused window may or may not have a handler.
+ */
+static void term_key(int code)
+{
+	const char *seq;
+	char buf[8], c;
+	int n = 0;
+
 	/*
-	 * Everything below this point types into the terminal, so it only
-	 * happens when the terminal is the focused window. It used to read the
-	 * keyboard unconditionally: clicking the System window and typing
-	 * still ran the characters through the shell behind it, and a second
-	 * window wanting input could never have received any.
+	 * Scrollback is a terminal function, not a shell one, so these are
+	 * taken here rather than forwarded down the pty - the same choice
+	 * every terminal emulator makes with shift-PageUp.
 	 */
-	if (!term_focused()) {
-		/*
-		 * The one path that could discard a keystroke without saying
-		 * so, and it was introduced the same day input started
-		 * following the focus. Before that the terminal read the
-		 * keyboard unconditionally and this failure mode did not
-		 * exist; afterwards, anything that left the focus elsewhere -
-		 * or nowhere - ate every key silently, which is
-		 * indistinguishable from a broken keyboard.
-		 *
-		 * Two changes. It says so, rate limited so a held key cannot
-		 * flood the log. And with NO window focused at all the
-		 * terminal takes the key rather than the desktop swallowing
-		 * it, because a keyboard that does nothing is a worse answer
-		 * than a keyboard that types into the only thing that accepts
-		 * typing.
-		 */
-		static uint32_t last_ms;
-		uint32_t now = lv_tick_get();
-
-		const char *who = win_focus_title();
-
-		if (!who) {
-			if (now - last_ms > 2000) {
-				last_ms = now;
-				printf("lvdesk: no window focused - routing keys "
-				       "to the terminal\n");
-				fflush(stdout);
-			}
-		} else {
-			if (now - last_ms > 2000) {
-				last_ms = now;
-				printf("lvdesk: INPUT DISCARDED - key %d, but "
-				       "'%s' has focus, not the terminal\n",
-				       code, who);
-				fflush(stdout);
-			}
-			return;
-		}
-	}
-
 	if (code == KEY_PAGEUP)   { term_scrollback(term.nrows / 2); return; }
 	if (code == KEY_PAGEDOWN) { term_scrollback(-term.nrows / 2); return; }
 
@@ -567,6 +584,55 @@ static int kbd_poll(void)
 			continue;
 		busy = 1;
 		do {
+			/*
+			 * Runaway autorepeat means a release was lost.
+			 *
+			 * value 2 is the KERNEL repeating a key it believes is
+			 * held. If the release never arrived - which this
+			 * board's receiver has been observed doing, repeating
+			 * a KEY_M nobody was touching - it repeats for ever,
+			 * and nothing can correct it: EVIOCGKEY reports the
+			 * same wrong belief, because it IS that belief.
+			 *
+			 * So bound it. Holding a key for over a second and a
+			 * half is rare; a lost release is not. It matters most
+			 * on a MODIFIER - a stuck Ctrl turns every letter into
+			 * an invisible control character, which looks exactly
+			 * like the keyboard having died - so those are forced
+			 * off as well.
+			 */
+			if (ev.type == EV_KEY && ev.value == 2) {
+				uint32_t rnow = lv_tick_get();
+
+				if ((int)ev.code != rep_code) {
+					rep_code = ev.code;
+					rep_start = rnow;
+					rep_muted = 0;
+				} else if (!rep_muted &&
+					   rnow - rep_start > STUCK_REPEAT_MS) {
+					rep_muted = 1;
+					printf("lvdesk: key %d repeating %u ms with "
+					       "no release - treating it as stuck\n",
+					       ev.code,
+					       (unsigned)(rnow - rep_start));
+					fflush(stdout);
+					switch (ev.code) {
+					case KEY_LEFTSHIFT: case KEY_RIGHTSHIFT:
+						shift = 0; break;
+					case KEY_LEFTCTRL: case KEY_RIGHTCTRL:
+						mod_ctrl = 0; break;
+					case KEY_LEFTALT: case KEY_RIGHTALT:
+						mod_alt = 0; break;
+					}
+				}
+				if (rep_muted)
+					continue;
+			} else if (ev.type == EV_KEY && ev.value == 0 &&
+				   (int)ev.code == rep_code) {
+				rep_code = -1;		/* a real release */
+				rep_muted = 0;
+			}
+
 			/*
 			 * The kernel telling us it threw input away. Never
 			 * merely skip this: it is the only notification that
@@ -1571,6 +1637,12 @@ struct winrec {
 	lv_obj_t *maxicon;		/* swaps between maximise and restore */
 	lv_obj_t *grip;			/* bottom-right resize handle, or NULL */
 	void (*on_close)(void);		/* extra teardown, e.g. the terminal */
+	/*
+	 * What this window does with a keystroke while it has focus. NULL is
+	 * meaningful and common: the window still receives the key and
+	 * consumes it, it simply has nothing to do with it.
+	 */
+	void (*on_key)(int code);
 };
 
 static struct winrec wins[MAXWIN];
@@ -1671,6 +1743,53 @@ static void win_focus_next(void)
  * window is not focused, and once the terminal is closed term.win is NULL, so
  * both cases fall out of the same test.
  */
+/*
+ * Deliver a key to the focused window.
+ *
+ * A window with no on_key handler still consumes the key. That is the whole
+ * point: "selected" has to mean "receives the keyboard", or a window can be
+ * focused and have its keystrokes quietly land somewhere else.
+ *
+ * If nothing at all has focus, adopt the top-most usable window rather than
+ * dropping the key on the floor. A desktop with windows open and a keyboard
+ * that does nothing is a bug, not a state worth preserving.
+ */
+static void win_deliver_key(int code)
+{
+	static uint32_t last_ms;
+	uint32_t now = lv_tick_get();
+	struct winrec *w;
+
+	if (!win_focus)
+		win_focus_next();
+	w = win_focus;
+
+	if (!w || !w->win) {
+		if (now - last_ms > 2000) {
+			last_ms = now;
+			printf("lvdesk: key %d dropped - no window to give it to\n",
+			       code);
+			fflush(stdout);
+		}
+		return;
+	}
+	if (w->on_key) {
+		w->on_key(code);
+		return;
+	}
+	/*
+	 * Focused, but takes no keyboard input. The key stops here. Said out
+	 * loud because "I am typing and nothing happens" needs an answer, and
+	 * silence here is what made a focus bug look like a dead keyboard.
+	 */
+	if (now - last_ms > 2000) {
+		last_ms = now;
+		printf("lvdesk: key %d consumed by '%s', which takes no keyboard input\n",
+		       code, win_focus_title());
+		fflush(stdout);
+	}
+}
+
 static const char *win_focus_title(void)
 {
 	if (!win_focus || !win_focus->win)
@@ -3445,6 +3564,7 @@ static void mouse_scan(void)
 				printf("lvdesk: %s is synthetic, no accel\n",
 				       path);
 		}
+		input_grab(fd, path);
 		mouse_fds[mouse_n++] = fd;
 		printf("lvdesk: mouse on %s\n", path);
 	}
@@ -3866,6 +3986,15 @@ int main(void)
 	term.cols = 0;
 	term.nrows = 0;
 	term_fit();
+	/*
+	 * Register what this window does with a keystroke. This is the only
+	 * place the desktop learns that the terminal takes keyboard input;
+	 * the dispatcher knows nothing about terminals, only that a focused
+	 * window may or may not have a handler. A second window wanting keys
+	 * sets its own here and needs no change anywhere else.
+	 */
+	win_find(term.win)->on_key = term_key;
+
 	win_add_grip(win_find(term.win));
 	/* Re-fit when the window is resized or maximised. */
 	lv_obj_add_event_cb(term.win, term_resize_cb, LV_EVENT_SIZE_CHANGED, NULL);
