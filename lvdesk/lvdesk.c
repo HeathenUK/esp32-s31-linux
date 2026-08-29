@@ -3783,6 +3783,18 @@ static int wheel;
 static lv_obj_t *cursor_obj;
 static int hw_cursor;
 static int cursor_pending;
+/*
+ * Set by SIGCHLD so the loop only reaps when there is something to reap. The
+ * unconditional waitpid(WNOHANG) it replaces cost 83 ms per 5 s window to
+ * learn that nothing had exited.
+ */
+static volatile sig_atomic_t child_exited;
+
+static void on_sigchld(int sig)
+{
+	(void)sig;
+	child_exited = 1;
+}
 static int32_t last_cx = -1, last_cy = -1;	/* last position sent to the plane */
 static uint32_t last_cms;
 
@@ -4151,6 +4163,13 @@ int main(void)
 {
 	term_log = getenv("LVDESK_TERMLOG") != NULL;
 	prof_on = getenv("LVDESK_PROF") != NULL;
+	/*
+	 * Interrupting poll() is wanted here, not a problem: the loop re-runs
+	 * and reaps. child_exited starts set so anything already gone is
+	 * collected on the first pass.
+	 */
+	signal(SIGCHLD, on_sigchld);
+	child_exited = 1;
 	wpa_log = getenv("LVDESK_WPALOG") != NULL;
 	atexit(wpa_cleanup);
 	wpa_events_open();
@@ -4501,6 +4520,7 @@ int main(void)
 		struct pollfd fds[NFDS];
 		uint32_t next, elapsed;
 		int n = 0, ms;
+		int i_term, i_wifi, i_kbd, i_mouse, n_kbd, n_mouse;
 
 		{ PROF_START(t0); next = lv_timer_handler(); PROF_ADD(prof_timer, t0); }
 		if (next == LV_NO_TIMER_READY || next > 30)
@@ -4529,16 +4549,38 @@ int main(void)
 		if (idle_rounds > 4)
 			next = IDLE_POLL_MS;
 
-		if (term.fd >= 0) { fds[n].fd = term.fd; fds[n].events = POLLIN; n++; }
+		/*
+		 * Remember which slice of fds[] is which, so only the sources
+		 * poll() actually flagged get serviced below.
+		 *
+		 * Every loop used to call term_poll, kbd_poll, mouse_poll and
+		 * wifi_ev_poll unconditionally, and each read()s all of its own
+		 * descriptors - four to six syscalls per wake that almost
+		 * always return EAGAIN. Syscalls are not cheap here (a bare
+		 * clock_gettime measures 7.2 us, and this port carries the
+		 * generic-entry cost), and during a window drag that polling
+		 * was ~600 ms per 5 s window against ~200 ms actually spent in
+		 * LVGL.
+		 */
+		i_term = i_wifi = i_kbd = i_mouse = -1;
+		if (term.fd >= 0) {
+			i_term = n;
+			fds[n].fd = term.fd; fds[n].events = POLLIN; n++;
+		}
 		if (wpa_ev_fd >= 0 && n < NFDS) {
+			i_wifi = n;
 			fds[n].fd = wpa_ev_fd; fds[n].events = POLLIN; n++;
 		}
+		i_kbd = n;
 		for (int ki = 0; ki < kbd_n && n < NFDS; ki++) {
 			fds[n].fd = kbd_fds[ki]; fds[n].events = POLLIN; n++;
 		}
+		n_kbd = n - i_kbd;
+		i_mouse = n;
 		for (int mi = 0; mi < mouse_n && n < NFDS; mi++) {
 			fds[n].fd = mouse_fds[mi]; fds[n].events = POLLIN; n++;
 		}
+		n_mouse = n - i_mouse;
 
 		/*
 		 * Feed LVGL the time that actually elapsed, not the timeout we
@@ -4567,13 +4609,52 @@ int main(void)
 
 		{
 			int busy = 0;
+			int rd_term, rd_wifi, rd_kbd = 0, rd_mouse = 0, k;
 			PROF_START(t0);
 
-			{ PROF_START(a); busy |= term_poll();   PROF_ADD(prof_term, a); }
-			{ PROF_START(a); busy |= kbd_poll();    PROF_ADD(prof_kbd, a); }
-			{ PROF_START(a); busy |= mouse_poll();  PROF_ADD(prof_mouse, a); }
-			{ PROF_START(a); busy |= wifi_ev_poll(); PROF_ADD(prof_wifi, a); }
-			{ PROF_START(a); waitpid(-1, NULL, WNOHANG); PROF_ADD(prof_wait4, a); }
+			/*
+			 * POLLERR/POLLHUP/POLLNVAL count as ready, not just
+			 * POLLIN. An unplugged device - or a uinput device
+			 * whose process exited - sits hung up for ever, so
+			 * poll() returns instantly every time; if the read()
+			 * that discovers ENODEV is skipped, the fd is never
+			 * closed and the loop spins at full speed. That is a
+			 * busy-wait, and it cost 59% of the core against 26%
+			 * until it was found.
+			 */
+#define RD_MASK (POLLIN | POLLERR | POLLHUP | POLLNVAL)
+			rd_term = i_term >= 0 && (fds[i_term].revents & RD_MASK);
+			rd_wifi = i_wifi >= 0 && (fds[i_wifi].revents & RD_MASK);
+			for (k = 0; k < n_kbd; k++)
+				if (fds[i_kbd + k].revents & RD_MASK) rd_kbd = 1;
+			for (k = 0; k < n_mouse; k++)
+				if (fds[i_mouse + k].revents & RD_MASK) rd_mouse = 1;
+
+			/*
+			 * The device rescans live inside kbd_poll/mouse_poll and
+			 * must still happen when nothing is readable - that is
+			 * how a newly plugged keyboard is found - so they are
+			 * driven on their own 2 s timer here instead.
+			 */
+			if (lv_tick_get() - kbd_scan_at > 2000) rd_kbd = 1;
+			if (lv_tick_get() - mouse_scan_at > 2000) rd_mouse = 1;
+			if (term.need_fit) rd_term = 1;
+
+			if (rd_term)  { PROF_START(a); busy |= term_poll();   PROF_ADD(prof_term, a); }
+			if (rd_kbd)   { PROF_START(a); busy |= kbd_poll();    PROF_ADD(prof_kbd, a); }
+			if (rd_mouse) { PROF_START(a); busy |= mouse_poll();  PROF_ADD(prof_mouse, a); }
+			if (rd_wifi)  { PROF_START(a); busy |= wifi_ev_poll(); PROF_ADD(prof_wifi, a); }
+			/*
+			 * Only reap when a child has actually exited. waitpid()
+			 * on every loop was 83 ms per window to learn nothing.
+			 */
+			if (child_exited) {
+				child_exited = 0;
+				PROF_START(a);
+				while (waitpid(-1, NULL, WNOHANG) > 0)
+					;
+				PROF_ADD(prof_wait4, a);
+			}
 			idle_rounds = busy ? 0 : idle_rounds + 1;
 			/*
 			 * Settle the cursor exactly once, when the gesture has
