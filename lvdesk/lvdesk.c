@@ -1094,6 +1094,34 @@ static int term_poll(void)
 			term.rowdirty[term.cy] = 1;
 		}
 
+		/*
+		 * Absorb the row invalidations into one area when many rows
+		 * changed.
+		 *
+		 * LV_INV_BUF_SIZE is 32 and lives in LVGL's private header, so
+		 * it cannot be raised from lv_conf.h. A scroll dirties every
+		 * row - 36 at the default size - and when the buffer overflows
+		 * lv_refr.c throws the lot away and invalidates THE WHOLE
+		 * SCREEN instead ("If no place for the area add the screen").
+		 * Measured during a 150-line scroll: flushes of 800x480 =
+		 * 384k px, against a terminal content area of ~140k.
+		 *
+		 * lv_refr.c drops any area already contained in one it holds,
+		 * so invalidating the content area first makes all 36 row
+		 * invalidations free. Only worth it when enough rows changed to
+		 * approach the limit - a single keystroke must keep invalidating
+		 * one row, not the whole terminal.
+		 */
+		{
+			int dirty_rows = 0;
+
+			for (r = 0; r < term.nrows; r++)
+				if (term.rowdirty[r])
+					dirty_rows++;
+			if (dirty_rows > 8)
+				lv_obj_invalidate(term.content);
+		}
+
 		for (r = 0; r < term.nrows; r++) {
 			const char *src;
 			const unsigned char *at;
@@ -3701,6 +3729,8 @@ static void dmg_add(const struct kms_rect *n)
  * 9/s while LVGL was completing 60-126 refreshes a second.
  */
 static uint32_t frames_flushed;
+/* LVDESK_RECTLOG=1: print the area LVGL asks to flush. Diagnostic only. */
+static int rect_log;
 static uint64_t flushed_px;
 static uint32_t flush_calls;
 
@@ -3714,6 +3744,13 @@ static void kms_flush_cb(lv_display_t *d, const lv_area_t *area, uint8_t *px)
 	 */
 	flushed_px += (uint64_t)lv_area_get_width(area) * lv_area_get_height(area);
 	flush_calls++;
+	if (rect_log) {
+		fprintf(stderr, "  flush %dx%d at %d,%d = %dk px\n",
+			(int)lv_area_get_width(area), (int)lv_area_get_height(area),
+			(int)area->x1, (int)area->y1,
+			(int)(lv_area_get_width(area) * lv_area_get_height(area) / 1000));
+		fflush(stderr);
+	}
 	if (lv_display_flush_is_last(d))
 		frames_flushed++;
 	if (!direct_render) {
@@ -4281,6 +4318,7 @@ int main(void)
 {
 	term_log = getenv("LVDESK_TERMLOG") != NULL;
 	prof_on = getenv("LVDESK_PROF") != NULL;
+	rect_log = getenv("LVDESK_RECTLOG") != NULL;
 	/*
 	 * Interrupting poll() is wanted here, not a problem: the loop re-runs
 	 * and reaps. child_exited starts set so anything already gone is
