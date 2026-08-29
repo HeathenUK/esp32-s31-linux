@@ -150,6 +150,40 @@ BR2_PACKAGE_BC=y
 # needs only libX11, libXft, fontconfig and freetype, all already in flash.
 BR2_PACKAGE_ST=y
 
+# ---------------------------------------------------------------------------
+# libX11 alone - for the X11 shim inside lvdesk, NOT for running a server.
+#
+# The plan is option 2 from the desktop notes: lvdesk speaks enough of the X11
+# core protocol itself, so off-the-shelf clients connect to it directly and
+# their windows become lvdesk windows. No server process, no server heap - the
+# measured heft of X here was never the code (1.92 MB of client libs sat in XIP
+# at zero RSS) but the server's anonymous memory: Xfbdev was 2,876 kB resident
+# with no clients at all, dominated by one 2,456 kB mapping.
+#
+# The whole xclock chain, on purpose - libXaw, libXft, libXrender, libxkbfile.
+#
+# The first instinct was to take libX11 only and refuse RENDER so clients fell
+# back to core fonts. That is backwards. With Xft the CLIENT rasterises glyphs
+# through freetype and uploads them as A8 masks (RenderAddGlyphs); the server
+# only stores and composites them. So supporting RENDER means no font files on
+# the board, no font matching and no QueryFont metrics tables - strictly less
+# work than core fonts, and it generalises to every Xft app rather than to the
+# handful that still fall back.
+#
+# XKB is still refused: Xlib has a core-keyboard path when the extension is
+# absent. Xaw and Xt are client-side and need nothing from the server beyond
+# the core protocol.
+#
+# These live on the SD card for now, not in XIP - they are for bringing the
+# shim up, and the ~2.7 MB chain does not fit the flash images as they stand.
+# The x11r7 packages are gated behind this master switch - without it
+# BR2_PACKAGE_XLIB_LIBX11 is silently ignored, which is the Buildroot trap the
+# notes warn about: always grep the generated .config, never trust the
+# defconfig. It enables the menu only; nothing is built that is not selected.
+BR2_PACKAGE_XORG7=y
+BR2_PACKAGE_XLIB_LIBX11=y
+BR2_PACKAGE_XAPP_XCLOCK=y
+
 # xcalc: the calculator, off the shelf. It is an Athena app, so it brings back
 # libXaw7 (346,108), libXt (316,096) and libXmu (87,752) that leaving xterm
 # removed. That is ~750 kB for one application, which is only worth it because
