@@ -200,6 +200,54 @@ This is why no accelerator helps. A glyph is ~256 bytes - the crossover is
 128 KB, and the PPA's fixed cost alone is ~480 us, twenty times the entire
 budget for drawing one character.
 
+### What the hardware cannot reach, settled
+
+Asked directly: PIE SIMD, BitScrambler, PPA, GDMA.
+
+- **PIE / SIMD (`xespv2p2`) is disabled for userspace on purpose and must stay
+  that way.** The kernel does not save vendor vector state across context
+  switches. Its sibling `xesploop` silently corrupted results at ~0.5% per long
+  loop, scaling with interrupt rate, and cost days while masquerading as SD
+  corruption. The loop CSRs are `0x7Cx` with bits[9:8]=`0b11` - **M-mode only** -
+  so S-mode Linux cannot save them even if it wanted to. See
+  `s31-hardware-loop-corruption`. And the headroom is not there anyway: `-Os` vs
+  `-O3` on the pixel loops measures **0-9%** (`rootfs/pixloop.c`).
+- **BitScrambler** - nothing to convert. The client renders RGB565 and the panel
+  scans out RGB565.
+- **PPA / GDMA** - a glyph is ~256 bytes against a 128 KB crossover, and the
+  engine's ~480 us fixed cost is twenty times the entire per-glyph budget.
+
+**None of them can help, because the problem is not moving pixels.** Under a
+scroll the driver flushes 117-594 KB per update; writing even 594 KB at the
+CPU's measured 102 MB/s is 5.8 ms, against 47 ms spent in `lv_refr_now`. The
+rasteriser is spending roughly an order of magnitude more than its own memory
+traffic, and that excess is per-object and per-glyph software overhead inside
+LVGL. An accelerator moves bytes; it cannot remove software.
+
+### Config knobs: tested, and they are not it
+
+`LV_OBJ_STYLE_CACHE` 0 -> 1, three runs each, 1200 lines scrolled through the
+terminal via `/dev/pts/0`:
+
+    baseline      2190  2150  2270 ms
+    style cache   2210  2320  2070 ms
+
+Identical inside the harness's +-3% noise floor. Reverted. `LV_CACHE_DEF_SIZE`
+is 0 and `LV_USE_FONT_COMPRESSED` already off; there is no knob here that
+recovers 47 ms.
+
+### A repeatable harness, at last
+
+Driving the terminal with `uinject` was too unreliable to measure with - three
+separate arms were invalidated by a click that missed, a window that did not
+resize, and an Enter that never registered, each producing plausible-looking
+numbers. **Write to the pty instead:**
+
+    seq 1 1200 > /dev/pts/0
+
+That needs no focus, no pointer and no keyboard, and it reproduced to +-3%
+across three runs where injection had been swinging by 70%.
+
 ### The options, by measured headroom
 
 1. **Draw the terminal grid directly instead of through LVGL labels** - targets

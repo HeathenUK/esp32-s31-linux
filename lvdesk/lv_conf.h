@@ -679,6 +679,13 @@
  *============================================================================*/
 
 /** Speed up style property lookups by adding 2 x 32 bit variables to each lv_obj_t. */
+/*
+ * Tried at 1 and measured as nothing: 2210/2320/2070 ms against a
+ * 2190/2150/2270 ms baseline, three runs each, scrolling 1200 lines through
+ * the terminal. It is inside the +-3% noise floor of that harness, so it buys
+ * no speed and costs 8 bytes on every object. The terminal's cost is not
+ * style lookups - see docs/accel-plan.md.
+ */
 #define LV_OBJ_STYLE_CACHE 0
 
 /** Widget names (lv_obj_set_name) */
