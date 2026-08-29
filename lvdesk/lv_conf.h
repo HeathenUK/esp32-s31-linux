@@ -922,7 +922,19 @@
 #endif /*LV_TXT_LINE_BREAK_LONG_LEN > 0*/
 
 /** Text recoloring control character */
-#define LV_TXT_COLOR_CMD "#"
+/*
+ * NOT "#". The terminal renders per-character colour by wrapping runs in this
+ * command, and a root shell prompt ends in "~ #" - so with the default the
+ * every-day prompt would be eaten as the start of a colour command and the
+ * rest of the line swallowed as its parameter.
+ *
+ * "##" does not help: lv_text_is_cmd()'s escape branch is dead code (an
+ * `else if` on the same condition as the `if` above it), so a doubled marker
+ * is consumed rather than emitted. Rather than patch LVGL, move the marker to
+ * a control character that cannot appear in the grid at all - term_putc drops
+ * everything below 32, so \001 is unreachable from the pty by construction.
+ */
+#define LV_TXT_COLOR_CMD "\001"
 
 /** Allows mixing Left-to-Right and Right-to-Left texts.
  *  The direction will be processed according to the Unicode Bidirectional Algorithm:

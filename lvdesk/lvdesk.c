@@ -85,6 +85,24 @@
 #define TERM_MAXCOLS	120
 #define TERM_MAXROWS	48
 #define TERM_SCROLLBACK	200
+/*
+ * Per-cell colour.
+ *
+ * One byte per cell: an index into term_palette, or TERM_FG_DEFAULT for "use
+ * the label's own text colour". Bold maps to the bright half of the palette,
+ * which is what every other terminal does and what `ls --color` assumes.
+ *
+ * Background colour is deliberately not stored. It would need a second byte
+ * per cell and a second marker per run, and almost nothing a shell emits uses
+ * it - ls, grep --color and the usual prompts are foreground only.
+ */
+#define TERM_FG_DEFAULT	0xFF
+static const uint32_t term_palette[16] = {
+	0x000000, 0xCD0000, 0x00CD00, 0xCDCD00,	/* black red green yellow */
+	0x4A78C8, 0xCD00CD, 0x00CDCD, 0xE5E5E5,	/* blue magenta cyan white */
+	0x7F7F7F, 0xFF5555, 0x55FF55, 0xFFFF55,	/* the bright half */
+	0x6E9BE8, 0xFF55FF, 0x55FFFF, 0xFFFFFF,
+};
 /* Lines per wheel notch. Three felt sluggish in use; five is about what a
  * desktop terminal does and still lands inside one damage rectangle. */
 #define TERM_WHEEL_LINES	8
@@ -133,9 +151,23 @@ struct term {
 	int fd;			/* pty master */
 	pid_t child;
 	char grid[TERM_MAXROWS][TERM_MAXCOLS + 1];
+	unsigned char attr[TERM_MAXROWS][TERM_MAXCOLS];
 	int cols, nrows;	/* active size; <= TERM_MAXCOLS/ROWS */
 	int cx, cy;
 	int dirty;
+	/*
+	 * Re-fit on the next poll rather than inside the resize event.
+	 *
+	 * term_fit() measures the CONTENT area, and during LV_EVENT_SIZE_CHANGED
+	 * the window has its new size but its children have not been laid out
+	 * yet - so the measurement returned the old geometry, cols matched, and
+	 * the early return meant a resized window kept its old grid for ever.
+	 * That is why dragging the terminal wider gave more background and the
+	 * same number of columns.
+	 */
+	int need_fit;
+	unsigned char cur_fg;	/* SGR state: current foreground */
+	int bold;
 
 	/* CSI parser: ESC [ params... final */
 	int esc;		/* 0 none, 1 saw ESC, 2 inside CSI */
@@ -148,6 +180,7 @@ struct term {
 	 * rather than growing without bound on a board with ~3.9 MB free.
 	 */
 	char sb[TERM_SCROLLBACK][TERM_MAXCOLS + 1];
+	unsigned char sbattr[TERM_SCROLLBACK][TERM_MAXCOLS];
 	int sb_head, sb_count;
 	int view;		/* lines scrolled back; 0 = live */
 };
@@ -157,6 +190,8 @@ static int term_log;
 
 /* Defined with the terminal, used by the keyboard handler above it. */
 static void term_scrollback(int lines);
+/* term_poll re-fits on demand; the definition is below it. */
+static void term_fit(void);
 
 /*
  * Whether the terminal is the window keys belong to. Defined down with the
@@ -693,6 +728,7 @@ static void term_mark_all(void)
 static void term_scroll(void)
 {
 	memcpy(term.sb[term.sb_head], term.grid[0], TERM_MAXCOLS + 1);
+	memcpy(term.sbattr[term.sb_head], term.attr[0], TERM_MAXCOLS);
 	term.sb_head = (term.sb_head + 1) % TERM_SCROLLBACK;
 	if (term.sb_count < TERM_SCROLLBACK)
 		term.sb_count++;
@@ -701,7 +737,10 @@ static void term_scroll(void)
 
 	memmove(term.grid[0], term.grid[1],
 		sizeof(term.grid[0]) * (TERM_MAXROWS - 1));
+	memmove(term.attr[0], term.attr[1],
+		sizeof(term.attr[0]) * (TERM_MAXROWS - 1));
 	memset(term.grid[term.nrows - 1], ' ', TERM_MAXCOLS);
+	memset(term.attr[term.nrows - 1], TERM_FG_DEFAULT, TERM_MAXCOLS);
 	term.grid[term.nrows - 1][TERM_MAXCOLS] = 0;
 	term.cy = term.nrows - 1;
 	term_mark_all();		/* scrolling moves every row */
@@ -718,6 +757,17 @@ static const char *term_sb_line(int back)
 	return term.sb[idx];
 }
 
+/* The attributes for that same line, so scrolling back keeps its colour. */
+static const unsigned char *term_sb_attr(int back)
+{
+	int idx;
+
+	if (back < 1 || back > term.sb_count)
+		return NULL;
+	idx = (term.sb_head - back + TERM_SCROLLBACK * 2) % TERM_SCROLLBACK;
+	return term.sbattr[idx];
+}
+
 static void term_erase(int fromx, int fromy, int tox, int toy)
 {
 	int r, c;
@@ -726,8 +776,16 @@ static void term_erase(int fromx, int fromy, int tox, int toy)
 		int c0 = (r == fromy) ? fromx : 0;
 		int c1 = (r == toy) ? tox : term.cols - 1;
 
-		for (c = c0; c <= c1 && c < term.cols; c++)
+		for (c = c0; c <= c1 && c < term.cols; c++) {
 			term.grid[r][c] = ' ';
+			/*
+			 * Erased cells lose their colour as well. Leaving the
+			 * attribute behind makes a cleared region keep painting
+			 * coloured spaces, which shows up the moment anything
+			 * sets a background or the run is re-used.
+			 */
+			term.attr[r][c] = TERM_FG_DEFAULT;
+		}
 		term.rowdirty[r] = 1;
 	}
 }
@@ -768,7 +826,39 @@ static void term_csi(char final)
 	case 'C': term.cx += p0 > 0 ? p0 : 1; break;
 	case 'D': term.cx -= p0 > 0 ? p0 : 1; break;
 	case 'G': term.cx = p0 > 0 ? p0 - 1 : 0; break;
-	default:				/* SGR and the rest: ignore */
+	case 'm': {				/* SGR - select graphic rendition */
+		int i;
+
+		/*
+		 * A bare ESC[m is a reset, same as ESC[0m. Colour is the
+		 * whole point of this: without it `ls` and `grep --color`
+		 * emit these sequences and the terminal threw them away, so
+		 * everything came out the same shade.
+		 */
+		if (term.npar == 0) {
+			term.bold = 0;
+			term.cur_fg = TERM_FG_DEFAULT;
+			return;
+		}
+		for (i = 0; i < term.npar; i++) {
+			int p = term.par[i];
+
+			if (p == 0) { term.bold = 0; term.cur_fg = TERM_FG_DEFAULT; }
+			else if (p == 1) term.bold = 1;
+			else if (p == 22) term.bold = 0;
+			else if (p >= 30 && p <= 37) term.cur_fg = p - 30;
+			else if (p == 39) term.cur_fg = TERM_FG_DEFAULT;
+			else if (p >= 90 && p <= 97) term.cur_fg = (p - 90) + 8;
+			/*
+			 * 38 (256-colour/truecolour) and the 4x background set
+			 * are consumed and ignored rather than mishandled: a
+			 * partial implementation of 38;5;N would eat the wrong
+			 * number of parameters and corrupt everything after it.
+			 */
+		}
+		return;
+	}
+	default:				/* everything else: ignore */
 		return;
 	}
 	if (term.cx < 0) term.cx = 0;
@@ -824,6 +914,7 @@ static void term_putc(char c)
 		 */
 		if (term.cx > 0) term.cx--;
 		term.grid[term.cy][term.cx] = ' ';
+		term.attr[term.cy][term.cx] = TERM_FG_DEFAULT;
 		term.rowdirty[term.cy] = 1;
 		return;
 	case '\t':
@@ -834,6 +925,10 @@ static void term_putc(char c)
 	default:
 		if ((unsigned char)c < 32) return;
 		term.grid[term.cy][term.cx] = c;
+		/* Bold is the bright half of the palette, as everywhere else. */
+		term.attr[term.cy][term.cx] =
+			(term.cur_fg != TERM_FG_DEFAULT && term.bold &&
+			 term.cur_fg < 8) ? term.cur_fg + 8 : term.cur_fg;
 		term.rowdirty[term.cy] = 1;
 		if (++term.cx >= term.cols) {
 			term.cx = 0;
@@ -859,6 +954,55 @@ static void term_scrollback(int lines)
 			term.view, term.sb_count, term.nrows, term.cols);
 }
 
+/*
+ * Build one row's label text, wrapping coloured runs in LVGL's recolor command.
+ *
+ * A marker is emitted only where the colour CHANGES, so a plain line costs
+ * exactly its own characters. That matters: this runs for every dirty row, and
+ * one-label-per-row exists precisely to keep redraw proportional to what
+ * changed - see the note in term_poll about the 450 ms keystroke.
+ *
+ * The command character is \001, not '#' - LV_TXT_COLOR_CMD is overridden in
+ * lv_conf.h. A root prompt ends in "~ #", and with the default marker that '#'
+ * would start a colour command and swallow the rest of the line.
+ */
+static void term_render_row(char *out, size_t outsz, const char *src,
+			    const unsigned char *at, int cols)
+{
+	unsigned char cur = TERM_FG_DEFAULT;
+	size_t n = 0;
+	int open = 0, c;
+
+	for (c = 0; c < cols; c++) {
+		unsigned char a = at ? at[c] : TERM_FG_DEFAULT;
+		char ch = src ? src[c] : ' ';
+
+		if (ch == 0)
+			ch = ' ';
+		if (a != cur) {
+			if (n + 12 >= outsz)
+				break;
+			if (open) {
+				out[n++] = LV_TXT_COLOR_CMD[0];
+				open = 0;
+			}
+			if (a != TERM_FG_DEFAULT) {
+				n += snprintf(out + n, outsz - n, "%c%06X ",
+					      LV_TXT_COLOR_CMD[0],
+					      (unsigned)term_palette[a & 15]);
+				open = 1;
+			}
+			cur = a;
+		}
+		if (n + 2 >= outsz)
+			break;
+		out[n++] = ch;
+	}
+	if (open && n + 1 < outsz)
+		out[n++] = LV_TXT_COLOR_CMD[0];
+	out[n] = 0;
+}
+
 static int term_poll(void)
 {
 	char buf[512];
@@ -867,6 +1011,17 @@ static int term_poll(void)
 
 	if (term.fd < 0)
 		return 0;
+	/*
+	 * Deferred re-fit. Doing this inside LV_EVENT_SIZE_CHANGED measured the
+	 * content area before LVGL had laid the children out, so it read the
+	 * OLD geometry, matched the current cols/nrows and returned early -
+	 * which is why a resized terminal kept its old grid and the shell was
+	 * never told. Here the layout has settled.
+	 */
+	if (term.need_fit) {
+		term.need_fit = 0;
+		term_fit();
+	}
 	while ((n = read(term.fd, buf, sizeof(buf))) > 0) {
 		/*
 		 * Raw byte log, off unless asked for. Two guesses at this
@@ -907,7 +1062,11 @@ static int term_poll(void)
 		 *
 		 * One label per row means a keystroke invalidates one row.
 		 */
-		char line[TERM_MAXCOLS + 2];
+		/*
+		 * Worst case every cell changes colour: 8 bytes of marker, the
+		 * character, and a closing marker.
+		 */
+		char line[TERM_MAXCOLS * 10 + 16];
 		char saved = 0;
 		int r, cur_r = -1;
 
@@ -922,22 +1081,29 @@ static int term_poll(void)
 
 		for (r = 0; r < term.nrows; r++) {
 			const char *src;
+			const unsigned char *at;
 
 			if (!term.rowdirty[r])
 				continue;
 			/*
 			 * With the view scrolled back, the top rows come from
 			 * the ring and the rest from the live grid, so the
-			 * screen reads continuously across the join.
+			 * screen reads continuously across the join - and the
+			 * colours come from the ring with them.
 			 */
-			if (term.view && r < term.view)
+			if (term.view && r < term.view) {
 				src = term_sb_line(term.view - r);
-			else
+				at = term_sb_attr(term.view - r);
+			} else {
 				src = term.grid[r - term.view];
-			if (!src)
-				src = "";
-			memcpy(line, src, term.cols);
-			line[term.cols] = 0;
+				at = term.attr[r - term.view];
+			}
+			/*
+			 * term_render_row tolerates a NULL src. The previous
+			 * code substituted "" and then memcpy'd term.cols bytes
+			 * out of a one-byte string.
+			 */
+			term_render_row(line, sizeof(line), src, at, term.cols);
 			lv_label_set_text(term.rows[r], line);
 			term.rowdirty[r] = 0;
 		}
@@ -1011,7 +1177,7 @@ static void term_fit(void)
 static void term_resize_cb(lv_event_t *e)
 {
 	(void)e;
-	term_fit();
+	term.need_fit = 1;
 }
 
 static void term_spawn(void)
@@ -3969,6 +4135,9 @@ int main(void)
 	lv_obj_remove_flag(content, LV_OBJ_FLAG_SCROLLABLE);
 	memset(term.grid, ' ', sizeof(term.grid));
 	memset(term.sb, ' ', sizeof(term.sb));
+	memset(term.attr, TERM_FG_DEFAULT, sizeof(term.attr));
+	memset(term.sbattr, TERM_FG_DEFAULT, sizeof(term.sbattr));
+	term.cur_fg = TERM_FG_DEFAULT;
 	for (int r = 0; r < TERM_MAXROWS; r++) {
 		term.grid[r][TERM_MAXCOLS] = 0;
 		term.sb[r % TERM_SCROLLBACK][TERM_MAXCOLS] = 0;
@@ -3977,6 +4146,7 @@ int main(void)
 		lv_obj_set_style_text_color(term.rows[r],
 					    lv_color_hex(COL_TERM_FG), 0);
 		lv_obj_set_style_pad_all(term.rows[r], 0, 0);
+		lv_label_set_recolor(term.rows[r], true);
 		lv_obj_set_pos(term.rows[r], 0, r * TERM_CH);
 		lv_label_set_text(term.rows[r], "");
 		lv_obj_add_flag(term.rows[r], LV_OBJ_FLAG_HIDDEN);
