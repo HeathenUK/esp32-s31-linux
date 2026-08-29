@@ -27,6 +27,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -57,6 +58,8 @@ struct res {
 	uint16_t *px;			/* windows and pixmaps only */
 	uint32_t fg, bg;		/* GCs only */
 	int line_width;
+	int owner;			/* index into cli[] */
+	char title[48];			/* WM_NAME, windows only */
 };
 
 struct cli {
@@ -71,11 +74,21 @@ static struct res res[MAXRES];
 static struct cli cli[MAXCLI];
 static char *atom[MAXATOM];
 static int natom;
+static int cur_owner;			/* client whose request is in flight */
 static int lfd = -1;
 static void (*win_cb)(uint32_t id, int w, int h);
 static void (*draw_cb)(uint32_t id);
+static void (*close_cb)(uint32_t id);
 
 /* ------------------------------------------------------------- resources */
+
+/*
+ * The top-level ancestor of a drawable. Consumers present top-levels, so every
+ * draw notification is reported against one - a client that draws into a child
+ * widget window (all of them do) would otherwise report ids lvdesk never saw.
+ */
+static struct res *top_of(struct res *r);
+static void notify_draw(struct res *d);
 
 static struct res *res_find(uint32_t id)
 {
@@ -96,6 +109,7 @@ static struct res *res_new(uint32_t id, int type)
 			memset(&res[i], 0, sizeof(res[i]));
 			res[i].id = id;
 			res[i].type = type;
+			res[i].owner = cur_owner;
 			return &res[i];
 		}
 	fprintf(stderr, "xshim: resource table full\n");
@@ -111,6 +125,23 @@ static void res_free(uint32_t id)
 	free(r->px);
 	r->px = NULL;
 	r->type = R_FREE;
+}
+
+static struct res *top_of(struct res *r)
+{
+	int guard = 16;
+
+	while (r && r->type == R_WINDOW && r->parent != ROOT_ID && guard--)
+		r = res_find(r->parent);
+	return r;
+}
+
+static void notify_draw(struct res *d)
+{
+	struct res *t = top_of(d);
+
+	if (draw_cb && t)
+		draw_cb(t->id);
 }
 
 /* --------------------------------------------------------------- drawing */
@@ -329,6 +360,7 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 	uint8_t op = r[0], detail = r[1];
 	uint8_t d24[24];
 
+	cur_owner = (int)(c - cli);
 	memset(d24, 0, sizeof(d24));
 	c->seq++;
 	if (getenv("XSHIM_TRACE"))
@@ -552,7 +584,7 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 			draw_line(d, gets16(p), gets16(p + 2),
 				  gets16(p + 4), gets16(p + 6), g->fg);
 		}
-		if (draw_cb) draw_cb(d->id);
+		notify_draw(d);
 		break;
 	}
 	case 65: {					/* PolyLine */
@@ -568,7 +600,7 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 			draw_line(d, gets16(p), gets16(p + 2),
 				  gets16(p + 4), gets16(p + 6), g->fg);
 		}
-		if (draw_cb) draw_cb(d->id);
+		notify_draw(d);
 		break;
 	}
 	case 69: {					/* FillPoly */
@@ -585,7 +617,7 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 			pts[i * 2 + 1] = gets16(r + 16 + i * 4 + 2);
 		}
 		fill_poly(d, pts, n, g->fg);
-		if (draw_cb) draw_cb(d->id);
+		notify_draw(d);
 		break;
 	}
 	case 70: {					/* PolyFillRectangle */
@@ -604,7 +636,7 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 				for (x = rx; x < rx + rw; x++)
 					px_set(d, x, y, g->fg);
 		}
-		if (draw_cb) draw_cb(d->id);
+		notify_draw(d);
 		break;
 	}
 
@@ -618,10 +650,30 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		if (!cw) cw = d->w - cx;		/* 0 means "to the edge" */
 		if (!ch) ch = d->h - cy;
 		win_fill(d, cx, cy, cw, ch);
-		if (draw_cb) draw_cb(d->id);
+		notify_draw(d);
 		break;
 	}
-	case 2: case 12: case 18: case 19: case 22: case 25:
+	case 18: {					/* ChangeProperty */
+		/*
+		 * Only WM_NAME (predefined atom 39, format 8) is acted on -
+		 * it is what puts "xclock" rather than "X client" in the title
+		 * bar. Every other property is accepted and dropped; clients
+		 * set a dozen of them and never read one back.
+		 */
+		struct res *w = res_find(get32(r + 4));
+		uint32_t prop = get32(r + 8), nch = get32(r + 20);
+
+		if (w && w->type == R_WINDOW && prop == 39 && r[16] == 8) {
+			if (nch > sizeof(w->title) - 1)
+				nch = sizeof(w->title) - 1;
+			if (24 + nch <= (uint32_t)len) {
+				memcpy(w->title, r + 24, nch);
+				w->title[nch] = 0;
+			}
+		}
+		break;
+	}
+	case 2: case 12: case 19: case 22: case 25:
 	case 36: case 37: case 42: case 45: case 46:
 	case 72: case 78: case 93: case 94: case 95: case 127:
 		break;					/* accepted, nothing to do */
@@ -641,16 +693,18 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 /* ------------------------------------------------------------------- API */
 
 int xshim_init(void (*on_window)(uint32_t, int, int),
-	       void (*on_draw)(uint32_t))
+	       void (*on_draw)(uint32_t), void (*on_close)(uint32_t))
 {
 	struct sockaddr_un a;
 	int i;
 
 	win_cb = on_window;
 	draw_cb = on_draw;
+	close_cb = on_close;
 	for (i = 0; i < MAXCLI; i++)
 		cli[i].fd = -1;
 
+	mkdir("/tmp/.X11-unix", 0777);
 	unlink(XSHIM_SOCKET);
 	lfd = socket(AF_UNIX, SOCK_STREAM, 0);
 	if (lfd < 0)
@@ -703,14 +757,64 @@ const uint16_t *xshim_window_pixels(uint32_t id, int *w, int *h)
 	return r->px;
 }
 
+int xshim_fds(int *out, int max)
+{
+	int n = 0, i;
+
+	if (lfd < 0 || max < 1)
+		return 0;
+	out[n++] = lfd;
+	for (i = 0; i < MAXCLI && n < max; i++)
+		if (cli[i].fd >= 0)
+			out[n++] = cli[i].fd;
+	return n;
+}
+
+/*
+ * Release everything a client owned. `notify` is false when the close came
+ * from the consumer (a click on the title bar's X), because it is already
+ * tearing the window down and a callback would re-enter it.
+ */
+static void client_drop(struct cli *c, int notify)
+{
+	int owner = (int)(c - cli), i;
+
+	if (c->fd >= 0) {
+		close(c->fd);
+		c->fd = -1;
+	}
+	if (notify && close_cb)
+		for (i = 0; i < MAXRES; i++)
+			if (res[i].type == R_WINDOW && res[i].owner == owner &&
+			    res[i].mapped && res[i].parent == ROOT_ID)
+				close_cb(res[i].id);
+	for (i = 0; i < MAXRES; i++)
+		if (res[i].type != R_FREE && res[i].owner == owner)
+			res_free(res[i].id);
+}
+
+void xshim_window_close(uint32_t id)
+{
+	struct res *r = res_find(id);
+
+	if (r && r->type == R_WINDOW)
+		client_drop(&cli[r->owner], 0);
+}
+
+const char *xshim_window_title(uint32_t id)
+{
+	struct res *r = res_find(id);
+
+	return (r && r->type == R_WINDOW && r->title[0]) ? r->title : NULL;
+}
+
 static void client_data(struct cli *c)
 {
 	ssize_t n = read(c->fd, c->in + c->n, sizeof(c->in) - c->n);
 	size_t off = 0;
 
 	if (n <= 0) {
-		close(c->fd);
-		c->fd = -1;
+		client_drop(c, 1);
 		return;
 	}
 	c->n += n;
@@ -822,19 +926,14 @@ static void on_window(uint32_t id, int w, int h)
 
 static void on_draw(uint32_t id)
 {
-	struct res *r = res_find(id);
-
-	while (r && r->parent != ROOT_ID)		/* dump the top-level */
-		r = res_find(r->parent);
-	if (r)
-		dump_window(r->id);
+	dump_window(id);
 }
 
 int main(void)
 {
 	int i;
 
-	if (xshim_init(on_window, on_draw) < 0)
+	if (xshim_init(on_window, on_draw, NULL) < 0)
 		return 1;
 	printf("xshim: listening on %s (DISPLAY=:0)\n", XSHIM_SOCKET);
 	fflush(stdout);

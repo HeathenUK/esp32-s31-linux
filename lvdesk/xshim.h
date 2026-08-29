@@ -22,10 +22,30 @@
  * Returns the listening fd so it can join lvdesk's poll set, or -1.
  */
 int xshim_init(void (*on_window)(uint32_t id, int w, int h),
-	       void (*on_draw)(uint32_t id));
+	       void (*on_draw)(uint32_t id),
+	       void (*on_close)(uint32_t id));
 
 /* Service any ready clients. Non-blocking. */
 void xshim_poll(void);
+
+/*
+ * The listening fd plus every connected client, for a caller that already
+ * blocks in poll(). Without this lvdesk would have to poll the shim on every
+ * loop iteration, which is a syscall per wake for a socket that is idle
+ * almost always - the same waste this desktop removed everywhere else.
+ */
+int xshim_fds(int *out, int max);
+
+/* The client's WM_NAME, or NULL if it never set one. */
+const char *xshim_window_title(uint32_t id);
+
+/*
+ * Disconnect the client owning this window and release its resources, without
+ * calling on_close - for a close the consumer initiated itself. X clients exit
+ * when their connection drops, which is what makes this a working close button
+ * for a program that knows nothing about lvdesk.
+ */
+void xshim_window_close(uint32_t id);
 
 /* The RGB565 pixels of a client window, or NULL. Not copied. */
 const uint16_t *xshim_window_pixels(uint32_t id, int *w, int *h);

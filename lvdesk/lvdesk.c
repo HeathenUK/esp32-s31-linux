@@ -44,6 +44,7 @@
 #include "lvgl.h"
 #include "src/drivers/lv_drivers.h"
 #include "kms.h"
+#include "xshim.h"
 #include "lvdesk_art.h"
 
 /*
@@ -1924,11 +1925,19 @@ struct winrec {
 	 * consumes it, it simply has nothing to do with it.
 	 */
 	void (*on_key)(int code);
+	/*
+	 * The X client window this stands for, or 0. Closing it has to drop
+	 * the client's connection - that is how a program that knows nothing
+	 * about lvdesk learns the user closed it.
+	 */
+	uint32_t xid;
 };
 
 static struct winrec wins[MAXWIN];
 static int win_n;
 static struct winrec *win_focus;
+
+static void xwin_drop(uint32_t id);
 
 static struct winrec *win_find(lv_obj_t *win)
 {
@@ -2183,6 +2192,13 @@ static void win_close(struct winrec *w)
 	 * is a close, not a switch.
 	 */
 	switcher_cancel();
+	if (w->xid) {
+		uint32_t id = w->xid;
+
+		w->xid = 0;			/* before, so this cannot loop */
+		xwin_drop(id);
+		xshim_window_close(id);
+	}
 	if (w->on_close)
 		w->on_close();
 	if (w->tbtn)
@@ -2656,6 +2672,117 @@ static lv_obj_t *make_window(const char *title, int x, int y, int w, int h)
 	return win;
 }
 
+
+/* ------------------------------------------------------------ X11 clients */
+
+/*
+ * Off-the-shelf X clients as lvdesk windows.
+ *
+ * lvdesk/xshim.c speaks enough of the X core protocol to render one; here that
+ * becomes an ordinary lvdesk window with an lv_image over the shim's RGB565
+ * buffer - which is the very buffer the client drew into, so presenting it
+ * costs no copy. The whole memory price of running xclock is its own 164x164
+ * window, 53 kB, against the 2,456 kB anonymous mapping Xfbdev holds before a
+ * single client has connected.
+ */
+#define MAXXWIN 4
+
+static struct xwin {
+	uint32_t id;
+	lv_obj_t *win;
+	lv_obj_t *img;
+	lv_image_dsc_t dsc;
+} xwins[MAXXWIN];
+static int xwin_n;
+
+/* Forget a client window without touching lvdesk's own bookkeeping. */
+static void xwin_drop(uint32_t id)
+{
+	int i;
+
+	for (i = 0; i < xwin_n; i++)
+		if (xwins[i].id == id) {
+			xwins[i] = xwins[--xwin_n];
+			return;
+		}
+}
+
+/* The client exited or its connection died: take its window with it. */
+static void xwin_on_close(uint32_t id)
+{
+	int i;
+
+	for (i = 0; i < xwin_n; i++)
+		if (xwins[i].id == id) {
+			struct winrec *w = win_find(xwins[i].win);
+
+			xwins[i] = xwins[--xwin_n];
+			if (w) {
+				w->xid = 0;	/* the client is already gone */
+				win_close(w);
+			}
+			return;
+		}
+}
+
+static void xwin_on_window(uint32_t id, int w, int h)
+{
+	struct xwin *x;
+	struct winrec *rec;
+	lv_obj_t *win, *content;
+	const uint16_t *px;
+	const char *title;
+	int pw, ph;
+
+	(void)w; (void)h;
+	if (xwin_n >= MAXXWIN)
+		return;
+	px = xshim_window_pixels(id, &pw, &ph);
+	if (!px)
+		return;
+	title = xshim_window_title(id);
+	win = make_window(title ? title : "X client", 150, 60,
+			  pw + 2, ph + HDR_H + 2);
+	if (!win)
+		return;
+	rec = win_find(win);
+	if (rec)
+		rec->xid = id;
+	content = lv_win_get_content(win);
+	lv_obj_set_style_pad_all(content, 0, 0);
+
+	x = &xwins[xwin_n++];
+	x->id = id;
+	x->win = win;
+	x->dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
+	x->dsc.header.cf = LV_COLOR_FORMAT_RGB565;
+	x->dsc.header.w = pw;
+	x->dsc.header.h = ph;
+	x->dsc.header.stride = pw * 2;
+	x->dsc.data = (const uint8_t *)px;
+	x->dsc.data_size = (uint32_t)pw * ph * 2;
+	x->img = lv_image_create(content);
+	lv_image_set_src(x->img, &x->dsc);
+	lv_obj_set_pos(x->img, 0, 0);
+}
+
+static void xwin_on_draw(uint32_t id)
+{
+	int i, w, h;
+
+	for (i = 0; i < xwin_n; i++)
+		if (xwins[i].id == id) {
+			/*
+			 * Reading the pixels is what makes the shim composite
+			 * the client's child windows into the top-level. The
+			 * content is always in a child, so skipping this
+			 * presents an empty box.
+			 */
+			xshim_window_pixels(id, &w, &h);
+			lv_obj_invalidate(xwins[i].img);
+			return;
+		}
+}
 
 /* --------------------------------------------------------------- popovers */
 
@@ -3803,7 +3930,8 @@ static void kms_flush_cb(lv_display_t *d, const lv_area_t *area, uint8_t *px)
  */
 #define MAXMOUSE 8
 /* pty + slack + every keyboard and mouse we may have open */
-#define NFDS        (2 + MAXKBD + MAXMOUSE)
+/* +5: the X shim's listening socket and up to four connected clients. */
+#define NFDS        (2 + MAXKBD + MAXMOUSE + 5)
 /*
  * How long to sleep once the desktop has gone quiet.
  *
@@ -4650,6 +4778,14 @@ int main(void)
 	win_add_grip(win_find(term.win));
 	/* Re-fit when the window is resized or maximised. */
 	lv_obj_add_event_cb(term.win, term_resize_cb, LV_EVENT_SIZE_CHANGED, NULL);
+	/*
+	 * Stand up the X shim before the shell, so anything started from the
+	 * terminal inherits a DISPLAY that resolves to us.
+	 */
+	setenv("DISPLAY", ":0", 1);
+	if (xshim_init(xwin_on_window, xwin_on_draw, xwin_on_close) < 0)
+		fprintf(stderr, "lvdesk: no X shim (socket in use?)\n");
+
 	term_spawn();
 	term.dirty = 1;
 
@@ -4694,6 +4830,7 @@ int main(void)
 		uint32_t next, elapsed;
 		int n = 0, ms;
 		int i_term, i_wifi, i_kbd, i_mouse, n_kbd, n_mouse;
+		int i_x, n_x, xfds[5];
 		int frame_due;
 
 		/*
@@ -4784,6 +4921,13 @@ int main(void)
 			fds[n].fd = mouse_fds[mi]; fds[n].events = POLLIN; n++;
 		}
 		n_mouse = n - i_mouse;
+		i_x = n;
+		n_x = xshim_fds(xfds, (int)(sizeof(xfds) / sizeof(xfds[0])));
+		if (n + n_x > NFDS)
+			n_x = NFDS - n;
+		for (int xi = 0; xi < n_x; xi++) {
+			fds[n].fd = xfds[xi]; fds[n].events = POLLIN; n++;
+		}
 
 		/*
 		 * Feed LVGL the time that actually elapsed, not the timeout we
@@ -4847,6 +4991,12 @@ int main(void)
 			if (rd_kbd)   { PROF_START(a); busy |= kbd_poll();    PROF_ADD(prof_kbd, a); }
 			if (rd_mouse) { PROF_START(a); busy |= mouse_poll();  PROF_ADD(prof_mouse, a); }
 			if (rd_wifi)  { PROF_START(a); busy |= wifi_ev_poll(); PROF_ADD(prof_wifi, a); }
+			for (int xi = 0; xi < n_x; xi++)
+				if (fds[i_x + xi].revents & RD_MASK) {
+					xshim_poll();
+					busy = 1;
+					break;
+				}
 			/*
 			 * Only reap when a child has actually exited. waitpid()
 			 * on every loop was 83 ms per window to learn nothing.

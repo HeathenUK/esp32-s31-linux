@@ -109,6 +109,52 @@ stop dead at request 19, `QueryFont`, with the client apparently blocked on a
 reply. It was `head -20` truncating the log at exactly the listening line plus
 requests 1..19. **Check the instrument before the subject.**
 
+## In lvdesk
+
+`xshim.c` links into lvdesk. Its listening socket and each client join lvdesk's
+existing `poll()` set, so X traffic wakes the loop the same way a keystroke
+does and costs nothing when nobody is talking. A mapped top-level becomes an
+ordinary lvdesk window - title bar, minimise/maximise/close, task bar entry -
+with an `lv_image` whose data pointer *is* the shim's RGB565 buffer, so
+presenting a client costs no copy at all.
+
+`DISPLAY=:0` is set before the shell is spawned, so `xclock &` typed in
+lvdesk's own terminal just works.
+
+Both directions of teardown are wired: the client exiting drops its connection,
+which closes the lvdesk window; clicking the window's X drops the connection,
+which makes the client exit. An X client dying when its display goes away is
+the mechanism that gives a close button to a program that has never heard of
+lvdesk.
+
+### What it costs
+
+Measured on the board, lvdesk running, xclock started from its terminal:
+
+    MemAvailable, before                3,768 kB
+    MemAvailable, xclock running        3,084 kB
+      -> total cost of the app            684 kB
+
+    lvdesk RSS                        692 -> 960 kB   (+268 kB)
+    xclock RSS                              2,160 kB  (mostly libX11/libXt/
+                                                       libXaw file pages off SD)
+
+    lvdesk CPU, 10 s idle, no xclock       33 jiffies
+    lvdesk CPU, 10 s idle, xclock up       36 jiffies
+    xclock CPU, 10 s idle                   0 jiffies
+
+Against Xfbdev's **2,876 kB resident before a single client connects**, on a
+board with ~3.8 MB available. The 3-jiffy difference is inside this board's
+run-to-run noise; the honest claim is that the shim is free at idle, not that
+it costs 0.3%. xclock's own zero is not noise, though - an analog clock
+repaints on the minute and does nothing in between, and the shim adds no
+polling of its own.
+
+xclock's 2,160 kB is the one number with obvious slack: those are library file
+pages read from SD. `/usr/lib` is an XIP cramfs overlay here, where mapped
+binaries cost **zero RSS** - putting libX11, libXt, libXaw and libXmu in the
+XIP image should take most of it away.
+
 ## Where this goes next
 
 The shim lives in lvdesk's existing poll loop - a socket at
@@ -125,8 +171,15 @@ Order of work, each with something observable at the end:
 3. `PolySegment`, `PolyLine`, `FillPoly` into the window buffer. **Done -
    xclock's face renders correctly.**
 4. Input: pointer and keyboard events from lvdesk to the focused client.
-5. `ImageText8` and `QueryFont` metrics that mean something, for clients that
-   draw text.
+   **Not started.** xclock needs none, so nothing has forced the shape of it
+   yet; the first client that does will.
+5. `ImageText8` and `PolyText8` against the synthetic font, for clients that
+   draw text. **Not started** - `QueryFont` answers with consistent metrics
+   and nothing has drawn a glyph yet.
+6. `ConfigureNotify`, so resizing the lvdesk window resizes the client. Today
+   the window is created at whatever size the client asked for and stays
+   there.
+7. The X libraries into the XIP image, for the 2,160 kB above.
 
 Reference: `tools/xstub.py` is the executable version of this document. Run it,
 point a client at it, and it prints exactly what that client needs - including
