@@ -152,6 +152,16 @@ struct term {
 	pid_t child;
 	char grid[TERM_MAXROWS][TERM_MAXCOLS + 1];
 	unsigned char attr[TERM_MAXROWS][TERM_MAXCOLS];
+	/*
+	 * Rotation of the grid, so scrolling is an index increment.
+	 *
+	 * Scrolling used to memmove the whole grid AND the attribute plane -
+	 * about 11.5 kB per line - and bulk output scrolls once per line, ~19
+	 * lines per poll. That was the bulk of the 22 ms the input phase cost
+	 * per loop while text was streaming. A ring costs nothing: row r lives
+	 * at (top + r) % TERM_MAXROWS.
+	 */
+	int top;
 	int cols, nrows;	/* active size; <= TERM_MAXCOLS/ROWS */
 	int cx, cy;
 	int dirty;
@@ -186,6 +196,10 @@ struct term {
 };
 
 static struct term term;
+
+/* Row r of the visible grid, through the ring. */
+#define TROW(r)  term.grid[(term.top + (r)) % TERM_MAXROWS]
+#define TATTR(r) term.attr[(term.top + (r)) % TERM_MAXROWS]
 static int term_log;
 
 /* Defined with the terminal, used by the keyboard handler above it. */
@@ -727,21 +741,22 @@ static void term_mark_all(void)
 /* Push the top line into the scrollback ring and scroll the grid up. */
 static void term_scroll(void)
 {
-	memcpy(term.sb[term.sb_head], term.grid[0], TERM_MAXCOLS + 1);
-	memcpy(term.sbattr[term.sb_head], term.attr[0], TERM_MAXCOLS);
+	memcpy(term.sb[term.sb_head], TROW(0), TERM_MAXCOLS + 1);
+	memcpy(term.sbattr[term.sb_head], TATTR(0), TERM_MAXCOLS);
 	term.sb_head = (term.sb_head + 1) % TERM_SCROLLBACK;
 	if (term.sb_count < TERM_SCROLLBACK)
 		term.sb_count++;
 	if (term_log && term.sb_count < 3)
 		fprintf(stderr, "[scroll sb_count=%d]\n", term.sb_count);
 
-	memmove(term.grid[0], term.grid[1],
-		sizeof(term.grid[0]) * (TERM_MAXROWS - 1));
-	memmove(term.attr[0], term.attr[1],
-		sizeof(term.attr[0]) * (TERM_MAXROWS - 1));
-	memset(term.grid[term.nrows - 1], ' ', TERM_MAXCOLS);
-	memset(term.attr[term.nrows - 1], TERM_FG_DEFAULT, TERM_MAXCOLS);
-	term.grid[term.nrows - 1][TERM_MAXCOLS] = 0;
+	/*
+	 * The scroll itself: advance the ring and clear what rotates in at the
+	 * bottom. No grid movement at all.
+	 */
+	term.top = (term.top + 1) % TERM_MAXROWS;
+	memset(TROW(term.nrows - 1), ' ', TERM_MAXCOLS);
+	memset(TATTR(term.nrows - 1), TERM_FG_DEFAULT, TERM_MAXCOLS);
+	TROW(term.nrows - 1)[TERM_MAXCOLS] = 0;
 	term.cy = term.nrows - 1;
 	term_mark_all();		/* scrolling moves every row */
 }
@@ -777,14 +792,14 @@ static void term_erase(int fromx, int fromy, int tox, int toy)
 		int c1 = (r == toy) ? tox : term.cols - 1;
 
 		for (c = c0; c <= c1 && c < term.cols; c++) {
-			term.grid[r][c] = ' ';
+			TROW(r)[c] = ' ';
 			/*
 			 * Erased cells lose their colour as well. Leaving the
 			 * attribute behind makes a cleared region keep painting
 			 * coloured spaces, which shows up the moment anything
 			 * sets a background or the run is re-used.
 			 */
-			term.attr[r][c] = TERM_FG_DEFAULT;
+			TATTR(r)[c] = TERM_FG_DEFAULT;
 		}
 		term.rowdirty[r] = 1;
 	}
@@ -913,8 +928,8 @@ static void term_putc(char c)
 		 * glyph. Erasing is the harmless reading either way.
 		 */
 		if (term.cx > 0) term.cx--;
-		term.grid[term.cy][term.cx] = ' ';
-		term.attr[term.cy][term.cx] = TERM_FG_DEFAULT;
+		TROW(term.cy)[term.cx] = ' ';
+		TATTR(term.cy)[term.cx] = TERM_FG_DEFAULT;
 		term.rowdirty[term.cy] = 1;
 		return;
 	case '\t':
@@ -924,9 +939,9 @@ static void term_putc(char c)
 	case 7: return;					/* bell */
 	default:
 		if ((unsigned char)c < 32) return;
-		term.grid[term.cy][term.cx] = c;
+		TROW(term.cy)[term.cx] = c;
 		/* Bold is the bright half of the palette, as everywhere else. */
-		term.attr[term.cy][term.cx] =
+		TATTR(term.cy)[term.cx] =
 			(term.cur_fg != TERM_FG_DEFAULT && term.bold &&
 			 term.cur_fg < 8) ? term.cur_fg + 8 : term.cur_fg;
 		term.rowdirty[term.cy] = 1;
@@ -1073,8 +1088,8 @@ static int term_poll(void)
 		/* Block cursor, only when looking at the live screen. */
 		if (!term.view) {
 			cur_r = term.cy;
-			saved = term.grid[term.cy][term.cx];
-			term.grid[term.cy][term.cx] =
+			saved = TROW(term.cy)[term.cx];
+			TROW(term.cy)[term.cx] =
 				(saved == ' ' || saved == 0) ? '_' : saved;
 			term.rowdirty[term.cy] = 1;
 		}
@@ -1095,8 +1110,8 @@ static int term_poll(void)
 				src = term_sb_line(term.view - r);
 				at = term_sb_attr(term.view - r);
 			} else {
-				src = term.grid[r - term.view];
-				at = term.attr[r - term.view];
+				src = TROW(r - term.view);
+				at = TATTR(r - term.view);
 			}
 			/*
 			 * term_render_row tolerates a NULL src. The previous
@@ -1108,7 +1123,7 @@ static int term_poll(void)
 			term.rowdirty[r] = 0;
 		}
 		if (cur_r >= 0)
-			term.grid[term.cy][term.cx] = saved;
+			TROW(term.cy)[term.cx] = saved;
 		term.dirty = 0;
 	}
 	return busy;
