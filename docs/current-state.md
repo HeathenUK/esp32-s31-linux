@@ -1753,6 +1753,46 @@ started it retries, it starts another. That failure mode cost most of an hour.
 - **One sequence discontinuity is expected** - it is the handover, not a lost
   frame. `mjpegrec` reports it as a gap.
 
+## What the 4.4 MB of slab actually is (2026-08-29)
+
+`/proc/slabinfo` does not exist in the shipping kernel and cannot: it needs
+`CONFIG_SLUB_DEBUG`, which is mutually exclusive with **`CONFIG_SLUB_TINY`** -
+the minimal-footprint allocator this board is built with. Measuring the slab
+therefore means changing the allocator, so the absolute numbers below are from
+a throwaway kernel with `SLUB_TINY` off (Slab 5812 kB against the shipping
+4380 kB). The **composition** is the useful part:
+
+    kernfs_node_cache     814 kB   9476 objects   sysfs metadata
+    kmalloc-1k            384 kB
+    dentry                379 kB   reclaimable
+    kmalloc-64            340 kB
+    debugfs_inode_cache   331 kB   1008 objects   debugfs
+    biovec-max            270 kB     90 x 3072    block layer
+    kmalloc-128           220 kB
+    kmalloc-512           208 kB
+    inode_cache           196 kB
+    kmalloc-8k            192 kB
+    task_struct           191 kB     90 tasks
+    shmem/ext4 inodes     ~375 kB   reclaimable
+
+So roughly **1.1 MB is sysfs and debugfs metadata**, and the single largest
+item is 9476 kernfs nodes. Three things follow:
+
+- **debugfs costs ~331 kB plus its share of the kernfs nodes**, and it is there
+  because we asked for it: `CONFIG_DEBUG_FS` was enabled for usbmon and the LCD
+  driver's counters. That is a deliberate trade and now a priced one - this
+  session's USB and display work would not have been possible without those
+  counters. Turn it off for a build that needs the memory, not before.
+- **The filesystem caches (dentry, inode_cache, ext4, shmem: ~950 kB) are
+  reclaimable** and will shrink under pressure. They are not a leak.
+- What is left is genuine kernel structure - task_struct for 90 tasks, block
+  layer vectors, kmalloc for driver state. There is no single large reclaimable
+  block hiding in there.
+
+The honest summary: the slab is not where a big RAM win is waiting. Userspace
+is already at ~1.8 MB total RSS with everything XIP, and the kernel's 4.4 MB is
+mostly metadata for the devices and filesystems the board actually has.
+
 ## Boot audit II: the background fix had moved the cost (2026-08-29)
 
 `rcS complete` went **84.35 s -> 43.79 s**, and the whole of it was one thing
