@@ -118,6 +118,41 @@ reclaimable here.
 
 ---
 
+## Off-the-shelf X11 apps run in lvdesk, with no X server (2026-08-29)
+
+`xclock` - the real Buildroot binary, unmodified - runs as an lvdesk window
+with a title bar, buttons and a task bar entry. There is no X server on the
+board.
+
+lvdesk speaks the X core protocol itself (`lvdesk/xshim.c`, ~850 lines). Each
+client window is a buffer sized to that window, presented as an `lv_image`
+whose data pointer *is* that buffer, so there is no copy and no virtual screen.
+The request set is not "X11": it is the 19 request types a real xclock was
+observed to send, captured with `tools/xstub.py`, of which three actually draw.
+
+    MemAvailable cost of running xclock          684 kB
+    Xfbdev resident, no clients connected      2,876 kB
+    lvdesk idle, 10 s, xclock running        36 jiffies
+    lvdesk idle, 10 s, control               33 jiffies
+    xclock idle, 10 s                         0 jiffies
+
+The idle difference is inside this board's noise - the claim is "free", not
+"0.3%". xclock's zero is real: an analog clock repaints on the minute.
+
+Shipped: `/usr/bin/lvdesk` in the XIP image carries the shim, so the socket is
+there from boot and `xclock &` in lvdesk's own terminal works.
+
+**Not done yet**, in the order the next client will demand them: input routing
+to clients, `ImageText8`/`PolyText8` text drawing, and `ConfigureNotify` so
+resizing the lvdesk window resizes the client. Also open: xclock costs
+2,160 kB RSS purely because libX11/libXt/libXaw are read from SD - `/usr/lib`
+is an XIP overlay where mapped binaries cost **zero** RSS, but their closure is
+~2.7 MB against 225 kB free in the xip2 partition, so it needs a repartition,
+not just a line in `XIP2_ROOTS`.
+
+See `docs/x11-shim.md` for the protocol details, including three traps that
+each produce a plausible wrong picture rather than an error.
+
 ## Historical: the Weston era
 
 Weston runs on the panel. Behaviour is BIMODAL, not uniformly slow. Measured
