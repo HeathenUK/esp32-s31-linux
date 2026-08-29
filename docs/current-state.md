@@ -1840,10 +1840,48 @@ trap. It is now behind `/etc/s31-keylog-enable`, and `usbtrace off` kills it.
 - **Association is 5.6-6.2 s** and is now the largest single item in
   `S40network`. It is a hidden-SSID scan (`scan_ssid=1` forces active probing)
   plus the WPA handshake. Worth attacking only after the above.
-- **xip2 is still 1.44 MB of flash holding a 4096-byte empty filesystem**, and
-  the rootfs XIP image is 100% full at 5,248 KB. That is where the room would
-  come from to XIP `bluetoothd` (797 KB) and `ip` (582 KB), the two largest
-  things still on the card.
+- **bluetoothd does not fit in XIP and cannot be made to.** It is the largest
+  RSS on the board and never exits, but its closure is glib (1,218,632),
+  pcre2 (374,148) and dbus (275,812) on top of its own 797,012 - **2,665,604
+  bytes** against a 1,441,792 partition, with only 901,120 free in the rootfs
+  partition beside it. Staging the binary without its libraries buys little,
+  because glib is the bulk of what it touches. Evicting opkg's chain from
+  image 1 (libarchive 623,772 + libopkg 174,424 + the binary, ~838 KB, for a
+  package manager that runs interactively and rarely) would free enough to XIP
+  bluetoothd's own text but still not glib. That is the next lever if
+  bluetoothd's memory ever becomes the binding problem.
+
+### xip2 is in use: ip and udevd (2026-08-29)
+
+`XIP2_ROOTS` was empty, so the image staged at **4,096 bytes** while reserving
+1,441,792. It now carries `sbin/ip` and `sbin/udevd` with their closures
+(libkmod 79,160, libblkid 329,436): **1,216,512 bytes, 225,280 free**. libc is
+NOT duplicated - image 1 holds it and `EXCLUDE_DIR` skips it.
+
+Measured on the board, with a binary still on the card as the control:
+
+    udevd       XIP2   263,680 byte binary    28 kB resident from it
+    ip          XIP2   581,604 byte binary    24 kB resident from it
+    bluetoothd  SD     797,012 byte binary   184 kB resident from it
+
+**It changed boot time by nothing** (rcS 43.29 s against 43.79 s), which is the
+expected result: the boot bottleneck is udev's coldplug burning CPU, not
+paging. This is a memory win, not a latency one.
+
+Three traps, all of which cost a round trip here:
+
+- **The overlay loop guarded on image 1 alone.** `[ -d "$XIP_MNT/$d" ] ||
+  continue` ran before image 2 was consulted, so `/sbin` - which exists in
+  image 2 and not image 1 - was skipped entirely. The flash was written, the
+  image mounted, the files visibly present under `/mnt/xip2/sbin`, and nothing
+  used them. Build the lower stack first, then skip only if *both* are empty.
+- **`make xip2-rootfs` drags in a full Buildroot `target-finalize`**, which is
+  minutes and can fail for unrelated reasons. `xip2-image` is the
+  no-dependency form, and `xip-fast` now builds both images in the required
+  order (image 2 must stage after image 1 for `EXCLUDE_DIR` to work).
+- **`mkxipstage.py` printed the whole closure unannotated**, so libc appeared
+  in both images' listings and read as a 690 KB duplicate that was never
+  staged. It now marks skipped entries.
 
 ## Boot audit: 83 s to a desktop became 24 s (2026-08-28)
 

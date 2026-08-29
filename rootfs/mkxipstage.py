@@ -105,5 +105,10 @@ for p in sorted(closure):
 
 print("staged %d objects, %.2f MB (skipped %d already in EXCLUDE_DIR)"
       % (count, staged / 1048576, skipped))
+# Mark what was actually staged. This printed the whole CLOSURE unannotated,
+# so an object held by the other image - libc, every time - appeared in both
+# listings and read as a 690 KB duplicate that was never there.
 for p in sorted(closure):
-    print("   ", os.path.relpath(p, T))
+    rel = os.path.relpath(p, T)
+    dup = exclude and os.path.exists(os.path.join(exclude, rel))
+    print("    %-6s %s" % ("(skip)" if dup else "", rel))

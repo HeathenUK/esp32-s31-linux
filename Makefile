@@ -67,7 +67,7 @@ IDF_EXPORT := $(shell test -f /opt/esp-idf/export.sh && echo /opt/esp-idf/export
 
 .PHONY: all download toolchain toolchain-source opensbi linux coremark rootfs initramfs s31-pie-cases \
 	buildroot-menuconfig buildroot-clean clean fullclean flash-opensbi flash-linux  \
-	xip-rootfs flash-xip-rootfs xip2-stage \
+	xip-rootfs flash-xip-rootfs xip2-stage xip2-image \
 	flash-rootfs xip2-rootfs flash-xip2-rootfs xip-fast xip-image bootloader flash-bootloader erase \
 	imager flash-imager reset
 
@@ -473,6 +473,7 @@ xip-fast:
 	@echo "--- syncing overlay into the Buildroot target ---"
 	cp -a $(BUILDROOT_EXTERNAL)/board/esp32-s31/overlay/. $(BUILDROOT_OUT)/target/
 	@$(MAKE) xip-image
+	@$(MAKE) xip2-image
 
 xip-image:
 	@echo "--- userspace XIP image ---"
@@ -603,10 +604,34 @@ XIP2_STAGE := $(BUILD_DIR)/xipstage2
 # between them. Xorg forks xkbcomp once at startup to compile the keymap and
 # never runs it again, so putting it in flash buys a one-second-faster server
 # start and takes that space away from every binary that runs continuously.
-# Nothing here now. The second image existed to hold X clients (xcalc, jwm,
-# xfiles); with those gone it stages empty at 4,096 bytes and its 1.4 MB
-# partition is free for whatever needs it next.
-XIP2_ROOTS ?=
+# The second image existed to hold X clients (xcalc, jwm, xfiles). With those
+# gone it staged EMPTY at 4,096 bytes while still reserving 1,441,792 bytes of
+# flash - dead space on a board whose linux partition has been down to ~53 KB
+# of slack.
+#
+# It now carries the three biggest things still running off the SD card. The
+# selection is by "how continuously does it run", not by size:
+#
+#   ip          581,604  every ifup/ifdown, and the network path was measured
+#   udevd       263,680  269 devices at coldplug, and a process launch is
+#                        0.16 s here - see the boot audit in current-state.md
+#
+# With their closures - libkmod 79,160 and libblkid 329,436 - that is
+# 1,253,880 of the 1,441,792 available. libc is NOT counted: image 1 holds it
+# and overlayfs merges both layers.
+#
+# bluetoothd is the obvious omission and it does not fit. It is the largest
+# RSS on the board and never exits, but it drags glib (1,218,632), pcre2
+# (374,148) and dbus (275,812) behind it: 2,665,604 for the closure, against a
+# 1,441,792 partition. Putting the binary in without its libraries buys almost
+# nothing, because glib is the bulk of what it touches. It needs a bigger
+# partition, not a cleverer selection - and partition geometry lives in three
+# places that must agree.
+#
+# /sbin was added to S05xip's overlay list for ip and udevd; without it these
+# bytes would sit in flash unmounted, which is exactly what had already
+# happened to wpa_supplicant, iw and busybox for however many builds.
+XIP2_ROOTS ?= sbin/ip sbin/udevd
 
 # Staged separately from image creation, because image 1 has to know what is
 # in here before it stages itself - see the EXCLUDE_DIR note in xip-rootfs.
@@ -617,6 +642,26 @@ xip2-stage: xip-rootfs
 	EXCLUDE_DIR=$(XIP_STAGE) python3 $(CURDIR)/rootfs/mkxipstage.py \
 		$(CROSS_COMPILE)readelf $(BUILDROOT_OUT)/target $(XIP2_STAGE) \
 		$(XIP2_ROOTS)
+
+# The no-dependency form, for iterating on XIP2_ROOTS. xip2-rootfs drags in
+# xip-rootfs and therefore a full Buildroot target-finalize, which is minutes
+# and can fail for reasons that have nothing to do with the image being built.
+# This assumes $(XIP_STAGE) is already populated - xip-image does that, and
+# xip-fast runs both in the right order.
+xip2-image:
+	@echo "--- second userspace XIP image ---"
+	rm -rf $(XIP2_STAGE)
+	mkdir -p $(XIP2_STAGE)
+	EXCLUDE_DIR=$(XIP_STAGE) python3 $(CURDIR)/rootfs/mkxipstage.py \
+		$(CROSS_COMPILE)readelf $(BUILDROOT_OUT)/target $(XIP2_STAGE) \
+		$(XIP2_ROOTS)
+	$(BUILDROOT_OUT)/host/bin/mkcramfs -X -X $(XIP2_STAGE) $(XIP2_ROOTFS_IMG)
+	@SZ=$$(stat -c%s $(XIP2_ROOTFS_IMG)); \
+	if [ $$SZ -gt $(XIP2_PARTITION_SIZE) ]; then \
+		echo "ERROR: xip2 image ($$SZ bytes) exceeds its partition ($(XIP2_PARTITION_SIZE) bytes)"; \
+		exit 1; \
+	fi; \
+	echo "xip2 image $$SZ bytes, $$(($(XIP2_PARTITION_SIZE) - $$SZ)) bytes free"
 
 xip2-rootfs: xip2-stage
 	@echo "--- second userspace XIP image ---"

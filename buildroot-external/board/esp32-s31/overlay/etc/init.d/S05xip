@@ -66,18 +66,29 @@ start() {
 	# It also showed up as boot time. S40network runs while lvdesk is still
 	# faulting itself in, and wpa_supplicant demand-paged off the card under
 	# that contention took 35.3 s to reach its daemonize, against 1.91 s warm.
-	for d in usr/lib usr/bin usr/libexec usr/sbin lib bin; do
-		[ -d "$XIP_MNT/$d" ] || continue
-		sd="/mnt/sd-$(echo "$d" | tr / -)"
-		mkdir -p "$sd" || continue
-		mount --bind "/$d" "$sd" || continue
+	for d in usr/lib usr/bin usr/libexec usr/sbin lib bin sbin; do
+		# Build the lower stack FIRST, and skip only if neither image
+		# has the directory. This used to test $XIP_MNT/$d alone and
+		# `continue` on it, so a directory living only in image 2 was
+		# dropped before image 2 was ever consulted: /sbin holds ip and
+		# udevd, both staged into image 2 and neither present in image
+		# 1, so /sbin was silently never overlaid and both ran off the
+		# card exactly as before. The flash was written, the image
+		# mounted, the files were visibly there under /mnt/xip2 - and
+		# nothing used them.
+		#
 		# lowerdir order matters: flash first so it wins, SD last so
 		# anything absent from both images still resolves. Both flash
 		# layers are searched before the card, and overlayfs merges
 		# them, so an object only has to exist in one.
-		lower="$XIP_MNT/$d"
+		lower=""
+		[ -d "$XIP_MNT/$d" ] && lower="$XIP_MNT/$d"
 		[ -n "$XIP2_MNT" ] && [ -d "$XIP2_MNT/$d" ] && \
-			lower="$lower:$XIP2_MNT/$d"
+			lower="${lower:+$lower:}$XIP2_MNT/$d"
+		[ -n "$lower" ] || continue
+		sd="/mnt/sd-$(echo "$d" | tr / -)"
+		mkdir -p "$sd" || continue
+		mount --bind "/$d" "$sd" || continue
 		if ! mount -t overlay overlay \
 			-o "lowerdir=$lower:$sd" "/$d"; then
 			umount "$sd" 2>/dev/null
@@ -106,7 +117,7 @@ start() {
 
 stop() {
 	umount /usr/share/fonts 2>/dev/null
-	for d in usr/lib usr/bin usr/libexec usr/sbin lib bin; do
+	for d in usr/lib usr/bin usr/libexec usr/sbin lib bin sbin; do
 		umount "/$d" 2>/dev/null
 		umount "/mnt/sd-$(echo "$d" | tr / -)" 2>/dev/null
 	done
