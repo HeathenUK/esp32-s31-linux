@@ -138,3 +138,22 @@ config S31_AUDIO_MIC_RIGHT_SLOT
 endif
 
 endmenu
+
+config S31_USB_HID_ENABLE
+	bool "Own the USB controller on hart0 and enumerate HID devices"
+	default n
+	help
+	  Take the USB OTG controller for hart0 and drive keyboards and mice
+	  with Espressif's USB host stack, instead of leaving the controller to
+	  Linux's dwc2.
+
+	  Linux's dwc2 cannot talk to low-speed devices on this board: with the
+	  root port forced to full speed a low-speed keyboard fails every
+	  transaction (XactErr, "unable to enumerate USB device"), and the only
+	  configuration that works costs 39% of a core. See
+	  docs/usb-on-hart0-plan.md.
+
+	  There is ONE USB OTG peripheral on this SoC and a peripheral belongs
+	  to one hart, so enabling this means Linux has no USB at all - no
+	  storage, no serial, nothing. Disable usb_otghs and usb_phy in the
+	  device tree when you turn this on.

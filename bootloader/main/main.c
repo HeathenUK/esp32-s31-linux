@@ -45,6 +45,9 @@
 #include "hal/mmu_ll.h"
 #include "hal/mmu_types.h"
 #include "hosted_sram.h"
+#if CONFIG_S31_USB_HID_ENABLE
+#include "s31_usb_hid.h"
+#endif
 #include "s31_hosted_sram.h"
 #include "s31_audio_sram.h"
 #include "s31_memory_layout.h"
@@ -501,6 +504,13 @@ void app_main(void)
      * the RX task blocks between notifications, so Linux cannot alter its
      * interrupt-matrix route by resetting hart1.
      */
+#if CONFIG_S31_USB_HID_ENABLE
+    /* Before the transport: a HID device present at power-on should be
+     * enumerated by the time Linux is up, not seconds later. */
+    if (s31_usb_hid_start() != ESP_OK)
+        ESP_LOGE(TAG, "USB HID host failed to start");
+#endif
+
     if (s31_hosted_sram_start() != ESP_OK)
         loader_restart("hosted SRAM transport");
     ESP_LOGI(TAG, "hosted SRAM transport started");

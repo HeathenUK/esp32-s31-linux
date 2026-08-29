@@ -1260,6 +1260,8 @@ CONFIG_S31_DISPLAY_DISP_GPIO=-1
 # CONFIG_S31_AUDIO_ENABLE is not set
 # end of S31 audio co-processor
 
+# CONFIG_S31_USB_HID_ENABLE is not set
+
 #
 # Example Configuration
 #
@@ -4144,6 +4146,62 @@ CONFIG_CODEC_TAS5805M_SUPPORT=y
 # default:
 # CONFIG_CODEC_DATA_ADC_SUPPORT is not set
 # end of Audio Codec Device Configuration
+
+#
+# USB-OTG
+#
+# default:
+CONFIG_USB_HOST_CONTROL_TRANSFER_MAX_SIZE=256
+# CONFIG_USB_HOST_HW_BUFFER_BIAS_BALANCED is not set
+CONFIG_USB_HOST_HW_BUFFER_BIAS_IN=y
+# CONFIG_USB_HOST_HW_BUFFER_BIAS_PERIODIC_OUT is not set
+
+#
+# Hub Driver Configuration
+#
+
+#
+# Root Port configuration
+#
+# default:
+CONFIG_USB_HOST_DEBOUNCE_DELAY_MS=250
+# default:
+CONFIG_USB_HOST_RESET_HOLD_MS=30
+# default:
+CONFIG_USB_HOST_RESET_RECOVERY_MS=30
+# default:
+CONFIG_USB_HOST_SET_ADDR_RECOVERY_MS=10
+# default:
+CONFIG_USB_HOST_RESUME_HOLD_MS=30
+# default:
+CONFIG_USB_HOST_RESUME_RECOVERY_MS=20
+# default:
+CONFIG_USB_HOST_SUSPEND_ENTRY_MS=20
+# end of Root Port configuration
+
+CONFIG_USB_HOST_HUBS_SUPPORTED=y
+CONFIG_USB_HOST_HUB_MULTI_LEVEL=y
+
+#
+# Downstream Port configuration
+#
+# default:
+CONFIG_USB_HOST_EXT_PORT_RESET_RECOVERY_DELAY_MS=30
+# default:
+# CONFIG_USB_HOST_EXT_PORT_CUSTOM_POWER_ON_DELAY_ENABLE is not set
+# end of Downstream Port configuration
+# end of Hub Driver Configuration
+
+#
+# Power management
+#
+# end of Power management
+
+# default:
+# CONFIG_USB_HOST_ENABLE_ENUM_FILTER_CALLBACK is not set
+# default:
+CONFIG_USB_OTG_SUPPORTED=y
+# end of USB-OTG
 # end of Component config
 
 # default:
