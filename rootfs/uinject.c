@@ -390,6 +390,27 @@ int main(int argc, char **argv)
 			move_to(700, 400, 40, 8);
 			move_to(80, 60, 40, 8);
 		}
+	} else if (!strcmp(what, "dragstress")) {
+		/*
+		 * Press, move continuously for N seconds, release.
+		 *
+		 * Dragging a window is the interaction that actually feels
+		 * slow, and it cannot be measured with `stress` (no button) or
+		 * by respawning `drag` (the uinput device dies with each
+		 * process, so the button is released and the harness measures
+		 * fork/exec - see the note on `stress`). Starts on a title bar.
+		 */
+		int secs = argc > 2 ? atoi(argv[2]) : 15;
+		time_t end;
+
+		move_to(250, 20, 20, 10);
+		click(1);
+		end = time(NULL) + secs;
+		while (time(NULL) < end) {
+			move_to(600, 300, 40, 8);
+			move_to(250, 20, 40, 8);
+		}
+		click(0);
 	} else if (!strcmp(what, "drag")) {
 		move_to(250, 20, 10, 20);
 		click(1);

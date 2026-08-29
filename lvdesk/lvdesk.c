@@ -3675,6 +3675,7 @@ static void kms_flush_cb(lv_display_t *d, const lv_area_t *area, uint8_t *px)
  */
 static int prof_on;
 static uint64_t prof_wait, prof_input, prof_timer, prof_refr;
+static uint64_t prof_term, prof_kbd, prof_mouse, prof_wifi, prof_wait4, prof_curs;
 static uint32_t prof_loops, prof_refrs;
 
 static uint64_t prof_ns(void)
@@ -3687,6 +3688,90 @@ static uint64_t prof_ns(void)
 
 #define PROF_START(v) uint64_t v = prof_on ? prof_ns() : 0
 #define PROF_ADD(acc, v) do { if (prof_on) (acc) += prof_ns() - (v); } while (0)
+
+/*
+ * Implementation of the LVGL profiler hooks declared in lv_prof_hooks.h.
+ *
+ * Tags are compared by POINTER, not strcmp: they are __func__ or string
+ * literals, so their addresses are stable and the lookup stays cheap enough to
+ * sit inside LVGL's hot paths. Times are INCLUSIVE, so a parent contains its
+ * children - read the tree, not the sum.
+ */
+#define LVP_SLOTS 96
+#define LVP_DEPTH 48
+static struct { const char *tag; uint64_t total; uint32_t n; } lvp_slot[LVP_SLOTS];
+static int lvp_slots;
+static struct { int idx; uint64_t t0; } lvp_stk[LVP_DEPTH];
+static int lvp_sp;
+
+void lvp_begin(const char *tag)
+{
+	if (!prof_on)
+		return;
+	if (lvp_sp < LVP_DEPTH) {
+		int i;
+
+		for (i = 0; i < lvp_slots; i++)
+			if (lvp_slot[i].tag == tag)
+				break;
+		if (i == lvp_slots) {
+			if (lvp_slots < LVP_SLOTS)
+				lvp_slot[lvp_slots++].tag = tag;
+			else
+				i = -1;		/* table full: stop counting */
+		}
+		lvp_stk[lvp_sp].idx = i;
+		lvp_stk[lvp_sp].t0 = prof_ns();
+	}
+	lvp_sp++;			/* always, so end() stays balanced */
+}
+
+void lvp_end(const char *tag)
+{
+	(void)tag;
+	if (!prof_on || lvp_sp == 0)
+		return;
+	lvp_sp--;
+	if (lvp_sp < LVP_DEPTH && lvp_stk[lvp_sp].idx >= 0) {
+		int i = lvp_stk[lvp_sp].idx;
+
+		lvp_slot[i].total += prof_ns() - lvp_stk[lvp_sp].t0;
+		lvp_slot[i].n++;
+	}
+}
+
+/* Top sections by inclusive time, then reset for the next window. */
+static void lvp_dump(void)
+{
+	int printed, i, best;
+
+	if (!lvp_slots)
+		return;
+	for (printed = 0; printed < 10; printed++) {
+		uint64_t top = 0;
+
+		best = -1;
+		for (i = 0; i < lvp_slots; i++)
+			if (lvp_slot[i].total > top) {
+				top = lvp_slot[i].total;
+				best = i;
+			}
+		if (best < 0)
+			break;
+		fprintf(stderr, "  lvp %-34s %8llu ms  n=%-7u %6llu us/call\n",
+			lvp_slot[best].tag,
+			(unsigned long long)(lvp_slot[best].total / 1000000),
+			lvp_slot[best].n,
+			(unsigned long long)(lvp_slot[best].n ?
+				lvp_slot[best].total / 1000 / lvp_slot[best].n : 0));
+		lvp_slot[best].total = 0;
+	}
+	for (i = 0; i < lvp_slots; i++) {
+		lvp_slot[i].total = 0;
+		lvp_slot[i].n = 0;
+	}
+	fflush(stderr);
+}
 static int mouse_fds[MAXMOUSE];
 static int mouse_raw[MAXMOUSE];		/* synthetic: no pointer acceleration */
 static int mouse_n;
@@ -3696,6 +3781,20 @@ static int ptr_pressed;
 static int press_edge;			/* a new press, not yet acted on */
 static int wheel;
 static lv_obj_t *cursor_obj;
+static int hw_cursor;
+static int cursor_pending;
+static int32_t last_cx = -1, last_cy = -1;	/* last position sent to the plane */
+static uint32_t last_cms;
+
+/* Send the pending position and mark it sent. */
+static void cursor_settle(void)
+{
+	cursor_pending = 0;
+	last_cx = ptr_x;
+	last_cy = ptr_y;
+	last_cms = lv_tick_get();
+	kms_cursor_move(ptr_x, ptr_y);
+}
 static lv_indev_t *mouse_indev;
 
 static int is_mouse(int fd)
@@ -3891,6 +3990,35 @@ static int mouse_poll(void)
 	if (ptr_y > h - 1) ptr_y = h - 1;
 
 	/*
+	 * Only on an actual change: the ioctl pulls the primary plane into the
+	 * atomic state, so a redundant one is not free even though nothing
+	 * moved.
+	 */
+	if (hw_cursor) {
+		uint32_t nowms = lv_tick_get();
+
+		/*
+		 * Paced, not per event.
+		 *
+		 * The legacy cursor ioctl pulls the primary plane into the
+		 * atomic state (the driver says so in as many words), so each
+		 * one costs a commit - measured at ~1 ms, which made it the
+		 * single largest item in the input phase during a drag. A mouse
+		 * reports at ~125 Hz and the panel is 60, so half of those
+		 * moves could never be seen. The final position is always sent
+		 * because the pending check below runs on the next loop.
+		 */
+		if ((ptr_x != last_cx || ptr_y != last_cy) &&
+		    (uint32_t)(nowms - last_cms) >= 16) {
+			last_cx = ptr_x;
+			last_cy = ptr_y;
+			last_cms = nowms;
+			{ PROF_START(cx); kms_cursor_move(ptr_x, ptr_y); PROF_ADD(prof_curs, cx); }
+		}
+		cursor_pending = (ptr_x != last_cx || ptr_y != last_cy);
+	}
+
+	/*
 	 * The wheel scrolls whatever is under the pointer that can scroll.
 	 * Only the terminal can, so it is routed there directly rather than
 	 * through LVGL's scroll machinery - the terminal is not an LVGL
@@ -3980,14 +4108,35 @@ static void mouse_init(void)
 	 * damaged area per pointer move is the same as the rectangle's was, so
 	 * this costs nothing to run - see lvdesk_art.h.
 	 */
-	cursor_obj = lv_image_create(lv_layer_sys());
-	lv_image_set_src(cursor_obj, &lvdesk_cursor_img);
-	lv_obj_remove_flag(cursor_obj, LV_OBJ_FLAG_CLICKABLE);
+	/*
+	 * Prefer the DRM cursor plane, and fall back to drawing it.
+	 *
+	 * As an LVGL object the pointer is composited in-band, so every move
+	 * invalidates its old and new area and LVGL runs a full refresh -
+	 * profiled with LV_USE_PROFILER at 18.3 ms per refr_invalid_areas and
+	 * ~15 objects redrawn per move, which is why pointer motion alone cost
+	 * 30-38% of the core. The plane moves it with a register write. The
+	 * driver refuses the plane while the panel is scaled, so the software
+	 * path has to stay.
+	 */
+	if (!getenv("LVDESK_SW_CURSOR") &&
+	    kms_cursor_init(lvdesk_cursor_img.data,
+			    lvdesk_cursor_img.header.w,
+			    lvdesk_cursor_img.header.h) == 0) {
+		hw_cursor = 1;
+		printf("lvdesk: hardware cursor plane\n");
+	} else {
+		cursor_obj = lv_image_create(lv_layer_sys());
+		lv_image_set_src(cursor_obj, &lvdesk_cursor_img);
+		lv_obj_remove_flag(cursor_obj, LV_OBJ_FLAG_CLICKABLE);
+		printf("lvdesk: software cursor\n");
+	}
 
 	mouse_indev = lv_indev_create();
 	lv_indev_set_type(mouse_indev, LV_INDEV_TYPE_POINTER);
 	lv_indev_set_read_cb(mouse_indev, mouse_read_cb);
-	lv_indev_set_cursor(mouse_indev, cursor_obj);
+	if (cursor_obj)
+		lv_indev_set_cursor(mouse_indev, cursor_obj);
 
 	ptr_x = lv_display_get_horizontal_resolution(NULL) / 2;
 	ptr_y = lv_display_get_vertical_resolution(NULL) / 2;
@@ -4052,6 +4201,29 @@ int main(void)
 	 * before blaming LVGL.
 	 */
 	if (prof_on) {
+		/*
+		 * Cost of the instrument itself, first.
+		 *
+		 * Every timed section here is two clock_gettime() calls, and if
+		 * that is not a vDSO call on this port it is a syscall - which
+		 * would put the profiler's own cost on the same order as the
+		 * things it is measuring. A waitpid(WNOHANG) with no children
+		 * measured 135 us per call, which is impossible, so this is
+		 * checked rather than assumed.
+		 */
+		{
+			struct timespec c, d;
+			int k;
+
+			clock_gettime(CLOCK_MONOTONIC, &c);
+			for (k = 0; k < 10000; k++)
+				(void)prof_ns();
+			clock_gettime(CLOCK_MONOTONIC, &d);
+			fprintf(stderr, "prof: clock_gettime %llu ns/call\n",
+				(unsigned long long)((((uint64_t)(d.tv_sec - c.tv_sec) *
+					1000000000ull + (d.tv_nsec - c.tv_nsec))) / 10000));
+			fflush(stderr);
+		}
 		struct timespec a, b;
 		void *heap = malloc(kms_size);
 		uint64_t fb_ns = 0, heap_ns = 0;
@@ -4397,12 +4569,26 @@ int main(void)
 			int busy = 0;
 			PROF_START(t0);
 
-			busy |= term_poll();
-			busy |= kbd_poll();
-			busy |= mouse_poll();
-			busy |= wifi_ev_poll();
-			waitpid(-1, NULL, WNOHANG);	/* reap the tone child */
+			{ PROF_START(a); busy |= term_poll();   PROF_ADD(prof_term, a); }
+			{ PROF_START(a); busy |= kbd_poll();    PROF_ADD(prof_kbd, a); }
+			{ PROF_START(a); busy |= mouse_poll();  PROF_ADD(prof_mouse, a); }
+			{ PROF_START(a); busy |= wifi_ev_poll(); PROF_ADD(prof_wifi, a); }
+			{ PROF_START(a); waitpid(-1, NULL, WNOHANG); PROF_ADD(prof_wait4, a); }
 			idle_rounds = busy ? 0 : idle_rounds + 1;
+			/*
+			 * Settle the cursor exactly once, when the gesture has
+			 * stopped. Pacing can leave the last move of a gesture
+			 * unsent, and the pointer must not rest 16 ms behind
+			 * where the hand left it.
+			 *
+			 * The first version of this ran at the top of every
+			 * loop and never updated the last-sent position, so
+			 * cursor_pending stayed true and it re-sent the same
+			 * coordinates for ever - which undid the pacing and
+			 * cost 81% of the core in one run.
+			 */
+			if (hw_cursor && cursor_pending && !busy)
+				cursor_settle();
 			PROF_ADD(prof_input, t0);
 		}
 
@@ -4451,6 +4637,19 @@ int main(void)
 					(unsigned long long)(prof_input / 1000 / prof_loops),
 					(unsigned long long)(prof_timer / 1000 / prof_loops),
 					(unsigned long long)(prof_refr / 1000 / prof_loops));
+				fprintf(stderr,
+					"  input split: term=%llums kbd=%llums "
+					"mouse=%llums wifi=%llums waitpid=%llums "
+					"cursor_ioctl=%llums\n",
+					(unsigned long long)(prof_term / 1000000),
+					(unsigned long long)(prof_kbd / 1000000),
+					(unsigned long long)(prof_mouse / 1000000),
+					(unsigned long long)(prof_wifi / 1000000),
+					(unsigned long long)(prof_wait4 / 1000000),
+					(unsigned long long)(prof_curs / 1000000));
+				prof_term = prof_kbd = prof_mouse = 0;
+				prof_wifi = prof_wait4 = prof_curs = 0;
+				lvp_dump();
 				fflush(stderr);
 				prof_wait = prof_input = prof_timer = prof_refr = 0;
 				prof_loops = prof_refrs = 0;

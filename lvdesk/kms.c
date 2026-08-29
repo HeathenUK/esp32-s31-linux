@@ -43,6 +43,9 @@ uint8_t *kms_map;
 uint32_t kms_w, kms_h, kms_pitch, kms_size;
 
 static uint32_t crtc_id, conn_id;
+static uint32_t cur_handle;
+static int cur_ok;
+static int cur_w, cur_h;
 
 static void *xcalloc(size_t n, size_t sz)
 {
@@ -341,4 +344,86 @@ int kms_dirty(int x1, int y1, int x2, int y2)
 	struct kms_rect r = { x1, y1, x2, y2 };
 
 	return kms_dirty_rects(&r, 1);
+}
+
+/*
+ * Hardware cursor.
+ *
+ * The plane is ARGB8888 and at most 64x64 (ESP32S31_CURSOR_MAX), so the source
+ * image is copied into a 64x64 buffer with the rest left transparent - the
+ * legacy SETCURSOR ioctl has no stride field and the kernel assumes width *
+ * 4, so a smaller buffer with a different pitch cannot be handed over.
+ */
+#define KMS_CURSOR_DIM	64
+
+int kms_cursor_init(const void *argb8888, int w, int h)
+{
+	struct drm_mode_create_dumb creq;
+	struct drm_mode_map_dumb mreq;
+	struct drm_mode_cursor2 arg;
+	uint8_t *map;
+	int row;
+
+	if (kms_fd < 0 || w > KMS_CURSOR_DIM || h > KMS_CURSOR_DIM)
+		return -1;
+
+	memset(&creq, 0, sizeof(creq));
+	creq.width = KMS_CURSOR_DIM;
+	creq.height = KMS_CURSOR_DIM;
+	creq.bpp = 32;
+	if (ioctl(kms_fd, DRM_IOCTL_MODE_CREATE_DUMB, &creq) < 0)
+		return -1;
+	cur_handle = creq.handle;
+
+	memset(&mreq, 0, sizeof(mreq));
+	mreq.handle = cur_handle;
+	if (ioctl(kms_fd, DRM_IOCTL_MODE_MAP_DUMB, &mreq) < 0)
+		return -1;
+	map = mmap(NULL, creq.size, PROT_READ | PROT_WRITE, MAP_SHARED,
+		   kms_fd, mreq.offset);
+	if (map == MAP_FAILED)
+		return -1;
+
+	memset(map, 0, creq.size);
+	for (row = 0; row < h; row++)
+		memcpy(map + (size_t)row * creq.pitch,
+		       (const uint8_t *)argb8888 + (size_t)row * w * 4,
+		       (size_t)w * 4);
+	munmap(map, creq.size);
+
+	/*
+	 * CURSOR2 rather than CURSOR so the hotspot can be given. It is 0,0
+	 * for this arrow, but the ioctl is the one a compositor is expected to
+	 * use and it fails cleanly on drivers that lack the plane.
+	 */
+	memset(&arg, 0, sizeof(arg));
+	arg.flags = DRM_MODE_CURSOR_BO;
+	arg.crtc_id = crtc_id;
+	arg.width = KMS_CURSOR_DIM;
+	arg.height = KMS_CURSOR_DIM;
+	arg.handle = cur_handle;
+	arg.hot_x = 0;
+	arg.hot_y = 0;
+	if (ioctl(kms_fd, DRM_IOCTL_MODE_CURSOR2, &arg) < 0) {
+		perror("kms: SETCURSOR2");
+		return -1;
+	}
+	cur_w = w;
+	cur_h = h;
+	cur_ok = 1;
+	return 0;
+}
+
+int kms_cursor_move(int x, int y)
+{
+	struct drm_mode_cursor arg;
+
+	if (!cur_ok)
+		return -1;
+	memset(&arg, 0, sizeof(arg));
+	arg.flags = DRM_MODE_CURSOR_MOVE;
+	arg.crtc_id = crtc_id;
+	arg.x = x;
+	arg.y = y;
+	return ioctl(kms_fd, DRM_IOCTL_MODE_CURSOR, &arg);
 }

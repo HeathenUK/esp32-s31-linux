@@ -16,6 +16,22 @@ extern uint32_t kms_w, kms_h, kms_pitch, kms_size;
 struct kms_rect { int x1, y1, x2, y2; };	/* inclusive */
 
 int kms_open(const char *path);
+
+/*
+ * Hardware cursor plane.
+ *
+ * Moving the pointer as an LVGL object costs a full redraw cycle of everything
+ * under it - profiled at ~18 ms per refresh, and pointer motion alone was 30%+
+ * of the core. The DRM cursor plane moves it with a register write instead.
+ * The driver's own note records X11 losing 2.4x on pointer motion when this
+ * plane refused itself, so the win is not speculative.
+ *
+ * kms_cursor_init() returns 0 if the plane is usable; the caller must fall
+ * back to a software cursor otherwise (the plane refuses itself while the
+ * panel is scaled).
+ */
+int kms_cursor_init(const void *argb8888, int w, int h);
+int kms_cursor_move(int x, int y);
 int kms_dirty(int x1, int y1, int x2, int y2);	/* inclusive coordinates */
 int kms_dirty_rects(const struct kms_rect *r, int n);
 

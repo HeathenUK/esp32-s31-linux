@@ -2130,6 +2130,13 @@
 #endif /*LV_USE_SYSMON*/
 
 /** Instrument LVGL internals with trace hooks to measure runtime performance. */
+/*
+ * OFF in shipped builds. The hooks in lv_prof_hooks.h are cheap but they are
+ * still a call and a branch at every instrumented site, and LVGL instruments
+ * refr_obj_and_children and friends - thousands of calls per frame. Turn it on
+ * to answer a question, then turn it off: it is what found that pointer motion
+ * was a full LVGL redraw cycle, and it should not be paid for afterwards.
+ */
 #define LV_USE_PROFILER 0
 
 /** Built-in profiler
@@ -2172,7 +2179,7 @@
  *  The default header provides these via the built-in profiler.
  *  Set this to your own header to use a custom profiler backend.
  */
-#define LV_PROFILER_INCLUDE "lvgl/debugging/profiler/lv_profiler_builtin.h"
+#define LV_PROFILER_INCLUDE "lv_prof_hooks.h"
 
 /** Layout */
 #define LV_PROFILER_LAYOUT 1

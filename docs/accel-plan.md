@@ -360,6 +360,81 @@ All three are CPU-side and all three apply here. We have (2) in `rowdirty` and
 then throw it away - `term_scroll()` calls `term_mark_all()`, so every scrolled
 line dirties the whole screen. We have no (1) and no (3).
 
+### The desktop, profiled properly, and the hardware cursor (2026-08-29)
+
+The terminal was a load generator, not the desktop. Profiled with
+`LVDESK_PROF=1` plus LVGL's own hooks (`LV_USE_PROFILER` pointed at
+`lvdesk/lv_prof_hooks.h`, which aggregates per section instead of writing a
+trace), the desktop's cost was somewhere else entirely.
+
+**Pointer motion alone cost 30-46% of the core.** The tree said why:
+
+    lv_timer_handler       2341 ms
+      timer_cb             2329 ms
+        lv_display_refr_timer 2329 ms
+          refr_invalid_areas  2175 ms  n=119   18,278 us/call
+            refr_area         1746 ms  n=204    8,558 us/call
+              refr_obj_and_children 1698 ms n=612
+                EVENT_DRAW_MAIN     1258 ms n=1781  706 us/call
+
+The pointer was an LVGL object, so **every move ran a full refresh cycle and
+redrew ~15 objects**. Note this also corrects an earlier reading here: LVGL's
+refresh timer runs *inside* `lv_timer_handler`, so rendering was hiding in the
+"timer" bucket while the separate `lv_refr_now()` measured ~0.
+
+The driver has had a working cursor plane all along, and its own comment
+recorded that X11 lost 2.4x on pointer motion when that plane refused itself -
+while noting lvdesk "draws its pointer in LVGL and never uses the DRM cursor
+plane, so cursor_moves and cursor fb_changes both read 0". Wiring lvdesk to it
+(`kms_cursor_init`/`kms_cursor_move`, ARGB8888, 64x64 max):
+
+    window drag   SW cursor  9010 8620 8750 ms   57-60% of core
+                  HW cursor  3670 3740 ms        24%
+    idle          3% either way
+
+**2.4x, independently reproducing the driver's X11-era figure.**
+
+Two traps inside that change, both self-inflicted and both measured:
+
+- **The legacy cursor ioctl costs ~1 ms**, because it pulls the primary plane
+  into the atomic state - the driver says so explicitly. Unpaced it became the
+  largest single item in the input phase (478 ms per 5 s window). Paced to
+  16 ms it is 181 ms, with a settle so the pointer never rests behind the hand.
+- The first settle ran every loop and never updated the last-sent position, so
+  it re-sent the same coordinates for ever and cost **81% of the core**.
+
+**Where a drag now spends its time** (input phase, per 5 s window):
+
+    term_poll   254 ms      <- with an IDLE terminal
+    mouse_poll  374 ms      (of which cursor ioctl 181)
+    kbd_poll    139 ms
+    wifi_poll   136 ms
+    waitpid      83 ms
+
+That is ~600 ms per window of per-loop polling overhead that has nothing to do
+with dragging, against ~200 ms now spent in LVGL. **The remaining cost is the
+poll loop, not rendering.**
+
+### Would per-window planes help, like the cursor?
+
+Asked directly, and the answer is a low ceiling - for a reason that is easy to
+miss. **There is no hardware compositor on this SoC.** LCD_CAM is "a dumb
+scanout engine: a timing generator plus a FIFO" (esp32s31-lcd.c, line 5). The
+cursor "plane" is composited by the CPU, per-pixel alpha in C. Its win came
+from removing LVGL's redraw cycle, not from free hardware blending - and that
+is affordable only because a 12x19 cursor is 228 pixels.
+
+A 500x310 window is 155,000 pixels, 310 KB per composite. The PPA could do it
+(PPA BLEND exists and is unused, and 310 KB is well above the 128 KB
+crossover), so it is *feasible* - but the prize is now small: LVGL rendering is
+~200 ms of the ~1550 ms a drag costs, because the cursor plane already took the
+big redraw away. Reserving ~1 MB of PSRAM for window buffers would target ~13%
+of a drag while adding a permanent compositing cost whenever anything moves,
+and the scanout copy currently costs nothing at all when the screen is static.
+
+Revisit it only if the poll-loop overhead above is fixed first and rendering
+becomes the majority again.
+
 ### The options, by measured headroom
 
 1. **Draw the terminal grid directly instead of through LVGL labels** - targets
