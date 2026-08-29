@@ -1,0 +1,80 @@
+usb: dwc2: stop freeing the whole periodic schedule for one endpoint
+
+Unplugging the mouse killed the keyboard. The keyboard stayed enumerated and
+bound, its interrupt URBs completed -ESHUTDOWN, and nothing was ever scheduled
+for it again.
+
+The frame list is the periodic schedule for the WHOLE controller, but
+dwc2_hcd_qh_free_ddma() tore it down whenever ANY one periodic endpoint was
+freed. The guard was
+
+    (hsotg->params.uframe_sched || !hsotg->periodic_channels)
+
+and this board sets uframe_sched, so the left side is unconditionally true and
+the test never guarded anything.
+
+It never came back either. The frame list is only allocated in
+dwc2_hcd_qh_init_ddma(), and only for a NEW qh that finds it NULL. Endpoints
+that already had a qh simply stopped being scheduled, with
+dwc2_update_frame_list() logging "hsotg->frame_list = 00000000" and returning.
+
+That single bug accounts for a fortnight of symptoms that never made sense
+together: input dying intermittently, the fault appearing to MOVE between
+devices, and both a usbhid rebind and a controller re-probe fixing it
+temporarily - each of those creates a new qh, which reallocates the list.
+
+Test it against what is actually left instead. periodic_qh_count is decremented
+in dwc2_hcd_qh_unlink() before the free path runs, so here it counts the
+endpoints that REMAIN. A caller that ever frees without unlinking now leaks 256
+bytes rather than silently stopping all input, which is the safer direction by
+a wide margin.
+
+Measured after the fix, keyboard and mouse and hub together: zero
+"frame_list = 00000000" complaints in any capture, 310/310 interrupt-IN
+completions with status 0, and no bus errors while typing.
+
+Not produced by git diff: linux-71-port/ carries no VCS, so the "before" side
+is upstream v7.1 text reconstructed by hand and the hunk was generated with
+diff(1) against it.
+
+--- a/drivers/usb/dwc2/hcd_ddma.c
++++ b/drivers/usb/dwc2/hcd_ddma.c
+@@ -373,10 +373,36 @@
+ 		dwc2_release_channel_ddma(hsotg, qh);
+ 	spin_unlock_irqrestore(&hsotg->lock, flags);
+ 
++	/*
++	 * The frame list is the periodic schedule for the WHOLE controller, so
++	 * it may only be torn down once nothing periodic is left. The test used
++	 * to be "uframe_sched || !periodic_channels", and with uframe_sched
++	 * enabled - which it is here - that is unconditionally true. Freeing
++	 * any one periodic endpoint therefore destroyed the schedule for every
++	 * other one.
++	 *
++	 * It never came back. The frame list is only allocated in
++	 * dwc2_hcd_qh_init_ddma(), and only for a NEW qh that finds it NULL;
++	 * endpoints that already had a qh simply stopped being scheduled, with
++	 * dwc2_update_frame_list() logging "hsotg->frame_list = 00000000" and
++	 * returning. The device stayed enumerated and bound, and went quiet.
++	 *
++	 * Observed on this board: unplugging the mouse killed the keyboard.
++	 * The keyboard's interrupt URBs completed -ESHUTDOWN, no further
++	 * transfers were scheduled for it, and rebinding usbhid brought it
++	 * back - because that created a new qh, which reallocated the list.
++	 * That also explains why it looked intermittent and why it appeared to
++	 * move between devices: any teardown of any periodic endpoint takes
++	 * down whichever devices are left.
++	 *
++	 * periodic_qh_count is decremented in dwc2_hcd_qh_unlink() before the
++	 * free path runs, so by here it counts the endpoints that REMAIN. If a
++	 * caller ever frees without unlinking, this leaks 256 bytes rather
++	 * than silently stopping all input - the safer direction by far.
++	 */
+ 	if ((qh->ep_type == USB_ENDPOINT_XFER_ISOC ||
+ 	     qh->ep_type == USB_ENDPOINT_XFER_INT) &&
+-	    (hsotg->params.uframe_sched ||
+-	     !hsotg->periodic_channels) && hsotg->frame_list) {
++	    !hsotg->periodic_qh_count && hsotg->frame_list) {
+ 		dwc2_per_sched_disable(hsotg);
+ 		dwc2_frame_list_free(hsotg);
+ 	}

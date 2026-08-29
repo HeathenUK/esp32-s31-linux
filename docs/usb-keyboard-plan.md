@@ -17,6 +17,81 @@ Do not re-test these. Each was measured, not reasoned about.
 | FIFO rebalance (704/64/128) | made it worse - reverted |
 | ESP-IDF host on hart0 | `HUB: transaction translator (TT) is not supported` - it cannot reach ANY device behind a high-speed hub. See docs/usb-on-hart0-plan.md |
 
+## 2026-08-29: the host side is clean, measured
+
+Two faults were tangled together. The first is **fixed**; the second is **not
+in anything Linux owns**, and that is now measured rather than argued.
+
+### Fixed: dwc2 destroyed the periodic frame list
+
+`dwc2_hcd_qh_free_ddma()` tore down the **controller-wide** periodic frame list
+whenever any one periodic endpoint was freed, and nothing ever rebuilt it -
+allocation only happens for a *new* QH in `dwc2_hcd_qh_init_ddma()`. With
+`uframe_sched=1` the guard condition was unconditionally true:
+
+    -   if (hsotg->params.uframe_sched || !hsotg->periodic_channels)
+    +   if ((qh->ep_type == USB_ENDPOINT_XFER_ISOC ||
+    +        qh->ep_type == USB_ENDPOINT_XFER_INT) &&
+    +       !hsotg->periodic_qh_count && hsotg->frame_list)
+
+So unplugging the mouse killed the keyboard. It explains the intermittency, the
+fault appearing to *move* between devices, and why both a usbhid rebind and a
+controller re-probe cleared it temporarily. After the fix: **zero**
+`frame_list = 00000000` complaints across every capture.
+
+### Not ours: the residual dropped keys
+
+With the frame list fixed, ~1 keystroke in 10 still went missing. A capture
+across a real episode of it (154 presses, user typing prose) localises it
+completely:
+
+| layer | measurement |
+|---|---|
+| the wire | 310 completions, **status 00 on every one**; zero bus errors |
+| URB scheduling | endpoint at its requested `Ivl=1ms`; the unpolled window between a completion and its resubmission is **1.42 ms mean, 2.585 ms max** over 310 samples |
+| hidraw -> evdev | 310 reports -> 309 `EV_KEY`; no systematic loss |
+| evdev -> lvdesk | **0** `SYN_DROPPED`, 0 stuck keys, 0 autorepeats |
+
+Decoding the evdev stream against what was actually typed names the losses:
+`typing_now`, `problems_with`, `just be_that` - **three spaces, and nothing
+else**. They are absent from *hidraw*, so they were never in a USB report.
+
+**A lost press report is silent at every instrument**, which is why three
+sessions of usbmon watching found nothing: the report after it shows nothing
+held, which matches the host's existing state, so there is no event, no error
+and no stuck key. Only a lost *release* sticks a key.
+
+Two theories were killed by the same capture, and both are worth not
+re-deriving:
+
+- *"short presses fall between polls"* - **no**. Key dwell for keys that
+  arrived: space `min 58.0 / median 90.0 ms`, every other key
+  `min 8.0 / median 95.0 ms`. An **8 ms** press got through. No floor that
+  swallows 58 ms can pass 8 ms.
+- *"the receiver samples its radio on a period"* - **no**. Inter-event gaps are
+  smooth at 0,1,2,3,4... ms with no quantisation anywhere.
+
+That leaves the 8BitDo keyboard or its receiver, upstream of the USB endpoint.
+**The cheap decisive test is to plug the receiver into another machine and type
+the same paragraph** - it needs no board change at all. A wired keyboard is the
+other arm, but costs a boot with `host_full_speed=0` because low speed is still
+broken (below).
+
+### The instrument was wrong too, twice
+
+`kbdtrace` was watching `hidraw2` and decoding it as a **boot report**. It is
+not one:
+
+    C Ii:1:003:1 0:1 17 = 0c040000 00000008 ...
+
+17 bytes, report ID `0x0c`, single bits set - an **NKRO bitmap** report, from a
+245-byte report descriptor. Byte 0 was read as the modifier byte, so a capture
+showed `mod=0c` on all 125 reports and never once `00` - a constant is a report
+ID, not modifiers. The tool then cried `STUCK` through a capture whose only
+fault was a user holding Alt to Alt-Tab, and its 673 "stuck" autorepeats were
+one deliberately held key. It now prints `len=` and every raw byte, and folds
+the modifier byte into its held-key test.
+
 ## What is established
 
 - **A stuck key is a lost release report.** HID reports carry absolute state, so
