@@ -36,7 +36,7 @@
 #include "xshim.h"
 
 #define MAXCLI		4
-#define MAXRES		192
+#define MAXRES		320
 #define MAXATOM		64
 #define INBUF		65536
 
@@ -44,7 +44,7 @@
 #define VISUAL_ID	0x21
 #define CMAP_ID		0x20
 #define ROOT_ID		0x100
-#define RES_BASE	0x00400000
+#define RES_BASE	0x00200000
 #define RES_MASK	0x001FFFFF
 
 enum { R_FREE = 0, R_WINDOW, R_PIXMAP, R_GC, R_FONT, R_COLORMAP, R_CURSOR };
@@ -59,7 +59,7 @@ struct res {
 	uint32_t fg, bg;		/* GCs only */
 	int line_width;
 	int owner;			/* index into cli[] */
-	char title[48];			/* WM_NAME, windows only */
+	char title[32];			/* WM_NAME, windows only */
 };
 
 struct cli {
@@ -68,6 +68,21 @@ struct cli {
 	uint32_t seq;
 	uint8_t in[INBUF];
 	size_t n;
+	/*
+	 * The last few requests, for when something goes wrong. An X client
+	 * that fails does so several requests after the one that broke it, so
+	 * the opcode we refused is rarely the whole story.
+	 */
+	uint8_t recent[8];
+	int nrecent;
+	int nbad;			/* requests answered with an error */
+	/*
+	 * How many times each request was refused. A widget toolkit redraws,
+	 * so one missing primitive is not one log line - xcalc asked for
+	 * PolyText8 over two hundred times and buried everything else. Report
+	 * each gap once, in full, then count.
+	 */
+	uint16_t nunimpl[128];
 };
 
 static struct res res[MAXRES];
@@ -112,7 +127,8 @@ static struct res *res_new(uint32_t id, int type)
 			res[i].owner = cur_owner;
 			return &res[i];
 		}
-	fprintf(stderr, "xshim: resource table full\n");
+	fprintf(stderr, "xshim: resource table full (%d) - raise MAXRES\n",
+		MAXRES);
 	return NULL;
 }
 
@@ -225,6 +241,116 @@ static void fill_poly(struct res *d, const int16_t *pts, int n, uint16_t c)
 	}
 }
 
+/* ------------------------------------------------------------- diagnostics */
+
+/*
+ * Request names, so a log line says QueryPointer rather than 38. Worth the
+ * 500-odd bytes: the whole point of this table is that the next client to fail
+ * here fails with a message somebody can act on.
+ */
+static const char *const opname[128] = {
+	[1] = "CreateWindow", [2] = "ChangeWindowAttributes",
+	[3] = "GetWindowAttributes", [4] = "DestroyWindow",
+	[5] = "DestroySubwindows", [6] = "ChangeSaveSet", [7] = "ReparentWindow",
+	[8] = "MapWindow", [9] = "MapSubwindows", [10] = "UnmapWindow",
+	[11] = "UnmapSubwindows", [12] = "ConfigureWindow",
+	[13] = "CirculateWindow", [14] = "GetGeometry", [15] = "QueryTree",
+	[16] = "InternAtom", [17] = "GetAtomName", [18] = "ChangeProperty",
+	[19] = "DeleteProperty", [20] = "GetProperty", [21] = "ListProperties",
+	[22] = "SetSelectionOwner", [23] = "GetSelectionOwner",
+	[24] = "ConvertSelection", [25] = "SendEvent", [26] = "GrabPointer",
+	[27] = "UngrabPointer", [28] = "GrabButton", [29] = "UngrabButton",
+	[30] = "ChangeActivePointerGrab", [31] = "GrabKeyboard",
+	[32] = "UngrabKeyboard", [33] = "GrabKey", [34] = "UngrabKey",
+	[35] = "AllowEvents", [36] = "GrabServer", [37] = "UngrabServer",
+	[38] = "QueryPointer", [39] = "GetMotionEvents",
+	[40] = "TranslateCoordinates", [41] = "WarpPointer",
+	[42] = "SetInputFocus", [43] = "GetInputFocus", [44] = "QueryKeymap",
+	[45] = "OpenFont", [46] = "CloseFont", [47] = "QueryFont",
+	[48] = "QueryTextExtents", [49] = "ListFonts",
+	[50] = "ListFontsWithInfo", [51] = "SetFontPath",
+	[52] = "GetFontPath", [53] = "CreatePixmap", [54] = "FreePixmap",
+	[55] = "CreateGC", [56] = "ChangeGC", [57] = "CopyGC",
+	[58] = "SetDashes", [59] = "SetClipRectangles", [60] = "FreeGC",
+	[61] = "ClearArea", [62] = "CopyArea", [63] = "CopyPlane",
+	[64] = "PolyPoint", [65] = "PolyLine", [66] = "PolySegment",
+	[67] = "PolyRectangle", [68] = "PolyArc", [69] = "FillPoly",
+	[70] = "PolyFillRectangle", [71] = "PolyFillArc", [72] = "PutImage",
+	[73] = "GetImage", [74] = "PolyText8", [75] = "PolyText16",
+	[76] = "ImageText8", [77] = "ImageText16", [78] = "CreateColormap",
+	[79] = "FreeColormap", [80] = "CopyColormapAndFree",
+	[81] = "InstallColormap", [82] = "UninstallColormap",
+	[83] = "ListInstalledColormaps", [84] = "AllocColor",
+	[85] = "AllocNamedColor", [86] = "AllocColorCells",
+	[87] = "AllocColorPlanes", [88] = "FreeColors", [89] = "StoreColors",
+	[90] = "StoreNamedColor", [91] = "QueryColors", [92] = "LookupColor",
+	[93] = "CreateCursor", [94] = "CreateGlyphCursor", [95] = "FreeCursor",
+	[96] = "RecolorCursor", [97] = "QueryBestSize",
+	[98] = "QueryExtension", [99] = "ListExtensions",
+	[100] = "ChangeKeyboardMapping", [101] = "GetKeyboardMapping",
+	[102] = "ChangeKeyboardControl", [103] = "GetKeyboardControl",
+	[104] = "Bell", [105] = "ChangePointerControl",
+	[106] = "GetPointerControl", [107] = "SetScreenSaver",
+	[108] = "GetScreenSaver", [109] = "ChangeHosts", [110] = "ListHosts",
+	[111] = "SetAccessControl", [112] = "SetCloseDownMode",
+	[113] = "KillClient", [114] = "RotateProperties",
+	[115] = "ForceScreenSaver", [116] = "SetPointerMapping",
+	[117] = "GetPointerMapping", [118] = "SetModifierMapping",
+	[119] = "GetModifierMapping", [127] = "NoOperation",
+};
+
+static const char *opstr(uint8_t op)
+{
+	return (op < 128 && opname[op]) ? opname[op] : "?";
+}
+
+/*
+ * Which requests the client then blocks waiting for a reply to. This is the
+ * distinction that matters: an unimplemented request that wants no reply is
+ * a missing feature, and an unimplemented request that wants one is a HANG -
+ * the client sits in _XReply for ever with nothing on stderr from either side.
+ */
+static int expects_reply(uint8_t op)
+{
+	static const uint32_t m[4] = {
+		/*  0-31 */ (1u<<3)|(1u<<14)|(1u<<15)|(1u<<16)|(1u<<17)|
+			    (1u<<20)|(1u<<21)|(1u<<23)|(1u<<26)|(1u<<31),
+		/* 32-63 */ (1u<<(38-32))|(1u<<(39-32))|(1u<<(40-32))|
+			    (1u<<(43-32))|(1u<<(44-32))|(1u<<(47-32))|
+			    (1u<<(48-32))|(1u<<(49-32))|(1u<<(50-32))|
+			    (1u<<(52-32)),
+		/* 64-95 */ (1u<<(73-64))|(1u<<(83-64))|(1u<<(84-64))|
+			    (1u<<(85-64))|(1u<<(86-64))|(1u<<(87-64))|
+			    (1u<<(91-64))|(1u<<(92-64)),
+		/* 96-127*/ (1u<<(97-96))|(1u<<(98-96))|(1u<<(99-96))|
+			    (1u<<(101-96))|(1u<<(103-96))|(1u<<(106-96))|
+			    (1u<<(108-96))|(1u<<(110-96))|(1u<<(116-96))|
+			    (1u<<(117-96))|(1u<<(118-96))|(1u<<(119-96)),
+	};
+
+	return op < 128 && (m[op >> 5] & (1u << (op & 31)));
+}
+
+static int trace_on(void)
+{
+	static int v = -1;
+
+	if (v < 0)
+		v = getenv("XSHIM_TRACE") != NULL;
+	return v;
+}
+
+/* The last few requests this client sent, oldest first. */
+static void dump_recent(struct cli *c)
+{
+	int i;
+
+	fprintf(stderr, "xshim:   last %d requests:", c->nrecent);
+	for (i = 0; i < c->nrecent; i++)
+		fprintf(stderr, " %s", opstr(c->recent[i]));
+	fprintf(stderr, "\n");
+}
+
 /* ---------------------------------------------------------------- protocol */
 
 static void put16(uint8_t *p, uint16_t v) { p[0] = v; p[1] = v >> 8; }
@@ -254,11 +380,27 @@ static void send_setup(struct cli *c)
 	uint8_t *body = p;
 
 	put32(p, 1);            p += 4;		/* release number */
-	put32(p, RES_BASE);     p += 4;
+	/*
+	 * Each client gets its OWN resource-id range, which is what a real X
+	 * server does and what the base/mask pair is for. Handing every client
+	 * the same base means two clients allocate the SAME ids, res_find()
+	 * cannot tell them apart, and the second one to disconnect frees the
+	 * first one's window buffers - which lvdesk is still presenting
+	 * through an lv_image. That killed the desktop, and only ever with two
+	 * clients connected, which is why xclock alone never showed it.
+	 */
+	put32(p, RES_BASE * (uint32_t)(c - cli + 1)); p += 4;
 	put32(p, RES_MASK);     p += 4;
 	put32(p, 0);            p += 4;		/* motion buffer size */
 	put16(p, vlen);         p += 2;
-	put16(p, 65535);        p += 2;		/* max request length */
+	/*
+	 * Max request length, in 4-byte units. This MUST fit the input buffer:
+	 * advertising 65535 (256 kB) into a 64 kB buffer invites a client to
+	 * send a request we can never frame, and the failure is a stall
+	 * followed by a disconnect with nothing to explain it. BIG-REQUESTS is
+	 * refused, so this is a hard ceiling.
+	 */
+	put16(p, INBUF / 4);    p += 2;
 	*p++ = 1;				/* screens */
 	*p++ = 3;				/* pixmap formats */
 	*p++ = 0;				/* LSB first */
@@ -328,6 +470,38 @@ static void send_reply(struct cli *c, uint8_t detail, const uint8_t *d24,
 		write(c->fd, extra, nextra);
 }
 
+/*
+ * An X Error - same 32 bytes as an event, and it satisfies a client blocked in
+ * _XReply. Xlib's default handler then prints, on the CLIENT's stderr:
+ *
+ *   X Error of failed request:  BadImplementation
+ *     Major opcode of failed request:  38 (X_QueryPointer)
+ *
+ * which names the request we failed to implement, from the client's own point
+ * of view. That is worth far more than anything this end can print, and it is
+ * the difference between "xcalc hangs" and a one-line to-do.
+ */
+#define X_BAD_REQUEST		1
+#define X_BAD_VALUE		2
+#define X_BAD_WINDOW		3
+#define X_BAD_DRAWABLE		9
+#define X_BAD_ALLOC		11
+#define X_BAD_GC		13
+#define X_BAD_IMPLEMENTATION	17
+
+static void send_error(struct cli *c, uint8_t code, uint32_t bad, uint8_t major)
+{
+	uint8_t e[32];
+
+	memset(e, 0, sizeof(e));
+	e[1] = code;
+	put16(e + 2, c->seq);
+	put32(e + 4, bad);
+	e[10] = major;
+	write(c->fd, e, 32);
+	c->nbad++;
+}
+
 /* Every X event is exactly 32 bytes. Anything else desynchronises the stream. */
 static void send_event(struct cli *c, uint8_t type, const uint8_t *d, int n)
 {
@@ -363,8 +537,31 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 	cur_owner = (int)(c - cli);
 	memset(d24, 0, sizeof(d24));
 	c->seq++;
-	if (getenv("XSHIM_TRACE"))
-		fprintf(stderr, "  [%3u] op=%-3u len=%d\n", c->seq, op, len);
+	if (c->nrecent < (int)sizeof(c->recent)) {
+		c->recent[c->nrecent++] = op;
+	} else {
+		memmove(c->recent, c->recent + 1, sizeof(c->recent) - 1);
+		c->recent[sizeof(c->recent) - 1] = op;
+	}
+	if (trace_on())
+		fprintf(stderr, "  [%3u] %-22s op=%-3u len=%d\n",
+			c->seq, opstr(op), op, len);
+
+	/*
+	 * Extension requests. Every QueryExtension is answered "not present",
+	 * so a client using one is either ignoring that answer or talking to
+	 * an extension it never asked about - either way, say so rather than
+	 * fall into the switch and land on an unrelated core opcode.
+	 */
+	if (op >= 128) {
+		if (c->nunimpl[op & 127]++ == 0) {
+			fprintf(stderr, "xshim: extension request, major "
+				"opcode %u - no extension is advertised\n", op);
+			dump_recent(c);
+		}
+		send_error(c, X_BAD_REQUEST, 0, op);
+		return;
+	}
 
 	switch (op) {
 	case 98: {					/* QueryExtension */
@@ -387,6 +584,9 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		if (!id && natom < MAXATOM) {
 			atom[natom] = strndup((const char *)r + 8, n);
 			id = ++natom;
+		} else if (!id) {
+			fprintf(stderr, "xshim: out of atoms (%d) interning "
+				"'%.*s' - raise MAXATOM\n", MAXATOM, n, r + 8);
 		}
 		put32(d24, id);
 		send_reply(c, 0, d24, NULL, 0);
@@ -459,7 +659,15 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		send_reply(c, 1, d24, ext, n * 4);
 		break;
 	}
-	case 119: case 109: {				/* GetModifierMapping */
+	/*
+	 * 118 SetModifierMapping and 119 GetModifierMapping. This used to read
+	 * `case 119: case 109:` - but 109 is ChangeHosts, which takes no reply
+	 * at all, so answering it would have put an extra 32 bytes into the
+	 * stream and desynchronised every reply after it. Nothing observed had
+	 * sent ChangeHosts, so it never fired; it would have been a
+	 * spectacularly confusing first symptom.
+	 */
+	case 118: case 119: {
 		uint8_t ext[32];
 
 		memset(ext, 0, sizeof(ext));
@@ -475,8 +683,10 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		struct res *rr = res_new(id, R_WINDOW);
 		int bit;
 
-		if (!rr)
+		if (!rr) {
+			send_error(c, X_BAD_ALLOC, id, op);
 			break;
+		}
 		rr->x = gets16(r + 12); rr->y = gets16(r + 14);
 		rr->w = w; rr->h = h; rr->parent = parent;
 		rr->bg = 0xFFFF;
@@ -502,10 +712,11 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		int w = get16(r + 12), h = get16(r + 14);
 		struct res *rr = res_new(id, R_PIXMAP);
 
-		if (rr) {
-			rr->w = w; rr->h = h;
-			rr->px = calloc((size_t)w * h, 2);
+		if (!rr || !(rr->px = calloc((size_t)w * h, 2))) {
+			send_error(c, X_BAD_ALLOC, id, op);
+			break;
 		}
+		rr->w = w; rr->h = h;
 		break;
 	}
 	case 55: {					/* CreateGC */
@@ -576,8 +787,11 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		struct res *g = res_find(get32(r + 8));
 		int i, n = (len - 12) / 8;
 
-		if (!d || !d->px || !g)
+		if (!d || !d->px || !g) {
+			send_error(c, d ? X_BAD_GC : X_BAD_DRAWABLE,
+				   get32(d ? r + 8 : r + 4), op);
 			break;
+		}
 		for (i = 0; i < n; i++) {
 			const uint8_t *p = r + 12 + i * 8;
 
@@ -625,8 +839,11 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		struct res *g = res_find(get32(r + 8));
 		int i, n = (len - 12) / 8, x, y;
 
-		if (!d || !d->px || !g)
+		if (!d || !d->px || !g) {
+			send_error(c, d ? X_BAD_GC : X_BAD_DRAWABLE,
+				   get32(d ? r + 8 : r + 4), op);
 			break;
+		}
 		for (i = 0; i < n; i++) {
 			const uint8_t *p = r + 12 + i * 8;
 			int rx = gets16(p), ry = gets16(p + 2);
@@ -645,8 +862,10 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		int cx = gets16(r + 8), cy = gets16(r + 10);
 		int cw = get16(r + 12), ch = get16(r + 14);
 
-		if (!d)
+		if (!d) {
+			send_error(c, X_BAD_DRAWABLE, get32(r + 4), op);
 			break;
+		}
 		if (!cw) cw = d->w - cx;		/* 0 means "to the edge" */
 		if (!ch) ch = d->h - cy;
 		win_fill(d, cx, cy, cw, ch);
@@ -674,18 +893,31 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		break;
 	}
 	case 2: case 12: case 19: case 22: case 25:
-	case 36: case 37: case 42: case 45: case 46:
+	case 36: case 37: case 42: case 45: case 46: case 109:
 	case 72: case 78: case 93: case 94: case 95: case 127:
 		break;					/* accepted, nothing to do */
 
 	default:
 		/*
-		 * Loudly. A silent gap in a protocol implementation shows up
-		 * as a client that hangs with no clue why, which is the most
-		 * expensive kind of bug there is.
+		 * Loudly, and never silently: a gap in a protocol
+		 * implementation otherwise shows up as a client that hangs
+		 * with no clue why, which is the most expensive kind of bug
+		 * there is.
+		 *
+		 * The reply-expecting case is the one that hangs, so it is
+		 * called out separately AND answered with an error, which
+		 * unblocks the client and makes it print its own diagnosis.
 		 */
-		fprintf(stderr, "xshim: UNHANDLED opcode %u (detail %u, len %d)\n",
-			op, detail, len);
+		if (c->nunimpl[op]++ == 0) {
+			fprintf(stderr,
+				"xshim: UNIMPLEMENTED %s (opcode %u, detail %u,"
+				" len %d)%s\n", opstr(op), op, detail, len,
+				expects_reply(op)
+					? " - the client is BLOCKED on this"
+					: "");
+			dump_recent(c);
+		}
+		send_error(c, X_BAD_IMPLEMENTATION, 0, op);
 		break;
 	}
 }
@@ -783,6 +1015,22 @@ static void client_drop(struct cli *c, int notify)
 		close(c->fd);
 		c->fd = -1;
 	}
+	fprintf(stderr, "xshim: client %d gone after %u requests, "
+		"%d answered with an error\n", owner, c->seq, c->nbad);
+	if (c->nbad) {
+		int j, first = 1;
+
+		fprintf(stderr, "xshim:   unimplemented:");
+		for (j = 0; j < 128; j++)
+			if (c->nunimpl[j]) {
+				fprintf(stderr, "%s %s x%u", first ? "" : ",",
+					opstr(j), c->nunimpl[j]);
+				first = 0;
+			}
+		fprintf(stderr, "\n"
+			"xshim:   ^ that is the to-do list for this client; "
+			"XSHIM_TRACE=1 gives the full request log\n");
+	}
 	if (notify && close_cb)
 		for (i = 0; i < MAXRES; i++)
 			if (res[i].type == R_WINDOW && res[i].owner == owner &&
@@ -840,7 +1088,22 @@ static void client_data(struct cli *c)
 		const uint8_t *r = c->in + off;
 		int len = get16(r + 2) * 4;
 
-		if (len == 0 || c->n - off < (size_t)len)
+		if (len == 0) {
+			fprintf(stderr, "xshim: %s sent a zero-length request "
+				"- stream desynchronised, dropping client\n",
+				opstr(r[0]));
+			dump_recent(c);
+			client_drop(c, 1);
+			return;
+		}
+		if ((size_t)len > sizeof(c->in)) {
+			fprintf(stderr, "xshim: %s is %d bytes, larger than "
+				"the %zu-byte input buffer - raise INBUF\n",
+				opstr(r[0]), len, sizeof(c->in));
+			client_drop(c, 1);
+			return;
+		}
+		if (c->n - off < (size_t)len)
 			break;
 		handle(c, r, len);
 		off += len;
@@ -879,10 +1142,17 @@ void xshim_poll(void)
 				if (cli[j].fd < 0) {
 					memset(&cli[j], 0, sizeof(cli[j]));
 					cli[j].fd = fd;
+					fprintf(stderr,
+						"xshim: client %d connected\n",
+						j);
 					break;
 				}
-			if (j == MAXCLI)
+			if (j == MAXCLI) {
+				fprintf(stderr, "xshim: refusing a client, all "
+					"%d slots busy - raise MAXCLI\n",
+					MAXCLI);
 				close(fd);
+			}
 		} else {
 			client_data(&cli[map[i]]);
 		}

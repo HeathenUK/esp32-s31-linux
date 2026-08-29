@@ -184,6 +184,15 @@ BR2_PACKAGE_XORG7=y
 BR2_PACKAGE_XLIB_LIBX11=y
 BR2_PACKAGE_XAPP_XCLOCK=y
 
+# A second and a third client, for the shim's diagnostics rather than for the
+# desktop. xclock draws with three primitives and asks for nothing hard, so it
+# proves almost nothing about what the shim does when a client wants something
+# it has not implemented. xcalc is a full Athena widget app - buttons, labels,
+# text - and xdpyinfo does nothing BUT ask the server about itself, so between
+# them they walk into every gap there is. Both are test instruments here.
+BR2_PACKAGE_XAPP_XCALC=y
+BR2_PACKAGE_XAPP_XDPYINFO=y
+
 # xcalc: the calculator, off the shelf. It is an Athena app, so it brings back
 # libXaw7 (346,108), libXt (316,096) and libXmu (87,752) that leaving xterm
 # removed. That is ~750 kB for one application, which is only worth it because

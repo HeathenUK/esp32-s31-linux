@@ -155,6 +155,76 @@ pages read from SD. `/usr/lib` is an XIP cramfs overlay here, where mapped
 binaries cost **zero RSS** - putting libX11, libXt, libXaw and libXmu in the
 XIP image should take most of it away.
 
+## Diagnostics: what happens when a client the shim has never seen fails
+
+xclock proves almost nothing about this. It draws with three primitives and
+asks for nothing hard. So `xcalc` (a full Athena widget app) and `xdpyinfo`
+(which does nothing BUT interrogate the server) were built as test instruments,
+and the shim was audited against them. It was **not** adequate, in three ways
+that all present as a silent hang:
+
+- **An unimplemented request that expects a reply hung the client for ever.**
+  Nothing was printed at either end. This is the single most important case,
+  because it is indistinguishable from a crash.
+- Unhandled requests were logged by opcode number only, with no name and no
+  indication of whether the client was about to block.
+- Drawing to an unknown drawable or GC was silently dropped, so the symptom was
+  a blank window and the blame fell on the drawing code.
+
+What it does now:
+
+- **Every unimplemented request is answered with an X Error** (BadImplementation),
+  which is the protocol-correct way to fail. That unblocks the client AND makes
+  Xlib's own default handler print, on the client's stderr, the request it
+  failed on. The client diagnoses itself.
+- The shim's log names the request, says explicitly when the client is blocked,
+  and prints **the previous eight requests** - a client rarely fails on the
+  request that broke it.
+- Each gap is reported **once**, then counted. xcalc asks for `PolyText8` sixty
+  times and buried everything else in the first version of this.
+- Every client gets a **one-line to-do list on disconnect**.
+- Bad drawable/GC, extension requests (no extension is advertised), a
+  zero-length request, a request larger than the input buffer, and the resource,
+  atom and client tables filling up all say so by name.
+
+Against a real xcalc, the entire log is:
+
+    xshim: client 0 connected
+    xshim: UNIMPLEMENTED UnmapWindow (opcode 10, detail 0, len 8)
+    xshim:   last 8 requests: ChangeWindowAttributes CreatePixmap CreateGC
+             PutImage FreeGC ChangeWindowAttributes ClearArea UnmapWindow
+    xshim: UNIMPLEMENTED PolyText8 (opcode 74, detail 0, len 28)
+    xshim:   last 8 requests: UnmapWindow MapWindow UnmapWindow MapWindow
+             UnmapWindow ClearArea ChangeWindowAttributes PolyText8
+    xshim: client 0 gone after 192 requests, 72 answered with an error
+    xshim:   unimplemented: UnmapWindow x7, PolyText8 x65
+
+xcalc connects, builds its whole widget tree and **stays running**; it renders
+blank because every glyph it draws goes through `PolyText8`. xdpyinfo runs to
+**completion**, exit 0, having printed its own `BadImplementation` for
+`ListExtensions` and `QueryBestSize`. Neither hangs. Under lvdesk the same
+lines land in `/var/log/lvdesk.log`.
+
+### Three bugs the second and third client found
+
+Worth recording because none of them could have been found with xclock:
+
+- **Every client was handed the same `resource-id-base`.** A real X server gives
+  each client its own range; the shim gave all of them `0x400000`, so two
+  clients allocated identical ids, `res_find()` could not tell them apart, and
+  the second one to disconnect freed the first one's window buffers - which
+  lvdesk was still presenting through an `lv_image`. **Closing xcalc killed the
+  whole desktop**, but only when xclock was also connected. The base is now
+  `0x200000 * (client + 1)`.
+- **`case 119: case 109:` answered ChangeHosts as GetModifierMapping.** 109 is
+  ChangeHosts and takes no reply at all, so answering it would have injected 32
+  bytes into the stream and desynchronised every reply after it. The mapping
+  requests are 118 and 119.
+- **The advertised max request length was 65535 four-byte units** - 256 kB -
+  into a 64 kB input buffer. A client taking us at our word sends a request that
+  can never be framed; the symptom is a stall and then a disconnect with nothing
+  to explain it. It is now `INBUF / 4`.
+
 ## Where this goes next
 
 The shim lives in lvdesk's existing poll loop - a socket at
@@ -173,9 +243,10 @@ Order of work, each with something observable at the end:
 4. Input: pointer and keyboard events from lvdesk to the focused client.
    **Not started.** xclock needs none, so nothing has forced the shape of it
    yet; the first client that does will.
-5. `ImageText8` and `PolyText8` against the synthetic font, for clients that
-   draw text. **Not started** - `QueryFont` answers with consistent metrics
-   and nothing has drawn a glyph yet.
+5. `PolyText8`/`ImageText8` against the synthetic font, and `UnmapWindow`.
+   **These two are exactly what xcalc asks for and does not get** - see the
+   diagnostics section. Nothing else stands between xcalc and a working
+   calculator.
 6. `ConfigureNotify`, so resizing the lvdesk window resizes the client. Today
    the window is created at whatever size the client asked for and stays
    there.

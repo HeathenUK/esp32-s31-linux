@@ -57,9 +57,18 @@ done
 # Renamed here rather than in the overlay because the overlay cannot remove the
 # names Buildroot installs - it would leave both copies, and rcS would run each
 # service twice.
-for f in "${TARGET_DIR}/etc/init.d/S30dbus-daemon" ; do
-	[ -e "$f" ] && mv "$f" "${TARGET_DIR}/etc/init.d/S45dbus-daemon"
-done
-for f in "${TARGET_DIR}/etc/init.d/S40bluetoothd" ; do
-	[ -e "$f" ] && mv "$f" "${TARGET_DIR}/etc/init.d/S46bluetoothd"
-done
+#
+# `if`, not `[ -e ] &&`: this script runs under `set -e`, and a trailing
+# `&&` list that evaluates false IS a failing command. The rename only
+# happens on the first build - afterwards the S30 name is already gone - so
+# the second and every later incremental rootfs build died here, in
+# target-finalize, printing nothing whatsoever. Buildroot reports it as
+# `Error 1` from a script that produced no output.
+if [ -e "${TARGET_DIR}/etc/init.d/S30dbus-daemon" ]; then
+	mv "${TARGET_DIR}/etc/init.d/S30dbus-daemon" \
+	   "${TARGET_DIR}/etc/init.d/S45dbus-daemon"
+fi
+if [ -e "${TARGET_DIR}/etc/init.d/S40bluetoothd" ]; then
+	mv "${TARGET_DIR}/etc/init.d/S40bluetoothd" \
+	   "${TARGET_DIR}/etc/init.d/S46bluetoothd"
+fi
