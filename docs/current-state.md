@@ -1840,16 +1840,44 @@ trap. It is now behind `/etc/s31-keylog-enable`, and `usbtrace off` kills it.
 - **Association is 5.6-6.2 s** and is now the largest single item in
   `S40network`. It is a hidden-SSID scan (`scan_ssid=1` forces active probing)
   plus the WPA handshake. Worth attacking only after the above.
-- **bluetoothd does not fit in XIP and cannot be made to.** It is the largest
-  RSS on the board and never exits, but its closure is glib (1,218,632),
-  pcre2 (374,148) and dbus (275,812) on top of its own 797,012 - **2,665,604
-  bytes** against a 1,441,792 partition, with only 901,120 free in the rootfs
-  partition beside it. Staging the binary without its libraries buys little,
-  because glib is the bulk of what it touches. Evicting opkg's chain from
-  image 1 (libarchive 623,772 + libopkg 174,424 + the binary, ~838 KB, for a
-  package manager that runs interactively and rarely) would free enough to XIP
-  bluetoothd's own text but still not glib. That is the next lever if
-  bluetoothd's memory ever becomes the binding problem.
+- ~~bluetoothd does not fit in XIP~~ **Done** - see below. It took removing
+  opkg *and* leaving libasound on the card.
+
+### bluetoothd is in XIP, and opkg and Weston are gone (2026-08-29)
+
+`bluetoothd` is the largest resident thing on the board and never exits, so it
+was the right target. It needed **two** evictions, not one:
+
+    opkg          libarchive 623,772 + libopkg 174,424 + the binary, plus
+                  libexpat and libz which turned out to be its alone
+    libasound     943,548, NEEDED by lvdesk but only for the volume mixer and
+                  the odd PCM write - a human moving a slider, not per frame
+
+Being NEEDED is not the same as being hot, and `XIP_SKIP` now expresses that:
+an object in the closure can be left on the card, where it still loads through
+the SD lower layer of the same overlay. Only its residency changes. Without it
+the two images total **8,205,052 against 7,602,176** of partition and no
+arrangement fits.
+
+    XIP image  5,951,488 bytes, 208,896 free   bluetoothd, glib, pcre2, dbus
+    xip2 image 1,216,512 bytes, 225,280 free   ip, udevd, libkmod, libblkid
+
+Measured after, with the pre-change figure for the same binary:
+
+    bluetoothd binary-backed Rss   184 kB (SD)  ->  28 kB (XIP)
+    glib-backed Rss                                  8 kB
+
+Bluetooth still works - `hci0` present, `Bluetooth: MGMT ver 1.23`, bluetoothd
+driving it - and lvdesk still runs with libasound coming off the card.
+
+**Weston was never in the defconfig**; the card was carrying leftovers from an
+older image - binaries, `libweston-15.so.0.0.0`, the shells, `/usr/share/weston`,
+`/etc/xdg/weston`. Removed along with opkg: **3,128 kB** of SD freed. They cost
+no RAM, so this is tidiness, not a performance change.
+
+Removing files under `/usr/bin`, `/usr/lib` and friends has to go through the
+bind mounts (`/mnt/sd-usr-bin`, `/mnt/sd-usr-lib`): the overlays are read-only,
+so `rm` against the merged path silently fails to remove the SD copy.
 
 ### xip2 is in use: ip and udevd (2026-08-29)
 

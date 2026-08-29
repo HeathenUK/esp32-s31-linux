@@ -71,12 +71,24 @@ while queue:
             queue.append(lp)
 
 exclude = os.environ.get("EXCLUDE_DIR", "")
+# Objects to leave on the SD card even though they are in the closure.
+#
+# Being NEEDED by a root is not the same as being hot. libasound is 943,548
+# bytes and lvdesk links it for the volume mixer and the odd PCM write - which
+# happens when a human moves a slider, not per frame. Flash is the scarcest
+# thing on this board, and that is 943 KB not being spent on bluetoothd, which
+# never exits. The library still loads, from the SD lower layer of the same
+# overlay; only its residency changes.
+skip = set(f for f in os.environ.get("XIP_SKIP", "").split() if f)
 staged = 0
 count = 0
 skipped = 0
 for p in sorted(closure):
     rel = os.path.relpath(p, T)
     if exclude and os.path.exists(os.path.join(exclude, rel)):
+        skipped += 1
+        continue
+    if rel in skip or os.path.basename(rel) in skip:
         skipped += 1
         continue
     if rel.startswith(".."):
@@ -111,4 +123,5 @@ print("staged %d objects, %.2f MB (skipped %d already in EXCLUDE_DIR)"
 for p in sorted(closure):
     rel = os.path.relpath(p, T)
     dup = exclude and os.path.exists(os.path.join(exclude, rel))
-    print("    %-6s %s" % ("(skip)" if dup else "", rel))
+    off = rel in skip or os.path.basename(rel) in skip
+    print("    %-6s %s" % ("(skip)" if dup else "(SD)" if off else "", rel))

@@ -194,27 +194,26 @@ BR2_PACKAGE_DEJAVU_SANS=y
 # over HTTPS downloads in seconds. Bound the read so a stall fails over.
 BR2_WGET="wget -nd -t 3 --connect-timeout=15 --read-timeout=30"
 
-# A package manager, so the board stops being a fixed image.
+# No package manager. opkg was here and is REMOVED (2026-08-29) - it never met
+# the need it was added for.
 #
-# opkg is the only real candidate here. Buildroot offers opkg and rpm and
-# nothing else - no apk, no dpkg - and rpm's database and Python tooling are far
-# too heavy for 15.4 MB. opkg is C, embedded-targeted, and its .ipk format is
-# just ar+tar.gz, which matters because we have to build every package
-# ourselves.
+# The reasoning that put it here still stands as far as it goes: opkg is the
+# only real candidate Buildroot offers, and this target is riscv32 ilp32 with a
+# custom vendor extension (xespv2p2), so no upstream feed exists or ever will -
+# every package has to come from our own Buildroot output. That is exactly why
+# it never paid: building a feed from Buildroot is the whole cost of a rebuild,
+# and once you are rebuilding you may as well ship the image.
 #
-# That last point is the real constraint, and it rules out the usual answer of
-# "point it at a distro mirror". This target is riscv32 ilp32 with a custom
-# vendor extension (xespv2p2); Debian, Alpine, Fedora and OpenWrt are all
-# riscv64-only, so no upstream binary feed exists or ever will. The feed has to
-# come from our own Buildroot output - see docs/packaging.md.
+# What it cost, and this is why it went: opkg drags libarchive (623,772),
+# libopkg (174,424) and their share of libexpat and libz, and that chain was
+# sitting in XIP FLASH - the scarcest resource on the board - for a program run
+# interactively and rarely. Evicting it is what made room for bluetoothd, which
+# never exits and was the largest RSS on the board. See the XIP2_ROOTS note in
+# the Makefile for the arithmetic.
 #
-# Cost: opkg pulls in libarchive. Both live on the microSD, which has 106 GB
-# free, and in XIP flash they would cost no RSS at all.
-BR2_PACKAGE_OPKG=y
-
-# Host side: opkg-build and opkg-make-index turn Buildroot's per-package output
-# into .ipk files and an index.
-BR2_PACKAGE_HOST_OPKG_UTILS=y
+# docs/packaging.md describes the feed workflow and is kept for the record.
+# BR2_PACKAGE_OPKG is not set
+# BR2_PACKAGE_HOST_OPKG_UTILS is not set
 
 # Timezone. The board is in the UK, so BST has to be handled - and handled the
 # normal way, from the zoneinfo database, rather than by hardcoding an offset

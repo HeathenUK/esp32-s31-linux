@@ -447,7 +447,15 @@ XIP_ROOTFS_IMG := $(BUILD_DIR)/rootfs-xip.cramfs
 # To go back to X, use the desktop set below - it is kept because it was tuned
 # by measurement, not guesswork (see the note above about which binaries go in
 # which image, and why libXft belongs here).
-XIP_ROOTS ?= bin/busybox usr/bin/opkg usr/sbin/wpa_supplicant usr/sbin/iw usr/bin/lvdesk
+XIP_ROOTS ?= bin/busybox usr/sbin/wpa_supplicant usr/sbin/iw usr/bin/lvdesk \
+	usr/libexec/bluetooth/bluetoothd
+
+# In the closure but deliberately left on the card. NEEDED is not the same as
+# hot: lvdesk links libasound for the volume mixer and occasional PCM writes,
+# which happen when a human moves a slider. 943,548 bytes of flash for that,
+# against bluetoothd which never exits, is the wrong trade - and without this
+# the two images total 8,205,052 against 7,602,176 of partition.
+XIP_SKIP ?= libasound.so.2.0.0
 
 # XIP_ROOTS_DESKTOP was defined here and referenced NOWHERE - dead since the
 # desktop was set aside for text mode, so anything listed in it was silently
@@ -486,7 +494,7 @@ xip-image:
 	@# about which BINARIES go where, not which libraries: moving a binary
 	@# to image 2 moves only the binary, because its libraries are already
 	@# here. That is how the two partitions get balanced.
-	python3 $(CURDIR)/rootfs/mkxipstage.py $(CROSS_COMPILE)readelf \
+	XIP_SKIP="$(XIP_SKIP)" python3 $(CURDIR)/rootfs/mkxipstage.py $(CROSS_COMPILE)readelf \
 		$(BUILDROOT_OUT)/target $(XIP_STAGE) $(XIP_ROOTS)
 	@# Core-font clients need a fonts.dir index; Xft ones do not. The font
 	@# files copy across on their own, so the server and st work and the
@@ -639,7 +647,7 @@ xip2-stage: xip-rootfs
 	@echo "--- staging second userspace XIP image ---"
 	rm -rf $(XIP2_STAGE)
 	mkdir -p $(XIP2_STAGE)
-	EXCLUDE_DIR=$(XIP_STAGE) python3 $(CURDIR)/rootfs/mkxipstage.py \
+	EXCLUDE_DIR=$(XIP_STAGE) XIP_SKIP="$(XIP_SKIP)" python3 $(CURDIR)/rootfs/mkxipstage.py \
 		$(CROSS_COMPILE)readelf $(BUILDROOT_OUT)/target $(XIP2_STAGE) \
 		$(XIP2_ROOTS)
 
@@ -652,7 +660,7 @@ xip2-image:
 	@echo "--- second userspace XIP image ---"
 	rm -rf $(XIP2_STAGE)
 	mkdir -p $(XIP2_STAGE)
-	EXCLUDE_DIR=$(XIP_STAGE) python3 $(CURDIR)/rootfs/mkxipstage.py \
+	EXCLUDE_DIR=$(XIP_STAGE) XIP_SKIP="$(XIP_SKIP)" python3 $(CURDIR)/rootfs/mkxipstage.py \
 		$(CROSS_COMPILE)readelf $(BUILDROOT_OUT)/target $(XIP2_STAGE) \
 		$(XIP2_ROOTS)
 	$(BUILDROOT_OUT)/host/bin/mkcramfs -X -X $(XIP2_STAGE) $(XIP2_ROOTFS_IMG)
