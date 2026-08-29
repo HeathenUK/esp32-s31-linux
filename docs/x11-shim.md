@@ -79,6 +79,36 @@ but nothing is ever drawn with it. RENDER can wait for a client that needs it.
   widget window; an Expose sent only to the parent leaves it sitting in its
   event loop, which is indistinguishable from a hang.
 
+## It works: xclock renders
+
+`xshim -DXSHIM_STANDALONE` on the board, with the board's own xclock pointed at
+it over `/tmp/.X11-unix/X0`: **60 requests, zero unhandled opcodes**, and a
+correct clock face - white background, black tick marks, black hands - dumped
+to a PPM. No X server involved.
+
+Three more traps, all of which produce a *plausible* wrong picture rather than
+an error, which is what makes them expensive:
+
+- **The CreateGC default foreground is 0, and the default background is 1.**
+  Not white on black. xclock's tick-mark GC sets only `background` and `font`
+  (value-mask `0x4008`) and takes the default foreground for all sixty lines,
+  so defaulting foreground to white draws the entire face in white - on a white
+  background, an empty box; on a black one, a photographic negative. Both were
+  observed before the spec was read.
+- **The server paints the window background, not the client.** An X client
+  draws only what it considers foreground. Honour `CWBackPixel` (bit 1 of
+  CreateWindow's value-mask) by filling the buffer, and implement `ClearArea` -
+  otherwise every window renders as an inverted ghost.
+- **The content is in a child window.** xclock's face is drawn into `0x40000f`,
+  a child of the top-level `0x40000e`. Present only the top-level and you
+  present an empty container. Only windows whose parent is the root become
+  lvdesk windows; children are composited into them at their own x,y.
+
+One non-bug worth recording, because it cost a diagnosis: the trace appeared to
+stop dead at request 19, `QueryFont`, with the client apparently blocked on a
+reply. It was `head -20` truncating the log at exactly the listening line plus
+requests 1..19. **Check the instrument before the subject.**
+
 ## Where this goes next
 
 The shim lives in lvdesk's existing poll loop - a socket at
@@ -89,12 +119,11 @@ half of the canvas and atlas attempts that worked.
 
 Order of work, each with something observable at the end:
 
-1. Setup, atoms, properties, GCs - client reaches `MapWindow`. **Done in the
-   stub; port to C.**
-2. A window appears in lvdesk at the right size, with a `MapNotify` + `Expose`
-   sent back.
-3. `PolySegment`, `PolyLine`, `FillPoly` into the window buffer. **xclock's
-   face appears.**
+1. Setup, atoms, properties, GCs - client reaches `MapWindow`. **Done.**
+2. A window appears at the right size, with a `MapNotify` + `Expose` sent back.
+   **Done.**
+3. `PolySegment`, `PolyLine`, `FillPoly` into the window buffer. **Done -
+   xclock's face renders correctly.**
 4. Input: pointer and keyboard events from lvdesk to the focused client.
 5. `ImageText8` and `QueryFont` metrics that mean something, for clients that
    draw text.
