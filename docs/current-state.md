@@ -1753,6 +1753,42 @@ started it retries, it starts another. That failure mode cost most of an hour.
 - **One sequence discontinuity is expected** - it is the handover, not a lost
   frame. `mjpegrec` reports it as a gap.
 
+## Syscall cost: already fixed, and what is left is not material (2026-08-29)
+
+Revisited because `clock_gettime` measured 7.2 us from inside lvdesk and that
+looked like a systemic tax. `rootfs/syscallbench.c` splits it, three runs:
+
+    getpid                    ~1,495 ns/call     syscall entry floor
+    clock_gettime (libc)      ~2,771 ns/call
+    clock_gettime (raw)       ~2,792 ns/call
+    empty loop                    26 ns/iter     harness
+
+Three conclusions:
+
+- **Entry is ~1.5 us, not 4.5.** The earlier `.text..fast` work on the trap
+  path (43.0 -> 9.0 us for a read+write pair) already took this win. There is
+  no second one waiting.
+- **The clocksource read adds ~1.3 us**, which is the gap between getpid and
+  clock_gettime.
+- **There is no vDSO.** libc and the raw syscall are within 1% of each other,
+  so every time query traps. The kernel does build `vdso.so` and sets
+  `HAVE_GENERIC_VDSO`, but `arch/riscv/Kconfig` line 112 reads
+  `select GENERIC_GETTIMEOFDAY if HAVE_GENERIC_VDSO && 64BIT` - the generic
+  vDSO time path is **64-bit only upstream**. Not a config to flip; it would
+  mean porting it to rv32.
+
+**And it does not matter at our rates.** lvdesk makes roughly 600 syscalls a
+second (~0.09% of the core) and ~200 clock_gettime calls (~0.06%). Eliminating
+every one of them saves a fraction of a percent. The 7.2 us seen from inside
+lvdesk against 2.8 us standalone is contention - cache pressure under load -
+not a different cost.
+
+The one genuinely expensive "syscall" on this board is the DRM cursor ioctl at
+**~1 ms**, 660x a getpid, and that is an atomic commit doing real work rather
+than trap overhead. It is already paced to the frame period.
+
+So: the syscall lead is closed, on numbers rather than on effort.
+
 ## What the 4.4 MB of slab actually is (2026-08-29)
 
 `/proc/slabinfo` does not exist in the shipping kernel and cannot: it needs
