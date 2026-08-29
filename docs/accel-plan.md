@@ -435,6 +435,44 @@ and the scanout copy currently costs nothing at all when the screen is static.
 Revisit it only if the poll-loop overhead above is fixed first and rendering
 becomes the majority again.
 
+### The canvas terminal was built, measured, and rejected (2026-08-29)
+
+Implemented in full - an lv_canvas the size of the content area, the grid drawn
+into it with one lv_draw_label per colour run, scrolling as a memmove of the
+pixel buffer with only the newly exposed rows rasterised, and the scroll applied
+ONCE per render rather than once per line. It works and renders correctly. It
+does not pay:
+
+    workload                    labels    canvas
+    bulk flood (2000 lines)     3230 ms   3410 ms   canvas 6% worse
+    paced 15-line batches       1950 ms   1850 ms   canvas 5% better
+    single lines (typing)        780 ms    850 ms   canvas 9% worse
+
+for **281 kB of permanent RAM** at the default window size, on a board with
+~3.6 MB free. Reverted.
+
+Three reasons it cannot win here, all worth knowing before anyone tries again:
+
+1. **Bulk output defeats every incremental scheme.** `seq 1 2000` floods fast
+   enough that each render sees ~180 scrolled rows against 36 on screen, so the
+   whole screen genuinely changed and the "redraw everything" path runs anyway -
+   now with a canvas blit on top. No incremental technique helps the flood case;
+   only cheaper full-screen rendering does.
+2. **`lv_canvas_finish_layer()` invalidates the whole canvas.** Drawing one row
+   still flushes the entire content area, so a single-line update went from the
+   label path's 57k pixels to 709k. Adding a band invalidation of only the rows
+   redrawn changed nothing, because the canvas invalidates itself first.
+3. **The labels are not as bad as assumed.** For a single-line update LVGL
+   invalidates just that label - 9.5k pixels - which is already close to optimal.
+   The 36-label cost only appears on a scroll, and a scroll moves every pixel on
+   screen no matter how it is drawn.
+
+What remains true is the profile that motivated it: during a scroll LVGL spends
+~49 ms per loop in timer+refr, and the canvas does collapse that to ~6 ms. The
+work simply moves into term_poll and the canvas blit, for no net gain. Beating
+it needs a cheaper glyph path - the atlas, blitting pre-rendered cells - not a
+different place to put the pixels.
+
 ### The options, by measured headroom
 
 1. **Draw the terminal grid directly instead of through LVGL labels** - targets
