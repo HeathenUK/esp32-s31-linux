@@ -3686,9 +3686,19 @@ static void dmg_add(const struct kms_rect *n)
  * 9/s while LVGL was completing 60-126 refreshes a second.
  */
 static uint32_t frames_flushed;
+static uint64_t flushed_px;
+static uint32_t flush_calls;
 
 static void kms_flush_cb(lv_display_t *d, const lv_area_t *area, uint8_t *px)
 {
+	/*
+	 * Area asked for, counted client-side. The driver's flush_bytes has a
+	 * different granularity (it can fall back to a full-surface copy when
+	 * more than KMS_MAX_CLIPS rects arrive), so "bytes per frame" derived
+	 * from it is not the area LVGL actually invalidated.
+	 */
+	flushed_px += (uint64_t)lv_area_get_width(area) * lv_area_get_height(area);
+	flush_calls++;
 	if (lv_display_flush_is_last(d))
 		frames_flushed++;
 	if (!direct_render) {
@@ -4462,8 +4472,25 @@ int main(void)
 	 * free, and would enlarge every repaint that uncovers desk.
 	 */
 	lv_obj_set_style_bg_color(scr, lv_color_hex(COL_DESK), 0);
-	lv_obj_set_style_bg_image_src(scr, &lvdesk_tile_img, 0);
-	lv_obj_set_style_bg_image_tiled(scr, true, 0);
+	/*
+	 * Solid colour, not the 16x16 tile.
+	 *
+	 * LVGL paints a tiled background by blitting the tile once per cell, so
+	 * the wallpaper cost ~738 draw tasks for the ~189k pixels a window drag
+	 * repaints - and that is charged to EVERY repaint anywhere on the
+	 * desktop, not just dragging. Measured over a drag, same pixels either
+	 * way:
+	 *
+	 *     16x16 tile     21 frames, 182k px/frame, 50.4 ms per frame
+	 *     flat colour    40 frames, 181k px/frame, 32.6 ms per frame
+	 *
+	 * LVDESK_TILE=1 puts it back for anyone who wants the texture and can
+	 * afford 18 ms a frame for it.
+	 */
+	if (getenv("LVDESK_TILE")) {
+		lv_obj_set_style_bg_image_src(scr, &lvdesk_tile_img, 0);
+		lv_obj_set_style_bg_image_tiled(scr, true, 0);
+	}
 	lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 	lv_obj_set_scrollbar_mode(scr, LV_SCROLLBAR_MODE_OFF);
 
@@ -4832,10 +4859,12 @@ int main(void)
 				 * refrs counts commits, from the driver's side.
 				 */
 				fprintf(stderr,
-					"prof: frames=%u loops=%u wait=%llums input=%llums "
+					"prof: frames=%u px=%lluk rects=%u loops=%u wait=%llums input=%llums "
 					"timer=%llums refr=%llums "
 					"(per loop: input=%lluus timer=%lluus refr=%lluus)\n",
-					frames_flushed, prof_loops,
+					frames_flushed,
+					(unsigned long long)(flushed_px / 1000),
+					flush_calls, prof_loops,
 					(unsigned long long)(prof_wait / 1000000),
 					(unsigned long long)(prof_input / 1000000),
 					(unsigned long long)(prof_timer / 1000000),
@@ -4857,7 +4886,7 @@ int main(void)
 				prof_wifi = prof_wait4 = prof_curs = 0;
 				lvp_dump();
 				fflush(stderr);
-				frames_flushed = 0;
+				frames_flushed = 0; flushed_px = 0; flush_calls = 0;
 				prof_wait = prof_input = prof_timer = prof_refr = 0;
 				prof_loops = prof_refrs = 0;
 			}
