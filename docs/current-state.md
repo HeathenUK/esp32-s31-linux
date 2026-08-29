@@ -1753,6 +1753,98 @@ started it retries, it starts another. That failure mode cost most of an hour.
 - **One sequence discontinuity is expected** - it is the handover, not a lost
   frame. `mjpegrec` reports it as a gap.
 
+## Boot audit II: the background fix had moved the cost (2026-08-29)
+
+`rcS complete` went **84.35 s -> 43.79 s**, and the whole of it was one thing
+wearing a disguise.
+
+The complaint was "S40network takes forever". It does not. Fine-grained
+markers written to `/dev/kmsg` from `wlan0-up.sh` split it up:
+
+    28.26  before ifup -a
+    36.47  pre-up begins          8.2 s just to enter pre-up
+    40.62  ip link show done      4.2 s  for a netlink query
+    44.98  iw dev info done       4.4 s
+    70.68  wpa_supplicant started 20.8 s
+    76.32  associated             5.6 s  <- the only part that is really network
+
+`ip link show` costs **0.23 s** warm. Everything in that window ran ~20x slow,
+so this was never a network problem: it was whatever else had the CPU.
+
+**It was udev's coldplug** - and specifically the previous audit's own fix for
+it. Backgrounding `udevadm trigger`/`settle` (~32 s of real work: 269 devices,
+27 rule files, and a 0.16 s process launch each) stopped it blocking the
+desktop, but the work did not go away. It landed on `S40network` instead.
+Measured, same boot, one variable:
+
+    |                  | coldplug nice 0 | nice 19 | udev not run |
+    | ip link show     |     4.2 s       |  0.21 s |    0.23 s    |
+    | iw dev info      |     4.4 s       |  0.23 s |    0.23 s    |
+    | wpa_supplicant   |    20.8 s       |  2.4 s  |    2.1 s     |
+    | rcS complete     |    84.35 s      | 42.97 s |   37.13 s    |
+
+`nice -n 19` recovers essentially all of it while udev still does its whole job
+(`/dev/input` and `/dev/dri` both populated). **Deferring work is not removing
+it** - see the note on the kworker hand-off for the same lesson at millisecond
+scale.
+
+Two hypotheses were tested and killed first, and neither should be re-run:
+
+- *lvdesk contends with the network* - **no.** Booting with `S40lvdesk` moved
+  out of `init.d` entirely: `wpa_supplicant` still took 23.2 s and rcS still
+  finished at 81.4 s against 84.4 s.
+- *the binaries are demand-paged off SD* - **no**, though the finding it led to
+  was real (below). Moving them to XIP changed the stall by nothing at all:
+  `wpa_supplicant started` stayed at 34.5 s after pre-up.
+- *entropy starvation* - **no.** `crng init done` at **0.842 s**; the board has
+  a hardware TRNG (`esp32s31-trng`) and the pool is full. wpa_supplicant's
+  "Trying to read entropy from /dev/random" line is startup chatter, not a
+  stall.
+
+### /usr/sbin and /bin were never overlaid, and the XIP image already held them
+
+Separate bug, found on the way. `S05xip` looped over `usr/lib usr/bin
+usr/libexec lib`. The XIP image *already contained*
+`/usr/sbin/wpa_supplicant` (784 KB), `/usr/sbin/iw` (256 KB) and
+`/bin/busybox` (734 KB) - **1.77 MB of flash** - and none of it was ever
+mounted, so all three ran from the SD card and the flash copies were dead
+weight. Adding `usr/sbin` and `bin` to the loop:
+
+    wpa_supplicant RSS   from SD 232 kB  ->  from XIP 88 kB
+
+On a board with ~2 MB free that is worth having on its own, and it costs
+nothing - the bytes were already in flash.
+
+### keylog was starting on every boot
+
+`S06keylog` started `/root/keylog` whenever the binary existed. It was found
+running at **56% of the core**, holding idle at 0% and lvdesk at 12% CPU;
+killing it gave 40% idle and lvdesk at 4%. It is not in the repo - it lives
+only on the card, which is exactly the "SD holds state the repo does not"
+trap. It is now behind `/etc/s31-keylog-enable`, and `usbtrace off` kills it.
+
+### Placement, as it actually stands
+
+| where | what | cost |
+|---|---|---|
+| XIP flash, overlaid | `/usr/lib`, `/usr/bin`, `/usr/libexec`, `/usr/sbin`, `/lib`, `/bin` | lvdesk: 723 KB binary at **96 kB RSS** |
+| `.text..fast` (RAM) | 242,192 bytes, 2925 functions - blk 193, mmc 174, input 92, dwc 85, bio 72, snd 62, sched 56 | ~1.6% of RAM for the ~6x hot paths |
+| SD | everything else in `/usr/share`, `/etc`, data | |
+
+### Still open
+
+- **One `Oops [#1]`** was seen at 139 s of a heavily-poked boot (overlays
+  mounted by hand, wpa_supplicant killed repeatedly). The board went silent
+  before the trace could be read and it has **not** recurred across five clean
+  boots since. Unexplained; do not assume it is gone.
+- **Association is 5.6-6.2 s** and is now the largest single item in
+  `S40network`. It is a hidden-SSID scan (`scan_ssid=1` forces active probing)
+  plus the WPA handshake. Worth attacking only after the above.
+- **xip2 is still 1.44 MB of flash holding a 4096-byte empty filesystem**, and
+  the rootfs XIP image is 100% full at 5,248 KB. That is where the room would
+  come from to XIP `bluetoothd` (797 KB) and `ip` (582 KB), the two largest
+  things still on the card.
+
 ## Boot audit: 83 s to a desktop became 24 s (2026-08-28)
 
 Every line of the boot log was walked, with per-script timestamps written to

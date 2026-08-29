@@ -1,0 +1,24 @@
+#!/bin/sh
+#
+# Log every evdev key event - a DIAGNOSTIC, and it is not free.
+#
+# This used to start whenever /root/keylog existed, which is whenever anyone
+# had deployed it. Measured while it was running: 0% idle and lvdesk at 12%
+# CPU; after killing it, 40% idle and lvdesk at 4%. It had been running for an
+# unknown number of boots, charging 56% of the core to whatever was being
+# measured at the time - see docs/current-state.md on harnesses that bill
+# their own cost to the thing under test.
+#
+# It now needs an explicit flag, so leaving the tool on the board is harmless:
+#
+#     touch /etc/s31-keylog-enable && reboot
+#
+case "$1" in
+  start)
+	[ -e /etc/s31-keylog-enable ] || exit 0
+	[ -x /root/keylog ] || exit 0
+	: > /root/keydiag.log
+	setsid /root/keylog >> /root/keydiag.log 2>&1 </dev/null &
+	;;
+esac
+exit 0

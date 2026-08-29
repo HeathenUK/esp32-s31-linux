@@ -52,7 +52,21 @@ start() {
 	# They are read transiently while rendering rather than held mapped, so
 	# inspecting a running server's mappings does not show them and makes the
 	# cost invisible - only an A/B finds it.
-	for d in usr/lib usr/bin usr/libexec lib; do
+	# usr/sbin and bin belong here as much as the rest, and their absence
+	# was costing real money: the XIP image ALREADY contained
+	# /usr/sbin/wpa_supplicant (784 KB), /usr/sbin/iw (256 KB) and
+	# /bin/busybox (734 KB) - 1.77 MB of flash - while the loop below never
+	# mounted those two directories, so every one of them ran from the SD
+	# card instead and the flash copies were dead weight.
+	#
+	# Measured on one boot, same binary, one variable:
+	#
+	#     wpa_supplicant RSS   from SD 232 kB  ->  from XIP 88 kB
+	#
+	# It also showed up as boot time. S40network runs while lvdesk is still
+	# faulting itself in, and wpa_supplicant demand-paged off the card under
+	# that contention took 35.3 s to reach its daemonize, against 1.91 s warm.
+	for d in usr/lib usr/bin usr/libexec usr/sbin lib bin; do
 		[ -d "$XIP_MNT/$d" ] || continue
 		sd="/mnt/sd-$(echo "$d" | tr / -)"
 		mkdir -p "$sd" || continue
@@ -92,7 +106,7 @@ start() {
 
 stop() {
 	umount /usr/share/fonts 2>/dev/null
-	for d in usr/lib usr/bin usr/libexec lib; do
+	for d in usr/lib usr/bin usr/libexec usr/sbin lib bin; do
 		umount "/$d" 2>/dev/null
 		umount "/mnt/sd-$(echo "$d" | tr / -)" 2>/dev/null
 	done

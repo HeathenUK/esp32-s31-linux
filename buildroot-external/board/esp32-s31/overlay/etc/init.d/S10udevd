@@ -48,9 +48,24 @@ start() {
 	# opens /dev/input itself and rescans every 2 s, so a device udev is
 	# still processing is picked up when it appears rather than being
 	# missed. The desktop now starts at 45 s instead of 83 s.
-	( udevadm trigger --type=subsystems --action=add; \
+	# The coldplug is ~32 s of real work here - 269 devices, 27 rule files,
+	# and a process launch costs 0.16 s on this board. Backgrounding it (the
+	# previous fix) stopped it blocking the desktop but did NOT remove it:
+	# it landed on top of S40network instead and starved it. Measured, same
+	# boot, one variable:
+	#
+	#              coldplug at nice 0   at nice 19   udev not run at all
+	#   ip link show      4.2 s           0.21 s          0.23 s
+	#   iw dev info       4.4 s           0.23 s          0.23 s
+	#   wpa_supplicant   20.8 s           2.4 s           2.1 s
+	#   rcS complete     84.35 s          42.97 s         37.13 s
+	#
+	# So it was never the network: everything in that window ran ~20x slow.
+	# At nice 19 udev still does its whole job (/dev/input and /dev/dri are
+	# populated) and the foreground gets the CPU.
+	nice -n 19 sh -c "udevadm trigger --type=subsystems --action=add; \
 	  udevadm trigger --type=devices --action=add; \
-	  udevadm settle --timeout=$SETTLE_TIMEOUT ) &
+	  udevadm settle --timeout=$SETTLE_TIMEOUT" &
 	return "$status"
 }
 
