@@ -297,6 +297,69 @@ writes to, and it is not reachable by any engine on this SoC. Sizing a fix
 needs the per-render and per-line terms separated first - instrument
 `term_scroll` and `lv_refr_now` counts independently before writing anything.
 
+### How this is done elsewhere, and what of it applies (2026-08-29)
+
+Researched rather than guessed, then each idea tested on the board.
+
+**esp_lvgl_port / LVGL's own Espressif guidance** is emphatic about one thing:
+put the draw buffer in **internal SRAM**, sized 10-25% of the screen, with DMA.
+PSRAM writes are quoted at 3-4x slower, and their measurements are explicitly
+"valid for frame buffer in internal SRAM. Placing the frame buffer into
+external PSRAM will yield worse results" - 41 FPS internal+DMA against 11-31
+PSRAM.
+
+That reframed an earlier null result here: DIRECT-into-framebuffer versus
+PARTIAL-into-heap measured identical, but **both arms were PSRAM**, because
+Linux's heap on this board *is* PSRAM. The board has one `mmio-sram` node,
+`sram@2f062000`, **0x8000 = 32 KB, entirely owned by the audio DMA pool**.
+
+So the recommendation cannot be followed directly. But it predicts something
+testable without repartitioning anything: if memory speed were the limit, a
+partial buffer small enough to stay in cache would behave like fast memory -
+`accel-plan.md` already measures a 32 KB memcpy at 177 MB/s against ~102 MB/s
+once it reaches PSRAM. Swept, two runs each, 1200 lines scrolled:
+
+    DIRECT   (PSRAM fb)        2200  2250 ms
+    PARTIAL   8 rows  12.8 KB  2350  2550 ms
+    PARTIAL  16 rows  25 KB    2450  2440 ms
+    PARTIAL  32 rows  51 KB    2370  2200 ms
+    PARTIAL  64 rows 102 KB    2160  2170 ms
+
+**Monotonically worse as the buffer gets smaller.** Cache residency buys
+nothing, which says the rasteriser is not waiting on memory - and therefore
+that moving the draw buffer into internal SRAM would not help either. That is
+worth knowing before repartitioning SRAM with hart0, which is the only way to
+get a useful amount of it.
+
+(It also independently reproduces esp_lvgl_port's "below 10% of the screen has
+a severe negative effect": 12.8 KB is 1.7% of this screen.)
+
+**LVGL's cache.** The docs say every font backend goes through LVGL's cache
+system - a glyph-descriptor cache and a draw-data cache - and ours was off.
+`LV_CACHE_DEF_SIZE` 0 -> 64 KB: 2280/2280/2180 against ~2200. Nothing, which is
+the right answer for a static bitmap font where fetching a glyph bitmap is a
+pointer computation. That cache is for decoded images and FreeType/TinyTTF.
+
+**TFT_eSPI is not applicable, and it is worth saying why.** Its speed comes
+from the *transport* - DMA to an SPI display, `startWrite`/`endWrite`
+batching, sprites composed in RAM then pushed as one DMA image. We already
+have the equivalent and better: a parallel RGB panel scanning out of PSRAM
+continuously, with the commit path measured at 0.8 ms. Nothing in TFT_eSPI
+addresses rasterisation cost.
+
+**What modern terminal emulators actually do** (Windows Terminal AtlasEngine,
+kitty, Alacritty) is three things, and the GPU is only one of them:
+
+1. **Glyph atlas** - rasterise each character once, then every later frame is a
+   blit of a cached cell, never a rasterisation.
+2. **Per-row damage bitset** - the parser flips a dirty bit per row touched;
+   the renderer redraws only those rows.
+3. **Scroll is a memcpy on contiguous memory**, not a redraw.
+
+All three are CPU-side and all three apply here. We have (2) in `rowdirty` and
+then throw it away - `term_scroll()` calls `term_mark_all()`, so every scrolled
+line dirties the whole screen. We have no (1) and no (3).
+
 ### The options, by measured headroom
 
 1. **Draw the terminal grid directly instead of through LVGL labels** - targets

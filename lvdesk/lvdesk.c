@@ -4124,10 +4124,26 @@ int main(void)
 		 * assumes a packed stride. Fall back to partial rendering with
 		 * a row-by-row copy in the flush callback.
 		 */
+		/*
+		 * Size is settable because the interesting threshold on this
+		 * board may be the CACHE, not the "10-25% of the screen" that
+		 * esp_lvgl_port recommends for internal SRAM. We have no
+		 * internal SRAM to render into - Linux sees 32 KB of it and
+		 * audio owns all of it - but a partial buffer small enough to
+		 * stay resident behaves like fast memory for the same reason:
+		 * accel-plan.md measures a 32 KB memcpy at 177 MB/s against
+		 * ~102 MB/s once it reaches PSRAM.
+		 */
 		static uint8_t partial_buf[800 * 64 * 2];
+		const char *pr = getenv("LVDESK_PARTIAL");
+		int rows = pr ? atoi(pr) : 64;
 
+		if (rows < 4 || rows > 64)
+			rows = 64;
+		printf("lvdesk: partial buffer %d rows, %d bytes\n",
+		       rows, 800 * rows * 2);
 		lv_display_set_buffers(disp, partial_buf, NULL,
-				       sizeof(partial_buf),
+				       (uint32_t)(800 * rows * 2),
 				       LV_DISPLAY_RENDER_MODE_PARTIAL);
 		printf("lvdesk: pitch %u != %u, partial mode\n",
 		       kms_pitch, kms_w * 2);

@@ -844,6 +844,14 @@
 /** Avoids repeatedly opening and decoding the same images, at the cost of RAM.
  *  Of little benefit with only the built-in image formats.
  */
+/*
+ * Tried at 64 KB because LVGL's docs say every font backend goes through this
+ * cache (a glyph-descriptor cache and a draw-data cache). Measured as nothing:
+ * 2280/2280/2180 ms against a ~2200 ms baseline, scrolling 1200 lines. That is
+ * the right result for a static bitmap font, where fetching a glyph bitmap is
+ * already just a pointer computation - the cache exists for decoded images and
+ * FreeType/TinyTTF, neither of which we use.
+ */
 #define LV_CACHE_DEF_SIZE 0
 
 /** Avoids repeatedly reading image headers, at the cost of RAM.
