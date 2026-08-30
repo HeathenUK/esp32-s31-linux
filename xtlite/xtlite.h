@@ -69,6 +69,7 @@ struct wid {
 	int x, y, w, h;
 	int pref_w, pref_h;		/* width/height resources, 0 = from label */
 	int justify;			/* 0 left, 1 centre, 2 right - Xaw's values */
+	XFontStruct *fnt;		/* per-widget font, NULL = the default */
 	int bw;
 	unsigned long fg, bg, border;
 	char label[64];

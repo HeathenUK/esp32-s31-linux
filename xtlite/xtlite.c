@@ -295,6 +295,19 @@ static void wid_configure(struct wid *w)
 	if (s) w->from_horiz = find_named(xt_root, s);
 	s = res_get(w, "fromVert", "FromVert");
 	if (s) w->from_vert = find_named(xt_root, s);
+	/*
+	 * A per-widget font. xcalc asks for -adobe-symbol-* on three buttons
+	 * and gets the radical, pi and the division sign from it; drawing them
+	 * with the default face renders "O`" and "p" instead, which is what
+	 * ignoring this resource looked like.
+	 */
+	s = res_get(w, "font", "Font");
+	if (s) {
+		w->fnt = XLoadQueryFont(xt_dpy, s);
+		if (!w->fnt)
+			fprintf(stderr, "xtlite: %s asked for font '%s' and "
+				"the server had none\n", w->name, s);
+	}
 	s = res_get(w, "radioGroup", "RadioGroup");
 	if (s) snprintf(w->radio_group, sizeof(w->radio_group), "%s", s);
 }
@@ -321,9 +334,10 @@ static void layout(struct wid *w, int defdist)
 			continue;
 		/* Explicit size wins; otherwise fit the label. */
 		if (c->cls != W_FORM || c->pref_w || c->pref_h) {
-			int tw = font ? XTextWidth(font, c->label,
-						   strlen(c->label)) : 8;
-			int th = font ? font->ascent + font->descent : 13;
+			XFontStruct *cf = c->fnt ? c->fnt : font;
+			int tw = cf ? XTextWidth(cf, c->label,
+						 strlen(c->label)) : 8;
+			int th = cf ? cf->ascent + cf->descent : 13;
 
 			c->w = c->pref_w ? c->pref_w : tw + 8;
 			c->h = c->pref_h ? c->pref_h : th + 4;
@@ -351,8 +365,14 @@ static void layout(struct wid *w, int defdist)
 
 static void unset_group(struct wid *w, const char *group, struct wid *keep);
 
+static XFontStruct *wfont(struct wid *w)
+{
+	return w->fnt ? w->fnt : font;
+}
+
 static void draw(struct wid *w)
 {
+	XFontStruct *f = wfont(w);
 	int tw, tx, ty;
 	unsigned long fg = w->fg, bg = w->bg;
 
@@ -365,13 +385,15 @@ static void draw(struct wid *w)
 	XFillRectangle(xt_dpy, w->win, gc_fg, 0, 0, w->w, w->h);
 	if (w->cls == W_FORM || !w->label[0])
 		return;
-	tw = font ? XTextWidth(font, w->label, strlen(w->label)) : 0;
+	if (f)
+		XSetFont(xt_dpy, gc_fg, f->fid);
+	tw = f ? XTextWidth(f, w->label, strlen(w->label)) : 0;
 	switch (w->justify) {
 	case 0:  tx = 2; break;			/* XtJustifyLeft */
 	case 2:  tx = w->w - tw - 2; break;	/* XtJustifyRight */
 	default: tx = (w->w - tw) / 2; break;	/* XtJustifyCenter */
 	}
-	ty = font ? (w->h + font->ascent - font->descent) / 2 : w->h / 2;
+	ty = f ? (w->h + f->ascent - f->descent) / 2 : w->h / 2;
 	XSetForeground(xt_dpy, gc_fg, fg);
 	XDrawString(xt_dpy, w->win, gc_fg, tx, ty, w->label, strlen(w->label));
 }
