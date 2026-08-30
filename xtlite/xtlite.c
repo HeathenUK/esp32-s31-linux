@@ -104,6 +104,7 @@ static const char *class_name(struct wid *w)
 	case W_LABEL:   return "Label";
 	case W_COMMAND: return "Command";
 	case W_TOGGLE:  return "Toggle";
+	case W_CUSTOM:  return xt_class_name(w->wclass);
 	}
 	return "?";
 }
@@ -173,6 +174,84 @@ static unsigned long res_pixel(struct wid *w, const char *n, const char *c,
 	return dflt;
 }
 
+const char *xt_res_lookup(Widget w, const char *name, const char *class)
+{
+	return res_get(WID(w), name, class);
+}
+
+/*
+ * Store a value into a resource slot.
+ *
+ * xt_set_typed() takes the value already in its binary form, as an Arg or an
+ * XtRImmediate default carries it; xt_set_from_string() takes the text form,
+ * as the resource database carries it. Both have to respect resource_size,
+ * because Dimension and Position are shorts and writing an int over one
+ * corrupts the field next to it - which is how a widget ends up with a
+ * plausible width and a garbage height.
+ */
+void xt_set_typed(void *slot, const char *type, unsigned size, long value)
+{
+	/*
+	 * Float is not an integer of the same width. xclock's `update` is an
+	 * XtRFloat, and storing the integer 1 in it gives 1.4e-45 - so
+	 * update*1000 rounded to zero, the delay to the next tick came out
+	 * negative, wrapped to 4,249,431,067 ms, and the clock sat at 12:00
+	 * spinning through a timeout every few milliseconds. The board has a
+	 * real single-precision FPU, so this is one instruction.
+	 */
+	if (type && !strcmp(type, XtRFloat)) {
+		*(float *)slot = (float)value;
+		return;
+	}
+	switch (size) {
+	case 1: *(char *)slot = (char)value; break;
+	case 2: *(short *)slot = (short)value; break;
+	case 4: *(long *)slot = value; break;
+	default: memcpy(slot, &value, size < sizeof(long) ? size
+						          : sizeof(long));
+	}
+}
+
+void xt_set_from_string(void *slot, const char *type, unsigned size,
+			const char *v)
+{
+	if (!v)
+		return;
+	if (!strcmp(type, XtRString)) {
+		*(const char **)slot = v;
+	} else if (!strcmp(type, XtRBoolean) || !strcmp(type, XtRBool)) {
+		*(char *)slot = (*v == 't' || *v == 'T' || *v == 'y' ||
+				 *v == 'Y' || *v == '1');
+	} else if (!strcmp(type, XtRPixel) || !strcmp(type, "Color")) {
+		XColor c;
+
+		if (XParseColor(xt_dpy, DefaultColormap(xt_dpy, 0), v, &c) &&
+		    XAllocColor(xt_dpy, DefaultColormap(xt_dpy, 0), &c))
+			xt_set_typed(slot, type, size, (long)c.pixel);
+	} else if (!strcmp(type, XtRFontStruct)) {
+		XFontStruct *f = XLoadQueryFont(xt_dpy, v);
+
+		if (f)
+			*(XFontStruct **)slot = f;
+	} else if (!strcmp(type, XtRFont)) {
+		XFontStruct *f = XLoadQueryFont(xt_dpy, v);
+
+		if (f)
+			xt_set_typed(slot, type, size, (long)f->fid);
+	} else if (!strcmp(type, XtRFloat)) {
+		*(float *)slot = strtof(v, NULL);
+	} else if (!strcmp(type, XtRInt) || !strcmp(type, XtRDimension) ||
+		   !strcmp(type, XtRPosition) || !strcmp(type, XtRShort) ||
+		   !strcmp(type, XtRCardinal)) {
+		xt_set_typed(slot, type, size, atol(v));
+	} else if (!strcmp(type, XtRCursor) || !strcmp(type, XtRPixmap) ||
+		   !strcmp(type, XtRCallback)) {
+		/* Nothing here draws a cursor or a pixmap; leave the default. */
+	} else {
+		xt_ignored("resource type", type);
+	}
+}
+
 /* --------------------------------------------------------------- widgets */
 
 /*
@@ -211,9 +290,15 @@ static int apply_arg(struct wid *w, const char *name, long value)
 	return 0;
 }
 
-static struct wid *wid_new(const char *name, enum wclass cls, struct wid *parent)
+/*
+ * Allocate a widget. `recsize` is the size of the APPLICATION-visible record
+ * that follows ours; every widget has one, so WIDGET()/WID() is a single
+ * constant offset whether the class is ours or the application's.
+ */
+struct wid *xt_wid_new(const char *name, enum wclass cls, struct wid *parent,
+		       size_t recsize)
 {
-	struct wid *w = calloc(1, sizeof(*w));
+	struct wid *w = calloc(1, sizeof(*w) + recsize);
 
 	if (!w)
 		return NULL;
@@ -352,14 +437,19 @@ static void layout(struct wid *w, int defdist)
 			c->w, c->h, c->x, c->y,
 			c->from_horiz ? c->from_horiz->name : "-",
 			c->from_vert ? c->from_vert->name : "-");
-		if (c->x + c->w + 2 * c->bw > right)
-			right = c->x + c->w + 2 * c->bw;
-		if (c->y + c->h + 2 * c->bw > bottom)
-			bottom = c->y + c->h + 2 * c->bw;
+		/*
+		 * The trailing margin mirrors this child's own leading one, so
+		 * a widget placed flush at 0,0 - a custom widget filling its
+		 * shell - does not get a stray defdist strip on two sides.
+		 */
+		if (c->x + c->w + 2 * c->bw + hd > right)
+			right = c->x + c->w + 2 * c->bw + hd;
+		if (c->y + c->h + 2 * c->bw + vd > bottom)
+			bottom = c->y + c->h + 2 * c->bw + vd;
 	}
 	if (w->nkids) {
-		w->w = right + defdist;
-		w->h = bottom + defdist;
+		w->w = right;
+		w->h = bottom;
 	}
 }
 
@@ -378,12 +468,21 @@ static void draw(struct wid *w)
 
 	if (!w->realized || !w->win)
 		return;
+	if (w->cls == W_CUSTOM) {
+		xt_custom_expose(w, NULL);
+		return;
+	}
 	if (w->set) {			/* Toggle/Command "set" is reverse video */
 		unsigned long t = fg; fg = bg; bg = t;
 	}
 	XSetForeground(xt_dpy, gc_fg, bg);
 	XFillRectangle(xt_dpy, w->win, gc_fg, 0, 0, w->w, w->h);
-	if (w->cls == W_FORM || !w->label[0])
+	/*
+	 * A shell's label is its window TITLE; painting it as content put the
+	 * word "xclock" across the middle of the clock face, because the shell
+	 * repaints after its child and the child only redraws its hands.
+	 */
+	if (w->cls == W_FORM || w->cls == W_SHELL || !w->label[0])
 		return;
 	if (f)
 		XSetFont(xt_dpy, gc_fg, f->fid);
@@ -419,6 +518,8 @@ static void realize(struct wid *w)
 				       InputOutput, CopyFromParent, mask, &a);
 	}
 	w->realized = 1;
+	if (w->cls == W_CUSTOM)
+		xt_custom_resized(w);
 	{
 		int i;
 
@@ -650,7 +751,7 @@ static int builtin_action(struct wid *w, const char *name)
 	}
 	if (!strcmp(name, "notify")) {
 		if (w->callback)
-			w->callback(w, w->closure, NULL);
+			w->callback(WIDGET(w), w->closure, NULL);
 		return 1;
 	}
 	return 0;
@@ -683,7 +784,7 @@ static void run_actions(struct wid *w, const char *spec, XEvent *ev)
 
 				xt_note("action %s(%s) on %s", name, arg,
 					w->name);
-				actions[i].proc(w, ev, params, &np);
+				actions[i].proc(WIDGET(w), ev, params, &np);
 				break;
 			}
 		if (i == nactions && builtin_action(w, name))
@@ -739,6 +840,8 @@ static void dispatch(struct wid *w, XEvent *ev)
 #include <X11/Intrinsic.h>
 #include "xtstrings.h"
 
+#include <poll.h>
+
 /*
  * Widget classes are opaque tokens. The application receives one of these
  * pointers from us and hands it straight back to XtCreateManagedWidget, so
@@ -747,6 +850,18 @@ static void dispatch(struct wid *w, XEvent *ev)
  */
 static const enum wclass cls_form = W_FORM, cls_label = W_LABEL;
 static const enum wclass cls_command = W_COMMAND, cls_toggle = W_TOGGLE;
+
+/*
+ * Telling our tokens apart from a real WidgetClassRec is by identity, not by
+ * inspection: a token is four bytes and reading core_class.superclass out of
+ * one would run off the end of it.
+ */
+int xt_is_builtin_class(WidgetClass c)
+{
+	return c == (WidgetClass)&cls_form || c == (WidgetClass)&cls_label ||
+	       c == (WidgetClass)&cls_command ||
+	       c == (WidgetClass)&cls_toggle;
+}
 
 WidgetClass formWidgetClass    = (WidgetClass)&cls_form;
 WidgetClass labelWidgetClass   = (WidgetClass)&cls_label;
@@ -832,21 +947,37 @@ Widget XtAppInitialize(XtAppContext *app_ret, const char *class,
 	if (font)
 		XSetFont(xt_dpy, gc_fg, font->fid);
 
-	shell = wid_new(app_name, W_SHELL, NULL);
+	shell = xt_wid_new(app_name, W_SHELL, NULL, xt_class_size(NULL));
 	xt_root = shell;
 	wid_configure(shell);
 	shell->managed = 1;
-	return (Widget)shell;
+	return WIDGET(shell);
 }
 
 XTLITE_IMPL(XtCreateManagedWidget)
 Widget XtCreateManagedWidget(const char *name, WidgetClass cls, Widget parent,
 			     ArgList args, Cardinal n)
 {
-	struct wid *p = (struct wid *)parent;
-	struct wid *w = wid_new(name, *(const enum wclass *)cls, p);
+	struct wid *p = WID(parent);
+	struct wid *w;
 	Cardinal i;
 
+	/*
+	 * Our own classes are opaque tokens; anything else is a class record
+	 * the application built for itself, and its instance layout is not
+	 * ours to choose. See xtclass.c.
+	 */
+	if (!xt_is_builtin_class(cls)) {
+		Widget cw = xt_custom_create(name, cls, p, args, n);
+
+		if (cw) {
+			WID(cw)->managed = 1;
+			return cw;
+		}
+		return NULL;
+	}
+	w = xt_wid_new(name, *(const enum wclass *)cls, p,
+		       xt_class_size(NULL));
 	if (!w)
 		return NULL;
 	w->managed = 1;
@@ -867,13 +998,81 @@ Widget XtCreateManagedWidget(const char *name, WidgetClass cls, Widget parent,
 		if (t)
 			parse_translations(w, t);
 	}
-	return (Widget)w;
+	return WIDGET(w);
+}
+
+XTLITE_IMPL(XtCreateWidget)
+Widget XtCreateWidget(const char *name, WidgetClass cls, Widget parent,
+		      ArgList args, Cardinal n)
+{
+	Widget w = XtCreateManagedWidget(name, cls, parent, args, n);
+
+	/*
+	 * Unmanaged means "do not lay me out yet". Everything here is laid out
+	 * once, at realize, so the only difference that survives is the flag.
+	 */
+	if (w)
+		WID(w)->managed = 0;
+	return w;
+}
+
+XTLITE_IMPL(XtManageChild)
+void XtManageChild(Widget w) { if (w) WID(w)->managed = 1; }
+
+XTLITE_IMPL(XtUnmanageChild)
+void XtUnmanageChild(Widget w) { if (w) WID(w)->managed = 0; }
+
+/*
+ * XtOpenApplication is XtAppInitialize plus the shell's class, which xtlite
+ * has only one of. xclock asks for a sessionShellWidgetClass and gets the same
+ * top-level window either way: there is no session manager on this board, so
+ * the difference between a Session, Application and TopLevel shell is entirely
+ * in machinery that would have nothing to talk to.
+ */
+XTLITE_IMPL(XtOpenApplication)
+Widget XtOpenApplication(XtAppContext *app_ret, const char *class,
+			 XrmOptionDescRec *options, Cardinal num_options,
+			 int *argc, String *argv, String *fallback,
+			 WidgetClass shell_class, ArgList args,
+			 Cardinal num_args)
+{
+	(void)shell_class;
+	return XtAppInitialize(app_ret, class, options, num_options, argc,
+			       argv, fallback, args, num_args);
+}
+
+XTLITE_IMPL(XtDisplayToApplicationContext)
+XtAppContext XtDisplayToApplicationContext(Display *d)
+{
+	(void)d;
+	return the_app;
+}
+
+XTLITE_IMPL(XtWidgetToApplicationContext)
+XtAppContext XtWidgetToApplicationContext(Widget w)
+{
+	(void)w;
+	return the_app;
+}
+
+XTLITE_IMPL(XtAddCallback)
+void XtAddCallback(Widget wi, const char *name, XtCallbackProc proc,
+		   XtPointer data)
+{
+	struct wid *w = WID(wi);
+
+	if (!strcmp(name, XtNcallback)) {
+		w->callback = (void (*)(Widget, void *, void *))proc;
+		w->closure = data;
+		return;
+	}
+	xt_ignored("callback", name);
 }
 
 XTLITE_IMPL(XtRealizeWidget)
 void XtRealizeWidget(Widget wi)
 {
-	struct wid *w = (struct wid *)wi;
+	struct wid *w = WID(wi);
 	int def = res_int(w, "defaultDistance", "Thickness", 4);
 
 	layout(w, def);
@@ -892,7 +1091,7 @@ void XtAppAddActions(XtAppContext app, XtActionList list, Cardinal n)
 	for (i = 0; i < n && nactions < MAXACT; i++) {
 		actions[nactions].name = list[i].string;
 		actions[nactions].proc =
-			(void (*)(struct wid *, XEvent *, char **,
+			(void (*)(Widget, XEvent *, char **,
 				  unsigned *))list[i].proc;
 		nactions++;
 	}
@@ -907,6 +1106,24 @@ void XtAppMainLoop(XtAppContext app)
 		XEvent ev;
 		struct wid *w;
 
+		/*
+		 * Blocking in XNextEvent() would stop the clock: a widget with
+		 * a timeout and no input pending must wait on a DEADLINE, not
+		 * on the socket. So flush, then poll the connection with the
+		 * time until the next timer, and only read when there is
+		 * something there.
+		 */
+		while (!XPending(xt_dpy)) {
+			struct pollfd pfd = { ConnectionNumber(xt_dpy),
+					      POLLIN, 0 };
+			int wait = xt_timer_wait_ms();
+
+			XFlush(xt_dpy);
+			poll(&pfd, 1, wait);
+			xt_timer_fire_due();
+			if (!running)
+				return;
+		}
 		XNextEvent(xt_dpy, &ev);
 		w = by_window(xt_root, ev.xany.window);
 		xt_note("event type %d on window 0x%lx -> %s", ev.type,
@@ -915,7 +1132,10 @@ void XtAppMainLoop(XtAppContext app)
 			continue;
 		switch (ev.type) {
 		case Expose:
-			draw(w);
+			if (w->cls == W_CUSTOM)
+				xt_custom_expose(w, &ev);
+			else
+				draw(w);
 			break;
 		case ButtonPress:
 		case ButtonRelease:
@@ -929,7 +1149,7 @@ void XtAppMainLoop(XtAppContext app)
 XTLITE_IMPL(XtSetValues)
 void XtSetValues(Widget wi, ArgList args, Cardinal n)
 {
-	struct wid *w = (struct wid *)wi;
+	struct wid *w = WID(wi);
 	Cardinal i;
 	int redraw = 0;
 
@@ -944,7 +1164,7 @@ void XtSetValues(Widget wi, ArgList args, Cardinal n)
 XTLITE_IMPL(XtGetValues)
 void XtGetValues(Widget wi, ArgList args, Cardinal n)
 {
-	struct wid *w = (struct wid *)wi;
+	struct wid *w = WID(wi);
 	Cardinal i;
 
 	for (i = 0; args && i < n; i++) {
@@ -964,7 +1184,7 @@ XtTranslations XtParseTranslationTable(const char *table)
 XTLITE_IMPL(XtOverrideTranslations)
 void XtOverrideTranslations(Widget wi, XtTranslations t)
 {
-	parse_translations((struct wid *)wi, (const char *)t);
+	parse_translations(WID(wi), (const char *)t);
 }
 
 XTLITE_IMPL(XtDisplay)
@@ -972,7 +1192,7 @@ Display *XtDisplay(Widget w) { (void)w; return xt_dpy; }
 XTLITE_IMPL(XtScreen)
 Screen *XtScreen(Widget w) { (void)w; return DefaultScreenOfDisplay(xt_dpy); }
 XTLITE_IMPL(XtWindow)
-Window XtWindow(Widget w) { return w ? ((struct wid *)w)->win : None; }
+Window XtWindow(Widget w) { return w ? WID(w)->win : None; }
 
 XTLITE_IMPL(XtSetKeyboardFocus)
 void XtSetKeyboardFocus(Widget sub, Widget descendant)
@@ -1008,7 +1228,7 @@ XTLITE_IMPL(XtGetApplicationResources)
 void XtGetApplicationResources(Widget wi, XtPointer base, XtResourceList res,
 			       Cardinal n, ArgList args, Cardinal num_args)
 {
-	struct wid *w = (struct wid *)wi;
+	struct wid *w = WID(wi);
 	Cardinal i;
 
 	(void)args; (void)num_args;
@@ -1068,7 +1288,7 @@ static void unset_group(struct wid *w, const char *group, struct wid *keep)
 XTLITE_IMPL(XawToggleUnsetCurrent)
 void XawToggleUnsetCurrent(Widget radio_group)
 {
-	struct wid *w = (struct wid *)radio_group;
+	struct wid *w = WID(radio_group);
 
 	if (w && w->radio_group[0])
 		unset_group(xt_root, w->radio_group, NULL);

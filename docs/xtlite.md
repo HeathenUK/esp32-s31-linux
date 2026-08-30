@@ -142,3 +142,75 @@ every button, and that comes from Xaw's Command, not from xcalc.
 - Button borders.
 - Actions are wired but arithmetic is untested; the keypad renders and the
   translation tables parse.
+
+## The Intrinsics class mechanism (xtclass.c)
+
+xtlite's original bet was that a widget class is an opaque token. That holds
+for anything built entirely from Athena widgets, and it is why xtlite is 50 kB
+rather than 304. It does **not** hold for an application that declares a widget
+class of its own, and xclock does:
+
+    ClockClassRec = { CoreClassPart core_class; SimpleClassPart; ClockClassPart }
+    ClockRec      = { CorePart core; SimplePart simple; ClockPart clock; }
+
+statically initialised with `(WidgetClass) &simpleClassRec` and `XtInherit*`
+sentinels, with a Redisplay proc that reads `w->core.width` directly. The
+layout was chosen by the compiler at the application's build time, out of the
+system headers. So `xtlite/xtclass.c` provides the real thing, using those same
+headers rather than transcribing them:
+
+- `widgetClassRec` and `simpleClassRec` as real objects, sized with
+  `sizeof(WidgetRec)`/`sizeof(SimpleRec)` and filled by a constructor - a
+  struct literal of thirty NULLs would depend on field ORDER, which belongs to
+  the header and not to us.
+- `_XtInherit` as a real symbol, resolved against the superclass for `realize`,
+  `resize`, `expose`, `set_values_almost`, `accept_focus`, `query_geometry`,
+  `display_accelerator` and `tm_table`.
+- `class_initialize` / `class_part_initialize`, run once, superclass first.
+- Every class's resource list applied to the instance record, superclass first.
+- `initialize`, `expose` and `resize` called on ours.
+
+**The instance record is the application's, so our bookkeeping cannot live
+inside it.** It lives immediately BEFORE it, in one allocation, and `WIDGET()`
+/ `WID()` convert by a constant offset - no side table and no lookup on the
+event path.
+
+Also added, because xclock relocates against them: `XtOpenApplication`,
+`XtCreateWidget`, `XtManageChild`/`XtUnmanageChild`, `XtAddCallback`,
+`XtAppAddTimeOut`/`XtRemoveTimeOut`, `XtGetGC`/`XtReleaseGC`, `XtAppErrorMsg`,
+`XtSetTypeConverter`/`XtAddConverter`, `XtDisplayStringConversionWarning`,
+`XtDisplayOfObject`/`XtWindowOfObject`, `XtWidgetToApplicationContext`,
+`XtDisplayToApplicationContext`, `XawInitializeWidgetSet`,
+`sessionShellWidgetClass` and `XmuCvtStringToBackingStore`.
+
+### Four bugs, and what each looked like
+
+- **`update` is an XtRFloat, not an int.** Storing the integer 1 in it gives
+  1.4e-45, so `update * 1000` rounded to zero, the delay to the next tick came
+  out negative, and it wrapped to **4,249,431,067 ms**. xclock sat at 12:00
+  spinning through a timeout every few milliseconds. The board has a real
+  single-precision FPU, so the fix is one instruction. `XtAppAddTimeOut` now
+  also reports a wrapped interval instead of accepting it.
+- **Core had no resource list**, so `CorePart` was whatever `calloc` left. The
+  field that bit was `background_pixel`: xclock erases the previous second hand
+  by redrawing it in the background colour, so a zeroed one painted every old
+  hand in BLACK and the face filled with a fan of them.
+- **A shell's label is its TITLE.** `draw()` painted it as content too, which
+  put the word "xclock" across the middle of the clock face - invisible under
+  xcalc, whose Form covers the whole shell.
+- **layout() sized a custom widget from its label.** A custom widget has no
+  label, so the 164x164 clock was laid out as an 8x17 box and the shell came up
+  12x21. `pref_w`/`pref_h` are now taken from the record after the class's
+  initialize proc runs, which is the only point at which they are known.
+
+The resource walk logs every resource with its type, size and offset under
+`XTLITE_TRACE=1`. That is what found the Float bug in one run, and it is the
+first thing to look at for any new custom-widget application.
+
+## Where xclock stands
+
+Analog xclock runs off the shelf, shows the correct time and updates:
+**856 kB resident**, of which ~370 kB is the Xft/fontconfig/freetype/expat/z
+stack it never draws a glyph with, ~60 kB is libXau/libXdmcp/libxcb
+over-linking, and 72 kB is libxkbfile. `xclock -digital` segfaults, because it
+renders text through Xft and the shim advertises no RENDER.

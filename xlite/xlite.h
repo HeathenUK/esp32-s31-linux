@@ -24,9 +24,26 @@
  * reach ->fd, ->request, ->screens and the rest. The private1..private18
  * placeholders in that layout are ours to use.
  */
-#define XLIB_ILLEGAL_ACCESS 1
 
-#include <X11/Xlib.h>
+/*
+ * The REAL struct _XDisplay, not Xlib.h's public prefix.
+ *
+ * Xlib.h publishes only the front of the record, with private1..private18
+ * placeholders, and that sufficed while the only consumers were the toolkit
+ * and the application - their macros stay inside the public part.
+ *
+ * It is not enough for the extension libraries. libXrender, libXft and
+ * libXcursor are compiled against Xlibint.h: LockDisplay() dereferences
+ * ->lock_fns, Data() writes through ->bufptr and SyncHandle() calls
+ * ->synchandler, all in the region Xlib.h describes only as "private to Xlib".
+ * Those offsets are baked into those libraries.
+ *
+ * The header is in the sysroot, so the layout is not unknowable - only
+ * unstable across libX11 releases, which does not matter when the whole
+ * userspace is built together. Using it makes every offset correct by
+ * construction and reduces the internals to seventeen functions.
+ */
+#include <X11/Xlibint.h>
 #include <X11/Xutil.h>
 #include <X11/Xresource.h>
 #include <X11/Xatom.h>
@@ -42,17 +59,30 @@
 #define XLITE_IMPL(name)	/* implemented: name */
 
 #define XLITE_QSTART	64		/* initial event ring, grows on demand */
-#define XLITE_IBUF	16384
+/*
+ * The input buffer starts small and grows to whatever reply actually arrives.
+ * A fixed 16 kB was 16 kB of resident memory in every client for the sake of
+ * the one reply in a thousand that is large, and it still could not hold a
+ * ListFonts answer bigger than that.
+ */
+#define XLITE_IBUF	2048
 
 struct xdpy {
-	Display pub;			/* MUST be first: clients cast to it */
+	struct _XDisplay pub;		/* MUST be first: clients cast to it */
 
 	int fd;
-	uint32_t seq;			/* sequence of the last request sent */
+	/*
+	 * The sequence number is pub.request, not a field of our own: the
+	 * extension libraries build requests through _XGetRequest(), which
+	 * only knows about pub.request, and two counters would drift apart the
+	 * first time libXrender sent anything.
+	 */
 	XID next_id, id_base, id_mask;
 
-	unsigned char in[XLITE_IBUF];	/* bytes read but not yet consumed */
-	size_t inlen;
+	unsigned char *in;		/* bytes read but not yet consumed */
+	size_t inlen, incap;
+	char *out;			/* request buffer; pub.buffer points here */
+	size_t outcap;
 
 	/*
 	 * A GROWABLE event ring. It was a fixed 256 and silently dropped when
@@ -81,6 +111,9 @@ static inline struct xdpy *XD(Display *d) { return (struct xdpy *)d; }
 
 /* Diagnostics: see xlite_diag.c. */
 void xlite_missing(int idx, const char *name);
+
+/* Ensure the input buffer can hold `need` bytes. Returns 0 if it cannot. */
+int xlite_ingrow(struct xdpy *x, size_t need);
 void xlite_note(const char *fmt, ...);
 int xlite_tracing(void);
 extern const int xlite_nstubs;

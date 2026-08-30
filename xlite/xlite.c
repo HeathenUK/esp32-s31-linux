@@ -47,38 +47,29 @@ static int writeall(int fd, const void *buf, size_t n)
 
 /* --------------------------------------------------------------- requests */
 
-static unsigned char reqbuf[65536];
-
 /*
  * Start a request. Returns a zeroed buffer of `words` 4-byte units with the
- * opcode, detail and length already filled in, so callers only write fields.
- * The sequence number is bumped here because that is what replies match on.
+ * opcode, detail and length already filled in.
+ *
+ * This now allocates from the SAME output buffer the extension libraries use
+ * through _XGetRequest(), which is what keeps their requests and ours in the
+ * order they were issued. Two buffers could not.
  */
 unsigned char *xlite_req(struct xdpy *x, int opcode, int detail, int words)
 {
-	memset(reqbuf, 0, words * 4);
-	reqbuf[0] = opcode;
-	reqbuf[1] = detail;
-	p16(reqbuf + 2, words);
-	x->seq++;
-	x->pub.request = x->seq;
-	return reqbuf;
+	unsigned char *r = _XGetRequest(&x->pub, (CARD8)opcode,
+					(size_t)words * 4);
+
+	if (!r)
+		return NULL;
+	r[1] = (unsigned char)detail;
+	return r;
 }
 
-int xlite_flush(struct xdpy *x)
+/* The bytes are already in the shared buffer; nothing to push. */
+int xlite_send(struct xdpy *x, const unsigned char *r)
 {
-	return 0;			/* requests are written immediately */
-}
-
-static int req_send(struct xdpy *x, const unsigned char *r)
-{
-	int words = g16(r + 2);
-
-	if (writeall(x->fd, r, words * 4) < 0) {
-		if (x->ioerrh)
-			x->ioerrh(&x->pub);
-		return -1;
-	}
+	(void)x; (void)r;
 	return 0;
 }
 
@@ -244,6 +235,23 @@ static void deliver_error(struct xdpy *x, const unsigned char *e)
  * except a reply, which carries a length; both are handled here so callers
  * never see a partial message.
  */
+int xlite_ingrow(struct xdpy *x, size_t need)
+{
+	size_t cap = x->incap ? x->incap : XLITE_IBUF;
+	unsigned char *p;
+
+	if (need <= x->incap)
+		return 1;
+	while (cap < need)
+		cap *= 2;
+	p = realloc(x->in, cap);
+	if (!p)
+		return 0;
+	x->in = p;
+	x->incap = cap;
+	return 1;
+}
+
 int xlite_read_more(struct xdpy *x, int block)
 {
 	struct pollfd pfd = { x->fd, POLLIN, 0 };
@@ -251,7 +259,9 @@ int xlite_read_more(struct xdpy *x, int block)
 
 	if (!block && poll(&pfd, 1, 0) <= 0)
 		return 0;
-	n = read(x->fd, x->in + x->inlen, sizeof(x->in) - x->inlen);
+	if (!xlite_ingrow(x, x->inlen + 512))
+		return 0;
+	n = read(x->fd, x->in + x->inlen, x->incap - x->inlen);
 	if (n <= 0) {
 		if (n == 0 || errno != EINTR) {
 			if (x->ioerrh)
@@ -285,8 +295,11 @@ static int pump(struct xdpy *x, uint32_t want, unsigned char *hdr,
 
 			if (m[0] == 1)			/* reply */
 				need = 32 + g32(m + 4) * 4;
-			if (x->inlen - off < need)
+			if (x->inlen - off < need) {
+				if (!xlite_ingrow(x, off + need))
+					return 0;
 				break;
+			}
 			if (m[0] == 0) {
 				deliver_error(x, m);
 			} else if (m[0] == 1) {
@@ -321,6 +334,7 @@ static int pump(struct xdpy *x, uint32_t want, unsigned char *hdr,
 		}
 		if (!want && x->qhead != x->qtail)
 			return 0;
+		xlite_flush(x);		/* never block holding unsent requests */
 		if (!xlite_read_more(x, 1))
 			return 0;
 	}
@@ -329,6 +343,8 @@ static int pump(struct xdpy *x, uint32_t want, unsigned char *hdr,
 int xlite_reply(struct xdpy *x, uint32_t seq, unsigned char *hdr,
 		unsigned char **extra, size_t *nextra)
 {
+	if (xlite_flush(x) < 0)		/* it cannot answer what we still hold */
+		return 0;
 	return pump(x, seq, hdr, extra, nextra);
 }
 
@@ -519,6 +535,22 @@ Display *XOpenDisplay(const char *name)
 	x->pub.display_name = x->name;
 	x->next_id = 1;
 
+	/*
+	 * The output buffer, and the private fields Xlibint.h's macros reach
+	 * into directly: lock_fns NULL means LockDisplay() is a no-op, and
+	 * synchandler NULL means SyncHandle() does nothing.
+	 */
+	x->outcap = 4096;
+	x->out = malloc(x->outcap);
+	if (!x->out)
+		goto fail;
+	x->pub.buffer = x->out;
+	x->pub.bufptr = x->out;
+	x->pub.bufmax = x->out + x->outcap;
+	x->pub.lock_fns = NULL;
+	x->pub.synchandler = NULL;
+	x->pub.last_req = x->out;
+
 	xlite_note("connected to %s, root 0x%lx %dx%d depth %d",
 		   a.sun_path, (unsigned long)x->screen.root,
 		   x->screen.width, x->screen.height, x->screen.root_depth);
@@ -546,7 +578,7 @@ int XCloseDisplay(Display *d)
 /* --------------------------------------------------------------- plumbing */
 
 XLITE_IMPL(XFlush)
-int XFlush(Display *d) { (void)d; return 0; }
+int XFlush(Display *d) { return xlite_flush(XD(d)); }
 
 XLITE_IMPL(XSync)
 int XSync(Display *d, Bool discard)
@@ -555,9 +587,9 @@ int XSync(Display *d, Bool discard)
 	unsigned char hdr[32], *extra = NULL;
 	size_t nextra = 0;
 	unsigned char *r = xlite_req(x, 43, 0, 1);	/* GetInputFocus */
-	uint32_t seq = x->seq;
+	uint32_t seq = x->pub.request;
 
-	req_send(x, r);
+	xlite_send(x, r);
 	if (xlite_reply(x, seq, hdr, &extra, &nextra))
 		free(extra);
 	if (discard) {
@@ -591,6 +623,18 @@ static void dequeue(struct xdpy *x, XEvent *ev)
 	*ev = x->q[x->qhead];
 	x->qhead = (x->qhead + 1) % x->qcap;
 	x->pub.qlen--;
+
+	/*
+	 * Give the ring back once it drains. An Expose storm at map time grew
+	 * it to 512 slots - 48 kB, held for the life of a process that is idle
+	 * ~always afterwards. queue_grow() reallocates on demand, so dropping
+	 * it here costs one calloc the next time a burst arrives.
+	 */
+	if (!x->pub.qlen && x->qcap > XLITE_QSTART) {
+		free(x->q);
+		x->q = NULL;
+		x->qcap = x->qhead = x->qtail = 0;
+	}
 }
 
 XLITE_IMPL(XNextEvent)
@@ -651,4 +695,3 @@ char *XDisplayName(const char *s)
 	return buf;
 }
 
-int xlite_send(struct xdpy *x, const unsigned char *r) { return req_send(x, r); }

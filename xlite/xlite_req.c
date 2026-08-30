@@ -54,7 +54,7 @@ Atom XInternAtom(Display *dpy, const char *name, Bool only_if_exists)
 		REQ(dpy, 16, only_if_exists ? 1 : 0, words);
 		p16(r + 4, n);
 		memcpy(r + 8, name, n);
-		seq = x->seq;
+		seq = x->pub.request;
 		xlite_send(x, r);
 		if (!xlite_reply(x, seq, hdr, &extra, &nextra))
 			return None;
@@ -75,7 +75,7 @@ char *XGetAtomName(Display *dpy, Atom a)
 	{
 		REQ(dpy, 17, 0, 2);
 		p32(r + 4, a);
-		seq = x->seq;
+		seq = x->pub.request;
 		xlite_send(x, r);
 		if (!xlite_reply(x, seq, hdr, &extra, &nextra))
 			return NULL;
@@ -870,7 +870,7 @@ int XDrawImageString(Display *dpy, Drawable d, GC gc, int px, int py,
 
 /* ---------------------------------------------------------------- fonts */
 
-static XFontStruct *font_query(Display *dpy, Font fid)
+static XFontStruct *font_fetch(Display *dpy, Font fid)
 {
 	unsigned char hdr[32], *extra = NULL;
 	size_t nextra = 0;
@@ -882,7 +882,7 @@ static XFontStruct *font_query(Display *dpy, Font fid)
 	{
 		REQ(dpy, 47, 0, 2);
 		p32(r + 4, fid);
-		seq = x->seq;
+		seq = x->pub.request;
 		xlite_send(x, r);
 		if (!xlite_reply(x, seq, hdr, &extra, &nextra))
 			return NULL;
@@ -966,25 +966,93 @@ Font XLoadFont(Display *dpy, const char *name)
 	return fid;
 }
 
+/*
+ * Fonts are cached for the life of the process, by name and by id.
+ *
+ * An XFontStruct is not small: the per-character metrics of a 256-glyph font
+ * are 3,072 bytes on their own, and Xaw asks for the font of every widget it
+ * builds. xcalc has 70 widgets and every one of them names the same two
+ * fonts, so the uncached version held 213,852 bytes of duplicate metrics -
+ * 60% of the client's entire heap - and paid 140 synchronous round trips to
+ * fetch them. Measured with rootfs/mallocprof.c; see docs/xlite.md.
+ *
+ * Nothing frees these. A client has a handful of fonts and keeps using them,
+ * so the cache IS the lifetime, and XFreeFont becomes a no-op rather than a
+ * hazard: the struct it was handed is shared with every other widget.
+ */
+#define NFCACHE	16
+
+static struct fcache {
+	char name[48];
+	Font fid;
+	XFontStruct *fs;
+} fcache[NFCACHE];
+static int nfcache;
+
+static XFontStruct *font_by_id(Display *dpy, Font fid)
+{
+	int i;
+
+	for (i = 0; i < nfcache; i++)
+		if (fcache[i].fid == fid)
+			return fcache[i].fs;
+	{
+		XFontStruct *fs = font_fetch(dpy, fid);
+
+		if (fs && nfcache < NFCACHE) {
+			fcache[nfcache].fid = fid;
+			fcache[nfcache].fs = fs;
+			nfcache++;
+		}
+		return fs;
+	}
+}
+
+XLITE_IMPL(XNextRequest)
+unsigned long XNextRequest(Display *dpy)
+{
+	return dpy->request + 1;
+}
+
 XLITE_IMPL(XQueryFont)
-XFontStruct *XQueryFont(Display *dpy, XID fid) { return font_query(dpy, fid); }
+XFontStruct *XQueryFont(Display *dpy, XID fid) { return font_by_id(dpy, fid); }
 
 XLITE_IMPL(XLoadQueryFont)
 XFontStruct *XLoadQueryFont(Display *dpy, const char *name)
 {
-	return font_query(dpy, XLoadFont(dpy, name));
+	int i;
+
+	for (i = 0; i < nfcache; i++)
+		if (fcache[i].name[0] && !strcmp(fcache[i].name, name))
+			return fcache[i].fs;
+	{
+		Font fid = XLoadFont(dpy, name);
+		XFontStruct *fs = fid ? font_fetch(dpy, fid) : NULL;
+
+		if (fs && nfcache < NFCACHE) {
+			snprintf(fcache[nfcache].name,
+				 sizeof(fcache[nfcache].name), "%s", name);
+			fcache[nfcache].fid = fid;
+			fcache[nfcache].fs = fs;
+			nfcache++;
+		} else if (fs) {
+			xlite_note("font cache full, %s uncached", name);
+		}
+		return fs;
+	}
 }
 
 XLITE_IMPL(XFreeFont)
 int XFreeFont(Display *dpy, XFontStruct *fs)
 {
+	int i;
+
+	(void)dpy;
 	if (!fs)
 		return 0;
-	{
-		REQ(dpy, 46, 0, 2);
-		p32(r + 4, fs->fid);
-		xlite_send(x, r);
-	}
+	for (i = 0; i < nfcache; i++)
+		if (fcache[i].fs == fs)
+			return 1;	/* shared, and still in use */
 	free(fs->per_char);
 	free(fs);
 	return 1;
@@ -1098,7 +1166,7 @@ int XGetWindowProperty(Display *dpy, Window w, Atom prop, long off, long len,
 		p32(r + 12, req_type);
 		p32(r + 16, off);
 		p32(r + 20, len);
-		seq = x->seq;
+		seq = x->pub.request;
 		xlite_send(x, r);
 		if (!xlite_reply(x, seq, hdr, &extra, &nextra)) {
 			*type = None; *fmt = 0; *nitems = 0; *after = 0;
@@ -1138,7 +1206,7 @@ Status XAllocColor(Display *dpy, Colormap cmap, XColor *c)
 		REQ(dpy, 84, 0, 4);
 		p32(r + 4, cmap);
 		p16(r + 8, c->red); p16(r + 10, c->green); p16(r + 12, c->blue);
-		seq = x->seq;
+		seq = x->pub.request;
 		xlite_send(x, r);
 		if (!xlite_reply(x, seq, hdr, &extra, &nextra))
 			return 0;
@@ -1165,7 +1233,7 @@ Status XAllocNamedColor(Display *dpy, Colormap cmap, const char *name,
 		p32(r + 4, cmap);
 		p16(r + 8, n);
 		memcpy(r + 12, name, n);
-		seq = x->seq;
+		seq = x->pub.request;
 		xlite_send(x, r);
 		if (!xlite_reply(x, seq, hdr, &extra, &nextra))
 			return 0;
@@ -1192,7 +1260,7 @@ Status XParseColor(Display *dpy, Colormap cmap, const char *spec, XColor *c)
 		p32(r + 4, cmap);
 		p16(r + 8, n);
 		memcpy(r + 12, spec, n);
-		seq = x->seq;
+		seq = x->pub.request;
 		xlite_send(x, r);
 		if (!xlite_reply(x, seq, hdr, &extra, &nextra))
 			return 0;
@@ -1406,7 +1474,7 @@ Status XGetGeometry(Display *dpy, Drawable d, Window *root, int *px, int *py,
 	{
 		REQ(dpy, 14, 0, 2);
 		p32(r + 4, d);
-		seq = x->seq;
+		seq = x->pub.request;
 		xlite_send(x, r);
 		if (!xlite_reply(x, seq, hdr, &extra, &nextra))
 			return 0;
@@ -1458,9 +1526,20 @@ int (*XSynchronize(Display *dpy, Bool on))(Display *)
 }
 
 /*
- * Extension bookkeeping. Nothing here advertises an extension, but libXext
- * still registers itself and dereferences what it gets back, so this has to
- * return a real record.
+ * Extension bookkeeping.
+ *
+ * XAddExtension() is a client registering hooks of its own, so a fresh record
+ * is the right answer. XInitExtension() is a LIBRARY asking whether the server
+ * has an extension, and the answer here is always no - so it has to actually
+ * ask, and return NULL.
+ *
+ * Returning a record with major_opcode 0, as this used to, is worse than
+ * useless: libXrender's RenderCheckExtension() passes on a non-NULL codes
+ * pointer, so every Render call was built and sent with request type 0. The
+ * shim logged "UNIMPLEMENTED ? (opcode 0)" and the client saw BadImplementation
+ * from calls it had no reason to think would fail. An honest NULL makes
+ * libXrender, libXft, libXcursor and libXfixes disable themselves on the paths
+ * they already have for a server without RENDER.
  */
 XLITE_IMPL(XAddExtension)
 XExtCodes *XAddExtension(Display *dpy)
@@ -1476,11 +1555,50 @@ XExtCodes *XAddExtension(Display *dpy)
 	return c;
 }
 
+XLITE_IMPL(XQueryExtension)
+Bool XQueryExtension(Display *dpy, const char *name, int *major,
+		     int *first_event, int *first_error)
+{
+	unsigned char hdr[32], *extra = NULL;
+	size_t nextra = 0, n = strlen(name);
+	uint32_t seq;
+
+	*major = *first_event = *first_error = 0;
+	{
+		REQ(dpy, 98, 0, 2 + (int)((n + 3) / 4));
+		p16(r + 4, n);
+		memcpy(r + 8, name, n);
+		seq = x->pub.request;
+		xlite_send(x, r);
+		if (!xlite_reply(x, seq, hdr, &extra, &nextra))
+			return False;
+	}
+	free(extra);
+	if (!hdr[8]) {
+		xlite_note("extension %s: not present", name);
+		return False;
+	}
+	*major = hdr[9];
+	*first_event = hdr[10];
+	*first_error = hdr[11];
+	return True;
+}
+
 XLITE_IMPL(XInitExtension)
 XExtCodes *XInitExtension(Display *dpy, const char *name)
 {
-	(void)name;
-	return XAddExtension(dpy);
+	int major, first_event, first_error;
+	XExtCodes *c;
+
+	if (!XQueryExtension(dpy, name, &major, &first_event, &first_error))
+		return NULL;
+	c = XAddExtension(dpy);
+	if (c) {
+		c->major_opcode = major;
+		c->first_event = first_event;
+		c->first_error = first_error;
+	}
+	return c;
 }
 
 XLITE_IMPL(XAddConnectionWatch)
@@ -1576,36 +1694,6 @@ int XConnectionNumber(Display *dpy) { return XD(dpy)->fd; }
  * public one we build against. Every parameter is a pointer either way, so the
  * ABI is identical.
  */
-/*
- * Listed here for the stub generator, which greps the source rather than
- * expanding macros and so cannot see the names the macro below defines:
- * XLITE_IMPL(XESetCloseDisplay) XLITE_IMPL(XESetCreateGC)
- * XLITE_IMPL(XESetCopyGC) XLITE_IMPL(XESetFlushGC) XLITE_IMPL(XESetFreeGC)
- * XLITE_IMPL(XESetCreateFont) XLITE_IMPL(XESetFreeFont)
- * XLITE_IMPL(XESetWireToEvent) XLITE_IMPL(XESetEventToWire)
- * XLITE_IMPL(XESetWireToError) XLITE_IMPL(XESetError)
- * XLITE_IMPL(XESetErrorString) XLITE_IMPL(XESetPrintErrorValues)
- * XLITE_IMPL(XESetCopyEventCookie) XLITE_IMPL(XESetWireToEventCookie)
- */
-#define XESET(name) \
-	void *name(Display *dpy, int ext, void *proc) \
-	{ (void)dpy; (void)ext; (void)proc; return NULL; }
-
-XESET(XESetCloseDisplay)
-XESET(XESetCreateGC)
-XESET(XESetCopyGC)
-XESET(XESetFlushGC)
-XESET(XESetFreeGC)
-XESET(XESetCreateFont)
-XESET(XESetFreeFont)
-XESET(XESetWireToEvent)
-XESET(XESetEventToWire)
-XESET(XESetWireToError)
-XESET(XESetError)
-XESET(XESetErrorString)
-XESET(XESetPrintErrorValues)
-XESET(XESetCopyEventCookie)
-XESET(XESetWireToEventCookie)
 
 /* ------------------------------------------------------- context manager */
 

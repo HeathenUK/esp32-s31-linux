@@ -6,7 +6,8 @@ SYSROOT=/src/build/buildroot/host/riscv32-buildroot-linux-musl/sysroot
 CC=/src/toolchain/riscv32-esp-linux-musl/bin/riscv32-esp-linux-musl-gcc
 $CC -O2 -fPIC -shared -Wall -Wno-unused-parameter \
 	-I"$SYSROOT/usr/include" -I/src/xtlite \
-	-Wl,-soname,libXt.so.6 -o /src/images/libXt.so.6.0.0 /src/xtlite/xtlite.c
+	-Wl,-soname,libXt.so.6 -o /src/images/libXt.so.6.0.0 \
+	/src/xtlite/xtlite.c /src/xtlite/xtclass.c
 
 # libXaw7 and libXmu become EMPTY libraries. Their symbols are defined by our
 # libXt above, and the dynamic loader resolves a symbol from whichever object

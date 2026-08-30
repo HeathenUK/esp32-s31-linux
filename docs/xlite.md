@@ -304,3 +304,76 @@ this cannot recur.
 3. Move the chain into XIP now that the client runs. Our libX11 is 97 kB
    against 1,318 kB, so the incremental closure drops by ~1.2 MB; re-measure
    whether it now fits the reclaimable flash.
+
+## Xlib's internals, and the end of the extension-library question
+
+The dual-stack option is closed: xlite now implements the internal ABI, so
+libXrender, libXft, libXcursor and libXfixes load against it and no client
+needs the real libX11.
+
+`Xlibint.h` is in the sysroot, so `struct _XDisplay` is a KNOWN layout rather
+than a guessed one. `struct xdpy` embeds it as its first member, and
+`xlite/xlite_int.c` implements the seventeen `_X*` entry points the extension
+libraries use: `_XGetRequest`, `_XSend`, `_XFlush`, `_XRead`, `_XReadPad`,
+`_XEatData`, `_XEatDataWords`, `_XReply`, `_XSetLastRequestRead`,
+`_XVIDtoVisual`, `_XAllocScratch`/`_XAllocTemp`/`_XFreeTemp`,
+`_XGetAsyncReply`, `_XDeqAsyncHandler`, `_XFlushGCCache` and
+`_XInitImageFuncPtrs`. `lock_fns` and `synchandler` are NULL, which is what
+makes `LockDisplay()` and `SyncHandle()` compile to nothing.
+
+Everything now shares **one** output buffer. That is not a tidiness point: an
+extension's requests and ours have to reach the server in the order they were
+issued, and two buffers cannot guarantee it.
+
+Three things this broke, each of which looked like something else:
+
+- **The sequence counter forked.** `xlite_req()` used to bump `x->seq`;
+  `_XGetRequest()` bumps `dpy->request`. With both present, `x->seq` stopped
+  advancing, every reply arrived "unmatched", and xcalc came up as a blank grey
+  box - which reads as a rendering bug. There is now one counter,
+  `pub.request`, because the extension libraries can only see that one.
+- **Buffered requests need flushing before a block.** Writing immediately had
+  made `XFlush()` a no-op. It is now real, and both the reply path and the
+  event-wait path flush first - a client that blocks in `poll()` holding
+  unsent requests waits for an answer to a question it never asked.
+- **`XInitExtension()` returned a record with major_opcode 0.** libXrender's
+  `RenderCheckExtension()` only tests that `codes` is non-NULL, so every Render
+  call was built and sent with request type **0**: the shim logged
+  `UNIMPLEMENTED ? (opcode 0)` and xfiles got BadImplementation from calls it
+  had no reason to expect could fail. `XInitExtension()` now does the real
+  QueryExtension round trip and returns NULL, and `XQueryExtension()` is
+  implemented properly. xfiles' failure is now one honest line:
+  `could not find XRender visual format`.
+
+## Accounting for the heap: rootfs/mallocprof.c
+
+xcalc's resident set was 592 kB, of which 352 kB was one anonymous mapping.
+"352 kB of heap" is not an account of anything, and the three previous fixed-
+size-array disasters here were all found by tripping over them. So there is now
+an allocator profiler - `rootfs/mallocprof.c`, LD_PRELOAD, live bytes per call
+site printed as library+offset for `addr2line`:
+
+    LD_PRELOAD=/root/mallocprof.so x11run xcalc
+    kill -USR2 $(pidof xcalc); cat /tmp/mallocprof.txt
+
+It found this on the first run:
+
+    live   count  call site
+    213852     70  libX11+0x98fc   font_query
+    49152      1  libX11+0x7294   queue_grow
+    19072      1  libX11+0x7a8c   XOpenDisplay
+
+- **70 identical XFontStructs, 213,852 bytes.** The per-character metrics of a
+  256-glyph font are 3,072 bytes on their own, and Xaw asks for the font of
+  every widget it builds. Fonts are now cached by name and by id for the life
+  of the process, which also removes 140 synchronous round trips at startup.
+  `XFreeFont()` is a no-op for a cached font, because the struct it is handed
+  is shared with every other widget.
+- **The event ring never shrank.** An Expose storm at map time grew it to 512
+  slots - 48 kB - held for the life of a process idle ever after. It is now
+  released when it drains.
+- **Two fixed 16 kB socket buffers.** Both start at 2-4 kB and grow; the input
+  buffer could not previously hold a reply larger than 16 kB at all.
+
+Result: **live heap 355,854 -> 87,014 bytes, and xcalc 592 kB -> 296 kB
+resident.** The 64 kB static request buffer went at the same time.

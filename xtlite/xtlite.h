@@ -24,6 +24,8 @@
  */
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
+#include <X11/Intrinsic.h>
+#include <X11/StringDefs.h>
 #include <X11/Xresource.h>
 #include <X11/Xatom.h>
 #include <stdio.h>
@@ -32,8 +34,12 @@
 
 #define XTLITE_IMPL(name)	/* implemented: name */
 
-/* What a widget can be. Only the classes xcalc instantiates exist. */
-enum wclass { W_SHELL, W_FORM, W_LABEL, W_COMMAND, W_TOGGLE };
+/*
+ * What a widget can be. The first five are ours, and opaque to the
+ * application. W_CUSTOM is a class the APPLICATION defined - see xtclass.c -
+ * where the instance layout is the application's and not ours.
+ */
+enum wclass { W_SHELL, W_FORM, W_LABEL, W_COMMAND, W_TOGGLE, W_CUSTOM };
 
 #define MAXACT	64
 
@@ -41,7 +47,7 @@ struct wid;
 
 struct action {
 	const char *name;
-	void (*proc)(struct wid *, XEvent *, char **, unsigned *);
+	void (*proc)(Widget, XEvent *, char **, unsigned *);
 };
 
 /* One parsed translation: an event pattern and the actions it fires. */
@@ -52,8 +58,26 @@ struct trans {
 	char *actions;			/* "digit(7)" etc., verbatim */
 };
 
+/*
+ * The widget record the application sees sits IMMEDIATELY AFTER our own, in
+ * one allocation:
+ *
+ *     [ struct wid | CorePart ... SimplePart ... ClockPart ]
+ *                  ^
+ *                  the Widget the application is handed
+ *
+ * An application-defined widget lays out its own instance record, starting
+ * with CorePart at offset zero, and reads w->core.width directly - so our
+ * bookkeeping cannot live inside it. Putting it in front makes the conversion
+ * a constant offset in both directions, with no side table and no lookup on
+ * the event path.
+ */
+#define WIDGET(p)	((Widget)((char *)(p) + sizeof(struct wid)))
+#define WID(w)		((struct wid *)((char *)(w) - sizeof(struct wid)))
+
 struct wid {
 	enum wclass cls;
+	WidgetClass wclass;		/* the application's class, or NULL */
 	char name[32];
 	struct wid *parent;
 	/*
@@ -77,7 +101,7 @@ struct wid {
 
 	/* Command/Toggle state */
 	int set, highlighted;
-	void (*callback)(struct wid *, void *, void *);
+	void (*callback)(Widget, void *, void *);
 	void *closure;
 	char radio_group[32];
 
@@ -92,6 +116,26 @@ struct wid {
 /* Globals live in xtlite.c. */
 extern Display *xt_dpy;
 extern struct wid *xt_root;
+
+struct wid *xt_wid_new(const char *name, enum wclass cls, struct wid *parent,
+		       size_t recsize);
+const char *xt_res_lookup(Widget w, const char *name, const char *class);
+void xt_set_typed(void *slot, const char *type, unsigned size, long value);
+void xt_set_from_string(void *slot, const char *type, unsigned size,
+			const char *v);
+
+/* xtclass.c - the Intrinsics class mechanism. */
+Widget xt_custom_create(const char *name, WidgetClass wc, struct wid *parent,
+			ArgList args, Cardinal nargs);
+void xt_custom_expose(struct wid *p, XEvent *ev);
+void xt_custom_resized(struct wid *p);
+int xt_is_intrinsics_class(WidgetClass wc);
+int xt_is_builtin_class(WidgetClass c);
+const char *xt_class_name(WidgetClass wc);
+size_t xt_class_size(WidgetClass wc);
+int xt_timer_wait_ms(void);
+void xt_timer_fire_due(void);
+unsigned long xt_now_ms(void);
 
 void xt_note(const char *fmt, ...);
 void xt_missing(const char *name);
