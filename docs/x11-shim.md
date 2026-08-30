@@ -322,40 +322,59 @@ suspecting the server.
 Clients live in `/root/x11`, like the other hand-deployed tools; `x11run` with
 no arguments, or with a name it cannot find, lists what is there.
 
-## Text, and what a real X server would draw differently
+## Fonts: real X bitmap faces, in flash, at zero RSS
 
-The glyphs are the kernel's own `lib/fonts/font_8x8.c`, turned into a C table
-by `tools/mkxshimfont.py`. Same GPL-2.0 as the shim, so there is no font
-package, no font file on the card, and 2 kB of glyph data that lives in XIP
-flash at **zero RSS**. It also makes `QueryFont` honest: the shim already
-claimed a fixed 8x8 face with ascent 7, and a toolkit lays out its widgets from
-whatever the server reports, so the metrics and the glyphs must be the same
-font or the layout is computed on a lie.
+The shim used to answer every `OpenFont` with one synthetic 8x8 face. That is
+self-consistent - `QueryFont` reported those metrics and layouts came out
+tidy - but it is not what the client asked for. xcalc requests `8x13`
+(`XCalc*Font: 8x13`) and per-GC `-adobe-symbol-*` for its radical and pi.
 
-The table is CP437 - the console font's own order - so the two encodings that
-actually turn up are mapped onto it:
+Now six real X BDF faces are compiled in by `tools/mkxshimfont.py`:
 
-- **ISO 8859-1**, the default for an X core font. xcalc's "x squared" button is
-  the single byte `\262`.
-- **Adobe Symbol**, which clients select per-GC. xcalc's radical sign is
-  `\326` and its pi is `\160`; in any other font those are `O` and `p`.
+    8x13  6x13  9x15  5x8      misc-fixed, ISO 8859-1   (font-misc-misc)
+    symb12  symb14           Adobe Symbol             (font-adobe-75dpi)
 
-That needs per-GC font tracking (`OpenFont` records the encoding from the font
-NAME, GC value bit 14 selects it) and the `PolyText8` font-shift item, which is
-a 255 byte followed by four font-id bytes **MSB first**.
+**29 kB of glyph data, and it costs zero RSS** - lvdesk is an XIP binary, so
+its text is mapped from flash and never resident. That is the whole argument
+for compiling fonts in rather than reading font files: no PCF parser, no font
+path, no page cache, no SD latency. The two Buildroot font packages are enabled
+for their BDF **sources** only; the .pcf.gz they install are unused.
 
-Checked against xcalc's own app-defaults, which is the authoritative
-description of how it should look, the remaining differences from a real X
-server are:
+`OpenFont` resolves a name three ways, because clients ask all three: a short
+alias (`8x13`, `fixed`), a full XLFD, or an XLFD of wildcards with only a size
+pinned. Size comes from XLFD field 7 (pixels) or field 8 (decipoints at 75dpi);
+family only has to separate Adobe Symbol from everything else, because that is
+the distinction that changes what a byte means. `QueryFont` and
+`QueryTextExtents` then report that face's real metrics, per glyph, so a
+proportional font measures correctly.
 
-- It asks for `8x13` (`XCalc*Font: 8x13`) and gets 8x8. The layout is
-  self-consistent because QueryFont reports the real metrics, so the window is
-  simply more compact than on a desktop.
-- Symbol glyphs that CP437 does not contain cannot be shown at all.
+This replaced a CP437 mapping hack. The kernel console font was a good way to
+get *something* drawn without adding a dependency, but it is CP437, so ISO
+8859-1 and Adobe Symbol both had to be mapped onto it by hand and anything
+CP437 lacked could not be drawn at all. Real fonts in their own encodings make
+that disappear.
 
-Everything else matches: the black `bevel` around the display, the inset white
-`screen`, the 1px black button borders, `x^2`, the radical, pi and the division
-sign.
+Checked against xcalc's own app-defaults - the authoritative description of how
+it should look - it now matches: the black `bevel`, the inset white `screen`,
+1px black button borders, 8x13 text, `x^2` from ISO 8859-1, and the radical,
+pi and division signs from Adobe Symbol.
+
+## Does it generalise? xfiles says no, and says exactly why
+
+xfiles is the honest test, because nothing was done for it. It still fails at
+the same place it failed before any of this work:
+
+    xfiles: could not find XRender visual format
+    -> 33 requests, 1 unimplemented (FreeColormap)
+
+So the core-protocol work generalises - xcalc needs **415 requests and zero
+errors** - but there is a second axis it does not touch. An Xft client will not
+start without RENDER, and no amount of core-protocol coverage helps. That is
+the next piece of work, and it is a small one: `QueryPictFormats`,
+`CreatePicture`, `CreateGlyphSet`, `AddGlyphs`, `CompositeGlyphs`,
+`FreePicture`. The client rasterises its own glyphs through freetype and
+uploads A8 masks, so RENDER needs **no font machinery at all** - and it covers
+essentially everything written since 1995.
 
 ## Where this goes next
 

@@ -1,65 +1,167 @@
 #!/usr/bin/env python3
 """
-Turn the kernel's 8x8 console font into a C table for the X11 shim.
+Turn X11 BDF bitmap fonts into C tables for lvdesk's X11 shim.
 
-The shim's QueryFont already claims a fixed 8x8 face with ascent 7 and descent
-1. This makes that claim TRUE rather than synthetic, which matters more than it
-sounds: a toolkit lays its widgets out from the metrics the server reports, so
-metrics that do not match the glyphs give a correct-looking window full of
-clipped or overlapping text.
+Why not read font files at runtime: the shim has no PCF parser, and a font
+compiled into lvdesk lives in XIP flash at ZERO RSS, where a file read off the
+card costs page cache and latency on a board with ~3 MB free. Four fixed fonts
+plus two Symbol sizes come to ~25 kB of flash and nothing resident.
 
-Source is lib/fonts/font_8x8.c from the kernel tree we already build - same
-GPL-2.0 as the shim - so no font package, no font file on the card, and 760
-bytes of glyph data that live in XIP flash at zero RSS.
+Why real X fonts rather than a synthetic face: a toolkit lays its widgets out
+from the metrics the server reports for the font it asked for. Reporting one
+8x8 face for every request makes the layout self-consistent but wrong - xcalc
+asks for 8x13 - and it cannot render ISO 8859-1 or the Adobe Symbol glyphs
+clients select per-GC.
 
-  python3 tools/mkxshimfont.py linux-71-port/lib/fonts/font_8x8.c \
-      lvdesk/xshim_font.h
+Every glyph is normalised into the font's own box (advance width x pixel
+height, origin on the baseline with `ascent` rows above it) so the drawing code
+needs no per-glyph offsets. Proportional fonts keep a per-glyph advance table;
+monospace ones do not need one.
+
+  python3 tools/mkxshimfont.py <out.h> <name>=<file.bdf> [<name>=<file.bdf>...]
 """
 import re
 import sys
 
-FIRST, LAST = 0, 255
+
+def parse_bdf(path):
+    """-> dict with xlfd, ascent, descent, and per-encoding glyph data."""
+    xlfd, ascent, descent = "", None, None
+    glyphs = {}
+    enc = dwidth = None
+    bbx = None
+    rows = None
+    for line in open(path, "rb").read().decode("latin-1").splitlines():
+        f = line.split()
+        if not f:
+            continue
+        k = f[0]
+        if k == "FONT" and len(f) > 1:
+            xlfd = f[1]
+        elif k == "FONT_ASCENT":
+            ascent = int(f[1])
+        elif k == "FONT_DESCENT":
+            descent = int(f[1])
+        elif k == "ENCODING":
+            enc = int(f[1])
+        elif k == "DWIDTH":
+            dwidth = int(f[1])
+        elif k == "BBX":
+            bbx = tuple(int(v) for v in f[1:5])
+        elif k == "BITMAP":
+            rows = []
+        elif k == "ENDCHAR":
+            if enc is not None and enc >= 0 and bbx:
+                glyphs[enc] = (dwidth, bbx, rows or [])
+            enc = dwidth = bbx = rows = None
+        elif rows is not None:
+            rows.append(f[0])
+    if ascent is None or descent is None:
+        sys.exit("%s: no FONT_ASCENT/FONT_DESCENT" % path)
+    return {"xlfd": xlfd, "ascent": ascent, "descent": descent,
+            "glyphs": glyphs}
 
 
-def main(src, dst):
-    text = open(src).read()
-    # The table is a flat list of 2048 byte literals, one per line, with the
-    # character index in a comment. Take the literals in order.
-    body = text[text.index("FONTDATAMAX"):]
-    vals = [int(v, 16) for v in re.findall(r"0x([0-9a-fA-F]{2}),", body)]
-    if len(vals) < 256 * 8:
-        sys.exit("expected 2048 bytes, found %d" % len(vals))
+def build(font):
+    """Normalise every glyph into one box. Returns (meta, bits, advances)."""
+    g = font["glyphs"]
+    enc = sorted(k for k in g if 0 <= k <= 255)
+    if not enc:
+        sys.exit("no glyphs in 0..255")
+    first, last = enc[0], enc[-1]
+    h = font["ascent"] + font["descent"]
+    advs = [g[e][0] for e in enc]
+    # Box wide enough for the widest advance AND the widest inked bitmap.
+    box = max(advs)
+    for e in enc:
+        _, (bw, _bh, xoff, _yoff), _ = g[e]
+        box = max(box, xoff + bw)
+    bpr = (box + 7) // 8
+    mono = len(set(advs)) == 1
 
+    bits = bytearray()
+    for e in range(first, last + 1):
+        cell = [bytearray(bpr) for _ in range(h)]
+        if e in g:
+            _dw, (bw, bh, xoff, yoff), rows = g[e]
+            top = font["ascent"] - yoff - bh
+            for gr in range(min(bh, len(rows))):
+                # A BDF row is hex, padded to a whole number of bytes.
+                val = int(rows[gr] or "0", 16)
+                nbits = ((bw + 7) // 8) * 8
+                y = top + gr
+                if y < 0 or y >= h:
+                    continue
+                for gc in range(bw):
+                    if not (val >> (nbits - 1 - gc)) & 1:
+                        continue
+                    x = xoff + gc
+                    if 0 <= x < box:
+                        cell[y][x >> 3] |= 0x80 >> (x & 7)
+        for row in cell:
+            bits += row
+    return {"first": first, "last": last, "h": h, "box": box, "bpr": bpr,
+            "mono": mono, "w": advs[0] if mono else 0,
+            "ascent": font["ascent"], "descent": font["descent"],
+            "xlfd": font["xlfd"]}, bits, [g[e][0] if e in g else 0
+                                          for e in range(first, last + 1)]
+
+
+def carray(name, data, per=16):
+    out = ["static const unsigned char %s[] = {" % name]
+    for i in range(0, len(data), per):
+        out.append("\t" + " ".join("0x%02x," % b for b in data[i:i + per]))
+    out.append("};")
+    return out
+
+
+def main(dst, specs):
     out = ["/* SPDX-License-Identifier: GPL-2.0-only */",
            "/*",
-           " * Generated by tools/mkxshimfont.py from the kernel's",
-           " * lib/fonts/font_8x8.c. Do not edit.",
+           " * Generated by tools/mkxshimfont.py from X11 BDF sources.",
+           " * Do not edit.",
            " *",
-           " * CP437 %d..%d, 8x8, one byte per row, MSB leftmost." % (FIRST, LAST),
-           " * Ascent 7, descent 1: row r sits at baseline - 7 + r.",
+           " * Each glyph is normalised into the font's own box, origin on the",
+           " * baseline with `ascent` rows above it, so drawing needs no",
+           " * per-glyph offsets. MSB is the leftmost pixel.",
            " */",
            "#ifndef LVDESK_XSHIM_FONT_H",
-           "#define LVDESK_XSHIM_FONT_H",
-           "",
-           "#define XFONT_FIRST\t%d" % FIRST,
-           "#define XFONT_LAST\t%d" % LAST,
-           "#define XFONT_W\t\t8",
-           "#define XFONT_H\t\t8",
-           "#define XFONT_ASCENT\t7",
-           "#define XFONT_DESCENT\t1",
-           "",
-           "static const unsigned char xfont_bits[%d][8] = {"
-           % (LAST - FIRST + 1)]
-    for c in range(FIRST, LAST + 1):
-        rows = vals[c * 8:(c + 1) * 8]
-        ch = chr(c) if 32 <= c < 127 else "."
-        ch = ch.replace("\\", "\\\\").replace("'", "\\'")
-        out.append("\t{ %s }, /* '%s' */"
-                   % (", ".join("0x%02x" % r for r in rows), ch))
-    out += ["};", "", "#endif /* LVDESK_XSHIM_FONT_H */", ""]
+           "#define LVDESK_XSHIM_FONT_H", ""]
+    metas = []
+    for spec in specs:
+        name, path = spec.split("=", 1)
+        meta, bits, advs = build(parse_bdf(path))
+        meta["name"] = name
+        out += carray("xfb_" + name, bits)
+        if not meta["mono"]:
+            out += carray("xfa_" + name, advs)
+        out.append("")
+        metas.append(meta)
+        print("%-8s %2dx%-2d box=%d bpr=%d %s %5d bytes  %s"
+              % (name, meta["w"] or 0, meta["h"], meta["box"], meta["bpr"],
+                 "mono" if meta["mono"] else "prop", len(bits), meta["xlfd"]))
+
+    out += ["struct xfont {",
+            "\tconst char *xlfd;",
+            "\tconst char *alias;\t/* the short name, e.g. \"8x13\" */",
+            "\tconst unsigned char *bits;",
+            "\tconst unsigned char *adv;\t/* NULL when monospace */",
+            "\tunsigned short first, last;",
+            "\tunsigned char w, h, box, bpr, ascent, descent;",
+            "};", "",
+            "static const struct xfont xfonts[] = {"]
+    for m in metas:
+        out.append('\t{ "%s", "%s", xfb_%s, %s, %d, %d, %d, %d, %d, %d, %d, %d },'
+                   % (m["xlfd"].lower(), m["name"], m["name"],
+                      "NULL" if m["mono"] else "xfa_" + m["name"],
+                      m["first"], m["last"], m["w"], m["h"], m["box"],
+                      m["bpr"], m["ascent"], m["descent"]))
+    out += ["};", "",
+            "#define XFONT_N\t(int)(sizeof(xfonts) / sizeof(xfonts[0]))", "",
+            "#endif /* LVDESK_XSHIM_FONT_H */", ""]
     open(dst, "w").write("\n".join(out))
-    print("wrote %s: %d glyphs" % (dst, LAST - FIRST + 1))
+    print("wrote %s" % dst)
 
 
 if __name__ == "__main__":
-    main(sys.argv[1], sys.argv[2])
+    main(sys.argv[1], sys.argv[2:])

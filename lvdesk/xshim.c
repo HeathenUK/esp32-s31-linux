@@ -69,7 +69,7 @@ struct res {
 	int cx0, cy0, cx1, cy1;		/* clip, in that buffer's coords */
 	uint32_t fg, bg;		/* GCs only */
 	uint32_t font;			/* GCs only: the font it selects */
-	int is_symbol;			/* fonts only: Adobe Symbol encoding */
+	int font_idx;			/* fonts only: index into xfonts[] */
 	int line_width;
 	int owner;			/* index into cli[] */
 	uint32_t event_mask;		/* what this window asked to receive */
@@ -541,114 +541,135 @@ static void dump_recent(struct cli *c)
 }
 
 /*
- * The glyph table is the kernel's CP437 console font, so anything that is not
- * CP437 has to be mapped onto it. Two encodings turn up in practice:
+ * Pick the closest embedded font for an X font name.
  *
- *   - ISO 8859-1, which is what an X core font is by default. xcalc's "x squared"
- *     button is the single byte \262.
- *   - Adobe Symbol, which clients select per-GC for mathematical glyphs.
- *     xcalc uses \326 for the radical sign and \160 for pi.
+ * Clients ask three ways: a short alias ("8x13", "fixed"), a full XLFD, or an
+ * XLFD full of wildcards with only a size pinned down. All three have to land
+ * somewhere sensible, because a client that cannot open a font usually gives
+ * up rather than choose for itself.
  *
- * Only the code points that exist in CP437 can be shown; the rest fall through
- * to the raw byte, which is at least deterministic. Unmapped is better than
- * wrong here - a substituted glyph reads as a rendering bug.
+ * The size wanted comes from XLFD field 7 (pixels) or field 8 (decipoints);
+ * the family only has to separate Adobe Symbol from everything else, since
+ * that is the distinction that changes which glyph a byte means.
  */
-static uint8_t map_latin1(uint8_t ch)
+static int font_pick(const uint8_t *name, int n)
 {
-	static const struct { uint8_t l1, cp; } m[] = {
-		{ 0xA0, 0x20 }, { 0xA1, 0xAD }, { 0xA2, 0x9B }, { 0xA3, 0x9C },
-		{ 0xA5, 0x9D }, { 0xAA, 0xA6 }, { 0xAB, 0xAE }, { 0xAC, 0xAA },
-		{ 0xB0, 0xF8 }, { 0xB1, 0xF1 }, { 0xB2, 0xFD }, { 0xB5, 0xE6 },
-		{ 0xB7, 0xFA }, { 0xBA, 0xA7 }, { 0xBB, 0xAF }, { 0xBC, 0xAC },
-		{ 0xBD, 0xAB }, { 0xBF, 0xA8 }, { 0xC4, 0x8E }, { 0xC5, 0x8F },
-		{ 0xC6, 0x92 }, { 0xC7, 0x80 }, { 0xC9, 0x90 }, { 0xD1, 0xA5 },
-		{ 0xD6, 0x99 }, { 0xDC, 0x9A }, { 0xDF, 0xE1 }, { 0xE0, 0x85 },
-		{ 0xE1, 0xA0 }, { 0xE2, 0x83 }, { 0xE4, 0x84 }, { 0xE5, 0x86 },
-		{ 0xE6, 0x91 }, { 0xE7, 0x87 }, { 0xE8, 0x8A }, { 0xE9, 0x82 },
-		{ 0xEA, 0x88 }, { 0xEB, 0x89 }, { 0xEC, 0x8D }, { 0xED, 0xA1 },
-		{ 0xEE, 0x8C }, { 0xEF, 0x8B }, { 0xF1, 0xA4 }, { 0xF2, 0x95 },
-		{ 0xF3, 0xA2 }, { 0xF4, 0x93 }, { 0xF6, 0x94 }, { 0xF7, 0xF6 },
-		{ 0xF9, 0x97 }, { 0xFA, 0xA3 }, { 0xFB, 0x96 }, { 0xFC, 0x81 },
-		{ 0xFF, 0x98 },
-	};
-	int i;
+	char b[160];
+	const char *tok[16];
+	int i, ntok = 0, want = 0, symbol = 0, best = 0, bestd = 1 << 30;
 
-	if (ch < 0xA0)
-		return ch;
-	for (i = 0; i < (int)(sizeof(m) / sizeof(m[0])); i++)
-		if (m[i].l1 == ch)
-			return m[i].cp;
-	return ch;
+	if (n > (int)sizeof(b) - 1)
+		n = sizeof(b) - 1;
+	for (i = 0; i < n; i++)
+		b[i] = (name[i] >= 'A' && name[i] <= 'Z') ? name[i] + 32
+							  : name[i];
+	b[n] = 0;
+
+	for (i = 0; i < XFONT_N; i++)		/* exact alias, e.g. "8x13" */
+		if (!strcmp(b, xfonts[i].alias))
+			return i;
+	if (!strcmp(b, "fixed"))
+		return 1;			/* 6x13, X's traditional default */
+	if (strstr(b, "symbol"))
+		symbol = 1;
+
+	/* Split the XLFD; tok[7] is pixel size and tok[8] point size. */
+	tok[ntok++] = b;
+	for (i = 0; i < n && ntok < 16; i++)
+		if (b[i] == '-') {
+			b[i] = 0;
+			tok[ntok++] = b + i + 1;
+		}
+	if (ntok > 7 && tok[7][0] >= '1' && tok[7][0] <= '9')
+		want = atoi(tok[7]);
+	else if (ntok > 8 && tok[8][0] >= '1' && tok[8][0] <= '9')
+		want = (atoi(tok[8]) * 75 + 360) / 720;	/* decipoints at 75dpi */
+	if (!want)
+		want = 13;
+
+	for (i = 0; i < XFONT_N; i++) {
+		int is_sym = strstr(xfonts[i].xlfd, "symbol") != NULL;
+		int d = xfonts[i].h - want;
+
+		if (is_sym != symbol)
+			continue;
+		if (d < 0)
+			d = -d;
+		if (d < bestd) {
+			bestd = d;
+			best = i;
+		}
+	}
+	return best;
 }
 
-static uint8_t map_symbol(uint8_t ch)
+static const struct xfont *font_of(struct res *g)
 {
-	static const struct { uint8_t sy, cp; } m[] = {
-		{ 0x60, 0xC4 },		/* radical extender -> horizontal bar */
-		{ 0x61, 0xE0 },		/* alpha */
-		{ 0x62, 0xE1 },		/* beta */
-		{ 0x64, 0xEB },		/* delta */
-		{ 0x65, 0xEE },		/* epsilon */
-		{ 0x66, 0xED },		/* phi */
-		{ 0x6D, 0xE6 },		/* mu */
-		{ 0x70, 0xE3 },		/* pi */
-		{ 0x73, 0xE5 },		/* sigma */
-		{ 0x74, 0xE7 },		/* tau */
-		{ 0x47, 0xE2 },		/* Gamma */
-		{ 0x53, 0xE4 },		/* Sigma */
-		{ 0x57, 0xEA },		/* Omega */
-		{ 0xA5, 0xEC },		/* infinity */
-		{ 0xB1, 0xF1 },		/* plus-minus */
-		{ 0xB8, 0xF6 },		/* divide */
-		{ 0xD6, 0xFB },		/* radical sign */
-	};
-	int i;
+	struct res *f = g ? res_find(g->font) : NULL;
 
-	for (i = 0; i < (int)(sizeof(m) / sizeof(m[0])); i++)
-		if (m[i].sy == ch)
-			return m[i].cp;
-	return ch;
+	if (f && f->type == R_FONT && f->font_idx >= 0 &&
+	    f->font_idx < XFONT_N)
+		return &xfonts[f->font_idx];
+	return &xfonts[0];
+}
+
+static int glyph_adv(const struct xfont *f, uint8_t ch)
+{
+	if (ch < f->first || ch > f->last)
+		return f->w ? f->w : f->box;
+	return f->adv ? f->adv[ch - f->first] : f->w;
 }
 
 /*
  * One glyph, origin on the baseline as X defines it: bitmap row r lands at
- * y - XFONT_ASCENT + r, so the descent row falls below the baseline. Anything
+ * y - ascent + r, so the descent rows fall below the baseline. Anything
  * outside the font's range is skipped rather than substituted - a missing
  * glyph should look missing, not like a different character.
  */
 static void draw_glyph(struct res *d, int x, int y, uint8_t ch, uint16_t c,
-		       int symbol)
+		       const struct xfont *f)
 {
 	const unsigned char *g;
 	int row, col;
 
-	ch = symbol ? map_symbol(ch) : map_latin1(ch);
-	g = xfont_bits[ch];
-	for (row = 0; row < XFONT_H; row++)
-		for (col = 0; col < XFONT_W; col++)
-			if (g[row] & (0x80 >> col))
-				px_set(d, x + col, y - XFONT_ASCENT + row, c);
+	if (ch < f->first || ch > f->last)
+		return;
+	g = f->bits + (size_t)(ch - f->first) * f->h * f->bpr;
+	for (row = 0; row < f->h; row++)
+		for (col = 0; col < f->box; col++)
+			if (g[row * f->bpr + (col >> 3)] & (0x80 >> (col & 7)))
+				px_set(d, x + col, y - f->ascent + row, c);
 }
 
 static int draw_string(struct res *d, int x, int y, const uint8_t *str, int n,
-		       uint16_t c, int symbol)
+		       uint16_t c, const struct xfont *f)
 {
-	int i;
+	int i, adv = 0;
+
+	for (i = 0; i < n; i++) {
+		draw_glyph(d, x + adv, y, str[i], c, f);
+		adv += glyph_adv(f, str[i]);
+	}
+	return adv;
+}
+
+static int text_width(const struct xfont *f, const uint8_t *str, int n)
+{
+	int i, adv = 0;
 
 	for (i = 0; i < n; i++)
-		draw_glyph(d, x + i * XFONT_W, y, str[i], c, symbol);
-	return n * XFONT_W;
+		adv += glyph_adv(f, str[i]);
+	return adv;
 }
 
 /*
  * Colour names. Every X client resolves at least a few of these through the
- * server, and a client that cannot resolve one usually gives up rather than
- * pick a default - so this is cheap generality, not decoration.
+ * server, and one that cannot resolve a name usually gives up rather than pick
+ * a default - so this is cheap generality, not decoration.
  *
  * The full rgb.txt is 750-odd names and a file on the card; this is the set
- * that actually turns up, plus the numeric forms, in 300 bytes of flash. An
- * unknown name is logged BY NAME, which is what makes the next gap a one-line
- * fix rather than an investigation.
+ * that actually turns up, plus the numeric forms. An unknown name is logged BY
+ * NAME, which makes the next gap a one-line fix rather than an investigation.
  */
 static const struct { const char *name; uint8_t r, g, b; } cnames[] = {
 	{ "black", 0x00, 0x00, 0x00 }, { "white", 0xFF, 0xFF, 0xFF },
@@ -684,7 +705,7 @@ static int color_lookup(const uint8_t *nm, int n, uint16_t *ro, uint16_t *go,
 		if (per < 1 || per > 4 || per * 3 != digits)
 			return 0;
 		for (k = 0; k < 3; k++) {
-			int acc = 0;
+			int acc = 0, w = per;
 
 			for (i = 0; i < per; i++) {
 				int h = hexval(nm[1 + k * per + i]);
@@ -693,13 +714,11 @@ static int color_lookup(const uint8_t *nm, int n, uint16_t *ro, uint16_t *go,
 					return 0;
 				acc = acc * 16 + h;
 			}
-			/* Scale whatever precision was given up to 16 bits. */
-			while (per * 4 < 16) {
-				acc = (acc << (per * 4)) | acc;
-				per *= 2;
+			while (w * 4 < 16) {	/* scale up to 16 bits */
+				acc = (acc << (w * 4)) | acc;
+				w *= 2;
 			}
 			v[k] = acc & 0xFFFF;
-			per = digits / 3;
 		}
 		*ro = v[0]; *go = v[1]; *bo = v[2];
 		return 1;
@@ -730,13 +749,6 @@ static uint32_t rgb565(uint16_t r, uint16_t g, uint16_t b)
 {
 	return ((uint32_t)(r >> 11) << 11) | ((uint32_t)(g >> 10) << 5) |
 	       (uint32_t)(b >> 11);
-}
-
-static int gc_symbol(struct res *g)
-{
-	struct res *f = g ? res_find(g->font) : NULL;
-
-	return f && f->type == R_FONT && f->is_symbol;
 }
 
 /* ---------------------------------------------------------------- protocol */
@@ -1046,54 +1058,76 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		break;
 	case 47: {					/* QueryFont */
 		/*
-		 * A synthetic fixed 8x8 face over ASCII 32..126. The client
-		 * takes the core-font path and needs consistent metrics, but
-		 * for an analog clock nothing is ever drawn with it.
+		 * The metrics of the font this id refers to, not a synthetic
+		 * face. A toolkit lays out its widgets from exactly these
+		 * numbers, so they have to describe the glyphs we will
+		 * actually draw or the layout is computed on a lie.
 		 */
-		uint8_t ext[52 - 24 + (XFONT_LAST - XFONT_FIRST + 1) * 12];
-		uint8_t ci[12], *p = ext;
-		int i, nch = XFONT_LAST - XFONT_FIRST + 1;
+		struct res *fr = res_find(get32(r + 4));
+		const struct xfont *f = (fr && fr->type == R_FONT &&
+					 fr->font_idx < XFONT_N)
+					? &xfonts[fr->font_idx] : &xfonts[0];
+		int nch = f->last - f->first + 1;
+		uint8_t ext[28 + 256 * 12], ci[12], *p = ext;
+		int i, wmin = 1 << 30, wmax = 0;
 
+		for (i = 0; i < nch; i++) {
+			int a = glyph_adv(f, (uint8_t)(f->first + i));
+
+			if (a < wmin) wmin = a;
+			if (a > wmax) wmax = a;
+		}
+		/* min-bounds, then max-bounds, spanning the 24-byte header. */
 		memset(ci, 0, sizeof(ci));
-		put16(ci + 2, XFONT_W); put16(ci + 4, XFONT_W);
-		put16(ci + 6, XFONT_ASCENT); put16(ci + 8, XFONT_DESCENT);
-
+		put16(ci + 2, wmin); put16(ci + 4, wmin);
+		put16(ci + 6, f->ascent); put16(ci + 8, f->descent);
 		memcpy(d24, ci, 12); memset(d24 + 12, 0, 4);
-		memcpy(d24 + 16, ci, 8);		/* max-bounds starts here */
+		put16(ci + 2, wmax); put16(ci + 4, wmax);
+		memcpy(d24 + 16, ci, 8);
 
 		memcpy(p, ci + 8, 4); p += 4;
 		memset(p, 0, 4); p += 4;
-		put16(p, XFONT_FIRST); put16(p + 2, XFONT_LAST);
-		put16(p + 4, XFONT_FIRST); put16(p + 6, 0); p += 8;
+		put16(p, f->first); put16(p + 2, f->last);
+		put16(p + 4, f->first); put16(p + 6, 0); p += 8;
 		*p++ = 0; *p++ = 0; *p++ = 0; *p++ = 1;
-		put16(p, XFONT_ASCENT); put16(p + 2, XFONT_DESCENT); p += 4;
+		put16(p, f->ascent); put16(p + 2, f->descent); p += 4;
 		put32(p, nch); p += 4;
-		for (i = 0; i < nch; i++) { memcpy(p, ci, 12); p += 12; }
+		for (i = 0; i < nch; i++) {
+			int a = glyph_adv(f, (uint8_t)(f->first + i));
+
+			memset(ci, 0, sizeof(ci));
+			put16(ci + 2, a); put16(ci + 4, a);
+			put16(ci + 6, f->ascent); put16(ci + 8, f->descent);
+			memcpy(p, ci, 12); p += 12;
+		}
 		send_reply(c, 0, d24, ext, p - ext);
 		break;
 	}
 	case 48: {					/* QueryTextExtents */
 		/*
-		 * Every field here used to be one slot out, which put 0 in
-		 * overall-width - so every string measured as zero pixels
-		 * wide. A toolkit sizing a widget from that collapses its
-		 * whole layout, and the result looks like a rendering bug
-		 * rather than a measurement one.
-		 *
-		 * The string is CHAR2B even for an 8-bit font, and r[1] is
-		 * the odd-length flag.
+		 * The string is CHAR2B even for an 8-bit font, and r[1] is the
+		 * odd-length flag. Every field here used to be one slot out,
+		 * which put 0 in overall-width - so every string measured as
+		 * zero pixels wide and a toolkit sized from that collapsed its
+		 * whole layout.
 		 */
-		int n = (len - 8) / 2 - (r[1] ? 1 : 0);
+		struct res *fr = res_find(get32(r + 4));
+		const struct xfont *f = (fr && fr->type == R_FONT &&
+					 fr->font_idx < XFONT_N)
+					? &xfonts[fr->font_idx] : &xfonts[0];
+		int n = (len - 8) / 2 - (r[1] ? 1 : 0), i, wid = 0;
 
 		if (n < 0)
 			n = 0;
-		put16(d24 + 0, XFONT_ASCENT);
-		put16(d24 + 2, XFONT_DESCENT);
-		put16(d24 + 4, XFONT_ASCENT);
-		put16(d24 + 6, XFONT_DESCENT);
-		put32(d24 + 8, (uint32_t)(n * XFONT_W));	/* overall-width */
-		put32(d24 + 12, 0);				/* overall-left */
-		put32(d24 + 16, (uint32_t)(n * XFONT_W));	/* overall-right */
+		for (i = 0; i < n; i++)		/* low byte of each CHAR2B */
+			wid += glyph_adv(f, r[8 + i * 2 + 1]);
+		put16(d24 + 0, f->ascent);
+		put16(d24 + 2, f->descent);
+		put16(d24 + 4, f->ascent);
+		put16(d24 + 6, f->descent);
+		put32(d24 + 8, (uint32_t)wid);		/* overall-width */
+		put32(d24 + 12, 0);			/* overall-left */
+		put32(d24 + 16, (uint32_t)wid);		/* overall-right */
 		send_reply(c, 0, d24, NULL, 0);
 		break;
 	}
@@ -1332,20 +1366,20 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		struct res *g = res_find(get32(r + 8));
 		int x = gets16(r + 12), y = gets16(r + 14);
 		const uint8_t *p = r + 16, *end = r + len;
-		int sym;
+		const struct xfont *f;
 
 		if (!d || !drawable_ok(d) || !g) {
 			send_error(c, d ? X_BAD_GC : X_BAD_DRAWABLE,
 				   get32(d ? r + 8 : r + 4), op);
 			break;
 		}
-		sym = gc_symbol(g);
+		f = font_of(g);
 		while (p + 2 <= end) {
 			int m, delta;
 
 			if (*p == 255) {		/* font shift */
 				/* Four bytes of font id, MSB first. */
-				struct res *f;
+				struct res *fr;
 				uint32_t fid;
 
 				if (p + 5 > end)
@@ -1353,8 +1387,10 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 				fid = ((uint32_t)p[1] << 24) |
 				      ((uint32_t)p[2] << 16) |
 				      ((uint32_t)p[3] << 8) | p[4];
-				f = res_find(fid);
-				sym = f && f->type == R_FONT && f->is_symbol;
+				fr = res_find(fid);
+				if (fr && fr->type == R_FONT &&
+				    fr->font_idx < XFONT_N)
+					f = &xfonts[fr->font_idx];
 				p += 5;
 				continue;
 			}
@@ -1368,7 +1404,7 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 					"fg=%04x bg=%04x at %d,%d\n", d->id, m,
 					p + 2, g->fg, g->bg, x, y);
 			x += draw_string(d, x, y, p + 2, m, (uint16_t)g->fg,
-					 sym);
+					 f);
 			p += 2 + m;
 		}
 		notify_draw(d);
@@ -1393,14 +1429,19 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		}
 		if (16 + n > len)
 			n = len - 16;
-		for (j = y - XFONT_ASCENT; j < y + XFONT_DESCENT; j++)
-			for (i = x; i < x + n * XFONT_W; i++)
-				px_set(d, i, j, (uint16_t)g->bg);
+		{
+			const struct xfont *f = font_of(g);
+			int wid = text_width(f, r + 16, n);
+
+			for (j = y - f->ascent; j < y + f->descent; j++)
+				for (i = x; i < x + wid; i++)
+					px_set(d, i, j, (uint16_t)g->bg);
+		}
 		if (trace_on())
 			fprintf(stderr, "xshim: ImageText8 0x%x '%.*s' fg=%04x "
 				"bg=%04x at %d,%d\n", d->id, n, r + 16, g->fg,
 				g->bg, x, y);
-		draw_string(d, x, y, r + 16, n, (uint16_t)g->fg, gc_symbol(g));
+		draw_string(d, x, y, r + 16, n, (uint16_t)g->fg, font_of(g));
 		notify_draw(d);
 		break;
 	}
@@ -1599,17 +1640,16 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		 * which in any other font are 'O' and 'p'.
 		 */
 		struct res *f = res_new(get32(r + 4), R_FONT);
-		int n = get16(r + 8), i;
+		int n = get16(r + 8);
 
 		if (!f)
 			break;
 		if (12 + n > len)
 			n = len - 12;
-		for (i = 0; i + 6 <= n; i++)
-			if (!memcmp(r + 12 + i, "symbol", 6)) {
-				f->is_symbol = 1;
-				break;
-			}
+		f->font_idx = font_pick(r + 12, n);
+		if (trace_on())
+			fprintf(stderr, "xshim: OpenFont '%.*s' -> %s\n", n,
+				r + 12, xfonts[f->font_idx].alias);
 		break;
 	}
 	case 61: {					/* ClearArea */

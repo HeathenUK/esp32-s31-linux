@@ -191,6 +191,18 @@ BR2_PACKAGE_XAPP_XCLOCK=y
 # text - and xdpyinfo does nothing BUT ask the server about itself, so between
 # them they walk into every gap there is. Both are test instruments here.
 BR2_PACKAGE_XAPP_XCALC=y
+
+# The classic X "fixed" bitmap fonts - 6x13, 8x13, 9x15 and friends.
+#
+# Enabled for their BDF SOURCES, which tools/mkxshimfont.py turns into C tables
+# compiled into lvdesk. The shim does not read font files at runtime: it has no
+# PCF parser, and a font in lvdesk's XIP text costs zero RSS where a file read
+# off the card costs page cache and latency. The installed .pcf.gz go to the SD
+# rootfs and nothing uses them.
+BR2_PACKAGE_XFONT_FONT_MISC_MISC=y
+# Adobe Symbol, for the mathematical glyphs clients select per-GC (xcalc's
+# radical sign and pi). Also source-only, for the same reason.
+BR2_PACKAGE_XFONT_FONT_ADOBE_75DPI=y
 BR2_PACKAGE_XAPP_XDPYINFO=y
 
 # xcalc: the calculator, off the shelf. It is an Athena app, so it brings back
