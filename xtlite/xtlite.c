@@ -527,6 +527,31 @@ static void realize(struct wid *w)
 				       0, 0, w->w, w->h, 0, CopyFromParent,
 				       InputOutput, CopyFromParent, mask, &a);
 		XStoreName(xt_dpy, w->win, w->label[0] ? w->label : app_name);
+		/*
+		 * Declare the shell fixed-size, because under xtlite it is.
+		 *
+		 * Real Xt reflows a shell's widget tree when the window
+		 * manager resizes it; xtlite has no geometry management, so a
+		 * resized xcalc repaints its background across the new width
+		 * and leaves the button grid sitting in the corner. Setting
+		 * PMinSize == PMaxSize tells the window manager that up front,
+		 * so it removes the maximise button and the resize grip rather
+		 * than offering an operation whose only possible outcome is a
+		 * large empty area.
+		 *
+		 * This is an honest statement about THIS toolkit, not about the
+		 * application: implement Xt geometry management here and the
+		 * hint should come off with it.
+		 */
+		{
+			XSizeHints h;
+
+			memset(&h, 0, sizeof(h));
+			h.flags = PMinSize | PMaxSize;
+			h.min_width = h.max_width = (int)w->w;
+			h.min_height = h.max_height = (int)w->h;
+			XSetWMNormalHints(xt_dpy, w->win, &h);
+		}
 	} else {
 		w->win = XCreateWindow(xt_dpy, w->parent->win, w->x, w->y,
 				       w->w, w->h, w->bw, CopyFromParent,
