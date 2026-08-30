@@ -142,6 +142,73 @@ The lesson is the one this project keeps relearning: the shim's own buffers
 were 235 kB and worth little, but 159 kB was hiding in a struct I wrote without
 thinking about how many of them there would be.
 
+## Every byte, accounted for
+
+Not "here is what I noticed" - the complete map of a running xcalc, with each
+object justified by how many of its exported functions the client chain
+actually references.
+
+    RSS kB  object                referenced / exported   verdict
+    ------  --------------------  ---------------------   ------------------
+       340  libXaw7               the widget set itself    justified
+       308  libXt                 the Intrinsics           justified
+       288  [anon]                heap, BSS, our buffers   see below
+        88  libXmu                 37 / 129                justified
+        72  xlite                 our libX11               justified
+        72  libICE                  2 / 108                2 functions!
+        64  libXext                 2 / 132                2 functions!
+        56  libXpm                  1 /  34                1 function!
+        44  xcalc                 the application          justified
+        32  libSM                  11 /  41                dead path
+        20  [stack]
+         8  [heap]  8 libc(rw)  4 vdso
+    ------
+      1404  total  (980 clean, 420 dirty)
+
+    already removed by this audit:
+        24  libXdmcp                0 /  42                gone
+        16  libXau                  0 /   8                gone
+        72  libxcb                  0 / ...                gone
+
+**Nothing referenced libXau or libXdmcp at all** - zero of 8 and zero of 42
+exported functions - and they were mapped anyway, exactly as libxcb was: a
+DT_NEEDED that pkg-config handed the linker and the loader then honoured. 40 kB
+for nothing, now dropped with `tools/drop-needed.py`.
+
+Why small libraries cost so much: the kernel's fault-around brings in ~64 kB
+around a fault, so a single call into a library maps most of it. That is why
+libICE costs 72 kB to provide **two** functions.
+
+### What is still addressable, with numbers
+
+    libICE   72 kB   IceConnectionNumber, IceProcessMessages
+    libSM    32 kB   11 Smc* functions, all on the session-manager path
+    libXext  64 kB   XShapeQueryExtension, XShapeCombineMask
+    libXpm   56 kB   XpmReadFileToPixmap
+    -------------
+            224 kB   for FOURTEEN functions
+
+Every one of these is the xlite argument again. There is no session manager on
+this board, so `SmcOpenConnection` never succeeds and the whole libSM/libICE
+path is dead. The shim advertises **no extensions at all**, so
+`XShapeQueryExtension` must return False and `XShapeCombineMask` is never
+reached. xcalc uses no XPM. Replacing the four with a single stub library
+exporting those fourteen symbols is on the order of 2 kB and removes 224 kB -
+16% of the client.
+
+The honest caveat: stubbing libXpm removes XPM support for any client that
+does use it, and stubbing libXext removes SHAPE for any client that needs it.
+Those are build-time choices to make deliberately, not silently.
+
+### The 288 kB of anonymous memory
+
+Attributed, not guessed: Xt and Xaw's widget records dominate it, and they are
+not ours to shrink. Our own contributions are the resource database (~23 kB
+after the compaction above, down from ~159 kB) and xlite's per-display
+buffers - a 16 kB input buffer and the event ring, both inside one `calloc`.
+The 64 kB request buffer is BSS and only the pages actually written are ever
+faulted in, so it costs about 4 kB, not 64.
+
 ## Four bugs worth keeping
 
 Each of these presented as something other than what it was.
