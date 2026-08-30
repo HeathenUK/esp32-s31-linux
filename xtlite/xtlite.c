@@ -48,6 +48,33 @@ void xt_note(const char *fmt, ...)
 	fputc('\n', stderr);
 }
 
+/*
+ * Anything we are handed and do not act on gets said OUT LOUD, once, with a
+ * summary at exit - never behind a trace flag.
+ *
+ * This exists because xcalc passes justify=2 (XtJustifyRight) to its display
+ * labels and the first version of apply_arg() dropped it with a quiet
+ * xt_note(). The result was a centred value where the application had
+ * explicitly asked for a right-aligned one: the library silently overriding
+ * the program. An off-the-shelf application only stays off-the-shelf if every
+ * instruction it gives is either obeyed or announced.
+ */
+void xt_ignored(const char *kind, const char *name)
+{
+	static const char *seen[64];
+	static int n, registered;
+	int i;
+
+	for (i = 0; i < n; i++)
+		if (!strcmp(seen[i], name))
+			return;
+	if (n < 64)
+		seen[n++] = name;
+	fprintf(stderr, "xtlite: IGNORING %s '%s' - the application asked for "
+		"something we do not implement\n", kind, name);
+	(void)registered;
+}
+
 void xt_missing(const char *name)
 {
 	static const char *seen[32];
@@ -148,6 +175,42 @@ static unsigned long res_pixel(struct wid *w, const char *n, const char *c,
 
 /* --------------------------------------------------------------- widgets */
 
+/*
+ * Apply one widget argument. The application is off-the-shelf, so anything it
+ * sets and we ignore is a decision being made by US instead of by it - which
+ * is how xcalc's explicitly right-justified display ended up centred.
+ */
+static int apply_arg(struct wid *w, const char *name, long value)
+{
+	if (!strcmp(name, "label")) {
+		snprintf(w->label, sizeof(w->label), "%s",
+			 (const char *)value);
+		return 1;
+	}
+	if (!strcmp(name, "justify")) {		/* XtJustifyLeft/Center/Right */
+		w->justify = (int)value;
+		return 1;
+	}
+	if (!strcmp(name, "borderWidth")) {
+		w->bw = (int)value;
+		return 1;
+	}
+	if (!strcmp(name, "width")) {
+		w->pref_w = (int)value;
+		return 1;
+	}
+	if (!strcmp(name, "height")) {
+		w->pref_h = (int)value;
+		return 1;
+	}
+	if (!strcmp(name, "state")) {
+		w->set = (int)value;
+		return 1;
+	}
+	xt_ignored("argument", name);
+	return 0;
+}
+
 static struct wid *wid_new(const char *name, enum wclass cls, struct wid *parent)
 {
 	struct wid *w = calloc(1, sizeof(*w));
@@ -214,6 +277,16 @@ static void wid_configure(struct wid *w)
 	 * button from its own label instead gives a ragged grid and pushes the
 	 * later rows off the window entirely.
 	 */
+	{	/* "left" / "center" / "right", or Xaw's numeric values. */
+		const char *j = res_get(w, "justify", "Justify");
+
+		w->justify = 1;
+		if (j) {
+			if (!strncmp(j, "left", 4))       w->justify = 0;
+			else if (!strncmp(j, "right", 5)) w->justify = 2;
+			else if (j[0] >= '0' && j[0] <= '2') w->justify = *j - '0';
+		}
+	}
 	w->pref_w = res_int(w, "width", "Width", 0);
 	w->pref_h = res_int(w, "height", "Height", 0);
 	w->horiz_dist = res_int(w, "horizDistance", "HorizDistance", -1);
@@ -291,7 +364,11 @@ static void draw(struct wid *w)
 	if (w->cls == W_FORM || !w->label[0])
 		return;
 	tw = font ? XTextWidth(font, w->label, strlen(w->label)) : 0;
-	tx = (w->w - tw) / 2;
+	switch (w->justify) {
+	case 0:  tx = 2; break;			/* XtJustifyLeft */
+	case 2:  tx = w->w - tw - 2; break;	/* XtJustifyRight */
+	default: tx = (w->w - tw) / 2; break;	/* XtJustifyCenter */
+	}
 	ty = font ? (w->h + font->ascent - font->descent) / 2 : w->h / 2;
 	XSetForeground(xt_dpy, gc_fg, fg);
 	XDrawString(xt_dpy, w->win, gc_fg, tx, ty, w->label, strlen(w->label));
@@ -431,7 +508,8 @@ static void parse_line(struct wid *w, const char *line)
 		if (!t->detail && detail[0])
 			t->detail = (unsigned char)detail[0];
 	} else {
-		return;			/* Enter/Leave: highlight only */
+		xt_ignored("translation event", ev);
+		return;
 	}
 	if (strstr(mods, "Ctrl"))  t->mods |= ControlMask;
 	if (strstr(mods, "Shift")) t->mods |= ShiftMask;
@@ -489,8 +567,16 @@ static void run_actions(struct wid *w, const char *spec, XEvent *ev)
 				actions[i].proc(w, ev, params, &np);
 				break;
 			}
-		if (i == nactions)
-			xt_note("no action named '%s'", name);
+		if (i == nactions) {
+			static char last[48];
+
+			if (strcmp(last, name)) {
+				snprintf(last, sizeof(last), "%s", name);
+				fprintf(stderr, "xtlite: no action named "
+					"'%s' - the application bound it in a "
+					"translation table\n", name);
+			}
+		}
 		p = cp + 1;
 	}
 }
@@ -551,6 +637,7 @@ XtLanguageProc XtSetLanguageProc(XtAppContext app, XtLanguageProc proc,
 				 XtPointer data)
 {
 	(void)app; (void)proc; (void)data;
+	xt_ignored("call", "XtSetLanguageProc");
 	return NULL;		/* no locale support; xlite says so as well */
 }
 
@@ -641,10 +728,16 @@ Widget XtCreateManagedWidget(const char *name, WidgetClass cls, Widget parent,
 		return NULL;
 	w->managed = 1;
 	wid_configure(w);
-	for (i = 0; args && i < n; i++)
-		if (!strcmp(args[i].name, "label"))
-			snprintf(w->label, sizeof(w->label), "%s",
-				 (const char *)args[i].value);
+	for (i = 0; args && i < n; i++) {
+		/*
+		 * Log every argument, including the ones not handled. The
+		 * application is off-the-shelf: anything it sets and we ignore
+		 * is a rendering decision being made by US instead of by it,
+		 * which is exactly how a centred value ends up where a
+		 * right-aligned one belongs.
+		 */
+		apply_arg(w, args[i].name, (long)args[i].value);
+	}
 	{	/* Per-widget translations come from the resource file. */
 		const char *t = res_get(w, "translations", "Translations");
 
@@ -715,16 +808,8 @@ void XtSetValues(Widget wi, ArgList args, Cardinal n)
 	Cardinal i;
 	int redraw = 0;
 
-	for (i = 0; args && i < n; i++) {
-		if (!strcmp(args[i].name, "label")) {
-			snprintf(w->label, sizeof(w->label), "%s",
-				 (const char *)args[i].value);
-			redraw = 1;
-		} else if (!strcmp(args[i].name, "state")) {
-			w->set = (int)args[i].value;
-			redraw = 1;
-		}
-	}
+	for (i = 0; args && i < n; i++)
+		redraw |= apply_arg(w, args[i].name, (long)args[i].value);
 	if (redraw) {
 		draw(w);
 		XFlush(xt_dpy);
@@ -768,6 +853,7 @@ XTLITE_IMPL(XtSetKeyboardFocus)
 void XtSetKeyboardFocus(Widget sub, Widget descendant)
 {
 	(void)sub; (void)descendant;	/* one shell, one focus */
+	xt_ignored("call", "XtSetKeyboardFocus");
 }
 
 XTLITE_IMPL(XtOwnSelection)
@@ -775,6 +861,7 @@ Boolean XtOwnSelection(Widget w, Atom sel, Time t, XtConvertSelectionProc conv,
 		       XtLoseSelectionProc lose, XtSelectionDoneProc done)
 {
 	(void)w; (void)sel; (void)t; (void)conv; (void)lose; (void)done;
+	xt_ignored("call", "XtOwnSelection");
 	return False;		/* no selection transfer on this desktop */
 }
 
@@ -827,8 +914,7 @@ void XtGetApplicationResources(Widget wi, XtPointer base, XtResourceList res,
 			else
 				*(short *)slot = (short)atoi(v);
 		} else {
-			xt_note("resource %s: unconverted type %s",
-				r->resource_name, type);
+			xt_ignored("resource type", type);
 		}
 	}
 }

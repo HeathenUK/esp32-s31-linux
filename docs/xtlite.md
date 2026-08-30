@@ -85,10 +85,33 @@ many times - reserving for the worst case in memory that cannot be evicted.
   not a glitch: it is the only message that will ever ask for that content. Now
   it grows, and starting at 64 it uses less memory than the fixed 256 did.
 
+## Anything ignored is said out loud
+
+xcalc passes `justify = 2` (XtJustifyRight) and `borderWidth = 0` to its
+display labels. The first version of `apply_arg()` dropped both with a quiet
+trace note, so the value came out **centred where the application had
+explicitly asked for right-aligned** - the library silently overriding the
+program. An off-the-shelf application only stays off-the-shelf if every
+instruction it gives is either obeyed or announced.
+
+So an unhandled argument, resource type, translation event or deliberate no-op
+now prints unconditionally, once each, with no trace flag involved:
+
+    xtlite: IGNORING argument 'input' - the application asked for something
+                                        we do not implement
+
+Running xcalc, that immediately produced six lines, one of which was a bug in
+this code rather than a missing feature: `IGNORING translation event 'Key>'`
+shows the translation parser mis-splitting a pattern. It had been doing that
+silently.
+
 ## Not done
 
 - Per-widget fonts, so the radical and pi still render from the default face
-  (`ö\`` and `p` rather than `√` and `π`).
+  (`ö\`` and `p` rather than `√` and `π`). xcalc selects `-adobe-symbol-*` per
+  button and xtlite uses one face for everything.
+- The translation-parser bug the IGNORING output just exposed ('Key>').
+- ClientMessage translations, so the window-manager close button is not wired.
 - Button borders.
 - Actions are wired but arithmetic is untested; the keypad renders and the
   translation tables parse.

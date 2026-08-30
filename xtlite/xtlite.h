@@ -68,6 +68,7 @@ struct wid {
 	Window win;
 	int x, y, w, h;
 	int pref_w, pref_h;		/* width/height resources, 0 = from label */
+	int justify;			/* 0 left, 1 centre, 2 right - Xaw's values */
 	int bw;
 	unsigned long fg, bg, border;
 	char label[64];
@@ -93,6 +94,7 @@ extern struct wid *xt_root;
 
 void xt_note(const char *fmt, ...);
 void xt_missing(const char *name);
+void xt_ignored(const char *kind, const char *name);
 int xt_tracing(void);
 
 #endif /* XTLITE_H */
