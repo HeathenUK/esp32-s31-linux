@@ -2741,7 +2741,13 @@ static void xwin_on_window(uint32_t id, int w, int h)
 	if (!px)
 		return;
 	title = xshim_window_title(id);
-	win = make_window(title ? title : "X client", 150, 60,
+	/*
+	 * Cascade. Every X window used to open at 150,60 - so the second
+	 * client landed exactly under the first and looked like it had failed
+	 * to appear at all.
+	 */
+	win = make_window(title ? title : "X client",
+			  150 + xwin_n * 26, 60 + xwin_n * 26,
 			  pw + 2, ph + HDR_H + 2);
 	if (!win)
 		return;
@@ -2778,7 +2784,26 @@ static void xwin_on_draw(uint32_t id)
 			 * content is always in a child, so skipping this
 			 * presents an empty box.
 			 */
-			xshim_window_pixels(id, &w, &h);
+			const uint16_t *px = xshim_window_pixels(id, &w, &h);
+
+			/*
+			 * The client may have resized itself, which moves the
+			 * buffer. Follow it, and resize the lvdesk window to
+			 * match, or the image is drawn from a stale pointer.
+			 */
+			if (px && ((int)xwins[i].dsc.header.w != w ||
+				   (int)xwins[i].dsc.header.h != h ||
+				   xwins[i].dsc.data != (const uint8_t *)px)) {
+				xwins[i].dsc.header.w = w;
+				xwins[i].dsc.header.h = h;
+				xwins[i].dsc.header.stride = w * 2;
+				xwins[i].dsc.data = (const uint8_t *)px;
+				xwins[i].dsc.data_size = (uint32_t)w * h * 2;
+				lv_image_set_src(xwins[i].img,
+						 &xwins[i].dsc);
+				lv_obj_set_size(xwins[i].win, w + 2,
+						h + HDR_H + 2);
+			}
 			lv_obj_invalidate(xwins[i].img);
 			return;
 		}

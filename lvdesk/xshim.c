@@ -705,6 +705,9 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		}
 		rr->px = calloc((size_t)w * h, 2);
 		win_fill(rr, 0, 0, w, h);
+		if (trace_on())
+			fprintf(stderr, "       +win 0x%x %dx%d+%d+%d parent=0x%x\n",
+				id, w, h, rr->x, rr->y, parent);
 		break;
 	}
 	case 53: {					/* CreatePixmap */
@@ -867,6 +870,62 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		break;
 	}
 
+	case 12: {					/* ConfigureWindow */
+		/*
+		 * Not ignorable. A toolkit creates its shell window at some
+		 * placeholder size, computes the layout, then resizes - so a
+		 * shim that drops this presents whatever the placeholder was.
+		 * xcalc came up as an 82x40 box for exactly this reason, which
+		 * reads as "the shim cannot draw it" rather than "the shim
+		 * never resized it".
+		 */
+		struct res *w = res_find(get32(r + 4));
+		uint16_t mask = get16(r + 8);
+		const uint8_t *v = r + 12;
+		int nw, nh, bit;
+		uint8_t d[28];
+
+		if (!w || w->type != R_WINDOW) {
+			send_error(c, X_BAD_WINDOW, get32(r + 4), op);
+			break;
+		}
+		nw = w->w; nh = w->h;
+		for (bit = 0; bit < 7; bit++) {
+			if (!(mask & (1u << bit)))
+				continue;
+			if (bit == 0) w->x = gets16(v);
+			if (bit == 1) w->y = gets16(v);
+			if (bit == 2) nw = get16(v);
+			if (bit == 3) nh = get16(v);
+			v += 4;
+		}
+		if ((nw != w->w || nh != w->h) && nw > 0 && nh > 0) {
+			uint16_t *np = calloc((size_t)nw * nh, 2);
+
+			if (!np) {
+				send_error(c, X_BAD_ALLOC, w->id, op);
+				break;
+			}
+			free(w->px);
+			w->px = np;
+			w->w = nw; w->h = nh;
+			win_fill(w, 0, 0, nw, nh);
+		}
+		if (trace_on())
+			fprintf(stderr, "       ~win 0x%x -> %dx%d+%d+%d (mask %04x)\n",
+				w->id, w->w, w->h, w->x, w->y, mask);
+		/* Tell the client where it ended up, then make it repaint. */
+		memset(d, 0, sizeof(d));
+		put32(d, w->id); put32(d + 4, w->id);
+		put16(d + 12, w->x); put16(d + 14, w->y);
+		put16(d + 16, w->w); put16(d + 18, w->h);
+		send_event(c, 22, d, 28);		/* ConfigureNotify */
+		if (w->mapped) {
+			expose_window(c, w);
+			notify_draw(w);
+		}
+		break;
+	}
 	case 61: {					/* ClearArea */
 		struct res *d = res_find(get32(r + 4));
 		int cx = gets16(r + 8), cy = gets16(r + 10);
@@ -902,7 +961,7 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		}
 		break;
 	}
-	case 2: case 12: case 19: case 22: case 25:
+	case 2: case 19: case 22: case 25:
 	case 36: case 37: case 42: case 45: case 46: case 109:
 	case 72: case 78: case 93: case 94: case 95: case 127:
 		break;					/* accepted, nothing to do */

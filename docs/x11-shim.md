@@ -275,6 +275,27 @@ calculator. Input is `ButtonPress`/`ButtonRelease`/`MotionNotify`/`KeyPress`/
 coordinates onto the right child window, which is the part with actual work in
 it.
 
+## A trap that is packaging, not protocol: app-defaults
+
+xcalc first came up as an **82x40 box** with every one of its forty buttons
+created at 72x12 and all at the same +4+4. That reads as a broken shim. It was
+not: xcalc sent **zero** ConfigureWindow requests and only one QueryFont, so Xt
+had computed that layout itself, before creating a single window.
+
+The cause was that only the *binary* had been copied to the board. Athena apps
+are driven almost entirely by their app-defaults resource file - xcalc's
+`XCalc` is 22,916 bytes and defines the whole button grid. Without it Xt builds
+a widget tree with no constraints and lays it out degenerately.
+
+With `XFILESEARCHPATH` pointing at the file, xcalc comes up at its proper size
+and titles itself "Calculator" from its own WM_NAME. **Ship app-defaults with
+any Xt/Xaw client**, and when a client's geometry looks absurd, check whether
+it ever asked the server to resize anything before suspecting the server.
+
+`ConfigureWindow` was implemented anyway - it had been in the
+accepted-and-ignored list, and a toolkit that *does* resize its shell after
+computing a layout would have been stuck at the placeholder size for real.
+
 ## Where this goes next
 
 The shim lives in lvdesk's existing poll loop - a socket at
