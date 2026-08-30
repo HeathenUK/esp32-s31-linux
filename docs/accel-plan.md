@@ -754,10 +754,33 @@ buffer and any other dumb buffer.
   not a tuning question.
 - **The X shim's compositing inside lvdesk** - same reason, its pixmaps are
   malloc'd. This is what was measured and rejected above.
-- **Cursor compositing** - already on the **DRM hardware cursor plane**
-  (`kms_cursor_init`/`kms_cursor_move`); the display engine overlays it during
-  scanout at no CPU cost. A PPA blend would replace one register write with a
-  ~200 us ioctl. It is already better than anything the PPA could do.
+**Cursor compositing IS a PPA blend candidate** - an earlier draft of this
+section wrongly called it free. lvdesk does use the DRM cursor plane
+(`kms_cursor_init`/`kms_cursor_move`), but this panel has no hardware overlay:
+the plane is **composited by the CPU inside the driver**, in
+`esp32s31_lcd_cursor_paint()`, as a per-pixel ARGB8888-over-RGB565 alpha blend
+run on every pointer move. "DRM cursor plane" is not the same as "hardware
+cursor", and conflating them hides a real per-motion cost.
+
+  What makes it a candidate rather than a certainty:
+
+  - The destination, `lcd->scan_cpu`, is the private scanout buffer and is
+    **already in CMA**. No relocation, so the 13.7x penalty does not apply.
+  - It runs **in the kernel**, so it skips the DRM ioctl that dominates the
+    ~200 us fixed cost measured from userspace - the in-kernel setup was 9 us.
+  - The source, `lcd->cur_argb`, is kmalloc'd and would have to move to CMA.
+    That is cheap and one-off: it is already copied once per cursor fb change,
+    not per move.
+  - Two changes needed in the wrapper: `esp32s31_ppa_blend_layers()` currently
+    takes a FIXED alpha, while a cursor needs **per-pixel** alpha from an
+    ARGB8888 source, and it must blend ARGB8888 over RGB565 rather than one
+    format throughout. The PPA supports both; our wrapper does not expose them.
+  - Size is the open question: a 32x32 cursor is 2 KB, right at the measured
+    blend crossover, so this must be measured in place rather than assumed.
+
+  The cursor's other blit - restoring the vacated rectangle - is a plain copy of
+  the same ~2 KB, three orders of magnitude below the 131 KB copy crossover.
+  That one stays on the CPU.
 - **The driver's damage copy** - `esp32s31_lcd_copy_rect()` picks CPU or PPA per
   rectangle at a ~128 KB crossover. Re-measured after the fix and **the table
   still holds**: 640x384 is 10.9 ms CPU against 6.9 ms PPA (was 9.66 / 6.43),
@@ -765,7 +788,16 @@ buffer and any other dumb buffer.
   fixed cost but memcpy is cheap, so the crossover did not move. **The copy
   decisions were not distorted by the bug - only the blend ones were.**
 
-**The one real opportunity: alpha compositing into the scanout buffer.**
+**The drag ghost is a copy, not a blend, and it is above the copy crossover.**
+`drag_ghost_begin()` snapshots a window with `lv_snapshot_take()` in RGB565 -
+no alpha, no opacity set - so dragging blits an opaque ~310 KB image per frame
+(500x310). That is comfortably past the 131 KB copy crossover, worth ~1.4-1.6x.
+It also has an unusually good memory story: `drag_snap` is written once and
+thereafter only read by whoever blits it, so putting it in CMA costs nothing in
+CPU access - the 13.7x penalty only bites surfaces the CPU keeps drawing into.
+Reaching it needs either an LVGL draw unit or lvdesk doing that one blit itself.
+
+**Alpha compositing into the scanout buffer - smaller than it looks.**
 
 lvdesk renders DIRECT into the mapped dumb buffer, so LVGL's destination is
 already in CMA. Every rounded corner, shadow, fade and translucent panel LVGL
@@ -782,6 +814,14 @@ img and buf dispatch behind LVGL's draw-unit interface - is exactly right, so
 the work is re-pointing its three back-end calls at our ioctls rather than
 designing anything. Fills need no source surface, so they qualify immediately;
 images would need the source in CMA and mostly will not.
+
+One caveat found while surveying: lvdesk **deliberately disables shadows**
+(`lv_obj_set_style_shadow_width(..., 0, 0)` in four places), and sets no
+opacities, so the desktop's own alpha volume is far lower than a stock LVGL
+theme's. The remaining blends are icon-sized images and 4bpp glyph coverage -
+both far below the ~2 KB blend crossover, both staying on the CPU. Do not
+expect a large win here without first re-introducing decoration that was
+removed on purpose.
 
 **Also worth settling while here, though it is not a PPA question:**
 `LVDESK_PARTIAL` already toggles rendering into a cached heap buffer with a
