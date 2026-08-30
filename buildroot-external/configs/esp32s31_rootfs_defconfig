@@ -207,6 +207,16 @@ BR2_PACKAGE_XAPP_XCALC=y
 # rootfs (13.8 -> 23 MB) by installing every .a. Reverted; the number is
 # recorded in docs/x11-shim.md.
 
+# Drop DT_NEEDED entries nothing references.
+#
+# libXt, libXmu, libXext and libXpm each record a dependency on libxcb.so.1 and
+# use ZERO xcb_* symbols - pkg-config hands the linker x11's transitive
+# libraries and the linker records them regardless. The loader honours the
+# entry, so every X client maps 72 kB of libxcb for nothing. That matters here
+# for the same reason everything else does: it is 72 kB of text paged off the
+# SD card on a board with ~3 MB free.
+BR2_TARGET_LDFLAGS="-Wl,--as-needed"
+
 BR2_PACKAGE_XFONT_FONT_MISC_MISC=y
 # Adobe Symbol, for the mathematical glyphs clients select per-GC (xcalc's
 # radical sign and pi). Also source-only, for the same reason.

@@ -66,8 +66,9 @@ database search".
 real library, character for character, and zero unimplemented functions called.
 
     libX11.so   1,318,508 bytes   ->   xlite   97,748 bytes
-    xcalc Rss       2,104 kB      ->           1,592 kB   (-512 kB, -24%)
+    xcalc Rss       2,104 kB      ->           1,532 kB   (-572 kB, -27%)
       of which libX11   636 kB    ->              72 kB
+      and libxcb         72 kB    ->               0      (see below)
 
     remaining: libXaw7 324, libXt 308, libXmu 84, libXext 64 - off the shelf,
     which is the point: replacing the toolkit would stop the applications
@@ -83,8 +84,45 @@ encoders for atoms, windows, GCs, pixmaps, drawing, text, fonts, properties and
 colours; the context manager Xt uses to map ids to widgets; keysyms, key
 lookup and the window-manager property calls; regions as bounding boxes.
 
-Known cosmetic gap: xcalc's display bevel is clipped at the top, so the mode
-indicators sit half off. Everything else matches.
+It matches the real library's rendering.
+
+## libxcb was mapped for nothing
+
+libXt, libXmu, libXext and libXpm each recorded `DT_NEEDED libxcb.so.1` and
+referenced **zero** `xcb_*` symbols. pkg-config hands the linker x11's
+transitive libraries and the linker records them whether or not anything uses
+them; the loader then honours the entry, so every X client mapped 72 kB of
+libxcb it never called.
+
+`-Wl,--as-needed` is the proper fix and **it does not work here** - libtool
+drops the flag, and the rebuilt libraries still carried the entry. So
+`tools/drop-needed.py` removes it from the `.dynamic` array directly, shifting
+the tail up as patchelf would. That edits link metadata, not code, and it
+refuses to touch a library whose symbols are actually referenced.
+
+libICE and libSM were checked the same way and are **genuinely used** - libXt
+references 3 ICE and 11 SM symbols - so they stay.
+
+## The point of all this: it now fits in flash
+
+    XIP closure for xcalc, with the real libX11   2,307,184 bytes
+    XIP closure for xcalc, with xlite             1,103,882 bytes
+
+    reclaimable flash (factory 475 + linux 315
+      + xip1 143 + xip2 225)                     ~1,158 kB
+
+The chain did not fit before and does now, with about 54 kB to spare. In XIP
+every one of those pages costs **zero RSS** and is never read from the card, so
+xcalc would drop from 1,532 kB resident to roughly its 528 kB of dirty anonymous
+pages - and the paging this whole exercise is about disappears rather than
+shrinking.
+
+It needs a repartition, which this project's notes are emphatic about: the
+geometry lives in three places that must agree (`bootloader/partitions.csv`,
+the `*_PARTITION_SIZE` variables, and constants compiled into
+`bootloader/main/main.c` twice), and all three flash images must be rewritten.
+That is the next piece of work, and it is now worth doing because the numbers
+say it lands.
 
 ## Four bugs worth keeping
 
@@ -106,6 +144,12 @@ Each of these presented as something other than what it was.
   read `x\262` on screen and every translation table failed to parse.
 - **`XUniqueContext` is a macro in `Xutil.h`** as well as an exported symbol,
   so defining it needs an `#undef` first.
+- **The QueryFont reply straddles the header boundary.** Its fixed part is 60
+  bytes but a reply header is 32, so max-bounds starts at offset 24 and its
+  *descent* is the first field of the extra data. Reading it one field out put
+  the attributes word into `max_bounds.descent`, and Xaw sizes a label from
+  `max_bounds` - which is why xcalc's display bevel came out clipped while
+  every glyph on screen was correct.
 
 ## Finding the next gap
 
@@ -124,7 +168,7 @@ The diagnostics are the reason this took hours rather than days:
 
 ## Next
 
-1. The clipped display bevel - a geometry bug, not a missing function.
+1. The repartition, so the chain can actually go into XIP.
 2. xclock, which takes the Xft/RENDER path and will need more.
 3. Move the chain into XIP now that the client runs. Our libX11 is 97 kB
    against 1,318 kB, so the incremental closure drops by ~1.2 MB; re-measure

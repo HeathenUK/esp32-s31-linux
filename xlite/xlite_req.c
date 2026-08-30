@@ -893,26 +893,52 @@ static XFontStruct *font_query(Display *dpy, Font fid)
 		return NULL;
 	}
 	fs->fid = fid;
-	/* min-bounds is at hdr+8, max-bounds starts at hdr+24 and spans. */
+	/*
+	 * The reply's fixed part is 60 bytes but a reply header is only 32, so
+	 * the font's own metrics straddle the boundary: max-bounds starts at
+	 * offset 24 and its DESCENT is the first thing in the extra data.
+	 * Getting that split wrong put the attributes word into
+	 * max_bounds.descent, and Xaw sizes a label from max_bounds - which is
+	 * why xcalc's display bevel came out clipped while every glyph was
+	 * correct.
+	 *
+	 *   min-bounds  CHARINFO  hdr+8 .. hdr+19
+	 *   max-bounds  CHARINFO  hdr+24 .. extra+3
+	 *   min/max-char-or-byte2 extra+8, extra+10
+	 *   font-ascent/descent   extra+20, extra+22
+	 *   CHARINFO count        extra+24, then m FONTPROPs then the array
+	 */
+	fs->min_bounds.lbearing = (short)g16(hdr + 8);
+	fs->min_bounds.rbearing = (short)g16(hdr + 10);
 	fs->min_bounds.width = (short)g16(hdr + 12);
 	fs->min_bounds.ascent = (short)g16(hdr + 14);
 	fs->min_bounds.descent = (short)g16(hdr + 16);
+	fs->max_bounds.lbearing = (short)g16(hdr + 24);
+	fs->max_bounds.rbearing = (short)g16(hdr + 26);
 	fs->max_bounds.width = (short)g16(hdr + 28);
+	fs->max_bounds.ascent = (short)g16(hdr + 30);
 	if (extra && nextra >= 28) {
-		fs->max_bounds.ascent = (short)g16(extra + 0);
-		fs->max_bounds.descent = (short)g16(extra + 2);
+		unsigned m;
+
+		fs->max_bounds.descent = (short)g16(extra + 0);
 		fs->min_char_or_byte2 = g16(extra + 8);
 		fs->max_char_or_byte2 = g16(extra + 10);
 		fs->default_char = g16(extra + 12);
+		m = g16(extra + 14);		/* FONTPROPs, skipped over */
+		fs->direction = extra[16];
+		fs->min_byte1 = extra[17];
+		fs->max_byte1 = extra[18];
 		fs->all_chars_exist = extra[19];
 		fs->ascent = (short)g16(extra + 20);
 		fs->descent = (short)g16(extra + 22);
 		nch = g32(extra + 24);
-		if (nch && nextra >= 28 + (size_t)nch * 12) {
+		if (nch && nextra >= 28 + (size_t)m * 8 + (size_t)nch * 12) {
+			const unsigned char *base = extra + 28 + m * 8;
+
 			fs->per_char = calloc(nch, sizeof(XCharStruct));
 			if (fs->per_char)
 				for (i = 0; i < (int)nch; i++) {
-					const unsigned char *c = extra + 28 + i * 12;
+					const unsigned char *c = base + i * 12;
 
 					fs->per_char[i].lbearing = (short)g16(c);
 					fs->per_char[i].rbearing = (short)g16(c + 2);
