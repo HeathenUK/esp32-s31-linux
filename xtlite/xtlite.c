@@ -212,7 +212,7 @@ void xt_set_typed(void *slot, const char *type, unsigned size, long value)
 	}
 }
 
-void xt_set_from_string(void *slot, const char *type, unsigned size,
+void xt_set_from_string(Widget w, void *slot, const char *type, unsigned size,
 			const char *v)
 {
 	if (!v)
@@ -244,6 +244,13 @@ void xt_set_from_string(void *slot, const char *type, unsigned size,
 		   !strcmp(type, XtRPosition) || !strcmp(type, XtRShort) ||
 		   !strcmp(type, XtRCardinal)) {
 		xt_set_typed(slot, type, size, atol(v));
+	} else if (xt_convert(w, type, v, slot, size)) {
+		/*
+		 * The application registered a converter for this type - which
+		 * is how xclock's XftFont and XftColor resources get filled.
+		 * Noting them and moving on left an XftFont pointer NULL and
+		 * `xclock -digital` dereferenced it.
+		 */
 	} else if (!strcmp(type, XtRCursor) || !strcmp(type, XtRPixmap) ||
 		   !strcmp(type, XtRCallback)) {
 		/* Nothing here draws a cursor or a pixmap; leave the default. */

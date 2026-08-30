@@ -121,8 +121,11 @@ struct wid *xt_wid_new(const char *name, enum wclass cls, struct wid *parent,
 		       size_t recsize);
 const char *xt_res_lookup(Widget w, const char *name, const char *class);
 void xt_set_typed(void *slot, const char *type, unsigned size, long value);
-void xt_set_from_string(void *slot, const char *type, unsigned size,
+void xt_set_from_string(Widget w, void *slot, const char *type, unsigned size,
 			const char *v);
+/* xtclass.c: run an application-registered type converter. 1 if it worked. */
+int xt_convert(Widget w, const char *type, const char *v, void *slot,
+	       unsigned size);
 
 /* xtclass.c - the Intrinsics class mechanism. */
 Widget xt_custom_create(const char *name, WidgetClass wc, struct wid *parent,

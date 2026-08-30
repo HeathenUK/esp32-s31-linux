@@ -99,6 +99,7 @@ struct cli {
 	 * each gap once, in full, then count.
 	 */
 	uint16_t nunimpl[128];
+	uint16_t nrender[64];		/* the same, per RENDER minor opcode */
 };
 
 static struct res res[MAXRES];
@@ -111,7 +112,7 @@ static int cur_owner;			/* client whose request is in flight */
  * any size here, and on a board with ~3 MB free they are worth knowing about
  * to the byte rather than by inference.
  */
-static size_t mem_win, mem_pix;
+static size_t mem_win, mem_pix, mem_glyph;
 static int n_win, n_pix;
 static int lfd = -1;
 static void (*win_cb)(uint32_t id, int w, int h);
@@ -236,8 +237,9 @@ static void px_release(struct res *r)
 void xshim_mem_report(void)
 {
 	fprintf(stderr, "xshim: %d window buffers %zu kB, %d pixmaps %zu kB, "
-		"total %zu kB\n", n_win, mem_win / 1024, n_pix, mem_pix / 1024,
-		(mem_win + mem_pix) / 1024);
+		"glyphs %zu kB, total %zu kB\n", n_win, mem_win / 1024,
+		n_pix, mem_pix / 1024, mem_glyph / 1024,
+		(mem_win + mem_pix + mem_glyph) / 1024);
 }
 
 static void px_set(struct res *d, int x, int y, uint16_t c)
@@ -1030,6 +1032,635 @@ static void expose_window(struct cli *c, struct res *w)
 	paint_subtree(c, w);
 }
 
+/* ========================================================================
+ * RENDER
+ *
+ * Xft goes through RENDER for every glyph, and Xft is not optional: xfiles
+ * refuses to start without a picture format, and `xclock -digital` draws its
+ * text with it. Refusing the extension is honest but it caps the program base
+ * at applications that still use core text, which by now is almost none.
+ *
+ * What Xft actually asks for is a small corner of the protocol:
+ *
+ *   QueryVersion, QueryPictFormats   once, at startup
+ *   CreatePicture / FreePicture      one per drawable, plus a solid source
+ *   CreateGlyphSet / AddGlyphs       the glyph cache, A8 coverage bitmaps
+ *   CompositeGlyphs8/16/32           the actual text
+ *   FillRectangles                   backgrounds and underlines
+ *   Composite                        images, and Xft's fallback paths
+ *
+ * so that is what this implements, and everything else reports itself by name
+ * through the same counter the core opcodes use. The compositing is done here
+ * in software against RGB565, which is the only format the panel has - alpha
+ * exists in the SOURCE, never in the destination.
+ * ===================================================================== */
+
+#define RENDER_MAJOR	140		/* our major opcode for RENDER */
+#define RENDER_ERROR	160		/* first of its five error codes */
+
+/*
+ * The picture formats we advertise. Xft matches by TEMPLATE - depth plus the
+ * shifts and masks - so these have to be exactly the standard ones or
+ * XRenderFindStandardFormat() returns NULL and the client exits saying it
+ * could not find a format.
+ */
+#define PF_A8		0x30
+#define PF_RGB565	0x31
+#define PF_A1		0x32
+#define PF_ARGB32	0x33
+
+enum { PICT_OP_CLEAR = 0, PICT_OP_SRC = 1, PICT_OP_OVER = 3 };
+
+#define MAXPICT		64
+#define MAXGSET		16
+
+struct pict {
+	uint32_t id;
+	uint32_t drawable;
+	uint32_t format;
+	int solid;			/* a CreateSolidFill picture */
+	int repeat;
+	uint8_t a, rr, gg, bb;		/* solid colour, 8 bits per channel */
+	int has_clip;
+	int cx, cy, cw, ch;		/* clip, relative to the drawable */
+	int owner;
+};
+
+struct glyph {
+	uint32_t id;
+	int w, h, ox, oy, ax, ay;
+	uint8_t *a;			/* w*h coverage, one byte each */
+};
+
+struct gset {
+	uint32_t id;
+	uint32_t format;
+	int owner;
+	struct glyph *g;
+	int ng, cap;
+};
+
+static struct pict picts[MAXPICT];
+static struct gset gsets[MAXGSET];
+
+static struct pict *pict_find(uint32_t id)
+{
+	int i;
+
+	for (i = 0; i < MAXPICT; i++)
+		if (picts[i].id == id)
+			return &picts[i];
+	return NULL;
+}
+
+static struct pict *pict_new(uint32_t id)
+{
+	int i;
+
+	for (i = 0; i < MAXPICT; i++)
+		if (!picts[i].id) {
+			memset(&picts[i], 0, sizeof(picts[i]));
+			picts[i].id = id;
+			picts[i].owner = cur_owner;
+			return &picts[i];
+		}
+	fprintf(stderr, "xshim: picture table full (%d)\n", MAXPICT);
+	return NULL;
+}
+
+static struct gset *gset_find(uint32_t id)
+{
+	int i;
+
+	for (i = 0; i < MAXGSET; i++)
+		if (gsets[i].id == id)
+			return &gsets[i];
+	return NULL;
+}
+
+static void gset_free(struct gset *s)
+{
+	int i;
+
+	for (i = 0; i < s->ng; i++) {
+		mem_glyph -= (size_t)s->g[i].w * s->g[i].h;
+		free(s->g[i].a);
+	}
+	free(s->g);
+	memset(s, 0, sizeof(*s));
+}
+
+/* Release everything a departing client owns. */
+static void render_drop_client(int owner)
+{
+	int i;
+
+	for (i = 0; i < MAXPICT; i++)
+		if (picts[i].id && picts[i].owner == owner)
+			memset(&picts[i], 0, sizeof(picts[i]));
+	for (i = 0; i < MAXGSET; i++)
+		if (gsets[i].id && gsets[i].owner == owner)
+			gset_free(&gsets[i]);
+}
+
+/* ------------------------------------------------------------ compositing */
+
+/*
+ * Blend one pixel. `cov` is 0..255 coverage from the glyph or the source
+ * alpha; the destination is RGB565 with no alpha of its own, so OVER reduces
+ * to a lerp and SRC to a store. That is the whole compositor: RENDER's other
+ * operators exist for layers this display does not have.
+ */
+static void blend_px(struct res *d, int x, int y, int r8, int g8, int b8,
+		     int cov, int op)
+{
+	struct res *b = d->buf;
+	int ax = x + d->ax, ay = y + d->ay;
+	uint16_t *p;
+	int dr, dg, db;
+
+	if (!b || !b->px)
+		return;
+	if (ax < d->cx0 || ay < d->cy0 || ax >= d->cx1 || ay >= d->cy1)
+		return;
+	if (cov <= 0)
+		return;
+	p = &b->px[(size_t)ay * b->w + ax];
+	if (op == PICT_OP_SRC || cov >= 255) {
+		*p = (uint16_t)(((r8 & 0xF8) << 8) | ((g8 & 0xFC) << 3) |
+				(b8 >> 3));
+		return;
+	}
+	dr = (*p >> 11) << 3;
+	dg = ((*p >> 5) & 0x3F) << 2;
+	db = (*p & 0x1F) << 3;
+	dr += ((r8 - dr) * cov) >> 8;
+	dg += ((g8 - dg) * cov) >> 8;
+	db += ((b8 - db) * cov) >> 8;
+	*p = (uint16_t)(((dr & 0xF8) << 8) | ((dg & 0xFC) << 3) | (db >> 3));
+}
+
+/* Intersect a picture's clip with a rectangle, in drawable coordinates. */
+static void pict_clip(struct pict *pi, int *x0, int *y0, int *x1, int *y1)
+{
+	if (!pi || !pi->has_clip)
+		return;
+	if (pi->cx > *x0) *x0 = pi->cx;
+	if (pi->cy > *y0) *y0 = pi->cy;
+	if (pi->cx + pi->cw < *x1) *x1 = pi->cx + pi->cw;
+	if (pi->cy + pi->ch < *y1) *y1 = pi->cy + pi->ch;
+}
+
+static void render_fill(struct res *d, struct pict *dp, int x, int y,
+			int w, int h, int r8, int g8, int b8, int a8, int op)
+{
+	int x0 = x, y0 = y, x1 = x + w, y1 = y + h, i, j;
+
+	pict_clip(dp, &x0, &y0, &x1, &y1);
+	if (op == PICT_OP_CLEAR) {
+		r8 = g8 = b8 = 0;
+		a8 = 255;
+		op = PICT_OP_SRC;
+	}
+	for (j = y0; j < y1; j++)
+		for (i = x0; i < x1; i++)
+			blend_px(d, i, j, r8, g8, b8, a8, op);
+}
+
+static struct glyph *glyph_find(struct gset *s, uint32_t id)
+{
+	int i;
+
+	for (i = 0; i < s->ng; i++)
+		if (s->g[i].id == id)
+			return &s->g[i];
+	return NULL;
+}
+
+/* ------------------------------------------------------------- the requests */
+
+/*
+ * Advertised formats. Xft looks these up by template - depth plus every shift
+ * and mask - so an approximation is not a smaller version of this, it is a
+ * client that exits saying it cannot find a format.
+ */
+static void put_format(uint8_t *p, uint32_t id, int depth, int rs, int rm,
+		       int gs, int gm, int bs, int bm, int as, int am)
+{
+	memset(p, 0, 28);
+	put32(p, id);
+	p[4] = 0;			/* PictTypeDirect */
+	p[5] = (uint8_t)depth;
+	put16(p + 8, rs);  put16(p + 10, rm);
+	put16(p + 12, gs); put16(p + 14, gm);
+	put16(p + 16, bs); put16(p + 18, bm);
+	put16(p + 20, as); put16(p + 22, am);
+}
+
+static void render_unimpl(struct cli *c, uint8_t minor, const char *name)
+{
+	if (c->nrender[minor & 63]++ == 0)
+		fprintf(stderr, "xshim: RENDER %s (minor %u) is not "
+			"implemented - the client will be told BadRequest\n",
+			name, minor);
+}
+
+/* Un-premultiply an xRenderColor into 8-bit channels the blender can use. */
+static void render_color(const uint8_t *p, int *r, int *g, int *b, int *a)
+{
+	int A = get16(p + 6) >> 8;
+
+	*r = get16(p + 0) >> 8;
+	*g = get16(p + 2) >> 8;
+	*b = get16(p + 4) >> 8;
+	*a = A;
+	if (A > 0 && A < 255) {
+		*r = *r * 255 / A; if (*r > 255) *r = 255;
+		*g = *g * 255 / A; if (*g > 255) *g = 255;
+		*b = *b * 255 / A; if (*b > 255) *b = 255;
+	}
+}
+
+static void render_glyphs(struct cli *c, const uint8_t *r, int len, int idsize)
+{
+	struct pict *sp = pict_find(get32(r + 8));
+	struct pict *dp = pict_find(get32(r + 12));
+	struct gset *gs = gset_find(get32(r + 20));
+	struct res *d;
+	const uint8_t *p = r + 28, *end = r + len * 4;
+	int op = r[4], x = 0, y = 0;
+
+	if (!dp || !gs) {
+		send_error(c, X_BAD_VALUE, 0, RENDER_MAJOR);
+		return;
+	}
+	d = res_find(dp->drawable);
+	if (!drawable_ok(d))
+		return;
+	/*
+	 * Xft always paints text through a SOLID source picture - the colour -
+	 * with the glyph as the mask. A non-solid source would mean textured
+	 * text, which nothing here asks for.
+	 */
+	if (!sp || !sp->solid) {
+		render_unimpl(c, 23, "CompositeGlyphs from a non-solid source");
+		return;
+	}
+	while (p + 8 <= end) {
+		int n = p[0], i;
+
+		if (n == 255) {			/* switch glyph set */
+			gs = gset_find(get32(p + 4));
+			p += 8;
+			if (!gs)
+				return;
+			continue;
+		}
+		x += gets16(p + 4);
+		y += gets16(p + 6);
+		p += 8;
+		for (i = 0; i < n && p + idsize <= end; i++, p += idsize) {
+			uint32_t id = idsize == 1 ? p[0] :
+				      idsize == 2 ? get16(p) : get32(p);
+			struct glyph *g = glyph_find(gs, id);
+			int gx, gy;
+
+			if (!g)
+				continue;
+			for (gy = 0; gy < g->h; gy++)
+				for (gx = 0; gx < g->w; gx++) {
+					int cov = g->a[gy * g->w + gx];
+					int x0 = x - g->ox + gx;
+					int y0 = y - g->oy + gy;
+					int cl0 = x0, cl1 = x0 + 1;
+					int ct0 = y0, ct1 = y0 + 1;
+
+					pict_clip(dp, &cl0, &ct0, &cl1, &ct1);
+					if (cl0 >= cl1 || ct0 >= ct1)
+						continue;
+					blend_px(d, x0, y0, sp->rr, sp->gg,
+						 sp->bb,
+						 cov * sp->a / 255, op);
+				}
+			x += g->ax;
+			y += g->ay;
+		}
+		p = r + ((p - r + 3) & ~3);	/* ids are padded to 4 bytes */
+	}
+}
+
+static void render_add_glyphs(struct cli *c, const uint8_t *r, int len)
+{
+	struct gset *s = gset_find(get32(r + 4));
+	uint32_t n = get32(r + 8);
+	const uint8_t *ids = r + 12, *info, *img, *end = r + len * 4;
+	int bpp = 8;
+	uint32_t i;
+
+	if (!s) {
+		send_error(c, X_BAD_VALUE, 0, RENDER_MAJOR);
+		return;
+	}
+	if (s->format == PF_A1)
+		bpp = 1;
+	info = ids + n * 4;
+	img = info + n * 12;
+	if (s->ng + (int)n > s->cap) {
+		int cap = s->cap ? s->cap * 2 : 64;
+		struct glyph *g;
+
+		while (cap < s->ng + (int)n)
+			cap *= 2;
+		g = realloc(s->g, (size_t)cap * sizeof(*g));
+		if (!g)
+			return;
+		s->g = g;
+		s->cap = cap;
+	}
+	for (i = 0; i < n && img <= end; i++) {
+		const uint8_t *gi = info + i * 12;
+		struct glyph *g = &s->g[s->ng];
+		int w = get16(gi), h = get16(gi + 2);
+		int stride = bpp == 1 ? ((w + 31) / 32) * 4 : (w + 3) & ~3;
+		int gx, gy;
+
+		if (w <= 0 || h <= 0 || img + (size_t)stride * h > end) {
+			img += (size_t)stride * h;
+			continue;
+		}
+		memset(g, 0, sizeof(*g));
+		g->id = get32(ids + i * 4);
+		g->w = w; g->h = h;
+		g->ox = gets16(gi + 4);
+		g->oy = gets16(gi + 6);
+		g->ax = gets16(gi + 8);
+		g->ay = gets16(gi + 10);
+		g->a = malloc((size_t)w * h);
+		if (!g->a)
+			return;
+		mem_glyph += (size_t)w * h;
+		for (gy = 0; gy < h; gy++)
+			for (gx = 0; gx < w; gx++) {
+				const uint8_t *row = img + (size_t)gy * stride;
+
+				g->a[gy * w + gx] = bpp == 1 ?
+					((row[gx >> 3] >> (gx & 7)) & 1) * 255 :
+					row[gx];
+			}
+		img += (size_t)stride * h;
+		s->ng++;
+	}
+}
+
+/*
+ * Copy or blend one picture onto another. The only sources that arrive here
+ * are a solid fill (which is a rectangle) and another RGB565 drawable of ours
+ * (which is a copy) - anything else says so rather than painting nonsense.
+ */
+static void render_composite(struct cli *c, const uint8_t *r)
+{
+	struct pict *sp = pict_find(get32(r + 8));
+	struct pict *mp = pict_find(get32(r + 12));
+	struct pict *dp = pict_find(get32(r + 16));
+	struct res *d, *s;
+	int op = r[4];
+	int sx = gets16(r + 20), sy = gets16(r + 22);
+	int dx = gets16(r + 28), dy = gets16(r + 30);
+	int w = get16(r + 32), h = get16(r + 34);
+	int i, j, x0, y0, x1, y1;
+
+	if (!dp)
+		return;
+	d = res_find(dp->drawable);
+	if (!drawable_ok(d))
+		return;
+	if (mp)
+		render_unimpl(c, 8, "Composite with a mask picture");
+	if (sp && sp->solid) {
+		render_fill(d, dp, dx, dy, w, h, sp->rr, sp->gg, sp->bb,
+			    sp->a, op);
+		return;
+	}
+	s = sp ? res_find(sp->drawable) : NULL;
+	if (!drawable_ok(s)) {
+		render_unimpl(c, 8, "Composite from an unknown source");
+		return;
+	}
+	x0 = dx; y0 = dy; x1 = dx + w; y1 = dy + h;
+	pict_clip(dp, &x0, &y0, &x1, &y1);
+	for (j = y0; j < y1; j++)
+		for (i = x0; i < x1; i++) {
+			int px = sx + (i - dx), py = sy + (j - dy);
+			uint16_t v;
+
+			if (sp->repeat) {
+				px %= s->w ? s->w : 1;
+				py %= s->h ? s->h : 1;
+			}
+			if (px < 0 || py < 0 || px >= s->w || py >= s->h)
+				continue;
+			v = s->buf->px[(size_t)(py + s->ay) * s->buf->w +
+				       px + s->ax];
+			blend_px(d, i, j, (v >> 11) << 3, ((v >> 5) & 0x3F) << 2,
+				 (v & 0x1F) << 3, 255, PICT_OP_SRC);
+		}
+}
+
+static const char *render_opstr(uint8_t m)
+{
+	static const char *n[] = {
+		[0] = "QueryVersion", [1] = "QueryPictFormats",
+		[2] = "QueryPictIndexValues", [4] = "CreatePicture",
+		[5] = "ChangePicture", [6] = "SetPictureClipRectangles",
+		[7] = "FreePicture", [8] = "Composite", [10] = "Trapezoids",
+		[11] = "Triangles", [17] = "CreateGlyphSet",
+		[18] = "ReferenceGlyphSet", [19] = "FreeGlyphSet",
+		[20] = "AddGlyphs", [22] = "FreeGlyphs",
+		[23] = "CompositeGlyphs8", [24] = "CompositeGlyphs16",
+		[25] = "CompositeGlyphs32", [26] = "FillRectangles",
+		[27] = "CreateCursor", [33] = "CreateSolidFill",
+	};
+
+	return m < sizeof(n) / sizeof(n[0]) && n[m] ? n[m] : "?";
+}
+
+/* Returns 1 if the request was handled, 0 to fall through to an error. */
+static int render_request(struct cli *c, const uint8_t *r, int len)
+{
+	uint8_t minor = r[1];
+
+	/*
+	 * Say what a client asks for the first time it asks. RENDER is where
+	 * a client that "just exits" is now most likely to be failing, and
+	 * the sequence it got through before giving up is the whole diagnosis.
+	 */
+	if (minor < 64 && c->nrender[minor]++ == 0)
+		fprintf(stderr, "xshim: RENDER %s (minor %u)\n",
+			render_opstr(minor), minor);
+
+	switch (minor) {
+	case 0: {					/* QueryVersion */
+		uint8_t d24[24];
+
+		memset(d24, 0, sizeof(d24));
+		put32(d24, 0);				/* major 0 */
+		put32(d24 + 4, 11);			/* minor 11 */
+		send_reply(c, 0, d24, NULL, 0);
+		return 1;
+	}
+	case 1: {					/* QueryPictFormats */
+		uint8_t d24[24], ext[4 * 28 + 8 + 8 + 8 + 4];
+		uint8_t *p = ext;
+
+		memset(d24, 0, sizeof(d24));
+		memset(ext, 0, sizeof(ext));
+		put32(d24 + 0, 4);			/* numFormats */
+		put32(d24 + 4, 1);			/* numScreens */
+		put32(d24 + 8, 1);			/* numDepths */
+		put32(d24 + 12, 1);			/* numVisuals */
+		put32(d24 + 16, 1);			/* numSubpixel */
+
+		put_format(p, PF_RGB565, 16, 11, 0x1F, 5, 0x3F, 0, 0x1F, 0, 0);
+		p += 28;
+		put_format(p, PF_ARGB32, 32, 16, 0xFF, 8, 0xFF, 0, 0xFF,
+			   24, 0xFF);
+		p += 28;
+		put_format(p, PF_A8, 8, 0, 0, 0, 0, 0, 0, 0, 0xFF);
+		p += 28;
+		put_format(p, PF_A1, 1, 0, 0, 0, 0, 0, 0, 0, 0x01);
+		p += 28;
+
+		put32(p, 1); put32(p + 4, PF_RGB565);	/* screen: 1 depth */
+		p += 8;
+		p[0] = 16; p[1] = 0; put16(p + 2, 1); put32(p + 4, 0);
+		p += 8;					/* depth 16, 1 visual */
+		put32(p, VISUAL_ID); put32(p + 4, PF_RGB565);
+		p += 8;
+		put32(p, 0);				/* SubPixelUnknown */
+		p += 4;
+		send_reply(c, 0, d24, ext, p - ext);
+		return 1;
+	}
+	case 4: {					/* CreatePicture */
+		struct pict *pi = pict_new(get32(r + 4));
+		uint32_t mask = get32(r + 16);
+		const uint8_t *v = r + 20;
+
+		if (!pi)
+			return 1;
+		pi->drawable = get32(r + 8);
+		pi->format = get32(r + 12);
+		if (mask & 0x001)
+			pi->repeat = (int)get32(v);
+		return 1;
+	}
+	case 5:						/* ChangePicture */
+		return 1;				/* only repeat/clip, below */
+	case 6: {					/* SetPictureClipRectangles */
+		struct pict *pi = pict_find(get32(r + 4));
+		int ox = gets16(r + 8), oy = gets16(r + 10);
+		const uint8_t *p = r + 12, *end = r + len * 4;
+
+		if (!pi)
+			return 1;
+		pi->has_clip = 0;
+		for (; p + 8 <= end; p += 8) {
+			int x = ox + gets16(p), y = oy + gets16(p + 2);
+			int w = get16(p + 4), h = get16(p + 6);
+
+			if (!pi->has_clip) {
+				pi->cx = x; pi->cy = y;
+				pi->cw = w; pi->ch = h;
+				pi->has_clip = 1;
+			} else {		/* the union, so nothing is lost */
+				int x1 = pi->cx + pi->cw, y1 = pi->cy + pi->ch;
+
+				if (x < pi->cx) pi->cx = x;
+				if (y < pi->cy) pi->cy = y;
+				if (x + w > x1) x1 = x + w;
+				if (y + h > y1) y1 = y + h;
+				pi->cw = x1 - pi->cx;
+				pi->ch = y1 - pi->cy;
+			}
+		}
+		return 1;
+	}
+	case 7: {					/* FreePicture */
+		struct pict *pi = pict_find(get32(r + 4));
+
+		if (pi)
+			memset(pi, 0, sizeof(*pi));
+		return 1;
+	}
+	case 8:						/* Composite */
+		render_composite(c, r);
+		return 1;
+	case 17: {					/* CreateGlyphSet */
+		int i;
+
+		for (i = 0; i < MAXGSET; i++)
+			if (!gsets[i].id) {
+				memset(&gsets[i], 0, sizeof(gsets[i]));
+				gsets[i].id = get32(r + 4);
+				gsets[i].format = get32(r + 8);
+				gsets[i].owner = cur_owner;
+				return 1;
+			}
+		fprintf(stderr, "xshim: glyph-set table full (%d)\n", MAXGSET);
+		return 1;
+	}
+	case 19: {					/* FreeGlyphSet */
+		struct gset *s = gset_find(get32(r + 4));
+
+		if (s)
+			gset_free(s);
+		return 1;
+	}
+	case 20:					/* AddGlyphs */
+		render_add_glyphs(c, r, len);
+		return 1;
+	case 22:					/* FreeGlyphs */
+		return 1;			/* the set is freed as a whole */
+	case 23:					/* CompositeGlyphs8 */
+		render_glyphs(c, r, len, 1);
+		return 1;
+	case 24:					/* CompositeGlyphs16 */
+		render_glyphs(c, r, len, 2);
+		return 1;
+	case 25:					/* CompositeGlyphs32 */
+		render_glyphs(c, r, len, 4);
+		return 1;
+	case 26: {					/* FillRectangles */
+		struct pict *dp = pict_find(get32(r + 8));
+		struct res *d = dp ? res_find(dp->drawable) : NULL;
+		const uint8_t *p = r + 20, *end = r + len * 4;
+		int cr, cg, cb, ca;
+
+		if (!drawable_ok(d))
+			return 1;
+		render_color(r + 12, &cr, &cg, &cb, &ca);
+		for (; p + 8 <= end; p += 8)
+			render_fill(d, dp, gets16(p), gets16(p + 2),
+				    get16(p + 4), get16(p + 6),
+				    cr, cg, cb, ca, r[4]);
+		return 1;
+	}
+	case 33: {					/* CreateSolidFill */
+		struct pict *pi = pict_new(get32(r + 4));
+		int cr, cg, cb, ca;
+
+		if (!pi)
+			return 1;
+		render_color(r + 8, &cr, &cg, &cb, &ca);
+		pi->solid = 1;
+		pi->rr = (uint8_t)cr; pi->gg = (uint8_t)cg;
+		pi->bb = (uint8_t)cb; pi->a = (uint8_t)ca;
+		return 1;
+	}
+	}
+	return 0;
+}
+
 static void handle(struct cli *c, const uint8_t *r, int len)
 {
 	uint8_t op = r[0], detail = r[1];
@@ -1055,9 +1686,12 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 	 * fall into the switch and land on an unrelated core opcode.
 	 */
 	if (op >= 128) {
+		if (op == RENDER_MAJOR && render_request(c, r, len))
+			return;
 		if (c->nunimpl[op & 127]++ == 0) {
 			fprintf(stderr, "xshim: extension request, major "
-				"opcode %u - no extension is advertised\n", op);
+				"opcode %u minor %u - not implemented\n", op,
+				detail);
 			dump_recent(c);
 		}
 		send_error(c, X_BAD_REQUEST, 0, op);
@@ -1066,12 +1700,21 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 
 	switch (op) {
 	case 98: {					/* QueryExtension */
+		int n = get16(r + 4);
+
 		/*
-		 * Refuse everything. The client was observed to accept this
-		 * for BIG-REQUESTS, XKEYBOARD and XFree86-Bigfont and carry
-		 * on; refusing XKB in particular sends Xlib down its
-		 * core-keyboard path, so there is no layout machinery here.
+		 * RENDER is answered YES, and everything else no. Refusing
+		 * XKB in particular sends Xlib down its core-keyboard path,
+		 * so there is no layout machinery here; refusing RENDER used
+		 * to cap the program base at applications that still draw
+		 * text with core requests, which by now is almost none.
 		 */
+		if (n == 6 && !memcmp(r + 8, "RENDER", 6)) {
+			d24[0] = 1;			/* present */
+			d24[1] = RENDER_MAJOR;
+			d24[2] = 0;			/* no events */
+			d24[3] = RENDER_ERROR;
+		}
 		send_reply(c, 0, d24, NULL, 0);
 		break;
 	}
@@ -1982,6 +2625,7 @@ static void client_drop(struct cli *c, int notify)
 	for (i = 0; i < MAXRES; i++)
 		if (res[i].type != R_FREE && res[i].owner == owner)
 			res_free(res[i].id);
+	render_drop_client(owner);
 }
 
 void xshim_window_close(uint32_t id)

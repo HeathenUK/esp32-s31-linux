@@ -115,6 +115,24 @@ for p in sorted(closure):
         if not os.path.exists(os.path.join(d, base)):
             os.symlink(b, os.path.join(d, base))
 
+    # And any ALIAS the target already has for this object.
+    #
+    # The block above can only invent names derived from the object's own
+    # basename, so libXaw.so.7 -> libXaw7.so.7 -> libXaw7.so.7.0.0 lost its
+    # first hop: the file was staged under the name nothing asks for, and
+    # xcalc - whose DT_NEEDED says libXaw.so.7 - would not start from XIP at
+    # all. The alias is right there in the target directory; use it.
+    srcdir = os.path.dirname(p)
+    for name in os.listdir(srcdir):
+        lp = os.path.join(srcdir, name)
+        if not os.path.islink(lp):
+            continue
+        if os.path.realpath(lp) != os.path.realpath(p):
+            continue
+        dl = os.path.join(d, name)
+        if not os.path.lexists(dl):
+            os.symlink(b, dl)
+
 print("staged %d objects, %.2f MB (skipped %d already in EXCLUDE_DIR)"
       % (count, staged / 1048576, skipped))
 # Mark what was actually staged. This printed the whole CLOSURE unannotated,

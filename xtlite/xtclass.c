@@ -257,13 +257,18 @@ static void apply_resources(Widget w, WidgetClass wc, ArgList args,
 		}
 
 		v = xt_res_lookup(w, r->resource_name, r->resource_class);
-		xt_note("  res %-18s %-12s size %u off %-4u = %s",
+		xt_note("  res %-18s %-12s size %u off %-4u = %s "
+			"[default %s \"%s\"]",
 			r->resource_name, r->resource_type,
 			(unsigned)r->resource_size,
 			(unsigned)r->resource_offset,
-			v ? v : "(default)");
+			v ? v : "(default)",
+			r->default_type ? r->default_type : "-",
+			r->default_type && !strcmp(r->default_type, XtRString)
+			&& r->default_addr ? (const char *)r->default_addr
+			: "");
 		if (v) {
-			xt_set_from_string(slot, r->resource_type,
+			xt_set_from_string(w, slot, r->resource_type,
 					   r->resource_size, v);
 			continue;
 		}
@@ -277,7 +282,7 @@ static void apply_resources(Widget w, WidgetClass wc, ArgList args,
 			memcpy(slot, r->default_addr, r->resource_size);
 		else if (r->default_type &&
 			 !strcmp(r->default_type, XtRString))
-			xt_set_from_string(slot, r->resource_type,
+			xt_set_from_string(w, slot, r->resource_type,
 					   r->resource_size,
 					   (const char *)r->default_addr);
 		else
@@ -604,25 +609,162 @@ void XtDisplayStringConversionWarning(Display *dpy, const char *from,
 	fprintf(stderr, "xtlite: cannot convert \"%s\" to %s\n", from, to);
 }
 
+/* --------------------------------------------------------- type converters */
+
 /*
- * Type converters are registered and never consulted: every conversion xtlite
- * performs is done from the string form in xt_set_from_string(), so a
- * converter the application supplies would only be reached for a type we do
- * not handle - and that case already reports itself by name there.
+ * Applications register converters for the resource types xtlite has never
+ * heard of, and then depend on them having RUN. xclock's `face` is an
+ * XftFont* and its colours are XftColors; noting the registration and
+ * carrying on left the font pointer NULL, and `xclock -digital`
+ * dereferenced it before drawing a single character.
+ *
+ * So they are stored and called. The awkward part is XtConvertArgList: a
+ * converter for a font or a colour needs the screen and the colormap, and
+ * asks for them as offsets into the widget record - which is exactly why the
+ * class mechanism had to come first.
  */
+#define NCONV	16
+
+static struct conv {
+	const char *from, *to;
+	XtTypeConverter newp;
+	XtConverter oldp;
+	XtConvertArgList args;
+	Cardinal nargs;
+} convs[NCONV];
+static int nconv;
+
+static void conv_add(const char *from, const char *to, XtTypeConverter newp,
+		     XtConverter oldp, XtConvertArgList args, Cardinal n)
+{
+	int i;
+
+	for (i = 0; i < nconv; i++)
+		if (!strcmp(convs[i].from, from) && !strcmp(convs[i].to, to))
+			break;
+	if (i == NCONV) {
+		xt_note("converter table full, %s -> %s dropped", from, to);
+		return;
+	}
+	if (i == nconv)
+		nconv++;
+	convs[i].from = from;
+	convs[i].to = to;
+	convs[i].newp = newp;
+	convs[i].oldp = oldp;
+	convs[i].args = args;
+	convs[i].nargs = n;
+	xt_note("converter %s -> %s registered, %u args", from, to,
+		(unsigned)n);
+}
+
+/* Build the XrmValue list a converter's XtConvertArgList asks for. */
+static Cardinal eval_args(Widget w, struct conv *c, XrmValue *out, int max)
+{
+	Cardinal i, n = 0;
+
+	for (i = 0; i < c->nargs && (int)n < max; i++) {
+		XtConvertArgRec *a = &c->args[i];
+
+		out[n].size = a->size;
+		switch (a->address_mode) {
+		case XtAddress:
+			out[n].addr = (XPointer)a->address_id;
+			break;
+		case XtImmediate:
+			out[n].addr = (XPointer)&a->address_id;
+			break;
+		case XtBaseOffset:
+		case XtWidgetBaseOffset:
+			/*
+			 * Every widget here is a real widget, so there is no
+			 * object-to-parent walk to do: the offset applies
+			 * straight to the record.
+			 */
+			out[n].addr = (XPointer)((char *)w +
+						 (long)a->address_id);
+			break;
+		default:
+			xt_ignored("converter argument mode", c->to);
+			return 0;
+		}
+		n++;
+	}
+	return n;
+}
+
+int xt_convert(Widget w, const char *type, const char *v, void *slot,
+	       unsigned size)
+{
+	XrmValue args[8], from, to;
+	Cardinal n;
+	int i;
+
+	for (i = 0; i < nconv; i++) {
+		struct conv *c = &convs[i];
+		XtPointer cdata = NULL;
+
+		if (strcmp(c->to, type) || strcmp(c->from, XtRString))
+			continue;
+		n = eval_args(w, c, args, 8);
+		from.size = (unsigned)strlen(v) + 1;
+		from.addr = (XPointer)v;
+		to.size = size;
+		to.addr = (XPointer)slot;
+		if (c->newp) {
+			if (!c->newp(xt_dpy, args, &n, &from, &to, &cdata))
+				return 0;
+		} else if (c->oldp) {
+			to.addr = NULL;		/* old style allocates */
+			c->oldp(args, &n, &from, &to);
+			if (!to.addr)
+				return 0;
+		} else {
+			return 0;
+		}
+		/*
+		 * An old-style converter, and some new ones, answer by
+		 * pointing to their own storage instead of writing where they
+		 * were told. Copying is the difference between a converted
+		 * value and an untouched slot.
+		 */
+		if (to.addr && to.addr != (XPointer)slot)
+			memcpy(slot, to.addr, to.size < size ? to.size : size);
+		xt_note("converted \"%s\" to %s", v, type);
+		return 1;
+	}
+	return 0;
+}
+
 XTLITE_IMPL(XtSetTypeConverter)
 void XtSetTypeConverter(const char *from, const char *to,
 			XtTypeConverter conv, XtConvertArgList args,
 			Cardinal n, XtCacheType cache, XtDestructor destroy)
 {
-	(void)conv; (void)args; (void)n; (void)cache; (void)destroy;
-	xt_note("type converter %s -> %s registered, not used", from, to);
+	(void)cache; (void)destroy;
+	conv_add(from, to, conv, NULL, args, n);
+}
+
+XTLITE_IMPL(XtAppSetTypeConverter)
+void XtAppSetTypeConverter(XtAppContext app, const char *from, const char *to,
+			   XtTypeConverter conv, XtConvertArgList args,
+			   Cardinal n, XtCacheType cache, XtDestructor destroy)
+{
+	(void)app; (void)cache; (void)destroy;
+	conv_add(from, to, conv, NULL, args, n);
 }
 
 XTLITE_IMPL(XtAddConverter)
 void XtAddConverter(const char *from, const char *to, XtConverter conv,
 		    XtConvertArgList args, Cardinal n)
 {
-	(void)conv; (void)args; (void)n;
-	xt_note("converter %s -> %s registered, not used", from, to);
+	conv_add(from, to, NULL, conv, args, n);
+}
+
+XTLITE_IMPL(XtAppAddConverter)
+void XtAppAddConverter(XtAppContext app, const char *from, const char *to,
+		       XtConverter conv, XtConvertArgList args, Cardinal n)
+{
+	(void)app;
+	conv_add(from, to, NULL, conv, args, n);
 }

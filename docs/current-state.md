@@ -2121,3 +2121,42 @@ evidence that this path misbehaves already exists: the kernel was seen
 auto-repeating KEY_M that nobody was holding, which means a HID report was lost
 or garbled. Cheap tests: plug the receiver straight into the board with no hub,
 and check whether the loss correlates with Wi-Fi traffic.
+
+## The X11 client stack moved into XIP flash (2026-08-30)
+
+`xcalc` now runs from `/usr/bin` against our own libraries in `/usr/lib`, and
+costs **124-180 kB resident**. It was 2,104 kB when it first ran.
+
+    2,104 kB  stock libX11/libXt/libXaw/libXmu/libICE/libSM/libXext/libXpm
+      592 kB  after xlite + xtlite + xstubs replaced them
+      296 kB  after the font cache and the buffer fixes (see docs/xlite.md)
+      180 kB  from XIP flash - every r-xp text mapping costs zero RSS
+
+`make x11-stage` installs the eight replacement libraries into the Buildroot
+**overlay**, which is what makes them survive a target rebuild and what makes
+the closure packable at all: staged from the stock libraries, xcalc's closure
+is 2.51 MB against a 1.41 MB partition, because the stock libX11 alone is
+1.3 MB and drags libxcb, libXau and libXdmcp behind it. With ours it is
+**528,384 bytes, 913,408 free**. The full sequence:
+
+    ./docker/build.sh 'sh /src/xlite/build.sh'      # and xtlite, xstubs
+    make x11-stage
+    ./docker/build.sh 'cd /src && $S31_MAKE xip-fast'
+    ./docker/build.sh 'cp /src/build/rootfs-xip*.cramfs /src/images/'
+    make flash-xip-rootfs flash-xip2-rootfs
+
+**A latent bug in `rootfs/mkxipstage.py` that only surfaced here.** It
+recreated the SONAME symlinks a loader looks for, but only names derived from
+the object's own basename - so `libXaw.so.7 -> libXaw7.so.7 ->
+libXaw7.so.7.0.0` lost its first hop. xcalc's DT_NEEDED says `libXaw.so.7`, so
+the file was staged under a name nothing asks for and the binary would not
+start from XIP at all. It now also copies any alias the target directory
+already has for a staged object.
+
+**Card state this repo does not hold.** `/usr/share/X11/app-defaults/` did not
+exist on the ext4 root - the app-defaults only lived in the `/root/x11`
+development staging tree - so an xcalc started with `XFILESEARCHPATH` pointing
+at the standard path built its widget tree with NO resources and came up as a
+90x60 box showing only the display. That is the same degenerate layout a
+missing app-defaults has always produced, and it looks like a rendering bug.
+They are now installed at `/usr/share/X11/app-defaults/`.

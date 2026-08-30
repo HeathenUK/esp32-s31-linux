@@ -483,6 +483,32 @@ xip-rootfs: rootfs xip-image
 # only an overlay file has changed - which is every lvdesk iteration - sync the
 # overlay into the target tree and repack. Use xip-rootfs when a *package*
 # changed; this is for iterating on our own binaries.
+# Install our X11 replacement libraries into the Buildroot OVERLAY, which is
+# what makes them survive a target rebuild - and what makes the XIP closure
+# small enough to pack at all. Staged from the stock libraries, xcalc's closure
+# is 2.51 MB against a 1.41 MB partition, because the stock libX11 alone is
+# 1.3 MB and drags in libxcb, libXau and libXdmcp behind it. Ours is 108 kB and
+# needs none of them.
+#
+#   xlite    libX11                       docs/xlite.md
+#   xtlite   libXt, libXaw7, libXmu       docs/xtlite.md
+#   xstubs   libICE, libSM, libXext, libXpm
+#
+# Build them first with docker/build.sh on xlite/build.sh, xtlite/build.sh and
+# xstubs/build.sh; this only installs what is in images/.
+X11_REPLACEMENTS := libX11.so.6.4.0 libXt.so.6.0.0 libXaw7.so.7.0.0 \
+	libXmu.so.6.2.0 libICE.so.6.3.0 libSM.so.6.0.1 libXext.so.6.4.0 \
+	libXpm.so.4.11.0
+
+x11-stage:
+	@echo "--- installing the X11 replacements into the overlay ---"
+	@mkdir -p $(BUILDROOT_EXTERNAL)/board/esp32-s31/overlay/usr/lib
+	@for f in $(X11_REPLACEMENTS); do \
+		test -f images/$$f || { echo "ERROR: images/$$f is missing - build it first" >&2; exit 1; }; \
+		cp -a images/$$f $(BUILDROOT_EXTERNAL)/board/esp32-s31/overlay/usr/lib/$$f; \
+		printf "  %-24s %7d bytes\n" $$f $$(stat -f%z images/$$f 2>/dev/null || stat -c%s images/$$f); \
+	done
+
 xip-fast:
 	@echo "--- syncing overlay into the Buildroot target ---"
 	cp -a $(BUILDROOT_EXTERNAL)/board/esp32-s31/overlay/. $(BUILDROOT_OUT)/target/
