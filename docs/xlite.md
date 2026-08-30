@@ -62,36 +62,70 @@ database search".
 
 ## Where it stands
 
-Built: **80,588 bytes**, against libX11's 1,318,508. 166 of 297 functions
-implemented, 160 stubbed.
+**xcalc runs under xlite and renders correctly.** Same four warnings as the
+real library, character for character, and zero unimplemented functions called.
 
-Working:
+    libX11.so   1,318,508 bytes   ->   xlite   97,748 bytes
+    xcalc Rss       2,104 kB      ->           1,592 kB   (-512 kB, -24%)
+      of which libX11   636 kB    ->              72 kB
 
-- the connection and setup handshake, screen/visual/depth/format construction
-- the resource id allocator and `XAllocID`
-- the event queue: read, decode, queue, `XNextEvent`/`XPending`/`XEventsQueued`/
-  `XSync`, error delivery through the client's error handler
-- the resource manager: quarks, database parse (including continuations and
-  comments), scored wildcard matching, search lists, `XrmParseCommand`
-- request encoders: atoms, windows, GCs, pixmaps, drawing, text, fonts,
-  properties, colours
-- regions as bounding boxes - always a superset, so a client redraws slightly
-  more and the screen is identical
-- the `XESet*` extension hooks, which must exist and return NULL
+    remaining: libXaw7 324, libXt 308, libXmu 84, libXext 64 - off the shelf,
+    which is the point: replacing the toolkit would stop the applications
+    being off-the-shelf.
 
-**Not yet working.** xcalc connects, runs through Xt's initialisation, loads its
-app-defaults through our Xrm and then faults inside the database search
-(`db_find`/`match`) on the first `XrmGetResource` after the merge. The database
-and its entries pass their magic-word checks and the cycle guard does not fire,
-so the corruption is narrower than a bad list - the next step is to bound the
-class-quark array, which `XrmGetResource` fills independently of the name array
-and can therefore leave shorter than the loop that reads it.
+205 of 297 symbols implemented, 132 stubbed.
+
+Working: the connection and setup handshake; screen, visual, depth and format
+construction; the resource id allocator; the event queue, decoder and error
+delivery; the resource manager (quarks, parsing with continuations, comments
+and escapes, scored wildcard matching, search lists, XrmParseCommand); request
+encoders for atoms, windows, GCs, pixmaps, drawing, text, fonts, properties and
+colours; the context manager Xt uses to map ids to widgets; keysyms, key
+lookup and the window-manager property calls; regions as bounding boxes.
+
+Known cosmetic gap: xcalc's display bevel is clipped at the top, so the mode
+indicators sit half off. Everything else matches.
+
+## Four bugs worth keeping
+
+Each of these presented as something other than what it was.
+
+- **Uninitialised out-parameters.** The specification says `XrmQGetResource`
+  leaves its value undefined when the lookup fails, and real Xlib does - but Xt
+  reads it anyway on one path, so with a stack-allocated `XrmValue` it handed
+  `strncpy` whatever was on the stack. This was the segfault that looked like a
+  fault in the resource database, and clearing the out-parameters fixed it.
+  Initialising an out-parameter is never wrong.
+- **`XGetGCValues` was called 22,985 times** during one xcalc startup. There is
+  no GetGCValues request in the X protocol at all: Xlib answers from its own
+  cached copy, so the GC must carry one. Stubbing it out was not merely
+  incomplete, it was 23,000 potential round trips.
+- **Resource values carry escapes.** xcalc writes its buttons as `x\262` and
+  `\326\140` - octal for the Latin-1 and Adobe Symbol code points - and its
+  translation tables are full of `\n`. Without decoding, the labels literally
+  read `x\262` on screen and every translation table failed to parse.
+- **`XUniqueContext` is a macro in `Xutil.h`** as well as an exported symbol,
+  so defining it needs an `#undef` first.
+
+## Finding the next gap
+
+The diagnostics are the reason this took hours rather than days:
+
+- unimplemented functions report by name, once, with counts and an atexit
+  summary - so each run yields the whole to-do list, not one name
+- `XLITE_TRACE=1` logs resource lookups with the pattern that matched, which is
+  how "the label is wrong" became "the escape is not decoded"
+- `XLITE_INSTRUMENT=1` prints every xlite function entered
+- `XLITE_BACKTRACE=1` installs a SIGSEGV handler that walks the frame pointers
+  and then scans the stack for return addresses, because the toolkit is built
+  without frame pointers. That is what turned "faults inside stpncpy" into the
+  exact chain `XmuCvtStringToBitmap -> XtStringConversionWarning ->
+  XtWarningMsg -> XtAppGetErrorDatabaseText -> strncpy`.
 
 ## Next
 
-1. Close the Xrm search fault; get xcalc to map a window.
-2. `XQueryExtension`, `XGetDefault`, `XLookupString` and the keyboard path.
-3. xclock, which additionally needs `XCreateFontSet` refusal handled and the
-   Xft/RENDER path left alone.
-4. Move the chain into XIP once the client runs, and re-measure RSS - that is
-   the number this whole exercise is for.
+1. The clipped display bevel - a geometry bug, not a missing function.
+2. xclock, which takes the Xft/RENDER path and will need more.
+3. Move the chain into XIP now that the client runs. Our libX11 is 97 kB
+   against 1,318 kB, so the incremental closure drops by ~1.2 MB; re-measure
+   whether it now fits the reclaimable flash.

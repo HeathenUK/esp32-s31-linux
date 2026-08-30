@@ -172,6 +172,51 @@ static struct xrmdb *db_new(void)
 	return d;
 }
 
+/*
+ * Decode the escapes a resource value may contain, in place.
+ *
+ * This is not cosmetic. xcalc writes its "x squared" button as `x\262` and
+ * its radical and pi as `\326\140` and `\160` - octal for the Latin-1 and
+ * Adobe Symbol code points. Without decoding, the label literally reads
+ * "x\262" on screen, which is exactly how it looked before this existed.
+ */
+static void unescape(char *v)
+{
+	char *r = v, *w = v;
+
+	while (*r) {
+		if (*r != '\\') {
+			*w++ = *r++;
+			continue;
+		}
+		r++;
+		switch (*r) {
+		case 'n': *w++ = '\n'; r++; break;
+		case 't': *w++ = '\t'; r++; break;
+		case 'r': *w++ = '\r'; r++; break;
+		case 'b': *w++ = '\b'; r++; break;
+		case 'f': *w++ = '\f'; r++; break;
+		case '\\': *w++ = '\\'; r++; break;
+		case ' ': *w++ = ' '; r++; break;
+		case 0: *w++ = '\\'; break;
+		default:
+			if (*r >= '0' && *r <= '7') {
+				int val = 0, k = 0;
+
+				while (k < 3 && *r >= '0' && *r <= '7') {
+					val = val * 8 + (*r++ - '0');
+					k++;
+				}
+				*w++ = (char)val;
+			} else {
+				*w++ = *r++;
+			}
+			break;
+		}
+	}
+	*w = 0;
+}
+
 static void db_put(struct xrmdb *d, const char *spec, const char *value)
 {
 	struct entry *e = calloc(1, sizeof(*e));
@@ -181,6 +226,8 @@ static void db_put(struct xrmdb *d, const char *spec, const char *value)
 	e->magic = ENTRY_MAGIC;
 	e->n = split(spec, e->comp, e->bind, CMAX - 1);
 	e->value = strdup(value ? value : "");
+	if (e->value)
+		unescape(e->value);
 	e->next = d->head;
 	d->head = e;
 }
@@ -197,6 +244,16 @@ static int match(struct entry *e, XrmQuark *nq_, XrmQuark *cq, int n, int *score
 {
 	int i = 0, j = 0, s = 0;
 
+	/*
+	 * Every array access below is bounded by e->n and n, so if this
+	 * faults it is because a parameter is not what it claims. Say which.
+	 */
+	if (!e || !nq_ || !cq || n < 0 || n >= CMAX) {
+		fprintf(stderr, "xlite: bad resource lookup (e=%p names=%p "
+			"classes=%p n=%d) - skipping\n", (void *)e,
+			(void *)nq_, (void *)cq, n);
+		return 0;
+	}
 	while (i < e->n) {
 		int loose = e->bind[i] == XrmBindLoosely;
 
@@ -464,10 +521,43 @@ Bool XrmQGetResource(XrmDatabase db, XrmNameList names, XrmClassList classes,
 	struct entry *e;
 	int n = 0;
 
+	/*
+	 * Clear the out-parameters before doing anything.
+	 *
+	 * The specification says they are undefined when the lookup fails,
+	 * and real Xlib leaves them alone - but Xt reads them anyway on at
+	 * least one path (XtResolvePathname's customization lookup), so with
+	 * a stack-allocated XrmValue it reads whatever was on the stack and
+	 * hands it to strncpy. Initialising an out-parameter is never wrong,
+	 * and it turns a fault deep inside the toolkit into an empty string.
+	 */
+	if (value) {
+		value->addr = NULL;
+		value->size = 0;
+	}
+	if (type)
+		*type = NULLQUARK;
+
 	while (names[n] != NULLQUARK && n < CMAX - 1)
 		n++;
 	if (!names || !classes)
 		return False;
+	if (xlite_tracing()) {
+		char buf[256];
+		size_t o = 0;
+		int k;
+
+		for (k = 0; names[k] != NULLQUARK && k < CMAX - 1; k++) {
+			const char *q = XrmQuarkToString(names[k]);
+
+			o += snprintf(buf + o, sizeof(buf) - o, "%s%s",
+				      k ? "." : "", q ? q : "?");
+			if (o >= sizeof(buf) - 1)
+				break;
+		}
+		buf[o < sizeof(buf) ? o : sizeof(buf) - 1] = 0;
+		xlite_note("lookup %s", buf);
+	}
 	e = db_find(db_ok(db, "XrmQGetResource"), names, classes, n);
 	if (!e)
 		return False;
@@ -475,6 +565,21 @@ Bool XrmQGetResource(XrmDatabase db, XrmNameList names, XrmClassList classes,
 		*type = XrmStringToQuark("String");
 	value->addr = e->value;
 	value->size = strlen(e->value) + 1;
+	if (xlite_tracing()) {
+		char b[256];
+		size_t o = 0;
+		int k;
+
+		for (k = 0; k < e->n && o < sizeof(b) - 2; k++) {
+			const char *q = XrmQuarkToString(e->comp[k]);
+
+			if (k)
+				b[o++] = e->bind[k] == XrmBindLoosely ? '*' : '.';
+			o += snprintf(b + o, sizeof(b) - o, "%s", q ? q : "?");
+		}
+		b[o < sizeof(b) ? o : sizeof(b) - 1] = 0;
+		xlite_note("  matched '%s' -> '%s'", b, e->value);
+	}
 	return True;
 }
 
@@ -483,8 +588,12 @@ Bool XrmGetResource(XrmDatabase db, const char *name, const char *class,
 		    char **type, XrmValue *value)
 {
 	XrmQuark nq_[CMAX], cq[CMAX];
-	XrmRepresentation t;
+	XrmRepresentation t = NULLQUARK;
 
+	if (type)
+		*type = NULL;
+	xlite_note("XrmGetResource '%s' / '%s'", name ? name : "(null)",
+		   class ? class : "(null)");
 	split(name, nq_, NULL, CMAX - 1);
 	split(class ? class : "", cq, NULL, CMAX - 1);
 	if (!XrmQGetResource(db, nq_, cq, &t, value))

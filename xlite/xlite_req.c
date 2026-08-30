@@ -22,6 +22,19 @@ static unsigned long g32(const unsigned char *p)
 	       ((unsigned long)p[3] << 24);
 }
 
+/*
+ * Our GC. The public prefix must match Xlib.h's struct _XGC exactly, because
+ * clients read ext_data and gid; everything after it is ours. The cached
+ * values matter more than they look - Xaw asked for them 22,985 times in one
+ * xcalc startup, so answering from here rather than the server is the
+ * difference between a working desktop and 23,000 round trips.
+ */
+struct xgc {
+	XExtData *ext_data;
+	GContext gid;
+	XGCValues v;
+};
+
 #define REQ(dpy, op, det, words) \
 	struct xdpy *x = XD(dpy); \
 	unsigned char *r = xlite_req(x, op, det, words)
@@ -339,13 +352,15 @@ GC XCreateGC(Display *dpy, Drawable d, unsigned long mask, XGCValues *val)
 	 * private. Over-allocate so that nothing which was compiled against
 	 * the full one can walk off the end of ours.
 	 */
-	GC gc = calloc(1, 256);
+	GC gc = calloc(1, sizeof(struct xgc) > 256 ? sizeof(struct xgc) : 256);
 	int nval = 0, i;
 	unsigned long v[24];
 
 	if (!gc)
 		return NULL;
 	gc->gid = gid;
+	if (val)
+		((struct xgc *)gc)->v = *val;
 	for (i = 0; i < 23; i++)
 		if (mask & (1UL << i)) {
 			unsigned long q = 0;
@@ -397,6 +412,34 @@ int XChangeGC(Display *dpy, GC gc, unsigned long mask, XGCValues *val)
 
 	if (!gc)
 		return 0;
+	{	/* Keep the cache in step; XGetGCValues answers from it. */
+		struct xgc *g = (struct xgc *)gc;
+		XGCValues *d = &g->v;
+
+		if (mask & GCFunction) d->function = val->function;
+		if (mask & GCPlaneMask) d->plane_mask = val->plane_mask;
+		if (mask & GCForeground) d->foreground = val->foreground;
+		if (mask & GCBackground) d->background = val->background;
+		if (mask & GCLineWidth) d->line_width = val->line_width;
+		if (mask & GCLineStyle) d->line_style = val->line_style;
+		if (mask & GCCapStyle) d->cap_style = val->cap_style;
+		if (mask & GCJoinStyle) d->join_style = val->join_style;
+		if (mask & GCFillStyle) d->fill_style = val->fill_style;
+		if (mask & GCFillRule) d->fill_rule = val->fill_rule;
+		if (mask & GCTile) d->tile = val->tile;
+		if (mask & GCStipple) d->stipple = val->stipple;
+		if (mask & GCTileStipXOrigin) d->ts_x_origin = val->ts_x_origin;
+		if (mask & GCTileStipYOrigin) d->ts_y_origin = val->ts_y_origin;
+		if (mask & GCFont) d->font = val->font;
+		if (mask & GCSubwindowMode) d->subwindow_mode = val->subwindow_mode;
+		if (mask & GCGraphicsExposures) d->graphics_exposures = val->graphics_exposures;
+		if (mask & GCClipXOrigin) d->clip_x_origin = val->clip_x_origin;
+		if (mask & GCClipYOrigin) d->clip_y_origin = val->clip_y_origin;
+		if (mask & GCClipMask) d->clip_mask = val->clip_mask;
+		if (mask & GCDashOffset) d->dash_offset = val->dash_offset;
+		if (mask & GCDashList) d->dashes = val->dashes;
+		if (mask & GCArcMode) d->arc_mode = val->arc_mode;
+	}
 	for (i = 0; i < 23; i++)
 		if (mask & (1UL << i)) {
 			unsigned long q = 0;
@@ -1537,3 +1580,241 @@ XESET(XESetErrorString)
 XESET(XESetPrintErrorValues)
 XESET(XESetCopyEventCookie)
 XESET(XESetWireToEventCookie)
+
+/* ------------------------------------------------------- context manager */
+
+/*
+ * Xt's association between an X resource id and its widget lives here, and it
+ * is consulted on every event dispatch - so this is not an optional corner of
+ * Xlib. A resource id plus a context is the key; the value is opaque to us.
+ *
+ * A chained hash table, because Xt stores one entry per widget and looks them
+ * up constantly. Linear search over a few hundred widgets on every event would
+ * be felt on this board.
+ */
+#define CTX_BUCKETS	127
+
+struct ctx {
+	XID rid;
+	XContext context;
+	XPointer data;
+	struct ctx *next;
+};
+
+static struct ctx *ctx_tab[CTX_BUCKETS];
+
+static unsigned ctx_hash(XID rid, XContext c)
+{
+	return ((unsigned)rid * 31u + (unsigned)c) % CTX_BUCKETS;
+}
+
+XLITE_IMPL(XSaveContext)
+int XSaveContext(Display *dpy, XID rid, XContext context, const char *data)
+{
+	unsigned h = ctx_hash(rid, context);
+	struct ctx *c;
+
+	(void)dpy;
+	for (c = ctx_tab[h]; c; c = c->next)
+		if (c->rid == rid && c->context == context) {
+			c->data = (XPointer)data;
+			return 0;
+		}
+	c = malloc(sizeof(*c));
+	if (!c)
+		return XCNOMEM;
+	c->rid = rid;
+	c->context = context;
+	c->data = (XPointer)data;
+	c->next = ctx_tab[h];
+	ctx_tab[h] = c;
+	return 0;
+}
+
+XLITE_IMPL(XFindContext)
+int XFindContext(Display *dpy, XID rid, XContext context, XPointer *data)
+{
+	unsigned h = ctx_hash(rid, context);
+	struct ctx *c;
+
+	(void)dpy;
+	for (c = ctx_tab[h]; c; c = c->next)
+		if (c->rid == rid && c->context == context) {
+			*data = c->data;
+			return 0;
+		}
+	*data = NULL;
+	return XCNOENT;
+}
+
+XLITE_IMPL(XDeleteContext)
+int XDeleteContext(Display *dpy, XID rid, XContext context)
+{
+	unsigned h = ctx_hash(rid, context);
+	struct ctx *c, **pp = &ctx_tab[h];
+
+	(void)dpy;
+	while ((c = *pp)) {
+		if (c->rid == rid && c->context == context) {
+			*pp = c->next;
+			free(c);
+			return 0;
+		}
+		pp = &c->next;
+	}
+	return XCNOENT;
+}
+
+/*
+ * Xutil.h defines this as a macro, so callers never reference the symbol - but
+ * libX11 exports it too, and something linked against the real library may.
+ */
+#undef XUniqueContext
+XLITE_IMPL(XUniqueContext)
+XContext XUniqueContext(void)
+{
+	static XContext next = 1;
+
+	return next++;
+}
+
+/* ------------------------------------------------------------- odds/ends */
+
+XLITE_IMPL(XScreenNumberOfScreen)
+int XScreenNumberOfScreen(Screen *s) { (void)s; return 0; }
+
+XLITE_IMPL(XFreeStringList)
+void XFreeStringList(char **list)
+{
+	if (list) {
+		free(list[0]);		/* one block, as XTextProperty gives */
+		free(list);
+	}
+}
+
+/*
+ * A cursor id with nothing behind it. lvdesk draws the pointer itself and the
+ * shim ignores cursor attributes entirely, so a client that sets one gets the
+ * desktop's pointer - which is the right pointer for this machine anyway.
+ */
+XLITE_IMPL(XCreateFontCursor)
+Cursor XCreateFontCursor(Display *dpy, unsigned shape)
+{
+	(void)shape;
+	return XAllocID(dpy);
+}
+
+XLITE_IMPL(XFreeCursor)
+int XFreeCursor(Display *dpy, Cursor c) { (void)dpy; (void)c; return 1; }
+
+XLITE_IMPL(XDefineCursor)
+int XDefineCursor(Display *dpy, Window w, Cursor c)
+{
+	XSetWindowAttributes a;
+
+	memset(&a, 0, sizeof(a));
+	a.cursor = c;
+	return XChangeWindowAttributes(dpy, w, CWCursor, &a);
+}
+
+XLITE_IMPL(XUndefineCursor)
+int XUndefineCursor(Display *dpy, Window w) { return XDefineCursor(dpy, w, None); }
+
+/*
+ * No fontsets. XSupportsLocale() already returns False, so the toolkit takes
+ * its single-font path; returning NULL here is the answer that matches.
+ */
+XLITE_IMPL(XCreateFontSet)
+XFontSet XCreateFontSet(Display *dpy, const char *base, char ***missing,
+			int *nmissing, char **def)
+{
+	(void)dpy; (void)base;
+	if (missing) *missing = NULL;
+	if (nmissing) *nmissing = 0;
+	if (def) *def = NULL;
+	return NULL;
+}
+
+XLITE_IMPL(XCreatePixmapFromBitmapData)
+Pixmap XCreatePixmapFromBitmapData(Display *dpy, Drawable d, char *data,
+				   unsigned w, unsigned h, unsigned long fg,
+				   unsigned long bg, unsigned depth)
+{
+	Pixmap p = XCreatePixmap(dpy, d, w, h, depth);
+	GC gc;
+	XGCValues v;
+	int stride = (w + 7) / 8, bytes = stride * h;
+
+	v.foreground = fg;
+	v.background = bg;
+	gc = XCreateGC(dpy, p, GCForeground | GCBackground, &v);
+	{	/* PutImage, XYBitmap, one 1-bit plane. */
+		REQ(dpy, 72, 0, 6 + (bytes + 3) / 4);
+
+		p32(r + 4, p);
+		p32(r + 8, gc ? gc->gid : 0);
+		p16(r + 12, w); p16(r + 14, h);
+		p16(r + 16, 0); p16(r + 18, 0);
+		r[20] = 0;			/* left-pad */
+		r[21] = 1;			/* depth 1 */
+		if (bytes > 0 && data)
+			memcpy(r + 24, data, bytes);
+		xlite_send(x, r);
+	}
+	XFreeGC(dpy, gc);
+	return p;
+}
+
+XLITE_IMPL(XGetGCValues)
+Status XGetGCValues(Display *dpy, GC gc, unsigned long mask, XGCValues *out)
+{
+	struct xgc *g = (struct xgc *)gc;
+
+	(void)dpy;
+	if (!g || !out)
+		return 0;
+	/*
+	 * From the cache, never the server. There is no GetGCValues request in
+	 * the X protocol at all - real Xlib answers from its own copy too.
+	 */
+	if (mask & GCFunction) out->function = g->v.function;
+	if (mask & GCPlaneMask) out->plane_mask = g->v.plane_mask;
+	if (mask & GCForeground) out->foreground = g->v.foreground;
+	if (mask & GCBackground) out->background = g->v.background;
+	if (mask & GCLineWidth) out->line_width = g->v.line_width;
+	if (mask & GCLineStyle) out->line_style = g->v.line_style;
+	if (mask & GCCapStyle) out->cap_style = g->v.cap_style;
+	if (mask & GCJoinStyle) out->join_style = g->v.join_style;
+	if (mask & GCFillStyle) out->fill_style = g->v.fill_style;
+	if (mask & GCFillRule) out->fill_rule = g->v.fill_rule;
+	if (mask & GCTile) out->tile = g->v.tile;
+	if (mask & GCStipple) out->stipple = g->v.stipple;
+	if (mask & GCTileStipXOrigin) out->ts_x_origin = g->v.ts_x_origin;
+	if (mask & GCTileStipYOrigin) out->ts_y_origin = g->v.ts_y_origin;
+	if (mask & GCFont) out->font = g->v.font;
+	if (mask & GCSubwindowMode) out->subwindow_mode = g->v.subwindow_mode;
+	if (mask & GCGraphicsExposures)
+		out->graphics_exposures = g->v.graphics_exposures;
+	if (mask & GCClipXOrigin) out->clip_x_origin = g->v.clip_x_origin;
+	if (mask & GCClipYOrigin) out->clip_y_origin = g->v.clip_y_origin;
+	if (mask & GCClipMask) out->clip_mask = g->v.clip_mask;
+	if (mask & GCDashOffset) out->dash_offset = g->v.dash_offset;
+	if (mask & GCDashList) out->dashes = g->v.dashes;
+	if (mask & GCArcMode) out->arc_mode = g->v.arc_mode;
+	return 1;
+}
+
+/* The XAlloc*Hints family is nothing but zeroed structures. */
+XLITE_IMPL(XAllocSizeHints)
+XSizeHints *XAllocSizeHints(void) { return calloc(1, sizeof(XSizeHints)); }
+XLITE_IMPL(XAllocWMHints)
+XWMHints *XAllocWMHints(void) { return calloc(1, sizeof(XWMHints)); }
+XLITE_IMPL(XAllocClassHint)
+XClassHint *XAllocClassHint(void) { return calloc(1, sizeof(XClassHint)); }
+XLITE_IMPL(XAllocIconSize)
+XIconSize *XAllocIconSize(void) { return calloc(1, sizeof(XIconSize)); }
+XLITE_IMPL(XAllocStandardColormap)
+XStandardColormap *XAllocStandardColormap(void)
+{
+	return calloc(1, sizeof(XStandardColormap));
+}

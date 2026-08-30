@@ -17,7 +17,7 @@ python3 /src/tools/mkxlitestubs.py /src/xlite/symbols.txt /src/xlite/stubs.c $IM
 echo "--- compiling ---"
 INSTR=""
 [ -n "$XLITE_INSTRUMENT" ] && INSTR="-DXLITE_INSTRUMENT -finstrument-functions"
-$CC -O2 -fPIC -shared -Wall -Wno-unused-parameter $INSTR \
+$CC -O2 -fno-omit-frame-pointer -fPIC -shared -Wall -Wno-unused-parameter $INSTR \
 	-I"$SYSROOT/usr/include" -I/src/xlite \
 	-Wl,-soname,libX11.so.6 \
 	-o "$OUT" /src/xlite/*.c
