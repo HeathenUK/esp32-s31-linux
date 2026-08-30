@@ -638,3 +638,70 @@ blend.
 
 **Do not repeat the mistake this document caused:** check the driver header for
 the entry point before reasoning about whether an engine is available.
+
+
+## 2026-08-30: the PPA was waiting on a flag it could never see
+
+**Every number in this document that compares the PPA against the CPU was taken
+with a fixed cost an order of magnitude too high.**
+
+`esp32s31_ppa_spin_done()` polled `PPA_INT_RAW` while the driver's own ISR did
+`writel(st, ppa->ppa + PPA_INT_CLR)`. The flag is set and cleared before the
+spin can observe it, so the spin always burned its full budget and then fell
+through to a sleep. The tell is that the wait scaled with the timeout:
+
+    ppa_spin_us = 300   ->  blend 64x64 wait 1,121 us
+    ppa_spin_us = 3000  ->  blend 64x64 wait 3,304 us
+
+**The authority is Espressif's own driver.** In
+`esp-idf/components/esp_driver_ppa/src/`, `ppa_blend.c`, `ppa_srm.c` and
+`ppa_fill.c` all complete on the 2D-DMA receive EOF
+(`dma2d_rx_event_callbacks_t.on_recv_eof`); none of them uses the PPA's EOF
+interrupt. This driver's own timeout fallback already polled that bit, so the
+correct signal was in the file the whole time.
+
+    blend 64x64   1,322 us -> 169 us   (setup 9 us, wait 160 us)
+                  24 KB in 160 us = 150 MB/s - the engine's real rate
+
+### What that does to the decisions here
+
+Blend against a CACHED CPU blend (the honest baseline - DRM dumb buffers are
+mapped uncached, and a CPU blend through them runs at ~2.4 us per PIXEL, which
+flatters the engine by 30x):
+
+    rect       bytes     PPA us   CPU cached   ratio (before -> after)
+    32x32      2,048       222        197      0.20 -> 0.89
+    64x64      8,192       268        625      0.53 -> 2.33
+    96x96     18,432       448      1,530      1.54 -> 3.42
+    128x128   32,768     1,326      2,817      2.23 -> 2.12
+    400x300  240,000     4,315     20,493      4.80 -> 4.75
+
+**The blend crossover moved from ~18 KB to ~2 KB.** At icon size the PPA went
+from losing 2:1 to winning 2.3:1.
+
+The same fix is now applied to the fill and SRM paths, because the vendor
+driver says they share the completion signal. **The SRM/copy crossover in the
+tables above therefore needs re-measuring** - it was taken with the same broken
+wait, and the ~128 KB figure is not trustworthy. Single runs after the fix were
+too noisy to quote; that needs the repeat discipline the rest of this document
+uses.
+
+### Two further corrections to this document
+
+- **PPA BLEND is implemented.** `esp32s31_ppa_blend()` has existed since
+  bring-up and works; it was simply not exported from `esp32s31-ppa.h` and was
+  reachable only from debugfs. It now has `esp32s31_ppa_blend_layers()` and
+  `DRM_IOCTL_ESP32S31_PPA_BLEND`. Reading the header and concluding "not
+  implemented" was wrong - grep the `.c`.
+- **`ppabench` measures a BLIT.** It drives `DRM_IOCTL_ESP32S31_PPA_COPY` only,
+  so its crossover is a copy crossover and says nothing about blending. Use
+  `rootfs/blendbench.c` for blends; it also verifies correctness (every alpha
+  lands on the exact expected RGB565 value) before timing anything.
+
+### Do not aim raw addresses at the PPA
+
+The debugfs interfaces take physical addresses and the driver bounds them to
+`lcd_reserved` - but that region is a `reusable` CMA pool, so an address inside
+it is very likely a LIVE allocation. Writing blend output to `0x50900000` while
+the desktop was running corrupted CMA and killed several processes. Use the
+ioctls with GEM handles, which is what they are for.
