@@ -343,9 +343,21 @@ static int xpm_build(Display *dpy, Drawable d, char **lines, int nlines,
 	 * XFillRectangles turns that into one request per colour - eleven for a
 	 * typical icon instead of several thousand.
 	 */
+	/*
+	 * ...but in BATCHES, not one unbounded request per colour.
+	 *
+	 * Sending every run of a colour in one go makes both buffers scale
+	 * with the image: the rectangle array was w*h/2 entries (52 kB for a
+	 * 128x103 icon) and the request itself reached 18 kB, which is what
+	 * grew xlite's output buffer to 18,480 bytes and left it there for the
+	 * life of the client. Neither cost buys anything - the win over the
+	 * original was going from thousands of requests to a handful, and a
+	 * cap of 512 rectangles keeps that (a 2,300-run colour becomes five
+	 * requests, not one) while both buffers stay at 4 kB.
+	 */
 	{
-		XRectangle *rects = malloc(((size_t)w * h / 2 + 1) *
-					   sizeof(*rects));
+#define XPM_BATCH	512
+		XRectangle *rects = malloc(XPM_BATCH * sizeof(*rects));
 		int ci;
 
 		if (!rects) {
@@ -383,6 +395,13 @@ static int xpm_build(Display *dpy, Drawable d, char **lines, int nlines,
 					rects[nr].height = 1;
 					nr++;
 					x += run;
+					if (nr == XPM_BATCH) {
+						XSetForeground(dpy, gc,
+							cols[ci].pixel);
+						XFillRectangles(dpy, pm, gc,
+								rects, nr);
+						nr = 0;
+					}
 				}
 			}
 			if (nr) {

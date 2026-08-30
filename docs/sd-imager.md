@@ -120,3 +120,15 @@ against the real receiver binary - clean transfer, corrupted frames, injected
 hart0 log lines, duplicated frames and swallowed acks. Worth re-running after any
 change to the framing, because the failure it guards against costs 13 minutes to
 observe on real hardware.
+
+## Never flash a mounted XIP partition on a running board
+
+`make flash-xip-rootfs` / `flash-xip2-rootfs` rewrite the very flash the live
+system has mounted: `/usr/bin` and `/usr/lib` are overlays whose lowerdirs are
+`/mnt/xip` and `/mnt/xip2`, both cramfs on those partitions. Rewriting them
+underneath a running desktop changes the bytes behind pages that are already
+mapped, so **already-running clients can render corruption** - and it will look
+like a rendering bug in whatever you last changed, not like a flash operation.
+
+Reset immediately after flashing either image, before judging anything on
+screen. Nothing that was running across the flash is trustworthy.
