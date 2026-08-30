@@ -733,3 +733,59 @@ So: **PPA blend is worth using where both surfaces are already in CMA** (it wins
 1.7x at icon size and ~5x at window size), and is not worth relocating drawables
 to reach. Revisit only if a genuinely cached CMA mapping can be demonstrated -
 the `map_noncoherent` route was tried and does not do it here.
+
+## Where the PPA can still help, after the completion-signal fix (2026-08-30)
+
+A survey of lvdesk and the whole xlite family, re-asked now that a PPA
+operation costs ~200 us of fixed overhead instead of ~1,300.
+
+**The filter that decides everything: the PPA can only address `lcd_reserved`.**
+So the question is never "is this a blend?" but "are BOTH surfaces already in
+CMA?" - because relocating a surface to reach the engine costs 13.7x on every
+CPU access to it (measured above). Two surfaces qualify: the scanout dumb
+buffer and any other dumb buffer.
+
+**Ruled out, with reasons:**
+
+- **The entire xlite family** (xlite, xrlite, xftlite, xtlite, xstubs) runs in
+  the *client* process, drawing into malloc'd pixmaps. It has no DRM master and
+  nothing in CMA. Reaching the PPA would mean allocating every pixmap as a dumb
+  buffer and paying 13.7x on all the CPU drawing that dominates it. Structural,
+  not a tuning question.
+- **The X shim's compositing inside lvdesk** - same reason, its pixmaps are
+  malloc'd. This is what was measured and rejected above.
+- **Cursor compositing** - already on the **DRM hardware cursor plane**
+  (`kms_cursor_init`/`kms_cursor_move`); the display engine overlays it during
+  scanout at no CPU cost. A PPA blend would replace one register write with a
+  ~200 us ioctl. It is already better than anything the PPA could do.
+- **The driver's damage copy** - `esp32s31_lcd_copy_rect()` picks CPU or PPA per
+  rectangle at a ~128 KB crossover. Re-measured after the fix and **the table
+  still holds**: 640x384 is 10.9 ms CPU against 6.9 ms PPA (was 9.66 / 6.43),
+  and PPA is still 6x worse at 128x128. The fix roughly halved the engine's
+  fixed cost but memcpy is cheap, so the crossover did not move. **The copy
+  decisions were not distorted by the bug - only the blend ones were.**
+
+**The one real opportunity: alpha compositing into the scanout buffer.**
+
+lvdesk renders DIRECT into the mapped dumb buffer, so LVGL's destination is
+already in CMA. Every rounded corner, shadow, fade and translucent panel LVGL
+draws is a read-modify-write blend - against write-combine memory - and PPA
+blend now beats a *cached* CPU blend by 1.7-2.1x at 64x64 and 4.4-5.8x at
+256x256 and up. The uncached destination makes the CPU's side of that
+comparison considerably worse than the "cached" column.
+
+**LVGL already ships the draw unit for this**: `lvgl/src/draw/espressif/ppa/`,
+gated by `LV_USE_PPA` (currently 0). It cannot simply be switched on - it is
+written against ESP-IDF (`driver/ppa.h`, `esp_cache.h`, `ppa_do_fill()`), and
+on hart1 the PPA belongs to our kernel DRM driver. But its structure - fill,
+img and buf dispatch behind LVGL's draw-unit interface - is exactly right, so
+the work is re-pointing its three back-end calls at our ioctls rather than
+designing anything. Fills need no source surface, so they qualify immediately;
+images would need the source in CMA and mostly will not.
+
+**Also worth settling while here, though it is not a PPA question:**
+`LVDESK_PARTIAL` already toggles rendering into a cached heap buffer with a
+copy-out, against rendering direct into write-combine. The comment at that
+toggle poses the question and today's 13.7x figure is the first hard evidence
+that rendering against uncached memory - not the copy - may be the real cost.
+Measure it: fresh boot per arm, 5+ runs, discard warm-up.
