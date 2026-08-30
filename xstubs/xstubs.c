@@ -152,6 +152,90 @@ void XShapeCombineMask(void *dpy, unsigned long dest, int kind, int x, int y,
 
 struct xpm_col { char key[8]; unsigned long pixel; int none; };
 
+/*
+ * Colour names already resolved, across every icon.
+ *
+ * XParseColor and XAllocColor are each a SYNCHRONOUS round trip, and the first
+ * version called both once per colour per icon: 779 of each for xfiles' set,
+ * 1,558 blocking round trips, and the client was still loading icons after
+ * fourteen seconds - it had not reached MapWindow, so no window ever appeared.
+ * Icon palettes repeat heavily, so remembering them turns that into a few
+ * dozen.
+ */
+#define XPM_CACHE 128
+
+static struct { char name[40]; unsigned long pixel; int ok; } xpm_cache[XPM_CACHE];
+static int xpm_ncache;
+
+/* Bits and shift of a visual's channel mask. */
+static void mask_bits(unsigned long m, int *shift, int *bits)
+{
+	*shift = 0; *bits = 0;
+	if (!m)
+		return;
+	while (!(m & 1)) { m >>= 1; (*shift)++; }
+	while (m & 1)    { m >>= 1; (*bits)++; }
+}
+
+/*
+ * A hex colour on a TrueColor visual needs no server at all: the pixel IS the
+ * components packed into the visual's masks. Asking anyway costs two
+ * synchronous round trips per colour, and an icon set is hundreds of colours.
+ */
+static int xpm_direct(Display *dpy, const char *name, unsigned long *pixel)
+{
+	Visual *v = DefaultVisual(dpy, DefaultScreen(dpy));
+	unsigned r = 0, g = 0, b = 0;
+	int rs, rb, gs, gb, bs, bb, n;
+
+	if (!v || v->class != TrueColor || name[0] != '#')
+		return 0;
+	n = strlen(name + 1);
+	if (n == 6) {
+		if (sscanf(name + 1, "%2x%2x%2x", &r, &g, &b) != 3)
+			return 0;
+	} else if (n == 12) {
+		if (sscanf(name + 1, "%4x%4x%4x", &r, &g, &b) != 3)
+			return 0;
+		r >>= 8; g >>= 8; b >>= 8;
+	} else {
+		return 0;
+	}
+	mask_bits(v->red_mask, &rs, &rb);
+	mask_bits(v->green_mask, &gs, &gb);
+	mask_bits(v->blue_mask, &bs, &bb);
+	*pixel = ((unsigned long)(r >> (8 - rb)) << rs) |
+		 ((unsigned long)(g >> (8 - gb)) << gs) |
+		 ((unsigned long)(b >> (8 - bb)) << bs);
+	return 1;
+}
+
+static int xpm_color(Display *dpy, Colormap cmap, const char *name,
+		     unsigned long *pixel)
+{
+	XColor col;
+	int i;
+
+	if (xpm_direct(dpy, name, pixel))
+		return 1;
+	for (i = 0; i < xpm_ncache; i++)
+		if (!strcmp(xpm_cache[i].name, name)) {
+			*pixel = xpm_cache[i].pixel;
+			return xpm_cache[i].ok;
+		}
+	col.pixel = 0;
+	i = XParseColor(dpy, cmap, name, &col) && XAllocColor(dpy, cmap, &col);
+	*pixel = i ? col.pixel : 0;
+	if (xpm_ncache < XPM_CACHE) {
+		snprintf(xpm_cache[xpm_ncache].name,
+			 sizeof(xpm_cache[xpm_ncache].name), "%s", name);
+		xpm_cache[xpm_ncache].pixel = *pixel;
+		xpm_cache[xpm_ncache].ok = i;
+		xpm_ncache++;
+	}
+	return i;
+}
+
 /* The next double-quoted string, or NULL. Advances *pp past it. */
 static char *xpm_next(char **pp, char *end)
 {
@@ -202,7 +286,6 @@ static int xpm_build(Display *dpy, Drawable d, char **lines, int nlines,
 
 	for (i = 0; i < nc; i++) {
 		char *c = lines[1 + i], *k;
-		XColor col;
 
 		if (!c || (int)strlen(c) < cpp)
 			break;
@@ -223,13 +306,14 @@ static int xpm_build(Display *dpy, Drawable d, char **lines, int nlines,
 			if (!strncasecmp(k, "none", 4)) {
 				cols[i].none = 1;
 			} else {
+				unsigned long px;
+
 				while (*k && *k != ' ' && *k != '\t' &&
 				       e < name + sizeof(name) - 1)
 					*e++ = *k++;
 				*e = 0;
-				if (XParseColor(dpy, cmap, name, &col) &&
-				    XAllocColor(dpy, cmap, &col))
-					cols[i].pixel = col.pixel;
+				if (xpm_color(dpy, cmap, name, &px))
+					cols[i].pixel = px;
 			}
 		}
 		ncols++;
@@ -245,35 +329,68 @@ static int xpm_build(Display *dpy, Drawable d, char **lines, int nlines,
 	gc = XCreateGC(dpy, pm, 0, NULL);
 
 	/*
-	 * Drawn as RUNS of one colour with XFillRectangle rather than through
-	 * PutImage, which the shim accepts and ignores. A 16x16 icon is a
-	 * handful of requests.
+	 * One request per COLOUR, not per run.
+	 *
+	 * The first version drew each run of same-coloured pixels with its own
+	 * XFillRectangle, preceded by an XSetForeground - two requests per run.
+	 * For xfiles' 64x64 icons that is thousands of round trips each, and
+	 * with thirteen icons the client was still loading them after ten
+	 * seconds: 10,577 requests logged, all ChangeGC/PolyFillRectangle, and
+	 * it had not yet reached MapWindow. The window never appeared because
+	 * the icons never finished.
+	 *
+	 * Gathering every run of one colour and sending them as a single
+	 * XFillRectangles turns that into one request per colour - eleven for a
+	 * typical icon instead of several thousand.
 	 */
-	for (y = 0; y < h; y++) {
-		char *row = lines[1 + ncols + y];
-		int x = 0, rowlen;
+	{
+		XRectangle *rects = malloc(((size_t)w * h / 2 + 1) *
+					   sizeof(*rects));
+		int ci;
 
-		if (!row)
-			break;
-		rowlen = strlen(row);
-		while (x < w && rowlen >= (x + 1) * cpp) {
-			int run = 1, ci = -1, j;
-
-			for (j = 0; j < ncols; j++)
-				if (!memcmp(row + x * cpp, cols[j].key, cpp)) {
-					ci = j;
-					break;
-				}
-			while (x + run < w && rowlen >= (x + run + 1) * cpp &&
-			       !memcmp(row + (x + run) * cpp,
-				       row + x * cpp, cpp))
-				run++;
-			if (ci >= 0 && !cols[ci].none) {
-				XSetForeground(dpy, gc, cols[ci].pixel);
-				XFillRectangle(dpy, pm, gc, x, y, run, 1);
-			}
-			x += run;
+		if (!rects) {
+			XFreeGC(dpy, gc);
+			return 3;		/* XpmNoMemory */
 		}
+		for (ci = 0; ci < ncols; ci++) {
+			int nr = 0, yy;
+
+			if (cols[ci].none)
+				continue;	/* transparent: draw nothing */
+			for (yy = 0; yy < h; yy++) {
+				char *row = lines[1 + ncols + yy];
+				int x = 0, rowlen;
+
+				if (!row)
+					break;
+				rowlen = strlen(row);
+				while (x < w && rowlen >= (x + 1) * cpp) {
+					int run = 1;
+
+					if (memcmp(row + x * cpp,
+						   cols[ci].key, cpp)) {
+						x++;
+						continue;
+					}
+					while (x + run < w &&
+					       rowlen >= (x + run + 1) * cpp &&
+					       !memcmp(row + (x + run) * cpp,
+						       cols[ci].key, cpp))
+						run++;
+					rects[nr].x = x;
+					rects[nr].y = yy;
+					rects[nr].width = run;
+					rects[nr].height = 1;
+					nr++;
+					x += run;
+				}
+			}
+			if (nr) {
+				XSetForeground(dpy, gc, cols[ci].pixel);
+				XFillRectangles(dpy, pm, gc, rects, nr);
+			}
+		}
+		free(rects);
 	}
 	XFreeGC(dpy, gc);
 	if (pix_ret)

@@ -11,7 +11,7 @@ elsewhere it says so.
 |---|---|---|---|
 | CPU | anything | `memcpy`, per-pixel C | used below the threshold |
 | PPA SRM | scale, rotate, mirror | `esp32s31_ppa_scale_rect()` | used above the threshold |
-| PPA BLEND | two-layer alpha, solid fill | internal, debugfs only | implemented, unused |
+| PPA BLEND | two-layer alpha, solid fill | **NOT IMPLEMENTED** | see below |
 | AXI GDMA | `DMA_MEMCPY`, `DMA_MEMSET` | dmaengine | fastest, but 1D only - see below |
 | AHB GDMA | `DMA_MEMCPY` | dmaengine | untested; same 1D limitation applies |
 | BitScrambler | stream bit manipulation | — | ruled out, see below |
@@ -603,3 +603,38 @@ That explains four null desktop sweeps: the arms were never as separated as the
 knob's name implies. Any future comparison must check `ppa_ops` in the debugfs
 rather than trusting the parameter, and if a true "no PPA at all" arm is wanted
 it needs a real switch adding.
+
+
+## Correction: PPA BLEND does not exist, and the crossover above is a COPY crossover
+
+Two errors in this document, both found 2026-08-30 while deciding how to
+implement RENDER `Composite` with a mask in the X shim.
+
+**1. The table said PPA BLEND was "implemented, unused". It is not implemented
+at all.** `esp32s31-ppa.h` exports exactly two functions:
+
+    int esp32s31_ppa_scale(...)
+    int esp32s31_ppa_scale_rect(...)
+
+There is no blend entry point, no blend ioctl, and `esp32s31-lcd.c` alpha-
+blends the *cursor* in software (`/* Alpha-blend the ARGB8888 cursor into the
+RGB565 scanout buffer. */`) - which it would not do if the engine were
+reachable. Anything in these notes that reasons from "BLEND exists and is
+unused" is reasoning from a table entry, not from the driver.
+
+**2. The ~128 KB crossover is a COPY crossover and must not be applied to
+blending.** `rootfs/ppabench.c` drives one ioctl, `DRM_IOCTL_ESP32S31_PPA_COPY`
+- a blit. A blend is a very different job for the CPU: two source reads, three
+multiply-adds and a write per pixel, against a copy's move. The PPA's fixed
+cost (~13 us to program) does not change. So the blend crossover must sit at a
+**smaller** rectangle than the copy crossover, and quoting 128 KB to reject
+hardware blending is quoting the wrong number.
+
+The X shim's masked `Composite` is therefore implemented in software for now,
+with the composite sizes logged under `XSHIM_TRACE=1` so the real distribution
+is known before anyone writes a blend path. Two customers would share it: the
+shim's masked composite and glyph blending, and the driver's software cursor
+blend.
+
+**Do not repeat the mistake this document caused:** check the driver header for
+the entry point before reasoning about whether an engine is available.

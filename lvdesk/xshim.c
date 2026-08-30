@@ -76,6 +76,7 @@ struct res {
 	uint32_t event_mask;		/* what this window asked to receive */
 	int bw;				/* border width, drawn in the PARENT */
 	uint32_t border_pixel;
+	uint32_t bg_pixmap;		/* windows: CWBackPixmap, 0 = none */
 	char title[32];			/* WM_NAME, windows only */
 };
 
@@ -365,6 +366,23 @@ static int is_descendant(struct res *w, struct res *of)
  * Rects are gathered once and filtered per row; this only runs on a background
  * fill, which is rare.
  */
+/*
+ * What a window's background IS at one point: a tile from its background
+ * pixmap if it has one, otherwise its background colour. Tiling is what X
+ * specifies, and it costs nothing here because the common case is a pixmap the
+ * size of the window.
+ */
+static uint16_t win_bg_at(struct res *d, int x, int y)
+{
+	struct res *p = d->bg_pixmap ? res_find(d->bg_pixmap) : NULL;
+
+
+	if (p && p->type == R_PIXMAP && drawable_ok(p) && p->w > 0 && p->h > 0)
+		return px_get(p, ((x % p->w) + p->w) % p->w,
+			      ((y % p->h) + p->h) % p->h);
+	return (uint16_t)d->bg;
+}
+
 static void win_fill(struct res *d, int x, int y, int w, int h)
 {
 	struct { int x0, y0, x1, y1; } ob[80];
@@ -412,12 +430,12 @@ static void win_fill(struct res *d, int x, int y, int w, int h)
 				}
 		for (i = 0; i < n; i++) {
 			for (k = cur; k < sp[i][0] && k < x + w; k++)
-				px_set(d, k, j, (uint16_t)d->bg);
+				px_set(d, k, j, win_bg_at(d, k, j));
 			if (sp[i][1] > cur)
 				cur = sp[i][1];
 		}
 		for (k = cur; k < x + w; k++)
-			px_set(d, k, j, (uint16_t)d->bg);
+			px_set(d, k, j, win_bg_at(d, k, j));
 	}
 }
 
@@ -1140,6 +1158,15 @@ static struct pict *pict_find(uint32_t id)
 {
 	int i;
 
+	/*
+	 * None is not a picture. An empty slot has id 0, so looking up None
+	 * returned the first FREE slot - a non-NULL record with no drawable -
+	 * and every ordinary unmasked Composite was misrouted into the masked
+	 * path and refused. xfiles never used a mask at all; the mask was an
+	 * artefact of this lookup.
+	 */
+	if (!id)
+		return NULL;
 	for (i = 0; i < MAXPICT; i++)
 		if (picts[i].id == id)
 			return &picts[i];
@@ -1503,7 +1530,17 @@ static void put_format(uint8_t *p, uint32_t id, int depth, int rs, int rm,
 
 static void render_unimpl(struct cli *c, uint8_t minor, const char *name)
 {
-	if (c->nrender[minor & 63]++ == 0)
+	/*
+	 * Its OWN counter. Sharing nrender[] with the dispatcher's
+	 * first-request logger meant the count was always non-zero by the time
+	 * this ran, so every unimplemented RENDER path reported NOTHING - and
+	 * a search for refused requests came back clean while xfiles drew a
+	 * black window. An instrument that cannot fire is worse than none.
+	 */
+	static uint16_t seen[64];
+
+	(void)c;
+	if (seen[minor & 63]++ == 0)
 		fprintf(stderr, "xshim: RENDER %s (minor %u) is not "
 			"implemented - the client will be told BadRequest\n",
 			name, minor);
@@ -1670,6 +1707,7 @@ static void render_composite(struct cli *c, const uint8_t *r)
 	struct res *d, *s;
 	int op = r[4];
 	int sx = gets16(r + 20), sy = gets16(r + 22);
+	int mask_x = gets16(r + 24), mask_y = gets16(r + 26);
 	int dx = gets16(r + 28), dy = gets16(r + 30);
 	int w = get16(r + 32), h = get16(r + 34);
 	int i, j, x0, y0, x1, y1;
@@ -1679,8 +1717,94 @@ static void render_composite(struct cli *c, const uint8_t *r)
 	d = res_find(dp->drawable);
 	if (!drawable_ok(d))
 		return;
-	if (mp)
-		render_unimpl(c, 8, "Composite with a mask picture");
+	/*
+	 * A mask picture: dst = src*a + dst*(1-a), with the coverage coming
+	 * from a third surface. This is how an icon with transparency is
+	 * drawn, and ignoring the mask is why xfiles composited its file list
+	 * into a background pixmap that stayed black.
+	 *
+	 * The mask is nominally A8, but every drawable here is RGB565 - there
+	 * is no 8-bit surface to read - so coverage is taken from the red
+	 * channel, which is monotonic in what a client writes: 0xFFFF opaque,
+	 * 0 transparent, and anything between in proportion.
+	 *
+	 * HARDWARE: the PPA BLEND engine does exactly this operation and is
+	 * implemented but unused (docs/accel-plan.md). It is NOT used here
+	 * because of the size: programming the PPA costs a fixed ~13 us and it
+	 * only overtakes the CPU above ~128 KB, while these composites are
+	 * icon-sized. The sizes are logged below so the crossover can be
+	 * checked against real traffic rather than assumed.
+	 */
+	if (mp) {
+		/*
+		 * A SOLID mask has no drawable: it is a constant alpha, used
+		 * to draw something uniformly translucent. Rejecting it as
+		 * "unreadable" is what left xfiles' window black even after
+		 * masked compositing was implemented.
+		 */
+		struct res *m = mp->solid ? NULL : res_find(mp->drawable);
+		int x0, y0, x1, y1, i, j;
+
+		if (!sp || (!mp->solid && !drawable_ok(m))) {
+			if (trace_on())
+			fprintf(stderr, "xshim: masked composite: src 0x%x=%s "
+				"mask 0x%x=%s dst 0x%x=%s\n",
+				get32(r + 8), sp ? "ok" : "MISSING",
+				get32(r + 12), mp ? (mp->solid ? "solid" :
+				(drawable_ok(m) ? "ok" : "no drawable")) :
+				"MISSING",
+				get32(r + 16), dp ? "ok" : "MISSING");
+			render_unimpl(c, 8, "Composite with an unreadable mask");
+			return;
+		}
+		if (trace_on())
+			fprintf(stderr, "xshim:   masked composite %dx%d "
+				"(%d bytes) src=%s\n", w, h, w * h * 2,
+				sp->solid ? "solid" : "picture");
+		x0 = dx; y0 = dy; x1 = dx + w; y1 = dy + h;
+		pict_clip(dp, &x0, &y0, &x1, &y1);
+		for (j = y0; j < y1; j++)
+			for (i = x0; i < x1; i++) {
+				int mx = mask_x + (i - dx);
+				int my = mask_y + (j - dy);
+				uint16_t mv = 0;
+				int cov, sr, sg, sb;
+
+				if (mp->solid) {
+					cov = mp->a;
+				} else {
+					if (mx < 0 || my < 0 || mx >= m->w ||
+					    my >= m->h)
+						continue;
+					mv = px_get(m, mx, my);
+					cov = (((mv >> 11) & 0x1F) * 255) / 31;
+				}
+				if (!cov)
+					continue;
+				if (sp->solid) {
+					sr = sp->rr; sg = sp->gg; sb = sp->bb;
+					cov = cov * sp->a / 255;
+				} else {
+					struct res *ss =
+						res_find(sp->drawable);
+					int px = sx + (i - dx);
+					int py = sy + (j - dy);
+					uint16_t v;
+
+					if (!drawable_ok(ss) || px < 0 ||
+					    py < 0 || px >= ss->w ||
+					    py >= ss->h)
+						continue;
+					v = px_get(ss, px, py);
+					sr = (v >> 11) << 3;
+					sg = ((v >> 5) & 0x3F) << 2;
+					sb = (v & 0x1F) << 3;
+				}
+				blend_px(d, i, j, sr, sg, sb, cov, op);
+			}
+		notify_draw(d);
+		return;
+	}
 	if (sp && sp->solid) {
 		render_fill(d, dp, dx, dy, w, h, sp->rr, sp->gg, sp->bb,
 			    sp->a, op);
@@ -1695,6 +1819,10 @@ static void render_composite(struct cli *c, const uint8_t *r)
 	notify_draw(d);
 	x0 = dx; y0 = dy; x1 = dx + w; y1 = dy + h;
 	pict_clip(dp, &x0, &y0, &x1, &y1);
+	if (trace_on())
+		fprintf(stderr, "xshim:   composite op=%d %dx%d src(%d,%d) "
+			"dst(%d,%d) -> clipped %d,%d..%d,%d  src %dx%d\n",
+			op, w, h, sx, sy, dx, dy, x0, y0, x1, y1, s->w, s->h);
 	for (j = y0; j < y1; j++)
 		for (i = x0; i < x1; i++) {
 			int px = sx + (i - dx), py = sy + (j - dy);
@@ -1755,6 +1883,18 @@ static int render_request(struct cli *c, const uint8_t *r, int len)
 			tp = pict_find(get32(r + 12)); break;
 		case 26:
 			tp = pict_find(get32(r + 8)); break;
+		}
+		if (minor == 8 || minor == 26) {
+			struct pict *dq = pict_find(get32(r + (minor == 8 ?
+							     16 : 8)));
+			struct res *dd = dq ? res_find(dq->drawable) : NULL;
+
+			fprintf(stderr, "xshim:  R %s -> pict 0x%x drawable "
+				"0x%x (%s %dx%d)\n", render_opstr(minor),
+				dq ? dq->id : 0, dq ? dq->drawable : 0,
+				dd ? (dd->type == R_WINDOW ? "window" :
+				      "pixmap") : "?",
+				dd ? dd->w : 0, dd ? dd->h : 0);
 		}
 		fprintf(stderr, "xshim:  R %-22s dst=0x%x clip=%s %d,%d %dx%d\n",
 			render_opstr(minor), tp ? tp->id : 0,
@@ -2652,7 +2792,21 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		for (bit = 0; bit < 15; bit++) {
 			if (!(mask & (1u << bit)))
 				continue;
-			if (bit == 1) w->bg = get32(v);
+			/*
+			 * CWBackPixmap. A client that draws its content into
+			 * a pixmap, installs it as the background and then
+			 * ClearArea()s to show it gets a black window without
+			 * this - the drawing is accepted, lands nowhere
+			 * visible, and is then painted over. That is exactly
+			 * how xfiles presents its file list.
+			 */
+			if (bit == 0) {
+				w->bg_pixmap = get32(v);
+				fprintf(stderr, "xshim: win 0x%x background "
+					"pixmap = 0x%x\n", w->id,
+					w->bg_pixmap);
+			}
+			if (bit == 1) { w->bg = get32(v); w->bg_pixmap = 0; }
 			if (bit == 3) w->border_pixel = get32(v);
 			if (bit == 11) w->event_mask = get32(v);
 			v += 4;
