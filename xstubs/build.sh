@@ -4,10 +4,12 @@
 # integration as xlite, and nothing above them is rebuilt.
 set -e
 CC=/src/toolchain/riscv32-esp-linux-musl/bin/riscv32-esp-linux-musl-gcc
+SYSROOT=/src/build/buildroot/host/riscv32-buildroot-linux-musl/sysroot
 OUT=/src/images
 S=/src/xstubs/xstubs.c
 build() {			# soname, output name, -D flag
-	$CC -O2 -fPIC -shared -Wall -D"$3" -Wl,-soname,"$1" -o "$OUT/$2" "$S"
+	$CC -O2 -fPIC -shared -Wall -I"$SYSROOT/usr/include" -D"$3" \
+		-Wl,-soname,"$1" -o "$OUT/$2" "$S"
 	${CC%gcc}strip "$OUT/$2"
 	ls -l "$OUT/$2" | awk '{printf "  %-24s %7d bytes\n", $9, $5}'
 }

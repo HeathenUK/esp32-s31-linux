@@ -80,3 +80,41 @@ moment.
 **A latent defect needs a trigger, and a replacement library is a very good
 trigger.** After swapping one out, re-test the things that were working, not
 just the thing being replaced.
+
+## SetClipRectangles, XPM, and where xfiles stands
+
+`SetClipRectangles` (core opcode 59) is now implemented in the shim, stored as
+the bounding box of the rectangles - a superset, so text may extend slightly
+past where a client asked rather than being cut short. `GCClipMask` set to
+None clears it; ignoring that reset would leave one widget's clip in force for
+every later draw. With it, `xclock -digital` runs with **zero X errors**.
+
+**XPM is implemented rather than stubbed.** xfiles loads five icons and will
+not start without them. Two traps:
+
+- The client calls **`XpmCreatePixmapFromData`**, not `XpmReadFileToPixmap` -
+  its icons are compiled in, not read from disk. This file's own header comment
+  said the one function used was the file one, and believing it sent the first
+  attempt at the wrong symbol entirely. **Check what the client REFERENCES.**
+- Pixels are drawn as runs with `XFillRectangle`, because the shim accepts
+  `PutImage` and does nothing with it.
+
+xfiles now starts, loads its icons and opens a correctly titled window. It does
+**not** draw its file list yet:
+
+    xftlite: XftTextRender32 into a picture we did not create
+
+`XftTextRender32()` takes a destination PICTURE, not an XftDraw, so there is no
+drawable to draw on and no GC to draw with. Pictures xftlite hands out through
+`XftDrawPicture()` can be mapped back, and that is done - but xfiles builds its
+own with `XRenderCreatePicture`, which we never see. Two ways forward, neither
+started:
+
+1. Real RENDER glyph rendering - `CreateGlyphSet`/`AddGlyphs`/`CompositeGlyphs`
+   are already in the shim, but the client has to supply glyph BITMAPS and
+   xftlite has none: the faces live in the shim.
+2. Replace libXrender too (36 kB, and we already strip three unused DT_NEEDEDs
+   from it), so picture-to-drawable is ours to track.
+
+Option 2 is the smaller piece and fits the pattern everything else here
+followed.

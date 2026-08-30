@@ -8,7 +8,8 @@
  *   libICE    72 kB resident    2 of 108 functions
  *   libSM     32 kB resident   11 of  41, all on the session-manager path
  *   libXext   64 kB resident    2 of 132 (XShapeQueryExtension, ...CombineMask)
- *   libXpm    56 kB resident    1 of  34 (XpmReadFileToPixmap)
+ *   libXpm    56 kB resident    2 of  34 (XpmCreatePixmapFromData,
+ *                                          XpmReadFileToPixmap)
  *   ------------------------------------------------------------------
  *            224 kB            for FOURTEEN functions
  *
@@ -22,7 +23,12 @@
  *     any machine started without one.
  *   - The shim advertises NO extensions, so XShapeQueryExtension must answer
  *     False and XShapeCombineMask is unreachable.
- *   - Nothing here reads XPM files.
+ *   - XPM is now IMPLEMENTED rather than stubbed. "Nothing here reads XPM
+ *     files" stopped being true the moment xfiles was tried, and the note
+ *     above naming XpmReadFileToPixmap as the one function used sent the
+ *     first attempt at the wrong symbol entirely: xfiles compiles its icons
+ *     in and calls XpmCreatePixmapFromData. Check what the client
+ *     REFERENCES, not what a comment says.
  *
  * Each function still reports itself once if it is ever called with a result
  * that would matter, so a future client that genuinely needs SHAPE or XPM says
@@ -30,6 +36,11 @@
  */
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <strings.h>
+#ifdef STUB_XPM
+#include <X11/Xlib.h>
+#endif
 
 static void once(const char *name, const char *what)
 {
@@ -124,24 +135,203 @@ void XShapeCombineMask(void *dpy, unsigned long dest, int kind, int x, int y,
  * already handle it - xcalc's icon conversion fails that way with the real
  * library too.
  */
-int XpmReadFileToPixmap(void *dpy, unsigned long d, char *file,
-			unsigned long *pix, unsigned long *shape, void *attr)
+/*
+ * XPM, for real.
+ *
+ * This was stubbed on the grounds that "nothing here reads XPM files", which
+ * stopped being true the moment xfiles was tried: it loads five icons and
+ * refuses to start without them. The format is a C array of strings, so the
+ * parser is a scan for quoted strings - far less code than the 56 kB library,
+ * and it means the icons are the client's own rather than something we drew.
+ *
+ * Pixels are drawn as RUNS of one colour with XFillRectangle rather than
+ * through PutImage, because the shim accepts PutImage and does nothing with
+ * it. For a 16x16 icon that is a handful of requests.
+ */
+#define XPM_MAXCOL 256
+
+struct xpm_col { char key[8]; unsigned long pixel; int none; };
+
+/* The next double-quoted string, or NULL. Advances *pp past it. */
+static char *xpm_next(char **pp, char *end)
 {
-	(void)dpy; (void)d; (void)file; (void)attr;
-	if (pix) *pix = 0;
-	if (shape) *shape = 0;
-	once("XpmReadFileToPixmap", "no XPM support is built in");
-	return -3;			/* XpmOpenFailed */
+	char *p = *pp, *start;
+
+	while (p < end && *p != '"')
+		p++;
+	if (p >= end)
+		return NULL;
+	start = ++p;
+	while (p < end && *p != '"')
+		p++;
+	if (p >= end)
+		return NULL;
+	*p = 0;
+	*pp = p + 1;
+	return start;
 }
 
-int XpmCreatePixmapFromData(void *dpy, unsigned long d, char **data,
-			    unsigned long *pix, unsigned long *shape,
-			    void *attr)
+/*
+ * Build a pixmap from XPM lines. Both entry points land here: the format is
+ * identical, only the source differs - xfiles compiles its icons in as a char
+ * array, others read a file.
+ */
+static int xpm_build(Display *dpy, Drawable d, char **lines, int nlines,
+		     Pixmap *pix_ret, Pixmap *mask_ret)
 {
-	(void)dpy; (void)d; (void)data; (void)attr;
-	if (pix) *pix = 0;
-	if (shape) *shape = 0;
-	once("XpmCreatePixmapFromData", "no XPM support is built in");
-	return -3;
+	struct xpm_col cols[XPM_MAXCOL];
+	int w = 0, h = 0, nc = 0, cpp = 1, i, y, ncols = 0;
+	Colormap cmap = DefaultColormap(dpy, DefaultScreen(dpy));
+	Pixmap pm;
+	GC gc;
+
+	if (mask_ret)
+		*mask_ret = 0;
+	/* nlines == 0 means "unknown": compiled-in data carries no count. */
+	if (!lines || !lines[0] ||
+	    sscanf(lines[0], "%d %d %d %d", &w, &h, &nc, &cpp) < 3 ||
+	    w <= 0 || h <= 0 || nc <= 0 || cpp <= 0 || cpp > 7) {
+		fprintf(stderr, "xstubs: XPM header rejected: \"%s\"\n",
+			lines && lines[0] ? lines[0] : "(null)");
+		return 2;			/* XpmFileInvalid */
+	}
+	if (nc > XPM_MAXCOL)
+		nc = XPM_MAXCOL;
+	if (nlines && nlines < 1 + nc + h)
+		return 2;
+
+	for (i = 0; i < nc; i++) {
+		char *c = lines[1 + i], *k;
+		XColor col;
+
+		if (!c || (int)strlen(c) < cpp)
+			break;
+		memcpy(cols[i].key, c, cpp);
+		cols[i].key[cpp] = 0;
+		cols[i].none = 0;
+		cols[i].pixel = 0;
+		/* "<chars> c <colour>", with s/m/g keys possibly before it. */
+		k = strstr(c + cpp, " c ");
+		if (!k)
+			k = strstr(c + cpp, "\tc ");
+		if (k) {
+			char name[64], *e = name;
+
+			k += 3;
+			while (*k == ' ' || *k == '\t')
+				k++;
+			if (!strncasecmp(k, "none", 4)) {
+				cols[i].none = 1;
+			} else {
+				while (*k && *k != ' ' && *k != '\t' &&
+				       e < name + sizeof(name) - 1)
+					*e++ = *k++;
+				*e = 0;
+				if (XParseColor(dpy, cmap, name, &col) &&
+				    XAllocColor(dpy, cmap, &col))
+					cols[i].pixel = col.pixel;
+			}
+		}
+		ncols++;
+	}
+
+	pm = XCreatePixmap(dpy, d, w, h,
+			   DefaultDepth(dpy, DefaultScreen(dpy)));
+	if (!pm) {
+		fprintf(stderr, "xstubs: XPM %dx%d: XCreatePixmap failed\n",
+			w, h);
+		return 3;			/* XpmNoMemory */
+	}
+	gc = XCreateGC(dpy, pm, 0, NULL);
+
+	/*
+	 * Drawn as RUNS of one colour with XFillRectangle rather than through
+	 * PutImage, which the shim accepts and ignores. A 16x16 icon is a
+	 * handful of requests.
+	 */
+	for (y = 0; y < h; y++) {
+		char *row = lines[1 + ncols + y];
+		int x = 0, rowlen;
+
+		if (!row)
+			break;
+		rowlen = strlen(row);
+		while (x < w && rowlen >= (x + 1) * cpp) {
+			int run = 1, ci = -1, j;
+
+			for (j = 0; j < ncols; j++)
+				if (!memcmp(row + x * cpp, cols[j].key, cpp)) {
+					ci = j;
+					break;
+				}
+			while (x + run < w && rowlen >= (x + run + 1) * cpp &&
+			       !memcmp(row + (x + run) * cpp,
+				       row + x * cpp, cpp))
+				run++;
+			if (ci >= 0 && !cols[ci].none) {
+				XSetForeground(dpy, gc, cols[ci].pixel);
+				XFillRectangle(dpy, pm, gc, x, y, run, 1);
+			}
+			x += run;
+		}
+	}
+	XFreeGC(dpy, gc);
+	if (pix_ret)
+		*pix_ret = pm;
+	return 0;				/* XpmSuccess */
 }
+
+/*
+ * The one xfiles actually calls: its icons are compiled in, not read from
+ * disk. Stubbing this is what made it print "could not open pixmap" five times
+ * and give up - and implementing XpmReadFileToPixmap first, on the strength of
+ * a comment in this file, fixed nothing at all. Check which symbol the client
+ * REFERENCES, not which one sounds right.
+ */
+int XpmCreatePixmapFromData(Display *dpy, Drawable d, char **data,
+			    Pixmap *pix_ret, Pixmap *mask_ret,
+			    void *attributes)
+{
+	(void)attributes;
+	return xpm_build(dpy, d, data, 0, pix_ret, mask_ret);
+}
+
+int XpmReadFileToPixmap(Display *dpy, Drawable d, char *file,
+			Pixmap *pix_ret, Pixmap *mask_ret, void *attributes)
+{
+	char *buf, *p, *end, *lines[1024];
+	int n = 0, rc;
+	long sz;
+	FILE *f = fopen(file, "rb");
+
+	(void)attributes;
+	if (mask_ret)
+		*mask_ret = 0;
+	if (!f)
+		return 1;			/* XpmOpenFailed */
+	fseek(f, 0, SEEK_END);
+	sz = ftell(f);
+	fseek(f, 0, SEEK_SET);
+	if (sz <= 0 || sz > (1 << 20) || !(buf = malloc(sz + 1))) {
+		fclose(f);
+		return 1;
+	}
+	sz = fread(buf, 1, sz, f);
+	fclose(f);
+	buf[sz] = 0;
+	p = buf;
+	end = buf + sz;
+	while (n < 1024) {
+		char *l = xpm_next(&p, end);
+
+		if (!l)
+			break;
+		lines[n++] = l;
+	}
+	rc = xpm_build(dpy, d, lines, n, pix_ret, mask_ret);
+	free(buf);
+	return rc;
+}
+
+
 #endif

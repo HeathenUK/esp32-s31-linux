@@ -391,6 +391,29 @@ Visual *XftDrawVisual(XftDraw *draw) { return draw ? draw->visual : NULL; }
  * a text function at all on the analog face. So this has to be real, even
  * though nothing here renders a glyph through RENDER.
  */
+/*
+ * Every Picture we have handed out, and the XftDraw it came from.
+ *
+ * XftTextRender32() takes a destination PICTURE rather than an XftDraw, so
+ * there is no drawable to draw on and no GC to draw with - and a Picture is
+ * opaque server-side, so it cannot be turned back into one. But the picture
+ * a client renders into is the one IT asked us for, so remembering the pairs
+ * is enough to find the way back.
+ */
+#define NPICT 16
+static struct { Picture pict; XftDraw *draw; } pictmap[NPICT];
+static int npict;
+
+static XftDraw *draw_of_picture(Picture p)
+{
+	int i;
+
+	for (i = 0; i < npict; i++)
+		if (pictmap[i].pict == p)
+			return pictmap[i].draw;
+	return NULL;
+}
+
 Picture XftDrawPicture(XftDraw *draw)
 {
 	XRenderPictFormat *fmt;
@@ -406,6 +429,11 @@ Picture XftDrawPicture(XftDraw *draw)
 		return 0;
 	draw->pict = XRenderCreatePicture(draw->dpy, draw->drawable, fmt, 0,
 					  NULL);
+	if (draw->pict && npict < NPICT) {
+		pictmap[npict].pict = draw->pict;
+		pictmap[npict].draw = draw;
+		npict++;
+	}
 	return draw->pict;
 }
 
@@ -461,6 +489,20 @@ void XftDrawRect(XftDraw *draw, const XftColor *color, int x, int y,
 	XSetForeground(draw->dpy, draw->gc, color->pixel);
 	XFillRectangle(draw->dpy, draw->drawable, draw->gc, x, y, width,
 		       height);
+}
+
+/* Draw with the GC's current foreground, for the paths that carry no colour. */
+static void draw_8bit_nocolor(XftDraw *draw, XftFont *pub, int x, int y,
+			      const unsigned char *s, int len)
+{
+	struct xftfont *f = (struct xftfont *)pub;
+
+	if (!draw || !f)
+		return;
+	if (f->fid)
+		XSetFont(draw->dpy, draw->gc, f->fid);
+	XDrawString(draw->dpy, draw->drawable, draw->gc, x, y,
+		    (const char *)s, len);
 }
 
 static void draw_8bit(XftDraw *draw, const XftColor *color, XftFont *pub,
@@ -524,9 +566,23 @@ void XftTextRender32(Display *dpy, int op, Picture src, XftFont *pub,
 		     Picture dst, int srcx, int srcy, int x, int y,
 		     const FcChar32 *string, int len)
 {
-	(void)dpy; (void)op; (void)src; (void)pub; (void)dst;
-	(void)srcx; (void)srcy; (void)x; (void)y; (void)string; (void)len;
-	xft_missing("XftTextRender32");
+	XftDraw *draw = draw_of_picture(dst);
+	unsigned char buf[512];
+	int i, n = len < 512 ? len : 512;
+
+	(void)dpy; (void)op; (void)src; (void)srcx; (void)srcy;
+	if (!draw) {
+		xft_missing("XftTextRender32 into a picture we did not create");
+		return;
+	}
+	for (i = 0; i < n; i++)
+		buf[i] = string[i] < 256 ? (unsigned char)string[i] : '?';
+	/*
+	 * The colour is in the SOURCE picture, which we cannot read back, so
+	 * the GC keeps whatever foreground it was last given - which is the
+	 * colour the caller set through XftDrawSrcPicture().
+	 */
+	draw_8bit_nocolor(draw, pub, x, y, buf, n);
 }
 
 /* -------------------------------------------------------------- colours */

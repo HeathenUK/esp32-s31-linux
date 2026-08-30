@@ -68,6 +68,7 @@ struct res {
 	int ax, ay;			/* our origin within that buffer */
 	int cx0, cy0, cx1, cy1;		/* clip, in that buffer's coords */
 	uint32_t fg, bg;		/* GCs only */
+	int clip_set;			/* GCs only: a clip was installed */
 	uint32_t font;			/* GCs only: the font it selects */
 	int font_idx;			/* fonts only: index into xfonts[] */
 	int line_width;
@@ -242,11 +243,24 @@ void xshim_mem_report(void)
 		(mem_win + mem_pix + mem_glyph) / 1024);
 }
 
+/*
+ * The clip of the GC in the request being served.
+ *
+ * The drawing primitives take a drawable and a colour, not a GC - a line does
+ * not need to know what drew it - so threading a clip through all of them
+ * would touch every one. The shim serves exactly one request at a time, so the
+ * active clip is set once from the GC in handle() and read here.
+ */
+static int gcclip_on, gcclip_x0, gcclip_y0, gcclip_x1, gcclip_y1;
+
 static void px_set(struct res *d, int x, int y, uint16_t c)
 {
 	struct res *b = d->buf;
 	int ax, ay;
 
+	if (gcclip_on && (x < gcclip_x0 || y < gcclip_y0 ||
+			  x >= gcclip_x1 || y >= gcclip_y1))
+		return;
 	if (!b || !b->px)
 		return;
 	ax = x + d->ax;
@@ -1948,6 +1962,25 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 	 * an extension it never asked about - either way, say so rather than
 	 * fall into the switch and land on an unrelated core opcode.
 	 */
+	/*
+	 * Install the clip of whichever GC this request names, so the drawing
+	 * primitives - which take a drawable and a colour, not a GC - honour
+	 * it without every one of them growing a parameter.
+	 */
+	gcclip_on = 0;
+	if (op >= 62 && op <= 77) {
+		/* CopyArea and CopyPlane carry the GC third, the rest second */
+		const uint8_t *gp = (op == 62 || op == 63) ? r + 12 : r + 8;
+		struct res *g = len >= (int)(gp - r) + 4 ?
+				res_find(get32(gp)) : NULL;
+
+		if (g && g->type == R_GC && g->clip_set) {
+			gcclip_on = 1;
+			gcclip_x0 = g->cx0; gcclip_y0 = g->cy0;
+			gcclip_x1 = g->cx1; gcclip_y1 = g->cy1;
+		}
+	}
+
 	if (op >= 128) {
 		if (op == RENDER_MAJOR && render_request(c, r, len))
 			return;
@@ -2244,6 +2277,12 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 			if (bit == 3) g->bg = get32(v);		/* background */
 			if (bit == 4) g->line_width = get32(v);
 			if (bit == 14) g->font = get32(v);
+			/*
+			 * GCClipMask (bit 19). A client resets its clip by
+			 * setting this to None, and ignoring that leaves the
+			 * previous clip in force for every later draw.
+			 */
+			if (bit == 19 && !get32(v)) g->clip_set = 0;
 			v += 4;
 		}
 		if (getenv("XSHIM_TRACE"))
@@ -2474,6 +2513,49 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		}
 		fill_poly(d, pts, n, g->fg);
 		notify_draw(d);
+		break;
+	}
+	case 59: {					/* SetClipRectangles */
+		/*
+		 * Refusing this was not free: a client that clips its drawing
+		 * got BadImplementation, and the error arriving during an idle
+		 * poll is what exposed a latent hang in xlite's XPending().
+		 *
+		 * Stored as the bounding box of the rectangles, which is a
+		 * superset - text may extend a little past where the client
+		 * asked rather than being cut short, and nothing is drawn
+		 * outside the widget that set it.
+		 */
+		struct res *g = res_find(get32(r + 4));
+		int ox = gets16(r + 8), oy = gets16(r + 10);
+		const uint8_t *p = r + 12, *end = r + len;
+		int first = 1;
+
+		if (!g) {
+			send_error(c, X_BAD_GC, get32(r + 4), op);
+			break;
+		}
+		g->clip_set = 0;
+		for (; p + 8 <= end; p += 8) {
+			int rx = ox + gets16(p), ry = oy + gets16(p + 2);
+			int rw = get16(p + 4), rh = get16(p + 6);
+
+			if (first) {
+				g->cx0 = rx; g->cy0 = ry;
+				g->cx1 = rx + rw; g->cy1 = ry + rh;
+				first = 0;
+				g->clip_set = 1;
+			} else {
+				if (rx < g->cx0) g->cx0 = rx;
+				if (ry < g->cy0) g->cy0 = ry;
+				if (rx + rw > g->cx1) g->cx1 = rx + rw;
+				if (ry + rh > g->cy1) g->cy1 = ry + rh;
+			}
+		}
+		if (first) {		/* no rectangles at all: draw nothing */
+			g->clip_set = 1;
+			g->cx0 = g->cy0 = g->cx1 = g->cy1 = 0;
+		}
 		break;
 	}
 	case 62: {					/* CopyArea */

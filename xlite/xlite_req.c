@@ -1008,6 +1008,35 @@ static XFontStruct *font_by_id(Display *dpy, Font fid)
 	}
 }
 
+/*
+ * The i18n form of XSetWMProperties. Everything it carries beyond the window
+ * name is for a window manager that reads it, and lvdesk reads WM_NAME - so
+ * the name is set and the rest is dropped rather than the call failing.
+ */
+XLITE_IMPL(XSetWindowBackgroundPixmap)
+int XSetWindowBackgroundPixmap(Display *dpy, Window w, Pixmap px)
+{
+	REQ(dpy, 2, 0, 4);		/* ChangeWindowAttributes */
+
+	p32(r + 4, w);
+	p32(r + 8, 0x00000001);		/* CWBackPixmap */
+	p32(r + 12, px);
+	xlite_send(x, r);
+	return 1;
+}
+
+XLITE_IMPL(XmbSetWMProperties)
+void XmbSetWMProperties(Display *dpy, Window w, const char *window_name,
+			const char *icon_name, char **argv, int argc,
+			XSizeHints *normal_hints, XWMHints *wm_hints,
+			XClassHint *class_hints)
+{
+	(void)icon_name; (void)argv; (void)argc;
+	(void)normal_hints; (void)wm_hints; (void)class_hints;
+	if (window_name)
+		XStoreName(dpy, w, window_name);
+}
+
 XLITE_IMPL(XNextRequest)
 unsigned long XNextRequest(Display *dpy)
 {
