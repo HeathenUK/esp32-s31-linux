@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Ship a file to the board by whichever path is actually fast.
 
-    deploy.py <local-file> <dest-on-board> [--console] [--port /dev/cu.usb...]
+    deploy.py <local-file> <dest-on-board> [--console] [--force]
+                                          [--port /dev/cu.usb...]
 
 There are two transports and the difference is not marginal:
 
@@ -88,6 +89,20 @@ def serve_dir(directory):
     return httpd, httpd.server_address[1]
 
 
+def already_there(path, dest):
+    """True if the board already holds this exact file.
+
+    Re-sending an identical binary is pure cost to a machine somebody may be
+    using: a megabyte over Wi-Fi is seconds of network interrupts, esp-hosted
+    transport and SD writes, all to end up where it started. Over one session
+    most deploys were byte-identical to what was already there.
+    """
+    want = hashlib.md5(open(path, 'rb').read()).hexdigest()
+    out = run_script("busybox md5sum %s 2>/dev/null | busybox cut -d' ' -f1"
+                     % dest, 30) or ''
+    return want in out
+
+
 def deploy_net(path, dest, ip, timeout=180):
     want = hashlib.md5(open(path, 'rb').read()).hexdigest()
     size = os.path.getsize(path)
@@ -98,7 +113,11 @@ def deploy_net(path, dest, ip, timeout=180):
         t0 = time.time()
         out = run_script(
             "mkdir -p %s\n"
-            "wget -q %s -O %s.part || { echo DEPLOY_WGET_FAIL; exit 1; }\n"
+            # nice: this competes with whoever is using the desktop, and a
+            # deploy that takes a second longer costs nothing while a dropped
+            # keystroke costs a debugging session.
+            "nice -n 19 wget -q %s -O %s.part || "
+            "{ echo DEPLOY_WGET_FAIL; exit 1; }\n"
             "mv %s.part %s && chmod 755 %s && sync\n"
             "echo SUM $(busybox md5sum %s | busybox cut -d' ' -f1)\n"
             % (os.path.dirname(dest) or '/', url, dest, dest, dest, dest, dest),
@@ -126,6 +145,11 @@ def main():
         return 2
     path, dest = args[0], args[1]
     size = os.path.getsize(path)
+
+    # Cheapest transfer is the one that does not happen.
+    if '--force' not in sys.argv and already_there(path, dest):
+        print("DEPLOY_OK unchanged (%d bytes, same md5 - nothing sent)" % size)
+        return 0
 
     if not force_console and size >= NET_THRESHOLD:
         ip = board_ip()

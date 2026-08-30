@@ -216,3 +216,32 @@ back to. Do not reach for it directly for anything large. Its docstring said
 every time, because following it meant hand-rolling a server each session.
 `--console` forces it if you need to test that path.
 
+
+## Cost to the board, and how to stay out of the way
+
+These tools run on a machine somebody may be using. Measured, 5 runs each:
+
+| operation | board CPU | note |
+|---|---|---|
+| `screenshot.py` | **~1.1 s** | dd 290 ms + gzip 820 ms + base64 260 ms, then the console transfer |
+| `screenshot-hw.py` | **16.9 ms** | hardware JPEG encoder - 65x cheaper |
+| `deploy.py`, unchanged file | **0** | skipped entirely on an md5 match |
+| `deploy.py`, 1 MB over Wi-Fi | seconds | now `nice -n 19` |
+
+Three changes came out of a session where a human was trying to type while
+this tooling ran, and reported lag that was never reproduced once it stopped:
+
+- **`deploy.py` no longer re-sends a file the board already has.** It checks
+  the destination's md5 first. Over that session most deploys were byte
+  identical to what was already there - pure cost for no change. `--force`
+  overrides.
+- **The board-side work is `nice -n 19`.** A deploy that takes a second longer
+  costs nothing; a dropped keystroke costs a debugging session.
+- **`screenshot.py` says what it costs, every time.** The cheap tool already
+  existed and was not reached for, for a whole session. Use `screenshot-hw.py`
+  unless the exact pixels are needed - it is lossy JPEG, so pixel-comparison
+  work still wants the raw path.
+
+`gzip -1` rather than `-9` in the raw path: 820 ms against 1010 ms median, and
+**identical output size** (12,093 bytes both), because a desktop framebuffer is
+mostly flat colour. Compressing it hard buys nothing here.
