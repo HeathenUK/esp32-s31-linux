@@ -74,4 +74,11 @@ const uint16_t *xshim_window_pixels(uint32_t id, int *w, int *h);
  */
 void xshim_window_resize(uint32_t id, int w, int h);
 
+/*
+ * 0 if the client declared itself fixed-size via WM_NORMAL_HINTS (min == max),
+ * 1 otherwise - including when it set no hints at all, which is most clients
+ * and means "the window manager decides".
+ */
+int xshim_window_resizable(uint32_t id);
+
 #endif /* LVDESK_XSHIM_H */

@@ -1031,10 +1031,22 @@ void XmbSetWMProperties(Display *dpy, Window w, const char *window_name,
 			XSizeHints *normal_hints, XWMHints *wm_hints,
 			XClassHint *class_hints)
 {
-	(void)icon_name; (void)argv; (void)argc;
-	(void)normal_hints; (void)wm_hints; (void)class_hints;
+	(void)icon_name; (void)argv; (void)argc; (void)wm_hints;
 	if (window_name)
 		XStoreName(dpy, w, window_name);
+	/*
+	 * Forward the size hints. Dropping them is invisible until something
+	 * asks the question they answer: a client that declares min == max is
+	 * saying it cannot be resized, and a window manager that never receives
+	 * that will happily maximise it and leave a band the client can never
+	 * fill. xfiles passes its XSizeHints through THIS call rather than
+	 * XSetWMNormalHints, so discarding them here silently disabled the
+	 * whole mechanism for the one client that uses it.
+	 */
+	if (normal_hints)
+		XSetWMNormalHints(dpy, w, normal_hints);
+	if (class_hints)
+		XSetClassHint(dpy, w, class_hints);
 }
 
 XLITE_IMPL(XNextRequest)

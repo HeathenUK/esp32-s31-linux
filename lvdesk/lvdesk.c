@@ -2012,6 +2012,7 @@ struct winrec {
 	int maximised;
 	int minimised;
 	int snapped;			/* edge-tiled, so rx/ry still hold home */
+	int fixed_size;			/* client declared min == max: no resize */
 	lv_obj_t *maxicon;		/* swaps between maximise and restore */
 	lv_obj_t *grip;			/* bottom-right resize handle, or NULL */
 	void (*on_close)(void);		/* extra teardown, e.g. the terminal */
@@ -2553,6 +2554,8 @@ static void win_toggle_max(struct winrec *w)
 
 	if (!w || !w->win)
 		return;
+	if (w->fixed_size)		/* the client said it cannot resize */
+		return;
 	if (w->maximised) {
 		lv_obj_set_pos(w->win, w->rx, w->ry);
 		lv_obj_set_size(w->win, w->rw, w->rh);
@@ -3068,8 +3071,25 @@ static void xwin_on_window(uint32_t id, int w, int h)
 	if (!win)
 		return;
 	rec = win_find(win);
-	if (rec)
+	if (rec) {
 		rec->xid = id;
+		/*
+		 * A client that declared itself fixed-size gets no maximise
+		 * button and no resize grip. Offering the operation and then
+		 * stretching a frame around a widget tree that cannot fill it
+		 * produces an empty band and looks like a rendering bug -
+		 * xcalc, being an Xt shell with a fully constrained geometry,
+		 * is exactly that case.
+		 */
+		rec->fixed_size = !xshim_window_resizable(id);
+		if (rec->fixed_size) {
+			if (rec->maxicon)
+				lv_obj_add_flag(lv_obj_get_parent(rec->maxicon),
+						LV_OBJ_FLAG_HIDDEN);
+			if (rec->grip)
+				lv_obj_add_flag(rec->grip, LV_OBJ_FLAG_HIDDEN);
+		}
+	}
 	content = lv_win_get_content(win);
 	lv_obj_set_style_pad_all(content, 0, 0);
 

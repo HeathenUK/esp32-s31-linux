@@ -67,6 +67,14 @@ struct res {
 	struct res *buf;		/* who owns the pixels we draw into */
 	int ax, ay;			/* our origin within that buffer */
 	int cx0, cy0, cx1, cy1;		/* clip, in that buffer's coords */
+	/*
+	 * WM_NORMAL_HINTS, for windows that declared one. A client that sets
+	 * min == max is telling the window manager it cannot be resized, and
+	 * xcalc does exactly that - so maximising it stretches a frame around
+	 * a widget tree that will never fill it.
+	 */
+	uint16_t min_w, min_h, max_w, max_h;
+	uint8_t has_hints;
 	uint32_t fg, bg;		/* GCs only */
 	int clip_set;			/* GCs only: a clip was installed */
 	uint32_t font;			/* GCs only: the font it selects */
@@ -3273,6 +3281,31 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 				w->title[nch] = 0;
 			}
 		}
+		/*
+		 * WM_NORMAL_HINTS (predefined atom 40), format 32. The wire
+		 * layout is the old XSizeHints: flags, then four obsolete
+		 * position/size fields, then min and max. PMinSize is bit 4 and
+		 * PMaxSize bit 5; a client that sets both to the same value is
+		 * saying it does not resize.
+		 */
+		if (w && w->type == R_WINDOW && prop == 40 && r[16] == 32 &&
+		    nch >= 9 && 24 + nch * 4 <= (uint32_t)len) {
+			uint32_t fl = get32(r + 24);
+
+			if (fl & (1u << 4)) {
+				w->min_w = (uint16_t)get32(r + 24 + 20);
+				w->min_h = (uint16_t)get32(r + 24 + 24);
+			}
+			if (fl & (1u << 5)) {
+				w->max_w = (uint16_t)get32(r + 24 + 28);
+				w->max_h = (uint16_t)get32(r + 24 + 32);
+			}
+			w->has_hints = 1;
+			if (trace_on())
+				fprintf(stderr, "xshim:   hints 0x%x flags %x "
+					"min %ux%u max %ux%u\n", w->id, fl,
+					w->min_w, w->min_h, w->max_w, w->max_h);
+		}
 		break;
 	}
 	case 19: case 22: case 25:
@@ -3344,6 +3377,29 @@ int xshim_init(void (*on_window)(uint32_t, int, int),
  * every draw notification, which for xcalc's 69 windows meant a full
  * re-composite per button repaint.
  */
+/*
+ * Can this client be resized at all?
+ *
+ * A client with PMinSize and PMaxSize set to the same extent is fixed by its
+ * own declaration - Xt does this for any shell whose geometry is fully
+ * constrained, which is why xcalc has never had anything useful to do with a
+ * maximise button. Answering 0 lets the desktop remove the affordance instead
+ * of offering an operation that can only produce an empty band.
+ *
+ * Unknown means resizable: a client that sets no hints (xfiles sets none) is
+ * making no claim, and X's default is that the window manager decides.
+ */
+int xshim_window_resizable(uint32_t id)
+{
+	struct res *r = res_find(id);
+
+	if (!r || r->type != R_WINDOW || !r->has_hints)
+		return 1;
+	if (!r->min_w || !r->max_w)
+		return 1;
+	return !(r->min_w == r->max_w && r->min_h == r->max_h);
+}
+
 void xshim_window_resize(uint32_t id, int w, int h)
 {
 	struct res *r = res_find(id);
@@ -3354,6 +3410,15 @@ void xshim_window_resize(uint32_t id, int w, int h)
 		return;
 	if (r->w == w && r->h == h)
 		return;
+	/* Never push a size a client has declared it cannot accept. */
+	if (r->has_hints) {
+		if (r->max_w && w > r->max_w) w = r->max_w;
+		if (r->max_h && h > r->max_h) h = r->max_h;
+		if (r->min_w && w < r->min_w) w = r->min_w;
+		if (r->min_h && h < r->min_h) h = r->min_h;
+		if (r->w == w && r->h == h)
+			return;
+	}
 	if (r->owner < 0 || r->owner >= MAXCLI)
 		return;
 	c = &cli[r->owner];
