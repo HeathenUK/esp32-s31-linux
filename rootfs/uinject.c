@@ -320,8 +320,18 @@ int main(int argc, char **argv)
 		msleep(150);
 		click(1);
 		msleep(120);
-		move_to(argc > 4 ? atoi(argv[4]) : 0,
-			argc > 5 ? atoi(argv[5]) : 0, 24, 22);
+		/*
+		 * The destination is paced like the start, not with the fixed
+		 * 24-step move. That move is fast enough to trip the desktop's
+		 * pointer acceleration - the comment on move_to_precise()
+		 * records it overshooting by up to 3x - so the drag LANDED
+		 * somewhere other than asked: 600,300 put the pointer at
+		 * 799,451, hard against the screen edge. A drag whose endpoint
+		 * is wrong is worse than no drag, because it still looks like
+		 * it worked.
+		 */
+		move_to_precise(argc > 4 ? atoi(argv[4]) : 0,
+				argc > 5 ? atoi(argv[5]) : 0);
 		msleep(120);
 		click(0);
 	} else if (!strcmp(what, "dragholdto")) {

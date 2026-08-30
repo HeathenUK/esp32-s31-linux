@@ -4641,7 +4641,13 @@ static int mouse_poll(void)
 		 * listens for.
 		 */
 		if (!handled) {
-			int b = wheel < 0 ? 4 : 5;
+			/*
+			 * evdev REL_WHEEL is POSITIVE for a scroll up, and X11
+			 * Button4 is scroll up - so the two agree and the
+			 * mapping is direct. Inverting it here sent the file
+			 * list the wrong way for every notch.
+			 */
+			int b = wheel > 0 ? 4 : 5;
 			int n = wheel < 0 ? -wheel : wheel;
 
 			while (n-- > 0) {

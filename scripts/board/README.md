@@ -137,6 +137,15 @@ the switcher can be photographed before it commits; kill that run and the
 release never arrives, so the next `altkey` steps a switcher that is still
 open. That contaminated a test once and read as a broken commit.
 
+It also understands `rclick X Y` (the RIGHT button - clients use Button3 for
+context menus and it is unreachable otherwise), and `wheel N X Y` moves to the
+point before scrolling. **`dragto`'s destination is now paced like its start.**
+It used the fixed 24-step move, which is fast enough to trip the desktop's
+pointer acceleration, so the drag ended somewhere other than asked - 600,300
+put the pointer at 799,451, hard against the screen edge. A gesture that lands
+on the wrong pixel still looks like it worked, and it invalidated several UI
+tests before it was noticed.
+
 It also understands `click X Y`, `dragto x1 y1 x2 y2`,
 `dragholdto x1 y1 x2 y2` (holds the button so the snap preview can be
 photographed), `dblclick X Y`, `wheel N` and `key CODE`. Every invocation homes
