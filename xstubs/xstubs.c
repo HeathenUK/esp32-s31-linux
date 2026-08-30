@@ -40,6 +40,9 @@
 #include <strings.h>
 #ifdef STUB_XPM
 #include <X11/Xlib.h>
+#include <stdint.h>
+extern void *XliteShmMap(Display *, Pixmap, int *, int *, int *, int *);
+extern void XliteShmDamaged(Display *, Pixmap);
 #endif
 
 static void once(const char *name, const char *what)
@@ -343,6 +346,57 @@ static int xpm_build(Display *dpy, Drawable d, char **lines, int nlines,
 	 * XFillRectangles turns that into one request per colour - eleven for a
 	 * typical icon instead of several thousand.
 	 */
+	/*
+	 * If the server will share the pixmap's pages, just write the pixels.
+	 *
+	 * This is the whole point of XLITE-SHM: lvdesk is the server and this
+	 * is its libX11, so the storage behind a pixmap can be handed over
+	 * rather than described. An icon then costs one pass over its own
+	 * source data and a single damage message, instead of a request per
+	 * colour carrying every run of it - and the run-finding below, which
+	 * exists only to compress the protocol, is not needed at all.
+	 */
+	{
+		int sw, sh, stride, bpp;
+		void *base = XliteShmMap(dpy, pm, &sw, &sh, &stride, &bpp);
+
+		if (base && bpp == 2 && sw >= w && sh >= h) {
+			int yy, x, ci;
+
+			for (yy = 0; yy < h; yy++) {
+				char *row = lines[1 + ncols + yy];
+				uint16_t *out = (uint16_t *)
+					((char *)base + (size_t)yy * stride);
+
+				if (!row)
+					break;
+				for (x = 0; x < w; x++) {
+					if ((int)strlen(row) < (x + 1) * cpp)
+						break;
+					for (ci = 0; ci < ncols; ci++)
+						if (!memcmp(row + x * cpp,
+							    cols[ci].key, cpp))
+							break;
+					if (ci == ncols || cols[ci].none)
+						continue;
+					out[x] = (uint16_t)cols[ci].pixel;
+				}
+			}
+			XliteShmDamaged(dpy, pm);
+			XFreeGC(dpy, gc);
+			/*
+			 * The caller's pixmap, which the slow path sets on its
+			 * way out. Returning success without it hands back a
+			 * pixmap that was filled perfectly and never seen -
+			 * the icons drew into shared memory, the server could
+			 * read them, and the screen stayed empty.
+			 */
+			if (pix_ret)
+				*pix_ret = pm;
+			return 0;		/* XpmSuccess */
+		}
+	}
+
 	/*
 	 * ...but in BATCHES, not one unbounded request per colour.
 	 *

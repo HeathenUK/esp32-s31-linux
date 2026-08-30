@@ -264,7 +264,45 @@ int xlite_read_more(struct xdpy *x, int block)
 		return 0;
 	if (!xlite_ingrow(x, x->inlen + 512))
 		return 0;
-	n = read(x->fd, x->in + x->inlen, x->incap - x->inlen);
+	/*
+	 * recvmsg, not read, so a descriptor sent with SCM_RIGHTS is not
+	 * silently discarded.
+	 *
+	 * The shared-pixmap path attaches a memfd to an ordinary reply, and on
+	 * a STREAM socket that descriptor is delivered with whichever read
+	 * consumes those bytes - so if the byte stream is drained with read()
+	 * the reply still arrives, intact and correct, and the fd is simply
+	 * gone. Every caller then sees a perfectly good reply and no memory,
+	 * which is not a failure mode anybody would guess from the symptom.
+	 */
+	{
+		struct msghdr m;
+		struct iovec io;
+		union {
+			struct cmsghdr al;
+			char b[CMSG_SPACE(sizeof(int)) * 4];
+		} u;
+		struct cmsghdr *cm;
+
+		memset(&m, 0, sizeof(m));
+		io.iov_base = x->in + x->inlen;
+		io.iov_len = x->incap - x->inlen;
+		m.msg_iov = &io;
+		m.msg_iovlen = 1;
+		m.msg_control = u.b;
+		m.msg_controllen = sizeof(u.b);
+		n = recvmsg(x->fd, &m, 0);
+		for (cm = CMSG_FIRSTHDR(&m); cm; cm = CMSG_NXTHDR(&m, cm))
+			if (cm->cmsg_level == SOL_SOCKET &&
+			    cm->cmsg_type == SCM_RIGHTS) {
+				int got;
+
+				memcpy(&got, CMSG_DATA(cm), sizeof(got));
+				if (x->shm_fd >= 0)
+					close(x->shm_fd);
+				x->shm_fd = got;
+			}
+	}
 	if (n <= 0) {
 		if (n == 0 || errno != EINTR) {
 			if (x->ioerrh)
@@ -392,6 +430,7 @@ Display *XOpenDisplay(const char *name)
 	 * and authorisation path, and nothing on this board has a use for it -
 	 * the server is in the same process tree.
 	 */
+	x->shm_fd = -1;			/* 0 is a real descriptor */
 	x->fd = socket(AF_UNIX, SOCK_STREAM, 0);
 	if (x->fd < 0) {
 		free(x);

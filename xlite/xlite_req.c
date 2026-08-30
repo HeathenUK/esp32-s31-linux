@@ -8,6 +8,8 @@
  * bulk of libX11 by symbol count and almost none of it by difficulty, which is
  * exactly why replacing the library is tractable at all.
  */
+#include <sys/mman.h>
+#include <unistd.h>
 #include "xlite.h"
 
 static void p16(unsigned char *p, unsigned v) { p[0] = v; p[1] = v >> 8; }
@@ -2020,4 +2022,83 @@ XLITE_IMPL(XAllocStandardColormap)
 XStandardColormap *XAllocStandardColormap(void)
 {
 	return calloc(1, sizeof(XStandardColormap));
+}
+
+/* ------------------------------------------------------- shared pixmaps */
+/*
+ * XLITE-SHM: draw into a pixmap's real pages instead of describing them.
+ *
+ * The server is lvdesk and we are its libX11, so a pixmap's storage can simply
+ * be handed over: the shim moves it into a memfd, passes the descriptor down
+ * the socket that already exists, and both sides then address the same memory.
+ * Loading an icon stops being thousands of requests, or even a batched few -
+ * it becomes a memcpy, and the protocol carries only the damage rectangle.
+ *
+ * Falls back silently: XliteShmMap() returns NULL against a server that does
+ * not advertise the extension, and every caller keeps its drawing path.
+ */
+static int xshm_major(Display *dpy)
+{
+	static int major = -1;
+	int ev, er;
+
+	if (major < 0) {
+		/* XLITE_NOSHM forces the protocol path, so the two can be
+		 * compared on the same board without relinking anything. */
+		if (getenv("XLITE_NOSHM") ||
+		    !XQueryExtension(dpy, "XLITE-SHM", &major, &ev, &er))
+			major = 0;
+	}
+	return major;
+}
+
+void *XliteShmMap(Display *dpy, Pixmap p, int *w, int *h, int *stride, int *bpp)
+{
+	struct xdpy *x = (struct xdpy *)dpy;
+	unsigned char hdr[32], *extra = NULL;
+	size_t nextra = 0, len;
+	uint32_t seq;
+	void *m;
+	int major = xshm_major(dpy), fd;
+
+	if (!major)
+		return NULL;
+	{
+		REQ(dpy, major, 1, 2);
+		p32(r + 4, p);
+		seq = x->pub.request;
+		xlite_send(x, r);
+		if (!xlite_reply(x, seq, hdr, &extra, &nextra))
+			return NULL;
+	}
+	free(extra);
+	fd = x->shm_fd;
+	x->shm_fd = -1;
+	if (fd < 0)
+		return NULL;
+	if (w) *w = hdr[8] | (hdr[9] << 8);
+	if (h) *h = hdr[10] | (hdr[11] << 8);
+	if (stride) *stride = hdr[12] | (hdr[13] << 8);
+	if (bpp) *bpp = hdr[14];
+	len = (size_t)hdr[16] | ((size_t)hdr[17] << 8) |
+	      ((size_t)hdr[18] << 16) | ((size_t)hdr[19] << 24);
+	m = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	close(fd);		/* the mapping keeps it alive */
+	return m == MAP_FAILED ? NULL : m;
+}
+
+/* Tell the server which part of a shared pixmap changed. No reply: a round
+ * trip here would reinstate exactly the cost this path exists to remove. */
+void XliteShmDamaged(Display *dpy, Pixmap p)
+{
+	struct xdpy *x = (struct xdpy *)dpy;
+	int major = xshm_major(dpy);
+
+	if (!major)
+		return;
+	{
+		REQ(dpy, major, 2, 2);
+		p32(r + 4, p);
+		xlite_send(x, r);
+	}
 }

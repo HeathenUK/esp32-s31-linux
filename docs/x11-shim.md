@@ -585,3 +585,47 @@ board on a 600x460 surface. Watch something small.
 Two false trails, both self-inflicted: grepping a log for request names with
 `XSHIM_TRACE` **off** and reading the zeros as evidence, and `tail`-ing a
 filtered log so that 269 `GCForeground` changes looked like none at all.
+
+## XLITE-SHM: handing a client the actual pixels
+
+lvdesk is the X server and xlite is its libX11, so a pixmap's storage does not
+have to be described over a socket - it can simply be handed over. The shim
+moves the pixmap into a `memfd`, passes the descriptor down the connection that
+already exists with `SCM_RIGHTS`, and both sides then address the same pages.
+
+    QueryExtension "XLITE-SHM"     -> major opcode
+    [major][1] pixmap              -> reply: w, h, stride, bpp, length + the fd
+    [major][2] pixmap              -> "I wrote to those pages"; no reply
+
+Measured on xfiles, same board, `XLITE_NOSHM=1` to force the old path:
+
+    protocol (batched fills)   1,055 requests
+    shared memory                582 requests, 32 pixmaps handed over
+
+**45% of all client traffic, gone** - and that is against the ALREADY batched
+XPM path, which had itself cut icon loading from thousands of requests. Loading
+an icon is now one pass over its own source data and a single damage message.
+
+Sharing is on demand, not for every pixmap: most are never shared, and
+page-rounding all 45 of them would cost more memory than the traffic saves. The
+existing contents are copied across, so it is invisible to anything already
+drawing into the pixmap.
+
+**Four traps, all of which produced a plausible wrong answer:**
+
+- **`read()` silently discards `SCM_RIGHTS`.** On a stream socket the
+  descriptor is delivered with whichever read consumes those bytes, so draining
+  the stream with `read()` leaves the reply intact and correct and the fd
+  simply gone. xlite's pump uses `recvmsg()` now.
+- **`struct xdpy` starts with `struct _XDisplay pub` and the comment says "MUST
+  be first: clients cast to it".** Adding a field above it shifted the layout
+  every `Display *` cast depends on, and both clients died with corrupted
+  output before any of this ran.
+- **Extension opcodes are intercepted before the request switch** (`if (op >=
+  128)`), so a `case` label for one down there is dead code. The request was
+  answered "not implemented" while the client waited for a reply that never
+  came, and xfiles hung at 80 requests.
+- **The fast path returned success without setting `*pix_ret`.** The icons were
+  written into shared memory correctly, the server could read them, the damage
+  count proved it - and the screen stayed empty, because the caller never
+  received the pixmap.

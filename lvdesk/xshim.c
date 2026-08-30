@@ -22,12 +22,14 @@
  * checked without LVGL in the way. Protocol bugs and integration bugs are
  * different problems and mixing them cost real time elsewhere in this project.
  */
+#define _GNU_SOURCE
 #include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -82,6 +84,8 @@ struct res {
 	uint8_t depth;			/* pixmaps: 1 means an alpha bitmap */
 	uint8_t dirty;			/* pixmaps: has anything ever drawn here */
 	uint8_t bpp;			/* bytes per pixel in px: 1 or 2 */
+	int shm_fd;			/* memfd backing px, or -1 */
+	size_t shm_len;
 	uint8_t uniform;		/* pixmaps: px is NULL, every pixel ufill */
 	uint16_t ufill;			/* ...and this is that value */
 	int line_width;
@@ -145,6 +149,7 @@ static struct res *top_of(struct res *r);
 static void notify_draw(struct res *d);
 static int trace_on(void);
 static void px_release(struct res *r);
+static int px_share(struct res *r);
 
 static unsigned long rf_calls, rf_steps;
 static unsigned long nreplies, nreqs;
@@ -196,6 +201,7 @@ static struct res *res_new(uint32_t id, int type)
 			res[i].id = id;
 			res[i].type = type;
 			res[i].owner = cur_owner;
+			res[i].shm_fd = -1;	/* 0 is a real fd */
 			return &res[i];
 		}
 	fprintf(stderr, "xshim: resource table full (%d) - raise MAXRES\n",
@@ -339,6 +345,14 @@ static void px_release(struct res *r)
 		mem_pix -= n; n_pix--;
 	} else {
 		mem_win -= n; n_win--;
+	}
+	if (r->shm_fd >= 0) {
+		munmap(r->px, r->shm_len);
+		close(r->shm_fd);
+		r->shm_fd = -1;
+		r->shm_len = 0;
+		r->px = NULL;
+		return;
 	}
 	free(r->px);
 	r->px = NULL;
@@ -1148,6 +1162,49 @@ static void send_setup(struct cli *c)
 	write(c->fd, b, p - b);
 }
 
+/*
+ * A reply with a file descriptor attached.
+ *
+ * The socket is already a unix socket, so a descriptor can ride along the same
+ * reply that carries the geometry - no second channel, no name to agree on and
+ * nothing to clean up if the client dies. This is the whole mechanism behind
+ * the shared-pixmap path: the client ends up with the SAME pages the shim
+ * draws into, so bulk pixel traffic stops being protocol at all.
+ */
+static void send_reply_fd(struct cli *c, const uint8_t *d24, int fd)
+{
+	uint8_t h[32];
+	struct msghdr m;
+	struct iovec io;
+	union {
+		struct cmsghdr al;
+		char b[CMSG_SPACE(sizeof(int))];
+	} u;
+	struct cmsghdr *cm;
+
+	nreplies++;
+	memset(h, 0, sizeof(h));
+	h[0] = 1;
+	put16(h + 2, c->seq);
+	memcpy(h + 8, d24, 24);
+
+	memset(&m, 0, sizeof(m));
+	memset(&u, 0, sizeof(u));
+	io.iov_base = h;
+	io.iov_len = sizeof(h);
+	m.msg_iov = &io;
+	m.msg_iovlen = 1;
+	m.msg_control = u.b;
+	m.msg_controllen = sizeof(u.b);
+	cm = CMSG_FIRSTHDR(&m);
+	cm->cmsg_level = SOL_SOCKET;
+	cm->cmsg_type = SCM_RIGHTS;
+	cm->cmsg_len = CMSG_LEN(sizeof(int));
+	memcpy(CMSG_DATA(cm), &fd, sizeof(fd));
+	if (sendmsg(c->fd, &m, 0) < 0)
+		perror("xshim: sendmsg");
+}
+
 static void send_reply(struct cli *c, uint8_t detail, const uint8_t *d24,
 		       const uint8_t *extra, int nextra)
 {
@@ -1308,6 +1365,7 @@ static void expose_window(struct cli *c, struct res *w)
  * exists in the SOURCE, never in the destination.
  * ===================================================================== */
 
+#define XSHM_MAJOR		201
 #define RENDER_MAJOR	140		/* our major opcode for RENDER */
 #define RENDER_ERROR	160		/* first of its five error codes */
 
@@ -2419,6 +2477,71 @@ static int render_request(struct cli *c, const uint8_t *r, int len)
 	return 0;
 }
 
+/*
+ * XLITE-SHM. Two requests, both about one pixmap:
+ *
+ *   1 GetPixmapFd - reply carries width, height, stride and bytes-per-pixel,
+ *                   with the memfd attached.
+ *   2 Damaged     - the client has written to those pages, so mark the surface
+ *                   dirty and repaint.
+ *
+ * There is no reply to Damaged: the point of this path is that pixels move
+ * without round trips, and a round trip per update would put one straight back.
+ */
+static void xshm_request(struct cli *c, const uint8_t *r, int len)
+{
+	uint8_t d24[24];
+	uint8_t op = r[0];
+
+	(void)len;
+	memset(d24, 0, sizeof(d24));
+
+		/*
+		 * XLITE-SHM. Two requests, both about one pixmap:
+		 *
+		 *   1 GetPixmapFd  - reply carries width, height, stride and
+		 *                    bytes-per-pixel, with the memfd attached.
+		 *   2 Damaged      - the client has written to those pages, so
+		 *                    mark the surface dirty and repaint.
+		 *
+		 * There is no reply to Damaged: the point of the whole path is
+		 * that pixels move without round trips, and a round trip per
+		 * update would put one straight back.
+		 */
+		struct res *p = res_find(get32(r + 4));
+
+		if (r[1] == 1) {
+			if (!p || p->type != R_PIXMAP || !px_share(p)) {
+				send_error(c, X_BAD_ALLOC, get32(r + 4), op);
+				return;
+			}
+			put16(d24, (uint16_t)p->w);
+			put16(d24 + 2, (uint16_t)p->h);
+			put16(d24 + 4, (uint16_t)(p->w * p->bpp));
+			d24[6] = p->bpp;
+			put32(d24 + 8, (uint32_t)p->shm_len);
+			send_reply_fd(c, d24, p->shm_fd);
+			if (trace_on())
+				fprintf(stderr, "xshim: SHM pixmap 0x%x %dx%d "
+					"bpp %u -> fd %d (%zu bytes)\n", p->id,
+					p->w, p->h, p->bpp, p->shm_fd,
+					p->shm_len);
+	} else if (r[1] == 2 && p) {
+		if (trace_on()) {
+			size_t i, tot = (size_t)p->w * p->h, nz = 0;
+
+			for (i = 0; i < tot; i++)
+				if (p->bpp == 1 ? ((uint8_t *)p->px)[i]
+						: p->px[i])
+					nz++;
+			fprintf(stderr, "xshim: SHM damaged 0x%x %zu/%zu "
+				"non-zero\n", p->id, nz, tot);
+		}
+		p->dirty = 1;
+		notify_draw(p);
+	}
+}
+
 static void handle(struct cli *c, const uint8_t *r, int len)
 {
 	uint8_t op = r[0], detail = r[1];
@@ -2466,6 +2589,16 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 	if (op >= 128) {
 		if (op == RENDER_MAJOR && render_request(c, r, len))
 			return;
+		/*
+		 * Extension opcodes are intercepted HERE, before the switch -
+		 * so a case label for one down there is dead code, and the
+		 * request is answered "not implemented" while the client waits
+		 * for a reply that never comes.
+		 */
+		if (op == XSHM_MAJOR) {
+			xshm_request(c, r, len);
+			return;
+		}
 		if (c->nunimpl[op & 127]++ == 0) {
 			fprintf(stderr, "xshim: extension request, major "
 				"opcode %u minor %u - not implemented\n", op,
@@ -2492,6 +2625,17 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 			d24[1] = RENDER_MAJOR;
 			d24[2] = 0;			/* no events */
 			d24[3] = RENDER_ERROR;
+		}
+		/*
+		 * Our own extension, which only our own libX11 asks for. It
+		 * hands a client the actual pages behind a pixmap, so bulk
+		 * pixel loading stops being protocol traffic entirely.
+		 */
+		if (n == 9 && !memcmp(r + 8, "XLITE-SHM", 9)) {
+			d24[0] = 1;
+			d24[1] = XSHM_MAJOR;
+			d24[2] = 0;
+			d24[3] = 0;
 		}
 		send_reply(c, 0, d24, NULL, 0);
 		break;
@@ -3398,6 +3542,47 @@ int xshim_window_resizable(uint32_t id)
 	if (!r->min_w || !r->max_w)
 		return 1;
 	return !(r->min_w == r->max_w && r->min_h == r->max_h);
+}
+
+/*
+ * Re-home a pixmap's pixels in a memfd so a client can map them.
+ *
+ * Done on demand rather than for every pixmap: most are never shared, and
+ * page-rounding 45 of them would cost more than the traffic it saves. The
+ * existing contents are copied across, so this is invisible to anything
+ * already drawing into it.
+ */
+static int px_share(struct res *r)
+{
+	size_t n = (size_t)r->w * r->h * (r->bpp ? r->bpp : 2);
+	void *m;
+	int fd;
+
+	if (r->shm_fd >= 0)
+		return 1;
+	if (!n)
+		return 0;
+	fd = memfd_create("xshim-pixmap", 0);
+	if (fd < 0)
+		return 0;
+	if (ftruncate(fd, (off_t)n) < 0) {
+		close(fd);
+		return 0;
+	}
+	m = mmap(NULL, n, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	if (m == MAP_FAILED) {
+		close(fd);
+		return 0;
+	}
+	if (r->px)
+		memcpy(m, r->px, n);
+	else
+		memset(m, 0, n);
+	free(r->px);
+	r->px = m;
+	r->shm_fd = fd;
+	r->shm_len = n;
+	return 1;
 }
 
 void xshim_window_resize(uint32_t id, int w, int h)

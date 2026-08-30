@@ -75,6 +75,7 @@
 struct xdpy {
 	struct _XDisplay pub;		/* MUST be first: clients cast to it */
 
+	int shm_fd;			/* last fd received with SCM_RIGHTS */
 	int fd;
 	/*
 	 * The sequence number is pub.request, not a field of our own: the
