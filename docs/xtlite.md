@@ -50,16 +50,16 @@ of the real libXt - data, not code, and verified: offset 429 is `label`, 214 is
 
 ## The result
 
-    xcalc Rss  2,104 kB  ->  304 kB     (-86%)
+    xcalc Rss  2,104 kB  ->  332 kB     (-84%)
 
-    124  [anon]      widget records, resource database, xlite's buffers
+    144  [anon]      widget records, resource database, xlite's buffers
      72  xlite       our libX11
      44  xcalc       the application itself
-     28  xtlite      our libXt + libXaw + libXmu
+     32  xtlite      our libXt + libXaw + libXmu
      12  libXaw7     empty stub
-      8  stack   8 libc(rw)   4 vdso   4 heap
+     12  stack   8 libc(rw)   4 vdso   4 heap
     ---
-    304  total  (124 clean, 176 dirty)
+    332  total  (128 clean, 200 dirty)
 
     libX11  1,318,508 bytes -> 97,748     libXt+libXaw+libXmu 747,572 -> 26,092
 
@@ -104,6 +104,33 @@ Running xcalc, that immediately produced six lines, one of which was a bug in
 this code rather than a missing feature: `IGNORING translation event 'Key>'`
 shows the translation parser mis-splitting a pattern. It had been doing that
 silently.
+
+## Input works: three bugs between a click and an action
+
+`7 + 8 = 15` on the panel, driven by uinject, on our libX11, our Xt and our
+Xaw. Getting there took three fixes, and the loud IGNORING output found two of
+them:
+
+- **`#override` on the same line as the binding.** xcalc writes
+  `translations: #override<Btn1Down>,<Btn1Up>:reciprocal()` with no newline
+  after the directive, and the parser skipped any line starting with '#'. Every
+  button had **zero** translations, so clicking did nothing at all.
+- **`:<Key>>:shr()` binds the '>' KEY.** Taking the last '>' in the line as the
+  end of the event name swallowed the key as part of it - which is what
+  `IGNORING translation event 'Key>'` was reporting. The event is now the last
+  `<...>` whose contents are a known event name, and the action separator is
+  the first ':' whose tail looks like `name(`.
+- **Button events were decoded four bytes early** - in xlite, not here. The
+  offsets in a device event are from the start of the 32-byte event (time 4,
+  root 8, event 12, child 16), and the button branch had been written as
+  though the pointer were past the header. Expose and the rest were right, so
+  the window came out as the ROOT for clicks only: every one was delivered
+  against 0x100, no widget matched, and input looked dead while the server was
+  sending it correctly all along.
+
+The built-in widget actions - `set`, `unset`, `toggle`, `notify`, `highlight`,
+`reset` - also had to be provided: xcalc's translations end with `unset()` on
+every button, and that comes from Xaw's Command, not from xcalc.
 
 ## Not done
 

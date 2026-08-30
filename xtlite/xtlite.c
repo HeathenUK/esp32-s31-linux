@@ -349,6 +349,8 @@ static void layout(struct wid *w, int defdist)
 	}
 }
 
+static void unset_group(struct wid *w, const char *group, struct wid *keep);
+
 static void draw(struct wid *w)
 {
 	int tw, tx, ty;
@@ -438,41 +440,109 @@ static struct wid *by_window(struct wid *w, Window win)
  * all press-then-release on the same button, so firing on the release is what
  * the user sees either way.
  */
+static int is_event_name(const char *e)
+{
+	return !strncmp(e, "Btn", 3) || !strcmp(e, "Key") ||
+	       !strcmp(e, "KeyPress") || !strcmp(e, "KeyDown") ||
+	       !strcmp(e, "KeyUp") || !strcmp(e, "EnterWindow") ||
+	       !strcmp(e, "LeaveWindow") || !strcmp(e, "Message") ||
+	       !strcmp(e, "Expose") || !strcmp(e, "Motion");
+}
+
+/*
+ * The separator between the event's detail and its action list: the first ':'
+ * whose tail looks like `name(`. Anything simpler gets one of these wrong -
+ * `:<Key>>:shr()` binds the '>' KEY, so the last '>' in the line is data, not
+ * the end of the event.
+ */
+static const char *find_sep(const char *p)
+{
+	for (; *p; p++) {
+		const char *q;
+
+		if (*p != ':')
+			continue;
+		q = p + 1;
+		while (*q == ' ' || *q == '\t')
+			q++;
+		if (!isalpha((unsigned char)*q) && *q != '_')
+			continue;
+		while (isalnum((unsigned char)*q) || *q == '_')
+			q++;
+		if (*q == '(')
+			return p;
+	}
+	return NULL;
+}
+
 static void parse_line(struct wid *w, const char *line)
 {
-	const char *lt, *colon, *lastgt, *p;
+	const char *lt, *gt, *colon;
 	struct trans *t;
 	char ev[24], detail[32], mods[32];
 	size_t n;
 
 	while (*line == ' ' || *line == '\t')
 		line++;
-	if (!*line || *line == '#' || *line == '!')
-		return;
-	lastgt = strrchr(line, '>');
-	if (!lastgt)
-		return;
-	colon = strchr(lastgt, ':');
-	if (!colon)
-		return;
-	lt = lastgt;
-	while (lt > line && *lt != '<')
-		lt--;
-	if (*lt != '<')
+	/*
+	 * A directive may sit on the SAME line as the first binding:
+	 * "#override<Btn1Down>,<Btn1Up>:reciprocal()". Skipping the whole line
+	 * because it starts with '#' left almost every xcalc button with no
+	 * translations at all, so clicking did nothing.
+	 */
+	if (*line == '#') {
+		const char *sp = line;
+
+		while (*sp && *sp != '<' && *sp != ' ' && *sp != '\t')
+			sp++;
+		line = sp;
+		while (*line == ' ' || *line == '\t')
+			line++;
+	}
+	if (!*line || *line == '!')
 		return;
 
-	n = lastgt - lt - 1;
+	/* Last valid <event> in the sequence; its detail runs to the separator. */
+	lt = NULL;
+	{
+		const char *p;
+
+		for (p = line; *p; p++) {
+			const char *e;
+			char buf[24];
+
+			if (*p != '<')
+				continue;
+			e = strchr(p, '>');
+			if (!e || (size_t)(e - p - 1) >= sizeof(buf))
+				continue;
+			memcpy(buf, p + 1, e - p - 1);
+			buf[e - p - 1] = 0;
+			if (is_event_name(buf))
+				lt = p;
+		}
+	}
+	if (!lt)
+		return;
+	gt = strchr(lt, '>');
+	if (!gt)
+		return;
+	colon = find_sep(gt + 1);
+	if (!colon)
+		return;
+
+	n = gt - lt - 1;
 	if (n >= sizeof(ev))
 		return;
 	memcpy(ev, lt + 1, n); ev[n] = 0;
 
-	n = colon - lastgt - 1;
+	n = colon - gt - 1;
 	if (n >= sizeof(detail))
 		n = sizeof(detail) - 1;
-	memcpy(detail, lastgt + 1, n); detail[n] = 0;
+	memcpy(detail, gt + 1, n); detail[n] = 0;
 
 	{	/* Modifiers: whatever precedes this event in its own term. */
-		const char *ms = line, *comma = NULL;
+		const char *ms = line, *comma = NULL, *p;
 
 		for (p = line; p < lt; p++)
 			if (*p == ',')
@@ -537,6 +607,33 @@ static void parse_translations(struct wid *w, const char *table)
 	xt_note("%s: %d translations", w->name, w->ntrans);
 }
 
+/*
+ * The actions a widget class provides itself, as opposed to those the
+ * application registers with XtAppAddActions. xcalc's translations end with
+ * unset() on every button and toggle() on the mode buttons, and those come
+ * from Xaw's Command and Toggle, not from xcalc.
+ */
+static int builtin_action(struct wid *w, const char *name)
+{
+	if (!strcmp(name, "set"))        { w->set = 1; draw(w); return 1; }
+	if (!strcmp(name, "unset"))      { w->set = 0; draw(w); return 1; }
+	if (!strcmp(name, "highlight"))  { return 1; }
+	if (!strcmp(name, "reset"))      { w->set = 0; draw(w); return 1; }
+	if (!strcmp(name, "toggle")) {
+		w->set = !w->set;
+		if (w->set && w->radio_group[0])
+			unset_group(xt_root, w->radio_group, w);
+		draw(w);
+		return 1;
+	}
+	if (!strcmp(name, "notify")) {
+		if (w->callback)
+			w->callback(w, w->closure, NULL);
+		return 1;
+	}
+	return 0;
+}
+
 /* Run "digit(7)unset()" - a chain of name(arg) calls. */
 static void run_actions(struct wid *w, const char *spec, XEvent *ev)
 {
@@ -567,6 +664,8 @@ static void run_actions(struct wid *w, const char *spec, XEvent *ev)
 				actions[i].proc(w, ev, params, &np);
 				break;
 			}
+		if (i == nactions && builtin_action(w, name))
+			i = -1;			/* handled by the widget class */
 		if (i == nactions) {
 			static char last[48];
 
@@ -593,6 +692,8 @@ static void dispatch(struct wid *w, XEvent *ev)
 		detail = ev->xkey.keycode;
 		mods = ev->xkey.state & (ControlMask | ShiftMask);
 	}
+	xt_note("dispatch type=%d detail=%u mods=%u to %s (%d trans)", type,
+		detail, mods, w->name, w->ntrans);
 	for (i = 0; i < w->ntrans; i++) {
 		struct trans *t = &w->trans[i];
 
@@ -786,6 +887,8 @@ void XtAppMainLoop(XtAppContext app)
 
 		XNextEvent(xt_dpy, &ev);
 		w = by_window(xt_root, ev.xany.window);
+		xt_note("event type %d on window 0x%lx -> %s", ev.type,
+			(unsigned long)ev.xany.window, w ? w->name : "(none)");
 		if (!w)
 			continue;
 		switch (ev.type) {

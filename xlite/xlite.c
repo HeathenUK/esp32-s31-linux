@@ -104,24 +104,38 @@ static void decode(struct xdpy *x, const unsigned char *e, XEvent *ev)
 	case KeyPress: case KeyRelease:
 	case ButtonPress: case ButtonRelease:
 	case MotionNotify:
-		ev->xbutton.window = g32(e + 8);
-		ev->xbutton.root = g32(e + 4);
-		ev->xbutton.subwindow = g32(e + 12);
-		ev->xbutton.time = g32(e + 0);
-		ev->xbutton.x_root = (short)g16(e + 16);
-		ev->xbutton.y_root = (short)g16(e + 18);
-		ev->xbutton.x = (short)g16(e + 20);
-		ev->xbutton.y = (short)g16(e + 22);
-		ev->xbutton.state = g16(e + 24);
-		ev->xbutton.same_screen = e[26];
+		/*
+		 * Offsets are from the START of the 32-byte event, not from
+		 * past its header: time 4, root 8, event 12, child 16,
+		 * root-x/y 20/22, event-x/y 24/26, state 28. Reading these
+		 * four bytes early put the ROOT window where the event window
+		 * belongs, so every click was delivered against 0x100 and no
+		 * widget ever matched - input looked dead while the server was
+		 * sending it correctly all along.
+		 */
+		ev->xbutton.time = g32(e + 4);
+		ev->xbutton.root = g32(e + 8);
+		ev->xbutton.window = g32(e + 12);
+		ev->xbutton.subwindow = g32(e + 16);
+		ev->xbutton.x_root = (short)g16(e + 20);
+		ev->xbutton.y_root = (short)g16(e + 22);
+		ev->xbutton.x = (short)g16(e + 24);
+		ev->xbutton.y = (short)g16(e + 26);
+		ev->xbutton.state = g16(e + 28);
+		ev->xbutton.same_screen = e[30];
 		ev->xbutton.button = e[1];	/* keycode for key events */
 		ev->xany.window = ev->xbutton.window;
 		break;
 	case EnterNotify: case LeaveNotify:
-		ev->xcrossing.window = g32(e + 8);
-		ev->xcrossing.root = g32(e + 4);
-		ev->xcrossing.x = (short)g16(e + 20);
-		ev->xcrossing.y = (short)g16(e + 22);
+		ev->xcrossing.time = g32(e + 4);
+		ev->xcrossing.root = g32(e + 8);
+		ev->xcrossing.window = g32(e + 12);
+		ev->xcrossing.subwindow = g32(e + 16);
+		ev->xcrossing.x_root = (short)g16(e + 20);
+		ev->xcrossing.y_root = (short)g16(e + 22);
+		ev->xcrossing.x = (short)g16(e + 24);
+		ev->xcrossing.y = (short)g16(e + 26);
+		ev->xcrossing.state = g16(e + 28);
 		ev->xany.window = ev->xcrossing.window;
 		break;
 	case Expose:
