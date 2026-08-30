@@ -118,3 +118,52 @@ started:
 
 Option 2 is the smaller piece and fits the pattern everything else here
 followed.
+
+## xrlite - and why owning libXrender was the right half of the choice
+
+Audited: xclock 5, xfiles 6, xftlite 5 - **ten distinct of libXrender's 45**.
+
+The saving is modest (44 kB resident, against the 1.1 MB xftlite removed), so
+memory was not the reason. A Picture is opaque server-side, and two things
+cannot be recovered from one:
+
+- **which drawable it refers to.** `XftTextRender32()` takes a destination
+  Picture and no drawable, so text could only be drawn into pictures xftlite
+  had handed out itself. xfiles builds its own with `XRenderCreatePicture`.
+- **what colour a solid fill holds**, which is where text gets its colour.
+
+Owning `XRenderCreatePicture()` and `XRenderCreateSolidFill()` makes both
+knowable, and xrlite publishes them as `XRliteDrawableOfPicture()` and
+`XRliteColorOfPicture()` - deliberately outside the Xrender API, because a
+caller using them is asking our stack, not X.
+
+The rejected alternative was client-side RENDER glyphs (`CreateGlyphSet` /
+`AddGlyphs` / `CompositeGlyphs`, all already in the shim). It is the
+protocol-correct path and stays correct for any picture - but it needs glyph
+BITMAPS on the client, and the faces live in the shim. Embedding a second copy
+in xftlite means metrics from `XQueryFont` and bitmaps from xftlite must agree
+exactly or text misaligns. And its one real advantage over core text -
+anti-aliased glyphs - **is unavailable anyway**, because the faces are 1-bit:
+coverage is 0 or 255. It becomes worth doing only if an outline font is ever
+rendered here.
+
+**`XRenderCompositeDoublePoly` is not a protocol request.** libXrender
+tessellates the polygon into trapezoids on the client and sends Trapezoids -
+which is why the shim only ever saw trapezoids, never a polygon, and why
+xclock's dial depended on getting the tessellation right. It is done the
+standard way: cut the polygon into horizontal bands at every vertex y, sort the
+crossings within each band by x, and pair them off.
+
+    libXrender  38,176 -> 17,700 bytes
+    xclock      352 -> 336 kB resident, dial and hands identical, 0 X errors
+
+The stock library is kept on the card as `libXrender.stock`, so putting it back
+on the library path is an instant A/B - which is how every swap here has been
+made safe.
+
+**A trap that cost a diagnosis:** after restoring lvdesk from its init script,
+the running shim was the one in the XIP image - flashed BEFORE CopyArea,
+Trapezoids and SetClipRectangles were added. The blank dial that produced was
+read as a tessellation bug for several minutes. `readlink /proc/$(pidof
+lvdesk)/exe` says which binary is actually serving, and the XIP one is only as
+new as the last flash.

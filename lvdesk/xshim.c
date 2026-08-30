@@ -1726,6 +1726,7 @@ static const char *render_opstr(uint8_t m)
 		[23] = "CompositeGlyphs8", [24] = "CompositeGlyphs16",
 		[25] = "CompositeGlyphs32", [26] = "FillRectangles",
 		[27] = "CreateCursor", [33] = "CreateSolidFill",
+		[34] = "CreateAnimCursor",
 	};
 
 	return m < sizeof(n) / sizeof(n[0]) && n[m] ? n[m] : "?";
@@ -1894,6 +1895,14 @@ static int render_request(struct cli *c, const uint8_t *r, int len)
 		return 1;
 	case 22:					/* FreeGlyphs */
 		return 1;			/* the set is freed as a whole */
+	case 27:					/* CreateCursor */
+	case 34:					/* CreateAnimCursor */
+		/*
+		 * Accepted and ignored: lvdesk draws the pointer itself, so a
+		 * client's cursor is never shown. The identifier it allocated
+		 * stays valid, which is what XDefineCursor needs afterwards.
+		 */
+		return 1;
 	case 23:					/* CompositeGlyphs8 */
 		render_glyphs(c, r, len, 1);
 		return 1;

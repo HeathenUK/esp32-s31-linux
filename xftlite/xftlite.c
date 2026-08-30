@@ -42,6 +42,10 @@
 #include <X11/extensions/Xrender.h>
 #include <X11/Xft/Xft.h>
 
+/* Published by xrlite; a Picture cannot answer these on its own. */
+extern Drawable XRliteDrawableOfPicture(Display *dpy, Picture p);
+extern int XRliteColorOfPicture(Display *dpy, Picture p, XRenderColor *out);
+
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -562,27 +566,59 @@ void XftDrawStringUtf8(XftDraw *draw, const XftColor *color, XftFont *pub,
  * core text path - which is why the shim implements CompositeGlyphs, and why
  * this reports itself rather than silently drawing nothing.
  */
+/*
+ * Text into an arbitrary destination Picture.
+ *
+ * A Picture is opaque server-side, so neither the drawable behind it nor the
+ * colour inside a solid fill can be recovered from one - which is why this
+ * used to work only for pictures xftlite had handed out itself, and why xfiles
+ * (which builds its own with XRenderCreatePicture) got nothing. xrlite owns
+ * both calls now and answers both questions.
+ */
 void XftTextRender32(Display *dpy, int op, Picture src, XftFont *pub,
 		     Picture dst, int srcx, int srcy, int x, int y,
 		     const FcChar32 *string, int len)
 {
-	XftDraw *draw = draw_of_picture(dst);
+	struct xftfont *f = (struct xftfont *)pub;
+	static Drawable gc_for;
+	static GC gc;
+	Drawable d = XRliteDrawableOfPicture(dpy, dst);
+	XRenderColor col;
 	unsigned char buf[512];
 	int i, n = len < 512 ? len : 512;
 
-	(void)dpy; (void)op; (void)src; (void)srcx; (void)srcy;
-	if (!draw) {
-		xft_missing("XftTextRender32 into a picture we did not create");
-		return;
+	(void)op; (void)srcx; (void)srcy;
+	if (!d) {
+		XftDraw *draw = draw_of_picture(dst);
+
+		if (!draw) {
+			xft_missing("XftTextRender32 into an unknown picture");
+			return;
+		}
+		d = draw->drawable;
 	}
+	if (!f)
+		return;
+	if (!gc || gc_for != d) {
+		if (gc)
+			XFreeGC(dpy, gc);
+		gc = XCreateGC(dpy, d, 0, NULL);
+		gc_for = d;
+	}
+	if (XRliteColorOfPicture(dpy, src, &col)) {
+		XColor c;
+
+		memset(&c, 0, sizeof(c));
+		c.red = col.red; c.green = col.green; c.blue = col.blue;
+		if (XAllocColor(dpy, DefaultColormap(dpy, DefaultScreen(dpy)),
+				&c))
+			XSetForeground(dpy, gc, c.pixel);
+	}
+	if (f->fid)
+		XSetFont(dpy, gc, f->fid);
 	for (i = 0; i < n; i++)
 		buf[i] = string[i] < 256 ? (unsigned char)string[i] : '?';
-	/*
-	 * The colour is in the SOURCE picture, which we cannot read back, so
-	 * the GC keeps whatever foreground it was last given - which is the
-	 * colour the caller set through XftDrawSrcPicture().
-	 */
-	draw_8bit_nocolor(draw, pub, x, y, buf, n);
+	XDrawString(dpy, d, gc, x, y, (const char *)buf, n);
 }
 
 /* -------------------------------------------------------------- colours */
