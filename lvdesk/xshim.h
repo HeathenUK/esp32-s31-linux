@@ -36,6 +36,16 @@ void xshim_poll(void);
  */
 int xshim_fds(int *out, int max);
 
+/*
+ * A pointer event, in coordinates relative to the top-level window `id`.
+ * act: 0 motion, 1 press, 2 release; button is 1-based (1 = left).
+ *
+ * The shim finds the deepest child under the point and propagates up to the
+ * first ancestor that selected the event, which is what X does and what makes
+ * a toolkit's buttons work without the desktop knowing anything about widgets.
+ */
+void xshim_pointer(uint32_t id, int x, int y, int button, int act);
+
 /* The client's WM_NAME, or NULL if it never set one. */
 const char *xshim_window_title(uint32_t id);
 

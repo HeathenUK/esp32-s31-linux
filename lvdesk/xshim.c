@@ -34,6 +34,7 @@
 #include <poll.h>
 
 #include "xshim.h"
+#include "xshim_font.h"
 
 #define MAXCLI		4
 #define MAXRES		320
@@ -59,6 +60,7 @@ struct res {
 	uint32_t fg, bg;		/* GCs only */
 	int line_width;
 	int owner;			/* index into cli[] */
+	uint32_t event_mask;		/* what this window asked to receive */
 	char title[32];			/* WM_NAME, windows only */
 };
 
@@ -104,6 +106,7 @@ static void (*close_cb)(uint32_t id);
  */
 static struct res *top_of(struct res *r);
 static void notify_draw(struct res *d);
+static int trace_on(void);
 
 static struct res *res_find(uint32_t id)
 {
@@ -156,6 +159,9 @@ static void notify_draw(struct res *d)
 {
 	struct res *t = top_of(d);
 
+	if (trace_on())
+		fprintf(stderr, "xshim: draw 0x%x (%s) -> top 0x%x\n", d->id,
+			d->mapped ? "mapped" : "UNMAPPED", t ? t->id : 0);
 	if (draw_cb && t)
 		draw_cb(t->id);
 }
@@ -351,6 +357,128 @@ static void dump_recent(struct cli *c)
 	fprintf(stderr, "\n");
 }
 
+/*
+ * One glyph, origin on the baseline as X defines it: bitmap row r lands at
+ * y - XFONT_ASCENT + r, so the descent row falls below the baseline. Anything
+ * outside the font's range is skipped rather than substituted - a missing
+ * glyph should look missing, not like a different character.
+ */
+static void draw_glyph(struct res *d, int x, int y, uint8_t ch, uint16_t c)
+{
+	const unsigned char *g;
+	int row, col;
+
+	if (ch < XFONT_FIRST || ch > XFONT_LAST)
+		return;
+	g = xfont_bits[ch - XFONT_FIRST];
+	for (row = 0; row < XFONT_H; row++)
+		for (col = 0; col < XFONT_W; col++)
+			if (g[row] & (0x80 >> col))
+				px_set(d, x + col, y - XFONT_ASCENT + row, c);
+}
+
+static int draw_string(struct res *d, int x, int y, const uint8_t *str, int n,
+		       uint16_t c)
+{
+	int i;
+
+	for (i = 0; i < n; i++)
+		draw_glyph(d, x + i * XFONT_W, y, str[i], c);
+	return n * XFONT_W;
+}
+
+/*
+ * Colour names. Every X client resolves at least a few of these through the
+ * server, and a client that cannot resolve one usually gives up rather than
+ * pick a default - so this is cheap generality, not decoration.
+ *
+ * The full rgb.txt is 750-odd names and a file on the card; this is the set
+ * that actually turns up, plus the numeric forms, in 300 bytes of flash. An
+ * unknown name is logged BY NAME, which is what makes the next gap a one-line
+ * fix rather than an investigation.
+ */
+static const struct { const char *name; uint8_t r, g, b; } cnames[] = {
+	{ "black", 0x00, 0x00, 0x00 }, { "white", 0xFF, 0xFF, 0xFF },
+	{ "red", 0xFF, 0x00, 0x00 },   { "green", 0x00, 0xFF, 0x00 },
+	{ "blue", 0x00, 0x00, 0xFF },  { "cyan", 0x00, 0xFF, 0xFF },
+	{ "magenta", 0xFF, 0x00, 0xFF }, { "yellow", 0xFF, 0xFF, 0x00 },
+	{ "gray", 0xBE, 0xBE, 0xBE },  { "grey", 0xBE, 0xBE, 0xBE },
+	{ "lightgray", 0xD3, 0xD3, 0xD3 }, { "lightgrey", 0xD3, 0xD3, 0xD3 },
+	{ "darkgray", 0xA9, 0xA9, 0xA9 },  { "darkgrey", 0xA9, 0xA9, 0xA9 },
+	{ "navy", 0x00, 0x00, 0x80 },  { "maroon", 0x80, 0x00, 0x00 },
+	{ "orange", 0xFF, 0xA5, 0x00 },{ "purple", 0xA0, 0x20, 0xF0 },
+	{ "brown", 0xA5, 0x2A, 0x2A }, { "pink", 0xFF, 0xC0, 0xCB },
+};
+
+static int hexval(int ch)
+{
+	if (ch >= '0' && ch <= '9') return ch - '0';
+	if (ch >= 'a' && ch <= 'f') return ch - 'a' + 10;
+	if (ch >= 'A' && ch <= 'F') return ch - 'A' + 10;
+	return -1;
+}
+
+/* 16-bit components out, which is what the protocol carries. */
+static int color_lookup(const uint8_t *nm, int n, uint16_t *ro, uint16_t *go,
+			uint16_t *bo)
+{
+	char buf[40];
+	int i, j = 0;
+
+	if (n > 0 && nm[0] == '#') {		/* #rgb, #rrggbb, #rrrrggggbbbb */
+		int digits = n - 1, per = digits / 3, v[3] = { 0, 0, 0 }, k;
+
+		if (per < 1 || per > 4 || per * 3 != digits)
+			return 0;
+		for (k = 0; k < 3; k++) {
+			int acc = 0;
+
+			for (i = 0; i < per; i++) {
+				int h = hexval(nm[1 + k * per + i]);
+
+				if (h < 0)
+					return 0;
+				acc = acc * 16 + h;
+			}
+			/* Scale whatever precision was given up to 16 bits. */
+			while (per * 4 < 16) {
+				acc = (acc << (per * 4)) | acc;
+				per *= 2;
+			}
+			v[k] = acc & 0xFFFF;
+			per = digits / 3;
+		}
+		*ro = v[0]; *go = v[1]; *bo = v[2];
+		return 1;
+	}
+	/* Case- and space-insensitive, as the protocol requires. */
+	for (i = 0; i < n && j < (int)sizeof(buf) - 1; i++) {
+		int ch = nm[i];
+
+		if (ch == ' ')
+			continue;
+		buf[j++] = (ch >= 'A' && ch <= 'Z') ? ch + 32 : ch;
+	}
+	buf[j] = 0;
+	for (i = 0; i < (int)(sizeof(cnames) / sizeof(cnames[0])); i++)
+		if (!strcmp(buf, cnames[i].name)) {
+			*ro = cnames[i].r * 0x101;
+			*go = cnames[i].g * 0x101;
+			*bo = cnames[i].b * 0x101;
+			return 1;
+		}
+	fprintf(stderr, "xshim: unknown colour name '%s' - add it to cnames[] "
+		"(using black)\n", buf);
+	*ro = *go = *bo = 0;
+	return 1;				/* never fail; clients give up */
+}
+
+static uint32_t rgb565(uint16_t r, uint16_t g, uint16_t b)
+{
+	return ((uint32_t)(r >> 11) << 11) | ((uint32_t)(g >> 10) << 5) |
+	       (uint32_t)(b >> 11);
+}
+
 /* ---------------------------------------------------------------- protocol */
 
 static void put16(uint8_t *p, uint16_t v) { p[0] = v; p[1] = v >> 8; }
@@ -503,15 +631,48 @@ static void send_error(struct cli *c, uint8_t code, uint32_t bad, uint8_t major)
 }
 
 /* Every X event is exactly 32 bytes. Anything else desynchronises the stream. */
-static void send_event(struct cli *c, uint8_t type, const uint8_t *d, int n)
+static void send_event_d(struct cli *c, uint8_t type, uint8_t detail,
+			 const uint8_t *d, int n)
 {
 	uint8_t e[32];
 
 	memset(e, 0, sizeof(e));
 	e[0] = type;
+	/*
+	 * Byte 1 is the event's detail - for a button event, WHICH button.
+	 * Leaving it zero delivers "button 0", which no translation table
+	 * matches: Xt's <Btn1Down> wants 1. The click arrives, the widget is
+	 * dispatched to, and nothing happens - which reads as the toolkit
+	 * ignoring us rather than as a one-byte omission.
+	 */
+	e[1] = detail;
 	put16(e + 2, c->seq);
 	memcpy(e + 4, d, n > 28 ? 28 : n);
 	write(c->fd, e, 32);
+}
+
+static void send_event(struct cli *c, uint8_t type, const uint8_t *d, int n)
+{
+	send_event_d(c, type, 0, d, n);
+}
+
+/*
+ * An Expose for part of a window. This is not optional bookkeeping: an X
+ * client does not repaint because it drew something, it repaints because the
+ * SERVER told it the pixels are gone. ClearArea with exposures set is the
+ * commonest case, and swallowing it leaves the client waiting for ever - which
+ * looks exactly like a drawing bug at this end.
+ */
+static void send_expose(struct cli *c, struct res *w, int x, int y, int ww,
+			int hh)
+{
+	uint8_t d[28];
+
+	memset(d, 0, sizeof(d));
+	put32(d, w->id);
+	put16(d + 4, x); put16(d + 6, y);
+	put16(d + 8, ww); put16(d + 10, hh);
+	send_event(c, 12, d, 28);		/* Expose, count 0 */
 }
 
 static void expose_window(struct cli *c, struct res *w)
@@ -605,32 +766,53 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		 * takes the core-font path and needs consistent metrics, but
 		 * for an analog clock nothing is ever drawn with it.
 		 */
-		uint8_t ext[52 - 24 + 95 * 12];
+		uint8_t ext[52 - 24 + (XFONT_LAST - XFONT_FIRST + 1) * 12];
 		uint8_t ci[12], *p = ext;
-		int i;
+		int i, nch = XFONT_LAST - XFONT_FIRST + 1;
 
 		memset(ci, 0, sizeof(ci));
-		put16(ci + 2, 8); put16(ci + 4, 8);
-		put16(ci + 6, 7); put16(ci + 8, 1);
+		put16(ci + 2, XFONT_W); put16(ci + 4, XFONT_W);
+		put16(ci + 6, XFONT_ASCENT); put16(ci + 8, XFONT_DESCENT);
 
 		memcpy(d24, ci, 12); memset(d24 + 12, 0, 4);
 		memcpy(d24 + 16, ci, 8);		/* max-bounds starts here */
 
 		memcpy(p, ci + 8, 4); p += 4;
 		memset(p, 0, 4); p += 4;
-		put16(p, 32); put16(p + 2, 126); put16(p + 4, 32);
-		put16(p + 6, 0); p += 8;
+		put16(p, XFONT_FIRST); put16(p + 2, XFONT_LAST);
+		put16(p + 4, XFONT_FIRST); put16(p + 6, 0); p += 8;
 		*p++ = 0; *p++ = 0; *p++ = 0; *p++ = 1;
-		put16(p, 7); put16(p + 2, 1); p += 4;
-		put32(p, 95); p += 4;
-		for (i = 0; i < 95; i++) { memcpy(p, ci, 12); p += 12; }
+		put16(p, XFONT_ASCENT); put16(p + 2, XFONT_DESCENT); p += 4;
+		put32(p, nch); p += 4;
+		for (i = 0; i < nch; i++) { memcpy(p, ci, 12); p += 12; }
 		send_reply(c, 0, d24, ext, p - ext);
 		break;
 	}
-	case 48:					/* QueryTextExtents */
-		put16(d24 + 2, 7); put16(d24 + 4, 1);
+	case 48: {					/* QueryTextExtents */
+		/*
+		 * Every field here used to be one slot out, which put 0 in
+		 * overall-width - so every string measured as zero pixels
+		 * wide. A toolkit sizing a widget from that collapses its
+		 * whole layout, and the result looks like a rendering bug
+		 * rather than a measurement one.
+		 *
+		 * The string is CHAR2B even for an 8-bit font, and r[1] is
+		 * the odd-length flag.
+		 */
+		int n = (len - 8) / 2 - (r[1] ? 1 : 0);
+
+		if (n < 0)
+			n = 0;
+		put16(d24 + 0, XFONT_ASCENT);
+		put16(d24 + 2, XFONT_DESCENT);
+		put16(d24 + 4, XFONT_ASCENT);
+		put16(d24 + 6, XFONT_DESCENT);
+		put32(d24 + 8, (uint32_t)(n * XFONT_W));	/* overall-width */
+		put32(d24 + 12, 0);				/* overall-left */
+		put32(d24 + 16, (uint32_t)(n * XFONT_W));	/* overall-right */
 		send_reply(c, 0, d24, NULL, 0);
 		break;
+	}
 	case 49:					/* ListFonts: none */
 		send_reply(c, 0, d24, NULL, 0);
 		break;
@@ -643,6 +825,31 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		put32(d24, ROOT_ID);
 		send_reply(c, 0, d24, NULL, 0);
 		break;
+	case 85: {					/* AllocNamedColor */
+		uint16_t cr, cg, cb;
+		int n = get16(r + 8);
+
+		if (12 + n > len)
+			n = len - 12;
+		color_lookup(r + 12, n, &cr, &cg, &cb);
+		put32(d24, rgb565(cr, cg, cb));
+		put16(d24 + 4, cr); put16(d24 + 6, cg); put16(d24 + 8, cb);
+		put16(d24 + 10, cr); put16(d24 + 12, cg); put16(d24 + 14, cb);
+		send_reply(c, 0, d24, NULL, 0);
+		break;
+	}
+	case 92: {					/* LookupColor */
+		uint16_t cr, cg, cb;
+		int n = get16(r + 8);
+
+		if (12 + n > len)
+			n = len - 12;
+		color_lookup(r + 12, n, &cr, &cg, &cb);
+		put16(d24 + 0, cr); put16(d24 + 2, cg); put16(d24 + 4, cb);
+		put16(d24 + 6, cr); put16(d24 + 8, cg); put16(d24 + 10, cb);
+		send_reply(c, 0, d24, NULL, 0);
+		break;
+	}
 	case 84: {					/* AllocColor */
 		uint16_t rr = get16(r + 8), gg = get16(r + 10), bb = get16(r + 12);
 
@@ -701,6 +908,7 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 			if (!(mask & (1u << bit)))
 				continue;
 			if (bit == 1) rr->bg = get32(v);
+			if (bit == 11) rr->event_mask = get32(v);
 			v += 4;
 		}
 		rr->px = calloc((size_t)w * h, 2);
@@ -772,29 +980,133 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		 * indistinguishable from a hang.
 		 */
 		/*
-		 * `owner == cur_owner` is not decoration. Without it, one
-		 * client mapping a window marks EVERY other client's unmapped
-		 * windows mapped and sends their Exposes to the wrong client -
-		 * which then gets an Expose for an id outside its own resource
-		 * range, while the client that owns it never draws. Same
-		 * family as the shared resource-id-base bug; it survived only
-		 * because xclock happens to map before anything else connects.
+		 * MapWindow (8) maps THIS window; MapSubwindows (9) maps its
+		 * children. The first version mapped every unmapped window the
+		 * client owned, which was a shortcut that worked for xclock
+		 * and actively broke xcalc: a toolkit unmaps widgets it wants
+		 * hidden, and the next MapWindow for something else brought
+		 * them all back.
 		 */
-		for (i = 0; i < MAXRES; i++)
-			if (res[i].type == R_WINDOW &&
-			    res[i].owner == cur_owner && !res[i].mapped) {
-				res[i].mapped = 1;
-				/*
-				 * Only top-levels become lvdesk windows; the
-				 * children are composited into them.
-				 */
-				if (win_cb && res[i].parent == ROOT_ID)
-					win_cb(res[i].id, res[i].w, res[i].h);
-				expose_window(c, &res[i]);
-			}
+		uint32_t target = get32(r + 4);
+		struct res *w = res_find(target);
+
+		if (!w || w->type != R_WINDOW) {
+			send_error(c, X_BAD_WINDOW, target, op);
+			break;
+		}
+		for (i = 0; i < MAXRES; i++) {
+			struct res *m = &res[i];
+
+			if (m->type != R_WINDOW || m->owner != cur_owner)
+				continue;
+			if (op == 8 ? m != w : m->parent != target)
+				continue;
+			if (m->mapped)
+				continue;
+			m->mapped = 1;
+			/* Only top-levels become lvdesk windows. */
+			if (win_cb && m->parent == ROOT_ID)
+				win_cb(m->id, m->w, m->h);
+			expose_window(c, m);
+		}
 		break;
 	}
 
+	case 74: {					/* PolyText8 */
+		/*
+		 * A list of TEXTITEM8: either {length, delta, string} or a
+		 * font shift, which is a 255 byte followed by four font-id
+		 * bytes. Only one font exists here, so a shift is skipped
+		 * rather than honoured - but it still has to be STEPPED OVER
+		 * at the right width or the rest of the item list decodes as
+		 * garbage.
+		 */
+		struct res *d = res_find(get32(r + 4));
+		struct res *g = res_find(get32(r + 8));
+		int x = gets16(r + 12), y = gets16(r + 14);
+		const uint8_t *p = r + 16, *end = r + len;
+
+		if (!d || !d->px || !g) {
+			send_error(c, d ? X_BAD_GC : X_BAD_DRAWABLE,
+				   get32(d ? r + 8 : r + 4), op);
+			break;
+		}
+		while (p + 2 <= end) {
+			int m, delta;
+
+			if (*p == 255) {		/* font shift */
+				p += 5;
+				continue;
+			}
+			m = *p;
+			delta = (int8_t)p[1];
+			if (p + 2 + m > end)
+				break;
+			x += delta;
+			if (trace_on())
+				fprintf(stderr, "xshim: PolyText8 0x%x '%.*s' "
+					"fg=%04x bg=%04x at %d,%d\n", d->id, m,
+					p + 2, g->fg, g->bg, x, y);
+			x += draw_string(d, x, y, p + 2, m, (uint16_t)g->fg);
+			p += 2 + m;
+		}
+		notify_draw(d);
+		break;
+	}
+	case 76: {					/* ImageText8 */
+		/*
+		 * Unlike PolyText8 this paints the character cell first, in
+		 * the GC's BACKGROUND, then the glyphs in the foreground. That
+		 * is the whole difference between the two requests, and it is
+		 * how a client overwrites text without clearing first.
+		 */
+		struct res *d = res_find(get32(r + 4));
+		struct res *g = res_find(get32(r + 8));
+		int n = r[1], x = gets16(r + 12), y = gets16(r + 14);
+		int i, j;
+
+		if (!d || !d->px || !g) {
+			send_error(c, d ? X_BAD_GC : X_BAD_DRAWABLE,
+				   get32(d ? r + 8 : r + 4), op);
+			break;
+		}
+		if (16 + n > len)
+			n = len - 16;
+		for (j = y - XFONT_ASCENT; j < y + XFONT_DESCENT; j++)
+			for (i = x; i < x + n * XFONT_W; i++)
+				px_set(d, i, j, (uint16_t)g->bg);
+		if (trace_on())
+			fprintf(stderr, "xshim: ImageText8 0x%x '%.*s' fg=%04x "
+				"bg=%04x at %d,%d\n", d->id, n, r + 16, g->fg,
+				g->bg, x, y);
+		draw_string(d, x, y, r + 16, n, (uint16_t)g->fg);
+		notify_draw(d);
+		break;
+	}
+	case 10: {					/* UnmapWindow */
+		/*
+		 * Children are composited into their parent's buffer, which
+		 * means unmapping one leaves its pixels behind. Clear the area
+		 * it occupied to the parent's background and expose the parent
+		 * so it repaints, or the widget stays on screen after the
+		 * client has hidden it.
+		 */
+		struct res *w = res_find(get32(r + 4));
+		struct res *par;
+
+		if (!w || w->type != R_WINDOW) {
+			send_error(c, X_BAD_WINDOW, get32(r + 4), op);
+			break;
+		}
+		w->mapped = 0;
+		par = res_find(w->parent);
+		if (par && par->type == R_WINDOW && par->px) {
+			win_fill(par, w->x, w->y, w->w, w->h);
+			expose_window(c, par);
+			notify_draw(par);
+		}
+		break;
+	}
 	case 66: {					/* PolySegment */
 		struct res *d = res_find(get32(r + 4));
 		struct res *g = res_find(get32(r + 8));
@@ -870,6 +1182,29 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		break;
 	}
 
+	case 2: {					/* ChangeWindowAttributes */
+		/*
+		 * Same value list as CreateWindow. Only the event mask and the
+		 * background matter here, but the list has to be WALKED in
+		 * full - each set bit is four bytes, so skipping one desyncs
+		 * every value after it.
+		 */
+		struct res *w = res_find(get32(r + 4));
+		uint32_t mask = get32(r + 8);
+		const uint8_t *v = r + 12;
+		int bit;
+
+		if (!w)
+			break;
+		for (bit = 0; bit < 15; bit++) {
+			if (!(mask & (1u << bit)))
+				continue;
+			if (bit == 1) w->bg = get32(v);
+			if (bit == 11) w->event_mask = get32(v);
+			v += 4;
+		}
+		break;
+	}
 	case 12: {					/* ConfigureWindow */
 		/*
 		 * Not ignorable. A toolkit creates its shell window at some
@@ -938,6 +1273,12 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		if (!cw) cw = d->w - cx;		/* 0 means "to the edge" */
 		if (!ch) ch = d->h - cy;
 		win_fill(d, cx, cy, cw, ch);
+		/*
+		 * r[1] is `exposures`. When set, the client is asking to be
+		 * told to repaint what we just erased.
+		 */
+		if (r[1])
+			send_expose(c, d, cx, cy, cw, ch);
 		notify_draw(d);
 		break;
 	}
@@ -961,7 +1302,7 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		}
 		break;
 	}
-	case 2: case 19: case 22: case 25:
+	case 19: case 22: case 25:
 	case 36: case 37: case 42: case 45: case 46: case 109:
 	case 72: case 78: case 93: case 94: case 95: case 127:
 		break;					/* accepted, nothing to do */
@@ -1056,6 +1397,123 @@ const uint16_t *xshim_window_pixels(uint32_t id, int *w, int *h)
 	*w = r->w;
 	*h = r->h;
 	return r->px;
+}
+
+/* Device event mask bits we care about. */
+#define EV_KEY_PRESS	(1u << 0)
+#define EV_KEY_RELEASE	(1u << 1)
+#define EV_BTN_PRESS	(1u << 2)
+#define EV_BTN_RELEASE	(1u << 3)
+#define EV_ENTER	(1u << 4)
+#define EV_LEAVE	(1u << 5)
+#define EV_MOTION	(1u << 6)
+
+/*
+ * The deepest mapped child containing (x, y), which is where a pointer event
+ * belongs. Coordinates come in relative to `w` and are rewritten relative to
+ * whatever is returned, because that is what the event carries.
+ *
+ * Later-created children win, which stands in for stacking order: nothing here
+ * restacks, and a toolkit creates its widgets in the order it wants them drawn.
+ */
+static struct res *hit_test(struct res *w, int *x, int *y)
+{
+	int i;
+
+	for (;;) {
+		struct res *hit = NULL;
+		int hx = 0, hy = 0;
+
+		for (i = 0; i < MAXRES; i++) {
+			struct res *ch = &res[i];
+
+			if (ch->type != R_WINDOW || ch->parent != w->id ||
+			    !ch->mapped)
+				continue;
+			if (*x < ch->x || *y < ch->y ||
+			    *x >= ch->x + ch->w || *y >= ch->y + ch->h)
+				continue;
+			hit = ch; hx = *x - ch->x; hy = *y - ch->y;
+		}
+		if (!hit)
+			return w;
+		*x = hx; *y = hy;
+		w = hit;
+	}
+}
+
+/*
+ * Deliver to the first ancestor that selected this event, which is what X
+ * calls propagation. A toolkit selects ButtonPress on the widget window and
+ * nothing on the containers around it, so without this every click lands on a
+ * window that never asked for one and is dropped.
+ */
+static void send_device_event(struct cli *c, uint8_t type, uint8_t detail,
+			      struct res *w, int x, int y, uint32_t sel,
+			      uint16_t state)
+{
+	uint8_t d[28];
+	uint32_t child = 0;
+	int rx = x, ry = y;
+
+	if (trace_on())
+		fprintf(stderr, "xshim:   deliver type=%u sel=%08x from 0x%x\n",
+			type, sel, w ? w->id : 0);
+	while (w && !(w->event_mask & sel)) {
+		rx += w->x; ry += w->y;
+		child = w->id;
+		w = res_find(w->parent);
+		if (w && w->type != R_WINDOW)
+			return;
+	}
+	if (!w) {
+		if (trace_on())
+			fprintf(stderr, "xshim:   DROPPED - nothing selected it\n");
+		return;
+	}
+	if (trace_on())
+		fprintf(stderr, "xshim:   -> 0x%x\n", w->id);
+	memset(d, 0, sizeof(d));
+	put32(d + 0, 0);			/* time: CurrentTime */
+	put32(d + 4, ROOT_ID);
+	put32(d + 8, w->id);			/* event window */
+	put32(d + 12, child);
+	put16(d + 16, rx); put16(d + 18, ry);	/* root x/y - no root here */
+	put16(d + 20, rx); put16(d + 22, ry);	/* event-relative */
+	put16(d + 24, state);
+	d[26] = 1;				/* same-screen */
+	send_event_d(c, type, detail, d, 28);
+}
+
+/*
+ * A pointer event from the desktop, in coordinates relative to the top-level
+ * whose id is `id`. act: 0 motion, 1 press, 2 release.
+ */
+void xshim_pointer(uint32_t id, int x, int y, int button, int act)
+{
+	static uint16_t state;
+	struct res *top = res_find(id), *w;
+	struct cli *c;
+
+	if (!top || top->type != R_WINDOW)
+		return;
+	c = &cli[top->owner];
+	if (c->fd < 0)
+		return;
+	w = hit_test(top, &x, &y);
+	if (trace_on())
+		fprintf(stderr, "xshim: ptr act=%d -> win 0x%x mask=%08x "
+			"at %d,%d\n", act, w->id, w->event_mask, x, y);
+
+	if (act == 1) {
+		send_device_event(c, 4, button, w, x, y, EV_BTN_PRESS, state);
+		state |= 0x100u << (button - 1);	/* Button1Mask.. */
+	} else if (act == 2) {
+		send_device_event(c, 5, button, w, x, y, EV_BTN_RELEASE, state);
+		state &= ~(0x100u << (button - 1));
+	} else {
+		send_device_event(c, 6, 0, w, x, y, EV_MOTION, state);
+	}
 }
 
 int xshim_fds(int *out, int max)

@@ -2707,6 +2707,37 @@ static void xwin_drop(uint32_t id)
 		}
 }
 
+/*
+ * Pointer events into the client.
+ *
+ * The desktop knows nothing about widgets: it hands the shim a coordinate
+ * relative to the top-level, and the shim finds the deepest child and
+ * propagates to whichever ancestor selected the event. That is what makes an
+ * off-the-shelf toolkit's buttons work with no widget knowledge on this side.
+ */
+static void xwin_ptr_cb(lv_event_t *e)
+{
+	struct xwin *x = lv_event_get_user_data(e);
+	lv_event_code_t code = lv_event_get_code(e);
+	lv_indev_t *indev = lv_indev_active();
+	lv_area_t a;
+	lv_point_t p;
+	int act;
+
+	if (!indev)
+		return;
+	lv_indev_get_point(indev, &p);
+	lv_obj_get_coords(x->img, &a);
+
+	switch (code) {
+	case LV_EVENT_PRESSED:   act = 1; break;
+	case LV_EVENT_RELEASED:
+	case LV_EVENT_PRESS_LOST: act = 2; break;
+	default:                 act = 0; break;
+	}
+	xshim_pointer(x->id, p.x - a.x1, p.y - a.y1, 1, act);
+}
+
 /* The client exited or its connection died: take its window with it. */
 static void xwin_on_close(uint32_t id)
 {
@@ -2770,6 +2801,17 @@ static void xwin_on_window(uint32_t id, int w, int h)
 	x->img = lv_image_create(content);
 	lv_image_set_src(x->img, &x->dsc);
 	lv_obj_set_pos(x->img, 0, 0);
+	/*
+	 * An lv_image is not clickable by default, and its size comes from the
+	 * source rather than the layout, so give it both explicitly - without
+	 * the size the hit area is zero and no press ever reaches the client.
+	 */
+	lv_obj_set_size(x->img, pw, ph);
+	lv_obj_add_flag(x->img, LV_OBJ_FLAG_CLICKABLE);
+	lv_obj_add_event_cb(x->img, xwin_ptr_cb, LV_EVENT_PRESSED, x);
+	lv_obj_add_event_cb(x->img, xwin_ptr_cb, LV_EVENT_RELEASED, x);
+	lv_obj_add_event_cb(x->img, xwin_ptr_cb, LV_EVENT_PRESS_LOST, x);
+	lv_obj_add_event_cb(x->img, xwin_ptr_cb, LV_EVENT_PRESSING, x);
 }
 
 static void xwin_on_draw(uint32_t id)
@@ -2801,6 +2843,7 @@ static void xwin_on_draw(uint32_t id)
 				xwins[i].dsc.data_size = (uint32_t)w * h * 2;
 				lv_image_set_src(xwins[i].img,
 						 &xwins[i].dsc);
+				lv_obj_set_size(xwins[i].img, w, h);
 				lv_obj_set_size(xwins[i].win, w + 2,
 						h + HDR_H + 2);
 			}
