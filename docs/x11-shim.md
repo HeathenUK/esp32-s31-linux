@@ -483,3 +483,59 @@ Reference: `tools/xstub.py` is the executable version of this document. Run it,
 point a client at it, and it prints exactly what that client needs - including
 `** NO REPLY IMPLEMENTED` for anything that would block, which is the only
 honest way to find the next gap.
+
+## xfiles: where it stands, and the one contradiction left (2026-08-30)
+
+xfiles now **starts, loads all thirteen XPM icons, and maps a correctly titled
+window** at 144 kB resident. Its content is still black, and the cause is
+narrowed to a single reproducible contradiction, logged under `XSHIM_TRACE=1`:
+
+    composite wrote 214016 px; dest 0x20005a now 46681/276000 non-zero
+    composite wrote  15600 px; dest 0x20005a now 46681/276000 non-zero
+    cleararea win 0x200001 600x460 rect 0,0 600x460 bgpix 0x20005a found 0/276000
+
+The same pixmap ID holds 46,681 non-zero pixels immediately after the
+composite, and zero a few requests later at `ClearArea`. The pixmap is created
+exactly once (no XID reuse - `pixmap 0x20005a 600x460` appears once in the whole
+log), so something zeroes it in between. Only `ChangeWindowAttributes` (setting
+this pixmap as the window background) and `ClearArea` occur between the two.
+
+**Prime suspect:** `notify_draw()` is called with a PIXMAP as its argument -
+`draw 0x20005a (UNMAPPED) -> top 0x20005a` in the trace - so lvdesk's window
+draw callback is being handed an id that is not a window. That is pre-existing
+behaviour shared with PolyFillRectangle, but it is the only thing crossing from
+the shim into lvdesk between the two observations.
+
+How xfiles composes, for whoever picks this up:
+
+    icons -> 64x64 pixmaps (XPM)
+          -> CopyArea into one 512x618 sheet
+          -> RENDER Composite (PictOpOver) into a 600x460 pixmap
+          -> that pixmap installed as the window's CWBackPixmap
+          -> ClearArea to show it
+
+Every one of those steps is implemented and observed working in isolation; only
+the last hand-off fails.
+
+### Fixed on the way here
+
+- **XPM was pathological, and it was ours.** One `XFillRectangle` per run of
+  pixels with an `XSetForeground` before each: 10,577 requests and still
+  loading icons after ten seconds. Runs are now batched into one
+  `XFillRectangles` per colour, and colours resolve **without the server at
+  all** - on a TrueColor visual a `#rrggbb` pixel is just the components packed
+  into the visual's masks, so `XParseColor`/`XAllocColor` need never be called.
+  `LookupColor` and `AllocColor` vanish from the request histogram.
+
+        startup      10,577 requests -> 1,001, window now mapped
+        shim pixmaps  2,574 kB -> 228 kB
+        round trips   1,558 -> 0
+        xfiles RSS    1,432 kB -> 144 kB
+
+- **`pict_find(None)` returned the first FREE slot**, because an empty slot has
+  id 0. Every unmasked Composite was misrouted into the masked path and
+  refused - and the entire "xfiles uses an alpha mask" theory was an artefact
+  of that lookup.
+- **`render_unimpl()` could never fire**: it tested a counter the dispatcher
+  had already incremented, so unimplemented RENDER paths were silent while a
+  search for refused requests came back clean and the window stayed black.

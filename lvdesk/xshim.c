@@ -1710,7 +1710,7 @@ static void render_composite(struct cli *c, const uint8_t *r)
 	int mask_x = gets16(r + 24), mask_y = gets16(r + 26);
 	int dx = gets16(r + 28), dy = gets16(r + 30);
 	int w = get16(r + 32), h = get16(r + 34);
-	int i, j, x0, y0, x1, y1;
+	int i, j, x0, y0, x1, y1, wrote = 0;
 
 	if (!dp)
 		return;
@@ -1838,7 +1838,11 @@ static void render_composite(struct cli *c, const uint8_t *r)
 				       px + s->ax];
 			blend_px(d, i, j, (v >> 11) << 3, ((v >> 5) & 0x3F) << 2,
 				 (v & 0x1F) << 3, 255, PICT_OP_SRC);
+			wrote++;
 		}
+	if (trace_on())
+		fprintf(stderr, "xshim:   composite wrote %d px into 0x%x\n",
+			wrote, d->id);
 }
 
 static const char *render_opstr(uint8_t m)
