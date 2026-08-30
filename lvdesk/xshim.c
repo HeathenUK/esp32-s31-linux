@@ -56,11 +56,23 @@ struct res {
 	int x, y, w, h;
 	int mapped;
 	uint32_t parent;
-	uint16_t *px;			/* windows and pixmaps only */
+	/*
+	 * Only a TOP-LEVEL window or a pixmap owns pixels. A child window is
+	 * a clipped view into its top-level's buffer, exactly as in an X
+	 * server without backing store - so 69 xcalc windows cost one buffer,
+	 * not 69, and a redraw of one button is not a re-composite of the
+	 * whole tree.
+	 */
+	uint16_t *px;			/* owner only */
+	struct res *buf;		/* who owns the pixels we draw into */
+	int ax, ay;			/* our origin within that buffer */
+	int cx0, cy0, cx1, cy1;		/* clip, in that buffer's coords */
 	uint32_t fg, bg;		/* GCs only */
 	int line_width;
 	int owner;			/* index into cli[] */
 	uint32_t event_mask;		/* what this window asked to receive */
+	int bw;				/* border width, drawn in the PARENT */
+	uint32_t border_pixel;
 	char title[32];			/* WM_NAME, windows only */
 };
 
@@ -138,12 +150,21 @@ static struct res *res_new(uint32_t id, int type)
 static void res_free(uint32_t id)
 {
 	struct res *r = res_find(id);
+	int i;
 
 	if (!r)
 		return;
 	free(r->px);
 	r->px = NULL;
 	r->type = R_FREE;
+	/*
+	 * Anything that was drawing into those pixels must stop. Children
+	 * outlive their parent here only during teardown, but a stale buf
+	 * pointer is a use-after-free in the drawing path.
+	 */
+	for (i = 0; i < MAXRES; i++)
+		if (res[i].buf == r)
+			res[i].buf = NULL;
 }
 
 static struct res *top_of(struct res *r)
@@ -168,20 +189,180 @@ static void notify_draw(struct res *d)
 
 /* --------------------------------------------------------------- drawing */
 
-static void px_set(struct res *d, int x, int y, uint16_t c)
+static int drawable_ok(struct res *d)
 {
-	if (!d->px || x < 0 || y < 0 || x >= d->w || y >= d->h)
-		return;
-	d->px[(size_t)y * d->w + x] = c;
+	return d && d->buf && d->buf->px;
 }
 
+static void px_set(struct res *d, int x, int y, uint16_t c)
+{
+	struct res *b = d->buf;
+	int ax, ay;
+
+	if (!b || !b->px)
+		return;
+	ax = x + d->ax;
+	ay = y + d->ay;
+	if (ax < d->cx0 || ay < d->cy0 || ax >= d->cx1 || ay >= d->cy1)
+		return;
+	b->px[(size_t)ay * b->w + ax] = c;
+}
+
+/*
+ * Recompute where a drawable lives inside its buffer, and its clip, for it and
+ * everything under it. Called whenever geometry, mapping or parentage changes.
+ *
+ * An unmapped window gets an empty clip rather than a special case in the
+ * drawing path: drawing into an unmapped window is discarded, and the client
+ * repaints when we Expose it on map.
+ */
+static void geom_update(struct res *w)
+{
+	struct res *p;
+	int i;
+
+	if (!w || w->type == R_FREE)
+		return;
+	if (w->type == R_PIXMAP || (w->type == R_WINDOW &&
+				    w->parent == ROOT_ID)) {
+		w->buf = w;
+		w->ax = w->ay = 0;
+		w->cx0 = w->cy0 = 0;
+		w->cx1 = w->w; w->cy1 = w->h;
+	} else if (w->type == R_WINDOW && (p = res_find(w->parent)) &&
+		   p->type == R_WINDOW && p->buf) {
+		w->buf = p->buf;
+		w->ax = p->ax + w->x;
+		w->ay = p->ay + w->y;
+		w->cx0 = w->ax > p->cx0 ? w->ax : p->cx0;
+		w->cy0 = w->ay > p->cy0 ? w->ay : p->cy0;
+		w->cx1 = w->ax + w->w < p->cx1 ? w->ax + w->w : p->cx1;
+		w->cy1 = w->ay + w->h < p->cy1 ? w->ay + w->h : p->cy1;
+		if (!w->mapped)
+			w->cx1 = w->cx0;	/* empty */
+	} else {
+		w->buf = NULL;
+		return;
+	}
+	for (i = 0; i < MAXRES; i++)
+		if (res[i].type == R_WINDOW && res[i].parent == w->id &&
+		    &res[i] != w)
+			geom_update(&res[i]);
+}
+
+/*
+ * Fill a window's background, skipping the areas its mapped children occupy.
+ *
+ * In X a child window is a separate drawable clipped OUT of its parent, so
+ * painting the parent never touches it. Sharing one buffer makes that
+ * something we have to do by hand - and not doing it is not subtle: mapping a
+ * container erases every child already drawn inside it, which is how xcalc
+ * lost its Xaw bevels and its base indicator while every individual draw was
+ * provably correct.
+ *
+ * Per row, gather the children's x-spans and fill the gaps. Rows times
+ * children, and only on a background fill, which is rare.
+ */
+static int is_descendant(struct res *w, struct res *of)
+{
+	int guard = 16;
+
+	while (w && guard--) {
+		if (w->parent == of->id)
+			return 1;
+		if (w->parent == ROOT_ID)
+			return 0;
+		w = res_find(w->parent);
+	}
+	return 0;
+}
+
+/*
+ * Fill a window's background, skipping every mapped DESCENDANT.
+ *
+ * In X a child window is a separate drawable clipped out of its ancestors, so
+ * painting a container never touches what is inside it. Sharing one buffer
+ * makes that something we do by hand, and it has to cover the whole subtree,
+ * not just direct children: excluding only direct children still let the
+ * top-level's fill erase its grandchildren, which is how xcalc lost the black
+ * bezel around its display while every individual draw was provably correct.
+ *
+ * Rects are gathered once and filtered per row; this only runs on a background
+ * fill, which is rare.
+ */
 static void win_fill(struct res *d, int x, int y, int w, int h)
 {
+	struct { int x0, y0, x1, y1; } ob[80];
+	int nob = 0, i, j, k;
+
+	if (d->type != R_WINDOW) {
+		for (j = y; j < y + h; j++)
+			for (i = x; i < x + w; i++)
+				px_set(d, i, j, (uint16_t)d->bg);
+		return;
+	}
+	for (i = 0; i < MAXRES && nob < (int)(sizeof(ob) / sizeof(ob[0])); i++) {
+		struct res *c2 = &res[i];
+
+		if (c2->type != R_WINDOW || c2 == d || !c2->mapped)
+			continue;
+		if (c2->buf != d->buf || !is_descendant(c2, d))
+			continue;
+		/* Into d's own coordinate space, border included. */
+		ob[nob].x0 = c2->ax - d->ax - c2->bw;
+		ob[nob].y0 = c2->ay - d->ay - c2->bw;
+		ob[nob].x1 = c2->ax - d->ax + c2->w + c2->bw;
+		ob[nob].y1 = c2->ay - d->ay + c2->h + c2->bw;
+		nob++;
+	}
+	for (j = y; j < y + h; j++) {
+		int sp[80][2], n = 0, cur = x;
+
+		for (i = 0; i < nob; i++) {
+			if (j < ob[i].y0 || j >= ob[i].y1)
+				continue;
+			if (ob[i].x1 <= x || ob[i].x0 >= x + w)
+				continue;
+			sp[n][0] = ob[i].x0;
+			sp[n][1] = ob[i].x1;
+			n++;
+		}
+		for (i = 0; i < n - 1; i++)		/* insertion sort */
+			for (k = i + 1; k < n; k++)
+				if (sp[k][0] < sp[i][0]) {
+					int t0 = sp[i][0], t1 = sp[i][1];
+
+					sp[i][0] = sp[k][0]; sp[i][1] = sp[k][1];
+					sp[k][0] = t0; sp[k][1] = t1;
+				}
+		for (i = 0; i < n; i++) {
+			for (k = cur; k < sp[i][0] && k < x + w; k++)
+				px_set(d, k, j, (uint16_t)d->bg);
+			if (sp[i][1] > cur)
+				cur = sp[i][1];
+		}
+		for (k = cur; k < x + w; k++)
+			px_set(d, k, j, (uint16_t)d->bg);
+	}
+}
+
+static void draw_border(struct res *w)
+{
+	struct res *p;
 	int i, j;
 
-	for (j = y; j < y + h; j++)
-		for (i = x; i < x + w; i++)
-			px_set(d, i, j, (uint16_t)d->bg);
+	if (!w || w->bw <= 0 || w->parent == ROOT_ID)
+		return;
+	p = res_find(w->parent);
+	if (!p || p->type != R_WINDOW || !drawable_ok(p))
+		return;
+	for (j = w->y - w->bw; j < w->y + w->h + w->bw; j++)
+		for (i = w->x - w->bw; i < w->x + w->w + w->bw; i++) {
+			if (i >= w->x && i < w->x + w->w &&
+			    j >= w->y && j < w->y + w->h)
+				continue;		/* the child itself */
+			px_set(p, i, j, (uint16_t)w->border_pixel);
+		}
 }
 
 static void draw_line(struct res *d, int x0, int y0, int x1, int y1, uint16_t c)
@@ -896,6 +1077,7 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		}
 		rr->x = gets16(r + 12); rr->y = gets16(r + 14);
 		rr->w = w; rr->h = h; rr->parent = parent;
+		rr->bw = get16(r + 20);
 		rr->bg = 0xFFFF;
 		/*
 		 * CWBackPixel is bit 1. This matters more than it looks: an
@@ -908,14 +1090,24 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 			if (!(mask & (1u << bit)))
 				continue;
 			if (bit == 1) rr->bg = get32(v);
+			if (bit == 3) rr->border_pixel = get32(v);
 			if (bit == 11) rr->event_mask = get32(v);
 			v += 4;
 		}
-		rr->px = calloc((size_t)w * h, 2);
+		if (parent == ROOT_ID) {
+			rr->px = calloc((size_t)w * h, 2);
+			if (!rr->px) {
+				send_error(c, X_BAD_ALLOC, id, op);
+				break;
+			}
+		}
+		geom_update(rr);
 		win_fill(rr, 0, 0, w, h);
 		if (trace_on())
-			fprintf(stderr, "       +win 0x%x %dx%d+%d+%d parent=0x%x\n",
-				id, w, h, rr->x, rr->y, parent);
+			fprintf(stderr, "       +win 0x%x %dx%d+%d+%d bw=%d "
+				"bg=%08x bp=%08x parent=0x%x\n", id, w, h,
+				rr->x, rr->y, rr->bw, rr->bg, rr->border_pixel,
+				parent);
 		break;
 	}
 	case 53: {					/* CreatePixmap */
@@ -928,6 +1120,7 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 			break;
 		}
 		rr->w = w; rr->h = h;
+		geom_update(rr);
 		break;
 	}
 	case 55: {					/* CreateGC */
@@ -1004,6 +1197,18 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 			if (m->mapped)
 				continue;
 			m->mapped = 1;
+			geom_update(m);
+			/*
+			 * The SERVER paints the background when a window is
+			 * mapped; the client then draws its content in
+			 * response to the Expose and never repaints the
+			 * background itself. Filling at CreateWindow instead
+			 * is not equivalent - the window is not mapped yet, so
+			 * it has no visible area to fill - and the missing
+			 * fill shows up as Xaw's black bevels disappearing.
+			 */
+			win_fill(m, 0, 0, m->w, m->h);
+			draw_border(m);
 			/* Only top-levels become lvdesk windows. */
 			if (win_cb && m->parent == ROOT_ID)
 				win_cb(m->id, m->w, m->h);
@@ -1026,7 +1231,7 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		int x = gets16(r + 12), y = gets16(r + 14);
 		const uint8_t *p = r + 16, *end = r + len;
 
-		if (!d || !d->px || !g) {
+		if (!d || !drawable_ok(d) || !g) {
 			send_error(c, d ? X_BAD_GC : X_BAD_DRAWABLE,
 				   get32(d ? r + 8 : r + 4), op);
 			break;
@@ -1065,7 +1270,7 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		int n = r[1], x = gets16(r + 12), y = gets16(r + 14);
 		int i, j;
 
-		if (!d || !d->px || !g) {
+		if (!d || !drawable_ok(d) || !g) {
 			send_error(c, d ? X_BAD_GC : X_BAD_DRAWABLE,
 				   get32(d ? r + 8 : r + 4), op);
 			break;
@@ -1099,8 +1304,9 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 			break;
 		}
 		w->mapped = 0;
+		geom_update(w);
 		par = res_find(w->parent);
-		if (par && par->type == R_WINDOW && par->px) {
+		if (par && par->type == R_WINDOW && drawable_ok(par)) {
 			win_fill(par, w->x, w->y, w->w, w->h);
 			expose_window(c, par);
 			notify_draw(par);
@@ -1112,7 +1318,7 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		struct res *g = res_find(get32(r + 8));
 		int i, n = (len - 12) / 8;
 
-		if (!d || !d->px || !g) {
+		if (!d || !drawable_ok(d) || !g) {
 			send_error(c, d ? X_BAD_GC : X_BAD_DRAWABLE,
 				   get32(d ? r + 8 : r + 4), op);
 			break;
@@ -1164,7 +1370,7 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		struct res *g = res_find(get32(r + 8));
 		int i, n = (len - 12) / 8, x, y;
 
-		if (!d || !d->px || !g) {
+		if (!d || !drawable_ok(d) || !g) {
 			send_error(c, d ? X_BAD_GC : X_BAD_DRAWABLE,
 				   get32(d ? r + 8 : r + 4), op);
 			break;
@@ -1200,6 +1406,7 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 			if (!(mask & (1u << bit)))
 				continue;
 			if (bit == 1) w->bg = get32(v);
+			if (bit == 3) w->border_pixel = get32(v);
 			if (bit == 11) w->event_mask = get32(v);
 			v += 4;
 		}
@@ -1232,19 +1439,25 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 			if (bit == 1) w->y = gets16(v);
 			if (bit == 2) nw = get16(v);
 			if (bit == 3) nh = get16(v);
+			if (bit == 4) w->bw = get16(v);
 			v += 4;
 		}
 		if ((nw != w->w || nh != w->h) && nw > 0 && nh > 0) {
-			uint16_t *np = calloc((size_t)nw * nh, 2);
+			if (w->px) {			/* a buffer owner */
+				uint16_t *np = calloc((size_t)nw * nh, 2);
 
-			if (!np) {
-				send_error(c, X_BAD_ALLOC, w->id, op);
-				break;
+				if (!np) {
+					send_error(c, X_BAD_ALLOC, w->id, op);
+					break;
+				}
+				free(w->px);
+				w->px = np;
 			}
-			free(w->px);
-			w->px = np;
 			w->w = nw; w->h = nh;
+			geom_update(w);
 			win_fill(w, 0, 0, nw, nh);
+		} else {
+			geom_update(w);
 		}
 		if (trace_on())
 			fprintf(stderr, "       ~win 0x%x -> %dx%d+%d+%d (mask %04x)\n",
@@ -1365,35 +1578,18 @@ int xshim_init(void (*on_window)(uint32_t, int, int),
 }
 
 /*
- * Blit every mapped child into its parent. Toolkits put the real content in a
- * child widget window - xclock's face is in 0x40000f, not the top-level - so a
- * shim that presents only the top-level presents an empty box.
+ * No compositing pass. Child windows draw straight into the top-level's buffer
+ * through px_set()'s offset and clip, so what the client drew IS what we
+ * present. The previous version blitted every mapped window in the tree on
+ * every draw notification, which for xcalc's 69 windows meant a full
+ * re-composite per button repaint.
  */
-static void composite(struct res *top)
-{
-	int i, x, y;
-
-	for (i = 0; i < MAXRES; i++) {
-		struct res *c = &res[i];
-
-		if (c->type != R_WINDOW || c->parent != top->id || !c->mapped ||
-		    !c->px)
-			continue;
-		composite(c);
-		for (y = 0; y < c->h; y++)
-			for (x = 0; x < c->w; x++)
-				px_set(top, c->x + x, c->y + y,
-				       c->px[(size_t)y * c->w + x]);
-	}
-}
-
 const uint16_t *xshim_window_pixels(uint32_t id, int *w, int *h)
 {
 	struct res *r = res_find(id);
 
 	if (!r || r->type != R_WINDOW || !r->px)
 		return NULL;
-	composite(r);
 	*w = r->w;
 	*h = r->h;
 	return r->px;
