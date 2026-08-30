@@ -685,7 +685,12 @@ XIP2_STAGE := $(BUILD_DIR)/xipstage2
 #
 # usr/bin/xcalc pulls the whole X client chain in behind it, which is the point:
 # in XIP that chain costs ZERO RSS instead of ~950 kB paged off the card.
-XIP2_ROOTS ?= sbin/udevd usr/bin/xcalc
+# xclock and xfiles join xcalc here. A binary run from the ext4 card pays its
+# whole text in RSS; from XIP it costs ZERO, because the pages are file-backed
+# in flash and never copied. xfiles measured 188 kB of resident TEXT out of a
+# 508 kB process - by far its largest single cost, and larger than everything
+# the fontconfig and Xcursor replacements saved put together.
+XIP2_ROOTS ?= sbin/udevd usr/bin/xcalc usr/bin/xclock usr/bin/xfiles
 
 # Staged separately from image creation, because image 1 has to know what is
 # in here before it stages itself - see the EXCLUDE_DIR note in xip-rootfs.

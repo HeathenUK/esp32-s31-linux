@@ -377,3 +377,41 @@ It found this on the first run:
 
 Result: **live heap 355,854 -> 87,014 bytes, and xcalc 592 kB -> 296 kB
 resident.** The 64 kB static request buffer went at the same time.
+
+## Crunching the clients down: 892 kB to 176 kB (2026-08-30)
+
+Four passes on xfiles, each measured on the board rather than argued:
+
+    892 kB  as found - stock fontconfig and Xcursor, binary on the ext4 card
+    508 kB  fontconfig and Xcursor replaced (xstubs)
+    276 kB  binary moved into XIP
+    208 kB  libraries taken from XIP too
+    176 kB  settled figure, all three clients
+
+**Pass 1 - count the symbols.** xfiles referenced ONE Xcursor symbol for 32 kB
+of RSS, and 13 fontconfig symbols which alone dragged in freetype (20 kB),
+expat (12 kB) and zlib (8 kB). It calls no `FT_` symbol itself. Seven libraries
+disappeared: those three plus xcb, Xau, Xdmcp and Xfixes, the last four having
+come in behind the stock Xcursor. The saving is bigger than the mappings
+because stock `FcInit()` also parses `/etc/fonts` through expat onto the heap.
+
+**Pass 2 and 3 - XIP is worth more than the libraries were.** A binary run from
+the card pays its whole text in RSS; the same binary in XIP flash is file-backed
+and costs **zero**. xfiles' text alone was 188 kB - more than passes 1 saved.
+`XIP2_ROOTS` now carries xclock and xfiles alongside xcalc.
+
+The subtlety is `LD_LIBRARY_PATH`: it is searched BEFORE the default `/usr/lib`,
+so setting it at all pulls libraries off the card and makes each pay its text.
+`x11run` therefore leaves it UNSET when it launched the XIP copy of a client -
+that client's whole closure was staged into XIP with it, so the default path is
+both complete and free. Same binary: 276 kB with the card's libraries, 208 kB
+with XIP's.
+
+**What is left is real.** Of the final 176 kB, ~172 kB is anonymous heap. There
+is no text left to remove.
+
+**The client is no longer where the memory goes.** Three clients cost 528 kB
+between them, but MemAvailable falls by ~3.0 MB when all three are open. The
+balance is the SHIM's pixmap storage inside lvdesk - xfiles alone asks for a
+600x460 and a 512x618 pixmap, 1.18 MB at 16bpp. That is client-requested and
+cannot be refused, and it is now the dominant cost of running an X client here.

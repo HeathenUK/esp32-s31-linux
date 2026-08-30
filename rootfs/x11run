@@ -20,14 +20,33 @@ X11=/root/x11
 [ -x "$X11/usr/bin/$1" ] || { echo "x11run: no such client: $1" >&2
 	echo "available:" >&2; ls "$X11/usr/bin" >&2; exit 1; }
 prog=$1; shift
+# Prefer the XIP copy of the client when there is one. A binary run from the
+# ext4 card pays its entire text in RSS; the same binary in XIP flash is
+# file-backed and costs ZERO - xfiles measured 188 kB of resident text from the
+# card, out of a 508 kB process. The staging tree stays as the fallback so a
+# client can still be iterated on without reflashing.
+if [ -x "/usr/bin/$prog" ]; then
+	exec_path=/usr/bin/$prog
+else
+	exec_path=$X11/usr/bin/$prog
+fi
 export DISPLAY=:0
 # xlite (our own libX11) first when it is present, then the stock chain.
 # Without this the loader finds the real 1.3 MB libX11 and every measurement
 # silently describes the wrong library.
-if [ -f /root/xlite/libX11.so.6 ]; then
+#
+# LD_LIBRARY_PATH is searched BEFORE the default /usr/lib, so setting it at all
+# pulls the libraries off the ext4 card and makes every one of them pay its
+# text in RSS. When the client itself came from XIP its whole closure was
+# staged there too, so the default path is both complete and free: xfiles
+# measured 276 kB with the libraries on the card against 208 kB with them in
+# XIP, for the same binary.
+if [ "$exec_path" = "/usr/bin/$prog" ]; then
+	:				# XIP closure - let the default path win
+elif [ -f /root/xlite/libX11.so.6 ]; then
 	export LD_LIBRARY_PATH=/root/xlite:$X11/usr/lib
 else
 	export LD_LIBRARY_PATH=$X11/usr/lib
 fi
 export XFILESEARCHPATH=$X11/usr/share/X11/app-defaults/%N
-exec "$X11/usr/bin/$prog" "$@"
+exec "$exec_path" "$@"
