@@ -244,6 +244,7 @@ static int kbd_fds[MAXKBD];
 static int kbd_n;
 static uint32_t kbd_scan_at;
 static int shift, mod_ctrl, mod_alt, mod_caps;
+static int caps_led_seen;	/* the kernel drives the Caps Lock LED */
 
 /*
  * Input loss, made visible.
@@ -731,6 +732,29 @@ static int kbd_poll(void)
 				shift = mod_ctrl = mod_alt = 0;
 				continue;
 			}
+			/*
+			 * The Caps Lock LED, when the kernel is the one
+			 * driving it.
+			 *
+			 * With LVDESK_NO_GRAB=1 the console keyboard handler
+			 * is processing Caps Lock as well, and it keeps a lock
+			 * state of its own. Two owners each with a private
+			 * toggle diverge permanently the first time either
+			 * misses a press - which is exactly what "caps goes
+			 * out of sync" is. The LED is the state the kernel
+			 * actually holds, and evdev reports every change of it,
+			 * so follow that instead of guessing in parallel.
+			 */
+			if (ev.type == EV_LED && ev.code == LED_CAPSL) {
+				if (mod_caps != !!ev.value)
+					printf("lvdesk: caps %s (from the "
+					       "kernel's LED)\n",
+					       ev.value ? "on" : "off");
+				mod_caps = !!ev.value;
+				caps_led_seen = 1;
+				fflush(stdout);
+				continue;
+			}
 			if (ev.type != EV_KEY)
 				continue;
 			switch (ev.code) {
@@ -745,7 +769,15 @@ static int kbd_poll(void)
 					switcher_end();
 				continue;
 			case KEY_CAPSLOCK:
-				if (ev.value == 1) {
+				/*
+				 * Only toggle it ourselves if nothing else is.
+				 * When the kernel drives the LED it will tell
+				 * us above, and toggling here as well would
+				 * apply the same press twice - or, once the
+				 * two disagreed, lock them out of step for
+				 * good.
+				 */
+				if (ev.value == 1 && !caps_led_seen) {
 					int k;
 					struct input_event led = {
 						.type = EV_LED,

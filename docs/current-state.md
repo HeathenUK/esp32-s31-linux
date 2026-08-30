@@ -2174,11 +2174,27 @@ LED. lvdesk initialised `mod_caps = 0` and never asked, so if caps was already
 on when it started, every letter was inverted until the user toggled it - which
 inverted the inversion rather than fixing it.
 
-It now reads the real state with `EVIOCGLED`/`LED_CAPSL` when it opens each
-keyboard, logs it (`keyboard on /dev/input/event1 (caps off)`), and writes the
-LED back on every toggle - to *every* keyboard node, because a composite
-receiver presents several and the lock is a property of the session, not of one
-interface. The devices are opened `O_RDWR` for that, falling back to read-only.
+Reading the state at startup was necessary but **not sufficient**, and the
+first version still drifted. With `LVDESK_NO_GRAB=1` the console keyboard
+handler is processing Caps Lock as well and keeps a lock state of its own, so
+there were two owners each with a private toggle: they diverge permanently the
+first time either misses a press, and pressing caps to correct it inverts the
+inversion instead.
+
+The fix is to stop keeping a rival toggle. The LED is the state the kernel
+actually holds, and evdev reports every change of it as an `EV_LED` event, so
+lvdesk follows that:
+
+    lvdesk: keyboard on /dev/input/event1 (caps on)
+    lvdesk: caps off (from the kernel's LED)
+
+It reads `EVIOCGLED`/`LED_CAPSL` when it opens each keyboard, then tracks
+`EV_LED` events thereafter. It only toggles and writes the LED itself if no
+`EV_LED` has ever arrived - i.e. when nothing else is driving it - because
+doing both applies the same press twice. Devices are opened `O_RDWR` for the
+write path, falling back to read-only. When it does write, it writes to *every*
+keyboard node: a composite receiver presents several, and the lock is a
+property of the session, not of one interface.
 
 Also set alongside `DISPLAY`: **`XFILESEARCHPATH`**. Without it an Xt client
 started from lvdesk's terminal finds no app-defaults and lays itself out
