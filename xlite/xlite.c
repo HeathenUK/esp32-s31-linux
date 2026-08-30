@@ -205,6 +205,9 @@ void xlite_queue(struct xdpy *x, const unsigned char *e)
 		}
 		next = (x->qtail + 1) % x->qcap;
 	}
+	if ((e[0] & 0x7F) == ConfigureNotify)
+		xlite_note("queued ConfigureNotify win 0x%lx %ux%u",
+			   (unsigned long)g32(e + 8), g16(e + 20), g16(e + 22));
 	decode(x, e, &x->q[x->qtail]);
 	x->qtail = next;
 	x->pub.qlen++;

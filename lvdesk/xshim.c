@@ -3406,6 +3406,11 @@ void xshim_window_resize(uint32_t id, int w, int h)
 	struct cli *c;
 	uint8_t d[28];
 
+	if (trace_on())
+		fprintf(stderr, "xshim: resize req 0x%x -> %dx%d (res %s, "
+			"cur %dx%d, owner %d, hints %d)\n", id, w, h,
+			r ? "found" : "MISSING", r ? r->w : -1, r ? r->h : -1,
+			r ? r->owner : -1, r ? r->has_hints : -1);
 	if (!r || r->type != R_WINDOW || w <= 0 || h <= 0)
 		return;
 	if (r->w == w && r->h == h)

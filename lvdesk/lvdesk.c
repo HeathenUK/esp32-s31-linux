@@ -2971,6 +2971,19 @@ static void xwin_push_size(lv_obj_t *win)
 {
 	int i;
 
+	/*
+	 * Settle the geometry FIRST. lv_obj_set_size() only marks the object
+	 * dirty - the size is not applied until the next layout pass - so
+	 * reading it back in the same breath returns the OLD extent. Every
+	 * caller here sets the frame and immediately asks what it became, so
+	 * without this the client was handed the size it already had, the
+	 * resize was rejected as a no-op, and a maximised window kept drawing
+	 * at its original width forever. The frame still ended up correct,
+	 * because LVGL laid it out afterwards, which is what made this look
+	 * like the client ignoring a perfectly good ConfigureNotify.
+	 */
+	lv_obj_update_layout(win);
+
 	for (i = 0; i < xwin_n; i++)
 		if (xwins[i].win == win) {
 			int cw = lv_obj_get_width(win) - 2;
