@@ -34,3 +34,4 @@ linux-71-port/
 # LVGL upstream checkout and built app binaries
 /lvgl/
 /lvdesk/*.bin
+xlite/stubs.c
