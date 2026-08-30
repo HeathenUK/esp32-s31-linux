@@ -829,3 +829,61 @@ copy-out, against rendering direct into write-combine. The comment at that
 toggle poses the question and today's 13.7x figure is the first hard evidence
 that rendering against uncached memory - not the copy - may be the real cost.
 Measure it: fresh boot per arm, 5+ runs, discard warm-up.
+
+## Both candidates pursued, and both rejected on measurement (2026-08-30)
+
+### 1. Cursor compositing on the PPA - implemented, correct, and slower
+
+Everything the earlier survey said was needed got built and works:
+
+- `esp32s31_ppa_blend_op()` now takes a described operation rather than nine
+  positional arguments, and supports an **ARGB8888 foreground over an RGB565
+  background with per-pixel alpha** - `PPA_ALPHA_NO_CHANGE` on BLEND1 rather
+  than `FIX_VALUE`, which is what makes the engine read the sprite's own alpha
+  instead of compositing it as a solid rectangle. Colour-mode encodings
+  (ARGB8888 = 0, RGB565 = 2) and the 4-bytes-per-pixel descriptor value (5) are
+  from ESP-IDF's `ppa_ll.h` and `dma2d_types.h`.
+- `esp32s31_ppa_blend_argb_sprite()` composites in place, which ESP-IDF's
+  `ppa_blend.c` explicitly contemplates (`in_bg` and `out_buffer` being the
+  same one).
+- The cursor sprite moved from `kmalloc` to `dma_alloc_coherent` so the engine
+  can reach it, flushed once per cursor change rather than per move.
+
+It renders correctly - clean anti-aliased edges, per-pixel alpha honoured. It is
+also **slower than the CPU**, measured with `cursor_ppa_px` toggled at runtime
+and three alternating arms:
+
+      CPU                       241, 279, 315 us per paint
+      PPA, one bulk sync        407, 414, 491 us
+      PPA, per-row syncs        773, 784, 820 us
+
+**The blend is not the problem; making the cached scanout coherent with the
+engine either side of it is.** A cursor is a narrow column of a wide surface, so
+the rows spanning a 64-row sprite are 102 KB to composite 8 KB. Narrowing that
+to the rectangle means 128 small `dma_sync` calls instead of two large ones, and
+that is worse still - per-call cost dominates. `cursor_ppa_px` defaults to 0
+and the path is kept as a measured, reversible toggle.
+
+### 2. Dragging - the slowness was the measuring harness
+
+The drag looked like **3.7 fps** (16 frames in 4.29 s). It is not:
+`uinject drag` calls `move_to(x, y, 24, 22)`, which is 24 events over 528 ms,
+and the rest of that window is uinject's own settle delays. Sixteen frames for
+twenty-four motion events is the desktop keeping up. Per frame the driver spends
+6.4 us... 6.4 **ms**, and lvdesk's own `refr` is ~6 ms, against a 16.7 ms panel
+period.
+
+Two things found while measuring that matter more than the drag itself:
+
+- **The driver already spreads every update across three engines.** `path:
+  rects=154 full=2 cpu=87 ppa=5` with `gdma_rows=52` - the 16 rectangles a drag
+  produced went to GDMA, not to the CPU. There was no un-accelerated blit to
+  claim.
+- **lvdesk's own probe contradicts `blendbench` about write-combine.** It
+  measures `fb memset 79 MB/s` against `heap memset 81 MB/s`, and `fb
+  read-modify-write 13,356 us` against `heap 12,874 us` - no penalty at all,
+  where blendbench measured 13.7x on dumb buffers. Both claim to be timing CPU
+  access to a DRM dumb buffer. **One of them is wrong and it is not yet known
+  which**, so the "13.7x penalty for CMA-resident drawables" figure quoted
+  earlier in this document should be treated as unconfirmed until that is
+  resolved. It is the single most load-bearing number in these decisions.
