@@ -63,4 +63,15 @@ void xshim_window_close(uint32_t id);
 /* The RGB565 pixels of a client window, or NULL. Not copied. */
 const uint16_t *xshim_window_pixels(uint32_t id, int *w, int *h);
 
+/*
+ * Resize a client's top-level from OUR side.
+ *
+ * The window manager lives in lvdesk, so maximising or snapping an X client is
+ * the desktop deciding the client's size - but the shim only ever sent a
+ * ConfigureNotify in reply to a client's own ConfigureWindow. Without this the
+ * lvdesk frame grew and the client never heard about it, so it kept drawing at
+ * its old size and left undrawn space inside the frame.
+ */
+void xshim_window_resize(uint32_t id, int w, int h);
+
 #endif /* LVDESK_XSHIM_H */

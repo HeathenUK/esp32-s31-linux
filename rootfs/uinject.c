@@ -64,6 +64,10 @@ static int make_dev(const char *name, int keyboard)
 		 */
 		ioctl(fd, UI_SET_RELBIT, REL_WHEEL);
 		ioctl(fd, UI_SET_KEYBIT, BTN_LEFT);
+		/* The right button exists so the shim's Button3 path can be
+		 * tested; without it a client's context menu is unreachable
+		 * from the harness and looks like a missing feature. */
+		ioctl(fd, UI_SET_KEYBIT, BTN_RIGHT);
 	}
 
 	memset(&us, 0, sizeof(us));
@@ -363,10 +367,35 @@ int main(int argc, char **argv)
 		 */
 		msleep(250);
 		click(0);
+	} else if (!strcmp(what, "rclick")) {
+		/* rclick X Y - move there and press the RIGHT button. */
+		move_to_precise(argc > 2 ? atoi(argv[2]) : 0,
+				argc > 3 ? atoi(argv[3]) : 0);
+		msleep(150);
+		emit(mouse_fd, EV_KEY, BTN_RIGHT, 1);
+		syn(mouse_fd);
+		msleep(80);
+		emit(mouse_fd, EV_KEY, BTN_RIGHT, 0);
+		syn(mouse_fd);
+		msleep(60);
 	} else if (!strcmp(what, "wheel")) {
 		/* wheel N - N notches, negative scrolls the other way. */
 		int i, n = argc > 2 ? atoi(argv[2]) : -3;
 		int dir = n < 0 ? -1 : 1;
+
+		/*
+		 * wheel N X Y - move there FIRST, then scroll.
+		 *
+		 * Every other command moves before it acts, which incidentally
+		 * gives lvdesk's 2 s device rescan time to open the new uinput
+		 * node and leaves the desktop's pointer somewhere known. A bare
+		 * wheel emitted into a device nothing has opened yet, at a
+		 * pointer position left over from a previous process, and read
+		 * exactly like a desktop that ignores the wheel.
+		 */
+		if (argc > 4)
+			move_to_precise(atoi(argv[3]), atoi(argv[4]));
+		msleep(2200);
 
 		for (i = 0; i < (n < 0 ? -n : n); i++) {
 			emit(mouse_fd, EV_REL, REL_WHEEL, dir);

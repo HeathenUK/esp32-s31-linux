@@ -2190,6 +2190,8 @@ static int term_focused(void)
 	       !win_focus->minimised;
 }
 
+static void xwin_push_size(lv_obj_t *win);
+
 static void win_toggle_max(struct winrec *w);
 static void win_snap(struct winrec *w, int mode);
 
@@ -2478,6 +2480,7 @@ static void win_toggle_max(struct winrec *w)
 	if (w->maximised) {
 		lv_obj_set_pos(w->win, w->rx, w->ry);
 		lv_obj_set_size(w->win, w->rw, w->rh);
+		xwin_push_size(w->win);
 		w->maximised = 0;
 	} else {
 		w->rx = lv_obj_get_x(w->win);
@@ -2487,6 +2490,7 @@ static void win_toggle_max(struct winrec *w)
 		lv_obj_set_pos(w->win, 0, 0);
 		lv_obj_set_size(w->win, sw, sh - TASKBAR_H);
 		w->maximised = 1;
+		xwin_push_size(w->win);
 	}
 	if (w->maxicon)
 		lv_image_set_src(w->maxicon, w->maximised ?
@@ -2525,14 +2529,17 @@ static void win_snap(struct winrec *w, int mode)
 	case 0:
 		lv_obj_set_pos(w->win, 0, 0);
 		lv_obj_set_size(w->win, sw / 2, sh - TASKBAR_H);
+		xwin_push_size(w->win);
 		break;
 	case 1:
 		lv_obj_set_pos(w->win, sw / 2, 0);
 		lv_obj_set_size(w->win, sw - sw / 2, sh - TASKBAR_H);
+		xwin_push_size(w->win);
 		break;
 	default:
 		lv_obj_set_pos(w->win, 0, 0);
 		lv_obj_set_size(w->win, sw, sh - TASKBAR_H);
+		xwin_push_size(w->win);
 		break;
 	}
 	w->maximised = (mode == 2);
@@ -2601,6 +2608,7 @@ static void grip_cb(lv_event_t *e)
 		nh = sh - TASKBAR_H - lv_obj_get_y(w->win);
 
 	lv_obj_set_size(w->win, nw, nh);
+	xwin_push_size(w->win);
 	w->maximised = 0;		/* a manual resize leaves maximised state */
 	if (w->maxicon)
 		lv_image_set_src(w->maxicon, &lvdesk_max_img);
@@ -2806,6 +2814,95 @@ static struct xwin {
 	lv_image_dsc_t dsc;
 } xwins[MAXXWIN];
 static int xwin_n;
+
+/*
+ * Push a frame's new content size down to the X client inside it, if there is
+ * one. lvdesk is the window manager, so maximising or snapping is US deciding
+ * the client's size - and a client that is never told simply carries on
+ * drawing at its old one, which is what left an undrawn band inside a
+ * maximised XFiles.
+ */
+static int32_t ptr_x, ptr_y;	/* pointer state, defined below */
+
+/*
+ * Send a button the LVGL indev does not carry straight to the client under the
+ * pointer.
+ *
+ * LVGL's pointer is a single pressed/released bit, so it can only ever express
+ * Button1 - which is why xwin_on_pointer() passed a hardcoded 1 and why the
+ * right button and the wheel never reached a client at all. xfiles handles
+ * both (widget.c: Button3 for its context menu, Button4/Button5 to scroll), so
+ * the capability was missing on OUR side, not the application's.
+ *
+ * Routed directly rather than through LVGL on purpose: feeding a right-click
+ * into the indev would make lvdesk's own buttons treat it as an activation.
+ */
+static int xwin_send_button(int button, int act)
+{
+	int i;
+
+	for (i = 0; i < xwin_n; i++) {
+		lv_area_t a;
+
+		if (!xwins[i].img || !xwins[i].win ||
+		    lv_obj_has_flag(xwins[i].win, LV_OBJ_FLAG_HIDDEN))
+			continue;
+		lv_obj_get_coords(xwins[i].img, &a);
+		if (ptr_x < a.x1 || ptr_x > a.x2 || ptr_y < a.y1 || ptr_y > a.y2)
+			continue;
+		xshim_pointer(xwins[i].id, ptr_x - a.x1, ptr_y - a.y1,
+			      button, act);
+		return 1;
+	}
+	return 0;
+}
+
+/*
+ * Is an X client's frame stacked ABOVE the terminal at the pointer?
+ *
+ * Both are children of the screen, so their child index is their z-order.
+ * Testing the terminal's rectangle first - as the wheel used to - hands it
+ * every notch while the pointer is anywhere over it, even when a client window
+ * is sitting on top: xfiles occupies the same corner of the screen and never
+ * saw a scroll event.
+ */
+static int xwin_above_term(void)
+{
+	int i;
+
+	if (!term.win || lv_obj_has_flag(term.win, LV_OBJ_FLAG_HIDDEN))
+		return 1;
+	for (i = 0; i < xwin_n; i++) {
+		lv_area_t a;
+
+		if (!xwins[i].img || !xwins[i].win ||
+		    lv_obj_has_flag(xwins[i].win, LV_OBJ_FLAG_HIDDEN))
+			continue;
+		lv_obj_get_coords(xwins[i].img, &a);
+		if (ptr_x < a.x1 || ptr_x > a.x2 || ptr_y < a.y1 || ptr_y > a.y2)
+			continue;
+		if (lv_obj_get_index(xwins[i].win) >
+		    lv_obj_get_index(term.win))
+			return 1;
+	}
+	return 0;
+}
+
+static void xwin_push_size(lv_obj_t *win)
+{
+	int i;
+
+	for (i = 0; i < xwin_n; i++)
+		if (xwins[i].win == win) {
+			int cw = lv_obj_get_width(win) - 2;
+			int ch = lv_obj_get_height(win) - HDR_H - 2;
+
+			if (cw > 0 && ch > 0)
+				xshim_window_resize(xwins[i].id, cw, ch);
+			return;
+		}
+}
+
 
 /* Forget a client window without touching lvdesk's own bookkeeping. */
 static void xwin_drop(uint32_t id)
@@ -4239,10 +4336,10 @@ static int mouse_fds[MAXMOUSE];
 static int mouse_raw[MAXMOUSE];		/* synthetic: no pointer acceleration */
 static int mouse_n;
 static uint32_t mouse_scan_at;
-static int32_t ptr_x, ptr_y;
 static int ptr_pressed;
 static int press_edge;			/* a new press, not yet acted on */
 static int wheel;
+static int btn_extra, btn_extra_act;
 static lv_obj_t *cursor_obj;
 static int hw_cursor;
 #define FRAME_MS 16		/* 60 Hz panel */
@@ -4423,6 +4520,11 @@ static int mouse_poll(void)
 				ptr_pressed = !!ev.value;
 				if (ptr_pressed && !was)
 					press_edge = 1;
+			} else if (ev.type == EV_KEY &&
+				   (ev.code == BTN_RIGHT ||
+				    ev.code == BTN_MIDDLE)) {
+				btn_extra = ev.code == BTN_RIGHT ? 3 : 2;
+				btn_extra_act = ev.value ? 1 : 2;
 			}
 		} while (read(mouse_fds[i], &ev, sizeof(ev)) == sizeof(ev));
 	}
@@ -4514,14 +4616,38 @@ static int mouse_poll(void)
 	 * scrollable, it is a fixed set of row labels over a ring buffer.
 	 * TERM_WHEEL_LINES a notch, which is about what everything else does.
 	 */
+	if (btn_extra) {
+		xwin_send_button(btn_extra, btn_extra_act);
+		btn_extra = 0;
+	}
 	if (wheel) {
-		if (term.win && !lv_obj_has_flag(term.win, LV_OBJ_FLAG_HIDDEN)) {
+		int handled = 0;
+
+
+		if (term.win && !lv_obj_has_flag(term.win, LV_OBJ_FLAG_HIDDEN) &&
+		    !xwin_above_term()) {
 			lv_area_t a;
 
 			lv_obj_get_coords(term.win, &a);
 			if (ptr_x >= a.x1 && ptr_x <= a.x2 &&
-			    ptr_y >= a.y1 && ptr_y <= a.y2)
+			    ptr_y >= a.y1 && ptr_y <= a.y2) {
 				term_scrollback(wheel * TERM_WHEEL_LINES);
+				handled = 1;
+			}
+		}
+		/*
+		 * X has no wheel axis: a notch is a press and release of
+		 * Button4 (up) or Button5 (down), which is what every toolkit
+		 * listens for.
+		 */
+		if (!handled) {
+			int b = wheel < 0 ? 4 : 5;
+			int n = wheel < 0 ? -wheel : wheel;
+
+			while (n-- > 0) {
+				xwin_send_button(b, 1);
+				xwin_send_button(b, 2);
+			}
 		}
 		wheel = 0;
 	}

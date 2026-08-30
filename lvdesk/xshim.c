@@ -3344,6 +3344,46 @@ int xshim_init(void (*on_window)(uint32_t, int, int),
  * every draw notification, which for xcalc's 69 windows meant a full
  * re-composite per button repaint.
  */
+void xshim_window_resize(uint32_t id, int w, int h)
+{
+	struct res *r = res_find(id);
+	struct cli *c;
+	uint8_t d[28];
+
+	if (!r || r->type != R_WINDOW || w <= 0 || h <= 0)
+		return;
+	if (r->w == w && r->h == h)
+		return;
+	if (r->owner < 0 || r->owner >= MAXCLI)
+		return;
+	c = &cli[r->owner];
+
+	/*
+	 * Re-back the top-level at the new size. Only a top-level owns pixels;
+	 * children are views into it, so geom_update() re-derives their
+	 * offsets and clips against the new buffer.
+	 */
+	if (r->px) {
+		px_release(r);
+		r->w = w; r->h = h;
+		if (!px_alloc(r, w, h))
+			return;
+	}
+	r->w = w; r->h = h;
+	geom_update(r);
+	win_fill(r, 0, 0, w, h);
+
+	memset(d, 0, sizeof(d));
+	put32(d, r->id); put32(d + 4, r->id);
+	put16(d + 12, r->x); put16(d + 14, r->y);
+	put16(d + 16, r->w); put16(d + 18, r->h);
+	send_event(c, 22, d, 28);		/* ConfigureNotify */
+	if (r->mapped) {
+		expose_window(c, r);
+		notify_draw(r);
+	}
+}
+
 const uint16_t *xshim_window_pixels(uint32_t id, int *w, int *h)
 {
 	struct res *r = res_find(id);
