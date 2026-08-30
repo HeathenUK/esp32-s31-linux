@@ -263,3 +263,24 @@ this tooling ran, and reported lag that was never reproduced once it stopped:
 `gzip -1` rather than `-9` in the raw path: 820 ms against 1010 ms median, and
 **identical output size** (12,093 bytes both), because a desktop framebuffer is
 mostly flat colour. Compressing it hard buys nothing here.
+
+
+## Driving the desktop without synthesising input
+
+`LVDESK_CTL=1` gives lvdesk a control FIFO at `/tmp/lvdesk.ctl`:
+
+    echo "list"           > /tmp/lvdesk.ctl   # index, size and position
+    echo "max 1"          > /tmp/lvdesk.ctl   # toggle maximise
+    echo "size 1 700 400" > /tmp/lvdesk.ctl   # resize, and tell the client
+
+It is off unless the variable is set, and it is a FIFO rather than a socket
+because the only client is a busybox shell - `echo` needs no tool that is not
+on the card.
+
+**Use this for anything that is not specifically testing the input stack.**
+Asking "does double-clicking the title bar maximise" through synthetic evdev
+means guessing a pixel, hoping the desktop is not stalled when the events land,
+and hoping the two clicks fall inside the 400 ms double-click window. Three
+separate harness faults were diagnosed as desktop bugs that way, and a maximise
+that worked perfectly was reported broken for an hour. The control FIFO names
+the operation instead of approximating it.

@@ -2191,6 +2191,82 @@ static int term_focused(void)
 }
 
 static void xwin_push_size(lv_obj_t *win);
+static void win_toggle_max(struct winrec *w);
+
+/*
+ * A debug control socket, off unless LVDESK_CTL is set.
+ *
+ * Driving the desktop through synthetic evdev is right for testing the INPUT
+ * stack and wrong for everything else: to answer "does double-clicking the
+ * title bar maximise", a test had to guess a pixel, hope the desktop was not
+ * stalled when the events arrived, and hope the two clicks fell inside the
+ * 400 ms double-click window. Three separate harness faults were diagnosed as
+ * desktop bugs that way, and a maximise that worked perfectly was reported
+ * broken for an hour.
+ *
+ * So: a datagram socket that names the operation instead of approximating it.
+ * SOCK_DGRAM needs no accept() and no connection state, so it costs one
+ * non-blocking recv in the main loop and nothing when unused.
+ *
+ *     echo "list"    | socat - UNIX-SENDTO:/tmp/lvdesk.ctl
+ *     echo "max 1"   | socat - UNIX-SENDTO:/tmp/lvdesk.ctl
+ *     echo "size 1 700 400" | socat - UNIX-SENDTO:/tmp/lvdesk.ctl
+ */
+#define LVDESK_CTL_PATH "/tmp/lvdesk.ctl"
+static int ctl_fd = -1;
+
+static void ctl_init(void)
+{
+	if (!getenv("LVDESK_CTL"))
+		return;
+	/*
+	 * A FIFO rather than a socket, because the only client is a shell on a
+	 * busybox rootfs: `echo "max 0" > /tmp/lvdesk.ctl` needs no tool that
+	 * is not there, where a unix socket needs socat. Opened O_RDWR so the
+	 * open does not block waiting for a writer and reads never see EOF
+	 * when one goes away.
+	 */
+	unlink(LVDESK_CTL_PATH);
+	if (mkfifo(LVDESK_CTL_PATH, 0666) < 0)
+		return;
+	ctl_fd = open(LVDESK_CTL_PATH, O_RDWR | O_NONBLOCK);
+	if (ctl_fd < 0)
+		return;
+	printf("lvdesk: control fifo on %s\n", LVDESK_CTL_PATH);
+	fflush(stdout);
+}
+
+static void ctl_poll(void)
+{
+	char buf[128];
+	int n, idx, w, h;
+
+	if (ctl_fd < 0)
+		return;
+	while ((n = (int)read(ctl_fd, buf, sizeof(buf) - 1)) > 0) {
+		buf[n] = '\0';
+		if (!strncmp(buf, "list", 4)) {
+			int i;
+
+			for (i = 0; i < win_n; i++)
+				printf("lvdesk: win %d %dx%d+%d+%d%s\n", i,
+				       (int)lv_obj_get_width(wins[i].win),
+				       (int)lv_obj_get_height(wins[i].win),
+				       (int)lv_obj_get_x(wins[i].win),
+				       (int)lv_obj_get_y(wins[i].win),
+				       wins[i].maximised ? " MAX" : "");
+			fflush(stdout);
+		} else if (sscanf(buf, "max %d", &idx) == 1) {
+			if (idx >= 0 && idx < win_n)
+				win_toggle_max(&wins[idx]);
+		} else if (sscanf(buf, "size %d %d %d", &idx, &w, &h) == 3) {
+			if (idx >= 0 && idx < win_n && w > 0 && h > 0) {
+				lv_obj_set_size(wins[idx].win, w, h);
+				xwin_push_size(wins[idx].win);
+			}
+		}
+	}
+}
 
 static void win_toggle_max(struct winrec *w);
 static void win_snap(struct winrec *w, int mode);
@@ -4962,6 +5038,7 @@ int main(void)
 	printf("lvdesk: %dx%d %s\n", (int)kms_w, (int)kms_h,
 	       direct_render ? "direct" : "partial");
 
+	ctl_init();
 	mouse_init();			/* pointer and keyboard are both read here */
 	kbd_open();
 
@@ -5351,6 +5428,7 @@ int main(void)
 			 * Only reap when a child has actually exited. waitpid()
 			 * on every loop was 83 ms per window to learn nothing.
 			 */
+			ctl_poll();
 			if (want_mem_report) {
 				want_mem_report = 0;
 				xshim_mem_report();

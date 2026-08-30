@@ -3378,6 +3378,10 @@ void xshim_window_resize(uint32_t id, int w, int h)
 	put16(d + 12, r->x); put16(d + 14, r->y);
 	put16(d + 16, r->w); put16(d + 18, r->h);
 	send_event(c, 22, d, 28);		/* ConfigureNotify */
+	if (trace_on())
+		fprintf(stderr, "xshim: RESIZE 0x%x -> %dx%d, ConfigureNotify "
+			"sent to client %d (mask %08x)\n", r->id, r->w, r->h,
+			r->owner, r->event_mask);
 	if (r->mapped) {
 		expose_window(c, r);
 		notify_draw(r);
