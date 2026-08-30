@@ -314,3 +314,84 @@ Status XSetWMProtocols(Display *dpy, Window w, Atom *protocols, int count)
  */
 XLITE_IMPL(XFilterEvent)
 Bool XFilterEvent(XEvent *ev, Window w) { (void)ev; (void)w; return False; }
+
+/*
+ * Thread support. There is exactly one thread in every client here, and this
+ * library holds no state that two of them could race on - so the locking is a
+ * no-op and Success is the honest answer.
+ *
+ * Returning 0 is NOT the safe choice: a client that asks for threads and is
+ * refused usually exits, which is precisely what xfiles did ("could not
+ * initialize support for threads") before this existed.
+ */
+XLITE_IMPL(XInitThreads)
+Status XInitThreads(void) { return 1; }
+
+XLITE_IMPL(XLockDisplay)
+void XLockDisplay(Display *dpy) { (void)dpy; }
+
+XLITE_IMPL(XUnlockDisplay)
+void XUnlockDisplay(Display *dpy) { (void)dpy; }
+
+XLITE_IMPL(XParseGeometry)
+int XParseGeometry(const char *spec, int *x, int *y, unsigned *w, unsigned *h)
+{
+	int flags = 0, v, sign;
+	const char *p = spec;
+
+	if (!p)
+		return 0;
+	if (*p != '+' && *p != '-' && *p != 'x' && *p != 'X') {
+		*w = strtoul(p, (char **)&p, 10);
+		flags |= 4;			/* WidthValue */
+		if (*p == 'x' || *p == 'X') {
+			p++;
+			*h = strtoul(p, (char **)&p, 10);
+			flags |= 8;		/* HeightValue */
+		}
+	}
+	while (*p == '+' || *p == '-') {
+		sign = (*p == '-') ? -1 : 1;
+		p++;
+		v = (int)strtol(p, (char **)&p, 10) * sign;
+		if (!(flags & 1)) {
+			*x = v;
+			flags |= 1 | (sign < 0 ? 16 : 0);   /* XValue|XNegative */
+		} else {
+			*y = v;
+			flags |= 2 | (sign < 0 ? 32 : 0);   /* YValue|YNegative */
+		}
+	}
+	return flags;
+}
+
+/*
+ * Visual lookup. There is one visual on this server - the panel's RGB565
+ * TrueColor - so a request either matches it or does not.
+ */
+XLITE_IMPL(XMatchVisualInfo)
+Status XMatchVisualInfo(Display *dpy, int screen, int depth, int class,
+			XVisualInfo *vi)
+{
+	Visual *v = DefaultVisual(dpy, screen);
+
+	if (!v || !vi)
+		return 0;
+	if (depth != DefaultDepth(dpy, screen) || class != v->class)
+		return 0;
+	memset(vi, 0, sizeof(*vi));
+	vi->visual = v;
+	vi->visualid = v->visualid;
+	vi->screen = screen;
+	vi->depth = depth;
+	vi->class = v->class;
+	vi->red_mask = v->red_mask;
+	vi->green_mask = v->green_mask;
+	vi->blue_mask = v->blue_mask;
+	vi->colormap_size = v->map_entries;
+	vi->bits_per_rgb = v->bits_per_rgb;
+	return 1;
+}
+
+XLITE_IMPL(XFreeColormap)
+int XFreeColormap(Display *dpy, Colormap c) { (void)dpy; (void)c; return 1; }

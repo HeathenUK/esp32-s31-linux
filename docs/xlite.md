@@ -251,10 +251,56 @@ The diagnostics are the reason this took hours rather than days:
   exact chain `XmuCvtStringToBitmap -> XtStringConversionWarning ->
   XtWarningMsg -> XtAppGetErrorDatabaseText -> strncpy`.
 
+## The extension libraries cannot run on xlite
+
+Tested by pointing xclock and xfiles at the stack. Both link now - the symbol
+list was widened from 297 to 346 by scanning every library the three
+applications load, not just the ones xcalc needs - and then they hit two
+different walls.
+
+**xfiles needs `_XGetRequest` and `XNextRequest`.** libXrender, libXft and
+libXcursor are built against `Xlibint.h`, whose macros write directly into
+Xlib's PRIVATE Display fields - the output buffer and request counters that sit
+beyond `xdefaults` in the "more to this structure, but it is private to Xlib"
+region. Our Display has nothing there. So an extension library cannot be hosted
+on xlite without reproducing Xlib's internal ABI, which is undocumented by
+construction.
+
+That leaves three options, none of them cheap:
+
+1. Replace libXrender and libXft as well, as we did for Xt and Xaw, so they use
+   our public API instead of Xlib's internals. libXft is a freetype glyph
+   renderer; bounded, but a real piece of work.
+2. Implement the private Display layout and `_XGetRequest`/`_XReply`/`_XSend`.
+   Fragile: it is private precisely so it can change.
+3. Keep the real libX11 for clients that need extensions, and xlite for those
+   that do not. A dual stack, chosen per application.
+
+**xclock needs Xt's real class ABI.** It defines its own Clock widget and
+inherits from Xaw's `simpleClassRec`, so it builds a genuine `WidgetClassRec`
+and hands it to `XtCreateManagedWidget`. xtlite's whole economy comes from
+widget classes being opaque tokens; honouring an application-defined class
+means implementing `CoreClassPart` - class_name, widget_size, initialize,
+realize, expose, resources - plus `_XtInherit`. That is public in `IntrinsicP.h`
+and therefore *doable*, unlike Xlib's internals, but it is a different and much
+larger piece of work than the twenty-four symbols xcalc needed.
+
+It also wants `XtOpenApplication`, `XtAppAddTimeOut`/`XtRemoveTimeOut`,
+`XtGetGC`/`XtReleaseGC`, `XtAddCallback`, `XtSetTypeConverter` and
+`sessionShellWidgetClass`.
+
+**A bug this exposed in our own code.** Widening the symbol list with a broad
+`^X` match swept in names belonging to OTHER libraries - 33 of them, including
+every `XRender*` entry point. Stubbing those in libX11 meant xlite silently
+*shadowed* the real libXrender, so xfiles got a stub where the genuine
+implementation existed. `xlite/libX11-exports.txt` now records the real
+library's 1,225 exported symbols, and symbols.txt is intersected against it so
+this cannot recur.
+
 ## Next
 
-1. The repartition, so the chain can actually go into XIP.
-2. xclock, which takes the Xft/RENDER path and will need more.
+1. Decide the extension-library question above; option 3 costs nothing today.
+2. RENDER in the shim, which xfiles needs even once its libraries load.
 3. Move the chain into XIP now that the client runs. Our libX11 is 97 kB
    against 1,318 kB, so the incremental closure drops by ~1.2 MB; re-measure
    whether it now fits the reclaimable flash.

@@ -133,4 +133,15 @@ int XpmReadFileToPixmap(void *dpy, unsigned long d, char *file,
 	once("XpmReadFileToPixmap", "no XPM support is built in");
 	return -3;			/* XpmOpenFailed */
 }
+
+int XpmCreatePixmapFromData(void *dpy, unsigned long d, char **data,
+			    unsigned long *pix, unsigned long *shape,
+			    void *attr)
+{
+	(void)dpy; (void)d; (void)data; (void)attr;
+	if (pix) *pix = 0;
+	if (shape) *shape = 0;
+	once("XpmCreatePixmapFromData", "no XPM support is built in");
+	return -3;
+}
 #endif
