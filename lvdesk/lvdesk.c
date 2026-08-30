@@ -237,7 +237,7 @@ static lv_obj_t *pw_ta;
 static void pw_ok_cb(lv_event_t *e);
 static void pw_close(void);
 static lv_obj_t *taskbar;
-static lv_obj_t *sysinfo;
+static lv_obj_t *sysinfo;		/* task bar free-memory readout */
 static char sysinfo_last[192];
 #define MAXKBD 8
 static int kbd_fds[MAXKBD];
@@ -1386,19 +1386,33 @@ static void sysinfo_update(void)
 
 	if (!sysinfo)
 		return;
+	/*
+	 * Read as little as possible, as rarely as possible, and repaint less
+	 * often than that.
+	 *
+	 * This runs on the EXISTING 5 s tick shared with the clock, so it costs
+	 * no extra wakeups. Within that, two economies matter:
+	 *
+	 * MemAvailable is the third line of /proc/meminfo, so stop there rather
+	 * than parsing all ~50 lines with two sscanf() each.
+	 *
+	 * And a raw kB figure differs on almost every tick, where HH:MM changes
+	 * once a minute - so a naive readout repaints the tray twelve times as
+	 * often as the clock does, and a repaint costs 24-48 ms on this panel.
+	 * The displayed value is therefore quantised to 16 kB: still accurate
+	 * to well under a percent of the free memory this board ever has, and
+	 * silent while nothing meaningful is moving. This is the same trap the
+	 * comment below records for jwm's clock; it is easy to walk back into.
+	 */
 	f = fopen("/proc/meminfo", "r");
 	if (f) {
-		while (fgets(line, sizeof(line), f)) {
-			sscanf(line, "MemTotal: %lu kB", &total);
-			sscanf(line, "MemAvailable: %lu kB", &avail);
-		}
+		while (fgets(line, sizeof(line), f))
+			if (sscanf(line, "MemAvailable: %lu kB", &avail) == 1)
+				break;
 		fclose(f);
 	}
-	f = fopen("/proc/uptime", "r");
-	if (f) { if (fscanf(f, "%lf", &up) != 1) up = 0; fclose(f); }
-	snprintf(buf, sizeof(buf),
-		 "mem  %lu / %lu kB free\nup   %.0f min\nui   lvgl %s",
-		 avail, total, up / 60.0, LVGL_VERSION_INFO);
+	(void)total; (void)up;
+	snprintf(buf, sizeof(buf), "M: %luKB", avail & ~15UL);
 	/*
 	 * Only touch the label when the text actually changed. lv_label_set_text
 	 * invalidates unconditionally, and an unconditional periodic redraw is
@@ -1895,6 +1909,9 @@ static void drag_ghost_begin(lv_obj_t *win)
 		return;
 	}
 	lv_image_set_src(drag_ghost, drag_snap);
+	/* The ghost is on the top layer too, and newer: keep the bar above it. */
+	if (taskbar)
+		lv_obj_move_foreground(taskbar);
 	lv_obj_remove_flag(drag_ghost, LV_OBJ_FLAG_CLICKABLE);
 	lv_obj_set_pos(drag_ghost, lv_obj_get_x(win), lv_obj_get_y(win));
 	lv_obj_add_flag(win, LV_OBJ_FLAG_HIDDEN);
@@ -4854,7 +4871,15 @@ int main(void)
 	lv_obj_set_scrollbar_mode(scr, LV_SCROLLBAR_MODE_OFF);
 
 	/* task bar, pinned to the bottom */
-	taskbar = lv_obj_create(scr);
+	/*
+	 * On the TOP layer, not the screen. Windows are screen children and
+	 * every raise calls lv_obj_move_foreground(), so a task bar that is
+	 * also a screen child ends up underneath whichever window was clicked
+	 * last - and underneath any window dragged down over it. Being on the
+	 * layer above means it is always painted last, with no per-raise
+	 * bookkeeping to forget at a future call site.
+	 */
+	taskbar = lv_obj_create(lv_layer_top());
 	lv_obj_set_size(taskbar, LV_PCT(100), TASKBAR_H);
 	lv_obj_align(taskbar, LV_ALIGN_BOTTOM_MID, 0, 0);
 	lv_obj_set_flex_flow(taskbar, LV_FLEX_FLOW_ROW);
@@ -4877,7 +4902,7 @@ int main(void)
 		lv_obj_t *l;
 
 		lv_obj_remove_style_all(tray);
-		lv_obj_set_size(tray, 132, TASKBAR_H - 4);
+		lv_obj_set_size(tray, 232, TASKBAR_H - 4);
 		lv_obj_set_flex_flow(tray, LV_FLEX_FLOW_ROW);
 		lv_obj_set_flex_align(tray, LV_FLEX_ALIGN_END,
 				      LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -4891,6 +4916,18 @@ int main(void)
 		lv_obj_add_flag(tray, LV_OBJ_FLAG_IGNORE_LAYOUT);
 		lv_obj_align(tray, LV_ALIGN_RIGHT_MID, -2, 0);
 		lv_obj_remove_flag(tray, LV_OBJ_FLAG_SCROLLABLE);
+
+		/*
+		 * Free memory, first in the tray so it sits to the LEFT of the
+		 * icons. This is the only thing the old System window was for,
+		 * and a window that exists to show one number is a window that
+		 * costs a top-level buffer to show one number.
+		 */
+		sysinfo = lv_label_create(tray);
+		lv_obj_set_style_text_font(sysinfo, FONT_UI, 0);
+		lv_obj_set_style_text_color(sysinfo,
+					   lv_color_hex(COL_HDR_TEXT), 0);
+		lv_label_set_text(sysinfo, "M: --KB");
 
 		l = lv_label_create(tray);
 		lv_label_set_text(l, LV_SYMBOL_WIFI);
@@ -4973,19 +5010,6 @@ int main(void)
 
 	term_spawn();
 	term.dirty = 1;
-
-	/* a second window: proves stacking, dragging and the task bar */
-	{
-		lv_obj_t *sys = make_window("System", 320, 150, 300, 150);
-		lv_obj_t *c = lv_win_get_content(sys);
-
-		lv_obj_set_style_pad_all(c, 4, 0);
-		sysinfo = lv_label_create(c);
-		lv_obj_set_style_text_font(sysinfo, FONT_TERM, 0);
-		lv_obj_set_style_text_color(sysinfo,
-					    lv_color_hex(COL_PANEL_TEXT), 0);
-		lv_label_set_text(sysinfo, "reading /proc...");
-	}
 
 	/*
 	 * The terminal is what the desktop is for, so it starts focused and on
