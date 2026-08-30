@@ -72,6 +72,10 @@ struct res {
 	uint32_t font;			/* GCs only: the font it selects */
 	int font_idx;			/* fonts only: index into xfonts[] */
 	uint8_t depth;			/* pixmaps: 1 means an alpha bitmap */
+	uint8_t dirty;			/* pixmaps: has anything ever drawn here */
+	uint8_t bpp;			/* bytes per pixel in px: 1 or 2 */
+	uint8_t uniform;		/* pixmaps: px is NULL, every pixel ufill */
+	uint16_t ufill;			/* ...and this is that value */
 	int line_width;
 	int owner;			/* index into cli[] */
 	uint32_t event_mask;		/* what this window asked to receive */
@@ -212,7 +216,8 @@ static void notify_draw(struct res *d)
 			size_t i, nz = 0, tot = (size_t)d->w * d->h;
 
 			for (i = 0; i < tot; i++)
-				if (d->px[i])
+				if (d->bpp == 1 ? ((uint8_t *)d->px)[i] :
+				    d->px[i])
 					nz++;
 			fprintf(stderr, "xshim: WATCH 0x%x after op: %zu/%zu "
 				"non-zero\n", d->id, nz, tot);
@@ -232,11 +237,50 @@ static int drawable_ok(struct res *d)
 	return d && d->buf && d->buf->px;
 }
 
+/*
+ * Storage for a drawable, at the width its DEPTH actually needs.
+ *
+ * Everything used to be RGB565 regardless. That is right for the 16- and
+ * 24-bit drawables, and exactly twice what an 8-bit one needs - and RENDER
+ * clients allocate large A8 surfaces to composite through. With three clients
+ * open the census showed two of the four biggest pixmaps were depth 8:
+ *
+ *     0x600054  512x618  depth 8  618 kB
+ *     0x600056  600x434  depth 8  508 kB
+ *
+ * 1,126 kB held for 563 kB of content, on a machine with one or two megabytes
+ * free - which is why lvdesk itself was being swapped out and faulting back in
+ * while the pointer moved.
+ *
+ * An 8-bit drawable stores one byte of intensity per pixel, which is what the
+ * RGB565 form was really carrying: writes kept the red channel and the mask
+ * path read coverage back out of it. Doing that directly is both half the
+ * memory and slightly more accurate, since it no longer quantises to 5 bits.
+ */
+static int px_materialise(struct res *r);
+
+/*
+ * A pixmap that holds ONE value everywhere needs no pixels, only the value.
+ *
+ * This is not a corner case. With three clients open, the two largest masks
+ * xfiles keeps - 512x618 and 600x434, 563 kB between them - contain exactly
+ * one run each: they are allocated, filled once, and composited through
+ * without ever varying. Storing half a megabyte to remember a single number
+ * is what was pushing lvdesk into swap.
+ *
+ * So a pixmap begins uniform at 0 (which is what calloc promised anyway) and
+ * materialises real storage only when something writes a DIFFERENT value.
+ * Windows are excluded: lvdesk hands their buffer pointer straight to LVGL,
+ * so they must always be backed.
+ */
 static uint16_t *px_alloc(struct res *r, int w, int h)
 {
-	size_t n = (size_t)w * h * 2;
+	size_t n;
 
-	r->px = calloc((size_t)w * h, 2);
+	r->bpp = (r->depth && r->depth <= 8) ? 1 : 2;
+	n = (size_t)w * h * r->bpp;
+
+	r->px = calloc((size_t)w * h, r->bpp);
 	if (!r->px)
 		return NULL;
 	if (r->type == R_PIXMAP) {
@@ -249,7 +293,7 @@ static uint16_t *px_alloc(struct res *r, int w, int h)
 
 static void px_release(struct res *r)
 {
-	size_t n = (size_t)r->w * r->h * 2;
+	size_t n = (size_t)r->w * r->h * (r->bpp ? r->bpp : 2);
 
 	if (!r->px)
 		return;
@@ -262,12 +306,94 @@ static void px_release(struct res *r)
 	r->px = NULL;
 }
 
+/* Give a uniform pixmap real pixels, pre-filled with the value it held. */
+static int px_materialise(struct res *r)
+{
+	size_t tot = (size_t)r->w * r->h, n = tot * r->bpp, i;
+
+	if (!r->uniform)
+		return r->px != NULL;
+	r->px = malloc(n);
+	if (!r->px)
+		return 0;
+	if (!r->ufill) {
+		memset(r->px, 0, n);
+	} else if (r->bpp == 1) {
+		memset(r->px, (uint8_t)r->ufill, n);
+	} else {
+		for (i = 0; i < tot; i++)
+			r->px[i] = r->ufill;
+	}
+	r->uniform = 0;
+	mem_pix += n; n_pix++;
+	return 1;
+}
+
 void xshim_mem_report(void)
 {
+	int i, nd1 = 0, nempty = 0;
+	size_t d1 = 0, empty = 0;
+
 	fprintf(stderr, "xshim: %d window buffers %zu kB, %d pixmaps %zu kB, "
 		"glyphs %zu kB, total %zu kB\n", n_win, mem_win / 1024,
 		n_pix, mem_pix / 1024, mem_glyph / 1024,
 		(mem_win + mem_pix + mem_glyph) / 1024);
+
+	/*
+	 * The census that decides what to do about it. Totals say the pixmaps
+	 * are the cost; they do not say whether the cure is storing masks at
+	 * their real depth, or not backing pixmaps nobody draws into.
+	 */
+	for (i = 0; i < MAXRES; i++) {
+		size_t n;
+
+		if (res[i].type != R_PIXMAP)
+			continue;
+		n = (size_t)res[i].w * res[i].h * (res[i].bpp ? res[i].bpp : 2);
+		if (res[i].depth == 1) {
+			nd1++;
+			d1 += n;
+		}
+		if (!res[i].dirty) {
+			nempty++;
+			empty += n;
+		}
+		if (n >= 64 * 1024) {
+			/*
+			 * How much of this is actually distinct? A run-length
+			 * count is a cheap upper bound on what compressing a
+			 * cold surface would leave, and decides whether that is
+			 * worth building at all.
+			 */
+			size_t k, tot = (size_t)res[i].w * res[i].h, runs = 1;
+
+			if (res[i].px && tot) {
+				if (res[i].bpp == 1) {
+					const uint8_t *q = (uint8_t *)res[i].px;
+
+					for (k = 1; k < tot; k++)
+						if (q[k] != q[k - 1])
+							runs++;
+				} else {
+					const uint16_t *q = res[i].px;
+
+					for (k = 1; k < tot; k++)
+						if (q[k] != q[k - 1])
+							runs++;
+				}
+			}
+			fprintf(stderr, "xshim:   pixmap 0x%x %dx%d depth %u "
+				"%zu kB, %zu runs = %zu kB RLE (%zu%%)%s\n",
+				res[i].id, res[i].w, res[i].h, res[i].depth,
+				n / 1024, runs,
+				runs * (res[i].bpp + 2) / 1024,
+				runs * (res[i].bpp + 2) * 100 / (n ? n : 1),
+				res[i].dirty ? "" : " NEVER DRAWN");
+		}
+	}
+	fprintf(stderr, "xshim:   depth-1: %d pixmaps %zu kB (would be %zu kB "
+		"at 1 byte/px); never drawn: %d pixmaps %zu kB\n",
+		nd1, d1 / 1024, d1 / 2 / 1024, nempty, empty / 1024);
 }
 
 /*
@@ -294,7 +420,11 @@ static void px_set(struct res *d, int x, int y, uint16_t c)
 	ay = y + d->ay;
 	if (ax < d->cx0 || ay < d->cy0 || ax >= d->cx1 || ay >= d->cy1)
 		return;
-	b->px[(size_t)ay * b->w + ax] = c;
+	b->dirty = 1;
+	if (b->bpp == 1)
+		((uint8_t *)b->px)[(size_t)ay * b->w + ax] = (uint8_t)c;
+	else
+		b->px[(size_t)ay * b->w + ax] = c;
 }
 
 /* Read one pixel, with the same clip rules px_set() writes under. */
@@ -307,6 +437,8 @@ static uint16_t px_get(struct res *d, int x, int y)
 		return 0;
 	if (ax < d->cx0 || ay < d->cy0 || ax >= d->cx1 || ay >= d->cy1)
 		return 0;
+	if (b->bpp == 1)
+		return ((const uint8_t *)b->px)[(size_t)ay * b->w + ax];
 	return b->px[(size_t)ay * b->w + ax];
 }
 
@@ -1280,6 +1412,35 @@ static void blend_px(struct res *d, int x, int y, int r8, int g8, int b8,
 		return;
 	if (ax < d->cx0 || ay < d->cy0 || ax >= d->cx1 || ay >= d->cy1)
 		return;
+	b->dirty = 1;
+	if (b->bpp == 1) {
+		/*
+		 * One byte of intensity. This is the same quantity the RGB565
+		 * form carried in its red channel, so the operators below would
+		 * add nothing an A8 surface can represent - Src and a coverage
+		 * blend are the only two that differ, and both reduce to this.
+		 */
+		uint8_t *q = &((uint8_t *)b->px)[(size_t)ay * b->w + ax];
+
+		switch (op) {
+		case PICT_OP_DST:
+		case PICT_OP_OVER_REVERSE:
+			return;
+		case PICT_OP_CLEAR:
+		case PICT_OP_OUT:
+			*q = 0;
+			return;
+		default:
+			break;
+		}
+		if (cov <= 0)
+			return;
+		if (op == PICT_OP_SRC || op == PICT_OP_IN || cov >= 255)
+			*q = (uint8_t)r8;
+		else
+			*q = (uint8_t)(*q + (((r8 - *q) * cov) >> 8));
+		return;
+	}
 	p = &b->px[(size_t)ay * b->w + ax];
 
 	/*
@@ -1878,6 +2039,7 @@ static void render_composite(struct cli *c, const uint8_t *r)
 						continue;
 					mv = px_get(m, mx, my);
 					cov = m->depth == 1 ? (mv ? 255 : 0) :
+					      m->bpp == 1 ? mv :
 					      (((mv >> 11) & 0x1F) * 255) / 31;
 				}
 				if (!cov)
@@ -1935,8 +2097,23 @@ static void render_composite(struct cli *c, const uint8_t *r)
 			}
 			if (px < 0 || py < 0 || px >= s->w || py >= s->h)
 				continue;
-			v = s->buf->px[(size_t)(py + s->ay) * s->buf->w +
-				       px + s->ax];
+			{
+				size_t o = (size_t)(py + s->ay) * s->buf->w +
+					   px + s->ax;
+
+				if (s->buf->bpp == 1) {
+					/* 8-bit source: one intensity, not a
+					 * packed colour. */
+					int g = ((const uint8_t *)
+						 s->buf->px)[o];
+
+					blend_px(d, i, j, g, g, g, 255,
+						 PICT_OP_SRC);
+					wrote++;
+					continue;
+				}
+				v = s->buf->px[o];
+			}
 			blend_px(d, i, j, (v >> 11) << 3, ((v >> 5) & 0x3F) << 2,
 				 (v & 0x1F) << 3, 255, PICT_OP_SRC);
 			wrote++;

@@ -2916,10 +2916,12 @@ static void xwin_on_draw(uint32_t id)
 	for (i = 0; i < xwin_n; i++)
 		if (xwins[i].id == id) {
 			/*
-			 * Reading the pixels is what makes the shim composite
-			 * the client's child windows into the top-level. The
-			 * content is always in a child, so skipping this
-			 * presents an empty box.
+			 * The shim's direct-render model means child windows
+			 * draw straight into their top-level's buffer, so this
+			 * is a plain accessor - there is no compositing step
+			 * here, and an earlier comment claiming there was sent
+			 * two separate investigations looking for work that
+			 * does not happen.
 			 */
 			const uint16_t *px = xshim_window_pixels(id, &w, &h);
 
