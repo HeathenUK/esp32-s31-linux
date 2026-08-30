@@ -11,14 +11,13 @@ CC=/src/toolchain/riscv32-esp-linux-musl/bin/riscv32-esp-linux-musl-gcc
 OUT=/src/images/libX11.so.6.4.0
 
 echo "--- generating stubs ---"
-python3 /src/tools/mkxlitestubs.py /src/xlite/symbols.txt /src/xlite/stubs.c \
-	/src/xlite/xlite.c /src/xlite/xlite_req.c /src/xlite/xlite_xrm.c \
-	2>/dev/null || \
-python3 /src/tools/mkxlitestubs.py /src/xlite/symbols.txt /src/xlite/stubs.c \
-	/src/xlite/xlite.c
+IMPLS=$(ls /src/xlite/xlite*.c)
+python3 /src/tools/mkxlitestubs.py /src/xlite/symbols.txt /src/xlite/stubs.c $IMPLS
 
 echo "--- compiling ---"
-$CC -O2 -fPIC -shared -Wall -Wno-unused-parameter \
+INSTR=""
+[ -n "$XLITE_INSTRUMENT" ] && INSTR="-DXLITE_INSTRUMENT -finstrument-functions"
+$CC -O2 -fPIC -shared -Wall -Wno-unused-parameter $INSTR \
 	-I"$SYSROOT/usr/include" -I/src/xlite \
 	-Wl,-soname,libX11.so.6 \
 	-o "$OUT" /src/xlite/*.c

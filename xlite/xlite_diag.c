@@ -23,6 +23,7 @@ static const char **names;
 static int nseen;
 static int registered;
 
+__attribute__((no_instrument_function))
 int xlite_tracing(void)
 {
 	static int v = -1;
@@ -84,3 +85,42 @@ void xlite_missing(int idx, const char *name)
 		nseen++;
 	}
 }
+
+/*
+ * An exact call trace, for when something faults inside a libc string routine
+ * and the return address is no help.
+ *
+ * Built only when XLITE_INSTRUMENT is defined, because -finstrument-functions
+ * costs a call pair per function. It prints the name of every xlite function
+ * entered, which is how "it crashes in memmove" becomes "it crashes in the
+ * memmove inside pump()".
+ */
+#ifdef XLITE_INSTRUMENT
+#include <dlfcn.h>
+
+__attribute__((no_instrument_function))
+void __cyg_profile_func_enter(void *fn, void *site)
+{
+	Dl_info info;
+
+	(void)site;
+	if (!xlite_tracing())
+		return;
+	if (!dladdr(fn, &info)) {
+		fprintf(stderr, "xlite> %p\n", fn);
+		return;
+	}
+	if (info.dli_sname)
+		fprintf(stderr, "xlite> %s\n", info.dli_sname);
+	else
+		/* A static function: report the file offset so nm can name it. */
+		fprintf(stderr, "xlite> +0x%lx\n",
+			(unsigned long)((char *)fn - (char *)info.dli_fbase));
+}
+
+__attribute__((no_instrument_function))
+void __cyg_profile_func_exit(void *fn, void *site)
+{
+	(void)fn; (void)site;
+}
+#endif

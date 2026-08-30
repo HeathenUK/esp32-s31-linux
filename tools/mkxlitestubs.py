@@ -34,9 +34,8 @@ def implemented(paths):
     got = set()
     for p in paths:
         for line in open(p):
-            m = re.search(r"XLITE_IMPL\((\w+)\)", line)
-            if m:
-                got.add(m.group(1))
+            for m in re.findall(r"XLITE_IMPL\((\w+)\)", line):
+                got.add(m)
     return got
 
 
