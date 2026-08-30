@@ -385,6 +385,7 @@ void xt_custom_expose(struct wid *p, XEvent *ev)
 {
 	Widget w = WIDGET(p);
 	XEvent synth;
+	Region reg = NULL;
 
 	if (!p->wclass || !p->wclass->core_class.expose)
 		return;
@@ -401,11 +402,36 @@ void xt_custom_expose(struct wid *p, XEvent *ev)
 		synth.xexpose.height = p->h;
 		ev = &synth;
 	}
+	/*
+	 * Build the Region the expose proc is entitled to.
+	 *
+	 * Xt's XtExposeProc takes (widget, event, REGION), and passing NULL
+	 * is not "the whole widget" - a widget that clips its drawing to the
+	 * region simply draws nothing. xclock sets its RENDER clip from it, so
+	 * with NULL its full-face repaint never happened and only the
+	 * timer-driven hand updates ever painted: the dial appeared to sweep
+	 * into existence behind the hands, one clipped region at a time.
+	 */
+	{
+		XRectangle rc;
+
+		rc.x = (short)ev->xexpose.x;
+		rc.y = (short)ev->xexpose.y;
+		rc.width = (unsigned short)(ev->xexpose.width ?
+					    ev->xexpose.width : p->w);
+		rc.height = (unsigned short)(ev->xexpose.height ?
+					     ev->xexpose.height : p->h);
+		reg = XCreateRegion();
+		if (reg)
+			XUnionRectWithRegion(&rc, reg, reg);
+	}
 	w->core.window = p->win;
 	w->core.width = p->w;
 	w->core.height = p->h;
 	w->core.visible = True;
-	p->wclass->core_class.expose(w, ev, NULL);
+	p->wclass->core_class.expose(w, ev, reg);
+	if (reg)
+		XDestroyRegion(reg);
 }
 
 /* ------------------------------------------------------------ the GC cache */
@@ -547,6 +573,8 @@ int xt_timer_wait_ms(void)
 	unsigned long now = xt_now_ms();
 	long best = -1;
 	int i;
+
+	xt_note("timer_wait: now=%lu", now);
 
 	for (i = 0; i < NTIMER; i++) {
 		long d;

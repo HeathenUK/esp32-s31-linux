@@ -99,7 +99,15 @@ void xt_missing(const char *name)
 static const char *class_name(struct wid *w)
 {
 	switch (w->cls) {
-	case W_SHELL:   return "XCalc";
+	/*
+	 * The shell's class is the APPLICATION's class, which is what
+	 * XtAppInitialize was given and what the app-defaults file is named
+	 * after. Hard-coding "XCalc" here meant every class-path lookup for
+	 * any other program silently missed - xclock's resources were being
+	 * sought under XCalc.Clock.* and never found, so its own settings
+	 * could not be expressed at all.
+	 */
+	case W_SHELL:   return app_class;
 	case W_FORM:    return "Form";
 	case W_LABEL:   return "Label";
 	case W_COMMAND: return "Command";
@@ -1126,7 +1134,9 @@ void XtAppMainLoop(XtAppContext app)
 			int wait = xt_timer_wait_ms();
 
 			XFlush(xt_dpy);
+			xt_note("idle: fd=%d wait=%d", pfd.fd, wait);
 			poll(&pfd, 1, wait);
+			xt_note("woke: revents=0x%x", pfd.revents);
 			xt_timer_fire_due();
 			if (!running)
 				return;

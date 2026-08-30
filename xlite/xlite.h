@@ -44,6 +44,11 @@
  * construction and reduces the internals to seventeen functions.
  */
 #include <X11/Xlibint.h>
+/*
+ * The REGION layout, because libXrender reads it directly. Not for the
+ * arithmetic - ours is a bounding box - but for the field offsets.
+ */
+#include <X11/Xregion.h>
 #include <X11/Xutil.h>
 #include <X11/Xresource.h>
 #include <X11/Xatom.h>

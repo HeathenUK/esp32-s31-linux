@@ -1284,21 +1284,56 @@ int XFreeColors(Display *dpy, Colormap c, unsigned long *px, int n,
 /* --------------------------------------------------------------- regions */
 
 /*
- * Regions as their bounding box.
+ * Regions: our arithmetic, X's LAYOUT.
  *
- * Xt uses regions to accumulate exposed area and then clips redraws to them.
- * A bounding box is always a superset, so the client redraws a little more
- * than it strictly must and the result on screen is identical. Exact region
- * arithmetic is several hundred lines to save repainting a few rectangles on
- * a 800x480 panel.
+ * Keeping a region as its bounding box is a deliberate simplification. Xt uses
+ * regions to accumulate exposed area and then clips redraws to them, and a
+ * bounding box is always a superset - the client repaints a little more than
+ * it strictly must and the screen is identical. Exact region arithmetic is
+ * several hundred lines to save repainting a few rectangles on an 800x480
+ * panel.
+ *
+ * The STRUCT is not ours to simplify, though. `Region` is opaque in Xlib.h,
+ * but libXrender includes X's private Xregion.h and reads the fields directly:
+ *
+ *     typedef struct _XRegion { long size; long numRects; BOX *rects;
+ *                               BOX extents; } REGION;
+ *
+ * A bare `{int x1, y1, x2, y2;}` puts our x2 exactly where libXrender expects
+ * the `rects` POINTER, so XRenderSetPictureClipRegion() dereferenced a clip
+ * coordinate: `unhandled signal 11 ... at 0x00000077` - 0x77 is 119, the right
+ * edge of the box. Same trap as Xlibint.h, and the same answer: use the real
+ * layout and keep the cheap behaviour inside it.
  */
-struct xlite_region { int x1, y1, x2, y2; };	/* empty when x2 <= x1 */
+struct xlite_region {
+	REGION pub;			/* MUST be first: libXrender reads it */
+	BOX box;			/* the single rect pub.rects points at */
+};
+
+/*
+ * Publish the box through the fields an extension library reads. Called after
+ * every mutation - including whole-struct copies, which would otherwise leave
+ * `rects` pointing at the region it was copied FROM.
+ */
+static void region_sync(struct xlite_region *g)
+{
+	int empty = g->box.x2 <= g->box.x1 || g->box.y2 <= g->box.y1;
+
+	g->pub.size = 1;
+	g->pub.rects = &g->box;
+	g->pub.numRects = empty ? 0 : 1;
+	if (empty)
+		memset(&g->box, 0, sizeof(g->box));
+	g->pub.extents = g->box;
+}
 
 XLITE_IMPL(XCreateRegion)
 Region XCreateRegion(void)
 {
 	struct xlite_region *r = calloc(1, sizeof(*r));
 
+	if (r)
+		region_sync(r);
 	return (Region)r;
 }
 
@@ -1310,7 +1345,7 @@ Bool XEmptyRegion(Region r)
 {
 	struct xlite_region *g = (struct xlite_region *)r;
 
-	return !g || g->x2 <= g->x1 || g->y2 <= g->y1;
+	return !g || g->box.x2 <= g->box.x1 || g->box.y2 <= g->box.y1;
 }
 
 XLITE_IMPL(XClipBox)
@@ -1322,9 +1357,9 @@ int XClipBox(Region r, XRectangle *rect)
 		memset(rect, 0, sizeof(*rect));
 		return 1;
 	}
-	rect->x = g->x1; rect->y = g->y1;
-	rect->width = g->x2 - g->x1;
-	rect->height = g->y2 - g->y1;
+	rect->x = g->box.x1; rect->y = g->box.y1;
+	rect->width = g->box.x2 - g->box.x1;
+	rect->height = g->box.y2 - g->box.y1;
 	return 1;
 }
 
@@ -1333,16 +1368,17 @@ int XUnionRectWithRegion(XRectangle *rect, Region src, Region dst)
 {
 	struct xlite_region *s = (struct xlite_region *)src;
 	struct xlite_region *d = (struct xlite_region *)dst;
-	struct xlite_region t;
+	BOX t;
 
 	if (!d)
 		return 0;
-	t = s ? *s : *d;
+	t = s ? s->box : d->box;
 	if (rect->width && rect->height) {
 		int x2 = rect->x + rect->width, y2 = rect->y + rect->height;
 
 		if (t.x2 <= t.x1 || t.y2 <= t.y1) {
-			t.x1 = rect->x; t.y1 = rect->y; t.x2 = x2; t.y2 = y2;
+			t.x1 = rect->x; t.y1 = rect->y;
+			t.x2 = x2; t.y2 = y2;
 		} else {
 			if (rect->x < t.x1) t.x1 = rect->x;
 			if (rect->y < t.y1) t.y1 = rect->y;
@@ -1350,7 +1386,8 @@ int XUnionRectWithRegion(XRectangle *rect, Region src, Region dst)
 			if (y2 > t.y2) t.y2 = y2;
 		}
 	}
-	*d = t;
+	d->box = t;
+	region_sync(d);
 	return 1;
 }
 
@@ -1364,10 +1401,15 @@ int XUnionRegion(Region a, Region b, Region dst)
 
 	if (!d)
 		return 0;
-	*d = p ? *p : (struct xlite_region){ 0, 0, 0, 0 };
+	if (p)
+		d->box = p->box;
+	else
+		memset(&d->box, 0, sizeof(d->box));
+	region_sync(d);
 	if (q && !XEmptyRegion(b)) {
-		rc.x = q->x1; rc.y = q->y1;
-		rc.width = q->x2 - q->x1; rc.height = q->y2 - q->y1;
+		rc.x = q->box.x1; rc.y = q->box.y1;
+		rc.width = q->box.x2 - q->box.x1;
+		rc.height = q->box.y2 - q->box.y1;
 		XUnionRectWithRegion(&rc, dst, dst);
 	}
 	return 1;
@@ -1383,15 +1425,17 @@ int XIntersectRegion(Region a, Region b, Region dst)
 	if (!d)
 		return 0;
 	if (!p || !q) {
-		memset(d, 0, sizeof(*d));
+		memset(&d->box, 0, sizeof(d->box));
+		region_sync(d);
 		return 1;
 	}
-	d->x1 = p->x1 > q->x1 ? p->x1 : q->x1;
-	d->y1 = p->y1 > q->y1 ? p->y1 : q->y1;
-	d->x2 = p->x2 < q->x2 ? p->x2 : q->x2;
-	d->y2 = p->y2 < q->y2 ? p->y2 : q->y2;
-	if (d->x2 < d->x1) d->x2 = d->x1;
-	if (d->y2 < d->y1) d->y2 = d->y1;
+	d->box.x1 = p->box.x1 > q->box.x1 ? p->box.x1 : q->box.x1;
+	d->box.y1 = p->box.y1 > q->box.y1 ? p->box.y1 : q->box.y1;
+	d->box.x2 = p->box.x2 < q->box.x2 ? p->box.x2 : q->box.x2;
+	d->box.y2 = p->box.y2 < q->box.y2 ? p->box.y2 : q->box.y2;
+	if (d->box.x2 < d->box.x1) d->box.x2 = d->box.x1;
+	if (d->box.y2 < d->box.y1) d->box.y2 = d->box.y1;
+	region_sync(d);
 	return 1;
 }
 
@@ -1402,8 +1446,10 @@ int XSubtractRegion(Region a, Region b, Region dst)
 	struct xlite_region *d = (struct xlite_region *)dst;
 
 	(void)b;			/* a bounding box cannot lose a hole */
-	if (d && p)
-		*d = *p;
+	if (d && p) {
+		d->box = p->box;
+		region_sync(d);
+	}
 	return 1;
 }
 
@@ -1413,8 +1459,9 @@ int XOffsetRegion(Region r, int dx, int dy)
 	struct xlite_region *g = (struct xlite_region *)r;
 
 	if (g) {
-		g->x1 += dx; g->x2 += dx;
-		g->y1 += dy; g->y2 += dy;
+		g->box.x1 += dx; g->box.x2 += dx;
+		g->box.y1 += dy; g->box.y2 += dy;
+		region_sync(g);
 	}
 	return 1;
 }
@@ -1424,7 +1471,8 @@ Bool XPointInRegion(Region r, int px, int py)
 {
 	struct xlite_region *g = (struct xlite_region *)r;
 
-	return g && px >= g->x1 && px < g->x2 && py >= g->y1 && py < g->y2;
+	return g && px >= g->box.x1 && px < g->box.x2 &&
+	       py >= g->box.y1 && py < g->box.y2;
 }
 
 XLITE_IMPL(XRectInRegion)
@@ -1434,11 +1482,11 @@ int XRectInRegion(Region r, int px, int py, unsigned w, unsigned h)
 
 	if (!g || XEmptyRegion(r))
 		return RectangleOut;
-	if ((int)(px + w) <= g->x1 || px >= g->x2 ||
-	    (int)(py + h) <= g->y1 || py >= g->y2)
+	if ((int)(px + w) <= g->box.x1 || px >= g->box.x2 ||
+	    (int)(py + h) <= g->box.y1 || py >= g->box.y2)
 		return RectangleOut;
-	if (px >= g->x1 && (int)(px + w) <= g->x2 &&
-	    py >= g->y1 && (int)(py + h) <= g->y2)
+	if (px >= g->box.x1 && (int)(px + w) <= g->box.x2 &&
+	    py >= g->box.y1 && (int)(py + h) <= g->box.y2)
 		return RectangleIn;
 	return RectanglePart;
 }
@@ -1449,7 +1497,7 @@ Bool XEqualRegion(Region a, Region b)
 	struct xlite_region *p = (struct xlite_region *)a;
 	struct xlite_region *q = (struct xlite_region *)b;
 
-	return p && q && !memcmp(p, q, sizeof(*p));
+	return p && q && !memcmp(&p->box, &q->box, sizeof(p->box));
 }
 
 XLITE_IMPL(XSetRegion)

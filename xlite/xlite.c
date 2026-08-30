@@ -283,8 +283,8 @@ int xlite_read_more(struct xdpy *x, int block)
  * event met on the way is queued rather than discarded, which is what makes a
  * round trip safe to do from inside an event loop.
  */
-static int pump(struct xdpy *x, uint32_t want, unsigned char *hdr,
-		unsigned char **extra, size_t *nextra)
+static int pump_ex(struct xdpy *x, uint32_t want, unsigned char *hdr,
+		   unsigned char **extra, size_t *nextra, int block)
 {
 	for (;;) {
 		size_t off = 0;
@@ -334,10 +334,18 @@ static int pump(struct xdpy *x, uint32_t want, unsigned char *hdr,
 		}
 		if (!want && x->qhead != x->qtail)
 			return 0;
+		if (!block)
+			return 0;	/* the caller must not be made to wait */
 		xlite_flush(x);		/* never block holding unsent requests */
 		if (!xlite_read_more(x, 1))
 			return 0;
 	}
+}
+
+static int pump(struct xdpy *x, uint32_t want, unsigned char *hdr,
+		unsigned char **extra, size_t *nextra)
+{
+	return pump_ex(x, want, hdr, extra, nextra, 1);
 }
 
 int xlite_reply(struct xdpy *x, uint32_t seq, unsigned char *hdr,
@@ -608,10 +616,18 @@ int XEventsQueued(Display *d, int mode)
 		return x->pub.qlen;
 	if (mode == QueuedAlready)
 		return 0;
+	/*
+	 * NON-BLOCKING, and that is the whole point of this call.
+	 *
+	 * pump() blocks when the bytes it consumes are a reply or an error
+	 * rather than an event: nothing gets queued, so it loops and waits for
+	 * more. Asking it to do that from here wedges XPending(), and a main
+	 * loop written as `while (!XPending()) { poll(); fire_timers(); }`
+	 * then never reaches its timers - xclock drew the right time once and
+	 * never ticked again.
+	 */
 	while (xlite_read_more(x, 0))
-		pump(x, 0, NULL, NULL, NULL);
-	if (mode == QueuedAfterFlush && x->qhead == x->qtail)
-		return x->pub.qlen;
+		pump_ex(x, 0, NULL, NULL, NULL, 0);
 	return x->pub.qlen;
 }
 

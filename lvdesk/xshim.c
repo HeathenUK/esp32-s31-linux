@@ -256,6 +256,19 @@ static void px_set(struct res *d, int x, int y, uint16_t c)
 	b->px[(size_t)ay * b->w + ax] = c;
 }
 
+/* Read one pixel, with the same clip rules px_set() writes under. */
+static uint16_t px_get(struct res *d, int x, int y)
+{
+	struct res *b = d->buf;
+	int ax = x + d->ax, ay = y + d->ay;
+
+	if (!b || !b->px)
+		return 0;
+	if (ax < d->cx0 || ay < d->cy0 || ax >= d->cx1 || ay >= d->cy1)
+		return 0;
+	return b->px[(size_t)ay * b->w + ax];
+}
+
 /*
  * Recompute where a drawable lives inside its buffer, and its clip, for it and
  * everything under it. Called whenever geometry, mapping or parentage changes.
@@ -1050,7 +1063,13 @@ static void expose_window(struct cli *c, struct res *w)
  *   Composite                        images, and Xft's fallback paths
  *
  * so that is what this implements, and everything else reports itself by name
- * through the same counter the core opcodes use. The compositing is done here
+ * through the same counter the core opcodes use.
+ *
+ * NOTE: handle() passes `len` in BYTES, not 4-byte words. Every list-walking
+ * request here bounds itself with `r + len`, and writing `r + len * 4` reads
+ * four times past the end - which showed up as the FIRST trapezoid of every
+ * request being perfect and every one after it being garbage, because the
+ * garbage only begins where the request does. The compositing is done here
  * in software against RGB565, which is the only format the panel has - alpha
  * exists in the SOURCE, never in the destination.
  * ===================================================================== */
@@ -1237,6 +1256,209 @@ static struct glyph *glyph_find(struct gset *s, uint32_t id)
 	return NULL;
 }
 
+
+/* ------------------------------------------------------------ trapezoids */
+
+/*
+ * Walk a picture's value list.
+ *
+ * The mask must be walked in FULL even for the values we ignore: each set bit
+ * is four bytes, so skipping one misreads every value after it. The bit that
+ * matters most is CPClipMask - a client sets a clip for a partial repaint and
+ * then clears it with clipMask None, and treating ChangePicture as a no-op
+ * leaves the old clip in force for ever. xclock drew its whole face correctly
+ * into the top-left corner of the pixmap and nothing anywhere else.
+ */
+#define CP_REPEAT	(1u << 0)
+#define CP_CLIP_X_ORG	(1u << 4)
+#define CP_CLIP_Y_ORG	(1u << 5)
+#define CP_CLIP_MASK	(1u << 6)
+
+static void pict_values(struct pict *pi, uint32_t mask, const uint8_t *v,
+			const uint8_t *end)
+{
+	int bit;
+
+	for (bit = 0; bit < 13 && v + 4 <= end; bit++) {
+		uint32_t m = 1u << bit;
+
+		if (!(mask & m))
+			continue;
+		switch (m) {
+		case CP_REPEAT:
+			pi->repeat = (int)get32(v);
+			break;
+		case CP_CLIP_X_ORG:
+			pi->cx += (int16_t)get32(v);
+			break;
+		case CP_CLIP_Y_ORG:
+			pi->cy += (int16_t)get32(v);
+			break;
+		case CP_CLIP_MASK:
+			if (!get32(v))		/* None: no clip at all */
+				pi->has_clip = 0;
+			break;
+		}
+		v += 4;
+	}
+}
+
+static void render_unimpl(struct cli *c, uint8_t minor, const char *name);
+
+
+/*
+ * Anti-aliased trapezoids, which is how RENDER draws vector shapes.
+ *
+ * Everything Xft and cairo-style code puts on screen that is not a glyph
+ * arrives here: xclock's hands and tick marks are trapezoids, and with this
+ * unimplemented its render path drew a perfectly correct nothing.
+ *
+ * A trapezoid is a top and bottom scanline plus a left and a right EDGE, each
+ * an arbitrary line - so the left and right boundaries move per scanline. The
+ * rasteriser samples NSUB sub-scanlines per pixel row and accumulates exact
+ * horizontal coverage for each, which anti-aliases both axes: vertically by
+ * how many sub-scanlines fall inside, horizontally by what fraction of each
+ * pixel the span covers.
+ *
+ * Coordinates are 16.16 fixed point, so the arithmetic is integer throughout -
+ * this board has single-precision hardware float but no reason to use it here,
+ * and 64-bit intermediates keep the edge interpolation exact.
+ */
+#define NSUB	8			/* sub-scanlines per pixel row */
+
+/* Where a line crosses scanline y. Both in 16.16. */
+static int32_t line_x_at(int32_t x1, int32_t y1, int32_t x2, int32_t y2,
+			 int32_t y)
+{
+	if (y2 == y1)
+		return x1;
+	return x1 + (int32_t)(((int64_t)(x2 - x1) * (y - y1)) / (y2 - y1));
+}
+
+/* Add `w` of coverage for the 16.16 span [xl,xr) into a row of bytes. */
+static void cov_span(uint8_t *cov, int w_px, int32_t xl, int32_t xr, int w)
+{
+	int first, last, i;
+
+	if (xr <= xl)
+		return;
+	if (xl < 0)
+		xl = 0;
+	if (xr > (int32_t)(w_px << 16))
+		xr = (int32_t)(w_px << 16);
+	if (xr <= xl)
+		return;
+	first = xl >> 16;
+	last = (xr - 1) >> 16;
+	if (first >= w_px)
+		return;
+	if (last >= w_px)
+		last = w_px - 1;
+	if (first == last) {
+		int a = cov[first] + (int)(((int64_t)w * (xr - xl)) >> 16);
+
+		cov[first] = a > 255 ? 255 : a;
+		return;
+	}
+	{
+		int a = cov[first] + (int)(((int64_t)w *
+					    (65536 - (xl & 0xFFFF))) >> 16);
+
+		cov[first] = a > 255 ? 255 : a;
+	}
+	for (i = first + 1; i < last; i++) {
+		int a = cov[i] + w;
+
+		cov[i] = a > 255 ? 255 : a;
+	}
+	{
+		int a = cov[last] + (int)(((int64_t)w * (xr & 0xFFFF)) >> 16);
+
+		cov[last] = a > 255 ? 255 : a;
+	}
+}
+
+static void render_trapezoids(struct cli *c, const uint8_t *r, int len)
+{
+	struct pict *sp = pict_find(get32(r + 8));
+	struct pict *dp = pict_find(get32(r + 12));
+	struct res *d;
+	const uint8_t *p = r + 24, *end = r + len;   /* len is BYTES */
+	int op = r[4];
+	static uint8_t cov[XSHIM_W];
+
+	if (!dp)
+		return;
+	d = res_find(dp->drawable);
+	if (!drawable_ok(d))
+		return;
+	if (!sp || !sp->solid) {
+		render_unimpl(c, 10, "Trapezoids from a non-solid source");
+		return;
+	}
+	if (trace_on())
+		fprintf(stderr, "xshim:   traps on 0x%x drawable %dx%d clip "
+			"%s %d,%d %dx%d  n=%d\n", dp->id, d->w, d->h,
+			dp->has_clip ? "yes" : "no", dp->cx, dp->cy,
+			dp->cw, dp->ch, (int)((end - p) / 40));
+	for (; p + 40 <= end; p += 40) {
+		int32_t top = (int32_t)get32(p), bot = (int32_t)get32(p + 4);
+		if (0 && trace_on())
+			fprintf(stderr, "xshim:   trap y %.2f..%.2f L(%.1f,%.1f)-(%.1f,%.1f) "
+				"R(%.1f,%.1f)-(%.1f,%.1f) src=%d,%d,%d,%d\n",
+				top / 65536.0, ((int32_t)get32(p + 4)) / 65536.0,
+				((int32_t)get32(p + 8)) / 65536.0,
+				((int32_t)get32(p + 12)) / 65536.0,
+				((int32_t)get32(p + 16)) / 65536.0,
+				((int32_t)get32(p + 20)) / 65536.0,
+				((int32_t)get32(p + 24)) / 65536.0,
+				((int32_t)get32(p + 28)) / 65536.0,
+				((int32_t)get32(p + 32)) / 65536.0,
+				((int32_t)get32(p + 36)) / 65536.0,
+				sp->rr, sp->gg, sp->bb, sp->a);
+		int32_t lx1 = (int32_t)get32(p + 8),  ly1 = (int32_t)get32(p + 12);
+		int32_t lx2 = (int32_t)get32(p + 16), ly2 = (int32_t)get32(p + 20);
+		int32_t rx1 = (int32_t)get32(p + 24), ry1 = (int32_t)get32(p + 28);
+		int32_t rx2 = (int32_t)get32(p + 32), ry2 = (int32_t)get32(p + 36);
+		int y0 = top >> 16, y1 = (bot + 0xFFFF) >> 16, iy;
+		int cx0 = 0, cy0 = 0, cx1 = d->w, cy1 = d->h;
+
+		pict_clip(dp, &cx0, &cy0, &cx1, &cy1);
+		if (y0 < cy0)
+			y0 = cy0;
+		if (y1 > cy1)
+			y1 = cy1;
+		for (iy = y0; iy < y1; iy++) {
+			int sub, any = 0, x;
+
+			memset(cov, 0, (size_t)(cx1 > 0 ? cx1 : 0));
+			for (sub = 0; sub < NSUB; sub++) {
+				int32_t sy = ((int32_t)iy << 16) +
+					(int32_t)((65536 * (2 * sub + 1)) /
+						  (2 * NSUB));
+				int32_t xl, xr;
+
+				if (sy < top || sy >= bot)
+					continue;
+				xl = line_x_at(lx1, ly1, lx2, ly2, sy);
+				xr = line_x_at(rx1, ry1, rx2, ry2, sy);
+				if (xr <= xl)
+					continue;
+				cov_span(cov, cx1, xl, xr, 255 / NSUB);
+				any = 1;
+			}
+			if (!any)
+				continue;
+			for (x = cx0; x < cx1; x++)
+				if (cov[x])
+					blend_px(d, x, iy, sp->rr, sp->gg,
+						 sp->bb,
+						 cov[x] * sp->a / 255, op);
+		}
+	}
+	notify_draw(d);
+}
+
 /* ------------------------------------------------------------- the requests */
 
 /*
@@ -1295,7 +1517,7 @@ static void render_glyphs(struct cli *c, const uint8_t *r, int len, int idsize)
 	struct pict *dp = pict_find(get32(r + 12));
 	struct gset *gs = gset_find(get32(r + 20));
 	struct res *d;
-	const uint8_t *p = r + 28, *end = r + len * 4;
+	const uint8_t *p = r + 28, *end = r + len;   /* len is BYTES */
 	int op = r[4], x = 0, y = 0;
 
 	if (!dp || !gs) {
@@ -1355,13 +1577,14 @@ static void render_glyphs(struct cli *c, const uint8_t *r, int len, int idsize)
 		}
 		p = r + ((p - r + 3) & ~3);	/* ids are padded to 4 bytes */
 	}
+	notify_draw(d);
 }
 
 static void render_add_glyphs(struct cli *c, const uint8_t *r, int len)
 {
 	struct gset *s = gset_find(get32(r + 4));
 	uint32_t n = get32(r + 8);
-	const uint8_t *ids = r + 12, *info, *img, *end = r + len * 4;
+	const uint8_t *ids = r + 12, *info, *img, *end = r + len;
 	int bpp = 8;
 	uint32_t i;
 
@@ -1447,6 +1670,7 @@ static void render_composite(struct cli *c, const uint8_t *r)
 	if (sp && sp->solid) {
 		render_fill(d, dp, dx, dy, w, h, sp->rr, sp->gg, sp->bb,
 			    sp->a, op);
+		notify_draw(d);
 		return;
 	}
 	s = sp ? res_find(sp->drawable) : NULL;
@@ -1454,6 +1678,7 @@ static void render_composite(struct cli *c, const uint8_t *r)
 		render_unimpl(c, 8, "Composite from an unknown source");
 		return;
 	}
+	notify_draw(d);
 	x0 = dx; y0 = dy; x1 = dx + w; y1 = dy + h;
 	pict_clip(dp, &x0, &y0, &x1, &y1);
 	for (j = y0; j < y1; j++)
@@ -1505,6 +1730,23 @@ static int render_request(struct cli *c, const uint8_t *r, int len)
 	if (minor < 64 && c->nrender[minor]++ == 0)
 		fprintf(stderr, "xshim: RENDER %s (minor %u)\n",
 			render_opstr(minor), minor);
+	if (trace_on()) {
+		struct pict *tp = NULL;
+
+		switch (minor) {
+		case 5: case 6: case 7:
+			tp = pict_find(get32(r + 4)); break;
+		case 8: case 10: case 23: case 24: case 25:
+			tp = pict_find(get32(r + 12)); break;
+		case 26:
+			tp = pict_find(get32(r + 8)); break;
+		}
+		fprintf(stderr, "xshim:  R %-22s dst=0x%x clip=%s %d,%d %dx%d\n",
+			render_opstr(minor), tp ? tp->id : 0,
+			tp && tp->has_clip ? "YES" : "no",
+			tp ? tp->cx : 0, tp ? tp->cy : 0,
+			tp ? tp->cw : 0, tp ? tp->ch : 0);
+	}
 
 	switch (minor) {
 	case 0: {					/* QueryVersion */
@@ -1551,27 +1793,33 @@ static int render_request(struct cli *c, const uint8_t *r, int len)
 	}
 	case 4: {					/* CreatePicture */
 		struct pict *pi = pict_new(get32(r + 4));
-		uint32_t mask = get32(r + 16);
-		const uint8_t *v = r + 20;
 
 		if (!pi)
 			return 1;
 		pi->drawable = get32(r + 8);
 		pi->format = get32(r + 12);
-		if (mask & 0x001)
-			pi->repeat = (int)get32(v);
+		pict_values(pi, get32(r + 16), r + 20, r + len);
 		return 1;
 	}
-	case 5:						/* ChangePicture */
-		return 1;				/* only repeat/clip, below */
+	case 5: {					/* ChangePicture */
+		struct pict *pi = pict_find(get32(r + 4));
+
+		if (pi)
+			pict_values(pi, get32(r + 8), r + 12, r + len);
+		return 1;
+	}
 	case 6: {					/* SetPictureClipRectangles */
 		struct pict *pi = pict_find(get32(r + 4));
 		int ox = gets16(r + 8), oy = gets16(r + 10);
-		const uint8_t *p = r + 12, *end = r + len * 4;
+		const uint8_t *p = r + 12, *end = r + len;
 
 		if (!pi)
 			return 1;
 		pi->has_clip = 0;
+		if (trace_on())
+			fprintf(stderr, "xshim:   setclip 0x%x org %d,%d "
+				"nrect %d\n", pi->id, ox, oy,
+				(int)((end - p) / 8));
 		for (; p + 8 <= end; p += 8) {
 			int x = ox + gets16(p), y = oy + gets16(p + 2);
 			int w = get16(p + 4), h = get16(p + 6);
@@ -1602,6 +1850,9 @@ static int render_request(struct cli *c, const uint8_t *r, int len)
 	}
 	case 8:						/* Composite */
 		render_composite(c, r);
+		return 1;
+	case 10:					/* Trapezoids */
+		render_trapezoids(c, r, len);
 		return 1;
 	case 17: {					/* CreateGlyphSet */
 		int i;
@@ -1641,7 +1892,7 @@ static int render_request(struct cli *c, const uint8_t *r, int len)
 	case 26: {					/* FillRectangles */
 		struct pict *dp = pict_find(get32(r + 8));
 		struct res *d = dp ? res_find(dp->drawable) : NULL;
-		const uint8_t *p = r + 20, *end = r + len * 4;
+		const uint8_t *p = r + 20, *end = r + len;
 		int cr, cg, cb, ca;
 
 		if (!drawable_ok(d))
@@ -1651,6 +1902,7 @@ static int render_request(struct cli *c, const uint8_t *r, int len)
 			render_fill(d, dp, gets16(p), gets16(p + 2),
 				    get16(p + 4), get16(p + 6),
 				    cr, cg, cb, ca, r[4]);
+		notify_draw(d);
 		return 1;
 	}
 	case 33: {					/* CreateSolidFill */
@@ -1663,6 +1915,9 @@ static int render_request(struct cli *c, const uint8_t *r, int len)
 		pi->solid = 1;
 		pi->rr = (uint8_t)cr; pi->gg = (uint8_t)cg;
 		pi->bb = (uint8_t)cb; pi->a = (uint8_t)ca;
+		if (trace_on())
+			fprintf(stderr, "xshim:   solid 0x%x = rgba %d,%d,%d,%d\n",
+				pi->id, cr, cg, cb, ca);
 		return 1;
 	}
 	}
@@ -1947,6 +2202,10 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		int w = get16(r + 12), h = get16(r + 14);
 		struct res *rr = res_new(id, R_PIXMAP);
 
+		if (trace_on())
+			fprintf(stderr, "xshim:   pixmap 0x%x %dx%d\n",
+				id, get16(r + 12), get16(r + 14));
+
 		rr->w = w; rr->h = h;
 		if (!rr || !px_alloc(rr, w, h)) {
 			send_error(c, X_BAD_ALLOC, id, op);
@@ -2217,6 +2476,46 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		notify_draw(d);
 		break;
 	}
+	case 62: {					/* CopyArea */
+		/*
+		 * A toolkit that double-buffers draws into a pixmap and blits
+		 * it, so without this such a client renders perfectly into a
+		 * buffer nobody ever sees - xclock's face came out blank while
+		 * every drawing request it made succeeded.
+		 *
+		 * Copied through a row at a time because source and
+		 * destination are frequently the SAME buffer (a window and its
+		 * own parent), where a naive per-pixel copy over overlapping
+		 * areas reads pixels it has already written.
+		 */
+		struct res *src = res_find(get32(r + 4));
+		struct res *dst = res_find(get32(r + 8));
+		int sx = gets16(r + 16), sy = gets16(r + 18);
+		int dx = gets16(r + 20), dy = gets16(r + 22);
+		int w = get16(r + 24), h = get16(r + 26);
+		static uint16_t row[XSHIM_W];
+		int j, i;
+
+		if (!drawable_ok(src) || !drawable_ok(dst)) {
+			send_error(c, X_BAD_DRAWABLE, get32(r + 4), op);
+			break;
+		}
+		if (trace_on())
+			fprintf(stderr, "xshim:   copyarea 0x%x(%dx%d) %d,%d "
+				"-> 0x%x(%dx%d) %d,%d  %dx%d\n",
+				src->id, src->w, src->h, sx, sy,
+				dst->id, dst->w, dst->h, dx, dy, w, h);
+		if (w > XSHIM_W)
+			w = XSHIM_W;
+		for (j = 0; j < h; j++) {
+			for (i = 0; i < w; i++)
+				row[i] = px_get(src, sx + i, sy + j);
+			for (i = 0; i < w; i++)
+				px_set(dst, dx + i, dy + j, row[i]);
+		}
+		notify_draw(dst);
+		break;
+	}
 	case 70: {					/* PolyFillRectangle */
 		struct res *d = res_find(get32(r + 4));
 		struct res *g = res_find(get32(r + 8));
@@ -2232,6 +2531,11 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 			int rx = gets16(p), ry = gets16(p + 2);
 			int rw = get16(p + 4), rh = get16(p + 6);
 
+			if (trace_on())
+				fprintf(stderr, "xshim:   fillrect on 0x%x "
+					"(%dx%d) %d,%d %dx%d fg=0x%04x\n",
+					d->id, d->w, d->h, rx, ry, rw, rh,
+					g->fg);
 			for (y = ry; y < ry + rh; y++)
 				for (x = rx; x < rx + rw; x++)
 					px_set(d, x, y, g->fg);
