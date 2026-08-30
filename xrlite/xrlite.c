@@ -632,6 +632,29 @@ void XRenderFillRectangles(Display *dpy, int op, Picture dst,
 		p16(p + 4, rects[i].width);
 		p16(p + 6, rects[i].height);
 	}
+
+	/*
+	 * A single 1x1 rect at the origin with PictOpSrc is not an ordinary
+	 * fill: it is the pre-CreateSolidFill idiom for a solid colour source -
+	 * a 1x1 pixmap with RepeatNormal, painted once and then used as the
+	 * source of every Composite that wants that colour. Recording the
+	 * colour here is what lets XRliteColorOfPicture() answer for it.
+	 *
+	 * Without this, xftlite could not tell what colour a string was meant
+	 * to be, left the GC at its protocol default foreground of 0, and drew
+	 * every one of xfiles' filenames in black on black. xfiles builds its
+	 * colours exactly this way (widget.c inittheme()), and so does most
+	 * pre-2005 RENDER code - CreateSolidFill only arrived in RENDER 0.10.
+	 */
+	if (n == 1 && op == 1 && rects[0].x == 0 && rects[0].y == 0 &&
+	    rects[0].width == 1 && rects[0].height == 1) {
+		struct pictrec *pr = pict_find(x, dst);
+
+		if (pr) {
+			pr->solid = 1;
+			pr->color = *color;
+		}
+	}
 }
 
 void XRenderFillRectangle(Display *dpy, int op, Picture dst,

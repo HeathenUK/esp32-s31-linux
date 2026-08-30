@@ -705,3 +705,31 @@ The debugfs interfaces take physical addresses and the driver bounds them to
 it is very likely a LIVE allocation. Writing blend output to `0x50900000` while
 the desktop was running corrupted CMA and killed several processes. Use the
 ioctls with GEM handles, which is what they are for.
+
+## Shim pixmaps cannot move into CMA yet (measured 2026-08-30)
+
+The PPA can only touch the reserved `lcd_reserved` region, so using it for the
+shim's compositing needs the drawables to live in DRM dumb buffers. That was
+attempted and is **rejected on the numbers**, not on principle.
+
+DRM dumb buffers are mapped write-combine, and the shim does far more CPU
+drawing into pixmaps than PPA blitting out of them. `esp32s31_lcd_lcd_gem_create_object()`
+was added to set `map_noncoherent = true`, which should have made the mapping
+cached. It did not: the CPU blend through a dumb buffer is unchanged.
+
+    blendbench, alpha 128, 20 iterations, 3 runs on a quiet board
+
+      rect       PPA us    CPU dumb-buffer    CPU cached malloc    PPA vs cached
+      64x64      294-401       8,919-9,175           624-840          1.7-2.1x
+      256x256  2,574-2,838   148,917-153,541      11,725-14,245      4.4-5.0x
+      400x300  4,254-4,305   272,707-277,929      20,571-25,023      4.8-5.8x
+
+The middle column is the cost of putting a drawable where the PPA can reach it:
+**~13.7x slower for CPU access** at 64x64. Any win from hardware blending is
+swamped by every ordinary draw into that surface. Note the first column also
+confirms the completion-signal fix holds - see [[s31-ppa-completion-signal]].
+
+So: **PPA blend is worth using where both surfaces are already in CMA** (it wins
+1.7x at icon size and ~5x at window size), and is not worth relocating drawables
+to reach. Revisit only if a genuinely cached CMA mapping can be demonstrated -
+the `map_noncoherent` route was tried and does not do it here.

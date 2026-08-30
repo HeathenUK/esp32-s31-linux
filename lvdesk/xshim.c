@@ -71,6 +71,7 @@ struct res {
 	int clip_set;			/* GCs only: a clip was installed */
 	uint32_t font;			/* GCs only: the font it selects */
 	int font_idx;			/* fonts only: index into xfonts[] */
+	uint8_t depth;			/* pixmaps: 1 means an alpha bitmap */
 	int line_width;
 	int owner;			/* index into cli[] */
 	uint32_t event_mask;		/* what this window asked to receive */
@@ -192,6 +193,31 @@ static void notify_draw(struct res *d)
 {
 	struct res *t = top_of(d);
 
+	/*
+	 * XSHIM_WATCH=<hex id> prints the drawable's non-zero pixel count after
+	 * every operation that touches it. notify_draw() runs at the end of
+	 * each one, so this is an ordered history of a surface's contents -
+	 * which is what it takes to find the operation that wipes something,
+	 * as opposed to knowing only that it ended up wiped.
+	 */
+	{
+		static unsigned long watch = ~0UL;
+		const char *e;
+
+		if (watch == ~0UL) {
+			e = getenv("XSHIM_WATCH");
+			watch = e ? strtoul(e, NULL, 16) : 0;
+		}
+		if (watch && d->id == (uint32_t)watch && d->px) {
+			size_t i, nz = 0, tot = (size_t)d->w * d->h;
+
+			for (i = 0; i < tot; i++)
+				if (d->px[i])
+					nz++;
+			fprintf(stderr, "xshim: WATCH 0x%x after op: %zu/%zu "
+				"non-zero\n", d->id, nz, tot);
+		}
+	}
 	if (trace_on())
 		fprintf(stderr, "xshim: draw 0x%x (%s) -> top 0x%x\n", d->id,
 			d->mapped ? "mapped" : "UNMAPPED", t ? t->id : 0);
@@ -1120,7 +1146,18 @@ static void expose_window(struct cli *c, struct res *w)
 #define PF_A1		0x32
 #define PF_ARGB32	0x33
 
-enum { PICT_OP_CLEAR = 0, PICT_OP_SRC = 1, PICT_OP_OVER = 3 };
+/*
+ * The RENDER operators, in protocol order. Only three of these used to be
+ * named, and blend_px()'s fast path wrote the source for anything it did not
+ * recognise - so PictOpOverReverse, which must leave an opaque destination
+ * alone, painted xfiles' whole 600x460 sheet black immediately after the
+ * content had been composited into it. An unknown operator has to be reasoned
+ * about, not defaulted to Src.
+ */
+enum { PICT_OP_CLEAR = 0, PICT_OP_SRC = 1, PICT_OP_DST = 2, PICT_OP_OVER = 3,
+       PICT_OP_OVER_REVERSE = 4, PICT_OP_IN = 5, PICT_OP_IN_REVERSE = 6,
+       PICT_OP_OUT = 7, PICT_OP_OUT_REVERSE = 8, PICT_OP_ATOP = 9,
+       PICT_OP_ATOP_REVERSE = 10, PICT_OP_XOR = 11, PICT_OP_ADD = 12 };
 
 #define MAXPICT		64
 #define MAXGSET		16
@@ -1243,10 +1280,51 @@ static void blend_px(struct res *d, int x, int y, int r8, int g8, int b8,
 		return;
 	if (ax < d->cx0 || ay < d->cy0 || ax >= d->cx1 || ay >= d->cy1)
 		return;
-	if (cov <= 0)
-		return;
 	p = &b->px[(size_t)ay * b->w + ax];
-	if (op == PICT_OP_SRC || cov >= 255) {
+
+	/*
+	 * Every drawable here is RGB565 with no alpha channel, so the
+	 * destination is opaque - Ad = 1 - and each operator collapses from the
+	 * general Porter-Duff form S*Fa + D*Fb to something much simpler:
+	 *
+	 *   OverReverse  Fa=1-Ad Fb=1     -> D            (a no-op, NOT Src)
+	 *   Out          Fa=1-Ad Fb=0     -> 0
+	 *   In           Fa=Ad   Fb=0     -> S
+	 *   Atop         Fa=Ad   Fb=1-As  -> same as Over
+	 *   AtopReverse  Fa=1-Ad Fb=As    -> D*As
+	 *   Xor          Fa=1-Ad Fb=1-As  -> D*(1-As)
+	 *
+	 * Operator numbering is from X11/extensions/render.h (xorgproto), not
+	 * from memory - guessing that 4 was Src is what caused this function to
+	 * paint xfiles' sheet black after it had been drawn.
+	 *
+	 * One deliberate simplification: `cov` serves as both a source alpha
+	 * and a glyph/trapezoid mask, and the two want different things from
+	 * Src (premultiply S*As versus lerp S*m + D*(1-m)). With no destination
+	 * alpha to carry the difference, the mask reading is taken - it is what
+	 * the glyph and trapezoid callers mean, and it is what makes a
+	 * translucent fill look like a wash rather than a darkening.
+	 */
+	switch (op) {
+	case PICT_OP_DST:
+	case PICT_OP_OVER_REVERSE:	/* D + S*(1-Ad) = D */
+		return;
+	case PICT_OP_CLEAR:
+	case PICT_OP_OUT:		/* S*(1-Ad) = 0 */
+		*p = 0;
+		return;
+	default:
+		break;
+	}
+	if (cov <= 0) {
+		/* A transparent source still erases where D is scaled by As. */
+		if (op == PICT_OP_IN_REVERSE || op == PICT_OP_ATOP_REVERSE ||
+		    op == PICT_OP_XOR || op == PICT_OP_OUT_REVERSE)
+			return;			/* D*(1-0) = D, or D*0 below */
+		return;
+	}
+	if (op == PICT_OP_SRC || op == PICT_OP_IN ||	/* S*Ad = S */
+	    ((op == PICT_OP_OVER || op == PICT_OP_ATOP) && cov >= 255)) {
 		*p = (uint16_t)(((r8 & 0xF8) << 8) | ((g8 & 0xFC) << 3) |
 				(b8 >> 3));
 		return;
@@ -1254,9 +1332,31 @@ static void blend_px(struct res *d, int x, int y, int r8, int g8, int b8,
 	dr = (*p >> 11) << 3;
 	dg = ((*p >> 5) & 0x3F) << 2;
 	db = (*p & 0x1F) << 3;
-	dr += ((r8 - dr) * cov) >> 8;
-	dg += ((g8 - dg) * cov) >> 8;
-	db += ((b8 - db) * cov) >> 8;
+
+	switch (op) {
+	case PICT_OP_IN_REVERSE:	/* D*As */
+	case PICT_OP_ATOP_REVERSE:	/* D*As + S*(1-Ad) = D*As */
+		dr = dr * cov / 255;
+		dg = dg * cov / 255;
+		db = db * cov / 255;
+		break;
+	case PICT_OP_OUT_REVERSE:	/* D*(1-As) */
+	case PICT_OP_XOR:		/* S*(1-Ad) + D*(1-As) = D*(1-As) */
+		dr = dr * (255 - cov) / 255;
+		dg = dg * (255 - cov) / 255;
+		db = db * (255 - cov) / 255;
+		break;
+	case PICT_OP_ADD:
+		dr += r8 * cov / 255; if (dr > 255) dr = 255;
+		dg += g8 * cov / 255; if (dg > 255) dg = 255;
+		db += b8 * cov / 255; if (db > 255) db = 255;
+		break;
+	default:			/* Over, Atop: S*As + D*(1-As) */
+		dr += ((r8 - dr) * cov) >> 8;
+		dg += ((g8 - dg) * cov) >> 8;
+		db += ((b8 - db) * cov) >> 8;
+		break;
+	}
 	*p = (uint16_t)(((dr & 0xF8) << 8) | ((dg & 0xFC) << 3) | (db >> 3));
 }
 
@@ -1777,7 +1877,8 @@ static void render_composite(struct cli *c, const uint8_t *r)
 					    my >= m->h)
 						continue;
 					mv = px_get(m, mx, my);
-					cov = (((mv >> 11) & 0x1F) * 255) / 31;
+					cov = m->depth == 1 ? (mv ? 255 : 0) :
+					      (((mv >> 11) & 0x1F) * 255) / 31;
 				}
 				if (!cov)
 					continue;
@@ -2065,10 +2166,16 @@ static int render_request(struct cli *c, const uint8_t *r, int len)
 		if (!drawable_ok(d))
 			return 1;
 		render_color(r + 12, &cr, &cg, &cb, &ca);
-		for (; p + 8 <= end; p += 8)
+		for (; p + 8 <= end; p += 8) {
+			if (trace_on())
+				fprintf(stderr, "xshim:   fill op=%u %ux%u at "
+					"%d,%d rgba %d,%d,%d,%d\n", r[4],
+					get16(p + 4), get16(p + 6), gets16(p),
+					gets16(p + 2), cr, cg, cb, ca);
 			render_fill(d, dp, gets16(p), gets16(p + 2),
 				    get16(p + 4), get16(p + 6),
 				    cr, cg, cb, ca, r[4]);
+		}
 		notify_draw(d);
 		return 1;
 	}
@@ -2393,6 +2500,16 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 				id, get16(r + 12), get16(r + 14));
 
 		rr->w = w; rr->h = h;
+		/*
+		 * Depth matters for exactly one thing: a depth-1 pixmap is a
+		 * BITMAP, and clients build text that way - fill with pixel 0,
+		 * draw the string with pixel 1, hand the result to RENDER as an
+		 * A1 mask. Stored as RGB565 those are the values 0 and 1, and
+		 * reading coverage from the red channel makes every glyph
+		 * completely transparent. xfiles' filenames were invisible for
+		 * exactly this reason (control/font.c drawtext()).
+		 */
+		rr->depth = r[1];
 		if (!rr || !px_alloc(rr, w, h)) {
 			send_error(c, X_BAD_ALLOC, id, op);
 			break;
@@ -2420,6 +2537,11 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		const uint8_t *v = (op == 55 ? r + 16 : r + 12);
 		struct res *g = res_find(gid);
 		int bit;
+
+		if (trace_on())
+			fprintf(stderr, "xshim:   %s gc 0x%x mask 0x%x "
+				"v0 0x%x\n", op == 55 ? "CreateGC" : "ChangeGC",
+				gid, mask, v + 4 <= r + len ? get32(v) : 0);
 
 		if (!g)
 			break;

@@ -539,3 +539,49 @@ the last hand-off fails.
 - **`render_unimpl()` could never fire**: it tested a counter the dispatcher
   had already incremented, so unimplemented RENDER paths were silent while a
   search for refused requests came back clean and the window stayed black.
+
+## Three bugs that all looked like "xfiles renders a black window"
+
+Worth reading before debugging any RENDER client, because each one produced the
+same symptom and the first two were invisible to tracing that was not looking
+for them.
+
+**1. Operator numbering was guessed.** `blend_px()` named only Clear, Src and
+Over, and its fast path wrote the source colour for anything it did not
+recognise. xfiles paints its sheet with `PictOpOverReverse` - operator **4**,
+which had been assumed to be Src - immediately *after* compositing the content
+in. OverReverse is `D + S*(1-Ad)`, and every drawable here is RGB565 with no
+alpha, so `Ad = 1` and the correct result is **D unchanged**. Treating it as Src
+painted the whole 600x460 sheet black.
+
+The full set is now implemented, reduced for an opaque destination, with the
+numbering taken from `X11/extensions/render.h` in xorgproto - not from memory.
+`Out` is 0, `Atop` is Over, `AtopReverse` is `D*As`, `Xor` is `D*(1-As)`.
+
+**2. A depth-1 pixmap is a mask, not a picture.** Clients build text by
+creating a depth-1 bitmap, filling it with pixel 0, drawing the string with
+pixel 1, and handing it to `Composite` as an A1 mask. Stored as RGB565 those
+are the values 0x0000 and 0x0001, and coverage read from the red channel is 0
+for both. `struct res` now carries `depth`, and a depth-1 mask reads any
+non-zero pixel as full coverage.
+
+**3. Solid colours predate CreateSolidFill.** `XRenderCreateSolidFill` arrived
+in RENDER 0.10; before it, and still in most code, a solid colour source is a
+**1x1 pixmap with RepeatNormal**, painted by a single `FillRectangles` of
+`PictOpSrc` over `0,0,1,1`. xrlite only tracked CreateSolidFill, so
+`XRliteColorOfPicture()` could not say what colour a string was, xftlite left
+the GC at the protocol default foreground of **0**, and every filename was
+drawn black on black. xrlite now recognises the 1x1 idiom by its signature.
+
+### How to find this class of bug
+
+Counting non-zero pixels in `notify_draw()` gives an ordered history of a
+surface after every operation that touches it, which is what identifies *which*
+request wipes something - as opposed to knowing only that it ended up wiped.
+`XSHIM_WATCH=<hex id>` does this. It is a debugging tool only: it scans the
+whole drawable per operation and prints to the serial console, which wedged the
+board on a 600x460 surface. Watch something small.
+
+Two false trails, both self-inflicted: grepping a log for request names with
+`XSHIM_TRACE` **off** and reading the zeros as evidence, and `tail`-ing a
+filtered log so that 269 `GCForeground` changes looked like none at all.
