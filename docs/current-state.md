@@ -2208,3 +2208,28 @@ reads as a broken display server rather than a missing environment variable.
 - lvdesk's own "System" window opens partly off the right edge of the panel at
   boot. It is not a leaked X client - it is there on a clean boot with no
   clients at all.
+
+### Ruled out: a leak in the X client lifecycle (2026-08-30)
+
+Suspected after a session of apparent input lag. Five xcalc open/close cycles,
+lvdesk's RSS and the shim's own accounting (`SIGUSR1` -> `xshim_mem_report`)
+after each:
+
+    start   rss=660 kB   1 window buffer 189 kB   (a live client)
+    cycle1  rss=536 kB   0 window buffers
+    cycle2  rss=536 kB   0 window buffers
+    cycle3  rss=536 kB   0 window buffers
+    cycle4  rss=536 kB   0 window buffers
+    cycle5  rss=536 kB   0 window buffers
+
+Flat to the kilobyte, and the shim releases each client's buffer on exit.
+3,156 kB still available afterwards. A 1,008 kB reading taken earlier in the
+same session was a longer-lived lvdesk holding a live client's 189 kB buffer,
+not growth - a single RSS number with an unknown number of windows open says
+nothing at all.
+
+**The remaining unfalsified explanation for that session's lag is external
+load**: ~1 MB binary deploys over Wi-Fi and 768 kB screenshot reads, repeatedly,
+while a human was trying to type. `rootfs/inputalign.c` now records its own
+scheduling, so that is testable rather than arguable - run a capture while
+deliberately deploying and screenshotting, and look for STALL lines.
