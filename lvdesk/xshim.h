@@ -25,6 +25,9 @@ int xshim_init(void (*on_window)(uint32_t id, int w, int h),
 	       void (*on_draw)(uint32_t id),
 	       void (*on_close)(uint32_t id));
 
+/* Log what the shim is holding in drawable buffers. */
+void xshim_mem_report(void);
+
 /* Service any ready clients. Non-blocking. */
 void xshim_poll(void);
 

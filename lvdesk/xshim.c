@@ -106,6 +106,13 @@ static struct cli cli[MAXCLI];
 static char *atom[MAXATOM];
 static int natom;
 static int cur_owner;			/* client whose request is in flight */
+/*
+ * What the shim itself is holding. Drawable buffers are the only allocation of
+ * any size here, and on a board with ~3 MB free they are worth knowing about
+ * to the byte rather than by inference.
+ */
+static size_t mem_win, mem_pix;
+static int n_win, n_pix;
 static int lfd = -1;
 static void (*win_cb)(uint32_t id, int w, int h);
 static void (*draw_cb)(uint32_t id);
@@ -121,6 +128,7 @@ static void (*close_cb)(uint32_t id);
 static struct res *top_of(struct res *r);
 static void notify_draw(struct res *d);
 static int trace_on(void);
+static void px_release(struct res *r);
 
 static struct res *res_find(uint32_t id)
 {
@@ -156,8 +164,7 @@ static void res_free(uint32_t id)
 
 	if (!r)
 		return;
-	free(r->px);
-	r->px = NULL;
+	px_release(r);
 	r->type = R_FREE;
 	/*
 	 * Anything that was drawing into those pixels must stop. Children
@@ -194,6 +201,43 @@ static void notify_draw(struct res *d)
 static int drawable_ok(struct res *d)
 {
 	return d && d->buf && d->buf->px;
+}
+
+static uint16_t *px_alloc(struct res *r, int w, int h)
+{
+	size_t n = (size_t)w * h * 2;
+
+	r->px = calloc((size_t)w * h, 2);
+	if (!r->px)
+		return NULL;
+	if (r->type == R_PIXMAP) {
+		mem_pix += n; n_pix++;
+	} else {
+		mem_win += n; n_win++;
+	}
+	return r->px;
+}
+
+static void px_release(struct res *r)
+{
+	size_t n = (size_t)r->w * r->h * 2;
+
+	if (!r->px)
+		return;
+	if (r->type == R_PIXMAP) {
+		mem_pix -= n; n_pix--;
+	} else {
+		mem_win -= n; n_win--;
+	}
+	free(r->px);
+	r->px = NULL;
+}
+
+void xshim_mem_report(void)
+{
+	fprintf(stderr, "xshim: %d window buffers %zu kB, %d pixmaps %zu kB, "
+		"total %zu kB\n", n_win, mem_win / 1024, n_pix, mem_pix / 1024,
+		(mem_win + mem_pix) / 1024);
 }
 
 static void px_set(struct res *d, int x, int y, uint16_t c)
@@ -1232,7 +1276,7 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 			v += 4;
 		}
 		if (parent == ROOT_ID) {
-			rr->px = calloc((size_t)w * h, 2);
+			px_alloc(rr, w, h);
 			if (!rr->px) {
 				send_error(c, X_BAD_ALLOC, id, op);
 				break;
@@ -1252,11 +1296,11 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		int w = get16(r + 12), h = get16(r + 14);
 		struct res *rr = res_new(id, R_PIXMAP);
 
-		if (!rr || !(rr->px = calloc((size_t)w * h, 2))) {
+		rr->w = w; rr->h = h;
+		if (!rr || !px_alloc(rr, w, h)) {
 			send_error(c, X_BAD_ALLOC, id, op);
 			break;
 		}
-		rr->w = w; rr->h = h;
 		geom_update(rr);
 		break;
 	}
@@ -1601,14 +1645,12 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		}
 		if ((nw != w->w || nh != w->h) && nw > 0 && nh > 0) {
 			if (w->px) {			/* a buffer owner */
-				uint16_t *np = calloc((size_t)nw * nh, 2);
-
-				if (!np) {
+				px_release(w);
+				w->w = nw; w->h = nh;
+				if (!px_alloc(w, nw, nh)) {
 					send_error(c, X_BAD_ALLOC, w->id, op);
 					break;
 				}
-				free(w->px);
-				w->px = np;
 			}
 			w->w = nw; w->h = nh;
 			geom_update(w);

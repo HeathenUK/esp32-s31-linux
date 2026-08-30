@@ -376,6 +376,82 @@ the next piece of work, and it is a small one: `QueryPictFormats`,
 uploads A8 masks, so RENDER needs **no font machinery at all** - and it covers
 essentially everything written since 1995.
 
+## Where the memory actually is (2026-08-30)
+
+Measured, not inferred. xcalc running under lvdesk, from `/proc/<pid>/smaps`:
+
+    xcalc Rss                                    2,104 kB
+      private-clean  (library text, from SD)     1,680 kB   80%
+      private-dirty  (anon: heap, must be RAM)     420 kB   20%
+
+    by mapping:  libX11 636   libXaw7 296   libXt 276   [anon] 232
+                 libxcb 120   libXmu  84    libICE  72   libXext 64
+
+    the shim's own buffers, xcalc + xclock up:
+      2 window buffers 226 kB, 4 pixmaps 9 kB     235 kB
+
+**Four fifths of an X client here is library text paged off the SD card**, and
+that - not swap policy - is the paging cost. The shim's own drawable buffers
+are 235 kB, so halving them with indexed colour would win ~113 kB against a
+1,680 kB problem. Optimising the shim's buffers is not where this is decided.
+
+### Why it cannot simply go in XIP
+
+XIP flash costs zero RSS, so the obvious answer is to put the client libraries
+there. The flash does not have room:
+
+    incremental XIP closure, xcalc + xclock          3,657 kB
+    reclaimable flash slack:
+      factory partition  (2 MB, loader uses 1.62)      475 kB
+      linux partition    (6.42 MB, kernel 6.11)        315 kB
+      xip2 partition                                   225 kB
+      xip1 partition                                   143 kB
+                                                     ------
+                                                     ~1,158 kB
+
+Note also that `libglib-2.0` (1,219 kB) and `bluetoothd` (797 kB) already hold
+2 MB of XIP. Bluetooth is not up for trade.
+
+### Three ways out, measured
+
+1. **Static link with `--gc-sections`.** Keeps every line off-the-shelf and
+   lets the linker drop what is unreachable. A fully static, stripped xcalc is
+   **1,708,648 bytes** - one self-contained file, against ~2.9 MB of shared
+   objects. In XIP that is zero RSS for all of it, leaving only the ~420 kB of
+   anon. But it is still ~550 kB more than the flash available, it is
+   per-application (nothing is shared between clients), and it needs a
+   repartition anyway.
+
+2. **Our own client-side Xlib.** The whole xcalc chain references **272 of
+   libX11's 1,177 functions** - 23%. A replacement providing those would also
+   remove libxcb, libXau and libXdmcp, because real libX11 only needs them as
+   its transport and ours would talk to the shim directly:
+
+       libX11 1,318 + libxcb ~200 + libXau/libXdmcp    ~1,550 kB  ->  ~80 kB
+
+   leaving libXt (316) + libXaw7 (471) + libXmu (88) + libXext (70) + xcalc
+   (43) ~= **1,030 kB, which fits the reclaimable flash.** This is the only
+   option that both fits and is shared across every client.
+
+   It is not a small job: 272 entry points, a Display struct that must match
+   the layout `Xlib.h` declares (Xt reads its fields through macros), the event
+   queue, and the **Xrm resource manager**, which is the one genuinely
+   intricate part - Xt loads xcalc's 22 kB of app-defaults through it. Estimate
+   ~3,000-5,000 lines.
+
+   Worth being precise about the shape: the shim is the SERVER. libX11, libXt
+   and libXaw run inside the client's own process, so the shim cannot replace
+   them from where it sits. What it can do is ship a second component of ours -
+   a client library - which the project's rules allow ("a new driver of our own
+   is fine; patching theirs is not"). Since Buildroot builds these packages
+   from source, our library only has to satisfy the real headers, not a vendor
+   binary's ABI.
+
+3. **Reimplementing Xt and Xaw as well** is a toolkit project - resource
+   conversion, geometry management, translation tables, action tables - and is
+   not recommended. Keeping them off the shelf is what makes the apps
+   off-the-shelf.
+
 ## Where this goes next
 
 The shim lives in lvdesk's existing poll loop - a socket at

@@ -4140,6 +4140,18 @@ static int cursor_pending;
  * learn that nothing had exited.
  */
 static volatile sig_atomic_t child_exited;
+/*
+ * SIGUSR1 asks the X shim what it is holding. On-demand rather than periodic:
+ * the answer only matters when something is being measured, and a timer that
+ * fires for ever is a wakeup source this desktop spent real effort removing.
+ */
+static volatile sig_atomic_t want_mem_report;
+
+static void on_sigusr1(int sig)
+{
+	(void)sig;
+	want_mem_report = 1;
+}
 
 static void on_sigchld(int sig)
 {
@@ -4521,6 +4533,7 @@ int main(void)
 	 * collected on the first pass.
 	 */
 	signal(SIGCHLD, on_sigchld);
+	signal(SIGUSR1, on_sigusr1);
 	child_exited = 1;
 	wpa_log = getenv("LVDESK_WPALOG") != NULL;
 	atexit(wpa_cleanup);
@@ -5069,6 +5082,10 @@ int main(void)
 			 * Only reap when a child has actually exited. waitpid()
 			 * on every loop was 83 ms per window to learn nothing.
 			 */
+			if (want_mem_report) {
+				want_mem_report = 0;
+				xshim_mem_report();
+			}
 			if (child_exited) {
 				child_exited = 0;
 				PROF_START(a);

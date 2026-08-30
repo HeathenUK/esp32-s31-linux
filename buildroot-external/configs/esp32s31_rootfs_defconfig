@@ -199,6 +199,14 @@ BR2_PACKAGE_XAPP_XCALC=y
 # PCF parser, and a font in lvdesk's XIP text costs zero RSS where a file read
 # off the card costs page cache and latency. The installed .pcf.gz go to the SD
 # rootfs and nothing uses them.
+# NOTE: BR2_SHARED_STATIC_LIBS was enabled here once, to measure whether
+# --gc-sections could shrink the X client stack enough to fit XIP flash. It
+# can, partly: a fully static, stripped xcalc is 1,708,648 bytes against ~2.9 MB
+# of shared objects. That is still ~550 kB more than the flash that can be
+# reclaimed, so it does not close the gap on its own - and it doubles the SD
+# rootfs (13.8 -> 23 MB) by installing every .a. Reverted; the number is
+# recorded in docs/x11-shim.md.
+
 BR2_PACKAGE_XFONT_FONT_MISC_MISC=y
 # Adobe Symbol, for the mathematical glyphs clients select per-GC (xcalc's
 # radical sign and pi). Also source-only, for the same reason.
