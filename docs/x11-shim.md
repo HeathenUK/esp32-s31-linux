@@ -225,6 +225,56 @@ Worth recording because none of them could have been found with xclock:
   can never be framed; the symptom is a stall and then a disconnect with nothing
   to explain it. It is now `INBUF / 4`.
 
+## How far this generalises: four clients, and where the branch is
+
+The worry with a partial X server is that every new client costs another
+fistful of requests until you have reimplemented X badly. The measured answer,
+on the **core protocol**, is that it does not:
+
+    xclock     19 request types                          renders correctly
+    xdpyinfo   + ListExtensions, QueryBestSize           runs to completion
+    xcalc      + UnmapWindow, PolyText8                  runs, renders blank
+    xfiles     + FreeColormap                            refuses to start
+
+Two new requests per client, and falling. That is the number to watch: if a
+client ever needs forty, that is the signal to stop rather than to keep
+writing.
+
+But **xfiles does not fail on the core protocol at all**. It exits with
+
+    xfiles: could not find XRender visual format
+
+after 33 requests, having been told by `QueryExtension` that RENDER is not
+present. Its one unimplemented request, `FreeColormap`, is cleanup on the way
+out. So the gate for xfiles is not a long tail of core requests - it is one
+extension, and it is a hard gate: an Xft client will not start without it.
+
+This is the branch point for the whole approach, and it splits the client
+population cleanly:
+
+- **Core-protocol clients** (xclock, xcalc, the Xt/Xaw generation) need
+  `PolyText8`/`ImageText8` drawn against a real bitmap font, with `QueryFont`
+  answering that font's actual metrics rather than today's synthetic 8x8 lie.
+  Self-consistent metrics matter more than the glyphs looking good: a toolkit
+  lays out buttons from what QueryFont said.
+- **Xft/RENDER clients** (xfiles, and essentially everything written since)
+  need `QueryPictFormats`, `CreatePicture`, `CreateGlyphSet`, `AddGlyphs`,
+  `CompositeGlyphs`, `FreePicture` - eight or so requests. The client
+  rasterises its own glyphs through freetype and uploads A8 masks; the shim
+  only has to composite them. **No font files, no font matching, no metrics
+  tables.**
+
+The second list is shorter than the first, needs no font machinery, and covers
+far more software. The defconfig comment predicted this before anything was
+built; xfiles is the evidence. **RENDER first.**
+
+Note also what is still missing for any of this to be *useful*: no client
+receives a single key or click. xcalc with PolyText8 would be a picture of a
+calculator. Input is `ButtonPress`/`ButtonRelease`/`MotionNotify`/`KeyPress`/
+`KeyRelease` - 32-byte events, easy in themselves - plus mapping lvdesk pointer
+coordinates onto the right child window, which is the part with actual work in
+it.
+
 ## Where this goes next
 
 The shim lives in lvdesk's existing poll loop - a socket at

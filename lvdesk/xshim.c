@@ -768,8 +768,18 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		 * top-level leaves it waiting in its event loop - which is
 		 * indistinguishable from a hang.
 		 */
+		/*
+		 * `owner == cur_owner` is not decoration. Without it, one
+		 * client mapping a window marks EVERY other client's unmapped
+		 * windows mapped and sends their Exposes to the wrong client -
+		 * which then gets an Expose for an id outside its own resource
+		 * range, while the client that owns it never draws. Same
+		 * family as the shared resource-id-base bug; it survived only
+		 * because xclock happens to map before anything else connects.
+		 */
 		for (i = 0; i < MAXRES; i++)
-			if (res[i].type == R_WINDOW && !res[i].mapped) {
+			if (res[i].type == R_WINDOW &&
+			    res[i].owner == cur_owner && !res[i].mapped) {
 				res[i].mapped = 1;
 				/*
 				 * Only top-levels become lvdesk windows; the
