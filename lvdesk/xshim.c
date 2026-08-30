@@ -139,6 +139,7 @@ static int trace_on(void);
 static void px_release(struct res *r);
 
 static unsigned long rf_calls, rf_steps;
+static unsigned long nreplies, nreqs;
 
 /*
  * A one-entry-per-bucket index over the resource table.
@@ -362,8 +363,10 @@ void xshim_mem_report(void)
 {
 	int i, nd1 = 0, nempty = 0;
 
-	fprintf(stderr, "xshim: res_find %lu calls, %lu steps (%lu avg)\n",
-		rf_calls, rf_steps, rf_calls ? rf_steps / rf_calls : 0);
+	fprintf(stderr, "xshim: res_find %lu calls, %lu steps (%lu avg); "
+		"%lu requests, %lu replies (%lu%% are round trips)\n",
+		rf_calls, rf_steps, rf_calls ? rf_steps / rf_calls : 0,
+		nreqs, nreplies, nreqs ? nreplies * 100 / nreqs : 0);
 	size_t d1 = 0, empty = 0;
 
 	fprintf(stderr, "xshim: %d window buffers %zu kB, %d pixmaps %zu kB, "
@@ -1140,6 +1143,7 @@ static void send_setup(struct cli *c)
 static void send_reply(struct cli *c, uint8_t detail, const uint8_t *d24,
 		       const uint8_t *extra, int nextra)
 {
+	nreplies++;
 	uint8_t h[32];
 
 	h[0] = 1; h[1] = detail;
@@ -2413,6 +2417,7 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 	uint8_t d24[24];
 
 	cur_owner = (int)(c - cli);
+	nreqs++;
 	memset(d24, 0, sizeof(d24));
 	c->seq++;
 	if (c->nrecent < (int)sizeof(c->recent)) {
