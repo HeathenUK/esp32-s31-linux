@@ -502,7 +502,8 @@ xip-rootfs: rootfs xip-image
 # /root development tree - so the board ran one set and the images held another.
 X11_REPLACEMENTS := libX11.so.6.4.0 libXt.so.6.0.0 libXaw7.so.7.0.0 \
 	libXmu.so.6.2.0 libICE.so.6.3.0 libSM.so.6.0.1 libXext.so.6.4.0 \
-	libXpm.so.4.11.0 libXrender.so.1.3.0 libXft.so.2.3.9
+	libXpm.so.4.11.0 libXrender.so.1.3.0 libXft.so.2.3.9 \
+	libfontconfig.so.1.16.0 libXcursor.so.1.0.2
 
 x11-stage:
 	@echo "--- installing the X11 replacements into the overlay ---"

@@ -452,3 +452,172 @@ int XpmReadFileToPixmap(Display *dpy, Drawable d, char *file,
 
 
 #endif
+
+
+/* ------------------------------------------------------------ fontconfig */
+#ifdef STUB_FONTCONFIG
+/*
+ * libfontconfig, for clients that only use it to NAME a font.
+ *
+ * xfiles references thirteen Fc symbols, and through them drags in
+ * fontconfig (8 kB RSS), freetype (20 kB), expat (12 kB) and zlib (8 kB) -
+ * 48 kB to describe a font. It calls no FT_ symbol itself: freetype is there
+ * only because fontconfig needs it, and expat only because fontconfig parses
+ * XML configuration at startup.
+ *
+ * None of that can matter here. xftlite serves the shim's built-in bitmap
+ * fonts, and its XftFontOpenPattern() ignores the pattern entirely while
+ * XftFontMatch() hands the same pointer straight back. So a pattern needs to
+ * be nothing more than an opaque, destroyable allocation that carries a name
+ * and a size for anyone who asks.
+ *
+ * The one rule: never return NULL from a create or match. Clients test for it
+ * and take an error path - xfiles warns "could not open font" and gives up.
+ */
+typedef unsigned char FcChar8;
+typedef unsigned int FcChar32;
+typedef int FcBool;
+
+struct fc_pattern {
+	char name[64];
+	double size;
+	int nchars;
+};
+
+static void *fc_alloc(void)
+{
+	struct fc_pattern *p = calloc(1, sizeof(*p));
+
+	if (p)
+		p->size = 12.0;
+	return p;
+}
+
+FcBool FcInit(void) { return 1; }
+void FcFini(void) { }
+
+void *FcPatternCreate(void) { return fc_alloc(); }
+
+void *FcNameParse(const FcChar8 *name)
+{
+	struct fc_pattern *p = fc_alloc();
+
+	/*
+	 * A fontconfig name is "Family-size:option=value". Only the family is
+	 * worth keeping, and only so a caller that reads it back sees what it
+	 * asked for.
+	 */
+	if (p && name) {
+		size_t i;
+
+		for (i = 0; i < sizeof(p->name) - 1 && name[i] &&
+			    name[i] != '-' && name[i] != ':'; i++)
+			p->name[i] = (char)name[i];
+		p->name[i] = '\0';
+	}
+	return p;
+}
+
+FcBool FcPatternAddDouble(void *pat, const char *object, double d)
+{
+	struct fc_pattern *p = pat;
+
+	if (p && object && !strcmp(object, "size"))
+		p->size = d;
+	return 1;
+}
+
+FcBool FcPatternAddCharSet(void *pat, const char *object, const void *cs)
+{
+	(void)pat; (void)object; (void)cs;
+	return 1;
+}
+
+void FcPatternDestroy(void *pat) { free(pat); }
+
+FcBool FcConfigSubstitute(void *config, void *pat, int kind)
+{
+	(void)config; (void)pat; (void)kind;
+	return 1;
+}
+
+void FcDefaultSubstitute(void *pat) { (void)pat; }
+
+/*
+ * A match must be a SEPARATE allocation from the pattern: callers destroy both
+ * (xfiles' font.c does, on every path including the error path), so returning
+ * the same pointer is a double free.
+ */
+void *FcFontMatch(void *config, void *pat, int *result)
+{
+	struct fc_pattern *p = pat, *m = fc_alloc();
+
+	(void)config;
+	if (result)
+		*result = 0;			/* FcResultMatch */
+	if (m && p)
+		*m = *p;
+	return m;
+}
+
+void *FcCharSetCreate(void) { return calloc(1, sizeof(struct fc_pattern)); }
+
+FcBool FcCharSetAddChar(void *cs, FcChar32 c)
+{
+	struct fc_pattern *p = cs;
+
+	(void)c;
+	if (p)
+		p->nchars++;
+	return 1;
+}
+
+void FcCharSetDestroy(void *cs) { free(cs); }
+#endif
+
+/* -------------------------------------------------------------- Xcursor */
+#ifdef STUB_XCURSOR
+/*
+ * libXcursor exists here to answer ONE call. xfiles references exactly one of
+ * its symbols - XcursorLibraryLoadCursor - for a busy pointer and a set of
+ * drag-and-drop pointers, and pays 32 kB of RSS for it, the largest single
+ * library cost in the process after libX11 itself.
+ *
+ * A themed cursor cannot be honoured anyway: lvdesk draws the pointer through
+ * the DRM cursor plane and the shim accepts CreateCursor without acting on it.
+ * The name is therefore mapped to the nearest core font cursor, which is what
+ * a client without a cursor theme installed would have got in any case.
+ */
+#include <X11/Xlib.h>
+#include <X11/cursorfont.h>
+
+Cursor XcursorLibraryLoadCursor(Display *dpy, const char *name)
+{
+	static const struct { const char *name; unsigned int shape; } map[] = {
+		{ "watch",	XC_watch },
+		{ "wait",	XC_watch },
+		{ "progress",	XC_watch },
+		{ "hand1",	XC_hand1 },
+		{ "hand2",	XC_hand2 },
+		{ "grabbing",	XC_hand2 },
+		{ "dnd-move",	XC_fleur },
+		{ "dnd-copy",	XC_hand2 },
+		{ "dnd-none",	XC_X_cursor },
+		{ "move",	XC_fleur },
+		{ "crosshair",	XC_crosshair },
+		{ "text",	XC_xterm },
+		{ "xterm",	XC_xterm },
+	};
+	unsigned int shape = XC_left_ptr;
+	size_t i;
+
+	if (!dpy)
+		return None;
+	for (i = 0; name && i < sizeof(map) / sizeof(map[0]); i++)
+		if (!strcmp(name, map[i].name)) {
+			shape = map[i].shape;
+			break;
+		}
+	return XCreateFontCursor(dpy, shape);
+}
+#endif

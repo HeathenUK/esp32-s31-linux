@@ -17,3 +17,8 @@ build libICE.so.6  libICE.so.6.3.0    STUB_ICE
 build libSM.so.6   libSM.so.6.0.1     STUB_SM
 build libXext.so.6 libXext.so.6.4.0   STUB_XEXT
 build libXpm.so.4  libXpm.so.4.11.0   STUB_XPM
+# Not X libraries, but the same argument: xfiles references 13 fontconfig
+# symbols and ONE Xcursor symbol, and pays 80 kB of RSS for them - fontconfig
+# alone drags in freetype, expat and zlib. See the notes in xstubs.c.
+build libfontconfig.so.1 libfontconfig.so.1.16.0 STUB_FONTCONFIG
+build libXcursor.so.1    libXcursor.so.1.0.2     STUB_XCURSOR
