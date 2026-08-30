@@ -150,7 +150,16 @@ It also understands `click X Y`, `dragto x1 y1 x2 y2`,
 `dragholdto x1 y1 x2 y2` (holds the button so the snap preview can be
 photographed), `dblclick X Y`, `wheel N` and `key CODE`. Every invocation homes
 the pointer to the top-left first and pays `UINJECT_SETTLE` ms (default 1500)
-before its first event, so two gestures in separate runs can never fall inside
+before its first event. **That default must stay above the desktop's 2000 ms
+device-rescan period**: every run creates a fresh uinput device, so a shorter
+settle races discovery and the events go to a node nothing has opened yet. At
+the old 1500 ms the FIRST run of a test landed exactly where it aimed and every
+later one drifted 2-3 px from wherever the pointer already was - aimed 300,200
+gave 300,200, then aimed 650,400 gave 302,202. A harness that is accurate once
+and then silently stops moving invalidates whatever it was asked to prove, and
+this one invalidated several UI results before it was caught.
+
+The settle also means two gestures in separate runs can never fall inside
 the desktop's 400 ms double-click window - `dblclick` exists for that reason.
 **Raise the settle to ~2500 ms when the desktop has just started**: discovery
 is on a 2 s rescan, and evdev only delivers events queued after the reader

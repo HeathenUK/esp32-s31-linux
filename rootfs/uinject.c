@@ -246,7 +246,20 @@ int main(int argc, char **argv)
 	 * device the desktop has not yet opened - which looks exactly like a
 	 * broken drag. Tunable because that race is the first thing to suspect.
 	 */
-	msleep(getenv("UINJECT_SETTLE") ? atoi(getenv("UINJECT_SETTLE")) : 1500);
+	/*
+	 * MUST exceed the desktop's device-rescan period, which is 2000 ms
+	 * (lvdesk.c: `lv_tick_get() - kbd_scan_at > 2000`). Every run creates a
+	 * fresh uinput device, so a settle shorter than that races discovery
+	 * and the events go to a node nothing has opened yet.
+	 *
+	 * The old 1500 ms default lost that race for every run after the
+	 * first, and lost it SILENTLY: the first click of a test landed
+	 * exactly where it was aimed and every later one drifted 2-3 px from
+	 * wherever the pointer already was. Aimed 300,200 -> 300,200, then
+	 * aimed 650,400 -> 302,202. A harness that is accurate once and then
+	 * quietly stops moving is worse than one that never works.
+	 */
+	msleep(getenv("UINJECT_SETTLE") ? atoi(getenv("UINJECT_SETTLE")) : 2600);
 	home();
 
 	if (!strcmp(what, "type")) {

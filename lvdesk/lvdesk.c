@@ -4617,6 +4617,15 @@ static int mouse_poll(void)
 	 * TERM_WHEEL_LINES a notch, which is about what everything else does.
 	 */
 	if (btn_extra) {
+		/*
+		 * LVDESK_AIMDBG reports where the pointer actually is when a
+		 * button lands. Synthetic input is dead-reckoned from relative
+		 * deltas, so "did the click go where the test aimed" is a
+		 * question the test cannot answer about itself.
+		 */
+		if (getenv("LVDESK_AIMDBG"))
+			printf("lvdesk: btn%d at %d,%d\n", btn_extra,
+			       (int)ptr_x, (int)ptr_y), fflush(stdout);
 		xwin_send_button(btn_extra, btn_extra_act);
 		btn_extra = 0;
 	}
