@@ -119,23 +119,32 @@ void XrmStringToBindingQuarkList(const char *s, XrmBindingList b, XrmQuarkList q
 /* ------------------------------------------------------------- database */
 
 #define ENTRY_MAGIC	0x58524d45u		/* "XRME" */
+#define COMP_LOOSE	0x80000000u		/* binding, packed into the quark */
 
+/*
+ * One database entry, sized to the components it actually has.
+ *
+ * This used to carry comp[32] and bind[32] fixed arrays - 272 bytes each - for
+ * patterns that are two to four components long. xcalc's app-defaults is 584
+ * resource lines, so that was ~159 kB of DIRTY anonymous memory per client:
+ * the one kind this board cannot evict, only swap. Sized to the real count
+ * with the binding packed into the quark's top bit, the same database is
+ * ~23 kB.
+ */
 struct entry {
 	unsigned magic;
-	XrmQuark comp[CMAX];		/* name components, may be "?" wildcard */
-	XrmBinding bind[CMAX];
-	int n;
-	char *value;
 	struct entry *next;
+	char *value;
+	short n;
+	unsigned comp[];		/* quark | COMP_LOOSE */
 };
 
 /*
  * A magic word, because a resource database is the one xlite object a caller
  * hands back to us that we cannot otherwise validate. Xt passes databases
  * around freely, and a pointer that is foreign, freed or simply not ours turns
- * into a walk down a garbage linked list - which shows up as a fault inside
- * memmove with no clue where it came from. Checking is two instructions and
- * turns that into a named complaint.
+ * into a walk down a garbage linked list - which shows up as a fault inside a
+ * libc string routine with no clue where it came from.
  */
 #define XRMDB_MAGIC	0x58524d44u		/* "XRMD" */
 
@@ -159,7 +168,8 @@ static struct xrmdb *db_ok(XrmDatabase db, const char *who)
 	return d;
 }
 
-static XrmQuark q_wild;			/* the "?" single-component wildcard */
+static XrmQuark q_wild;
+			/* the "?" single-component wildcard */
 
 static struct xrmdb *db_new(void)
 {
@@ -219,12 +229,22 @@ static void unescape(char *v)
 
 static void db_put(struct xrmdb *d, const char *spec, const char *value)
 {
-	struct entry *e = calloc(1, sizeof(*e));
+	XrmQuark q[CMAX];
+	XrmBinding b[CMAX];
+	struct entry *e;
+	int n, i;
 
-	if (!e || !d)
+	if (!d)
+		return;
+	n = split(spec, q, b, CMAX - 1);
+	e = calloc(1, sizeof(*e) + (size_t)n * sizeof(unsigned));
+	if (!e)
 		return;
 	e->magic = ENTRY_MAGIC;
-	e->n = split(spec, e->comp, e->bind, CMAX - 1);
+	e->n = n;
+	for (i = 0; i < n; i++)
+		e->comp[i] = (unsigned)q[i] |
+			     (b[i] == XrmBindLoosely ? COMP_LOOSE : 0);
 	e->value = strdup(value ? value : "");
 	if (e->value)
 		unescape(e->value);
@@ -255,24 +275,24 @@ static int match(struct entry *e, XrmQuark *nq_, XrmQuark *cq, int n, int *score
 		return 0;
 	}
 	while (i < e->n) {
-		int loose = e->bind[i] == XrmBindLoosely;
+		int loose = (e->comp[i] & COMP_LOOSE) != 0;
+		XrmQuark c = (XrmQuark)(e->comp[i] & ~COMP_LOOSE);
 
 		if (j >= n)
 			return 0;
 		if (loose) {
 			/* Skip ahead to the first place this component fits. */
-			while (j < n && e->comp[i] != nq_[j] &&
-			       e->comp[i] != cq[j] && e->comp[i] != q_wild)
+			while (j < n && c != nq_[j] && c != cq[j] &&
+			       c != q_wild)
 				j++;
 			if (j >= n)
 				return 0;
-		} else if (e->comp[i] != nq_[j] && e->comp[i] != cq[j] &&
-			   e->comp[i] != q_wild) {
+		} else if (c != nq_[j] && c != cq[j] && c != q_wild) {
 			return 0;
 		}
-		if (e->comp[i] == nq_[j])
+		if (c == nq_[j])
 			s += 4;
-		else if (e->comp[i] == cq[j])
+		else if (c == cq[j])
 			s += 2;
 		else
 			s += 1;			/* "?" */
@@ -571,10 +591,11 @@ Bool XrmQGetResource(XrmDatabase db, XrmNameList names, XrmClassList classes,
 		int k;
 
 		for (k = 0; k < e->n && o < sizeof(b) - 2; k++) {
-			const char *q = XrmQuarkToString(e->comp[k]);
+			const char *q = XrmQuarkToString(
+				(XrmQuark)(e->comp[k] & ~COMP_LOOSE));
 
 			if (k)
-				b[o++] = e->bind[k] == XrmBindLoosely ? '*' : '.';
+				b[o++] = (e->comp[k] & COMP_LOOSE) ? '*' : '.';
 			o += snprintf(b + o, sizeof(b) - o, "%s", q ? q : "?");
 		}
 		b[o < sizeof(b) ? o : sizeof(b) - 1] = 0;

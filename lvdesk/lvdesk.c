@@ -2599,11 +2599,27 @@ static lv_obj_t *make_window(const char *title, int x, int y, int w, int h)
 	lv_obj_t *hdr;
 	lv_obj_t *btn;
 
-	if (win_n >= MAXWIN) {
-		lv_obj_delete(win);
-		return NULL;
+	/*
+	 * Reuse a closed window's slot. win_close() clears ->win but never
+	 * decremented win_n, so opening and closing the same application eight
+	 * times exhausted the table and every later window silently failed to
+	 * appear - which reads as the client being broken, not the desktop.
+	 */
+	rec = NULL;
+	for (int i = 0; i < win_n; i++)
+		if (!wins[i].win) {
+			rec = &wins[i];
+			break;
+		}
+	if (!rec) {
+		if (win_n >= MAXWIN) {
+			fprintf(stderr, "lvdesk: no free window slot (%d in "
+				"use) - refusing to open another\n", MAXWIN);
+			lv_obj_delete(win);
+			return NULL;
+		}
+		rec = &wins[win_n++];
 	}
-	rec = &wins[win_n++];
 	memset(rec, 0, sizeof(*rec));
 	rec->win = win;
 

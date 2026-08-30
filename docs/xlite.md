@@ -66,9 +66,10 @@ database search".
 real library, character for character, and zero unimplemented functions called.
 
     libX11.so   1,318,508 bytes   ->   xlite   97,748 bytes
-    xcalc Rss       2,104 kB      ->           1,532 kB   (-572 kB, -27%)
+    xcalc Rss       2,104 kB      ->           1,400 kB   (-704 kB, -33%)
       of which libX11   636 kB    ->              72 kB
       and libxcb         72 kB    ->               0      (see below)
+      anonymous (dirty) 528 kB    ->             428 kB   (see below)
 
     remaining: libXaw7 324, libXt 308, libXmu 84, libXext 64 - off the shelf,
     which is the point: replacing the toolkit would stop the applications
@@ -123,6 +124,23 @@ the `*_PARTITION_SIZE` variables, and constants compiled into
 `bootloader/main/main.c` twice), and all three flash images must be rewritten.
 That is the next piece of work, and it is now worth doing because the numbers
 say it lands.
+
+## The resource database was 159 kB of dirty memory
+
+Found by turning the same lens on my own code. `struct entry` carried
+`comp[32]` and `bind[32]` fixed arrays - 272 bytes - for patterns that are two
+to four components long. xcalc's app-defaults is **584 resource lines**, so the
+database was ~159 kB of *dirty anonymous* memory: the one kind this board
+cannot evict, only swap.
+
+Sized to the components an entry actually has, with the binding packed into the
+quark's top bit, the same database is ~23 kB. Measured on the board:
+
+    anonymous  384 kB -> 280 kB      dirty  528 kB -> 428 kB
+
+The lesson is the one this project keeps relearning: the shim's own buffers
+were 235 kB and worth little, but 159 kB was hiding in a struct I wrote without
+thinking about how many of them there would be.
 
 ## Four bugs worth keeping
 
