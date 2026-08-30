@@ -887,3 +887,37 @@ Two things found while measuring that matter more than the drag itself:
   which**, so the "13.7x penalty for CMA-resident drawables" figure quoted
   earlier in this document should be treated as unconfirmed until that is
   resolved. It is the single most load-bearing number in these decisions.
+
+## Is the PPA an offload, or just a faster path? (measured 2026-08-30)
+
+The obvious defence of a "slower" engine is that the CPU could be doing
+something else meanwhile. On this board that is measurable, and mostly false.
+
+`ppa_spin_us` selects between spinning on the RX EOF and sleeping on the
+completion. Toggling it at runtime prices the wake-up:
+
+    blend 64x64 (8 KB), end to end through the ioctl
+      ppa_spin_us=300 (spin)     423, 839 us
+      ppa_spin_us=0   (sleep)  1,455, 1,529 us
+
+**Being woken from an interrupt costs ~0.7-1.1 ms here.** The blend itself is
+~160 us of engine time. So buying the CPU back costs four to six times what it
+frees, and the driver spins for good reason - this is the same board that pays
+~7.4 ms for a kworker hand-off ([[s31-deferred-work-costs-more]]).
+
+That splits the engine's usefulness cleanly by size:
+
+- **Below the spin budget (~300 us of engine time, roughly 128 KB):** the PPA
+  can only win on WALL-CLOCK, because the CPU is spinning either way. There is
+  no offload to be had. For the cursor it does not win on wall-clock either,
+  so the CPU keeps it.
+- **Above it:** the spin expires and the thread sleeps for the remainder, so a
+  256x256 blend leaves the CPU free for ~88% of its 2.6 ms. There the PPA is
+  **both** 4.0-4.7x faster than a cached CPU blend and an actual offload. That
+  is the regime the driver's existing ~128 KB crossover already selects, and
+  this is the measurement that justifies it rather than merely asserting it.
+
+So "the PPA is slower" is never a statement about the engine - it is a
+statement about a size. The right reading is: **use it for big rectangles,
+where it wins twice; keep small ones on the CPU, where an offload is not
+purchasable at any price.**
