@@ -160,13 +160,45 @@ static void decode(struct xdpy *x, const unsigned char *e, XEvent *ev)
 	}
 }
 
+/* Grow the ring, unrolling it so head is 0. Returns 0 if it cannot. */
+static int queue_grow(struct xdpy *x)
+{
+	int cap = x->qcap ? x->qcap * 2 : XLITE_QSTART;
+	XEvent *q;
+	int i, n = x->pub.qlen;
+
+	if (cap > 8192)
+		return 0;
+	q = calloc(cap, sizeof(*q));
+	if (!q)
+		return 0;
+	for (i = 0; i < n; i++)
+		q[i] = x->q[(x->qhead + i) % x->qcap];
+	free(x->q);
+	x->q = q;
+	x->qcap = cap;
+	x->qhead = 0;
+	x->qtail = n;
+	xlite_note("event ring grown to %d", cap);
+	return 1;
+}
+
 void xlite_queue(struct xdpy *x, const unsigned char *e)
 {
-	int next = (x->qtail + 1) % XLITE_QLEN;
+	int next;
 
-	if (next == x->qhead) {
-		xlite_note("event queue full, dropping type %d", e[0] & 0x7F);
+	if (!x->qcap && !queue_grow(x))
 		return;
+	next = (x->qtail + 1) % x->qcap;
+	if (next == x->qhead) {
+		if (!queue_grow(x)) {
+			fprintf(stderr, "xlite: event ring is full at %d and "
+				"cannot grow - dropping a type %d event, which "
+				"will show as content that never draws\n",
+				x->qcap, e[0] & 0x7F);
+			return;
+		}
+		next = (x->qtail + 1) % x->qcap;
 	}
 	decode(x, e, &x->q[x->qtail]);
 	x->qtail = next;
@@ -543,7 +575,7 @@ int XPending(Display *d) { return XEventsQueued(d, QueuedAfterFlush); }
 static void dequeue(struct xdpy *x, XEvent *ev)
 {
 	*ev = x->q[x->qhead];
-	x->qhead = (x->qhead + 1) % XLITE_QLEN;
+	x->qhead = (x->qhead + 1) % x->qcap;
 	x->pub.qlen--;
 }
 

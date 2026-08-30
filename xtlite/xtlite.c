@@ -1,0 +1,864 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * xtlite: the Intrinsics and Athena behaviour xcalc actually uses.
+ *
+ * See xtlite.h for why this is only 24 symbols wide. The short version: the
+ * application treats Widget and the widget classes as opaque tokens, so this
+ * implements what the application OBSERVES - a laid-out tree of labelled
+ * boxes that fire named actions when clicked - rather than Xt's class system.
+ */
+#include "xtlite.h"
+
+#include <stdarg.h>
+#include <ctype.h>
+
+Display *xt_dpy;
+struct wid *xt_root;
+
+static XrmDatabase xt_db;
+static char app_name[32] = "xcalc";
+static char app_class[32] = "XCalc";
+static struct action actions[MAXACT];
+static int nactions;
+static GC gc_fg, gc_inv;
+static XFontStruct *font;
+static int running = 1;
+
+/* ------------------------------------------------------------ diagnostics */
+
+int xt_tracing(void)
+{
+	static int v = -1;
+
+	if (v < 0)
+		v = getenv("XTLITE_TRACE") != NULL;
+	return v;
+}
+
+void xt_note(const char *fmt, ...)
+{
+	va_list ap;
+
+	if (!xt_tracing())
+		return;
+	fputs("xtlite: ", stderr);
+	va_start(ap, fmt);
+	vfprintf(stderr, fmt, ap);
+	va_end(ap);
+	fputc('\n', stderr);
+}
+
+void xt_missing(const char *name)
+{
+	static const char *seen[32];
+	static int n;
+	int i;
+
+	for (i = 0; i < n; i++)
+		if (seen[i] == name)
+			return;
+	if (n < 32)
+		seen[n++] = name;
+	fprintf(stderr, "xtlite: UNIMPLEMENTED %s() - carrying on\n", name);
+}
+
+/* --------------------------------------------------------------- resources */
+
+/*
+ * A widget's resource is looked up by its full instance path and its class
+ * path, exactly as Xrm defines - "xcalc.bevel.screen.LCD" against
+ * "XCalc.Form.Form.Label". Building both walks up the parent chain.
+ */
+static const char *class_name(struct wid *w)
+{
+	switch (w->cls) {
+	case W_SHELL:   return "XCalc";
+	case W_FORM:    return "Form";
+	case W_LABEL:   return "Label";
+	case W_COMMAND: return "Command";
+	case W_TOGGLE:  return "Toggle";
+	}
+	return "?";
+}
+
+static void path_of(struct wid *w, const char *leaf, char *inst, char *cls,
+		    size_t n)
+{
+	struct wid *chain[16];
+	int d = 0, i;
+	size_t oi = 0, oc = 0;
+
+	while (w && d < 16) {
+		chain[d++] = w;
+		w = w->parent;
+	}
+	for (i = d - 1; i >= 0; i--) {
+		oi += snprintf(inst + oi, n - oi, "%s%s", oi ? "." : "",
+			       chain[i]->name);
+		oc += snprintf(cls + oc, n - oc, "%s%s", oc ? "." : "",
+			       class_name(chain[i]));
+	}
+	if (leaf) {
+		snprintf(inst + oi, n - oi, ".%s", leaf);
+		snprintf(cls + oc, n - oc, ".%s", leaf);
+	}
+}
+
+/* Look up one resource for a widget. Returns NULL when unset. */
+static const char *res_get(struct wid *w, const char *name, const char *class)
+{
+	char inst[256], cls[256];
+	char *type = NULL;
+	XrmValue v;
+
+	path_of(w, name, inst, cls, sizeof(inst));
+	/* The class path needs the resource's CLASS as its leaf, not its name. */
+	{
+		char *dot = strrchr(cls, '.');
+
+		if (dot)
+			snprintf(dot + 1, sizeof(cls) - (dot + 1 - cls), "%s",
+				 class);
+	}
+	if (XrmGetResource(xt_db, inst, cls, &type, &v) && v.addr)
+		return (const char *)v.addr;
+	return NULL;
+}
+
+static int res_int(struct wid *w, const char *n, const char *c, int dflt)
+{
+	const char *s = res_get(w, n, c);
+
+	return s ? atoi(s) : dflt;
+}
+
+static unsigned long res_pixel(struct wid *w, const char *n, const char *c,
+			       unsigned long dflt)
+{
+	const char *s = res_get(w, n, c);
+	XColor col;
+
+	if (!s)
+		return dflt;
+	if (XParseColor(xt_dpy, DefaultColormap(xt_dpy, 0), s, &col) &&
+	    XAllocColor(xt_dpy, DefaultColormap(xt_dpy, 0), &col))
+		return col.pixel;
+	return dflt;
+}
+
+/* --------------------------------------------------------------- widgets */
+
+static struct wid *wid_new(const char *name, enum wclass cls, struct wid *parent)
+{
+	struct wid *w = calloc(1, sizeof(*w));
+
+	if (!w)
+		return NULL;
+	snprintf(w->name, sizeof(w->name), "%s", name ? name : "?");
+	w->cls = cls;
+	w->parent = parent;
+	if (parent) {
+		if (parent->nkids == parent->kidcap) {
+			int cap = parent->kidcap ? parent->kidcap * 2 : 8;
+			struct wid **k = realloc(parent->kids,
+						 cap * sizeof(*k));
+
+			if (!k) {
+				free(w);
+				return NULL;
+			}
+			parent->kids = k;
+			parent->kidcap = cap;
+		}
+		parent->kids[parent->nkids++] = w;
+	}
+	return w;
+}
+
+static struct wid *find_named(struct wid *root, const char *name)
+{
+	int i;
+
+	if (!root)
+		return NULL;
+	if (!strcmp(root->name, name))
+		return root;
+	for (i = 0; i < root->nkids; i++) {
+		struct wid *f = find_named(root->kids[i], name);
+
+		if (f)
+			return f;
+	}
+	return NULL;
+}
+
+/* Read every resource a widget cares about, once, at creation. */
+static void wid_configure(struct wid *w)
+{
+	const char *s;
+
+	w->bg = res_pixel(w, "background", "Background",
+			  WhitePixel(xt_dpy, 0));
+	w->fg = res_pixel(w, "foreground", "Foreground",
+			  BlackPixel(xt_dpy, 0));
+	w->border = res_pixel(w, "borderColor", "BorderColor",
+			      BlackPixel(xt_dpy, 0));
+	w->bw = res_int(w, "borderWidth", "BorderWidth",
+			w->cls == W_SHELL || w->cls == W_FORM ? 0 : 1);
+	s = res_get(w, "label", "Label");
+	snprintf(w->label, sizeof(w->label), "%s", s ? s : w->name);
+
+	/*
+	 * Explicit geometry. xcalc sets "XCalc*Command.width: 40" and
+	 * "height: 26", which is what makes its keypad uniform - sizing every
+	 * button from its own label instead gives a ragged grid and pushes the
+	 * later rows off the window entirely.
+	 */
+	w->pref_w = res_int(w, "width", "Width", 0);
+	w->pref_h = res_int(w, "height", "Height", 0);
+	w->horiz_dist = res_int(w, "horizDistance", "HorizDistance", -1);
+	w->vert_dist = res_int(w, "vertDistance", "VertDistance", -1);
+	s = res_get(w, "fromHoriz", "FromHoriz");
+	if (s) w->from_horiz = find_named(xt_root, s);
+	s = res_get(w, "fromVert", "FromVert");
+	if (s) w->from_vert = find_named(xt_root, s);
+	s = res_get(w, "radioGroup", "RadioGroup");
+	if (s) snprintf(w->radio_group, sizeof(w->radio_group), "%s", s);
+}
+
+/*
+ * Form layout, which is the only geometry manager xcalc uses.
+ *
+ * A child sits `horizDistance` right of `fromHoriz` (or of the left edge) and
+ * `vertDistance` below `fromVert`. That is the whole of the Form contract that
+ * xcalc's resource file exercises, and it is why the app-defaults file is not
+ * optional - without it every widget lands at the same place, which is exactly
+ * what a missing file looked like earlier in this project.
+ */
+static void layout(struct wid *w, int defdist)
+{
+	int i, right = 0, bottom = 0;
+
+	for (i = 0; i < w->nkids; i++) {
+		struct wid *c = w->kids[i];
+		int hd = c->horiz_dist >= 0 ? c->horiz_dist : defdist;
+		int vd = c->vert_dist >= 0 ? c->vert_dist : defdist;
+
+		if (!c->managed)
+			continue;
+		/* Explicit size wins; otherwise fit the label. */
+		if (c->cls != W_FORM || c->pref_w || c->pref_h) {
+			int tw = font ? XTextWidth(font, c->label,
+						   strlen(c->label)) : 8;
+			int th = font ? font->ascent + font->descent : 13;
+
+			c->w = c->pref_w ? c->pref_w : tw + 8;
+			c->h = c->pref_h ? c->pref_h : th + 4;
+		}
+		c->x = c->from_horiz ? c->from_horiz->x + c->from_horiz->w +
+				       2 * c->from_horiz->bw + hd : hd;
+		c->y = c->from_vert ? c->from_vert->y + c->from_vert->h +
+				      2 * c->from_vert->bw + vd : vd;
+		if (c->cls == W_FORM)
+			layout(c, defdist);
+		xt_note("  %-10s %3dx%-3d at %3d,%3d  fh=%s fv=%s", c->name,
+			c->w, c->h, c->x, c->y,
+			c->from_horiz ? c->from_horiz->name : "-",
+			c->from_vert ? c->from_vert->name : "-");
+		if (c->x + c->w + 2 * c->bw > right)
+			right = c->x + c->w + 2 * c->bw;
+		if (c->y + c->h + 2 * c->bw > bottom)
+			bottom = c->y + c->h + 2 * c->bw;
+	}
+	if (w->nkids) {
+		w->w = right + defdist;
+		w->h = bottom + defdist;
+	}
+}
+
+static void draw(struct wid *w)
+{
+	int tw, tx, ty;
+	unsigned long fg = w->fg, bg = w->bg;
+
+	if (!w->realized || !w->win)
+		return;
+	if (w->set) {			/* Toggle/Command "set" is reverse video */
+		unsigned long t = fg; fg = bg; bg = t;
+	}
+	XSetForeground(xt_dpy, gc_fg, bg);
+	XFillRectangle(xt_dpy, w->win, gc_fg, 0, 0, w->w, w->h);
+	if (w->cls == W_FORM || !w->label[0])
+		return;
+	tw = font ? XTextWidth(font, w->label, strlen(w->label)) : 0;
+	tx = (w->w - tw) / 2;
+	ty = font ? (w->h + font->ascent - font->descent) / 2 : w->h / 2;
+	XSetForeground(xt_dpy, gc_fg, fg);
+	XDrawString(xt_dpy, w->win, gc_fg, tx, ty, w->label, strlen(w->label));
+}
+
+static void realize(struct wid *w)
+{
+	XSetWindowAttributes a;
+	unsigned long mask = CWBackPixel | CWBorderPixel | CWEventMask;
+
+	memset(&a, 0, sizeof(a));
+	a.background_pixel = w->bg;
+	a.border_pixel = w->border;
+	a.event_mask = ExposureMask | ButtonPressMask | ButtonReleaseMask |
+		       KeyPressMask | EnterWindowMask | LeaveWindowMask;
+	if (w->cls == W_SHELL) {
+		w->win = XCreateWindow(xt_dpy, DefaultRootWindow(xt_dpy),
+				       0, 0, w->w, w->h, 0, CopyFromParent,
+				       InputOutput, CopyFromParent, mask, &a);
+		XStoreName(xt_dpy, w->win, w->label[0] ? w->label : app_name);
+	} else {
+		w->win = XCreateWindow(xt_dpy, w->parent->win, w->x, w->y,
+				       w->w, w->h, w->bw, CopyFromParent,
+				       InputOutput, CopyFromParent, mask, &a);
+	}
+	w->realized = 1;
+	{
+		int i;
+
+		for (i = 0; i < w->nkids; i++)
+			if (w->kids[i]->managed)
+				realize(w->kids[i]);
+	}
+	XMapWindow(xt_dpy, w->win);
+	w->mapped = 1;
+}
+
+static struct wid *by_window(struct wid *w, Window win)
+{
+	int i;
+
+	if (!w)
+		return NULL;
+	if (w->win == win)
+		return w;
+	for (i = 0; i < w->nkids; i++) {
+		struct wid *f = by_window(w->kids[i], win);
+
+		if (f)
+			return f;
+	}
+	return NULL;
+}
+
+/* ---------------------------------------------------------- translations */
+
+/*
+ * Parse one translation line, e.g.
+ *
+ *      <Btn1Down>,<Btn1Up>: toggle()selection()
+ *      Ctrl<Key>c:          quit()
+ *      :<Key>.:             decimal()
+ *
+ * The separator is the first ':' AFTER the last '>', which is the only rule
+ * that survives both `Ctrl<Key>c:quit()` and the leading-':' form above. Only
+ * the LAST event of a sequence is used as the trigger: xcalc's sequences are
+ * all press-then-release on the same button, so firing on the release is what
+ * the user sees either way.
+ */
+static void parse_line(struct wid *w, const char *line)
+{
+	const char *lt, *colon, *lastgt, *p;
+	struct trans *t;
+	char ev[24], detail[32], mods[32];
+	size_t n;
+
+	while (*line == ' ' || *line == '\t')
+		line++;
+	if (!*line || *line == '#' || *line == '!')
+		return;
+	lastgt = strrchr(line, '>');
+	if (!lastgt)
+		return;
+	colon = strchr(lastgt, ':');
+	if (!colon)
+		return;
+	lt = lastgt;
+	while (lt > line && *lt != '<')
+		lt--;
+	if (*lt != '<')
+		return;
+
+	n = lastgt - lt - 1;
+	if (n >= sizeof(ev))
+		return;
+	memcpy(ev, lt + 1, n); ev[n] = 0;
+
+	n = colon - lastgt - 1;
+	if (n >= sizeof(detail))
+		n = sizeof(detail) - 1;
+	memcpy(detail, lastgt + 1, n); detail[n] = 0;
+
+	{	/* Modifiers: whatever precedes this event in its own term. */
+		const char *ms = line, *comma = NULL;
+
+		for (p = line; p < lt; p++)
+			if (*p == ',')
+				comma = p;
+		if (comma)
+			ms = comma + 1;
+		n = lt - ms;
+		if (n >= sizeof(mods))
+			n = sizeof(mods) - 1;
+		memcpy(mods, ms, n); mods[n] = 0;
+	}
+
+	if (w->ntrans == w->transcap) {
+		int cap = w->transcap ? w->transcap * 2 : 4;
+		struct trans *nt = realloc(w->trans, cap * sizeof(*nt));
+
+		if (!nt)
+			return;
+		w->trans = nt;
+		w->transcap = cap;
+	}
+	t = &w->trans[w->ntrans];
+	memset(t, 0, sizeof(*t));
+
+	if (!strncmp(ev, "Btn", 3) && strstr(ev, "Down")) {
+		t->type = ButtonPress;  t->detail = ev[3] - '0';
+	} else if (!strncmp(ev, "Btn", 3) && strstr(ev, "Up")) {
+		t->type = ButtonRelease; t->detail = ev[3] - '0';
+	} else if (!strcmp(ev, "Key") || !strcmp(ev, "KeyPress") ||
+		   !strcmp(ev, "KeyDown")) {
+		t->type = KeyPress;
+		t->detail = XStringToKeysym(detail);
+		if (!t->detail && detail[0])
+			t->detail = (unsigned char)detail[0];
+	} else {
+		return;			/* Enter/Leave: highlight only */
+	}
+	if (strstr(mods, "Ctrl"))  t->mods |= ControlMask;
+	if (strstr(mods, "Shift")) t->mods |= ShiftMask;
+	t->actions = strdup(colon + 1);
+	if (!t->actions)
+		return;
+	w->ntrans++;
+}
+
+static void parse_translations(struct wid *w, const char *table)
+{
+	const char *p = table;
+
+	while (p && *p) {
+		const char *nl = strchr(p, '\n');
+		char line[256];
+		size_t n = nl ? (size_t)(nl - p) : strlen(p);
+
+		if (n >= sizeof(line))
+			n = sizeof(line) - 1;
+		memcpy(line, p, n); line[n] = 0;
+		parse_line(w, line);
+		p = nl ? nl + 1 : NULL;
+	}
+	xt_note("%s: %d translations", w->name, w->ntrans);
+}
+
+/* Run "digit(7)unset()" - a chain of name(arg) calls. */
+static void run_actions(struct wid *w, const char *spec, XEvent *ev)
+{
+	const char *p = spec;
+
+	while (*p) {
+		char name[48], arg[48];
+		const char *op, *cp;
+		int i;
+
+		while (*p == ' ' || *p == '\t' || *p == '\n')
+			p++;
+		op = strchr(p, '(');
+		if (!op)
+			return;
+		cp = strchr(op, ')');
+		if (!cp)
+			return;
+		snprintf(name, sizeof(name), "%.*s", (int)(op - p), p);
+		snprintf(arg, sizeof(arg), "%.*s", (int)(cp - op - 1), op + 1);
+		for (i = 0; i < nactions; i++)
+			if (!strcmp(actions[i].name, name)) {
+				char *params[1] = { arg };
+				unsigned np = arg[0] ? 1 : 0;
+
+				xt_note("action %s(%s) on %s", name, arg,
+					w->name);
+				actions[i].proc(w, ev, params, &np);
+				break;
+			}
+		if (i == nactions)
+			xt_note("no action named '%s'", name);
+		p = cp + 1;
+	}
+}
+
+static void dispatch(struct wid *w, XEvent *ev)
+{
+	int i, type = ev->type;
+	unsigned detail = 0, mods = 0;
+
+	if (type == ButtonPress || type == ButtonRelease) {
+		detail = ev->xbutton.button;
+		mods = ev->xbutton.state & (ControlMask | ShiftMask);
+	} else if (type == KeyPress) {
+		detail = ev->xkey.keycode;
+		mods = ev->xkey.state & (ControlMask | ShiftMask);
+	}
+	for (i = 0; i < w->ntrans; i++) {
+		struct trans *t = &w->trans[i];
+
+		if (t->type != type)
+			continue;
+		if (t->detail && t->detail != detail)
+			continue;
+		if (t->mods != mods)
+			continue;
+		run_actions(w, t->actions, ev);
+		return;
+	}
+	/* Unbound clicks still walk up to the parent, as Xt propagates them. */
+	if (w->parent && (type == ButtonPress || type == ButtonRelease ||
+			  type == KeyPress))
+		dispatch(w->parent, ev);
+}
+
+/* ============================ the exported API ========================== */
+
+#include <X11/Intrinsic.h>
+#include "xtstrings.h"
+
+/*
+ * Widget classes are opaque tokens. The application receives one of these
+ * pointers from us and hands it straight back to XtCreateManagedWidget, so
+ * what it points AT is nobody's business but ours - which is the single fact
+ * that makes replacing the widget set tractable.
+ */
+static const enum wclass cls_form = W_FORM, cls_label = W_LABEL;
+static const enum wclass cls_command = W_COMMAND, cls_toggle = W_TOGGLE;
+
+WidgetClass formWidgetClass    = (WidgetClass)&cls_form;
+WidgetClass labelWidgetClass   = (WidgetClass)&cls_label;
+WidgetClass commandWidgetClass = (WidgetClass)&cls_command;
+WidgetClass toggleWidgetClass  = (WidgetClass)&cls_toggle;
+
+static XtAppContext the_app = (XtAppContext)&running;   /* one, opaque */
+
+XTLITE_IMPL(XtSetLanguageProc)
+XtLanguageProc XtSetLanguageProc(XtAppContext app, XtLanguageProc proc,
+				 XtPointer data)
+{
+	(void)app; (void)proc; (void)data;
+	return NULL;		/* no locale support; xlite says so as well */
+}
+
+/* Find and load the application's resource file, as XtResolvePathname does. */
+static void load_app_defaults(const char *class)
+{
+	const char *sp = getenv("XFILESEARCHPATH");
+	char path[512];
+	XrmDatabase d = NULL;
+
+	if (sp) {
+		const char *pct = strstr(sp, "%N");
+
+		if (pct)
+			snprintf(path, sizeof(path), "%.*s%s%s",
+				 (int)(pct - sp), sp, class, pct + 2);
+		else
+			snprintf(path, sizeof(path), "%s", sp);
+		d = XrmGetFileDatabase(path);
+	}
+	if (!d) {
+		snprintf(path, sizeof(path), "/usr/share/X11/app-defaults/%s",
+			 class);
+		d = XrmGetFileDatabase(path);
+	}
+	if (d) {
+		xt_note("loaded app-defaults from %s", path);
+		XrmMergeDatabases(d, &xt_db);
+	} else {
+		fprintf(stderr, "xtlite: no app-defaults for %s - the widget "
+			"tree will have no resources and will lay out "
+			"degenerately\n", class);
+	}
+}
+
+XTLITE_IMPL(XtAppInitialize)
+Widget XtAppInitialize(XtAppContext *app_ret, const char *class,
+		       XrmOptionDescRec *options, Cardinal num_options,
+		       int *argc, String *argv, String *fallback,
+		       ArgList args, Cardinal num_args)
+{
+	struct wid *shell;
+
+	(void)fallback; (void)args; (void)num_args;
+	if (app_ret)
+		*app_ret = the_app;
+	if (class)
+		snprintf(app_class, sizeof(app_class), "%s", class);
+	if (argv && argv[0]) {
+		const char *b = strrchr(argv[0], '/');
+
+		snprintf(app_name, sizeof(app_name), "%s", b ? b + 1 : argv[0]);
+	}
+
+	xt_dpy = XOpenDisplay(NULL);
+	if (!xt_dpy) {
+		fprintf(stderr, "xtlite: cannot open display\n");
+		exit(1);
+	}
+	load_app_defaults(app_class);
+	if (options && num_options && argc && argv)
+		XrmParseCommand(&xt_db, options, num_options, app_name,
+				argc, argv);
+	XrmSetDatabase(xt_dpy, xt_db);
+
+	font = XLoadQueryFont(xt_dpy, "8x13");
+	gc_fg = XCreateGC(xt_dpy, DefaultRootWindow(xt_dpy), 0, NULL);
+	gc_inv = XCreateGC(xt_dpy, DefaultRootWindow(xt_dpy), 0, NULL);
+	if (font)
+		XSetFont(xt_dpy, gc_fg, font->fid);
+
+	shell = wid_new(app_name, W_SHELL, NULL);
+	xt_root = shell;
+	wid_configure(shell);
+	shell->managed = 1;
+	return (Widget)shell;
+}
+
+XTLITE_IMPL(XtCreateManagedWidget)
+Widget XtCreateManagedWidget(const char *name, WidgetClass cls, Widget parent,
+			     ArgList args, Cardinal n)
+{
+	struct wid *p = (struct wid *)parent;
+	struct wid *w = wid_new(name, *(const enum wclass *)cls, p);
+	Cardinal i;
+
+	if (!w)
+		return NULL;
+	w->managed = 1;
+	wid_configure(w);
+	for (i = 0; args && i < n; i++)
+		if (!strcmp(args[i].name, "label"))
+			snprintf(w->label, sizeof(w->label), "%s",
+				 (const char *)args[i].value);
+	{	/* Per-widget translations come from the resource file. */
+		const char *t = res_get(w, "translations", "Translations");
+
+		if (t)
+			parse_translations(w, t);
+	}
+	return (Widget)w;
+}
+
+XTLITE_IMPL(XtRealizeWidget)
+void XtRealizeWidget(Widget wi)
+{
+	struct wid *w = (struct wid *)wi;
+	int def = res_int(w, "defaultDistance", "Thickness", 4);
+
+	layout(w, def);
+	xt_note("realize %s: %dx%d, %d children", w->name, w->w, w->h,
+		w->nkids);
+	realize(w);
+	XFlush(xt_dpy);
+}
+
+XTLITE_IMPL(XtAppAddActions)
+void XtAppAddActions(XtAppContext app, XtActionList list, Cardinal n)
+{
+	Cardinal i;
+
+	(void)app;
+	for (i = 0; i < n && nactions < MAXACT; i++) {
+		actions[nactions].name = list[i].string;
+		actions[nactions].proc =
+			(void (*)(struct wid *, XEvent *, char **,
+				  unsigned *))list[i].proc;
+		nactions++;
+	}
+	xt_note("%d actions registered", nactions);
+}
+
+XTLITE_IMPL(XtAppMainLoop)
+void XtAppMainLoop(XtAppContext app)
+{
+	(void)app;
+	while (running) {
+		XEvent ev;
+		struct wid *w;
+
+		XNextEvent(xt_dpy, &ev);
+		w = by_window(xt_root, ev.xany.window);
+		if (!w)
+			continue;
+		switch (ev.type) {
+		case Expose:
+			draw(w);
+			break;
+		case ButtonPress:
+		case ButtonRelease:
+		case KeyPress:
+			dispatch(w, &ev);
+			break;
+		}
+	}
+}
+
+XTLITE_IMPL(XtSetValues)
+void XtSetValues(Widget wi, ArgList args, Cardinal n)
+{
+	struct wid *w = (struct wid *)wi;
+	Cardinal i;
+	int redraw = 0;
+
+	for (i = 0; args && i < n; i++) {
+		if (!strcmp(args[i].name, "label")) {
+			snprintf(w->label, sizeof(w->label), "%s",
+				 (const char *)args[i].value);
+			redraw = 1;
+		} else if (!strcmp(args[i].name, "state")) {
+			w->set = (int)args[i].value;
+			redraw = 1;
+		}
+	}
+	if (redraw) {
+		draw(w);
+		XFlush(xt_dpy);
+	}
+}
+
+XTLITE_IMPL(XtGetValues)
+void XtGetValues(Widget wi, ArgList args, Cardinal n)
+{
+	struct wid *w = (struct wid *)wi;
+	Cardinal i;
+
+	for (i = 0; args && i < n; i++) {
+		if (!strcmp(args[i].name, "label"))
+			*(char **)args[i].value = w->label;
+		else if (!strcmp(args[i].name, "state"))
+			*(int *)args[i].value = w->set;
+	}
+}
+
+XTLITE_IMPL(XtParseTranslationTable)
+XtTranslations XtParseTranslationTable(const char *table)
+{
+	return (XtTranslations)table;	/* parsed when it is applied */
+}
+
+XTLITE_IMPL(XtOverrideTranslations)
+void XtOverrideTranslations(Widget wi, XtTranslations t)
+{
+	parse_translations((struct wid *)wi, (const char *)t);
+}
+
+XTLITE_IMPL(XtDisplay)
+Display *XtDisplay(Widget w) { (void)w; return xt_dpy; }
+XTLITE_IMPL(XtScreen)
+Screen *XtScreen(Widget w) { (void)w; return DefaultScreenOfDisplay(xt_dpy); }
+XTLITE_IMPL(XtWindow)
+Window XtWindow(Widget w) { return w ? ((struct wid *)w)->win : None; }
+
+XTLITE_IMPL(XtSetKeyboardFocus)
+void XtSetKeyboardFocus(Widget sub, Widget descendant)
+{
+	(void)sub; (void)descendant;	/* one shell, one focus */
+}
+
+XTLITE_IMPL(XtOwnSelection)
+Boolean XtOwnSelection(Widget w, Atom sel, Time t, XtConvertSelectionProc conv,
+		       XtLoseSelectionProc lose, XtSelectionDoneProc done)
+{
+	(void)w; (void)sel; (void)t; (void)conv; (void)lose; (void)done;
+	return False;		/* no selection transfer on this desktop */
+}
+
+XTLITE_IMPL(XtDestroyApplicationContext)
+void XtDestroyApplicationContext(XtAppContext app)
+{
+	(void)app;
+	running = 0;
+	if (xt_dpy)
+		XCloseDisplay(xt_dpy);
+}
+
+/*
+ * Application resources: fill the caller's struct from the database, falling
+ * back to the defaults it supplied. Only the types xcalc declares are
+ * converted; anything else keeps its default and says so.
+ */
+XTLITE_IMPL(XtGetApplicationResources)
+void XtGetApplicationResources(Widget wi, XtPointer base, XtResourceList res,
+			       Cardinal n, ArgList args, Cardinal num_args)
+{
+	struct wid *w = (struct wid *)wi;
+	Cardinal i;
+
+	(void)args; (void)num_args;
+	for (i = 0; i < n; i++) {
+		XtResource *r = &res[i];
+		char *slot = (char *)base + r->resource_offset;
+		const char *v = res_get(w, r->resource_name, r->resource_class);
+		const char *type = r->resource_type;
+
+		if (!v) {			/* the caller's default */
+			if (r->default_addr && r->default_type &&
+			    !strcmp(r->default_type, type))
+				memcpy(slot, r->default_addr, r->resource_size);
+			else if (r->default_addr)
+				memcpy(slot, &r->default_addr,
+				       r->resource_size < sizeof(void *)
+				       ? r->resource_size : sizeof(void *));
+			continue;
+		}
+		if (!strcmp(type, "String")) {
+			*(const char **)slot = v;
+		} else if (!strcmp(type, "Boolean")) {
+			*(char *)slot = (*v == 't' || *v == 'T' ||
+					 *v == 'y' || *v == 'Y' || *v == '1');
+		} else if (!strcmp(type, "Int") || !strcmp(type, "Dimension")) {
+			if (r->resource_size == sizeof(int))
+				*(int *)slot = atoi(v);
+			else
+				*(short *)slot = (short)atoi(v);
+		} else {
+			xt_note("resource %s: unconverted type %s",
+				r->resource_name, type);
+		}
+	}
+}
+
+/* ------------------------------------------------------------ Athena bits */
+
+/*
+ * Toggles in a radio group: setting one clears the rest. xcalc uses this for
+ * the base and angle-mode indicators.
+ */
+static void unset_group(struct wid *w, const char *group, struct wid *keep)
+{
+	int i;
+
+	if (!w)
+		return;
+	if (w->cls == W_TOGGLE && w != keep && w->radio_group[0] &&
+	    !strcmp(w->radio_group, group) && w->set) {
+		w->set = 0;
+		draw(w);
+	}
+	for (i = 0; i < w->nkids; i++)
+		unset_group(w->kids[i], group, keep);
+}
+
+XTLITE_IMPL(XawToggleUnsetCurrent)
+void XawToggleUnsetCurrent(Widget radio_group)
+{
+	struct wid *w = (struct wid *)radio_group;
+
+	if (w && w->radio_group[0])
+		unset_group(xt_root, w->radio_group, NULL);
+}

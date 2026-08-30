@@ -41,7 +41,7 @@
  */
 #define XLITE_IMPL(name)	/* implemented: name */
 
-#define XLITE_QLEN	256		/* queued events before we drop */
+#define XLITE_QSTART	64		/* initial event ring, grows on demand */
 #define XLITE_IBUF	16384
 
 struct xdpy {
@@ -54,8 +54,18 @@ struct xdpy {
 	unsigned char in[XLITE_IBUF];	/* bytes read but not yet consumed */
 	size_t inlen;
 
-	XEvent q[XLITE_QLEN];		/* ring of queued events */
-	int qhead, qtail;
+	/*
+	 * A GROWABLE event ring. It was a fixed 256 and silently dropped when
+	 * full, which cost xcalc 39 Expose events during startup - every
+	 * widget past the sixteenth painted its background and then never got
+	 * told to draw its label. Losing an Expose is not a glitch: it is the
+	 * only message that will ever ask for that content.
+	 *
+	 * Growing also uses LESS memory in the common case, because it starts
+	 * at 64 rather than reserving 256.
+	 */
+	XEvent *q;
+	int qcap, qhead, qtail;
 
 	int (*errh)(Display *, XErrorEvent *);
 	int (*ioerrh)(Display *);

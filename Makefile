@@ -455,7 +455,13 @@ XIP_ROOTS ?= bin/busybox usr/sbin/wpa_supplicant usr/sbin/iw usr/bin/lvdesk \
 # which happen when a human moves a slider. 943,548 bytes of flash for that,
 # against bluetoothd which never exits, is the wrong trade - and without this
 # the two images total 8,205,052 against 7,602,176 of partition.
-XIP_SKIP ?= libasound.so.2.0.0
+# libblkid is 329,436 bytes and udevd only touches it during coldplug, to probe
+# filesystems for /dev/disk/by-uuid links nothing here uses. Those are clean
+# file pages, so once boot is over the kernel can drop them and the steady-state
+# cost of leaving it on the card is nothing - whereas in XIP it permanently
+# occupied a third of image 2. Trading it for the X client chain is trading
+# boot-time-only pages for pages that are resident the whole session.
+XIP_SKIP ?= libasound.so.2.0.0 libblkid.so.1.1.0
 
 # XIP_ROOTS_DESKTOP was defined here and referenced NOWHERE - dead since the
 # desktop was set aside for text mode, so anything listed in it was silently
@@ -639,7 +645,16 @@ XIP2_STAGE := $(BUILD_DIR)/xipstage2
 # /sbin was added to S05xip's overlay list for ip and udevd; without it these
 # bytes would sit in flash unmounted, which is exactly what had already
 # happened to wpa_supplicant, iw and busybox for however many builds.
-XIP2_ROOTS ?= sbin/ip sbin/udevd
+# sbin/ip was here and is not needed: nothing in the boot path calls it (the
+# "ip link show" in S10udevd is a comment recording a measurement, and
+# /etc/network/nfs_check is for an NFS root we do not use), and busybox has an
+# ip applet anyway. It is 581,604 bytes - by far the largest single item in
+# image 2 - held resident-free for a binary that never runs. It stays on the
+# card, where it costs nothing until someone types it.
+#
+# usr/bin/xcalc pulls the whole X client chain in behind it, which is the point:
+# in XIP that chain costs ZERO RSS instead of ~950 kB paged off the card.
+XIP2_ROOTS ?= sbin/udevd usr/bin/xcalc
 
 # Staged separately from image creation, because image 1 has to know what is
 # in here before it stages itself - see the EXCLUDE_DIR note in xip-rootfs.
