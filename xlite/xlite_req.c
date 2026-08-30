@@ -2075,7 +2075,7 @@ void *XliteShmMap(Display *dpy, Pixmap p, int *w, int *h, int *stride, int *bpp)
 	fd = x->shm_fd;
 	x->shm_fd = -1;
 	if (fd < 0)
-		return NULL;
+		return NULL;		/* server says this one is not shareable */
 	if (w) *w = hdr[8] | (hdr[9] << 8);
 	if (h) *h = hdr[10] | (hdr[11] << 8);
 	if (stride) *stride = hdr[12] | (hdr[13] << 8);
@@ -2101,4 +2101,168 @@ void XliteShmDamaged(Display *dpy, Pixmap p)
 		p32(r + 4, p);
 		xlite_send(x, r);
 	}
+}
+
+/* ------------------------------------------------------------- images */
+/*
+ * XCreateImage / XPutImage / XGetImage.
+ *
+ * All three were stubs, and the shim ACCEPTED PutImage and threw it away - so
+ * any off-the-shelf client that drew an image drew nothing, silently. This is
+ * the ordinary way pixels reach a drawable, so that was a hole underneath
+ * every application rather than a slow path in one.
+ *
+ * Where the destination is a pixmap the shared path takes over completely: the
+ * pixels are memcpy'd into the server's own pages and only a damage message
+ * crosses the socket. Otherwise the wire request carries them, which is what
+ * any other X server would do.
+ */
+/*
+ * XDestroyImage is a MACRO in Xutil.h that calls through ximage->f.destroy_image,
+ * so it cannot be provided as a symbol - the function pointer has to be filled
+ * in on every image we hand out, or the client jumps through NULL on free.
+ */
+static int ximg_destroy(XImage *im)
+{
+	if (im) {
+		free(im->data);
+		free(im);
+	}
+	return 1;
+}
+
+XLITE_IMPL(XCreateImage)
+XImage *XCreateImage(Display *dpy, Visual *vis, unsigned int depth, int format,
+		     int offset, char *data, unsigned int w, unsigned int h,
+		     int pad, int stride)
+{
+	XImage *im = calloc(1, sizeof(*im));
+
+	(void)dpy; (void)vis;
+	if (!im)
+		return NULL;
+	im->width = (int)w;
+	im->height = (int)h;
+	im->xoffset = offset;
+	im->format = format;
+	im->data = data;
+	im->byte_order = LSBFirst;
+	im->bitmap_unit = 32;
+	im->bitmap_bit_order = LSBFirst;
+	im->bitmap_pad = pad ? pad : 32;
+	im->depth = (int)depth;
+	im->bits_per_pixel = depth <= 8 ? 8 : depth <= 16 ? 16 : 32;
+	im->bytes_per_line = stride ? stride :
+		(int)(((w * im->bits_per_pixel + 31) / 32) * 4);
+	im->f.destroy_image = ximg_destroy;
+	im->red_mask = 0xF800;
+	im->green_mask = 0x07E0;
+	im->blue_mask = 0x001F;
+	return im;
+}
+
+
+XLITE_IMPL(XPutImage)
+int XPutImage(Display *dpy, Drawable d, GC gc, XImage *im, int sx, int sy,
+	      int dx, int dy, unsigned int w, unsigned int h)
+{
+	struct xdpy *x = (struct xdpy *)dpy;
+	int sw, sh, stride, bpp, y;
+	void *base;
+
+	if (!im || !im->data || !w || !h)
+		return 0;
+
+	/*
+	 * Straight into the server's pages when it will share them. No pixel
+	 * ever enters the socket, and the whole transfer costs one memcpy per
+	 * row plus a single damage message.
+	 */
+	base = XliteShmMap(dpy, d, &sw, &sh, &stride, &bpp);
+	if (base && bpp == 2 && im->bits_per_pixel == 16) {
+		for (y = 0; (unsigned)y < h && dy + y < sh; y++) {
+			const char *s = im->data +
+					(size_t)(sy + y) * im->bytes_per_line +
+					(size_t)sx * 2;
+			char *o = (char *)base + (size_t)(dy + y) * stride +
+				  (size_t)dx * 2;
+			unsigned n = w;
+
+			if (dx + (int)n > sw)
+				n = sw - dx;
+			memcpy(o, s, (size_t)n * 2);
+		}
+		XliteShmDamaged(dpy, d);
+		return 0;
+	}
+
+	/*
+	 * Otherwise put it on the wire - in BANDS that fit one request.
+	 *
+	 * A request cannot exceed the server's maximum length, which it states
+	 * at connection setup (65,536 bytes here). A 320x200 image is 128 kB,
+	 * so sending it whole produces no drawing and no error: the request is
+	 * simply too big to exist. Real Xlib splits for the same reason, and a
+	 * client that draws a large image is the normal case, not an edge one.
+	 */
+	{
+		int rowb = (int)(((w * im->bits_per_pixel / 8) + 3) & ~3u);
+		unsigned long cap = x->pub.max_request_size ?
+				    x->pub.max_request_size * 4 : 65536;
+		int rows = (int)((cap - 64) / (unsigned long)(rowb ? rowb : 1));
+		int done = 0;
+
+		if (rows < 1)
+			rows = 1;
+		while ((unsigned)done < h) {
+			int nrows = (int)h - done < rows ? (int)h - done : rows;
+			int nb = rowb * nrows;
+			REQ(dpy, 72, 2, 6 + (nb + 3) / 4);
+
+			p32(r + 4, d);
+			p32(r + 8, gc ? ((struct xgc *)gc)->gid : 0);
+			p16(r + 12, w);
+			p16(r + 14, nrows);
+			p16(r + 16, dx);
+			p16(r + 18, dy + done);
+			r[20] = 0;
+			r[21] = (unsigned char)im->depth;
+			for (y = 0; y < nrows; y++)
+				memcpy(r + 24 + (size_t)y * rowb,
+				       im->data +
+				       (size_t)(sy + done + y) *
+				       im->bytes_per_line +
+				       (size_t)sx * im->bits_per_pixel / 8,
+				       (size_t)rowb);
+			xlite_send(x, r);
+			done += nrows;
+		}
+	}
+	return 0;
+}
+
+XLITE_IMPL(XGetImage)
+XImage *XGetImage(Display *dpy, Drawable d, int sx, int sy, unsigned int w,
+		  unsigned int h, unsigned long plane, int format)
+{
+	int sw, sh, stride, bpp, y;
+	void *base;
+	XImage *im;
+	char *buf;
+
+	(void)plane;
+	base = XliteShmMap(dpy, d, &sw, &sh, &stride, &bpp);
+	if (!base || bpp != 2)
+		return NULL;		/* only shared drawables can be read */
+	buf = malloc((size_t)w * h * 2);
+	if (!buf)
+		return NULL;
+	for (y = 0; (unsigned)y < h; y++)
+		memcpy(buf + (size_t)y * w * 2,
+		       (char *)base + (size_t)(sy + y) * stride + (size_t)sx * 2,
+		       (size_t)w * 2);
+	im = XCreateImage(dpy, NULL, 16, format, 0, buf, w, h, 32, (int)w * 2);
+	if (!im)
+		free(buf);
+	return im;
 }

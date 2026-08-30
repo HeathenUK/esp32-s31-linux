@@ -629,3 +629,31 @@ drawing into the pixmap.
   written into shared memory correctly, the server could read them, the damage
   count proved it - and the screen stayed empty, because the caller never
   received the pixmap.
+
+## Images now work at all, and take the shared path when they can
+
+`XCreateImage`, `XPutImage` and `XGetImage` were stubs in xlite, and the shim
+ACCEPTED PutImage (opcode 72) and threw it away. So any off-the-shelf client
+that drew an image drew nothing and was told nothing - a hole underneath every
+application, not a slow path in one. None of xcalc, xclock or xfiles draws an
+image, which is why it had never been noticed.
+
+All three are implemented. `XPutImage` takes the shared route whenever the
+destination can be shared - the pixels are memcpy'd into the server's own pages
+and only a damage message crosses the socket - and falls back to the wire
+request otherwise. `rootfs/ximgtest.c` draws one gradient by each route so the
+two paths are distinguishable at a glance; if a half is missing or torn, that
+half's path is broken.
+
+Three things the wire path needs that are easy to get wrong:
+
+- **Rows are padded to four bytes.** A naive `w * h * bpp` read tears the image
+  progressively worse towards the bottom.
+- **A request cannot exceed the server's maximum length** - 65,536 bytes here,
+  stated at connection setup. A 320x200 image is 128 kB, so sending it whole
+  produces no drawing and no error; the request simply cannot exist. xlite
+  splits into bands, as real Xlib does.
+- **"Not shareable" must be an ordinary reply, not an error.** A client asking
+  whether a WINDOW can be shared is asking a reasonable question. Answering
+  with an error left it waiting for a reply that never came: the client drew the
+  half it could, then hung, still alive and apparently idle.

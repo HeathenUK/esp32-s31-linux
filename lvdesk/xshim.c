@@ -2512,7 +2512,16 @@ static void xshm_request(struct cli *c, const uint8_t *r, int len)
 
 		if (r[1] == 1) {
 			if (!p || p->type != R_PIXMAP || !px_share(p)) {
-				send_error(c, X_BAD_ALLOC, get32(r + 4), op);
+				/*
+				 * Answer "not shareable" as an ordinary reply
+				 * with no descriptor, NOT an error: a client
+				 * asking about a window is asking a reasonable
+				 * question, and an error leaves it waiting for
+				 * a reply that never arrives. XPutImage to a
+				 * window drew nothing and hung there.
+				 */
+				memset(d24, 0, sizeof(d24));
+				send_reply(c, 0, d24, NULL, 0);
 				return;
 			}
 			put16(d24, (uint16_t)p->w);
@@ -3454,7 +3463,55 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 	}
 	case 19: case 22: case 25:
 	case 36: case 37: case 42: case 46: case 109:
-	case 72: case 78: case 93: case 94: case 95: case 127:
+	case 72: {					/* PutImage */
+		/*
+		 * Accepted and DROPPED until now, which meant any client that
+		 * drew an image drew nothing and had no way to find out. It is
+		 * the standard way to get pixels onto a drawable, so this was a
+		 * hole under every off-the-shelf application, not a slow path.
+		 *
+		 * Only ZPixmap is handled - the format every toolkit actually
+		 * sends - and rows are padded to four bytes, which is what
+		 * makes a naive w*h*bpp read tear an image progressively worse
+		 * towards the bottom.
+		 */
+		struct res *d = res_find(get32(r + 4));
+		int fmt = r[1], iw = get16(r + 12), ih = get16(r + 14);
+		int dx = gets16(r + 16), dy = gets16(r + 18), depth = r[21];
+		const uint8_t *src = r + 24;
+		int y, x, pad;
+
+		if (!drawable_ok(d) || fmt != 2 || iw <= 0 || ih <= 0)
+			break;
+		pad = depth <= 8 ? ((iw + 3) & ~3) :
+		      depth <= 16 ? ((iw * 2 + 3) & ~3) : ((iw * 4 + 3) & ~3);
+		if (24 + (size_t)pad * ih > (size_t)len)
+			break;
+		for (y = 0; y < ih; y++) {
+			const uint8_t *row = src + (size_t)y * pad;
+
+			for (x = 0; x < iw; x++) {
+				uint16_t v;
+
+				if (depth <= 8) {
+					v = row[x];
+				} else if (depth <= 16) {
+					v = (uint16_t)(row[x * 2] |
+						       (row[x * 2 + 1] << 8));
+				} else {
+					/* 8-8-8 down to 5-6-5. */
+					v = (uint16_t)
+					    (((row[x * 4 + 2] & 0xF8) << 8) |
+					     ((row[x * 4 + 1] & 0xFC) << 3) |
+					     (row[x * 4] >> 3));
+				}
+				px_set(d, dx + x, dy + y, v);
+			}
+		}
+		notify_draw(d);
+		break;
+	}
+	case 78: case 93: case 94: case 95: case 127:
 		break;					/* accepted, nothing to do */
 
 	default:
