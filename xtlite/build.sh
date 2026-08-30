@@ -16,5 +16,7 @@ $CC -O2 -fPIC -shared -Wall -Wno-unused-parameter \
 echo 'static const char xtlite_placeholder[] = "xtlite";' > /tmp/empty.c
 $CC -O2 -fPIC -shared -Wl,-soname,libXaw7.so.7 -o /src/images/libXaw7.so.7.0.0 /tmp/empty.c
 $CC -O2 -fPIC -shared -Wl,-soname,libXmu.so.6  -o /src/images/libXmu.so.6.2.0  /tmp/empty.c
+for f in /src/images/libXt.so.6.0.0 /src/images/libXaw7.so.7.0.0 \
+	 /src/images/libXmu.so.6.2.0; do ${CC%gcc}strip "$f"; done
 ls -l /src/images/libXt.so.6.0.0 /src/images/libXaw7.so.7.0.0 /src/images/libXmu.so.6.2.0 | awk '{printf "  %-34s %7d\n", $9, $5}'
 

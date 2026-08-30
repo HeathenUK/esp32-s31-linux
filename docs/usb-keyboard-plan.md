@@ -202,3 +202,56 @@ order, and the baseline re-measured last.
   strong hint about controller state, and nothing has followed it up.
 - The receiver was seen to disconnect from the bus entirely, once, with no
   error logged. Never explained.
+
+
+## 2026-08-30: measured again with a mouse AND a keyboard on one hub
+
+The configuration under test - and the numbers that describe it, so nothing
+here has to be re-derived:
+
+    hub 1-1 "USB2.0 HUB"          speed 12   (full speed)
+      1-1.2 8BitDo receiver        speed 12   3 interfaces, all bInterval=1 ms
+      1-1.4 Logitech receiver      speed 12   2 interfaces, bInterval=2 ms
+    host_full_speed = Y   desc_dma = Y   "Enabling descriptor DMA mode"
+
+    CoreMark, both receivers attached      923.1 / 923.4 / 919.8
+    dwc2 interrupts, idle                  ~1030/s  (one per full-speed frame)
+    frame_list complaints                  0
+
+**There are no split transactions on this bus.** Everything enumerated at
+12 Mbit/s, so the hub is a plain repeater. Any note claiming a hub costs ~55%
+of the CPU here (CoreMark 175 against 388) is describing the state BEFORE
+`host_full_speed`, not this one - CoreMark 923 is within a few per cent of this
+board's best recorded score. The periodic-frame-list fix is also live.
+
+`rootfs/inputalign.c` was written for this: it opens every `/dev/hidraw*` and
+every `/dev/input/event*` at once and writes one interleaved log, so "was there
+a report for the key that never arrived?" can actually be answered. It is
+device-agnostic on purpose - a composite receiver is just more nodes.
+
+    inputalign 90 > /tmp/align.txt
+
+**Result with lvdesk stopped**, mouse moving throughout (693 mouse reports,
+224 keyboard reports, 250 key events): **zero `SYN_DROPPED`**, and the typed
+sentence reconstructs from evdev intact. The USB->HID->evdev path delivered
+everything under real mouse load.
+
+### Two traps this exposed in the instrument itself
+
+- **Read-time is not event-time.** The first version stamped every line with
+  the time *this process read the fd*, which put five key-downs 80 ms BEFORE
+  the HID reports they were derived from - causally impossible, and it looks
+  exactly like the host inventing events. It was the order in which two file
+  descriptors happened to be drained. evdev events now carry the kernel's own
+  timestamp via `EVIOCSCLOCKID`/`CLOCK_MONOTONIC`.
+- **A gap between mouse reports is not a stall.** It is equally "the hand
+  stopped moving", and the two are indistinguishable from the reports alone -
+  which is how "the desktop is laggy" stayed unfalsifiable for a whole session.
+  The tool now records its own scheduling: a 10 ms poll that returns late is
+  the system, and nothing the user does can fake it.
+
+### Still open
+
+A single dropped character was seen in one run and is **not** evidence - it is
+equally a typo, and this project has been wrong before by believing one run.
+It counts when it repeats across runs with the stall metric clean.

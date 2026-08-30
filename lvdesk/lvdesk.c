@@ -396,7 +396,16 @@ static void kbd_scan(void)
 
 	for (i = 0; i < 32 && kbd_n < MAXKBD; i++) {
 		snprintf(path, sizeof(path), "/dev/input/event%d", i);
-		fd = open(path, O_RDONLY | O_NONBLOCK);
+		/*
+		 * Read/WRITE, because the Caps Lock LED is ours to drive: on a
+		 * USB keyboard the lock is entirely a host-side concept - the
+		 * keyboard only ever sends KEY_CAPSLOCK - so whoever tracks
+		 * the state also owns the light. Falls back to read-only, in
+		 * which case the state still tracks, just without the LED.
+		 */
+		fd = open(path, O_RDWR | O_NONBLOCK);
+		if (fd < 0)
+			fd = open(path, O_RDONLY | O_NONBLOCK);
 		if (fd < 0)
 			continue;
 		/* already have this one? compare by device node identity */
@@ -416,9 +425,27 @@ static void kbd_scan(void)
 		}
 		if (bits[KEY_A / (8 * sizeof(long))] &
 		    (1UL << (KEY_A % (8 * sizeof(long))))) {
+			unsigned long leds[LED_MAX / (8 * sizeof(long)) + 1];
+
 			input_grab(fd, path);
 			kbd_fds[kbd_n++] = fd;
-			printf("lvdesk: keyboard on %s\n", path);
+			/*
+			 * Adopt the Caps Lock state that already exists.
+			 *
+			 * Assuming it starts off inverts every letter for the
+			 * whole session when it does not: caps ON typed lower
+			 * case, and pressing caps to "fix" it typed upper -
+			 * the state was right, the starting assumption was
+			 * wrong. The kernel knows; ask it.
+			 */
+			memset(leds, 0, sizeof(leds));
+			if (ioctl(fd, EVIOCGLED(sizeof(leds)), leds) >= 0)
+				mod_caps = !!(leds[LED_CAPSL /
+						    (8 * sizeof(long))] &
+					      (1UL << (LED_CAPSL %
+						       (8 * sizeof(long)))));
+			printf("lvdesk: keyboard on %s (caps %s)\n", path,
+			       mod_caps ? "on" : "off");
 		} else {
 			close(fd);
 		}
@@ -718,7 +745,27 @@ static int kbd_poll(void)
 					switcher_end();
 				continue;
 			case KEY_CAPSLOCK:
-				if (ev.value == 1) mod_caps = !mod_caps;
+				if (ev.value == 1) {
+					int k;
+					struct input_event led = {
+						.type = EV_LED,
+						.code = LED_CAPSL,
+					};
+
+					mod_caps = !mod_caps;
+					/*
+					 * Tell every keyboard, not just the one
+					 * that reported it: a composite
+					 * receiver presents several nodes and
+					 * the lock is a property of the
+					 * session, not of one interface.
+					 */
+					led.value = mod_caps;
+					for (k = 0; k < kbd_n; k++)
+						if (write(kbd_fds[k], &led,
+							  sizeof(led)) < 0)
+							;	/* read-only fd */
+				}
 				continue;
 			}
 			if (!ev.value)		/* release; 2 is autorepeat */
@@ -4880,6 +4927,13 @@ int main(void)
 	 * terminal inherits a DISPLAY that resolves to us.
 	 */
 	setenv("DISPLAY", ":0", 1);
+	/*
+	 * Where an Xt application finds its app-defaults. Without it the
+	 * widget tree is built with NO resources and lays itself out
+	 * degenerately - xcalc comes up as an 82x40 box - which reads as a
+	 * broken display server rather than a missing environment variable.
+	 */
+	setenv("XFILESEARCHPATH", "/usr/share/X11/app-defaults/%N", 1);
 	if (xshim_init(xwin_on_window, xwin_on_draw, xwin_on_close) < 0)
 		fprintf(stderr, "lvdesk: no X shim (socket in use?)\n");
 

@@ -21,4 +21,5 @@ $CC -O2 -fno-omit-frame-pointer -fPIC -shared -Wall -Wno-unused-parameter $INSTR
 	-I"$SYSROOT/usr/include" -I/src/xlite \
 	-Wl,-soname,libX11.so.6 \
 	-o "$OUT" /src/xlite/*.c
+${CC%gcc}strip "$OUT"
 ls -l "$OUT"

@@ -1249,7 +1249,15 @@ static void put_format(uint8_t *p, uint32_t id, int depth, int rs, int rm,
 {
 	memset(p, 0, 28);
 	put32(p, id);
-	p[4] = 0;			/* PictTypeDirect */
+	/*
+	 * PictTypeDirect is 1. Writing 0 here is PictTypeIndexed, and the
+	 * failure is asymmetric in a way that hides it: looking a format up by
+	 * ID still works, so XRenderFindVisualFormat() succeeds, while
+	 * XRenderFindStandardFormat() - which matches a TEMPLATE including the
+	 * type - finds nothing, so Xft cannot get its A8 mask format and every
+	 * XftFontOpen returns NULL.
+	 */
+	p[4] = 1;			/* PictTypeDirect */
 	p[5] = (uint8_t)depth;
 	put16(p + 8, rs);  put16(p + 10, rm);
 	put16(p + 12, gs); put16(p + 14, gm);

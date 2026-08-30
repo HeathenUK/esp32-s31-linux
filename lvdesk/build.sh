@@ -28,4 +28,10 @@ if [ "$APP" = lvdesk ]; then
 fi
 echo "linking $APP"
 $CC $CFLAGS -o $OUT /src/lvdesk/$APP.c $EXTRA /tmp/lvo/*.o -lm $LIBS
+# Strip. This binary is executed IN PLACE from flash, so every byte of it
+# occupies a partition with 45 kB of slack - and symbols are bytes the CPU
+# never reads. It was being stripped by hand, which meant that the one time it
+# was not, 231 kB of debug symbols went into XIP image 1 and nobody could tell
+# by looking at the tree. A build step cannot be forgotten.
+${CC%gcc}strip "$OUT"
 ls -la $OUT

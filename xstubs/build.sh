@@ -8,6 +8,7 @@ OUT=/src/images
 S=/src/xstubs/xstubs.c
 build() {			# soname, output name, -D flag
 	$CC -O2 -fPIC -shared -Wall -D"$3" -Wl,-soname,"$1" -o "$OUT/$2" "$S"
+	${CC%gcc}strip "$OUT/$2"
 	ls -l "$OUT/$2" | awk '{printf "  %-24s %7d bytes\n", $9, $5}'
 }
 build libICE.so.6  libICE.so.6.3.0    STUB_ICE

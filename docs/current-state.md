@@ -2160,3 +2160,35 @@ at the standard path built its widget tree with NO resources and came up as a
 90x60 box showing only the display. That is the same degenerate layout a
 missing app-defaults has always produced, and it looks like a rendering bug.
 They are now installed at `/usr/share/X11/app-defaults/`.
+
+
+## lvdesk: Caps Lock was inverted for the whole session (2026-08-30)
+
+Caps Lock behaved backwards in the terminal - caps ON typed lower case, and
+pressing caps to correct it typed upper. The state machine was right; the
+starting assumption was wrong.
+
+On a USB keyboard **the lock is entirely a host-side concept**. The keyboard
+only ever sends `KEY_CAPSLOCK`; whoever tracks the state owns it, and owns the
+LED. lvdesk initialised `mod_caps = 0` and never asked, so if caps was already
+on when it started, every letter was inverted until the user toggled it - which
+inverted the inversion rather than fixing it.
+
+It now reads the real state with `EVIOCGLED`/`LED_CAPSL` when it opens each
+keyboard, logs it (`keyboard on /dev/input/event1 (caps off)`), and writes the
+LED back on every toggle - to *every* keyboard node, because a composite
+receiver presents several and the lock is a property of the session, not of one
+interface. The devices are opened `O_RDWR` for that, falling back to read-only.
+
+Also set alongside `DISPLAY`: **`XFILESEARCHPATH`**. Without it an Xt client
+started from lvdesk's terminal finds no app-defaults and lays itself out
+degenerately - xcalc comes up as a 90x60 box showing only its display, which
+reads as a broken display server rather than a missing environment variable.
+
+### Two observations recorded, not yet chased
+
+- The hardware cursor plane stays drawn in fbcon after lvdesk exits; it should
+  be disabled on the way out.
+- lvdesk's own "System" window opens partly off the right edge of the panel at
+  boot. It is not a leaked X client - it is there on a clean boot with no
+  clients at all.
