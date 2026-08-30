@@ -68,6 +68,8 @@ struct res {
 	int ax, ay;			/* our origin within that buffer */
 	int cx0, cy0, cx1, cy1;		/* clip, in that buffer's coords */
 	uint32_t fg, bg;		/* GCs only */
+	uint32_t font;			/* GCs only: the font it selects */
+	int is_symbol;			/* fonts only: Adobe Symbol encoding */
 	int line_width;
 	int owner;			/* index into cli[] */
 	uint32_t event_mask;		/* what this window asked to receive */
@@ -539,19 +541,89 @@ static void dump_recent(struct cli *c)
 }
 
 /*
+ * The glyph table is the kernel's CP437 console font, so anything that is not
+ * CP437 has to be mapped onto it. Two encodings turn up in practice:
+ *
+ *   - ISO 8859-1, which is what an X core font is by default. xcalc's "x squared"
+ *     button is the single byte \262.
+ *   - Adobe Symbol, which clients select per-GC for mathematical glyphs.
+ *     xcalc uses \326 for the radical sign and \160 for pi.
+ *
+ * Only the code points that exist in CP437 can be shown; the rest fall through
+ * to the raw byte, which is at least deterministic. Unmapped is better than
+ * wrong here - a substituted glyph reads as a rendering bug.
+ */
+static uint8_t map_latin1(uint8_t ch)
+{
+	static const struct { uint8_t l1, cp; } m[] = {
+		{ 0xA0, 0x20 }, { 0xA1, 0xAD }, { 0xA2, 0x9B }, { 0xA3, 0x9C },
+		{ 0xA5, 0x9D }, { 0xAA, 0xA6 }, { 0xAB, 0xAE }, { 0xAC, 0xAA },
+		{ 0xB0, 0xF8 }, { 0xB1, 0xF1 }, { 0xB2, 0xFD }, { 0xB5, 0xE6 },
+		{ 0xB7, 0xFA }, { 0xBA, 0xA7 }, { 0xBB, 0xAF }, { 0xBC, 0xAC },
+		{ 0xBD, 0xAB }, { 0xBF, 0xA8 }, { 0xC4, 0x8E }, { 0xC5, 0x8F },
+		{ 0xC6, 0x92 }, { 0xC7, 0x80 }, { 0xC9, 0x90 }, { 0xD1, 0xA5 },
+		{ 0xD6, 0x99 }, { 0xDC, 0x9A }, { 0xDF, 0xE1 }, { 0xE0, 0x85 },
+		{ 0xE1, 0xA0 }, { 0xE2, 0x83 }, { 0xE4, 0x84 }, { 0xE5, 0x86 },
+		{ 0xE6, 0x91 }, { 0xE7, 0x87 }, { 0xE8, 0x8A }, { 0xE9, 0x82 },
+		{ 0xEA, 0x88 }, { 0xEB, 0x89 }, { 0xEC, 0x8D }, { 0xED, 0xA1 },
+		{ 0xEE, 0x8C }, { 0xEF, 0x8B }, { 0xF1, 0xA4 }, { 0xF2, 0x95 },
+		{ 0xF3, 0xA2 }, { 0xF4, 0x93 }, { 0xF6, 0x94 }, { 0xF7, 0xF6 },
+		{ 0xF9, 0x97 }, { 0xFA, 0xA3 }, { 0xFB, 0x96 }, { 0xFC, 0x81 },
+		{ 0xFF, 0x98 },
+	};
+	int i;
+
+	if (ch < 0xA0)
+		return ch;
+	for (i = 0; i < (int)(sizeof(m) / sizeof(m[0])); i++)
+		if (m[i].l1 == ch)
+			return m[i].cp;
+	return ch;
+}
+
+static uint8_t map_symbol(uint8_t ch)
+{
+	static const struct { uint8_t sy, cp; } m[] = {
+		{ 0x60, 0xC4 },		/* radical extender -> horizontal bar */
+		{ 0x61, 0xE0 },		/* alpha */
+		{ 0x62, 0xE1 },		/* beta */
+		{ 0x64, 0xEB },		/* delta */
+		{ 0x65, 0xEE },		/* epsilon */
+		{ 0x66, 0xED },		/* phi */
+		{ 0x6D, 0xE6 },		/* mu */
+		{ 0x70, 0xE3 },		/* pi */
+		{ 0x73, 0xE5 },		/* sigma */
+		{ 0x74, 0xE7 },		/* tau */
+		{ 0x47, 0xE2 },		/* Gamma */
+		{ 0x53, 0xE4 },		/* Sigma */
+		{ 0x57, 0xEA },		/* Omega */
+		{ 0xA5, 0xEC },		/* infinity */
+		{ 0xB1, 0xF1 },		/* plus-minus */
+		{ 0xB8, 0xF6 },		/* divide */
+		{ 0xD6, 0xFB },		/* radical sign */
+	};
+	int i;
+
+	for (i = 0; i < (int)(sizeof(m) / sizeof(m[0])); i++)
+		if (m[i].sy == ch)
+			return m[i].cp;
+	return ch;
+}
+
+/*
  * One glyph, origin on the baseline as X defines it: bitmap row r lands at
  * y - XFONT_ASCENT + r, so the descent row falls below the baseline. Anything
  * outside the font's range is skipped rather than substituted - a missing
  * glyph should look missing, not like a different character.
  */
-static void draw_glyph(struct res *d, int x, int y, uint8_t ch, uint16_t c)
+static void draw_glyph(struct res *d, int x, int y, uint8_t ch, uint16_t c,
+		       int symbol)
 {
 	const unsigned char *g;
 	int row, col;
 
-	if (ch < XFONT_FIRST || ch > XFONT_LAST)
-		return;
-	g = xfont_bits[ch - XFONT_FIRST];
+	ch = symbol ? map_symbol(ch) : map_latin1(ch);
+	g = xfont_bits[ch];
 	for (row = 0; row < XFONT_H; row++)
 		for (col = 0; col < XFONT_W; col++)
 			if (g[row] & (0x80 >> col))
@@ -559,12 +631,12 @@ static void draw_glyph(struct res *d, int x, int y, uint8_t ch, uint16_t c)
 }
 
 static int draw_string(struct res *d, int x, int y, const uint8_t *str, int n,
-		       uint16_t c)
+		       uint16_t c, int symbol)
 {
 	int i;
 
 	for (i = 0; i < n; i++)
-		draw_glyph(d, x + i * XFONT_W, y, str[i], c);
+		draw_glyph(d, x + i * XFONT_W, y, str[i], c, symbol);
 	return n * XFONT_W;
 }
 
@@ -658,6 +730,13 @@ static uint32_t rgb565(uint16_t r, uint16_t g, uint16_t b)
 {
 	return ((uint32_t)(r >> 11) << 11) | ((uint32_t)(g >> 10) << 5) |
 	       (uint32_t)(b >> 11);
+}
+
+static int gc_symbol(struct res *g)
+{
+	struct res *f = g ? res_find(g->font) : NULL;
+
+	return f && f->type == R_FONT && f->is_symbol;
 }
 
 /* ---------------------------------------------------------------- protocol */
@@ -856,6 +935,35 @@ static void send_expose(struct cli *c, struct res *w, int x, int y, int ww,
 	send_event(c, 12, d, 28);		/* Expose, count 0 */
 }
 
+static void draw_border(struct res *w);
+
+/*
+ * Paint a window's background and border, tell it to redraw, and do the same
+ * for everything mapped beneath it.
+ *
+ * The recursion is the point. A toolkit maps CHILDREN BEFORE PARENTS - xcalc
+ * sends four MapSubwindows and only then MapWindow for the shell - so when a
+ * child is mapped its ancestors are still unmapped, its clip is empty, and its
+ * background fill goes nowhere. Nothing ever repaints it, because the client
+ * considers the background the server's job. That is what cost xcalc the black
+ * bezel around its display while every individual draw was correct.
+ *
+ * Top-down, because win_fill() skips descendants: parents first, then the
+ * children that sit on top of them.
+ */
+static void paint_subtree(struct cli *c, struct res *w)
+{
+	int i;
+
+	win_fill(w, 0, 0, w->w, w->h);
+	draw_border(w);
+	send_expose(c, w, 0, 0, w->w, w->h);
+	for (i = 0; i < MAXRES; i++)
+		if (res[i].type == R_WINDOW && res[i].parent == w->id &&
+		    res[i].mapped && &res[i] != w)
+			paint_subtree(c, &res[i]);
+}
+
 static void expose_window(struct cli *c, struct res *w)
 {
 	uint8_t d[28];
@@ -863,12 +971,7 @@ static void expose_window(struct cli *c, struct res *w)
 	memset(d, 0, sizeof(d));
 	put32(d, w->id); put32(d + 4, w->id);
 	send_event(c, 19, d, 28);		/* MapNotify */
-
-	memset(d, 0, sizeof(d));
-	put32(d, w->id);
-	put16(d + 4, 0); put16(d + 6, 0);
-	put16(d + 8, w->w); put16(d + 10, w->h);
-	send_event(c, 12, d, 28);		/* Expose */
+	paint_subtree(c, w);
 }
 
 static void handle(struct cli *c, const uint8_t *r, int len)
@@ -1152,6 +1255,7 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 			if (bit == 2) g->fg = get32(v);		/* foreground */
 			if (bit == 3) g->bg = get32(v);		/* background */
 			if (bit == 4) g->line_width = get32(v);
+			if (bit == 14) g->font = get32(v);
 			v += 4;
 		}
 		if (getenv("XSHIM_TRACE"))
@@ -1207,8 +1311,6 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 			 * it has no visible area to fill - and the missing
 			 * fill shows up as Xaw's black bevels disappearing.
 			 */
-			win_fill(m, 0, 0, m->w, m->h);
-			draw_border(m);
 			/* Only top-levels become lvdesk windows. */
 			if (win_cb && m->parent == ROOT_ID)
 				win_cb(m->id, m->w, m->h);
@@ -1230,16 +1332,29 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		struct res *g = res_find(get32(r + 8));
 		int x = gets16(r + 12), y = gets16(r + 14);
 		const uint8_t *p = r + 16, *end = r + len;
+		int sym;
 
 		if (!d || !drawable_ok(d) || !g) {
 			send_error(c, d ? X_BAD_GC : X_BAD_DRAWABLE,
 				   get32(d ? r + 8 : r + 4), op);
 			break;
 		}
+		sym = gc_symbol(g);
 		while (p + 2 <= end) {
 			int m, delta;
 
 			if (*p == 255) {		/* font shift */
+				/* Four bytes of font id, MSB first. */
+				struct res *f;
+				uint32_t fid;
+
+				if (p + 5 > end)
+					break;
+				fid = ((uint32_t)p[1] << 24) |
+				      ((uint32_t)p[2] << 16) |
+				      ((uint32_t)p[3] << 8) | p[4];
+				f = res_find(fid);
+				sym = f && f->type == R_FONT && f->is_symbol;
 				p += 5;
 				continue;
 			}
@@ -1252,7 +1367,8 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 				fprintf(stderr, "xshim: PolyText8 0x%x '%.*s' "
 					"fg=%04x bg=%04x at %d,%d\n", d->id, m,
 					p + 2, g->fg, g->bg, x, y);
-			x += draw_string(d, x, y, p + 2, m, (uint16_t)g->fg);
+			x += draw_string(d, x, y, p + 2, m, (uint16_t)g->fg,
+					 sym);
 			p += 2 + m;
 		}
 		notify_draw(d);
@@ -1284,7 +1400,7 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 			fprintf(stderr, "xshim: ImageText8 0x%x '%.*s' fg=%04x "
 				"bg=%04x at %d,%d\n", d->id, n, r + 16, g->fg,
 				g->bg, x, y);
-		draw_string(d, x, y, r + 16, n, (uint16_t)g->fg);
+		draw_string(d, x, y, r + 16, n, (uint16_t)g->fg, gc_symbol(g));
 		notify_draw(d);
 		break;
 	}
@@ -1337,7 +1453,7 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		struct res *g = res_find(get32(r + 8));
 		int i, n = (len - 12) / 4;
 
-		if (!d || !d->px || !g || n < 2)
+		if (!d || !drawable_ok(d) || !g || n < 2)
 			break;
 		for (i = 0; i + 1 < n; i++) {
 			const uint8_t *p = r + 12 + i * 4;
@@ -1354,7 +1470,7 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		int i, n = (len - 16) / 4;
 		int16_t pts[64 * 2];
 
-		if (!d || !d->px || !g || n < 3)
+		if (!d || !drawable_ok(d) || !g || n < 3)
 			break;
 		if (n > 64) n = 64;
 		for (i = 0; i < n; i++) {
@@ -1474,6 +1590,28 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		}
 		break;
 	}
+	case 45: {					/* OpenFont */
+		/*
+		 * We have exactly one set of glyphs, so the only thing that
+		 * matters about a font is its ENCODING. A client that asks for
+		 * -adobe-symbol-* wants mathematical glyphs at ASCII
+		 * positions: xcalc's radical sign is \326 and its pi is \160,
+		 * which in any other font are 'O' and 'p'.
+		 */
+		struct res *f = res_new(get32(r + 4), R_FONT);
+		int n = get16(r + 8), i;
+
+		if (!f)
+			break;
+		if (12 + n > len)
+			n = len - 12;
+		for (i = 0; i + 6 <= n; i++)
+			if (!memcmp(r + 12 + i, "symbol", 6)) {
+				f->is_symbol = 1;
+				break;
+			}
+		break;
+	}
 	case 61: {					/* ClearArea */
 		struct res *d = res_find(get32(r + 4));
 		int cx = gets16(r + 8), cy = gets16(r + 10);
@@ -1516,7 +1654,7 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		break;
 	}
 	case 19: case 22: case 25:
-	case 36: case 37: case 42: case 45: case 46: case 109:
+	case 36: case 37: case 42: case 46: case 109:
 	case 72: case 78: case 93: case 94: case 95: case 127:
 		break;					/* accepted, nothing to do */
 

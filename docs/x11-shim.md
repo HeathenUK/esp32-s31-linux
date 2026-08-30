@@ -296,6 +296,67 @@ it ever asked the server to resize anything before suspecting the server.
 accepted-and-ignored list, and a toolkit that *does* resize its shell after
 computing a layout would have been stuck at the placeholder size for real.
 
+## Running a client
+
+`/root/x11run <client> [args]`, from lvdesk's own terminal or the console:
+
+    x11run xcalc
+    x11run xclock -update 1
+
+lvdesk sets `DISPLAY=:0` before it spawns the shell, so the socket is already
+in the environment. The wrapper adds the other two things a client needs, and
+each of them fails in its own way:
+
+    LD_LIBRARY_PATH   without it the loader cannot find libX11 and friends
+    XFILESEARCHPATH   without it an Xt/Xaw app builds its widget tree with NO
+                      resources and lays itself out degenerately
+
+The second one cost a real diagnosis: xcalc came up as an 82x40 box with all
+forty buttons at 72x12 and all at the same +4+4. That reads as a broken server.
+It was not - xcalc sent zero ConfigureWindow requests, so Xt had computed that
+layout itself, from an app-defaults file that was not on the board. **Ship
+app-defaults with any Xt/Xaw client**, and when a client's geometry looks
+absurd, check whether it ever asked the server to resize anything before
+suspecting the server.
+
+Clients live in `/root/x11`, like the other hand-deployed tools; `x11run` with
+no arguments, or with a name it cannot find, lists what is there.
+
+## Text, and what a real X server would draw differently
+
+The glyphs are the kernel's own `lib/fonts/font_8x8.c`, turned into a C table
+by `tools/mkxshimfont.py`. Same GPL-2.0 as the shim, so there is no font
+package, no font file on the card, and 2 kB of glyph data that lives in XIP
+flash at **zero RSS**. It also makes `QueryFont` honest: the shim already
+claimed a fixed 8x8 face with ascent 7, and a toolkit lays out its widgets from
+whatever the server reports, so the metrics and the glyphs must be the same
+font or the layout is computed on a lie.
+
+The table is CP437 - the console font's own order - so the two encodings that
+actually turn up are mapped onto it:
+
+- **ISO 8859-1**, the default for an X core font. xcalc's "x squared" button is
+  the single byte `\262`.
+- **Adobe Symbol**, which clients select per-GC. xcalc's radical sign is
+  `\326` and its pi is `\160`; in any other font those are `O` and `p`.
+
+That needs per-GC font tracking (`OpenFont` records the encoding from the font
+NAME, GC value bit 14 selects it) and the `PolyText8` font-shift item, which is
+a 255 byte followed by four font-id bytes **MSB first**.
+
+Checked against xcalc's own app-defaults, which is the authoritative
+description of how it should look, the remaining differences from a real X
+server are:
+
+- It asks for `8x13` (`XCalc*Font: 8x13`) and gets 8x8. The layout is
+  self-consistent because QueryFont reports the real metrics, so the window is
+  simply more compact than on a desktop.
+- Symbol glyphs that CP437 does not contain cannot be shown at all.
+
+Everything else matches: the black `bevel` around the display, the inset white
+`screen`, the 1px black button borders, `x^2`, the radical, pi and the division
+sign.
+
 ## Where this goes next
 
 The shim lives in lvdesk's existing poll loop - a socket at
