@@ -391,7 +391,7 @@ static uint16_t *px_alloc(struct res *r, int w, int h)
  * makes the break invisible: the window carries on with exactly what it was
  * showing a moment earlier.
  */
-static int alias_break(struct res *w)
+static int alias_break_ex(struct res *w, int keep_contents)
 {
 	struct res *pm;
 	uint16_t *own;
@@ -404,7 +404,15 @@ static int alias_break(struct res *w)
 	own = malloc(n);
 	if (!own)
 		return 0;
-	if (pm && pm->px)
+	/*
+	 * The copy preserves what the window currently shows - but a caller
+	 * about to overwrite the WHOLE drawable does not need it preserved,
+	 * and for xfiles' full-window Clear that copy was 539 kB and ~30 ms
+	 * per navigation, measured as the largest single request cost left.
+	 */
+	if (!keep_contents)
+		memset(own, 0, n);
+	else if (pm && pm->px)
 		memcpy(own, pm->px, n);
 	else
 		memset(own, 0, n);
@@ -413,6 +421,11 @@ static int alias_break(struct res *w)
 	notify_draw(w);			/* the desktop caches this pointer */
 	mem_win += n; n_win++;
 	return 1;
+}
+
+static int alias_break(struct res *w)
+{
+	return alias_break_ex(w, 1);
 }
 
 /* The pixmap's storage moved or went away: nobody may keep borrowing it. */
@@ -742,19 +755,26 @@ static void draw_arc(struct res *d, int ax, int ay, int aw, int ah,
 	damage_add(d, ax, ay, aw, ah);
 }
 
-/* One write-ready check per operation instead of one per pixel. */
-static struct res *op_target(struct res *d)
+/* One write-ready check per operation instead of one per pixel.
+ * full_cover says the caller will overwrite the entire drawable, so an
+ * alias can be broken without copying the contents it replaces. */
+static struct res *op_target_ex(struct res *d, int full_cover)
 {
 	struct res *b = d->buf;
 
 	if (!b)
 		return NULL;
-	if (b->alias && !alias_break(b))
+	if (b->alias && !alias_break_ex(b, !full_cover))
 		return NULL;
 	if (!b->px)
 		return NULL;
 	b->dirty = 1;
 	return b;
+}
+
+static struct res *op_target(struct res *d)
+{
+	return op_target_ex(d, 0);
 }
 
 static void px_hspan(struct res *d, int x, int y, int w, uint16_t c)
@@ -1536,6 +1556,9 @@ static void send_reply_fd(struct cli *c, const uint8_t *d24, int fd)
  * a print per request would BE the cost it claims to measure.
  */
 static uint64_t xsp_read, xsp_handle, xsp_write, xsp_poll, xsp_calls;
+/* handle time by request: core ops 0..127, RENDER minors at 128+minor */
+static uint64_t xsp_op_ns[256];
+static uint32_t xsp_op_n[256];
 static int xsp_on = -1;
 
 static uint64_t xsp_now(void)
@@ -1567,6 +1590,34 @@ static void xsp_dump(void)
 			(unsigned long long)(xsp_read / 1000 / xsp_calls),
 			(unsigned long long)(xsp_handle / 1000 / xsp_calls),
 			(unsigned long long)(xsp_write / 1000 / xsp_calls));
+	if (xsp_calls) {
+		int k, t, top[4] = { -1, -1, -1, -1 };
+
+		for (k = 0; k < 256; k++) {
+			if (!xsp_op_ns[k])
+				continue;
+			for (t = 0; t < 4; t++)
+				if (top[t] < 0 ||
+				    xsp_op_ns[k] > xsp_op_ns[top[t]]) {
+					memmove(top + t + 1, top + t,
+						(size_t)(3 - t) * sizeof(int));
+					top[t] = k;
+					break;
+				}
+		}
+		fprintf(stderr, "xsp:   top:");
+		for (t = 0; t < 4 && top[t] >= 0; t++)
+			fprintf(stderr, "  %s%u x%u %llums",
+				top[t] >= 128 ? "R" : "",
+				(unsigned)(top[t] >= 128 ? top[t] - 128
+							 : top[t]),
+				xsp_op_n[top[t]],
+				(unsigned long long)
+				(xsp_op_ns[top[t]] / 1000000));
+		fprintf(stderr, "\n");
+	}
+	memset(xsp_op_ns, 0, sizeof(xsp_op_ns));
+	memset(xsp_op_n, 0, sizeof(xsp_op_n));
 	xsp_read = xsp_handle = xsp_write = xsp_poll = xsp_calls = 0;
 }
 
@@ -2039,6 +2090,22 @@ static void render_fill(struct res *d, struct pict *dp, int x, int y,
 		r8 = g8 = b8 = 0;
 		a8 = 255;
 		op = PICT_OP_SRC;
+	}
+	/*
+	 * The measured top cost of an xfiles directory load: the XPM batcher
+	 * turns every icon into FillRectangles requests holding hundreds of
+	 * short per-colour runs, and each run was painted a pixel at a time
+	 * through blend_px - 28 ms per request. An opaque Src/Over fill is a
+	 * span write; anything else keeps the per-pixel path.
+	 */
+	if ((op == PICT_OP_SRC || (op == PICT_OP_OVER && a8 >= 255)) &&
+	    d->buf && d->buf->bpp == 2 && op_target(d)) {
+		uint16_t c = (uint16_t)(((r8 & 0xF8) << 8) |
+					((g8 & 0xFC) << 3) | (b8 >> 3));
+
+		for (j = y0; j < y1; j++)
+			px_hspan(d, x0, j, x1 - x0, c);
+		return;
 	}
 	for (j = y0; j < y1; j++)
 		for (i = x0; i < x1; i++)
@@ -2521,6 +2588,133 @@ static void render_composite(struct cli *c, const uint8_t *r)
 				sp->solid ? "solid" : "picture");
 		x0 = dx; y0 = dy; x1 = dx + w; y1 = dy + h;
 		pict_clip(dp, &x0, &y0, &x1, &y1);
+
+		/*
+		 * The measured heart of xfiles' lag: one directory navigation
+		 * was ~3.6 s of handle() time, nearly all of it this loop at
+		 * per-pixel px_get + blend_px over icon sheets whose masks
+		 * are almost entirely 0 (transparent gaps) or 255 (opaque
+		 * icon body). The run below keeps the generic loop as the
+		 * fallback and takes Over with a real A8/A1 mask and a real
+		 * RGB565 source through row pointers: coverage 0 skips with
+		 * one compare, 255 is a store, and only antialiased edges
+		 * pay the blend arithmetic (identical to blend_px's).
+		 */
+		if (!mp->solid && sp && !sp->solid &&
+		    (op == PICT_OP_OVER || op == PICT_OP_ATOP) &&
+		    d->buf && d->buf->bpp == 2 && m->buf && op_target(d)) {
+			struct res *ss = res_find(sp->drawable);
+
+			if (drawable_ok(ss) && ss->buf &&
+			    ss->buf->bpp == 2) {
+				struct res *db = d->buf, *sb = ss->buf,
+					   *mb = m->buf;
+
+				for (j = y0; j < y1; j++) {
+					int my = mask_y + (j - dy);
+					int py = sy + (j - dy);
+					int ry = j + d->ay;
+					int i0 = x0, i1 = x1, i2;
+					uint16_t *drow;
+					const uint16_t *srow;
+
+					if (my < 0 || my >= m->h ||
+					    py < 0 || py >= ss->h ||
+					    ry < d->cy0 || ry >= d->cy1 ||
+					    my + m->ay < 0 ||
+					    py + ss->ay < 0)
+						continue;
+					/* clip i so every index below is in
+					 * range for dst, src and mask */
+					if (i0 + d->ax < d->cx0)
+						i0 = d->cx0 - d->ax;
+					if (i1 + d->ax > d->cx1)
+						i1 = d->cx1 - d->ax;
+					if (mask_x + (i0 - dx) < 0)
+						i0 = dx - mask_x;
+					if (mask_x + (i1 - dx) > m->w)
+						i1 = dx - mask_x + m->w;
+					if (sx + (i0 - dx) < 0)
+						i0 = dx - sx;
+					if (sx + (i1 - dx) > ss->w)
+						i1 = dx - sx + ss->w;
+					if (i0 >= i1)
+						continue;
+					drow = db->px + (size_t)ry * db->w +
+					       d->ax;
+					srow = sb->px +
+					       (size_t)(py + ss->ay) * sb->w +
+					       ss->ax + (sx - dx);
+					for (i2 = i0; i2 < i1; i2++) {
+						int mxx = mask_x + (i2 - dx);
+						int raw, cov;
+
+						if (mb->bpp == 1)
+							raw = ((const uint8_t *)
+							  mb->px)[(size_t)
+							  (my + m->ay) *
+							  mb->w + mxx + m->ax];
+						else
+							raw = mb->px[
+							  (size_t)(my + m->ay) *
+							  mb->w + mxx + m->ax];
+						/*
+						 * depth-1 stores 0/1 whatever
+						 * the byte width - using the
+						 * raw byte as coverage made an
+						 * A1 mask nearly transparent.
+						 */
+						cov = m->depth == 1 ?
+						      (raw ? 255 : 0) :
+						      mb->bpp == 1 ? raw :
+						      ((((raw) >> 11) & 0x1F)
+						       * 255) / 31;
+						if (!cov)
+							continue;
+						if (cov >= 255) {
+							drow[i2] = srow[i2];
+							continue;
+						}
+						{
+						uint16_t v = srow[i2];
+						uint16_t *pd = &drow[i2];
+						int sr = (v >> 11) << 3;
+						int sg = ((v >> 5) & 0x3F) << 2;
+						int sb8 = (v & 0x1F) << 3;
+						int dr = (*pd >> 11) << 3;
+						int dg = ((*pd >> 5) & 0x3F) << 2;
+						int db8 = (*pd & 0x1F) << 3;
+
+						dr += ((sr - dr) * cov) >> 8;
+						dg += ((sg - dg) * cov) >> 8;
+						db8 += ((sb8 - db8) * cov) >> 8;
+						*pd = (uint16_t)
+						  (((dr & 0xF8) << 8) |
+						   ((dg & 0xFC) << 3) |
+						   (db8 >> 3));
+						}
+					}
+				}
+				damage_add(d, dx, dy, w, h);
+				notify_draw(d);
+				return;
+			}
+		}
+		if (xsp_on > 0) {
+			static uint64_t lastc;
+			uint64_t nowc = xsp_now();
+
+			if (nowc - lastc > 1000000000ull) {
+				lastc = nowc;
+				fprintf(stderr, "xsp: SLOW-COMP op=%d %dx%d "
+					"msolid=%d ssolid=%d mbpp=%d mdepth=%d"
+					" dbpp=%d\n", op, w, h,
+					mp->solid, sp ? sp->solid : -1,
+					m && m->buf ? m->buf->bpp : -1,
+					m ? m->depth : -1,
+					d->buf ? d->buf->bpp : -1);
+			}
+		}
 		for (j = y0; j < y1; j++)
 			for (i = x0; i < x1; i++) {
 				int mx = mask_x + (i - dx);
@@ -2578,10 +2772,51 @@ static void render_composite(struct cli *c, const uint8_t *r)
 		render_unimpl(c, 8, "Composite from an unknown source");
 		return;
 	}
-	damage_add(d, dx, dy, w, h);
-		notify_draw(d);
+	/*
+	 * Same reduction as the fills: an opaque destination makes
+	 * OverReverse and Dst no-ops, and a 565 source has no alpha, so Over
+	 * IS Src - a row copy. xfiles' sheet-to-background composite is
+	 * 600x460 of exactly this, and it was going through blend_px.
+	 */
+	if (op == PICT_OP_DST || op == PICT_OP_OVER_REVERSE)
+		return;
 	x0 = dx; y0 = dy; x1 = dx + w; y1 = dy + h;
 	pict_clip(dp, &x0, &y0, &x1, &y1);
+	if ((op == PICT_OP_OVER || op == PICT_OP_ATOP ||
+	     op == PICT_OP_SRC) && !sp->repeat &&
+	    d->buf && d->buf->bpp == 2 && s->buf && s->buf->bpp == 2 &&
+	    op_target(d)) {
+		struct res *db = d->buf, *sb = s->buf;
+
+		for (j = y0; j < y1; j++) {
+			int py = sy + (j - dy);
+			int ry = j + d->ay;
+			int i0 = x0, i1 = x1;
+
+			if (py < 0 || py >= s->h || ry < d->cy0 ||
+			    ry >= d->cy1)
+				continue;
+			if (i0 + d->ax < d->cx0)
+				i0 = d->cx0 - d->ax;
+			if (i1 + d->ax > d->cx1)
+				i1 = d->cx1 - d->ax;
+			if (sx + (i0 - dx) < 0)
+				i0 = dx - sx;
+			if (sx + (i1 - dx) > s->w)
+				i1 = dx - sx + s->w;
+			if (i0 >= i1)
+				continue;
+			memcpy(db->px + (size_t)ry * db->w + d->ax + i0,
+			       sb->px + (size_t)(py + s->ay) * sb->w +
+			       s->ax + sx + (i0 - dx),
+			       (size_t)(i1 - i0) * 2);
+		}
+		damage_add(d, dx, dy, w, h);
+		notify_draw(d);
+		return;
+	}
+	damage_add(d, dx, dy, w, h);
+	notify_draw(d);
 	if (trace_on())
 		fprintf(stderr, "xshim:   composite op=%d %dx%d src(%d,%d) "
 			"dst(%d,%d) -> clipped %d,%d..%d,%d  src %dx%d\n",
@@ -2843,6 +3078,126 @@ static int render_request(struct cli *c, const uint8_t *r, int len)
 		if (!drawable_ok(d))
 			return 1;
 		render_color(r + 12, &cr, &cg, &cb, &ca);
+		/*
+		 * Ad = 1 everywhere here, so OverReverse (D + S*(1-Ad)) and
+		 * Dst leave the destination untouched, and Over with a=0 is
+		 * the same. xfiles paints FULL-SHEET rectangles with exactly
+		 * these - 276k pixels of no-op that blend_px was faithfully
+		 * computing one pixel at a time, 46 ms per request.
+		 */
+		if (r[4] == PICT_OP_DST || r[4] == PICT_OP_OVER_REVERSE ||
+		    (r[4] == PICT_OP_OVER && ca == 0))
+			return 1;
+		/*
+		 * A single request can carry THOUSANDS of rectangles - the
+		 * XPM-style batching turns an icon into one rect per colour
+		 * run - and paying render_fill's whole call chain per rect
+		 * measured 42 ms per request during an xfiles navigation.
+		 * Everything invariant is hoisted out here: the clip, the
+		 * write-readiness, the packed colour, one damage union.
+		 */
+		if ((r[4] == PICT_OP_CLEAR || r[4] == PICT_OP_SRC ||
+		     (r[4] == PICT_OP_OVER && ca >= 255)) && d->buf) {
+			struct res *b;
+			uint16_t col;
+			int full = 0;
+
+			if (r[4] == PICT_OP_CLEAR) {
+				cr = cg = cb = 0;
+				ca = 255;
+			}
+			/* one rect spanning the drawable = nothing to keep */
+			if (end - p == 8 && gets16(p) <= 0 &&
+			    gets16(p + 2) <= 0 &&
+			    gets16(p) + (int)get16(p + 4) >= d->w &&
+			    gets16(p + 2) + (int)get16(p + 6) >= d->h)
+				full = 1;
+			b = op_target_ex(d, full);
+			if (!b)
+				return 1;
+			col = (uint16_t)(((cr & 0xF8) << 8) |
+					 ((cg & 0xFC) << 3) |
+					 (cb >> 3));
+			int px0 = -32768, py0 = -32768;
+			int px1 = 32767, py1 = 32767;
+			int bx0 = 1 << 30, by0 = 1 << 30;
+			int bx1 = -(1 << 30), by1 = -(1 << 30);
+
+			pict_clip(dp, &px0, &py0, &px1, &py1);
+			for (; p + 8 <= end; p += 8) {
+				int rx = gets16(p), ry = gets16(p + 2);
+				int x0 = rx, y0 = ry;
+				int x1 = rx + get16(p + 4);
+				int y1 = ry + get16(p + 6);
+				int y;
+
+				if (x0 < px0) x0 = px0;
+				if (y0 < py0) y0 = py0;
+				if (x1 > px1) x1 = px1;
+				if (y1 > py1) y1 = py1;
+				/* drawable-local -> buffer, clip once */
+				x0 += d->ax; x1 += d->ax;
+				y0 += d->ay; y1 += d->ay;
+				if (x0 < d->cx0) x0 = d->cx0;
+				if (y0 < d->cy0) y0 = d->cy0;
+				if (x1 > d->cx1) x1 = d->cx1;
+				if (y1 > d->cy1) y1 = d->cy1;
+				if (x0 >= x1 || y0 >= y1)
+					continue;
+				if (b->bpp == 1) {
+					/*
+					 * An A8 surface stores one intensity
+					 * byte; blend_px writes r8 there, so
+					 * the span form is a memset. This is
+					 * the mask-sheet clear xfiles does at
+					 * full window size.
+					 */
+					for (y = y0; y < y1; y++)
+						memset((uint8_t *)b->px +
+						       (size_t)y * b->w + x0,
+						       (uint8_t)cr,
+						       (size_t)(x1 - x0));
+				} else for (y = y0; y < y1; y++) {
+					uint16_t *q = b->px +
+						(size_t)y * b->w + x0;
+					int nn = x1 - x0;
+
+					while (nn--)
+						*q++ = col;
+				}
+				if (x0 < bx0) bx0 = x0;
+				if (y0 < by0) by0 = y0;
+				if (x1 > bx1) bx1 = x1;
+				if (y1 > by1) by1 = y1;
+			}
+			if (bx1 > bx0) {
+				if (!b->dmg_valid) {
+					b->dmg_x0 = bx0; b->dmg_y0 = by0;
+					b->dmg_x1 = bx1; b->dmg_y1 = by1;
+					b->dmg_valid = 1;
+				} else {
+					if (bx0 < b->dmg_x0) b->dmg_x0 = bx0;
+					if (by0 < b->dmg_y0) b->dmg_y0 = by0;
+					if (bx1 > b->dmg_x1) b->dmg_x1 = bx1;
+					if (by1 > b->dmg_y1) b->dmg_y1 = by1;
+				}
+			}
+			notify_draw(d);
+			return 1;
+		}
+		if (xsp_on > 0) {
+			static uint64_t lastp;
+			uint64_t nowp = xsp_now();
+
+			if (nowp - lastp > 1000000000ull) {
+				lastp = nowp;
+				fprintf(stderr, "xsp: SLOW-FILL op=%u ca=%d "
+					"nrects=%d first=%ux%u dstbpp=%d\n",
+					r[4], ca, (int)((end - p) / 8),
+					get16(p + 4), get16(p + 6),
+					d->buf ? d->buf->bpp : -1);
+			}
+		}
 		for (; p + 8 <= end; p += 8) {
 			if (trace_on())
 				fprintf(stderr, "xshim:   fill op=%u %ux%u at "
@@ -4554,10 +4909,14 @@ static void client_data(struct cli *c)
 		if (c->n - off < (size_t)len)
 			break;
 		if (xsp_on) {
-			uint64_t th = xsp_now();
+			uint64_t th = xsp_now(), dt;
+			int key = r[0] < 128 ? r[0] : 128 + (r[1] & 0x7F);
 
 			handle(c, r, len);
-			xsp_handle += xsp_now() - th;
+			dt = xsp_now() - th;
+			xsp_handle += dt;
+			xsp_op_ns[key] += dt;
+			xsp_op_n[key]++;
 			xsp_calls++;
 		} else {
 			handle(c, r, len);
