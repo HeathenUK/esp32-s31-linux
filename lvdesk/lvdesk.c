@@ -1842,6 +1842,18 @@ static void audio_open(void)
 	if (mixer_elem)
 		snd_mixer_selem_get_playback_volume_range(mixer_elem,
 							  &mixer_min, &mixer_max);
+	/*
+	 * alsa-lib keeps its parsed configuration tree - the whole of
+	 * alsa.conf and friends, ~100 KB of heap - cached globally after any
+	 * open, forever. The open mixer handle does not need it; it is only
+	 * consulted by NAME lookups, and the next one (a bong child, which is
+	 * its own process anyway) just re-parses. Freeing it here means the
+	 * first touch of the volume slider stops costing lvdesk that heap for
+	 * the rest of its life. musl never returns freed pages to the kernel,
+	 * so RSS will not visibly drop - the win is that later allocations
+	 * reuse these pages instead of growing the heap further.
+	 */
+	snd_config_update_free_global();
 }
 
 static int audio_get_pct(void)
@@ -1904,11 +1916,20 @@ static void audio_bong(void)
 	 * has the scar from instruments that called audio working while it
 	 * played noise.
 	 */
-	err = snd_pcm_open(&pcm, "plughw:0,0", SND_PCM_STREAM_PLAYBACK, 0);
+	/*
+	 * hw, not plughw: the tone is rendered natively - 2ch 48k S16_LE is
+	 * exactly what the codec runs - so the plug conversion layer would
+	 * allocate its chain for nothing. And free the parsed global config
+	 * immediately: this child lives for ~200 ms, and on a machine with
+	 * ~2 MB available its transient heap is what nudges the system into
+	 * reclaim on every volume change.
+	 */
+	err = snd_pcm_open(&pcm, "hw:0,0", SND_PCM_STREAM_PLAYBACK, 0);
 	if (err < 0) {
 		fprintf(stderr, "lvdesk: bong: open: %s\n", snd_strerror(err));
 		_exit(1);
 	}
+	snd_config_update_free_global();
 	err = snd_pcm_set_params(pcm, SND_PCM_FORMAT_S16_LE,
 				 SND_PCM_ACCESS_RW_INTERLEAVED, chans, rate, 1,
 				 300000);
