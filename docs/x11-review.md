@@ -174,6 +174,32 @@ AsciiText widget classes (xedit/xman/xmore class apps), XtOwnSelection
 implementation, not a stub — sized in days not hours, and worth doing only
 when a target app is named.
 
+## Session outcomes (2026-08-31, continued)
+
+- Reply/event output is batched (out_push/out_flush): write cost per
+  request halved in mixed traffic. The ~6 ms single-round-trip floor
+  remains - it is 1 read + 1 write of af_unix kernel text run from flash
+  (XSHIM_PROF measured read 1.3 ms, write 2.1 ms, handling 0.1 ms).
+  Kernel-side lead: .text.fast for the socket/wakeup path.
+- PolyArc/PolyFillArc implemented (scanline ellipse + sector test, float).
+- EnterNotify/LeaveNotify sent on hit-test change - Xaw hover works.
+- Probe app: oclock (xeyes rejected: links libX11-xcb/xcb-present, i.e.
+  stock-Xlib internals). It needed exactly three xtlite symbols:
+  XtCreateWindow, XtAddEventHandler (stored + dispatched),
+  _XEditResCheckMessages. Runs with zero unimplemented requests.
+  Known imperfection: hand angles look off - not chased yet.
+- Every build script now removes its output first: a failed build can no
+  longer leave a stale binary for deploy.py to ship.
+- All of it is in the flashed XIP images and verified from cold boot.
+
+Open, in rough order of value:
+1. The ~6 ms round-trip floor (kernel .text.fast candidate; weigh RAM).
+2. kbd/mouse 2 s device rescan: ~130 ms per 5 s at idle, and the likely
+   source of the 40-90 ms worst-case spikes in xfill.
+3. Atom-id collision: interned atoms start at 1 and alias the 68
+   predefined atoms - unfixed landmine, fix = seed the table.
+4. oclock hand angles; XCreateBitmapFromData stub (xcalc icon, cosmetic).
+
 ## Suggested order
 
 1. C3 property store + GetProperty (unlocks ICCCM + groundwork for paste)
