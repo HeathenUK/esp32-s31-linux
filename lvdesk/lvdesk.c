@@ -5010,10 +5010,12 @@ static void mouse_scan(void)
 			    a.st_rdev == b.st_rdev) { known = 1; break; }
 		}
 		if (known) { close(fd); continue; }
-		if (!is_mouse(fd) && !is_touch(fd)) { close(fd); continue; }
-		mouse_touch[mouse_n] = is_touch(fd);
-		if (mouse_touch[mouse_n])
-			printf("lvdesk: touchscreen on %s\n", path);
+		{
+			int touch = is_touch(fd);
+
+			if (!touch && !is_mouse(fd)) { close(fd); continue; }
+			mouse_touch[mouse_n] = touch;
+		}
 		{
 			/*
 			 * Injected devices bypass acceleration entirely.
@@ -5035,8 +5037,9 @@ static void mouse_scan(void)
 				       path);
 		}
 		input_grab(fd, path);
+		printf(mouse_touch[mouse_n] ? "lvdesk: touchscreen on %s\n"
+					    : "lvdesk: mouse on %s\n", path);
 		mouse_fds[mouse_n++] = fd;
-		printf("lvdesk: mouse on %s\n", path);
 	}
 }
 
@@ -5103,6 +5106,9 @@ static int mouse_poll(void)
 				       ev.code, ev.value), fflush(stdout);
 			if (in_dbg && ev.type == EV_KEY)
 				printf("ev%d KEY code=%u val=%d\n", i,
+				       ev.code, ev.value), fflush(stdout);
+			if (in_dbg && ev.type == EV_ABS)
+				printf("ev%d ABS code=%u val=%d\n", i,
 				       ev.code, ev.value), fflush(stdout);
 			/*
 			 * The pointer's ring overflows exactly like the
