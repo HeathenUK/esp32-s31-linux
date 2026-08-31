@@ -2274,5 +2274,11 @@ raw file playback should use `s31-play` (overlay `/usr/bin`, stages <=4 MB
 files to tmpfs first). Open lead if it ever matters: SD scheduler fairness -
 one dd starves a reader for ~350 ms.
 
+lvdesk's own volume path is verified end to end: tray icon -> popover ->
+slider click writes BOTH DACL and DACR (0x46/0x47: 0xBF -> 0x8E at 55%,
+back to 0xBF at 74%) and the confirmation bong plays at the newly chosen
+level - two bongs, the first audibly quieter, by ear. The popover's
+read-back percentage tracks the real register (74% == 0xBF/255).
+
 Capture compiled in and carries the same RX fix, but remains unverified by
 ear since the 2026-08-28 session (task #14).
