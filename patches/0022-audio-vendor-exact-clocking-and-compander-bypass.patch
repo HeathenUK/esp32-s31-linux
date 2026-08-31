@@ -1,0 +1,312 @@
+audio: the two faults behind "loud crackle" - found against the factory demo
+
+Playback on the Korvo-1 produced loud pitched noise while every digital
+instrument read correct. Worked back from the known-good stack for this exact
+board (esp-dev-kits factory_demo -> esp32_s31_korvo BSP -> esp_codec_dev
+1.6.2 es8389 driver) rather than trusting any existing code. Two independent
+faults, either sufficient for garbage; both fixed and verified by ear
+(clean 440 Hz sine, 48 kHz S16 stereo, from cold boot):
+
+  * esp32s31-i2s: hw_params wrote TX_CONF/RX_CONF whole from four fields,
+    silently clearing three bits that RESET TO 1 and must stay 1 - above all
+    tx_pcm_bypass (bit 12): cleared, the controller runs every sample through
+    its A-law compander before the codec. A companded sine is loud, harsh,
+    pitched-ish noise. Also restored: tx_bck_no_dly (14, TX only - on RX
+    bit 14 is rx_done_mode and stays 0) and tx/rx_left_align (15), plus
+    mono_fst_vld (9). Bit positions verified against IDF's
+    components/soc/esp32s31/register/soc/i2s_struct.h - the "i2s_ll.h for
+    this SoC" the old comment cited does not exist.
+
+  * es8389: the vendor runs the codec in "internal reference signal
+    (ADCL + DACR)" mode - 0x23 bit 7, 0xF0 = 0x1A (bit 3), 0x0F = 0x10 - and
+    programs the clock coefficient row for rate * bits * 4: the {64, 3072000}
+    row against a wire SCLK of only 32x fs (16-bit slots, 1.536 MHz). The
+    bits evidently double the internal clock. Mainline instead picks the
+    {32, 1536000} row with them clear - the DAC engine at half the speed its
+    filters expect. New `dac_ref` module parameter (default on; dac_ref=0 is
+    the mainline behaviour) applies the vendor mode; bias-on now also
+    releases the DAC reset (0x4D = 0x00) unconditionally, as the vendor does.
+
+Also established on the way, so it is not re-litigated: the flashed hart0
+loader has S31_AUDIO_ENABLE off (verified by strings on the binary, not just
+sdkconfig); the PA on GPIO7 is genuinely driven (GPIO_ENABLE bit 7 set, pad
+routed, output high); the Korvo BSP wires MCLK on GPIO2 but sets
+use_mclk=false, so SCLK-sourcing (0x02 = 0x40) is correct - the old "no MCLK
+trace" note came from a different board's BSP. The 16 KiB DMA ring is 85 ms:
+streaming a WAV off the SD card can underrun on the card's ~180 ms p99 tail,
+so stage test audio in /tmp.
+
+Cumulative diff from the 6.12 BSP baseline (linux-esp32-s31 submodule) to the
+current 7.1 tree for these two files, verified byte-identical on
+reconstruction. For sound/soc/codecs/es8389.c and
+sound/soc/espressif/esp32s31-i2s.c it SUPERSEDES the hunks in
+0005/0008/0009/0011 - on a fresh port, copy the 6.12 files in and apply only
+this, as with 0021.
+
+--- a/sound/soc/codecs/es8389.c
++++ b/sound/soc/codecs/es8389.c
+@@ -50,6 +50,22 @@
+ module_param(mainclk_src, uint, 0644);
+ MODULE_PARM_DESC(mainclk_src, "Value for register 0x02 (main clock source)");
+ 
++/*
++ * The vendor stack (esp_codec_dev es8389.c, no_dac_ref = false - the default
++ * every Espressif board config uses, including the Korvo's) runs the codec in
++ * "internal reference signal (ADCL + DACR)" mode: register 0x23 bit 7 set,
++ * 0xF0 = 0x1A (bit 3), 0x0F = 0x10 - and then programs the clock coefficient
++ * row for rate * bits * 4, i.e. TWICE the SCLK actually arriving on the wire
++ * (16-bit slots, 64x fs row against a 32x fs bit clock). The three register
++ * bits evidently make the internal clock tree run at 2x SCLK. Mainline instead
++ * selects the row matching the wire clock with those bits clear, and on this
++ * board that combination plays loud crackle. dac_ref=0 restores the mainline
++ * behaviour for A/B without a rebuild.
++ */
++static bool dac_ref = true;
++module_param(dac_ref, bool, 0644);
++MODULE_PARM_DESC(dac_ref, "Vendor internal-reference mode: 2x coefficient row + 0x23[7]/0xF0[3]/0x0F[4]");
++
+ static const char * const es8389_core_supplies[] = {
+ 	"vddd",
+ 	"vdda",
+@@ -74,8 +90,8 @@
+ static int es8389_dmic_set(struct snd_kcontrol *kcontrol,
+ 	struct snd_ctl_elem_value *ucontrol)
+ {
+-	struct snd_soc_component *component = snd_soc_dapm_kcontrol_component(kcontrol);
+-	struct snd_soc_dapm_context *dapm = snd_soc_dapm_kcontrol_dapm(kcontrol);
++	struct snd_soc_component *component = snd_soc_dapm_kcontrol_to_component(kcontrol);
++	struct snd_soc_dapm_context *dapm = snd_soc_dapm_kcontrol_to_dapm(kcontrol);
+ 	struct es8389_private *es8389 = snd_soc_component_get_drvdata(component);
+ 	struct soc_enum *e = (struct soc_enum *)kcontrol->private_value;
+ 	unsigned int val;
+@@ -606,7 +622,16 @@
+ 		 */
+ 		regmap_update_bits(es8389->regmap, ES8389_MASTER_CLK,
+ 					ES8389_MAINCLK_SRC_MASK, mainclk_src);
+-		es8389->sysclk = params_channels(params) * params_width(params) * params_rate(params);
++		/*
++		 * Vendor formula: rate * bits * 4, independent of channel count
++		 * - the {64,...} coefficient row for a 16-bit stereo stream
++		 * whose wire SCLK is 32x fs. Correct only together with the
++		 * dac_ref register bits set in es8389_init().
++		 */
++		if (dac_ref)
++			es8389->sysclk = params_width(params) * params_rate(params) * 4;
++		else
++			es8389->sysclk = params_channels(params) * params_width(params) * params_rate(params);
+ 	}
+ 
+ 	regmap_read(es8389->regmap, ES8389_DMIC_EN, &regv);
+@@ -671,6 +696,8 @@
+ 		if (ret)
+ 			return ret;
+ 
++		/* Vendor bias-on releases the DAC reset first, unconditionally. */
++		regmap_write(es8389->regmap, ES8389_DAC_RESET, 0x00);
+ 		regmap_update_bits(es8389->regmap, ES8389_HPSW, 0x20, 0x20);
+ 		regmap_write(es8389->regmap, ES8389_ANA_CTL1, 0xD9);
+ 		regmap_write(es8389->regmap, ES8389_ADC_EN, 0x8F);
+@@ -846,7 +873,12 @@
+ 	regmap_write(es8389->regmap, ES8389_SCLK_DIV, 0x04);
+ 	regmap_write(es8389->regmap, ES8389_LRCK_DIV1, 0x01);
+ 	regmap_write(es8389->regmap, ES8389_LRCK_DIV2, 0x00);
+-	regmap_write(es8389->regmap, ES8389_OSC_CLK, 0x00);
++	/*
++	 * Vendor open() writes 0x10 here; hw_params only ever touches bits
++	 * 7:6 of this register, so bit 4 persists from init. Part of the
++	 * dac_ref clocking mode - see the module parameter.
++	 */
++	regmap_write(es8389->regmap, ES8389_OSC_CLK, dac_ref ? 0x10 : 0x00);
+ 	regmap_write(es8389->regmap, ES8389_ADC_OSR, 0x1F);
+ 	regmap_write(es8389->regmap, ES8389_ADC_DSP, 0x7F);
+ 	regmap_write(es8389->regmap, ES8389_ADC_MUTE, 0xC0);
+@@ -861,6 +893,17 @@
+ 	regmap_write(es8389->regmap, ES8389_RESET, 0x01);
+ 	regmap_write(es8389->regmap, ES8389_DAC_RESET, 0x02);
+ 
++	if (dac_ref) {
++		/*
++		 * Vendor "internal reference signal (ADCL + DACR)" mode, the
++		 * default in every Espressif board config. 0xF0 becomes 0x1A -
++		 * bit 3 is outside every mask hw_params applies (0x72), so it
++		 * persists; 0x12 is what the coefficient rows then write back.
++		 */
++		regmap_update_bits(es8389->regmap, ES8389_ADC_MODE, 0x80, 0x80);
++		regmap_write(es8389->regmap, ES8389_CHIP_MISC, 0x1A);
++	}
++
+ 	regmap_update_bits(es8389->regmap, ES8389_ADC_FORMAT_MUTE, 0x03, 0x03);
+ 	regmap_update_bits(es8389->regmap, ES8389_DAC_FORMAT_MUTE, 0x03, 0x03);
+ }
+--- a/sound/soc/espressif/esp32s31-i2s.c
++++ b/sound/soc/espressif/esp32s31-i2s.c
+@@ -45,11 +45,34 @@
+ #define ESP32S31_I2S_TX_START		BIT(2)
+ #define ESP32S31_I2S_TX_SLAVE_MOD	BIT(3)
+ #define ESP32S31_I2S_TX_STOP_EN		BIT(4)
++/* RX_CONF instead has a two-bit stop *mode* here; 0 = run until stopped. */
++#define ESP32S31_I2S_RX_STOP_MODE	GENMASK(5, 4)
++/*
++ * TX_CONF bit 30: transmitter and receiver share the same WS and BCK. Capture
++ * needs this because only the transmitter's clocks reach the pins - see the
++ * comment in the trigger.
++ */
++#define ESP32S31_I2S_SIG_LOOPBACK	BIT(30)
+ #define ESP32S31_I2S_TX_CHAN_EQUAL	BIT(5)
+ #define ESP32S31_I2S_TX_MONO		BIT(6)
+ #define ESP32S31_I2S_TX_BIG_ENDIAN	BIT(7)
+ #define ESP32S31_I2S_TX_UPDATE		BIT(8)
++/*
++ * These three default to 1 out of reset and the vendor driver leaves them
++ * there. hw_params used to write TX_CONF whole from just msb_shift/tdm_en/
++ * bck_div/stop_en, which silently CLEARED them - and pcm_bypass=0 with
++ * pcm_conf=0 routes every sample through the hardware's A-law compander
++ * module on the way to the codec. A companded sine wave is loud, harsh,
++ * pitched noise: audible as "very loud noise, not the tone, not white".
++ * mono_fst_vld only matters in mono mode and left_align only when the slot
++ * is wider than the sample, but both are kept at their vendor defaults.
++ */
++#define ESP32S31_I2S_TX_MONO_FST_VLD	BIT(9)
++#define ESP32S31_I2S_TX_PCM_BYPASS	BIT(12)
+ #define ESP32S31_I2S_TX_MSB_SHIFT	BIT(13)
++/* TX bit 14 delays BCK by default; on RX bit 14 is rx_done_mode - keep 0. */
++#define ESP32S31_I2S_TX_BCK_NO_DLY	BIT(14)
++#define ESP32S31_I2S_TX_LEFT_ALIGN	BIT(15)
+ #define ESP32S31_I2S_TX_BCK_DIV_NUM	GENMASK(26, 21)
+ #define ESP32S31_I2S_TX_WS_IDLE_POL	BIT(17)
+ #define ESP32S31_I2S_TX_BIT_ORDER	BIT(18)
+@@ -105,6 +128,7 @@
+ 	struct device *dev;
+ 	void __iomem *base;
+ 	void __iomem *clkrst;
++	bool tx_for_rx;		/* transmitter started to clock capture */
+ 	struct snd_dmaengine_dai_dma_data playback_dma;
+ 	struct snd_dmaengine_dai_dma_data capture_dma;
+ 	unsigned int sysclk_hz;
+@@ -264,13 +288,52 @@
+ 
+ 	esp32s31_i2s_calc_div(ESP32S31_I2S_XTAL_HZ, mclk, &integer, &num, &den);
+ 	esp32s31_i2s_set_mclk(i2s, playback, integer, num, den);
++	/*
++	 * Capture also needs the *transmitter's* clock programmed, because the
++	 * transmitter is what drives the pins: the pinmux routes signals 25 and
++	 * 27 - the TX section's BCK and WS - to the pads, so a receive-only
++	 * master generates its clocks on the RX signal indices where nothing is
++	 * listening. The codec then never sees a bit clock, never sends a
++	 * sample, and rx_start (R/W/SC) clears itself again, which is why
++	 * recording returned a buffer that was never written.
++	 */
++	if (!playback)
++		esp32s31_i2s_set_mclk(i2s, true, integer, num, den);
+ 	i2s->sysclk_hz = mclk;
+ 
+-	/* Philips I2S: data delayed one BCLK from the word select edge. */
+-	conf = ESP32S31_I2S_TX_MSB_SHIFT | ESP32S31_I2S_TX_STOP_EN |
+-	       ESP32S31_I2S_TX_TDM_EN |
++	/*
++	 * Philips I2S: data delayed one BCLK from the word select edge, and
++	 * the reset-default bits explicitly preserved - this is a whole-register
++	 * write, so anything not named here is cleared, and clearing pcm_bypass
++	 * puts the A-law compander in the sample path.
++	 */
++	conf = ESP32S31_I2S_TX_MSB_SHIFT | ESP32S31_I2S_TX_TDM_EN |
++	       ESP32S31_I2S_TX_MONO_FST_VLD | ESP32S31_I2S_TX_PCM_BYPASS |
++	       ESP32S31_I2S_TX_LEFT_ALIGN |
+ 	       FIELD_PREP(ESP32S31_I2S_TX_BCK_DIV_NUM, bck_div - 1);
+ 	/*
++	 * TX_STOP_EN is bit 4 of TX_CONF and belongs to transmit alone. RX_CONF
++	 * uses bits [5:4] for rx_stop_mode, where 1 means "stop when rx_start
++	 * is 0 **or in_suc_eof is 1**" - so writing the transmit value into
++	 * RX_CONF halted capture the instant the first DMA descriptor
++	 * completed. That is why recording produced exactly one period and then
++	 * failed with EIO, and why capture had never worked.
++	 *
++	 * Every other field this builds sits at the same position in both
++	 * registers (msb_shift 13, tdm_en 19, bck_div_num 26:21, checked
++	 * against the SoC header), so only this one has to be conditional.
++	 */
++	if (playback)
++		conf |= ESP32S31_I2S_TX_STOP_EN | ESP32S31_I2S_TX_BCK_NO_DLY;
++	else
++		/*
++		 * Only the transmitter's BCK and WS reach the pads (GPIO3 and
++		 * GPIO4, matrix signals 25 and 27), so the receiver takes them
++		 * back in as a slave rather than generating its own on signal
++		 * indices 29 and 30, which are wired to nothing.
++		 */
++		conf |= ESP32S31_I2S_TX_SLAVE_MOD;
++	/*
+ 	 * Slots are exactly as wide as the samples, so the slot width, the
+ 	 * half-frame width and the WS pulse width are all the sample width.
+ 	 */
+@@ -316,6 +379,39 @@
+ 	case SNDRV_PCM_TRIGGER_START:
+ 	case SNDRV_PCM_TRIGGER_RESUME:
+ 	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
++		/*
++		 * Capture rides on the transmitter's clocks.
++		 *
++		 * Only the TX section's BCK and WS reach the pads (pinmux
++		 * signals 25 and 27), so the receiver cannot clock the codec by
++		 * itself. SIG_LOOPBACK feeds those same signals to the receiver
++		 * internally, and the transmitter has to be running to generate
++		 * them at all - which is what the vendor BSP arranges by
++		 * creating both channels and enabling both at init, leaving the
++		 * transmitter emitting silence whenever nothing is played.
++		 *
++		 * Measured: with the transmitter idle the capture ring is never
++		 * written; start playback and it fills immediately.
++		 */
++		if (!playback) {
++			/*
++			 * The transmitter runs for its clocks alone here, with
++			 * no DMA behind it, so TX_STOP_EN - left set by the
++			 * last playback - stops it at the first end-of-frame.
++			 * The clocks then die and the slave receiver, which has
++			 * no others, never sees an edge.
++			 */
++			esp32s31_i2s_update(i2s->base, ESP32S31_I2S_TX_CONF,
++					    ESP32S31_I2S_TX_STOP_EN, 0);
++			esp32s31_i2s_update(i2s->base, ESP32S31_I2S_TX_CONF, 0,
++					    ESP32S31_I2S_TX_FIFO_RESET);
++			esp32s31_i2s_update(i2s->base, ESP32S31_I2S_TX_CONF,
++					    ESP32S31_I2S_TX_FIFO_RESET, 0);
++			esp32s31_i2s_commit(i2s, true);
++			esp32s31_i2s_update(i2s->base, ESP32S31_I2S_TX_CONF, 0,
++					    ESP32S31_I2S_TX_START);
++			i2s->tx_for_rx = true;
++		}
+ 		/* Clear the FIFO before running, or stale samples are emitted. */
+ 		esp32s31_i2s_update(i2s->base, reg, 0, ESP32S31_I2S_TX_RESET);
+ 		esp32s31_i2s_update(i2s->base, reg, ESP32S31_I2S_TX_RESET, 0);
+@@ -331,6 +427,14 @@
+ 	case SNDRV_PCM_TRIGGER_SUSPEND:
+ 	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
+ 		esp32s31_i2s_update(i2s->base, reg, ESP32S31_I2S_TX_START, 0);
++		/* Only stop the transmitter if capture is what started it. */
++		if (!playback && i2s->tx_for_rx) {
++			esp32s31_i2s_update(i2s->base, ESP32S31_I2S_TX_CONF,
++					    ESP32S31_I2S_TX_START, 0);
++			esp32s31_i2s_update(i2s->base, ESP32S31_I2S_TX_CONF,
++					    ESP32S31_I2S_SIG_LOOPBACK, 0);
++			i2s->tx_for_rx = false;
++		}
+ 		break;
+ 	default:
+ 		return -EINVAL;
+@@ -420,7 +524,14 @@
+ 	.periods_min = 2,
+ 	.periods_max = ESP32S31_I2S_BUFFER_BYTES / 1024,
+ 	.period_bytes_min = 1024,
+-	.period_bytes_max = 4096,
++	/*
++	 * A GDMA descriptor carries at most 4095 bytes and receive keeps one
++	 * descriptor per period, so a 4096-byte period - which is what an
++	 * unconfigured arecord asks for - is rejected with -ENOMEM from
++	 * soc_component_trigger.  4092 is the largest legal multiple of the
++	 * 4-byte frame.
++	 */
++	.period_bytes_max = 4092,
+ 	.buffer_bytes_max = ESP32S31_I2S_BUFFER_BYTES,
+ };
+ 
