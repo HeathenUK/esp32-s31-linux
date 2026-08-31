@@ -2233,3 +2233,46 @@ load**: ~1 MB binary deploys over Wi-Fi and 768 kB screenshot reads, repeatedly,
 while a human was trying to type. `rootfs/inputalign.c` now records its own
 scheduling, so that is testable rather than arguable - run a capture while
 deliberately deploying and screenshotting, and look for STALL lines.
+
+## Audio works, verified by ear (2026-08-31)
+
+Clean 440 Hz from a cold boot: 48 kHz S16 stereo through the ES8389, mono
+sources duplicated to both channels and 22.05 kHz resampled by alsa-lib's
+plug layer (both ear-verified), so the card behaves like any ALSA chipset.
+Rebuilt from scratch against the vendor ground truth for this exact board -
+esp-dev-kits factory_demo -> esp32_s31_korvo BSP -> esp_codec_dev 1.6.2 -
+trusting nothing already here. Two independent faults, either alone enough
+for the "loud crackle" this replaced; both are in `patches/0022`:
+
+- **The I2S controller was companding.** hw_params wrote TX_CONF whole from
+  four fields, clearing bits that RESET TO 1 - above all `tx_pcm_bypass`
+  (bit 12): cleared, every sample runs through the hardware A-law compander.
+  A companded sine is loud pitched noise. Bit positions now come from IDF's
+  `soc/esp32s31/register/soc/i2s_struct.h`; the `i2s_ll.h` the old comment
+  cited does not exist for this SoC. Same fix on RX.
+- **The codec ran its engine at half speed.** The vendor programs the
+  {64, 3072000} coefficient row - `rate * bits * 4` - against a 32x-fs wire
+  clock, with the "internal reference" bits set (0x23[7], 0xF0=0x1A,
+  0x0F=0x10) that evidently double the internal clock. Mainline picks the
+  {32, 1536000} row with them clear. `dac_ref=0` module param restores
+  mainline behaviour for A/B.
+
+Also settled: the flashed loader's audio really is off (strings on the
+binary); GPIO7 PA is genuinely driven (GPIO_ENABLE bit 7, FUNC_OUT_SEL 256,
+out high); the Korvo BSP routes MCLK on GPIO2 but sets `use_mclk=false`, so
+SCLK-sourcing (0x02=0x40) is right and the old "no MCLK trace" note was
+another board's BSP.
+
+**The 16 KiB DMA ring is 85 ms, and that is a fact to live with, not fix.**
+Under deliberate SD+CPU load aplay underruns in ~350 ms bursts (3 in a 6 s
+WAV) because it has no lookahead beyond the ring; the same file from tmpfs
+plays clean under the same load. Growing the ring to the map's limit (24 KiB
+play = 128 ms; above that means moving `S31_AUDIO_DMA_BASE` in the shared
+two-hart layout plus a loader reflash) still would not cover 350 ms, so it
+was not done. Real players carry their own decode buffers and are fine;
+raw file playback should use `s31-play` (overlay `/usr/bin`, stages <=4 MB
+files to tmpfs first). Open lead if it ever matters: SD scheduler fairness -
+one dd starves a reader for ~350 ms.
+
+Capture compiled in and carries the same RX fix, but remains unverified by
+ear since the 2026-08-28 session (task #14).

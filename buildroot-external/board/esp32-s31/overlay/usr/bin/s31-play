@@ -1,0 +1,22 @@
+#!/bin/sh
+# Play a sound file with the SD card out of the realtime path.
+#
+# The I2S hardware ring is 16 KiB of shared SRAM - 85 ms at 48 kHz stereo -
+# and under SD contention aplay loses the card for ~350 ms at a time
+# (measured 2026-08-31: 3 underruns playing a 6 s WAV against one dd).
+# No affordable ring covers that, so the buffering happens here instead:
+# stage the file into tmpfs when it reasonably fits, then play from RAM.
+# Measured: the same file, same load, plays clean from /tmp.
+f="$1"
+[ -f "$f" ] || { echo "usage: s31-play <file.wav>" >&2; exit 1; }
+sz=$(ls -l "$f" | awk '{print $5}')
+avail=$(awk '/MemAvailable/{print $2 * 1024}' /proc/meminfo)
+if [ "$sz" -le 4194304 ] && [ "$sz" -le $((avail / 4)) ]; then
+	t=/tmp/.s31play.$$
+	if cp "$f" "$t" 2>/dev/null; then
+		aplay "$t"; rc=$?
+		rm -f "$t"
+		exit $rc
+	fi
+fi
+exec aplay "$f"
