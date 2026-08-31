@@ -2274,6 +2274,21 @@ raw file playback should use `s31-play` (overlay `/usr/bin`, stages <=4 MB
 files to tmpfs first). Open lead if it ever matters: SD scheduler fairness -
 one dd starves a reader for ~350 ms.
 
+RAM review of the volume path (2026-08-31, measured with controls): NOT a
+leak - lvdesk RSS/VmData flat to the kilobyte over repeated popover cycles
+and bong runs, no shadow surfaces (DIRECT render, widgets in LVGL's static
+512 KB pool). The real costs were 1.5 MB of test WAVs left in tmpfs
+(deleted), alsa-lib's parsed config tree held forever after first mixer use,
+and a per-bong re-parse + plug chain in the fork. Fixed:
+snd_config_update_free_global() after mixer load and in the bong child, and
+the bong opens hw:0,0 since the tone is already native format. Verified
+under a 4-client desktop: first volume use now costs 48 KB of heap
+(VmData 3188 -> 3236) and stays byte-flat through every later popover and
+bong; MemAvailable ends higher than it starts. The bong was always
+synthesized programmatically - no PCM is stored. Note MemAvailable jitters
+~200 KB from any process launch (page cache) and recovers lazily; that is
+noise, not growth.
+
 lvdesk's own volume path is verified end to end: tray icon -> popover ->
 slider click writes BOTH DACL and DACR (0x46/0x47: 0xBF -> 0x8E at 55%,
 back to 0xBF at 74%) and the confirmation bong plays at the newly chosen
