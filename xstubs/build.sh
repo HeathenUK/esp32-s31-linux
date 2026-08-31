@@ -9,6 +9,7 @@ OUT=/src/images
 S=/src/xstubs/xstubs.c
 build() {			# soname, output name, -D flag
 	$CC -O2 -fPIC -shared -Wall -I"$SYSROOT/usr/include" -D"$3" \
+	rm -f "$OUT/$2"	# a failed build must leave nothing to ship
 		-Wl,-soname,"$1" -o "$OUT/$2" "$S"
 	${CC%gcc}strip "$OUT/$2"
 	ls -l "$OUT/$2" | awk '{printf "  %-24s %7d bytes\n", $9, $5}'

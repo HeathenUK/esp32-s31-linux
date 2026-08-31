@@ -12,6 +12,7 @@ set -e
 SYSROOT=/src/build/buildroot/host/riscv32-buildroot-linux-musl/sysroot
 CC=/src/toolchain/riscv32-esp-linux-musl/bin/riscv32-esp-linux-musl-gcc
 
+rm -f /src/images/libXft.so.2.3.9	# a failed build must leave nothing to ship
 $CC -O2 -fPIC -shared -Wall -Wno-unused-parameter \
 	-I"$SYSROOT/usr/include" -I"$SYSROOT/usr/include/freetype2" \
 	-Wl,-soname,libXft.so.2 -o /src/images/libXft.so.2.3.9 \

@@ -4,6 +4,7 @@
 set -e
 SYSROOT=/src/build/buildroot/host/riscv32-buildroot-linux-musl/sysroot
 CC=/src/toolchain/riscv32-esp-linux-musl/bin/riscv32-esp-linux-musl-gcc
+rm -f /src/images/libXt.so.6.0.0	# a failed build must leave nothing to ship
 $CC -O2 -fPIC -shared -Wall -Wno-unused-parameter \
 	-I"$SYSROOT/usr/include" -I/src/xtlite \
 	-Wl,-soname,libXt.so.6 -o /src/images/libXt.so.6.0.0 \

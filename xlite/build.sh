@@ -9,6 +9,7 @@ set -e
 SYSROOT=/src/build/buildroot/host/riscv32-buildroot-linux-musl/sysroot
 CC=/src/toolchain/riscv32-esp-linux-musl/bin/riscv32-esp-linux-musl-gcc
 OUT=/src/images/libX11.so.6.4.0
+rm -f "$OUT"	# a failed build must leave nothing to ship
 
 echo "--- generating stubs ---"
 IMPLS=$(ls /src/xlite/xlite*.c)

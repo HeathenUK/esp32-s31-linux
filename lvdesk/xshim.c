@@ -23,6 +23,7 @@
  * different problems and mixing them cost real time elsewhere in this project.
  */
 #define _GNU_SOURCE
+#include <time.h>
 #include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -121,6 +122,17 @@ struct cli {
 	uint8_t in[INBUF];
 	size_t n;
 	/*
+	 * Replies and events accumulate here and go out in ONE write at the
+	 * flush points. Measured with XSHIM_PROF: a single write() on this
+	 * board costs ~2.1 ms (the af_unix/skb/wakeup path is kernel text
+	 * executing from 80 MHz flash), so a client-startup burst of N
+	 * requests used to cost N writes of kernel time. OUTBUF holds the
+	 * largest single reply (QueryFont, ~3.2 kB) many times over; anything
+	 * bigger flushes first and goes out directly.
+	 */
+	uint8_t out[16384];
+	size_t outn;
+	/*
 	 * The last few requests, for when something goes wrong. An X client
 	 * that fails does so several requests after the one that broke it, so
 	 * the opcode we refused is rarely the whole story.
@@ -163,6 +175,9 @@ static void (*close_cb)(uint32_t id);
  * widget window (all of them do) would otherwise report ids lvdesk never saw.
  */
 static struct res *top_of(struct res *r);
+struct cli;
+static void out_flush(struct cli *c);
+static void out_push(struct cli *c, const void *p, size_t n);
 static void notify_draw(struct res *d);
 static int trace_on(void);
 static void px_release(struct res *r);
@@ -1371,7 +1386,7 @@ static void send_setup(struct cli *c)
 	b[0] = 1; b[1] = 0;
 	put16(b + 2, 11); put16(b + 4, 0);
 	put16(b + 6, (p - body) / 4);
-	write(c->fd, b, p - b);
+	out_push(c, b, p - b);
 }
 
 /*
@@ -1385,6 +1400,7 @@ static void send_setup(struct cli *c)
  */
 static void send_reply_fd(struct cli *c, const uint8_t *d24, int fd)
 {
+	out_flush(c);	/* the fd rides THIS reply; keep the stream ordered */
 	uint8_t h[32];
 	struct msghdr m;
 	struct iovec io;
@@ -1417,6 +1433,77 @@ static void send_reply_fd(struct cli *c, const uint8_t *d24, int fd)
 		perror("xshim: sendmsg");
 }
 
+/*
+ * XSHIM_PROF=1: where does a request's time actually go? Added because a
+ * no-op GetInputFocus round trip measured ~3.8 ms inside xshim_poll while
+ * every step in it should be microseconds. Counters, not per-call printf -
+ * a print per request would BE the cost it claims to measure.
+ */
+static uint64_t xsp_read, xsp_handle, xsp_write, xsp_poll, xsp_calls;
+static int xsp_on = -1;
+
+static uint64_t xsp_now(void)
+{
+	struct timespec t;
+
+	clock_gettime(CLOCK_MONOTONIC, &t);
+	return (uint64_t)t.tv_sec * 1000000000ull + t.tv_nsec;
+}
+
+static void xsp_dump(void)
+{
+	static uint64_t last;
+	uint64_t now = xsp_now();
+
+	if (last && now - last < 1000000000ull)
+		return;
+	last = now;
+	if (xsp_calls)
+		fprintf(stderr, "xsp: %llu calls  poll=%lluus read=%lluus "
+			"handle=%lluus write=%lluus (per call p=%llu r=%llu "
+			"h=%llu w=%llu)\n",
+			(unsigned long long)xsp_calls,
+			(unsigned long long)(xsp_poll / 1000),
+			(unsigned long long)(xsp_read / 1000),
+			(unsigned long long)(xsp_handle / 1000),
+			(unsigned long long)(xsp_write / 1000),
+			(unsigned long long)(xsp_poll / 1000 / xsp_calls),
+			(unsigned long long)(xsp_read / 1000 / xsp_calls),
+			(unsigned long long)(xsp_handle / 1000 / xsp_calls),
+			(unsigned long long)(xsp_write / 1000 / xsp_calls));
+	xsp_read = xsp_handle = xsp_write = xsp_poll = xsp_calls = 0;
+}
+
+static void out_flush(struct cli *c)
+{
+	size_t off = 0;
+
+	while (off < c->outn) {
+		ssize_t w;
+		uint64_t tw = xsp_on > 0 ? xsp_now() : 0;
+
+		w = write(c->fd, c->out + off, c->outn - off);
+		if (tw)
+			xsp_write += xsp_now() - tw;
+		if (w <= 0)
+			break;		/* client_data will see the error */
+		off += (size_t)w;
+	}
+	c->outn = 0;
+}
+
+static void out_push(struct cli *c, const void *p, size_t n)
+{
+	if (c->outn + n > sizeof(c->out))
+		out_flush(c);
+	if (n > sizeof(c->out)) {	/* larger than the buffer: direct */
+		write(c->fd, p, n);
+		return;
+	}
+	memcpy(c->out + c->outn, p, n);
+	c->outn += n;
+}
+
 static void send_reply(struct cli *c, uint8_t detail, const uint8_t *d24,
 		       const uint8_t *extra, int nextra)
 {
@@ -1427,9 +1514,9 @@ static void send_reply(struct cli *c, uint8_t detail, const uint8_t *d24,
 	put16(h + 2, c->seq);
 	put32(h + 4, nextra / 4);
 	memcpy(h + 8, d24, 24);
-	write(c->fd, h, 32);
+	out_push(c, h, 32);
 	if (nextra)
-		write(c->fd, extra, nextra);
+		out_push(c, extra, nextra);
 }
 
 /*
@@ -1460,7 +1547,7 @@ static void send_error(struct cli *c, uint8_t code, uint32_t bad, uint8_t major)
 	put16(e + 2, c->seq);
 	put32(e + 4, bad);
 	e[10] = major;
-	write(c->fd, e, 32);
+	out_push(c, e, 32);
 	c->nbad++;
 }
 
@@ -1482,7 +1569,7 @@ static void send_event_d(struct cli *c, uint8_t type, uint8_t detail,
 	e[1] = detail;
 	put16(e + 2, c->seq);
 	memcpy(e + 4, d, n > 28 ? 28 : n);
-	write(c->fd, e, 32);
+	out_push(c, e, 32);
 }
 
 static void send_event(struct cli *c, uint8_t type, const uint8_t *d, int n)
@@ -4008,6 +4095,8 @@ void xshim_window_resize(uint32_t id, int w, int h)
 		expose_window(c, r);
 		notify_draw(r);
 	}
+	if (c->fd >= 0)
+		out_flush(c);
 }
 
 /*
@@ -4164,6 +4253,8 @@ void xshim_pointer(uint32_t id, int x, int y, int button, int act)
 	} else {
 		send_device_event(c, 6, 0, w, x, y, EV_MOTION, state);
 	}
+	if (c->fd >= 0)
+		out_flush(c);
 }
 
 int xshim_fds(int *out, int max)
@@ -4236,8 +4327,21 @@ const char *xshim_window_title(uint32_t id)
 
 static void client_data(struct cli *c)
 {
-	ssize_t n = read(c->fd, c->in + c->n, sizeof(c->in) - c->n);
+	ssize_t n;
 	size_t off = 0;
+	uint64_t t0 = 0;
+
+	if (xsp_on < 0)
+		xsp_on = getenv("XSHIM_PROF") != NULL;
+	if (xsp_on)
+		t0 = xsp_now();
+	n = read(c->fd, c->in + c->n, sizeof(c->in) - c->n);
+	if (xsp_on) {
+		uint64_t t1 = xsp_now();
+
+		xsp_read += t1 - t0;
+		t0 = t1;
+	}
 
 	if (n <= 0) {
 		client_drop(c, 1);
@@ -4283,13 +4387,22 @@ static void client_data(struct cli *c)
 		}
 		if (c->n - off < (size_t)len)
 			break;
-		handle(c, r, len);
+		if (xsp_on) {
+			uint64_t th = xsp_now();
+
+			handle(c, r, len);
+			xsp_handle += xsp_now() - th;
+			xsp_calls++;
+		} else {
+			handle(c, r, len);
+		}
 		off += len;
 	}
 	if (off) {
 		memmove(c->in, c->in + off, c->n - off);
 		c->n -= off;
 	}
+	out_flush(c);
 }
 
 void xshim_poll(void)
@@ -4305,8 +4418,20 @@ void xshim_poll(void)
 			p[n].fd = cli[i].fd; p[n].events = POLLIN;
 			map[n] = i; n++;
 		}
-	if (poll(p, n, 0) <= 0)
-		return;
+	{
+		uint64_t tp = 0;
+		int pr;
+
+		if (xsp_on > 0)
+			tp = xsp_now();
+		pr = poll(p, n, 0);
+		if (tp) {
+			xsp_poll += xsp_now() - tp;
+			xsp_dump();
+		}
+		if (pr <= 0)
+			return;
+	}
 	for (i = 0; i < n; i++) {
 		if (!(p[i].revents & (POLLIN | POLLERR | POLLHUP)))
 			continue;

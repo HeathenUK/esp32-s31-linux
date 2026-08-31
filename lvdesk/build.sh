@@ -8,6 +8,11 @@ SYSROOT=$(echo /src/build/buildroot/host/riscv32-buildroot-linux-musl/sysroot)
 CC=/src/toolchain/riscv32-esp-linux-musl/bin/riscv32-esp-linux-musl-gcc
 APP=${1:-lvdesk}
 OUT=/src/lvdesk/$APP.bin
+# Remove the previous output FIRST. With set -e a failed compile aborts
+# before the link, and the stale binary from the last good build then sits at
+# this path looking current - it has been deployed to the board at least
+# twice. A failed build must leave nothing to ship.
+rm -f "$OUT"
 CFLAGS="-O2 -I/src/lvgl -I/src/lvdesk -DLV_CONF_INCLUDE_SIMPLE "
 rm -rf /tmp/lvo /tmp/lvfail; mkdir -p /tmp/lvo; : > /tmp/lverr
 find /src/lvgl/src -name '*.c' > /tmp/srcs
