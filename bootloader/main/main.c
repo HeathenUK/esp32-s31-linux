@@ -58,7 +58,7 @@
 #include "s31_display.h"
 #endif
 
-#define OPENSBI_XIP_ADDR              0x40220000U
+#define OPENSBI_XIP_ADDR              0x40380000U
 /* The complete 16-MiB Flash is linearly mapped at the IDF flash aperture. */
 #define LINUX_XIP_ADDR                0x40400000U
 #define ROOTFS_FLASH_ADDR             0x40A00000U
@@ -339,7 +339,7 @@ static void start_linux_on_core1(uint32_t fdt)
     }
 }
 
-#define OPENSBI_XIP_ADDR              0x40220000U
+#define OPENSBI_XIP_ADDR              0x40380000U
 #define LINUX_XIP_ADDR                0x40400000U
 #define ROOTFS_FLASH_ADDR             0x40A00000U
 #define FLASH_MTD_XIP_ADDR            0x40000000U

@@ -131,7 +131,7 @@ toolchain: | $(BUILD_DIR)
 toolchain-source:
 	python3 $(CURDIR)/build_linux_toolchain.py --ct-ng-dir "$(CROSSTOOL_NG_DIR)" --jobs "$(JOBS)" --force
 
-FW_TEXT_START ?= 0x40220000
+FW_TEXT_START ?= 0x40380000
 FW_RW_START ?= 0x50FF0000
 # SV32 XIP uses a 4-MiB leaf/megapage boundary.
 LINUX_XIP_ADDR ?= 0x40400000
@@ -348,7 +348,7 @@ coremark: rootfs
 # Keep this decimal because POSIX test(1) and truncate(1) do not accept the
 # partition table's 0x-prefixed value.
 ROOTFS_PARTITION_SIZE ?= 6160384
-XIP2_PARTITION_SIZE ?= 1441792
+XIP2_PARTITION_SIZE ?= 1835008
 # The XIP kernel must start on a 4-MiB Sv32 megapage boundary, so the linux
 # partition stays at 0x400000 and rootfs takes every byte the kernel does not
 # need. Keep this in step with bootloader/partitions.csv.
@@ -690,7 +690,15 @@ XIP2_STAGE := $(BUILD_DIR)/xipstage2
 # in flash and never copied. xfiles measured 188 kB of resident TEXT out of a
 # 508 kB process - by far its largest single cost, and larger than everything
 # the fontconfig and Xcursor replacements saved put together.
-XIP2_ROOTS ?= sbin/udevd usr/bin/xcalc usr/bin/xclock usr/bin/xfiles
+# libasound rides here so the desktop's volume path costs no RAM: 324 KB of
+# resident text measured when it loaded from the SD card. The stock X
+# transport chain (xkbfile/xcb/Xau/Xdmcp - xclock's DT_NEEDED drags it) goes
+# the other way, to the SD lower layer: 280 KB of flash for calls that barely
+# happen.
+XIP2_ROOTS ?= sbin/udevd usr/bin/xcalc usr/bin/xclock usr/bin/xfiles \
+	usr/lib/libasound.so.2.0.0
+XIP2_SKIP ?= libblkid.so.1.1.0 libxkbfile.so.1.0.2 libxcb.so.1.1.0 \
+	libXau.so.6.0.0 libXdmcp.so.6.0.0
 
 # Staged separately from image creation, because image 1 has to know what is
 # in here before it stages itself - see the EXCLUDE_DIR note in xip-rootfs.
@@ -698,7 +706,7 @@ xip2-stage: xip-rootfs
 	@echo "--- staging second userspace XIP image ---"
 	rm -rf $(XIP2_STAGE)
 	mkdir -p $(XIP2_STAGE)
-	EXCLUDE_DIR=$(XIP_STAGE) XIP_SKIP="$(XIP_SKIP)" python3 $(CURDIR)/rootfs/mkxipstage.py \
+	EXCLUDE_DIR=$(XIP_STAGE) XIP_SKIP="$(XIP2_SKIP)" python3 $(CURDIR)/rootfs/mkxipstage.py \
 		$(CROSS_COMPILE)readelf $(BUILDROOT_OUT)/target $(XIP2_STAGE) \
 		$(XIP2_ROOTS)
 
@@ -711,7 +719,7 @@ xip2-image:
 	@echo "--- second userspace XIP image ---"
 	rm -rf $(XIP2_STAGE)
 	mkdir -p $(XIP2_STAGE)
-	EXCLUDE_DIR=$(XIP_STAGE) XIP_SKIP="$(XIP_SKIP)" python3 $(CURDIR)/rootfs/mkxipstage.py \
+	EXCLUDE_DIR=$(XIP_STAGE) XIP_SKIP="$(XIP2_SKIP)" python3 $(CURDIR)/rootfs/mkxipstage.py \
 		$(CROSS_COMPILE)readelf $(BUILDROOT_OUT)/target $(XIP2_STAGE) \
 		$(XIP2_ROOTS)
 	$(BUILDROOT_OUT)/host/bin/mkcramfs -X -X $(XIP2_STAGE) $(XIP2_ROOTFS_IMG)

@@ -98,7 +98,16 @@ core1_linux_trampoline:
     fence   rw, rw
     fence.i
 
-    li      t0, 0x40220000
+    /*
+     * OPENSBI_XIP_ADDR. The FOURTH home of the opensbi partition address,
+     * and the one every C-constant sweep missed when the partition moved
+     * 0x220000 -> 0x380000 (2026-08-31): hart1 jumped into the middle of
+     * the relocated xip2 cramfs image and died without a byte of output.
+     * Keep in lockstep with bootloader/partitions.csv, the two
+     * OPENSBI_XIP_ADDR defines in main.c, FW_TEXT_START in the top-level
+     * Makefile, and the ASSERT in opensbi-esp32-s31/firmware/fw_base.ldS.
+     */
+    li      t0, 0x40380000
     jr      t0
 
     .size core1_linux_trampoline, . - core1_linux_trampoline
