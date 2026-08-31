@@ -187,7 +187,11 @@ when a target app is named.
   stock-Xlib internals). It needed exactly three xtlite symbols:
   XtCreateWindow, XtAddEventHandler (stored + dispatched),
   _XEditResCheckMessages. Runs with zero unimplemented requests.
-  Known imperfection: hand angles look off - not chased yet.
+  An earlier note here said the hand angles looked off - WRONG, verified
+  against the taskbar clock at two times 7 minutes apart: the hands are
+  correct and tick on the minute. oclock simply IS that spartan (hour +
+  minute + a fixed jewel at 12, no seconds), and with SHAPE stubbed the
+  round window that is its whole charm renders square.
 - Every build script now removes its output first: a failed build can no
   longer leave a stale binary for deploy.py to ship.
 - All of it is in the flashed XIP images and verified from cold boot.
@@ -198,7 +202,7 @@ Open, in rough order of value:
    source of the 40-90 ms worst-case spikes in xfill.
 3. Atom-id collision: interned atoms start at 1 and alias the 68
    predefined atoms - unfixed landmine, fix = seed the table.
-4. oclock hand angles; XCreateBitmapFromData stub (xcalc icon, cosmetic).
+4. XCreateBitmapFromData stub (xcalc icon, cosmetic).
 
 ## Suggested order
 
