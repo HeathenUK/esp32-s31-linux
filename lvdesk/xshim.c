@@ -85,15 +85,7 @@ struct res {
 	uint8_t dirty;			/* pixmaps: has anything ever drawn here */
 	uint8_t bpp;			/* bytes per pixel in px: 1 or 2 */
 	int shm_fd;			/* memfd backing px, or -1 */
-	/*
-	 * The length px was actually mapped with. Recomputing it from w and h
-	 * at free time was fine while this was calloc; with munmap a stale
-	 * size is fatal, and w/h change on resize.
-	 */
-	size_t px_len;
 	size_t shm_len;
-	uint8_t uniform;		/* pixmaps: px is NULL, every pixel ufill */
-	uint16_t ufill;			/* ...and this is that value */
 	int line_width;
 	int owner;			/* index into cli[] */
 	uint32_t event_mask;		/* what this window asked to receive */
@@ -331,7 +323,6 @@ static int drawable_ok(struct res *d)
  * path read coverage back out of it. Doing that directly is both half the
  * memory and slightly more accurate, since it no longer quantises to 5 bits.
  */
-static int px_materialise(struct res *r);
 
 /*
  * A pixmap that holds ONE value everywhere needs no pixels, only the value.
@@ -392,6 +383,7 @@ static int alias_break(struct res *w)
 		memset(own, 0, n);
 	w->px = own;
 	w->alias = 0;
+	notify_draw(w);			/* the desktop caches this pointer */
 	mem_win += n; n_win++;
 	return 1;
 }
@@ -434,29 +426,6 @@ static void px_release(struct res *r)
 	}
 	free(r->px);
 	r->px = NULL;
-}
-
-/* Give a uniform pixmap real pixels, pre-filled with the value it held. */
-static int px_materialise(struct res *r)
-{
-	size_t tot = (size_t)r->w * r->h, n = tot * r->bpp, i;
-
-	if (!r->uniform)
-		return r->px != NULL;
-	r->px = malloc(n);
-	if (!r->px)
-		return 0;
-	if (!r->ufill) {
-		memset(r->px, 0, n);
-	} else if (r->bpp == 1) {
-		memset(r->px, (uint8_t)r->ufill, n);
-	} else {
-		for (i = 0; i < tot; i++)
-			r->px[i] = r->ufill;
-	}
-	r->uniform = 0;
-	mem_pix += n; n_pix++;
-	return 1;
 }
 
 void xshim_mem_report(void)
@@ -718,6 +687,16 @@ static void win_fill(struct res *d, int x, int y, int w, int h)
 			px_release(d);
 			d->px = pm->px;
 			d->alias = pm->id;
+			/*
+			 * The desktop CACHES this pointer (lvdesk keeps it in
+			 * an image descriptor and only re-reads it when it
+			 * notices a change), so swapping the buffer without
+			 * saying so leaves LVGL rendering from storage we just
+			 * released. free() made that invisible - the pages
+			 * stayed mapped - which is why it survived until the
+			 * allocator changed underneath it.
+			 */
+			notify_draw(d);
 			if (trace_on())
 				fprintf(stderr, "xshim: win 0x%x now aliases "
 					"pixmap 0x%x (%dx%d, %zu kB saved)\n",

@@ -27,7 +27,7 @@ case "$1" in
 	# repaints the panel about five times a second forever: measured 50
 	# plane updates per 10 s with it on against 1 with it off.
 	echo 0 > /sys/class/graphics/fbcon/cursor_blink 2>/dev/null
-	setsid /usr/bin/lvdesk >/var/log/lvdesk.log 2>&1 </dev/null &
+	LVDESK_CTL=1 setsid /usr/bin/lvdesk >/var/log/lvdesk.log 2>&1 </dev/null &
 	echo "OK"
 	;;
   stop)

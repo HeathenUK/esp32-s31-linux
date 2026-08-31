@@ -528,28 +528,22 @@ static void realize(struct wid *w)
 				       InputOutput, CopyFromParent, mask, &a);
 		XStoreName(xt_dpy, w->win, w->label[0] ? w->label : app_name);
 		/*
-		 * Declare the shell fixed-size, because under xtlite it is.
+		 * The natural layout size is the floor, not a straitjacket.
 		 *
-		 * Real Xt reflows a shell's widget tree when the window
-		 * manager resizes it; xtlite has no geometry management, so a
-		 * resized xcalc repaints its background across the new width
-		 * and leaves the button grid sitting in the corner. Setting
-		 * PMinSize == PMaxSize tells the window manager that up front,
-		 * so it removes the maximise button and the resize grip rather
-		 * than offering an operation whose only possible outcome is a
-		 * large empty area.
-		 *
-		 * This is an honest statement about THIS toolkit, not about the
-		 * application: implement Xt geometry management here and the
-		 * hint should come off with it.
+		 * This used to declare PMinSize == PMaxSize because xtlite had
+		 * no geometry management and a resize could only produce a
+		 * large empty area. shell_resized() reflows the tree now, so
+		 * the shell is resizable - but never below what layout()
+		 * needed, because fonts do not scale and a button smaller than
+		 * its label is unreadable.
 		 */
 		{
 			XSizeHints h;
 
 			memset(&h, 0, sizeof(h));
-			h.flags = PMinSize | PMaxSize;
-			h.min_width = h.max_width = (int)w->w;
-			h.min_height = h.max_height = (int)w->h;
+			h.flags = PMinSize;
+			h.min_width = (int)w->w;
+			h.min_height = (int)w->h;
 			XSetWMNormalHints(xt_dpy, w->win, &h);
 		}
 	} else {
@@ -586,6 +580,91 @@ static struct wid *by_window(struct wid *w, Window win)
 			return f;
 	}
 	return NULL;
+}
+
+/* ------------------------------------------------------------------ resize */
+
+/*
+ * Remember what layout() decided, recursively. shell_resized() scales from
+ * this snapshot every time, so the arithmetic is always basis * factor and
+ * never a scale of a scale.
+ */
+static void record_basis(struct wid *w)
+{
+	int i;
+
+	w->lx = w->x; w->ly = w->y;
+	w->lw = w->w; w->lh = w->h;
+	for (i = 0; i < w->nkids; i++)
+		record_basis(w->kids[i]);
+}
+
+/*
+ * Rubber-sheet reflow: every descendant's basis geometry scaled by the
+ * shell's growth. float, not double - this machine has a single-precision
+ * FPU and double is a library call.
+ *
+ * This is deliberately NOT Athena's chain semantics. Real Xaw Form defaults
+ * every child to ChainTop/ChainLeft, so a maximised xcalc keeps its button
+ * grid in one corner of a sea of background - which is exactly the "large
+ * empty area" the old fixed-size hint existed to prevent. Scaling uses the
+ * new space; for the widget trees this toolkit runs (a single custom widget
+ * filling the shell, or a Form grid) it is what a user expects maximise to
+ * mean. A single child at the shell's own size scales to fill, so xclock
+ * needs no special case.
+ */
+static void scale_tree(struct wid *w, float sx, float sy)
+{
+	int i;
+
+	for (i = 0; i < w->nkids; i++) {
+		struct wid *c = w->kids[i];
+
+		if (!c->managed)
+			continue;
+		c->x = (int)((float)c->lx * sx + 0.5f);
+		c->y = (int)((float)c->ly * sy + 0.5f);
+		c->w = (int)((float)c->lw * sx + 0.5f);
+		c->h = (int)((float)c->lh * sy + 0.5f);
+		if (c->w < 1) c->w = 1;
+		if (c->h < 1) c->h = 1;
+		if (c->realized && c->win)
+			XMoveResizeWindow(xt_dpy, c->win, c->x, c->y,
+					  c->w, c->h);
+		/*
+		 * A custom widget reads w->core.width itself, so push the new
+		 * numbers into its record and run its class resize proc -
+		 * that is how xclock recomputes its face for the new size.
+		 */
+		if (c->cls == W_CUSTOM)
+			xt_custom_resized(c);
+		scale_tree(c, sx, sy);
+	}
+}
+
+static void shell_resized(struct wid *sh, int nw, int nh)
+{
+	float sx, sy;
+
+	if (nw <= 0 || nh <= 0 || (nw == sh->w && nh == sh->h))
+		return;
+	if (sh->lw <= 0 || sh->lh <= 0) {	/* never laid out: adopt */
+		sh->w = nw; sh->h = nh;
+		return;
+	}
+	sx = (float)nw / (float)sh->lw;
+	sy = (float)nh / (float)sh->lh;
+	sh->w = nw;
+	sh->h = nh;
+	xt_note("shell resize %s -> %dx%d (x%.2f, x%.2f)", sh->name, nw, nh,
+		(double)sx, (double)sy);
+	scale_tree(sh, sx, sy);
+	/*
+	 * No explicit repaint: the server clears the resized window and sends
+	 * Expose to every window in the tree after the ConfigureNotify that
+	 * brought us here, and the normal Expose path redraws each widget at
+	 * its new geometry.
+	 */
 }
 
 /* ---------------------------------------------------------- translations */
@@ -1116,6 +1195,7 @@ void XtRealizeWidget(Widget wi)
 	int def = res_int(w, "defaultDistance", "Thickness", 4);
 
 	layout(w, def);
+	record_basis(w);
 	xt_note("realize %s: %dx%d, %d children", w->name, w->w, w->h,
 		w->nkids);
 	realize(w);
@@ -1183,6 +1263,17 @@ void XtAppMainLoop(XtAppContext app)
 		case ButtonRelease:
 		case KeyPress:
 			dispatch(w, &ev);
+			break;
+		case ConfigureNotify:
+			/*
+			 * Only a shell can be resized from outside; children
+			 * get ConfigureNotify echoed back from our own
+			 * XMoveResizeWindow calls, and reflowing on those
+			 * would scale the scale.
+			 */
+			if (w->cls == W_SHELL)
+				shell_resized(w, ev.xconfigure.width,
+					      ev.xconfigure.height);
 			break;
 		}
 	}

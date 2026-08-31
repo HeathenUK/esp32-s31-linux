@@ -91,6 +91,13 @@ struct wid {
 
 	Window win;
 	int x, y, w, h;
+	/*
+	 * Layout-basis geometry: what layout() computed before any resize.
+	 * A shell resize scales every descendant FROM THIS, not from the
+	 * current geometry, so repeated resizes cannot accumulate rounding
+	 * drift and shrinking back restores the original layout exactly.
+	 */
+	int lx, ly, lw, lh;
 	int pref_w, pref_h;		/* width/height resources, 0 = from label */
 	int justify;			/* 0 left, 1 centre, 2 right - Xaw's values */
 	XFontStruct *fnt;		/* per-widget font, NULL = the default */

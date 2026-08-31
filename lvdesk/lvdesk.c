@@ -25,6 +25,8 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/input.h>
+#include <linux/kd.h>
+#include <sys/ioctl.h>
 #include <poll.h>
 #include <sys/stat.h>
 #include <time.h>
@@ -260,10 +262,13 @@ static int caps_led_seen;	/* the kernel drives the Caps Lock LED */
  * no other answer on this board, and a silent drop is indistinguishable from a
  * keyboard fault.
  */
+static int in_dbg;			/* LVDESK_INDBG: log every raw event */
 static unsigned kbd_dropped;		/* SYN_DROPPED events seen */
+static unsigned mouse_dropped;		/* ...and the same for the pointer */
 static unsigned kbd_write_fail;		/* keystrokes the pty refused */
 static uint32_t kbd_last_poll_ms;
 static uint32_t kbd_worst_stall_ms;
+
 
 /* A key repeating longer than this without a release is treated as stuck. */
 #define STUCK_REPEAT_MS		1500
@@ -355,6 +360,90 @@ static const char *keyseq(int code)
  * keystrokes itself and the panel changed anyway; with fbcon unbound the
  * desktop turned out not to respond to a hotplugged keyboard at all.
  */
+/*
+ * Take the virtual terminal away from the kernel console.
+ *
+ * Grabbing the evdev devices is NOT sufficient, and relying on it alone was a
+ * real bug: characters kept appearing on fbcon underneath the desktop.
+ *
+ *  - EVIOCGRAB only covers devices lvdesk actually opened AND classified as a
+ *    keyboard.  A composite wireless receiver enumerates several interfaces
+ *    (this one presents "...Receiver" and "...Receiver Keyboard"), and any
+ *    interface not grabbed still reaches the kernel's `kbd` handler.  Solving
+ *    that per-device is a losing game - the next receiver has a different
+ *    layout.
+ *  - A grab does nothing about fbcon *painting*.  The console renders into the
+ *    same DRM device this desktop scans out of, so console output can appear
+ *    over the panel whether or not it came from our keyboard.
+ *
+ * KDSKBMODE/K_OFF stops the console keyboard handler generating anything at
+ * all, for every device, present or future.  KDSETMODE/KD_GRAPHICS stops fbcon
+ * drawing.  This is exactly what an X server does on startup, and it makes the
+ * separation structural rather than a matter of winning a race against udev.
+ *
+ * Both are restored on the way out, including on a fatal signal - leaving a VT
+ * in K_OFF means a keyboard that does nothing at the console, which would be a
+ * much worse bug than the one being fixed.
+ */
+static int vt_fd = -1;
+static int vt_kbmode = -1;
+static long vt_mode = -1;
+
+static void vt_restore(void)
+{
+	if (vt_fd < 0)
+		return;
+	if (vt_kbmode >= 0)
+		ioctl(vt_fd, KDSKBMODE, vt_kbmode);
+	if (vt_mode >= 0)
+		ioctl(vt_fd, KDSETMODE, vt_mode);
+	close(vt_fd);
+	vt_fd = -1;
+}
+
+static void vt_fatal(int sig)
+{
+	vt_restore();
+	signal(sig, SIG_DFL);
+	raise(sig);
+}
+
+static void vt_takeover(void)
+{
+	long mode;
+	int kb;
+
+	if (getenv("LVDESK_NO_VT")) {
+		printf("lvdesk: LVDESK_NO_VT set, leaving the console alone\n");
+		return;
+	}
+	vt_fd = open("/dev/tty0", O_RDWR | O_NOCTTY);
+	if (vt_fd < 0) {
+		printf("lvdesk: no /dev/tty0 (%s) - console may echo\n",
+		       strerror(errno));
+		return;
+	}
+	if (ioctl(vt_fd, KDGKBMODE, &kb) == 0)
+		vt_kbmode = kb;
+	if (ioctl(vt_fd, KDGETMODE, &mode) == 0)
+		vt_mode = mode;
+
+	if (ioctl(vt_fd, KDSKBMODE, K_OFF) < 0)
+		printf("lvdesk: KDSKBMODE K_OFF failed (%s) - keys may still "
+		       "reach the console\n", strerror(errno));
+	if (ioctl(vt_fd, KDSETMODE, KD_GRAPHICS) < 0)
+		printf("lvdesk: KDSETMODE KD_GRAPHICS failed (%s) - fbcon may "
+		       "still paint\n", strerror(errno));
+
+	atexit(vt_restore);
+	signal(SIGTERM, vt_fatal);
+	signal(SIGINT, vt_fatal);
+	signal(SIGHUP, vt_fatal);
+	signal(SIGSEGV, vt_fatal);
+	signal(SIGABRT, vt_fatal);
+	printf("lvdesk: console keyboard off, fbcon in graphics mode\n");
+}
+
 /*
  * Take exclusive ownership of an input device.
  *
@@ -479,6 +568,10 @@ static void kbd_open(void)
 static void term_write(const char *buf, int n)
 {
 	int tries = 0, off = 0;
+
+	if (in_dbg && n > 0)
+		printf("pty<- %d: %.*s\n", n, n > 8 ? 8 : n, buf),
+		fflush(stdout);
 
 	while (off < n) {
 		int w = write(term.fd, buf + off, n - off);
@@ -716,6 +809,10 @@ static int kbd_poll(void)
 			 * merely skip this: it is the only notification that
 			 * anything was lost.
 			 */
+			if (in_dbg && (ev.type == EV_KEY || ev.type == EV_MSC))
+				printf("kbd fd%d type=%u code=%u val=%d\n",
+				       kbd_fds[i], ev.type, ev.code,
+				       ev.value), fflush(stdout);
 			if (ev.type == EV_SYN && ev.code == SYN_DROPPED) {
 				kbd_dropped++;
 				printf("lvdesk: INPUT LOST - evdev overflow on "
@@ -4473,6 +4570,8 @@ static int mouse_fds[MAXMOUSE];
 static int mouse_raw[MAXMOUSE];		/* synthetic: no pointer acceleration */
 static int mouse_n;
 static uint32_t mouse_scan_at;
+static uint32_t in_lag_sum, in_lag_max;
+static uint32_t in_lag_n;
 static int ptr_pressed;
 static int press_edge;			/* a new press, not yet acted on */
 static int wheel;
@@ -4631,6 +4730,55 @@ static int mouse_poll(void)
 			continue;
 		busy = 1;
 		do {
+			/*
+			 * LVDESK_INDBG: every relative event, with the device
+			 * it came from. "One axis stops for a few seconds and
+			 * then recovers" cannot be diagnosed from the pointer
+			 * position - the question is whether the axis events
+			 * stopped ARRIVING, or arrived and were discarded, and
+			 * only the raw stream distinguishes those. A second
+			 * reader cannot answer it either, because lvdesk holds
+			 * an exclusive grab on the device.
+			 */
+			if (in_dbg && ev.type == EV_REL)
+				printf("ev%d REL code=%u val=%d\n", i,
+				       ev.code, ev.value), fflush(stdout);
+			if (in_dbg && ev.type == EV_KEY)
+				printf("ev%d KEY code=%u val=%d\n", i,
+				       ev.code, ev.value), fflush(stdout);
+			/*
+			 * The pointer's ring overflows exactly like the
+			 * keyboard's, and this path used to ignore the
+			 * notification entirely - EV_SYN fell through the
+			 * EV_REL/EV_KEY tests below and was dropped.
+			 *
+			 * The result is the reported symptom: after a stall the
+			 * kernel discards the backlog, the deltas either side
+			 * of the gap no longer describe a continuous movement,
+			 * and one axis appears to stop until a clean batch
+			 * arrives - "it goes up and down but not left and
+			 * right, then recovers a few seconds later".
+			 *
+			 * Everything accumulated in this batch is therefore
+			 * suspect and is thrown away, and the button state is
+			 * cleared: a lost RELEASE would otherwise leave the
+			 * pointer dragging something for ever.
+			 */
+			if (ev.type == EV_SYN && ev.code == SYN_DROPPED) {
+				mouse_dropped++;
+				printf("lvdesk: INPUT LOST - evdev overflow on "
+				       "mouse fd %d (%u so far)\n",
+				       mouse_fds[i], mouse_dropped);
+				fflush(stdout);
+				vdx = vdy = rdx = rdy = 0;
+				wheel = 0;
+				btn_extra = 0;
+				if (ptr_pressed) {
+					ptr_pressed = 0;
+					press_edge = 0;
+				}
+				continue;
+			}
 			if (ev.type == EV_REL) {
 				if (ev.code == REL_X) {
 					if (mouse_raw[i]) vdx += ev.value;
@@ -4651,6 +4799,28 @@ static int mouse_poll(void)
 					ev_ms = (uint32_t)
 						(ev.input_event_sec * 1000 +
 						 ev.input_event_usec / 1000);
+					/*
+					 * How STALE this event was by the time
+					 * we looked at it. The "input starved"
+					 * warning measures the gap between
+					 * polls, which is ~2 s whenever the
+					 * desktop is simply idle - it cannot
+					 * tell a quiet moment from a late one.
+					 * This can: the kernel stamped the
+					 * event when it happened, so anything
+					 * large here is real lag the user felt.
+					 */
+					{
+						uint32_t age = lv_tick_get() -
+							       ev_ms;
+
+						if (age < 10000) {
+							in_lag_sum += age;
+							in_lag_n++;
+							if (age > in_lag_max)
+								in_lag_max = age;
+						}
+					}
 			} else if (ev.type == EV_KEY && ev.code == BTN_LEFT) {
 				int was = ptr_pressed;
 
@@ -4924,6 +5094,7 @@ int main(void)
 	 * and reaps. child_exited starts set so anything already gone is
 	 * collected on the first pass.
 	 */
+	vt_takeover();
 	signal(SIGCHLD, on_sigchld);
 	signal(SIGUSR1, on_sigusr1);
 	child_exited = 1;
@@ -5099,6 +5270,7 @@ int main(void)
 	printf("lvdesk: %dx%d %s\n", (int)kms_w, (int)kms_h,
 	       direct_render ? "direct" : "partial");
 
+	in_dbg = getenv("LVDESK_INDBG") != NULL;
 	ctl_init();
 	mouse_init();			/* pointer and keyboard are both read here */
 	kbd_open();
@@ -5492,6 +5664,16 @@ int main(void)
 			ctl_poll();
 			if (want_mem_report) {
 				want_mem_report = 0;
+				printf("lvdesk: input dropped: %u keyboard, "
+				       "%u pointer; worst stall %u ms\n",
+				       kbd_dropped, mouse_dropped,
+				       (unsigned)kbd_worst_stall_ms);
+				printf("lvdesk: input lag avg %u ms, worst "
+				       "%u ms, over %u events\n",
+				       in_lag_n ? in_lag_sum / in_lag_n : 0,
+				       in_lag_max, in_lag_n);
+				fflush(stdout);
+				in_lag_sum = in_lag_max = in_lag_n = 0;
 				xshim_mem_report();
 			}
 			if (child_exited) {
