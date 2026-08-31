@@ -2297,3 +2297,37 @@ read-back percentage tracks the real register (74% == 0xBF/255).
 
 Capture compiled in and carries the same RX fix, but remains unverified by
 ear since the 2026-08-28 session (task #14).
+
+## RAM economy round, and a flash reshuffle that bit (2026-08-31)
+
+Idle desktop MemAvailable ~3.2-3.5 MB after: 1.5 MB of test WAVs deleted from
+tmpfs; syslogd/klogd moved to S06/S07 (after the XIP overlay) so their busybox
+text runs from cramfs - 968 KB resident down to 76 KB; libasound moved into
+xip2 so the volume path's 324 KB of SD-backed text now costs nothing; the
+2 s input-device rescan replaced with an inotify watch (was ~130 ms per 5 s
+idle plus the 40-90 ms hitches); alsa's config tree kept for the process
+lifetime (freeing it returns nothing - musl keeps the pages - and charged an
+SD re-parse per bong). Measured and waiting: LVGL's static pool peaks at
+25 KB of 512 KB (5%) on a working desktop - re-read `lvmem` via the control
+FIFO after heavy use, then shrink LV_MEM_SIZE with margin. The stashed
+uniform-pixmap work (~705 KB across X clients) remains the biggest X-session
+lever, gated on a full examined sweep.
+
+**The flash layout changed - record of what and how to undo.** To fit
+libasound (943,548 bytes): factory 0x200000 -> 0x1A0000 (loader app is
+1.62 MB; 82 KB headroom - an audio-enabled loader build will NOT fit),
+xip2 0x2A0000/0x160000 -> 0x1C0000/0x1C0000, opensbi 0x2A0000... -> 0x380000.
+linux and rootfs did not move. Rollback = revert the five-home commit set,
+rebuild loader + opensbi, reflash bootloader/table/app + opensbi + both xip
+images. **The opensbi address lives in FIVE homes**: partitions.csv, TWO
+defines in bootloader/main/main.c, FW_TEXT_START in the Makefile, the assert
+in opensbi's fw_base.ldS - and a bare `li t0, ...` in
+bootloader/main/core1_trampoline.S. The fifth was missed: hart1 jumped into
+the middle of the relocated xip2 image and died silently, and alive.py's
+raw-buffer stage matching reported SHELL from framing garbage for four
+resets running (both fixed; alive.py now prints whole phases with byte
+counts and classifies only filtered lines). Also learned: XIP_SKIP demotes a
+library to "the SD lower layer" - which only works if the card actually
+holds a copy. This card predates the X11 stack; libxkbfile/libxcb/libXau/
+libXdmcp had to be backfilled onto the ext4, and the sweep is what caught
+xclock failing to relocate XkbStdBell.
