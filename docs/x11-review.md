@@ -14,7 +14,32 @@ still lose the maximise button and ignore title-bar double-click
 
 ## Performance, ranked by expected win
 
-### P1. Damage rectangles instead of whole-window invalidation
+### DONE — P1+P2 measured (2026-08-31)
+
+Implemented together: damage rectangles (opt-in per drawing path, with
+whole-window fallback for any path that has not recorded a rect, so a
+forgotten path costs speed and never pixels; `LVDESK_FULLDMG=1` is the A/B
+toggle) and row-run fast paths (`span_clip`/`px_hspan`/`op_target`) in
+PolyFillRectangle, CopyArea, PutImage.
+
+Measured with `xfill` (extended: `-s` sync-only, `-w` windowed - the ROOT is
+not a drawable in this shim, so the original root fill measured nothing but
+round trip; note for anyone comparing against the Xorg-era numbers in
+current-state.md):
+
+    median of 3 runs            before      after
+    XSync round trip            6.4 ms      5.4-6.1 ms
+    32x32 fill+sync             8.0 ms      7.2-7.6 ms
+    400x300 fill+sync          25.8 ms     11.7-13.0 ms   (-52%)
+    400x300 worst case        135-150 ms    82-94 ms
+
+The remaining ~5.4 ms round-trip FLOOR is not in request handling: the new
+`xshim=` slot in the prof split reads 0 ms while it persists. It is loop
+scheduling, and it taxes every synchronous client op. Open lead, with the
+instrument now in place. Also open: kbd_poll+mouse_poll cost ~130 ms per 5 s
+at idle (~2.6%), dominated by the 2 s device rescan.
+
+### P1 (original analysis). Damage rectangles instead of whole-window invalidation
 
 `xwin_on_draw()` (lvdesk.c:3260) ends in `lv_obj_invalidate(xwins[i].img)` —
 the WHOLE window — on every draw notification. A one-cell update in a

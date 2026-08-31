@@ -62,6 +62,7 @@ void xshim_window_close(uint32_t id);
 
 /* The RGB565 pixels of a client window, or NULL. Not copied. */
 const uint16_t *xshim_window_pixels(uint32_t id, int *w, int *h);
+int xshim_window_take_damage(uint32_t id, int *x, int *y, int *w, int *h);
 
 /*
  * Resize a client's top-level from OUR side.

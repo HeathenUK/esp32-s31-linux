@@ -3292,7 +3292,36 @@ static void xwin_on_draw(uint32_t id)
 				lv_obj_set_size(xwins[i].win, w + 2,
 						h + HDR_H + 2);
 			}
-			lv_obj_invalidate(xwins[i].img);
+			{
+				static int fulldmg = -1;
+				int dx, dy, dw, dh;
+
+				if (fulldmg < 0)
+					fulldmg = getenv("LVDESK_FULLDMG")
+						  != NULL;
+				/*
+				 * Invalidate only what the shim says changed.
+				 * The whole-window fallback remains for any
+				 * drawing path that did not record a rect -
+				 * and as a runtime A/B toggle, because every
+				 * useful comparison on this board is an
+				 * `echo x >` and not a rebuild.
+				 */
+				if (!fulldmg && px &&
+				    xshim_window_take_damage(id, &dx, &dy,
+							     &dw, &dh)) {
+					lv_area_t a;
+
+					lv_obj_get_coords(xwins[i].img, &a);
+					a.x1 += dx; a.y1 += dy;
+					a.x2 = a.x1 + dw - 1;
+					a.y2 = a.y1 + dh - 1;
+					lv_obj_invalidate_area(xwins[i].img,
+							       &a);
+				} else {
+					lv_obj_invalidate(xwins[i].img);
+				}
+			}
 			return;
 		}
 }
@@ -4469,7 +4498,7 @@ static void kms_flush_cb(lv_display_t *d, const lv_area_t *area, uint8_t *px)
  */
 static int prof_on;
 static uint64_t prof_wait, prof_input, prof_timer, prof_refr;
-static uint64_t prof_term, prof_kbd, prof_mouse, prof_wifi, prof_wait4, prof_curs;
+static uint64_t prof_term, prof_kbd, prof_mouse, prof_wifi, prof_wait4, prof_curs, prof_xs;
 static uint32_t prof_loops, prof_refrs;
 
 static uint64_t prof_ns(void)
@@ -5653,7 +5682,9 @@ int main(void)
 			if (rd_wifi)  { PROF_START(a); busy |= wifi_ev_poll(); PROF_ADD(prof_wifi, a); }
 			for (int xi = 0; xi < n_x; xi++)
 				if (fds[i_x + xi].revents & RD_MASK) {
+					PROF_START(a);
 					xshim_poll();
+					PROF_ADD(prof_xs, a);
 					busy = 1;
 					break;
 				}
@@ -5751,9 +5782,11 @@ int main(void)
 					(unsigned long long)(prof_timer / 1000 / prof_loops),
 					(unsigned long long)(prof_refr / 1000 / prof_loops));
 				fprintf(stderr,
-					"  input split: term=%llums kbd=%llums "
+					"  input split: xshim=%llums "
+					"term=%llums kbd=%llums "
 					"mouse=%llums wifi=%llums waitpid=%llums "
 					"cursor_ioctl=%llums\n",
+					(unsigned long long)(prof_xs / 1000000),
 					(unsigned long long)(prof_term / 1000000),
 					(unsigned long long)(prof_kbd / 1000000),
 					(unsigned long long)(prof_mouse / 1000000),
@@ -5761,7 +5794,7 @@ int main(void)
 					(unsigned long long)(prof_wait4 / 1000000),
 					(unsigned long long)(prof_curs / 1000000));
 				prof_term = prof_kbd = prof_mouse = 0;
-				prof_wifi = prof_wait4 = prof_curs = 0;
+				prof_wifi = prof_wait4 = prof_curs = prof_xs = 0;
 				lvp_dump();
 				fflush(stderr);
 				frames_flushed = 0; flushed_px = 0; flush_calls = 0;

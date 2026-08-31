@@ -67,6 +67,17 @@ struct res {
 	 */
 	uint16_t *px;			/* owner only */
 	struct res *buf;		/* who owns the pixels we draw into */
+	/*
+	 * Damage accumulated since the desktop last presented this buffer, in
+	 * BUFFER coordinates. dmg_valid distinguishes "nothing recorded" from
+	 * "rect is (0,0,0,0)": a drawing path that has not been taught to
+	 * record its rectangle leaves dmg_valid unset, and the desktop then
+	 * repaints the whole window exactly as it always did. Partial damage
+	 * is an opt-in per drawing path, so a forgotten path costs speed and
+	 * never pixels.
+	 */
+	uint8_t dmg_valid;
+	int dmg_x0, dmg_y0, dmg_x1, dmg_y1;
 	int ax, ay;			/* our origin within that buffer */
 	int cx0, cy0, cx1, cy1;		/* clip, in that buffer's coords */
 	/*
@@ -553,6 +564,104 @@ static uint16_t px_get(struct res *d, int x, int y)
 	if (b->bpp == 1)
 		return ((const uint8_t *)b->px)[(size_t)ay * b->w + ax];
 	return b->px[(size_t)ay * b->w + ax];
+}
+
+/*
+ * Record that a drawable-local rectangle was drawn, so the desktop can
+ * invalidate that area instead of the whole window. The union is kept on the
+ * BUFFER OWNER because that is whose pixels changed - a child window's rect
+ * lands on its top-level, translated by the child's origin.
+ */
+static void damage_add(struct res *d, int x, int y, int w, int h)
+{
+	struct res *b = d->buf;
+	int x0, y0, x1, y1;
+
+	if (!b || w <= 0 || h <= 0)
+		return;
+	x0 = x + d->ax; y0 = y + d->ay;
+	x1 = x0 + w;    y1 = y0 + h;
+	if (x0 < d->cx0) x0 = d->cx0;
+	if (y0 < d->cy0) y0 = d->cy0;
+	if (x1 > d->cx1) x1 = d->cx1;
+	if (y1 > d->cy1) y1 = d->cy1;
+	if (x0 >= x1 || y0 >= y1)
+		return;
+	if (!b->dmg_valid) {
+		b->dmg_x0 = x0; b->dmg_y0 = y0;
+		b->dmg_x1 = x1; b->dmg_y1 = y1;
+		b->dmg_valid = 1;
+		return;
+	}
+	if (x0 < b->dmg_x0) b->dmg_x0 = x0;
+	if (y0 < b->dmg_y0) b->dmg_y0 = y0;
+	if (x1 > b->dmg_x1) b->dmg_x1 = x1;
+	if (y1 > b->dmg_y1) b->dmg_y1 = y1;
+}
+
+/*
+ * The row-run fast path. px_set() pays ~6 branches and a call per pixel;
+ * measured on a 400x300 fill that is the whole cost. span_clip() does the
+ * same tests ONCE for a horizontal run and the callers then move whole rows.
+ *
+ * Clip semantics are px_set()'s exactly: the GC clip applies in
+ * drawable-LOCAL coordinates before the origin translation, the buffer clip
+ * after it. Returns the writable run [*bx, *bx + *bw) at buffer row *by, or
+ * 0 for an empty run. The caller handles alias_break/dirty once per op.
+ */
+static int span_clip(struct res *d, int x, int y, int w, int *bx, int *by,
+		     int *bw)
+{
+	int x1 = x + w;
+
+	if (gcclip_on) {
+		if (y < gcclip_y0 || y >= gcclip_y1)
+			return 0;
+		if (x < gcclip_x0) x = gcclip_x0;
+		if (x1 > gcclip_x1) x1 = gcclip_x1;
+	}
+	x += d->ax; x1 += d->ax; y += d->ay;
+	if (y < d->cy0 || y >= d->cy1)
+		return 0;
+	if (x < d->cx0) x = d->cx0;
+	if (x1 > d->cx1) x1 = d->cx1;
+	if (x >= x1)
+		return 0;
+	*bx = x; *by = y; *bw = x1 - x;
+	return 1;
+}
+
+/* One write-ready check per operation instead of one per pixel. */
+static struct res *op_target(struct res *d)
+{
+	struct res *b = d->buf;
+
+	if (!b)
+		return NULL;
+	if (b->alias && !alias_break(b))
+		return NULL;
+	if (!b->px)
+		return NULL;
+	b->dirty = 1;
+	return b;
+}
+
+static void px_hspan(struct res *d, int x, int y, int w, uint16_t c)
+{
+	struct res *b = d->buf;
+	int bx, by, bw, i;
+
+	if (!b || !b->px || !span_clip(d, x, y, w, &bx, &by, &bw))
+		return;
+	if (b->bpp == 1) {
+		memset((uint8_t *)b->px + (size_t)by * b->w + bx,
+		       (uint8_t)c, (size_t)bw);
+	} else {
+		uint16_t *row = b->px + (size_t)by * b->w + bx;
+
+		for (i = 0; i < bw; i++)
+			row[i] = c;
+	}
 }
 
 /*
@@ -2270,12 +2379,14 @@ static void render_composite(struct cli *c, const uint8_t *r)
 				}
 				blend_px(d, i, j, sr, sg, sb, cov, op);
 			}
+		damage_add(d, dx, dy, w, h);
 		notify_draw(d);
 		return;
 	}
 	if (sp && sp->solid) {
 		render_fill(d, dp, dx, dy, w, h, sp->rr, sp->gg, sp->bb,
 			    sp->a, op);
+		damage_add(d, dx, dy, w, h);
 		notify_draw(d);
 		return;
 	}
@@ -2284,7 +2395,8 @@ static void render_composite(struct cli *c, const uint8_t *r)
 		render_unimpl(c, 8, "Composite from an unknown source");
 		return;
 	}
-	notify_draw(d);
+	damage_add(d, dx, dy, w, h);
+		notify_draw(d);
 	x0 = dx; y0 = dy; x1 = dx + w; y1 = dy + h;
 	pict_clip(dp, &x0, &y0, &x1, &y1);
 	if (trace_on())
@@ -2557,6 +2669,8 @@ static int render_request(struct cli *c, const uint8_t *r, int len)
 			render_fill(d, dp, gets16(p), gets16(p + 2),
 				    get16(p + 4), get16(p + 6),
 				    cr, cg, cb, ca, r[4]);
+			damage_add(d, gets16(p), gets16(p + 2),
+				   get16(p + 4), get16(p + 6));
 		}
 		notify_draw(d);
 		return 1;
@@ -3342,11 +3456,63 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 				dst->id, dst->w, dst->h, dx, dy, w, h);
 		if (w > XSHIM_W)
 			w = XSHIM_W;
-		for (j = 0; j < h; j++) {
-			for (i = 0; i < w; i++)
-				row[i] = px_get(src, sx + i, sy + j);
-			for (i = 0; i < w; i++)
-				px_set(dst, dx + i, dy + j, row[i]);
+		if (src->buf && src->buf->px && dst->buf &&
+		    src->buf->bpp == 2 && dst->buf->bpp == 2 && op_target(dst)) {
+			/*
+			 * Whole rows at a time. The old loop paid two calls
+			 * and ~12 branches per pixel; a blit is the second
+			 * hottest thing a toolkit does after fills. The row
+			 * buffer stays: source and destination are frequently
+			 * the same buffer, and reading the whole row first is
+			 * what makes overlap safe in both directions.
+			 */
+			struct res *sb = src->buf, *db = dst->buf;
+
+			for (j = 0; j < h; j++) {
+				int rx0 = sx + src->ax;
+				int ry = sy + j + src->ay;
+				int i0, i1;
+
+				/* source run readable inside its clip */
+				i0 = src->cx0 - rx0;
+				i1 = src->cx1 - rx0;
+				if (i0 < 0) i0 = 0;
+				if (i1 > w) i1 = w;
+				if (ry < src->cy0 || ry >= src->cy1 ||
+				    i0 >= i1) {
+					memset(row, 0, (size_t)w * 2);
+				} else {
+					if (i0 > 0)
+						memset(row, 0, (size_t)i0 * 2);
+					memcpy(row + i0,
+					       sb->px + (size_t)ry * sb->w +
+					       rx0 + i0,
+					       (size_t)(i1 - i0) * 2);
+					if (i1 < w)
+						memset(row + i1, 0,
+						       (size_t)(w - i1) * 2);
+				}
+				{
+					int bx, by, bw;
+
+					if (span_clip(dst, dx, dy + j, w,
+						      &bx, &by, &bw))
+						memcpy(db->px +
+						       (size_t)by * db->w + bx,
+						       row + (bx - (dx +
+							      dst->ax)),
+						       (size_t)bw * 2);
+				}
+			}
+			damage_add(dst, dx, dy, w, h);
+		} else {
+			for (j = 0; j < h; j++) {
+				for (i = 0; i < w; i++)
+					row[i] = px_get(src, sx + i, sy + j);
+				for (i = 0; i < w; i++)
+					px_set(dst, dx + i, dy + j, row[i]);
+			}
+			damage_add(dst, dx, dy, w, h);
 		}
 		notify_draw(dst);
 		break;
@@ -3354,13 +3520,15 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 	case 70: {					/* PolyFillRectangle */
 		struct res *d = res_find(get32(r + 4));
 		struct res *g = res_find(get32(r + 8));
-		int i, n = (len - 12) / 8, x, y;
+		int i, n = (len - 12) / 8, y;
 
 		if (!d || !drawable_ok(d) || !g) {
 			send_error(c, d ? X_BAD_GC : X_BAD_DRAWABLE,
 				   get32(d ? r + 8 : r + 4), op);
 			break;
 		}
+		if (!op_target(d))
+			break;
 		for (i = 0; i < n; i++) {
 			const uint8_t *p = r + 12 + i * 8;
 			int rx = gets16(p), ry = gets16(p + 2);
@@ -3372,8 +3540,8 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 					d->id, d->w, d->h, rx, ry, rw, rh,
 					g->fg);
 			for (y = ry; y < ry + rh; y++)
-				for (x = rx; x < rx + rw; x++)
-					px_set(d, x, y, g->fg);
+				px_hspan(d, rx, y, rw, g->fg);
+			damage_add(d, rx, ry, rw, rh);
 		}
 		notify_draw(d);
 		break;
@@ -3510,6 +3678,7 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		if (!cw) cw = d->w - cx;		/* 0 means "to the edge" */
 		if (!ch) ch = d->h - cy;
 		win_fill(d, cx, cy, cw, ch);
+		damage_add(d, cx, cy, cw, ch);
 		/*
 		 * r[1] is `exposures`. When set, the client is asking to be
 		 * told to repaint what we just erased.
@@ -3590,27 +3759,64 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		      depth <= 16 ? ((iw * 2 + 3) & ~3) : ((iw * 4 + 3) & ~3);
 		if (24 + (size_t)pad * ih > (size_t)len)
 			break;
-		for (y = 0; y < ih; y++) {
-			const uint8_t *row = src + (size_t)y * pad;
+		if (op_target(d) && d->buf->bpp == 2) {
+			/*
+			 * Depth branch hoisted out of the pixel loop, rows
+			 * written as runs. An image is the one payload where
+			 * per-pixel overhead multiplies by the whole surface.
+			 */
+			struct res *b = d->buf;
 
-			for (x = 0; x < iw; x++) {
-				uint16_t v;
+			for (y = 0; y < ih; y++) {
+				const uint8_t *row = src + (size_t)y * pad;
+				int bx, by, bw, x0;
+				uint16_t *out;
 
+				if (!span_clip(d, dx, dy + y, iw,
+					       &bx, &by, &bw))
+					continue;
+				x0 = bx - (dx + d->ax);
+				out = b->px + (size_t)by * b->w + bx;
 				if (depth <= 8) {
-					v = row[x];
+					for (x = 0; x < bw; x++)
+						out[x] = row[x0 + x];
 				} else if (depth <= 16) {
-					v = (uint16_t)(row[x * 2] |
-						       (row[x * 2 + 1] << 8));
+					memcpy(out, row + (size_t)x0 * 2,
+					       (size_t)bw * 2);
 				} else {
-					/* 8-8-8 down to 5-6-5. */
-					v = (uint16_t)
-					    (((row[x * 4 + 2] & 0xF8) << 8) |
-					     ((row[x * 4 + 1] & 0xFC) << 3) |
-					     (row[x * 4] >> 3));
+					const uint8_t *q = row +
+						(size_t)x0 * 4;
+
+					for (x = 0; x < bw; x++, q += 4)
+						out[x] = (uint16_t)
+						    (((q[2] & 0xF8) << 8) |
+						     ((q[1] & 0xFC) << 3) |
+						     (q[0] >> 3));
 				}
-				px_set(d, dx + x, dy + y, v);
+			}
+		} else {
+			for (y = 0; y < ih; y++) {
+				const uint8_t *row = src + (size_t)y * pad;
+
+				for (x = 0; x < iw; x++) {
+					uint16_t v;
+
+					if (depth <= 8) {
+						v = row[x];
+					} else if (depth <= 16) {
+						v = (uint16_t)(row[x * 2] |
+						    (row[x * 2 + 1] << 8));
+					} else {
+						v = (uint16_t)
+						 (((row[x * 4 + 2] & 0xF8) << 8) |
+						  ((row[x * 4 + 1] & 0xFC) << 3) |
+						  (row[x * 4] >> 3));
+					}
+					px_set(d, dx + x, dy + y, v);
+				}
 			}
 		}
+		damage_add(d, dx, dy, iw, ih);
 		notify_draw(d);
 		break;
 	}
@@ -3802,6 +4008,34 @@ void xshim_window_resize(uint32_t id, int w, int h)
 		expose_window(c, r);
 		notify_draw(r);
 	}
+}
+
+/*
+ * The damage accumulated on a window's buffer since the last take, in window
+ * coordinates. Returns 1 and clears it, or 0 meaning "unknown - repaint all":
+ * a drawing path that never called damage_add() leaves dmg_valid unset, so
+ * partial invalidation can only ever under-paint if a path LIES about its
+ * rectangle, never because one was forgotten.
+ */
+int xshim_window_take_damage(uint32_t id, int *x, int *y, int *w, int *h)
+{
+	struct res *r = res_find(id), *b;
+
+	if (!r || r->type != R_WINDOW)
+		return 0;
+	b = r->buf;
+	if ((!b || !b->dmg_valid) && r->alias) {
+		struct res *pm = res_find(r->alias);
+
+		if (pm && pm->dmg_valid)
+			b = pm;
+	}
+	if (!b || !b->dmg_valid)
+		return 0;
+	*x = b->dmg_x0; *y = b->dmg_y0;
+	*w = b->dmg_x1 - b->dmg_x0; *h = b->dmg_y1 - b->dmg_y0;
+	b->dmg_valid = 0;
+	return 1;
 }
 
 const uint16_t *xshim_window_pixels(uint32_t id, int *w, int *h)
