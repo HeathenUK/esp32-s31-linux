@@ -2469,6 +2469,16 @@ static void ctl_poll(void)
 				       (int)lv_obj_get_y(wins[i].win),
 				       wins[i].maximised ? " MAX" : "");
 			fflush(stdout);
+		} else if (sscanf(buf, "raise %d", &idx) == 1) {
+			if (idx >= 0 && idx < win_n && wins[idx].win) {
+				if (wins[idx].minimised) {
+					lv_obj_remove_flag(wins[idx].win,
+							   LV_OBJ_FLAG_HIDDEN);
+					wins[idx].minimised = 0;
+				}
+				lv_obj_move_foreground(wins[idx].win);
+				win_set_focus(&wins[idx]);
+			}
 		} else if (sscanf(buf, "max %d", &idx) == 1) {
 			if (idx >= 0 && idx < win_n)
 				win_toggle_max(&wins[idx]);
@@ -3152,6 +3162,20 @@ static int xwin_send_button(int button, int act)
 		lv_obj_get_coords(xwins[i].img, &a);
 		if (ptr_x < a.x1 || ptr_x > a.x2 || ptr_y < a.y1 || ptr_y > a.y2)
 			continue;
+		/*
+		 * A press in a window's CONTENT is a claim on the keyboard,
+		 * same as a press on its title bar - every other focus path
+		 * already agreed. Without this, click-into-xcalc-and-type
+		 * typed into whichever window was focused last.
+		 */
+		if (act == 1) {
+			struct winrec *r = win_find(xwins[i].win);
+
+			if (r) {
+				lv_obj_move_foreground(xwins[i].win);
+				win_set_focus(r);
+			}
+		}
 		xshim_pointer(xwins[i].id, ptr_x - a.x1, ptr_y - a.y1,
 			      button, act);
 		return 1;
@@ -3376,6 +3400,13 @@ static void xwin_on_window(uint32_t id, int w, int h)
 	lv_obj_set_size(x->img, pw, ph);
 	lv_obj_add_flag(x->img, LV_OBJ_FLAG_CLICKABLE);
 	lv_obj_add_event_cb(x->img, xwin_ptr_cb, LV_EVENT_PRESSED, x);
+	/*
+	 * Presses on the client image must also reach the WINDOW's raise_cb,
+	 * or clicking a client's content never focuses it - the terminal
+	 * focused fine only because its rows are not clickable and presses
+	 * fell through to the window.
+	 */
+	lv_obj_add_flag(x->img, LV_OBJ_FLAG_EVENT_BUBBLE);
 	lv_obj_add_event_cb(x->img, xwin_ptr_cb, LV_EVENT_RELEASED, x);
 	lv_obj_add_event_cb(x->img, xwin_ptr_cb, LV_EVENT_PRESS_LOST, x);
 	lv_obj_add_event_cb(x->img, xwin_ptr_cb, LV_EVENT_PRESSING, x);
