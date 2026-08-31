@@ -657,3 +657,37 @@ Three things the wire path needs that are easy to get wrong:
   whether a WINDOW can be shared is asking a reasonable question. Answering
   with an error left it waiting for a reply that never came: the client drew the
   half it could, then hung, still alive and apparently idle.
+
+## A window can borrow its background pixmap's pixels
+
+A client that presents its content as a background pixmap made the shim hold
+the same surface twice: xfiles' 600x460 sheet, and a 600x460 top-level buffer
+filled from it. 539 kB duplicated, plus a full-window copy on every repaint.
+
+The window now BORROWS those pixels - `res.alias` holds the pixmap's id and
+`px` points at its storage:
+
+    before   1 window buffer 539 kB, 43 pixmaps 2011 kB, total 2550 kB
+    after    0 window buffers   0 kB, 43 pixmaps 2011 kB, total 2011 kB
+
+With all three clients up, 2,846 -> 2,307 kB; xcalc and xclock keep ordinary
+buffers because they set no background pixmap, which is the fallback working.
+
+**It is installed in win_fill(), not when the background is set.** X does not
+adopt a new background until something clears the window, so aliasing at
+CWBackPixmap time would show the pixmap early. The moment win_fill() is about
+to paint the WHOLE window from a pixmap of exactly its size is the moment the
+two are definitionally identical, and that is where the swap is free.
+
+Three things keep it honest:
+
+- **Any write to the window breaks it.** `alias_break()` takes a private copy
+  first, so a client that draws to its window as well as its pixmap sees
+  nothing unusual - it just stops saving the memory.
+- **The pixmap moving breaks it too.** `px_share()` relocates storage into a
+  memfd and a resize reallocates, so both call `alias_drop()` first. A borrowed
+  pointer that outlives its owner is the one way this could corrupt rather than
+  merely waste.
+- **Damage to the pixmap repaints the window.** They are the same memory, but
+  the window is not in the pixmap's parent chain, so `notify_draw()` looks for
+  a borrower explicitly. Without that the screen simply never updates.

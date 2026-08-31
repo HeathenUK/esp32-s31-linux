@@ -94,6 +94,14 @@ struct res {
 	int bw;				/* border width, drawn in the PARENT */
 	uint32_t border_pixel;
 	uint32_t bg_pixmap;		/* windows: CWBackPixmap, 0 = none */
+	/*
+	 * A top-level whose entire content comes from its background pixmap
+	 * does not need a buffer of its own: px points straight at the
+	 * pixmap's pixels. Holds the pixmap's id while that is true, so the
+	 * borrowed storage is never freed here and can be repointed if the
+	 * pixmap's own allocation moves.
+	 */
+	uint32_t alias;
 	char title[32];			/* WM_NAME, windows only */
 };
 
@@ -242,6 +250,22 @@ static void notify_draw(struct res *d)
 	struct res *t = top_of(d);
 
 	/*
+	 * A window borrowing this pixmap's pixels has just changed too - they
+	 * are the same memory - but it is not in this drawable's parent chain,
+	 * so nothing else would tell the desktop to repaint it.
+	 */
+	if (d->type == R_PIXMAP) {
+		int i;
+
+		for (i = 0; i < MAXRES; i++)
+			if (res[i].type == R_WINDOW && res[i].alias == d->id) {
+				if (draw_cb)
+					draw_cb(res[i].id);
+				break;
+			}
+	}
+
+	/*
 	 * XSHIM_WATCH=<hex id> prints the drawable's non-zero pixel count after
 	 * every operation that touches it. notify_draw() runs at the end of
 	 * each one, so this is an ordered history of a surface's contents -
@@ -335,8 +359,56 @@ static uint16_t *px_alloc(struct res *r, int w, int h)
 	return r->px;
 }
 
+/*
+ * Give an aliased window its own pixels back.
+ *
+ * Called before anything writes to the window itself, and whenever the pixmap
+ * underneath is about to move or disappear. Copying the current contents in
+ * makes the break invisible: the window carries on with exactly what it was
+ * showing a moment earlier.
+ */
+static int alias_break(struct res *w)
+{
+	struct res *pm;
+	uint16_t *own;
+	size_t n;
+
+	if (!w->alias)
+		return 1;
+	pm = res_find(w->alias);
+	n = (size_t)w->w * w->h * (w->bpp ? w->bpp : 2);
+	own = malloc(n);
+	if (!own)
+		return 0;
+	if (pm && pm->px)
+		memcpy(own, pm->px, n);
+	else
+		memset(own, 0, n);
+	w->px = own;
+	w->alias = 0;
+	mem_win += n; n_win++;
+	return 1;
+}
+
+/* The pixmap's storage moved or went away: nobody may keep borrowing it. */
+static void alias_drop(struct res *pm)
+{
+	int i;
+
+	for (i = 0; i < MAXRES; i++)
+		if (res[i].type == R_WINDOW && res[i].alias == pm->id)
+			alias_break(&res[i]);
+}
+
 static void px_release(struct res *r)
 {
+	if (r->type == R_PIXMAP)
+		alias_drop(r);
+	if (r->alias) {			/* borrowed pixels are not ours */
+		r->px = NULL;
+		r->alias = 0;
+		return;
+	}
 	size_t n = (size_t)r->w * r->h * (r->bpp ? r->bpp : 2);
 
 	if (!r->px)
@@ -471,7 +543,11 @@ static void px_set(struct res *d, int x, int y, uint16_t c)
 	if (gcclip_on && (x < gcclip_x0 || y < gcclip_y0 ||
 			  x >= gcclip_x1 || y >= gcclip_y1))
 		return;
-	if (!b || !b->px)
+	if (!b)
+		return;
+	if (b->alias && !alias_break(b))	/* about to write: stop borrowing */
+		return;
+	if (!b->px)
 		return;
 	ax = x + d->ax;
 	ay = y + d->ay;
@@ -602,6 +678,43 @@ static void win_fill(struct res *d, int x, int y, int w, int h)
 {
 	struct { int x0, y0, x1, y1; } ob[80];
 	int nob = 0, i, j, k;
+
+	/*
+	 * An aliased window IS its background pixmap, so painting the
+	 * background into it is not merely wasted - the first write would take
+	 * the alias apart and reinstate the copy this exists to avoid.
+	 */
+	if (d->type == R_WINDOW && d->alias && d->alias == d->bg_pixmap)
+		return;
+
+	/*
+	 * About to paint the WHOLE window from a background pixmap of exactly
+	 * its size? Then the window's content is that pixmap, and it can
+	 * simply borrow the pixels instead of holding a second copy and
+	 * refreshing it from the first. Doing it HERE rather than when the
+	 * background is set keeps X's semantics: a window does not adopt a new
+	 * background until something clears it, and this is that moment.
+	 *
+	 * For xfiles it retires a 600x460 duplicate - 539 kB - and a
+	 * full-window copy on every repaint.
+	 */
+	if (d->type == R_WINDOW && d->buf == d && !d->alias && d->bg_pixmap &&
+	    x <= 0 && y <= 0 && w >= d->w && h >= d->h) {
+		struct res *pm = res_find(d->bg_pixmap);
+
+		if (pm && pm->type == R_PIXMAP && pm->px && pm->w == d->w &&
+		    pm->h == d->h && pm->bpp == d->bpp) {
+			px_release(d);
+			d->px = pm->px;
+			d->alias = pm->id;
+			if (trace_on())
+				fprintf(stderr, "xshim: win 0x%x now aliases "
+					"pixmap 0x%x (%dx%d, %zu kB saved)\n",
+					d->id, pm->id, d->w, d->h,
+					(size_t)d->w * d->h * d->bpp / 1024);
+			return;
+		}
+	}
 
 	if (d->type != R_WINDOW) {
 		for (j = y; j < y + h; j++)
@@ -3303,9 +3416,9 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 			 */
 			if (bit == 0) {
 				w->bg_pixmap = get32(v);
-				fprintf(stderr, "xshim: win 0x%x background "
-					"pixmap = 0x%x\n", w->id,
-					w->bg_pixmap);
+							fprintf(stderr, "xshim: win 0x%x background "
+					"pixmap = 0x%x%s\n", w->id,
+					w->bg_pixmap, "");
 			}
 			if (bit == 1) { w->bg = get32(v); w->bg_pixmap = 0; }
 			if (bit == 3) w->border_pixel = get32(v);
@@ -3619,6 +3732,7 @@ static int px_share(struct res *r)
 		return 1;
 	if (!n)
 		return 0;
+	alias_drop(r);			/* the pixels are about to move */
 	fd = memfd_create("xshim-pixmap", 0);
 	if (fd < 0)
 		return 0;
