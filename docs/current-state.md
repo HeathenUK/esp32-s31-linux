@@ -2348,3 +2348,35 @@ load-bearing (without it slots never release, BTN_TOUCH latches after the
 first touch ever, and the cursor follows a finger that can never click); and
 docs/touch-gt1158.md now opens with the correction of its own confident
 wrong conclusion. rootfs/gtprobe.c is the userspace register-level probe.
+
+## Bluetooth Classic works end to end (2026-08-31)
+
+The S31 was never BLE-only - SOC_BT_CLASSIC_SUPPORTED=1 and the controller
+is literally the BTDM (dual-mode) part. Three gates said otherwise, all
+ours: the loader's CONFIG_BTDM_CTRL_MODE_BLE_ONLY; a hardcode in
+esp-hosted's slave_bt.h ("only BLE for chipsets other than ESP32") that no
+sdkconfig could override - the S31 branch added there maps BTDM_CTRL_MODE_*
+and VHCI; and the kernel defconfig's BT_BREDR off (now on, plus BT_HIDP via
+the Makefile tweaks - HIDP in the defconfig is dropped by olddefconfig
+because the defconfig disables INPUT, the same trap as the touchscreen).
+Verified: hart0 logs "BT/BLE dual mode", hosted capabilities 0xe8 -> 0xf8,
+hci0 shows classic feature pages, HIDP loaded.
+
+**The dual-mode controller library cost 300 KB of loader**: factory grew to
+0x1F0000 (110 KB headroom) and xip2 shrank to 0x170000 at 0x210000 by
+evicting udevd+libkmod to SD (no loadable modules exist; coldplug is
+backgrounded). The boundary shuffle lands opensbi EXACTLY where it was -
+0x380000 - so none of the five address homes moved. Modem sleep stays off
+(BT_CTRL_SLEEP_ENABLE default n), per decision.
+
+Userspace: bluez rebuilt with client/hid/hog/audio plugins (bluetoothd
+797 KB -> 1,224 KB; fits XIP after evicting pcre2, glib's regex engine
+that nothing here calls - and NOTE the XIP_SKIP trap again: pcre2 had to
+be backfilled onto the SD card, which never had it). BlueALSA exposes A2DP
+as ALSA PCMs (S47bluealsa, a2dp-source+sink); /var/lib/bluetooth is a real
+SD directory now, so pairings persist - it was a tmpfs symlink that forgot
+everything at reboot. bluetoothd runs 160 KB resident from XIP;
+bluetoothctl and the bluealsa tools live on the SD. Classic keyboards go
+through kernel hidp straight to evdev (bluetoothd out of the per-key
+path); BLE keyboards go through bluetoothd's HoG into uhid (CONFIG_UHID
+still to enable when one shows up). Pairing itself awaits a real device.

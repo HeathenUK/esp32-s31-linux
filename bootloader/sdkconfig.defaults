@@ -30,3 +30,7 @@ CONFIG_S31_USB_HID_ENABLE=n
 CONFIG_USB_HOST_HUBS_SUPPORTED=y
 CONFIG_USB_HOST_HUB_MULTI_LEVEL=y
 CONFIG_USB_HOST_HW_BUFFER_BIAS_IN=y
+
+# Dual-mode BT: the Korvo's controller is classic-capable and Linux
+# drives both BR/EDR and BLE over the hosted VHCI.
+CONFIG_BTDM_CTRL_MODE_BTDM=y

@@ -21,8 +21,11 @@ mkdir -m 1777 "${target_dir}/tmp"
 mkdir -m 0755 "${target_dir}/run" "${target_dir}/var/log"
 ln -s /tmp "${target_dir}/var/tmp"
 
+# A real directory on the SD ext4, so pairings persist across boots. This
+# was a symlink into /run (tmpfs) from before Bluetooth had any real use,
+# which silently forgot every pairing at reboot.
 rm -rf "${target_dir}/var/lib/bluetooth"
-ln -s /run/bluetooth "${target_dir}/var/lib/bluetooth"
+mkdir -p "${target_dir}/var/lib/bluetooth"
 
 rm -rf "${target_dir}/var/lib/seedrng"
 ln -s /run/seedrng "${target_dir}/var/lib/seedrng"

@@ -1,0 +1,15 @@
+#!/bin/sh
+#
+# BlueALSA: exposes A2DP as ALSA PCMs so BT audio needs no sound server.
+# After S46bluetoothd - it registers its endpoints with bluez over D-Bus.
+case "$1" in
+  start)
+	printf "Starting bluealsa: "
+	setsid /usr/bin/bluealsa -p a2dp-source -p a2dp-sink \
+		>/var/log/bluealsa.log 2>&1 </dev/null &
+	echo "OK"
+	;;
+  stop)
+	killall bluealsa 2>/dev/null
+	;;
+esac

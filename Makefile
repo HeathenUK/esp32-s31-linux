@@ -302,6 +302,7 @@ linux: toolchain | $(LINUX_OUT)
 		--enable INPUT_UINPUT \
 		--enable INPUT_TOUCHSCREEN \
 		--enable TOUCHSCREEN_GT1158_POLLED \
+		--enable BT_HIDP \
 		--enable HIGH_RES_TIMERS \
 		--enable NO_HZ_IDLE \
 		--enable FILE_LOCKING \
@@ -350,7 +351,7 @@ coremark: rootfs
 # Keep this decimal because POSIX test(1) and truncate(1) do not accept the
 # partition table's 0x-prefixed value.
 ROOTFS_PARTITION_SIZE ?= 6160384
-XIP2_PARTITION_SIZE ?= 1835008
+XIP2_PARTITION_SIZE ?= 1507328
 # The XIP kernel must start on a 4-MiB Sv32 megapage boundary, so the linux
 # partition stays at 0x400000 and rootfs takes every byte the kernel does not
 # need. Keep this in step with bootloader/partitions.csv.
@@ -463,7 +464,11 @@ XIP_ROOTS ?= bin/busybox usr/sbin/wpa_supplicant usr/sbin/iw usr/bin/lvdesk \
 # cost of leaving it on the card is nothing - whereas in XIP it permanently
 # occupied a third of image 2. Trading it for the X client chain is trading
 # boot-time-only pages for pages that are resident the whole session.
-XIP_SKIP ?= libasound.so.2.0.0 libblkid.so.1.1.0
+# pcre2 is glib's regex engine and nothing on this system runs a regex
+# through glib; it left XIP when bluetoothd grew 427 KB of classic-BT
+# profiles (hid/hog/audio/avrcp/client support). From the SD lower layer
+# its pages are simply never faulted.
+XIP_SKIP ?= libasound.so.2.0.0 libblkid.so.1.1.0 libpcre2-8.so.0.15.0
 
 # XIP_ROOTS_DESKTOP was defined here and referenced NOWHERE - dead since the
 # desktop was set aside for text mode, so anything listed in it was silently
@@ -697,7 +702,11 @@ XIP2_STAGE := $(BUILD_DIR)/xipstage2
 # transport chain (xkbfile/xcb/Xau/Xdmcp - xclock's DT_NEEDED drags it) goes
 # the other way, to the SD lower layer: 280 KB of flash for calls that barely
 # happen.
-XIP2_ROOTS ?= sbin/udevd usr/bin/xcalc usr/bin/xclock usr/bin/xfiles \
+# udevd left the image when the factory partition grew for the dual-mode BT
+# controller library: this kernel has no loadable modules, so libkmod was dead
+# weight, and coldplug is already backgrounded and nice'd - udevd's SD-backed
+# pages are clean and evictable once boot is over.
+XIP2_ROOTS ?= usr/bin/xcalc usr/bin/xclock usr/bin/xfiles \
 	usr/lib/libasound.so.2.0.0
 XIP2_SKIP ?= libblkid.so.1.1.0 libxkbfile.so.1.0.2 libxcb.so.1.1.0 \
 	libXau.so.6.0.0 libXdmcp.so.6.0.0
