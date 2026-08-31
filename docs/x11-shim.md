@@ -691,3 +691,20 @@ Three things keep it honest:
 - **Damage to the pixmap repaints the window.** They are the same memory, but
   the window is not in the pixmap's parent chain, so `notify_draw()` looks for
   a borrower explicitly. Without that the screen simply never updates.
+
+## An X client needs no drag ghost
+
+Dragging a window snapshots it into an image and moves that instead, because
+moving the window itself re-rasterises its whole object tree - 3-7 fps and
+~78 ms a frame for the terminal, which is 36 label objects.
+
+A client window is not a tree. Its content is ONE lv_image pointing at the
+shim's buffer, so LVGL re-blits it from memory it already has, and the snapshot
+copies ~310 kB per drag to avoid work that does not happen. On a desktop
+already swapping under exactly that pressure, that was the difference between:
+
+    before   MemAvailable dipped ~930 kB, VmSwap 32 -> 904 kB, 439 major faults
+    after    MemAvailable dipped   92 kB, VmSwap  4 -> 136 kB,  21 major faults
+
+The window simply drags itself, which is the path the code already took when a
+snapshot could not be allocated.

@@ -1895,9 +1895,26 @@ static lv_obj_t *drag_ghost;		/* image standing in for the window */
 static lv_draw_buf_t *drag_snap;	/* its pixels */
 static lv_obj_t *drag_ghost_win;	/* the window it is standing in for */
 
+static int win_is_xclient(lv_obj_t *win);
+
 static void drag_ghost_begin(lv_obj_t *win)
 {
 	if (drag_ghost || drag_snap)
+		return;
+	/*
+	 * An X client needs no ghost. The snapshot exists because moving a
+	 * window re-rasterises its whole object tree - 36 label objects for the
+	 * terminal, which is what made a drag 3-7 fps - but a client window is
+	 * ONE image pointing at the shim's buffer, so LVGL just re-blits it
+	 * from memory it already has. Snapshotting it copies ~310 kB per drag
+	 * to avoid work that does not happen, on a desktop that is already
+	 * swapping under exactly that pressure: MemAvailable fell to 356 kB
+	 * mid-drag, and lvdesk took 451 major faults.
+	 *
+	 * The caller already handles "no ghost" - it is the path taken when a
+	 * snapshot cannot be allocated - so the window simply drags itself.
+	 */
+	if (win_is_xclient(win))
 		return;
 	drag_snap = lv_snapshot_take(win, LV_COLOR_FORMAT_RGB565);
 	if (!drag_snap)
@@ -2893,6 +2910,17 @@ static struct xwin {
 	lv_image_dsc_t dsc;
 } xwins[MAXXWIN];
 static int xwin_n;
+
+/* Is this frame an X client, whose content is a single image? */
+static int win_is_xclient(lv_obj_t *win)
+{
+	int i;
+
+	for (i = 0; i < xwin_n; i++)
+		if (xwins[i].win == win)
+			return 1;
+	return 0;
+}
 
 /*
  * Push a frame's new content size down to the X client inside it, if there is
