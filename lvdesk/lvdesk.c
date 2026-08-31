@@ -26,6 +26,7 @@
 #include <fcntl.h>
 #include <linux/input.h>
 #include <linux/kd.h>
+#include <sys/inotify.h>
 #include <sys/ioctl.h>
 #include <poll.h>
 #include <sys/stat.h>
@@ -248,6 +249,37 @@ static char sysinfo_last[192];
 static int kbd_fds[MAXKBD];
 static int kbd_n;
 static uint32_t kbd_scan_at;
+
+/*
+ * Hotplug discovery. The original design rescanned /dev/input every 2 s from
+ * kbd_poll and mouse_poll - opening and probing every event node, ~130 ms per
+ * 5 s at idle and the source of the 40-90 ms input hitches and the "input
+ * starved for 2007 ms" log lines. An inotify watch on the directory replaces
+ * the clock: a rescan now happens only at start-up, when the kernel says a
+ * node came or went, or when a read returns ENODEV. If inotify is unavailable
+ * the 2 s timer behaviour returns unchanged.
+ */
+static int input_watch_fd = -1;
+
+static void input_watch_init(void)
+{
+	input_watch_fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+	if (input_watch_fd < 0)
+		return;
+	if (inotify_add_watch(input_watch_fd, "/dev/input",
+			      IN_CREATE | IN_DELETE | IN_ATTRIB | IN_MOVED_TO) < 0) {
+		close(input_watch_fd);
+		input_watch_fd = -1;
+	}
+}
+
+/* scan_at == 0 means "a rescan has been requested". */
+static int input_rescan_due(uint32_t scan_at)
+{
+	if (input_watch_fd >= 0)
+		return scan_at == 0;
+	return lv_tick_get() - scan_at > 2000;
+}
 static int shift, mod_ctrl, mod_alt, mod_caps;
 static int caps_led_seen;	/* the kernel drives the Caps Lock LED */
 
@@ -794,8 +826,8 @@ static int kbd_poll(void)
 	}
 
 	/* pick up devices that appeared after start-up */
-	if (lv_tick_get() - kbd_scan_at > 2000) {
-		kbd_scan_at = lv_tick_get();
+	if (input_rescan_due(kbd_scan_at)) {
+		kbd_scan_at = lv_tick_get() | 1;
 		kbd_scan();
 	}
 
@@ -2579,6 +2611,19 @@ static void ctl_poll(void)
 		} else if (sscanf(buf, "max %d", &idx) == 1) {
 			if (idx >= 0 && idx < win_n)
 				win_toggle_max(&wins[idx]);
+		} else if (!strncmp(buf, "lvmem", 5)) {
+			/*
+			 * The LVGL pool is a static 512 KB taken on faith;
+			 * max_used is the number that says whether it can
+			 * shrink. Exercise the desktop hard, then read this.
+			 */
+			lv_mem_monitor_t m;
+
+			lv_mem_monitor(&m);
+			printf("lvdesk: lvmem total %u max_used %u used_pct %u%% frag %u%%\n",
+			       (unsigned)m.total_size, (unsigned)m.max_used,
+			       m.used_pct, m.frag_pct);
+			fflush(stdout);
 		} else if (sscanf(buf, "size %d %d %d", &idx, &w, &h) == 3) {
 			if (idx >= 0 && idx < win_n && w > 0 && h > 0) {
 				lv_obj_set_size(wins[idx].win, w, h);
@@ -4726,7 +4771,7 @@ static void kms_flush_cb(lv_display_t *d, const lv_area_t *area, uint8_t *px)
 #define MAXMOUSE 8
 /* pty + slack + every keyboard and mouse we may have open */
 /* +5: the X shim's listening socket and up to four connected clients. */
-#define NFDS        (2 + MAXKBD + MAXMOUSE + 5)
+#define NFDS        (2 + MAXKBD + MAXMOUSE + 6)
 /*
  * How long to sleep once the desktop has gone quiet.
  *
@@ -4991,8 +5036,8 @@ static int mouse_poll(void)
 		accel_on = !(e && !strcmp(e, "0"));
 	}
 
-	if (lv_tick_get() - mouse_scan_at > 2000) {
-		mouse_scan_at = lv_tick_get();
+	if (input_rescan_due(mouse_scan_at)) {
+		mouse_scan_at = lv_tick_get() | 1;
 		mouse_scan();
 	}
 
@@ -5554,6 +5599,7 @@ int main(void)
 
 	in_dbg = getenv("LVDESK_INDBG") != NULL;
 	ctl_init();
+	input_watch_init();
 	mouse_init();			/* pointer and keyboard are both read here */
 	kbd_open();
 
@@ -5771,7 +5817,7 @@ int main(void)
 		struct pollfd fds[NFDS];
 		uint32_t next, elapsed;
 		int n = 0, ms;
-		int i_term, i_wifi, i_kbd, i_mouse, n_kbd, n_mouse;
+		int i_term, i_wifi, i_kbd, i_mouse, i_watch, n_kbd, n_mouse;
 		int i_x, n_x, xfds[5];
 		int frame_due;
 
@@ -5844,7 +5890,11 @@ int main(void)
 		 * was ~600 ms per 5 s window against ~200 ms actually spent in
 		 * LVGL.
 		 */
-		i_term = i_wifi = i_kbd = i_mouse = -1;
+		i_term = i_wifi = i_kbd = i_mouse = i_watch = -1;
+		if (input_watch_fd >= 0) {
+			i_watch = n;
+			fds[n].fd = input_watch_fd; fds[n].events = POLLIN; n++;
+		}
 		if (term.fd >= 0) {
 			i_term = n;
 			fds[n].fd = term.fd; fds[n].events = POLLIN; n++;
@@ -5920,13 +5970,23 @@ int main(void)
 				if (fds[i_mouse + k].revents & RD_MASK) rd_mouse = 1;
 
 			/*
-			 * The device rescans live inside kbd_poll/mouse_poll and
-			 * must still happen when nothing is readable - that is
-			 * how a newly plugged keyboard is found - so they are
-			 * driven on their own 2 s timer here instead.
+			 * The device rescans live inside kbd_poll/mouse_poll
+			 * and must still happen when nothing is readable -
+			 * that is how a newly plugged keyboard is found. With
+			 * inotify they run only when the watch fires (below)
+			 * or a stale fd forces one; without it, on the old
+			 * 2 s timer.
 			 */
-			if (lv_tick_get() - kbd_scan_at > 2000) rd_kbd = 1;
-			if (lv_tick_get() - mouse_scan_at > 2000) rd_mouse = 1;
+			if (i_watch >= 0 && (fds[i_watch].revents & RD_MASK)) {
+				char wb[256];
+
+				while (read(input_watch_fd, wb, sizeof(wb)) > 0)
+					;
+				kbd_scan_at = 0;
+				mouse_scan_at = 0;
+			}
+			if (input_rescan_due(kbd_scan_at)) rd_kbd = 1;
+			if (input_rescan_due(mouse_scan_at)) rd_mouse = 1;
 			if (term.need_fit) rd_term = 1;
 
 			if (rd_term)  { PROF_START(a); busy |= term_poll();   PROF_ADD(prof_term, a); }

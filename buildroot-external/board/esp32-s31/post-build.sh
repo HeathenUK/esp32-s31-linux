@@ -72,3 +72,16 @@ if [ -e "${TARGET_DIR}/etc/init.d/S40bluetoothd" ]; then
 	mv "${TARGET_DIR}/etc/init.d/S40bluetoothd" \
 	   "${TARGET_DIR}/etc/init.d/S46bluetoothd"
 fi
+
+# syslogd and klogd start at S01/S02, before S05xip mounts the overlays, so
+# their busybox text was SD-ext4-backed - measured 412 KB and 556 KB resident
+# against ~50 KB when the same applets run from the cramfs XIP image, and the
+# SD copy of busybox ends up cached twice. Start them after the overlay.
+if [ -e "${TARGET_DIR}/etc/init.d/S01syslogd" ]; then
+	mv "${TARGET_DIR}/etc/init.d/S01syslogd" \
+	   "${TARGET_DIR}/etc/init.d/S06syslogd"
+fi
+if [ -e "${TARGET_DIR}/etc/init.d/S02klogd" ]; then
+	mv "${TARGET_DIR}/etc/init.d/S02klogd" \
+	   "${TARGET_DIR}/etc/init.d/S07klogd"
+fi
