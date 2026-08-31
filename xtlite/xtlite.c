@@ -1214,10 +1214,32 @@ void XtRealizeWidget(Widget wi)
 	int def = res_int(w, "defaultDistance", "Thickness", 4);
 
 	layout(w, def);
-	record_basis(w);
 	xt_note("realize %s: %dx%d, %d children", w->name, w->w, w->h,
 		w->nkids);
 	realize(w);
+	/*
+	 * A class realize proc may have chosen its own size (oclock's round
+	 * clock shrinks to a square). A shell wrapping a single custom widget
+	 * fits ITSELF to the child, as real Xt's geometry negotiation would -
+	 * otherwise the difference shows as bare shell background down two
+	 * edges. The basis is recorded after, so resizes scale the geometry
+	 * that actually exists.
+	 */
+	if (w->cls == W_SHELL && w->nkids == 1 && w->kids[0]->managed &&
+	    w->kids[0]->cls == W_CUSTOM) {
+		struct wid *k = w->kids[0];
+		int nw = k->x + k->w + 2 * k->bw;
+		int nh = k->y + k->h + 2 * k->bw;
+
+		if (nw > 0 && nh > 0 && (nw != w->w || nh != w->h)) {
+			xt_note("shell %s fits child %s: %dx%d -> %dx%d",
+				w->name, k->name, w->w, w->h, nw, nh);
+			w->w = nw;
+			w->h = nh;
+			XResizeWindow(xt_dpy, w->win, w->w, w->h);
+		}
+	}
+	record_basis(w);
 	XFlush(xt_dpy);
 }
 

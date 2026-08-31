@@ -20,7 +20,9 @@
 #   xcalc   black display bevel, "7" in the display (this script presses 7),
 #           1 px border around EVERY button
 #   xfiles  icon grid with folder/file icons and filename labels
-#   oclock  jewel dot at 12, hour + minute hands (square window: SHAPE stubbed)
+#   oclock  jewel dot at 12, hour + minute hands, and its thick black border
+#           RINGING ALL FOUR SIDES evenly - arms on only two sides means the
+#           border-origin model has regressed (square window: SHAPE stubbed)
 set -e
 X11RUN=/root/x11run
 UI=/root/uinject

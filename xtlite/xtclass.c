@@ -856,4 +856,14 @@ void xt_custom_realize(struct wid *p, XtValueMask mask,
 	p->wclass->core_class.realize(w, &mask, attrs);
 	if (!p->win)		/* a proc that never called XtCreateWindow */
 		p->win = w->core.window;
+	/*
+	 * The realize proc is authoritative about its own geometry - oclock's
+	 * shrinks the window to the round clock's square. Adopt what it chose,
+	 * or the layout keeps the old numbers and the shell wears the
+	 * difference as bare background.
+	 */
+	p->w = w->core.width;
+	p->h = w->core.height;
+	p->x = w->core.x;
+	p->y = w->core.y;
 }

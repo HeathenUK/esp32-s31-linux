@@ -819,8 +819,15 @@ static void geom_update(struct res *w)
 	} else if (w->type == R_WINDOW && (p = res_find(w->parent)) &&
 		   p->type == R_WINDOW && p->buf) {
 		w->buf = p->buf;
-		w->ax = p->ax + w->x;
-		w->ay = p->ay + w->y;
+		/*
+		 * X positions a window by the corner of its BORDER: the
+		 * content begins bw further in. Treating x,y as the content
+		 * corner drew oclock 6 px up-left of where it belonged, its
+		 * border's top and left arms clipped off by the parent and
+		 * the vacated right and bottom showing as thick black bands.
+		 */
+		w->ax = p->ax + w->x + w->bw;
+		w->ay = p->ay + w->y + w->bw;
 		w->cx0 = w->ax > p->cx0 ? w->ax : p->cx0;
 		w->cy0 = w->ay > p->cy0 ? w->ay : p->cy0;
 		w->cx1 = w->ax + w->w < p->cx1 ? w->ax + w->w : p->cx1;
@@ -1007,10 +1014,10 @@ static void draw_border(struct res *w)
 	p = res_find(w->parent);
 	if (!p || p->type != R_WINDOW || !drawable_ok(p))
 		return;
-	for (j = w->y - w->bw; j < w->y + w->h + w->bw; j++)
-		for (i = w->x - w->bw; i < w->x + w->w + w->bw; i++) {
-			if (i >= w->x && i < w->x + w->w &&
-			    j >= w->y && j < w->y + w->h)
+	for (j = w->y; j < w->y + w->h + 2 * w->bw; j++)
+		for (i = w->x; i < w->x + w->w + 2 * w->bw; i++) {
+			if (i >= w->x + w->bw && i < w->x + w->bw + w->w &&
+			    j >= w->y + w->bw && j < w->y + w->bw + w->h)
 				continue;		/* the child itself */
 			px_set(p, i, j, (uint16_t)w->border_pixel);
 		}
@@ -4678,9 +4685,12 @@ static struct res *hit_test(struct res *w, int *x, int *y)
 			    !ch->mapped)
 				continue;
 			if (*x < ch->x || *y < ch->y ||
-			    *x >= ch->x + ch->w || *y >= ch->y + ch->h)
+			    *x >= ch->x + ch->w + 2 * ch->bw ||
+			    *y >= ch->y + ch->h + 2 * ch->bw)
 				continue;
-			hit = ch; hx = *x - ch->x; hy = *y - ch->y;
+			hit = ch;
+			hx = *x - ch->x - ch->bw;
+			hy = *y - ch->y - ch->bw;
 		}
 		if (!hit)
 			return w;
