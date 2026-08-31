@@ -4205,6 +4205,8 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 			send_error(c, X_BAD_WINDOW, get32(r + 4), op);
 			break;
 		}
+		int ox = w->x, oy = w->y, ow = w->w, oh = w->h, obw = w->bw;
+
 		nw = w->w; nh = w->h;
 		for (bit = 0; bit < 7; bit++) {
 			if (!(mask & (1u << bit)))
@@ -4230,6 +4232,35 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 			win_fill(w, 0, 0, nw, nh);
 		} else {
 			geom_update(w);
+		}
+		/*
+		 * A border is drawn in the PARENT's pixels, so changing a
+		 * child's geometry - oclock reconfigures its border 1 -> 5 px
+		 * - leaves the old ring painted and the new one nonexistent
+		 * until some unrelated expose happens to repaint the parent.
+		 * That made oclock's thick ring appear and vanish depending on
+		 * how busy the desktop was. Repaint the union of the old and
+		 * new border-inclusive extents in the parent ourselves.
+		 */
+		if (w->parent != ROOT_ID && w->mapped) {
+			struct res *par = res_find(w->parent);
+
+			if (par && par->type == R_WINDOW) {
+				int ux0 = ox < w->x ? ox : w->x;
+				int uy0 = oy < w->y ? oy : w->y;
+				int ux1a = ox + ow + 2 * obw;
+				int ux1b = w->x + w->w + 2 * w->bw;
+				int uy1a = oy + oh + 2 * obw;
+				int uy1b = w->y + w->h + 2 * w->bw;
+				int ux1 = ux1a > ux1b ? ux1a : ux1b;
+				int uy1 = uy1a > uy1b ? uy1a : uy1b;
+
+				win_fill(par, ux0, uy0, ux1 - ux0, uy1 - uy0);
+				redraw_child_borders(par, ux0, uy0,
+						     ux1 - ux0, uy1 - uy0);
+				damage_add(par, ux0, uy0,
+					   ux1 - ux0, uy1 - uy0);
+			}
 		}
 		if (trace_on())
 			fprintf(stderr, "       ~win 0x%x -> %dx%d+%d+%d (mask %04x)\n",

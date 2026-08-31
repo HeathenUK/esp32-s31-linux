@@ -1214,31 +1214,38 @@ void XtRealizeWidget(Widget wi)
 	int def = res_int(w, "defaultDistance", "Thickness", 4);
 
 	layout(w, def);
+	/*
+	 * The Shell contract, verbatim from the Intrinsics: a shell is
+	 * EXACTLY the size of its managed child's CORE, and places the child
+	 * at (-border_width, -border_width) so the child's own X border
+	 * hangs outside the shell and is clipped away. layout() had sized
+	 * the shell to core + 2*bw with the child at (0,0), which left the
+	 * border inside and, once oclock split its space between window and
+	 * border ('window + 2*border = core', Clock.c), two pixels of bare
+	 * shell along the right and bottom. Under the real contract the
+	 * child's border-inclusive extent covers the shell completely.
+	 */
+	if (w->cls == W_SHELL && w->nkids == 1 && w->kids[0]->managed) {
+		struct wid *k = w->kids[0];
+
+		/*
+		 * Ground-truthed against a real X server (Xvfb, SHAPE off,
+		 * xwininfo tree): the shell is its child's CORE size and the
+		 * child sits at (0,0) - NOT at (-bw,-bw), which this first
+		 * said on remembered Intrinsics lore and which shifted
+		 * oclock's ring off the top-left while opening a sliver at
+		 * the bottom-right. At (0,0) the reconfigured clock's
+		 * border-box lands exactly flush: 5 px ring on all four
+		 * sides, verified pixel-for-pixel on both servers.
+		 */
+		k->x = 0;
+		k->y = 0;
+		w->w = k->w;
+		w->h = k->h;
+	}
 	xt_note("realize %s: %dx%d, %d children", w->name, w->w, w->h,
 		w->nkids);
 	realize(w);
-	/*
-	 * A class realize proc may have chosen its own size (oclock's round
-	 * clock shrinks to a square). A shell wrapping a single custom widget
-	 * fits ITSELF to the child, as real Xt's geometry negotiation would -
-	 * otherwise the difference shows as bare shell background down two
-	 * edges. The basis is recorded after, so resizes scale the geometry
-	 * that actually exists.
-	 */
-	if (w->cls == W_SHELL && w->nkids == 1 && w->kids[0]->managed &&
-	    w->kids[0]->cls == W_CUSTOM) {
-		struct wid *k = w->kids[0];
-		int nw = k->x + k->w + 2 * k->bw;
-		int nh = k->y + k->h + 2 * k->bw;
-
-		if (nw > 0 && nh > 0 && (nw != w->w || nh != w->h)) {
-			xt_note("shell %s fits child %s: %dx%d -> %dx%d",
-				w->name, k->name, w->w, w->h, nw, nh);
-			w->w = nw;
-			w->h = nh;
-			XResizeWindow(xt_dpy, w->win, w->w, w->h);
-		}
-	}
 	record_basis(w);
 	XFlush(xt_dpy);
 }
