@@ -144,6 +144,8 @@ static const uint32_t term_palette[16] = {
 #define TERM_ROWS   28
 #define TASKBAR_H   22
 #define HDR_H       20
+/* Measured cost of an lvdesk window's chrome around its content. */
+static int xwin_chrome_w = 2, xwin_chrome_h = HDR_H + 2;
 /* how much of a window must stay on screen when dragged */
 #define KEEP_ON_SCREEN 48
 
@@ -3326,6 +3328,32 @@ static void xwin_on_window(uint32_t id, int w, int h)
 	}
 	content = lv_win_get_content(win);
 	lv_obj_set_style_pad_all(content, 0, 0);
+	/*
+	 * Size the window so the CONTENT equals the client exactly. The +2
+	 * above assumed 1 px of chrome per side; the theme's real border left
+	 * the content a couple of pixels larger than the client image, and
+	 * the surplus showed as a thin bright strip down the right and
+	 * bottom of every X window. Measure what the chrome actually costs
+	 * and size from that, once - it is a property of the theme.
+	 */
+	{
+		static int chrome_w = -1, chrome_h;
+
+		if (chrome_w < 0) {
+			lv_obj_update_layout(win);
+			chrome_w = lv_obj_get_width(win) -
+				   lv_obj_get_width(content);
+			chrome_h = lv_obj_get_height(win) -
+				   lv_obj_get_height(content);
+			printf("lvdesk: window chrome measures %dx%d "
+			       "(sizing assumed 2x%d)\n",
+			       chrome_w, chrome_h, HDR_H + 2);
+			fflush(stdout);
+		}
+		lv_obj_set_size(win, pw + chrome_w, ph + chrome_h);
+		xwin_chrome_w = chrome_w;
+		xwin_chrome_h = chrome_h;
+	}
 
 	x = &xwins[xwin_n++];
 	x->id = id;
@@ -3385,8 +3413,9 @@ static void xwin_on_draw(uint32_t id)
 				lv_image_set_src(xwins[i].img,
 						 &xwins[i].dsc);
 				lv_obj_set_size(xwins[i].img, w, h);
-				lv_obj_set_size(xwins[i].win, w + 2,
-						h + HDR_H + 2);
+				lv_obj_set_size(xwins[i].win,
+						w + xwin_chrome_w,
+						h + xwin_chrome_h);
 			}
 			{
 				static int fulldmg = -1;
