@@ -136,3 +136,28 @@ make flash-bootloader
 # 4. Flash all firmware partitions
 make flash-opensbi flash-linux flash-rootfs
 ```
+
+## Reproducing a flashed kernel byte-for-byte (verified 2026-08-31)
+
+`images/xipImage` (build #66) was reproduced to an identical md5 from the
+tree, which is what proves `patches/0021` captures the display-stack source
+the board actually runs. Three inputs are not source and must be pinned:
+
+- **The banner.** With no `KBUILD_BUILD_*` set, `init/version.o` carries a
+  placeholder banner (`"# \n"`) and the real `#N + date` is linked in via
+  `version-timestamp.o`. Setting `KBUILD_BUILD_TIMESTAMP` (or even just
+  `KBUILD_BUILD_VERSION`) bakes the string into version.o's rodata instead,
+  which grows it and shifts every later address - 712 KB of relocation diffs
+  from one env var meant to *help* reproducibility. Leave both unset; pin
+  only `KBUILD_BUILD_USER=builder KBUILD_BUILD_HOST=<container id>` (the
+  container hostname is random per run), set `.version` to N-1
+  (`scripts/build-version` increments before use), and shim `date` on PATH
+  to the original link time (`init/Makefile` uses `$(shell LC_ALL=C date)`).
+- **The initramfs.** `gen_init_cpio` stamps mtimes with `time()` directly -
+  no shim reaches it - and the flashed cpio keeps the date of whatever old
+  build last regenerated it. Extract the 512-byte cpio from the flashed
+  image (`070701` magic near `__initramfs_start`) and drop it over
+  `usr/initramfs_data.cpio`; the generation rule does not re-run when only
+  its target changed.
+- **The build-id** is a hash of the link inputs and matches by itself once
+  the above do.
