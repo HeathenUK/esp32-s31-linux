@@ -85,6 +85,12 @@ struct res {
 	uint8_t dirty;			/* pixmaps: has anything ever drawn here */
 	uint8_t bpp;			/* bytes per pixel in px: 1 or 2 */
 	int shm_fd;			/* memfd backing px, or -1 */
+	/*
+	 * The length px was actually mapped with. Recomputing it from w and h
+	 * at free time was fine while this was calloc; with munmap a stale
+	 * size is fatal, and w/h change on resize.
+	 */
+	size_t px_len;
 	size_t shm_len;
 	uint8_t uniform;		/* pixmaps: px is NULL, every pixel ufill */
 	uint16_t ufill;			/* ...and this is that value */
@@ -512,9 +518,14 @@ void xshim_mem_report(void)
 				}
 			}
 			fprintf(stderr, "xshim:   pixmap 0x%x %dx%d depth %u "
-				"%zu kB, %zu runs = %zu kB RLE (%zu%%)%s\n",
+				"%zu kB, first=0x%04x, %zu runs = %zu kB RLE "
+				"(%zu%%)%s\n",
 				res[i].id, res[i].w, res[i].h, res[i].depth,
-				n / 1024, runs,
+				n / 1024,
+				res[i].px ? (res[i].bpp == 1 ?
+					     ((uint8_t *)res[i].px)[0] :
+					     res[i].px[0]) : 0,
+				runs,
 				runs * (res[i].bpp + 2) / 1024,
 				runs * (res[i].bpp + 2) * 100 / (n ? n : 1),
 				res[i].dirty ? "" : " NEVER DRAWN");
