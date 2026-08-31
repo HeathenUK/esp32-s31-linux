@@ -4895,6 +4895,7 @@ static void lvp_dump(void)
 }
 static int mouse_fds[MAXMOUSE];
 static int mouse_raw[MAXMOUSE];		/* synthetic: no pointer acceleration */
+static int mouse_touch[MAXMOUSE];	/* absolute touchscreen, not a mouse */
 static int mouse_n;
 static uint32_t mouse_scan_at;
 static uint32_t in_lag_sum, in_lag_max;
@@ -4965,6 +4966,32 @@ static int is_mouse(int fd)
 	return has_rel && has_btn && !has_a;
 }
 
+/*
+ * A touchscreen: absolute X plus BTN_TOUCH and no relative axes. The GT1158
+ * driver's single-touch emulation (ABS_X/ABS_Y/BTN_TOUCH mirroring MT slot 0)
+ * is exactly the view this consumes - taps land as clicks at the touched
+ * point, drags drag. Multitouch gestures are the kernel's to report and
+ * nobody's to consume yet.
+ */
+static int is_touch(int fd)
+{
+	unsigned long abs[ABS_MAX / (8 * sizeof(long)) + 1] = { 0 };
+	unsigned long key[KEY_MAX / (8 * sizeof(long)) + 1] = { 0 };
+	unsigned long rel[REL_MAX / (8 * sizeof(long)) + 1] = { 0 };
+
+	if (ioctl(fd, EVIOCGBIT(EV_ABS, sizeof(abs)), abs) < 0)
+		return 0;
+	if (ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(key)), key) < 0)
+		return 0;
+	ioctl(fd, EVIOCGBIT(EV_REL, sizeof(rel)), rel);
+	if (rel[REL_X / (8 * sizeof(long))] & (1UL << (REL_X % (8 * sizeof(long)))))
+		return 0;
+	if (!(abs[ABS_X / (8 * sizeof(long))] & (1UL << (ABS_X % (8 * sizeof(long))))))
+		return 0;
+	return !!(key[BTN_TOUCH / (8 * sizeof(long))] &
+		  (1UL << (BTN_TOUCH % (8 * sizeof(long)))));
+}
+
 static void mouse_scan(void)
 {
 	char path[64];
@@ -4983,7 +5010,10 @@ static void mouse_scan(void)
 			    a.st_rdev == b.st_rdev) { known = 1; break; }
 		}
 		if (known) { close(fd); continue; }
-		if (!is_mouse(fd)) { close(fd); continue; }
+		if (!is_mouse(fd) && !is_touch(fd)) { close(fd); continue; }
+		mouse_touch[mouse_n] = is_touch(fd);
+		if (mouse_touch[mouse_n])
+			printf("lvdesk: touchscreen on %s\n", path);
 		{
 			/*
 			 * Injected devices bypass acceleration entirely.
@@ -5049,6 +5079,7 @@ static int mouse_poll(void)
 			close(mouse_fds[i]);
 			mouse_fds[i] = mouse_fds[--mouse_n];
 			mouse_raw[i] = mouse_raw[mouse_n];
+			mouse_touch[i] = mouse_touch[mouse_n];
 			mouse_scan_at = 0;
 			i--;
 			continue;
@@ -5148,7 +5179,20 @@ static int mouse_poll(void)
 								in_lag_max = age;
 						}
 					}
-			} else if (ev.type == EV_KEY && ev.code == BTN_LEFT) {
+			} else if (ev.type == EV_ABS && mouse_touch[i]) {
+				/*
+				 * Absolute position, panel coordinates 1:1
+				 * with the screen. Assign, never accelerate:
+				 * the finger IS the position. ABS_X/ABS_Y are
+				 * the driver's single-touch emulation.
+				 */
+				if (ev.code == ABS_X)
+					ptr_x = ev.value;
+				else if (ev.code == ABS_Y)
+					ptr_y = ev.value;
+			} else if (ev.type == EV_KEY &&
+				   (ev.code == BTN_LEFT ||
+				    ev.code == BTN_TOUCH)) {
 				int was = ptr_pressed;
 
 				ptr_pressed = !!ev.value;

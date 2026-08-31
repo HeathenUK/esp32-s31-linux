@@ -2331,3 +2331,20 @@ library to "the SD lower layer" - which only works if the card actually
 holds a copy. This card predates the X11 stack; libxkbfile/libxcb/libXau/
 libXdmcp had to be backfilled onto the ext4, and the sweep is what caught
 xclock failing to relocate XkbStdBell.
+
+## Touch works: taps click X apps (2026-08-31)
+
+Rebuilt from the factory demo's ground truth, trusting nothing local, same
+method as audio. The GT1158 was never "blocked on hardware": it scans from
+power-on with neither INT nor RESET wired, and only wants its status register
+(0x814E) acknowledged with a 0 write on every poll - the vendor component's
+exact rhythm, mirrored by the new `gt1158_polled` kernel driver (polled I2C,
+20 ms default, module param; standard MT type B plus single-touch emulation,
+so it is an ordinary Linux touchscreen at /dev/input/event0). lvdesk gained a
+touchscreen device class: ABS_X/ABS_Y position the pointer absolutely and
+BTN_TOUCH is the left button, so taps click - verified by finger on an
+unmodified xcalc. Two traps for the record: INPUT_MT_DROP_UNUSED is
+load-bearing (without it slots never release, BTN_TOUCH latches after the
+first touch ever, and the cursor follows a finger that can never click); and
+docs/touch-gt1158.md now opens with the correction of its own confident
+wrong conclusion. rootfs/gtprobe.c is the userspace register-level probe.

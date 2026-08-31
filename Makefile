@@ -300,6 +300,8 @@ linux: toolchain | $(LINUX_OUT)
 		--disable DRM_DEBUG_MODESET_LOCK \
 		--enable INPUT_MISC \
 		--enable INPUT_UINPUT \
+		--enable INPUT_TOUCHSCREEN \
+		--enable TOUCHSCREEN_GT1158_POLLED \
 		--enable HIGH_RES_TIMERS \
 		--enable NO_HZ_IDLE \
 		--enable FILE_LOCKING \

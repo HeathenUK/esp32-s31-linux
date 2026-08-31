@@ -1,6 +1,20 @@
 # Touch on the Korvo-1: GT1158, and why it does not run
 
-Status: **blocked on hardware, not software.** The controller is present and
+**RESOLVED 2026-08-31: the conclusion below was WRONG - touch works, with no
+INT, no RESET, no config write.** The vendor component (esp_lcd_touch_gt1151,
+used by the factory demo) does only two things this investigation did not:
+it acknowledges 0x814E by writing 0 on EVERY poll cycle - data or not - and
+it never expects zero-touch frames to keep arriving while nobody touches the
+panel. Probed on this exact board with that rhythm: the controller publishes
+0x80 (ready, no touch) continuously at idle and clean checksummed frames
+under a finger. The "runtime resolution 257x2 garbage" below was GT9xx
+register lore applied to a GT1x part. The shipping driver is
+drivers/input/touchscreen/gt1158_polled.c; the one non-obvious kernel-side
+trap was INPUT_MT_DROP_UNUSED (without it BTN_TOUCH latches after the first
+ever touch and no tap ever clicks). Everything below is preserved as the
+record of a wrong conclusion confidently held.
+
+Status: ~~blocked on hardware, not software~~ **WRONG - see above.** The controller is present and
 correctly configured, but is not scanning, and the two lines normally used to
 start it are not wired to the SoC.
 
