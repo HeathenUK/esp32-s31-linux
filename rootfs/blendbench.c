@@ -211,6 +211,50 @@ int main(int argc, char **argv)
 		}
 	}
 
+	/*
+	 * Why two instruments disagree about write-combine.
+	 *
+	 * blendbench says CPU access to a dumb buffer costs 13.7x; lvdesk's own
+	 * probe says it costs nothing (fb 57 MB/s against heap 60 MB/s on a
+	 * read-modify-write). Both are carefully written, so the difference is
+	 * probably not in either - it is in the ACCESS PATTERN. A blend touches
+	 * three streams at once (two source reads and a write); lvdesk's probe
+	 * touches one. Write-combine has a small number of fill buffers, so
+	 * three streams may thrash where one does not.
+	 *
+	 * So: run the SAME one-stream read-modify-write lvdesk uses, on both
+	 * kinds of memory, right next to the three-stream blend. If one stream
+	 * is fast on the framebuffer and three are slow, both instruments were
+	 * right and the rule is about streams, not about the mapping.
+	 */
+	{
+		size_t n = (size_t)Ha * pitch / 2, i;
+		double t0;
+		volatile uint16_t *fb = (volatile uint16_t *)bgm;
+		uint16_t *hp = cbg;
+
+		t0 = now_us();
+		for (i = 0; i < n; i++)
+			fb[i] = (uint16_t)(fb[i] + 1);
+		printf("1-stream RMW, framebuffer : %8.0f us\n", now_us() - t0);
+
+		t0 = now_us();
+		for (i = 0; i < n; i++)
+			hp[i] = (uint16_t)(hp[i] + 1);
+		printf("1-stream RMW, heap        : %8.0f us\n", now_us() - t0);
+
+		t0 = now_us();
+		for (i = 0; i < n; i++)
+			((volatile uint16_t *)dstm)[i] =
+				fb[i] + ((volatile uint16_t *)fgm)[i];
+		printf("3-stream, all framebuffer : %8.0f us\n", now_us() - t0);
+
+		t0 = now_us();
+		for (i = 0; i < n; i++)
+			cout[i] = cbg[i] + cfg[i];
+		printf("3-stream, all heap        : %8.0f us\n", now_us() - t0);
+	}
+
 	printf("\nblend, alpha 128, %d iterations, pitch %u\n", iters, pitch);
 	printf("%9s %9s %10s %12s %10s %8s\n", "rect", "bytes", "PPA us",
 	       "CPU uncach", "CPU cached", "ratio");

@@ -921,3 +921,35 @@ So "the PPA is slower" is never a statement about the engine - it is a
 statement about a size. The right reading is: **use it for big rectangles,
 where it wins twice; keep small ones on the CPU, where an offload is not
 purchasable at any price.**
+
+## Write-combine costs nothing for ONE stream and 18x for three (2026-08-31)
+
+Two carefully written instruments disagreed about the same memory. blendbench
+measured CPU access to a DRM dumb buffer at 13.7x; lvdesk's own probe measured
+no penalty at all (fb 57 MB/s against heap 60 MB/s). Both were right, and the
+difference was never the mapping - it is the ACCESS PATTERN:
+
+    same buffers, same run              framebuffer      heap     ratio
+    1-stream read-modify-write        3,925-4,487 us  3,977-4,228   1.0x
+    3-stream (read+read+write)      269,738-270,327 us 14,484-15,682 18x
+
+Write-combine has a small number of fill buffers. One sequential stream uses
+them perfectly; three concurrent streams evict each other on every access, and
+each eviction is a partial write to uncached memory.
+
+**The rule: count the streams, not the mapping.**
+
+- **A fill, a memset, a straight blit** touches one or two streams and runs at
+  heap speed in write-combine memory. lvdesk rendering DIRECT into the scanout
+  dumb buffer is therefore not the mistake it looked like.
+- **A blend, a composite, anything reading two sources into a third** is 18x.
+  That is what made the "13.7x penalty for CMA-resident drawables" figure look
+  like a property of CMA. It is not - the shim's masked composite is exactly
+  this shape, and it is only safe because its drawables are in the heap.
+
+This also settles a PPA question that was decided against the wrong baseline.
+A CPU blend in write-combine memory is ~18x slower than in the heap, so for any
+surface that ALREADY lives in CMA the engine is not 4.4-5.8x better than the
+CPU - it is roughly sixty times better. Anything in docs above that compares
+the PPA against a *cached* CPU blend is comparing it against a baseline that
+does not exist for CMA-resident work.
