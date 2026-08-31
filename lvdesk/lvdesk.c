@@ -1843,27 +1843,53 @@ static void audio_open(void)
 		snd_mixer_selem_get_playback_volume_range(mixer_elem,
 							  &mixer_min, &mixer_max);
 	/*
-	 * alsa-lib keeps its parsed configuration tree - the whole of
-	 * alsa.conf and friends, ~100 KB of heap - cached globally after any
-	 * open, forever. The open mixer handle does not need it; it is only
-	 * consulted by NAME lookups, and the next one (a bong child, which is
-	 * its own process anyway) just re-parses. Freeing it here means the
-	 * first touch of the volume slider stops costing lvdesk that heap for
-	 * the rest of its life. musl never returns freed pages to the kernel,
-	 * so RSS will not visibly drop - the win is that later allocations
-	 * reuse these pages instead of growing the heap further.
+	 * alsa-lib's parsed configuration tree - alsa.conf and friends, ~100 KB
+	 * of heap built from SD reads - lives from this first use for the rest
+	 * of lvdesk's life, deliberately. Two earlier designs freed it (after
+	 * init, then on popover close) to give the RAM back; both were
+	 * illusory, because musl never returns freed heap pages to the kernel
+	 * - MemAvailable stayed exactly as low while every bong or popover
+	 * paid an SD re-parse to rebuild a tree it effectively still owned.
+	 * Kept alive, bong children inherit it across fork and open their PCM
+	 * without touching the SD card at all. The one-time cost of the first
+	 * volume interaction (~360 KB: this tree plus libasound's resident
+	 * text) is the true price of the feature; pretending otherwise only
+	 * added latency.
 	 */
-	snd_config_update_free_global();
 }
+
+/*
+ * The slider is PERCEPTUAL, not register-linear. This codec's volume register
+ * is linear in dB across -95.5..+32 dB, so a linear percent mapping put 40%
+ * at -44 dB (inaudible) and 100% at +32 dB of pure digital gain (clipping) -
+ * the whole usable range squeezed into the bar's top fifth.
+ *
+ * The mapping used everywhere else (PulseAudio's cubic law): amplitude =
+ * (pct/100)^3, i.e. dB = 60*log10(pct/100), ceilinged at 0 dB so 100% means
+ * full scale and the +32 dB gain range is never reachable from the UI.
+ * 50% = -18 dB, 25% = -36 dB, 10% = -60 dB. Through the ALSA dB API rather
+ * than raw register values, so it holds for any codec that reports TLV;
+ * elements without dB info fall back to the old linear raw mapping.
+ */
+#define VOL_SPAN_CDB	6000	/* 60 dB across the bar, in centi-dB */
 
 static int audio_get_pct(void)
 {
-	long v = 0;
+	long cdb = 0, v = 0;
 
 	audio_open();
 	if (!mixer_elem || mixer_max <= mixer_min)
 		return 60;
 	snd_mixer_handle_events(mixer);
+	if (snd_mixer_selem_get_playback_dB(mixer_elem,
+					    SND_MIXER_SCHN_FRONT_LEFT,
+					    &cdb) == 0) {
+		if (cdb >= 0)
+			return 100;
+		if (cdb <= -VOL_SPAN_CDB)
+			return 0;
+		return (int)(100.f * powf(10.f, (float)cdb / VOL_SPAN_CDB) + 0.5f);
+	}
 	snd_mixer_selem_get_playback_volume(mixer_elem,
 					    SND_MIXER_SCHN_FRONT_LEFT, &v);
 	return (int)((v - mixer_min) * 100 / (mixer_max - mixer_min));
@@ -1871,15 +1897,27 @@ static int audio_get_pct(void)
 
 static void audio_set_pct(int pct)
 {
-	long v;
+	long cdb, v;
 	int i;
 
 	audio_open();
 	if (!mixer_elem || mixer_max <= mixer_min)
 		return;
-	v = mixer_min + (mixer_max - mixer_min) * pct / 100;
-	for (i = 0; i < mixer_nelem; i++)
-		snd_mixer_selem_set_playback_volume_all(mixer_elems[i], v);
+	if (pct <= 0)
+		cdb = -9999 * 100;	/* below any codec's floor: mute */
+	else if (pct >= 100)
+		cdb = 0;
+	else
+		cdb = (long)(VOL_SPAN_CDB * log10f(pct / 100.f));
+	for (i = 0; i < mixer_nelem; i++) {
+		/* dir -1: round down, never louder than asked. */
+		if (snd_mixer_selem_set_playback_dB_all(mixer_elems[i],
+							cdb, -1) < 0) {
+			v = mixer_min + (mixer_max - mixer_min) * pct / 100;
+			snd_mixer_selem_set_playback_volume_all(mixer_elems[i],
+								v);
+		}
+	}
 }
 
 /*
@@ -1901,9 +1939,20 @@ static void audio_bong(void)
 	snd_pcm_t *pcm;
 	int16_t *buf;
 	int frames = rate * ms / 1000, i, err;
+	/*
+	 * Phase timing to the log, one line per bong. The click-to-sound
+	 * delay was reported as "huge" and there are three candidate costs -
+	 * the alsa.conf re-parse inside open, the device setup, and the
+	 * synthesis - so the line names the guilty one instead of arguing.
+	 */
+	struct timespec ts[5];
+#define BONG_STAMP(n) clock_gettime(CLOCK_MONOTONIC, &ts[n])
+#define BONG_MS(a, b) (((ts[b].tv_sec - ts[a].tv_sec) * 1000) + \
+		       ((ts[b].tv_nsec - ts[a].tv_nsec) / 1000000))
 
 	if (pid != 0)
 		return;			/* parent carries on; reaped in the loop */
+	BONG_STAMP(0);
 
 	/*
 	 * **Stereo.** This was opened with one channel and left plughw to
@@ -1919,17 +1968,16 @@ static void audio_bong(void)
 	/*
 	 * hw, not plughw: the tone is rendered natively - 2ch 48k S16_LE is
 	 * exactly what the codec runs - so the plug conversion layer would
-	 * allocate its chain for nothing. And free the parsed global config
-	 * immediately: this child lives for ~200 ms, and on a machine with
-	 * ~2 MB available its transient heap is what nudges the system into
-	 * reclaim on every volume change.
+	 * allocate its chain for nothing. The global config tree is inherited
+	 * from the parent (alive while the popover is open), so this open
+	 * touches no file on the SD card.
 	 */
 	err = snd_pcm_open(&pcm, "hw:0,0", SND_PCM_STREAM_PLAYBACK, 0);
 	if (err < 0) {
 		fprintf(stderr, "lvdesk: bong: open: %s\n", snd_strerror(err));
 		_exit(1);
 	}
-	snd_config_update_free_global();
+	BONG_STAMP(1);
 	err = snd_pcm_set_params(pcm, SND_PCM_FORMAT_S16_LE,
 				 SND_PCM_ACCESS_RW_INTERLEAVED, chans, rate, 1,
 				 300000);
@@ -1938,6 +1986,7 @@ static void audio_bong(void)
 		snd_pcm_close(pcm);
 		_exit(1);
 	}
+	BONG_STAMP(2);
 	buf = malloc((size_t)frames * chans * sizeof(*buf));
 	if (!buf) { snd_pcm_close(pcm); _exit(1); }
 
@@ -1945,18 +1994,42 @@ static void audio_bong(void)
 	 * Two partials an octave apart under an exponential decay - a "bong"
 	 * rather than a beep - with a raised-cosine attack so it does not
 	 * click. The same sample goes to both channels.
+	 *
+	 * All SINGLE precision, and no libm call inside the loop: this hart
+	 * has a hardware float FPU but double is a soft-float library call,
+	 * and the first version's 17,280 double sin() plus 8,640 double exp()
+	 * were a large slice of the click-to-sound delay. Each partial is a
+	 * complex rotation (four multiplies), the envelope one multiply.
 	 */
-	for (i = 0; i < frames; i++) {
-		double t = (double)i / rate;
-		double env = exp(-t * 8.0);
-		double atk = t < 0.004 ? (1.0 - cos(t / 0.004 * 3.14159)) / 2 : 1.0;
-		double v = sin(2 * 3.14159 * 660.0 * t) * 0.7 +
-			   sin(2 * 3.14159 * 1320.0 * t) * 0.3;
-		int16_t sample = (int16_t)(v * env * atk * 11000);
+	{
+		const float pi = 3.14159265f;
+		const float w1 = 2.f * pi * 660.f / rate;
+		const float w2 = 2.f * pi * 1320.f / rate;
+		const float k = expf(-8.f / rate);	/* decay per sample */
+		const float c1 = cosf(w1), s1 = sinf(w1);
+		const float c2 = cosf(w2), s2 = sinf(w2);
+		const int atk_n = rate * 4 / 1000;	/* 4 ms anti-click */
+		float re1 = 1.f, im1 = 0.f, re2 = 1.f, im2 = 0.f;
+		float env = 1.f, t;
 
-		buf[i * chans] = sample;
-		buf[i * chans + 1] = sample;
+		for (i = 0; i < frames; i++) {
+			float atk = i < atk_n ?
+				(1.f - cosf(i * pi / atk_n)) / 2.f : 1.f;
+			float v = im1 * 0.7f + im2 * 0.3f;
+			int16_t sample = (int16_t)(v * env * atk * 11000.f);
+
+			buf[i * chans] = sample;
+			buf[i * chans + 1] = sample;
+			t = re1 * c1 - im1 * s1;
+			im1 = re1 * s1 + im1 * c1;
+			re1 = t;
+			t = re2 * c2 - im2 * s2;
+			im2 = re2 * s2 + im2 * c2;
+			re2 = t;
+			env *= k;
+		}
 	}
+	BONG_STAMP(3);
 
 	err = snd_pcm_writei(pcm, buf, frames);
 	if (err < 0) {
@@ -1965,6 +2038,9 @@ static void audio_bong(void)
 		free(buf);
 		_exit(1);
 	}
+	BONG_STAMP(4);
+	fprintf(stderr, "lvdesk: bong: open %ldms params %ldms synth %ldms write %ldms\n",
+		BONG_MS(0, 1), BONG_MS(1, 2), BONG_MS(2, 3), BONG_MS(3, 4));
 	snd_pcm_drain(pcm);
 	snd_pcm_close(pcm);
 	free(buf);
