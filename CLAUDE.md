@@ -171,6 +171,13 @@ for kernel work; the rootfs only needs rebuilding when userspace changes.
 
   To actually establish cause, flash a sound-less kernel and power-cycle: if it
   whines from cold, it is the config; if not, it was a latched analog state.
+- **RESOLVED in kind, 2026-08-31: the whine is COIL WHINE from the board, not
+  the speaker.** Ear-tested: disabling the PA enable (GPIO7 low, verified
+  written) changed nothing, and a finger on the speaker cone did not muffle
+  it - a component on a switching supply is singing. The 2026-08-27 incident
+  above was almost certainly the same misattribution; do not chase the codec
+  or amplifier for a "speaker whine" again until the cone-touch test says the
+  speaker is actually moving.
 - **`CONFIG_BT` and `CONFIG_SND` are not in the committed defconfig**, yet the
   board has working Bluetooth and audio - they have been living as uncommitted
   working-tree edits, so a clean checkout builds a kernel with no sound. Check
