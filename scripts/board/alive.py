@@ -56,9 +56,14 @@ STAGES = [
 
 
 def furthest(text):
+    """Classify on the FILTERED lines, never the raw buffer: framing garbage
+    from reading one baud at another contains '# ' often enough that the raw
+    match declared STAGE SHELL on a board that never left the loader - an
+    empty 'linux phase' followed by SHELL was believed for four resets."""
+    clean = "\n".join(readable_lines(text))
     seen = None
     for name, needles in STAGES:
-        if any(n in text for n in needles):
+        if any(n in clean for n in needles):
             seen = name
     return seen
 
@@ -99,7 +104,7 @@ def report(stage, lines, extra=""):
     print("STAGE %s" % (stage or "NOTHING"))
     if extra:
         print(extra)
-    for l in lines[-8:]:
+    for l in lines[-40:]:
         print("  | %s" % l)
     return 0 if stage in ("SHELL", "LOGIN") else 1
 
@@ -133,11 +138,12 @@ def watch_reset(timeout):
                                  "reset.py")],
                    check=False, capture_output=True)
     # hart0 first, at its own baud.
-    early, _ = read_for(115200, 6.0)
+    early, _ = read_for(115200, 12.0)
     early_lines = readable_lines(early)
     early_stage = furthest(early)
-    print("--- hart0 phase (115200) ---")
-    for l in early_lines[-6:]:
+    print("--- hart0 phase (115200, %d raw bytes, %d readable lines) ---"
+          % (len(early), len(early_lines)))
+    for l in early_lines:
         print("  | %s" % l)
     if not early_stage:
         print("STAGE NOTHING")
@@ -149,6 +155,7 @@ def watch_reset(timeout):
     print("--- linux phase (1 Mbps, %ds) ---" % timeout)
     late, _ = read_for(1000000, timeout, poke=b"\r\n")
     late_lines = readable_lines(late)
+    print("(%d raw bytes, %d readable lines)" % (len(late), len(late_lines)))
     stage = furthest(late) or early_stage
     return report(stage, late_lines)
 
