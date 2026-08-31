@@ -118,6 +118,15 @@ struct wid {
 
 	struct trans *trans;
 	int ntrans, transcap;
+
+	/* XtAddEventHandler registrations, grown on demand like the rest. */
+	struct evh {
+		unsigned long mask;
+		int nonmaskable;
+		void (*proc)(Widget, XtPointer, XEvent *, Boolean *);
+		XtPointer closure;
+	} *evh;
+	int nevh, evhcap;
 };
 
 /* Globals live in xtlite.c. */
@@ -133,6 +142,10 @@ void xt_set_from_string(Widget w, void *slot, const char *type, unsigned size,
 /* xtclass.c: run an application-registered type converter. 1 if it worked. */
 int xt_convert(Widget w, const char *type, const char *v, void *slot,
 	       unsigned size);
+
+int xt_class_has_realize(struct wid *p);
+void xt_custom_realize(struct wid *p, XtValueMask mask,
+		       XSetWindowAttributes *attrs);
 
 /* xtclass.c - the Intrinsics class mechanism. */
 Widget xt_custom_create(const char *name, WidgetClass wc, struct wid *parent,

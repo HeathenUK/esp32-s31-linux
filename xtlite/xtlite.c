@@ -554,6 +554,19 @@ static void realize(struct wid *w)
 	w->realized = 1;
 	if (w->cls == W_CUSTOM)
 		xt_custom_resized(w);
+	/*
+	 * A class that provides its own realize proc replaces the window we
+	 * just made with the one that proc builds via XtCreateWindow - oclock
+	 * sets window attributes and shape state in there, and its expose
+	 * proc depends on that setup having happened.
+	 */
+	if (w->cls == W_CUSTOM && xt_class_has_realize(w)) {
+		if (w->win) {
+			XDestroyWindow(xt_dpy, w->win);
+			w->win = 0;
+		}
+		xt_custom_realize(w, mask, &a);
+	}
 	{
 		int i;
 
@@ -1218,6 +1231,8 @@ void XtAppAddActions(XtAppContext app, XtActionList list, Cardinal n)
 	xt_note("%d actions registered", nactions);
 }
 
+static void run_event_handlers(struct wid *w, XEvent *ev);
+
 XTLITE_IMPL(XtAppMainLoop)
 void XtAppMainLoop(XtAppContext app)
 {
@@ -1252,6 +1267,8 @@ void XtAppMainLoop(XtAppContext app)
 			(unsigned long)ev.xany.window, w ? w->name : "(none)");
 		if (!w)
 			continue;
+		if (w->nevh)
+			run_event_handlers(w, &ev);
 		switch (ev.type) {
 		case Expose:
 			if (w->cls == W_CUSTOM)
@@ -1318,6 +1335,66 @@ XTLITE_IMPL(XtOverrideTranslations)
 void XtOverrideTranslations(Widget wi, XtTranslations t)
 {
 	parse_translations(WID(wi), (const char *)t);
+}
+
+XTLITE_IMPL(XtAddEventHandler)
+void XtAddEventHandler(Widget wi, EventMask mask, Boolean nonmaskable,
+		       XtEventHandler proc, XtPointer closure)
+{
+	struct wid *w = WID(wi);
+
+	if (w->nevh == w->evhcap) {
+		w->evhcap = w->evhcap ? w->evhcap * 2 : 2;
+		w->evh = realloc(w->evh, w->evhcap * sizeof(*w->evh));
+	}
+	w->evh[w->nevh].mask = (unsigned long)mask;
+	w->evh[w->nevh].nonmaskable = nonmaskable;
+	w->evh[w->nevh].proc = (void (*)(Widget, XtPointer, XEvent *,
+					 Boolean *))proc;
+	w->evh[w->nevh].closure = closure;
+	w->nevh++;
+	xt_note("event handler on %s mask=%lx nonmaskable=%d", w->name,
+		(unsigned long)mask, nonmaskable);
+}
+
+/*
+ * The editres protocol hook every Xmu-linked client registers. There is no
+ * editres on this desktop; the handler only has to exist and do nothing.
+ */
+XTLITE_IMPL(_XEditResCheckMessages)
+void _XEditResCheckMessages(Widget w, XtPointer closure, XEvent *ev,
+			    Boolean *cont)
+{
+	(void)w; (void)closure; (void)ev;
+	if (cont)
+		*cont = True;
+}
+
+/* The event mask a core event type falls under, for handler dispatch. */
+static unsigned long evmask_of(int type)
+{
+	switch (type) {
+	case KeyPress:		return 1L << 0;
+	case ButtonPress:	return 1L << 2;
+	case ButtonRelease:	return 1L << 3;
+	case Expose:		return 1L << 15;
+	case ConfigureNotify:	return 1L << 17;
+	default:		return 0;
+	}
+}
+
+static void run_event_handlers(struct wid *w, XEvent *ev)
+{
+	unsigned long m = evmask_of(ev->type);
+	Boolean cont = True;
+	int i;
+
+	for (i = 0; i < w->nevh && cont; i++) {
+		struct evh *h = &w->evh[i];
+
+		if ((m && (h->mask & m)) || (!m && h->nonmaskable))
+			h->proc(WIDGET(w), h->closure, ev, &cont);
+	}
 }
 
 XTLITE_IMPL(XtDisplay)

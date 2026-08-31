@@ -23,6 +23,7 @@
  * different problems and mixing them cost real time elsewhere in this project.
  */
 #define _GNU_SOURCE
+#include <math.h>
 #include <time.h>
 #include <errno.h>
 #include <stdint.h>
@@ -644,6 +645,101 @@ static int span_clip(struct res *d, int x, int y, int w, int *bx, int *by,
 		return 0;
 	*bx = x; *by = y; *bw = x1 - x;
 	return 1;
+}
+
+static void px_hspan(struct res *d, int x, int y, int w, uint16_t c);
+
+/*
+ * Arcs, for the clients that draw with them (xeyes, oclock). X measures
+ * angles in 1/64 degree, counterclockwise from three o'clock, in a
+ * coordinate system where y grows DOWN - hence the minus on the sine.
+ * float throughout: this machine has a single-precision FPU and double is
+ * a library call.
+ */
+static float arc_norm(float a)
+{
+	while (a < 0)
+		a += 360.0f;
+	while (a >= 360.0f)
+		a -= 360.0f;
+	return a;
+}
+
+static int arc_in_sector(float ang, float a1, float sweep)
+{
+	float rel;
+
+	if (sweep >= 360.0f || sweep <= -360.0f)
+		return 1;
+	if (sweep < 0) {
+		a1 += sweep;
+		sweep = -sweep;
+	}
+	rel = arc_norm(ang - arc_norm(a1));
+	return rel <= sweep;
+}
+
+static void fill_arc(struct res *d, int ax, int ay, int aw, int ah,
+		     int a1_64, int a2_64, uint16_t color)
+{
+	float cx = ax + aw / 2.0f, cy = ay + ah / 2.0f;
+	float rx = aw / 2.0f, ry = ah / 2.0f;
+	float a1 = a1_64 / 64.0f, sweep = a2_64 / 64.0f;
+	int full = a2_64 >= 360 * 64 || a2_64 <= -360 * 64;
+	int y;
+
+	if (aw <= 0 || ah <= 0 || rx < 0.5f || ry < 0.5f)
+		return;
+	for (y = ay; y < ay + ah; y++) {
+		float dy = (y + 0.5f - cy) / ry;
+		float half, x0f, x1f;
+		int x0, x1, x;
+
+		if (dy < -1.0f || dy > 1.0f)
+			continue;
+		half = rx * sqrtf(1.0f - dy * dy);
+		x0f = cx - half; x1f = cx + half;
+		x0 = (int)ceilf(x0f - 0.5f);
+		x1 = (int)floorf(x1f - 0.5f);
+		if (x1 < x0)
+			continue;
+		if (full) {
+			px_hspan(d, x0, y, x1 - x0 + 1, color);
+			continue;
+		}
+		for (x = x0; x <= x1; x++) {
+			float ang = atan2f(-(y + 0.5f - cy) / ry,
+					   (x + 0.5f - cx) / rx) *
+				    (180.0f / 3.14159265f);
+
+			if (arc_in_sector(arc_norm(ang), a1, sweep))
+				px_hspan(d, x, y, 1, color);
+		}
+	}
+	damage_add(d, ax, ay, aw, ah);
+}
+
+static void draw_arc(struct res *d, int ax, int ay, int aw, int ah,
+		     int a1_64, int a2_64, uint16_t color)
+{
+	float cx = ax + aw / 2.0f, cy = ay + ah / 2.0f;
+	float rx = (aw - 1) / 2.0f, ry = (ah - 1) / 2.0f;
+	float a1 = a1_64 * (3.14159265f / (180.0f * 64.0f));
+	float sweep = a2_64 * (3.14159265f / (180.0f * 64.0f));
+	int n = 2 * (aw + ah), i;
+
+	if (aw <= 0 || ah <= 0)
+		return;
+	if (n < 8)
+		n = 8;
+	for (i = 0; i <= n; i++) {
+		float t = a1 + sweep * i / n;
+		int px = (int)(cx + rx * cosf(t) + 0.5f);
+		int py = (int)(cy - ry * sinf(t) + 0.5f);
+
+		px_hspan(d, px, py, 1, color);
+	}
+	damage_add(d, ax, ay, aw, ah);
 }
 
 /* One write-ready check per operation instead of one per pixel. */
@@ -3604,6 +3700,34 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		notify_draw(dst);
 		break;
 	}
+	case 68:					/* PolyArc */
+	case 71: {					/* PolyFillArc */
+		struct res *d = res_find(get32(r + 4));
+		struct res *g = res_find(get32(r + 8));
+		int i, n = (len - 12) / 12;
+
+		if (!d || !drawable_ok(d) || !g) {
+			send_error(c, d ? X_BAD_GC : X_BAD_DRAWABLE,
+				   get32(d ? r + 8 : r + 4), op);
+			break;
+		}
+		if (!op_target(d))
+			break;
+		for (i = 0; i < n; i++) {
+			const uint8_t *p = r + 12 + i * 12;
+			int x = gets16(p), y = gets16(p + 2);
+			int w = get16(p + 4), h = get16(p + 6);
+			int a1 = (int16_t)get16(p + 8);
+			int a2 = (int16_t)get16(p + 10);
+
+			if (op == 71)
+				fill_arc(d, x, y, w, h, a1, a2, g->fg);
+			else
+				draw_arc(d, x, y, w, h, a1, a2, g->fg);
+		}
+		notify_draw(d);
+		break;
+	}
 	case 70: {					/* PolyFillRectangle */
 		struct res *d = res_find(get32(r + 4));
 		struct res *g = res_find(get32(r + 8));
@@ -4243,6 +4367,48 @@ void xshim_pointer(uint32_t id, int x, int y, int button, int act)
 	if (trace_on())
 		fprintf(stderr, "xshim: ptr act=%d -> win 0x%x mask=%08x "
 			"at %d,%d\n", act, w->id, w->event_mask, x, y);
+
+	/*
+	 * Crossing events. EV_ENTER/EV_LEAVE were defined from the start and
+	 * never sent, which is why an Xaw button never highlighted under the
+	 * pointer: Command's translations bind <EnterWindow>/<LeaveWindow>.
+	 * Enter/Leave deliver to the window itself, no propagation; the mode
+	 * byte is Normal and the flags byte says same-screen. The pair goes
+	 * to each window's OWN owner - with two clients up the old and new
+	 * windows are not necessarily the same connection.
+	 */
+	{
+		static uint32_t inside;		/* one pointer, one desktop */
+
+		if (w->id != inside) {
+			struct res *ow = res_find(inside);
+			uint8_t d[28];
+
+			if (ow && ow->type == R_WINDOW &&
+			    (ow->event_mask & EV_LEAVE) &&
+			    ow->owner >= 0 && cli[ow->owner].fd >= 0) {
+				memset(d, 0, sizeof(d));
+				put32(d + 4, ROOT_ID);
+				put32(d + 8, ow->id);
+				d[26] = 0;		/* NotifyNormal */
+				d[27] = 2;		/* same-screen */
+				send_event_d(&cli[ow->owner], 8, 0, d, 28);
+				out_flush(&cli[ow->owner]);
+			}
+			if ((w->event_mask & EV_ENTER) &&
+			    w->owner >= 0 && cli[w->owner].fd >= 0) {
+				memset(d, 0, sizeof(d));
+				put32(d + 4, ROOT_ID);
+				put32(d + 8, w->id);
+				put16(d + 16, x); put16(d + 18, y);
+				put16(d + 20, x); put16(d + 22, y);
+				d[26] = 0;
+				d[27] = 2;
+				send_event_d(&cli[w->owner], 7, 0, d, 28);
+			}
+			inside = w->id;
+		}
+	}
 
 	if (act == 1) {
 		send_device_event(c, 4, button, w, x, y, EV_BTN_PRESS, state);

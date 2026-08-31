@@ -796,3 +796,53 @@ void XtAppAddConverter(XtAppContext app, const char *from, const char *to,
 	(void)app;
 	conv_add(from, to, NULL, conv, args, n);
 }
+
+/*
+ * XtCreateWindow: the spec's helper a widget's own realize proc calls to
+ * create its core window. oclock is the first client here whose widget class
+ * provides realize rather than inheriting it, and that proc does real work
+ * (window attributes, shape setup) before drawing ever starts - so it must
+ * run, and this must exist for it to call.
+ */
+XTLITE_IMPL(XtCreateWindow)
+void XtCreateWindow(Widget w, unsigned int window_class, Visual *visual,
+		    XtValueMask value_mask, XSetWindowAttributes *attributes)
+{
+	struct wid *p = WID(w);
+	Window parent = (p->parent && p->parent->win) ? p->parent->win :
+			DefaultRootWindow(xt_dpy);
+
+	p->win = XCreateWindow(xt_dpy, parent, w->core.x, w->core.y,
+			       w->core.width ? w->core.width : 1,
+			       w->core.height ? w->core.height : 1,
+			       w->core.border_width, CopyFromParent,
+			       (int)window_class, visual, value_mask,
+			       attributes);
+	w->core.window = p->win;
+	xt_note("XtCreateWindow %s -> 0x%lx", p->name,
+		(unsigned long)p->win);
+}
+
+/* Does this custom class provide its own realize proc (not the marker)? */
+int xt_class_has_realize(struct wid *p)
+{
+	return p->wclass && p->wclass->core_class.realize &&
+	       p->wclass->core_class.realize !=
+	       widgetClassRec.core_class.realize;
+}
+
+/* Run it, with the attribute set xtlite would otherwise have used itself. */
+void xt_custom_realize(struct wid *p, XtValueMask mask,
+		       XSetWindowAttributes *attrs)
+{
+	Widget w = WIDGET(p);
+
+	w->core.x = p->x;
+	w->core.y = p->y;
+	w->core.width = p->w;
+	w->core.height = p->h;
+	w->core.border_width = p->bw;
+	p->wclass->core_class.realize(w, &mask, attrs);
+	if (!p->win)		/* a proc that never called XtCreateWindow */
+		p->win = w->core.window;
+}
