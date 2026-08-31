@@ -125,12 +125,23 @@ static XtResource core_resources[] = {
 static void core_realize(Widget w, XtValueMask *mask,
 			 XSetWindowAttributes *attr)
 {
-	(void)w; (void)mask; (void)attr;
+	struct wid *p = WID(w);
+
 	/*
-	 * A marker, not an implementation. xtlite's realize() creates every
-	 * window itself; this exists so that a class inheriting realize can be
-	 * told apart from one that overrides it.
+	 * This was a do-nothing marker, and that blanked xclock: a classic
+	 * widget's own realize proc creates its window by CALLING ITS
+	 * SUPERCLASS'S realize (ClockRealize does exactly that) and then
+	 * decorating the result. With the marker inert, the chain ended with
+	 * no window created at all - the pre-made one had already been
+	 * destroyed on the way into the class proc - and the clock face had
+	 * nowhere to exist. So Core's realize now does what the real
+	 * Intrinsics' does: create the window. It still serves as the
+	 * inheritance marker; xt_class_has_realize compares pointers, not
+	 * behaviour.
 	 */
+	if (!p->win)
+		XtCreateWindow(w, InputOutput, CopyFromParent,
+			       mask ? *mask : 0, attr);
 }
 
 __attribute__((constructor))

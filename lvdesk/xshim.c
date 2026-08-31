@@ -1016,6 +1016,33 @@ static void draw_border(struct res *w)
 		}
 }
 
+/*
+ * A fill on a window paints the PARENT's pixels, and a child's border lives
+ * exactly there - it is drawn in the parent and belongs to no window's own
+ * content, so no Expose ever brings it back. xcalc's button outlines flashed
+ * at startup (drawn once at creation) and were then erased by the Form's
+ * first background fill, permanently. Any fill that touches a window now
+ * re-draws the borders of the mapped children it may have painted over.
+ */
+static void redraw_child_borders(struct res *d, int x, int y, int w, int h)
+{
+	int i;
+
+	if (!d || d->type != R_WINDOW)
+		return;
+	for (i = 0; i < MAXRES; i++) {
+		struct res *ch = &res[i];
+
+		if (ch->type != R_WINDOW || ch->parent != d->id ||
+		    !ch->mapped || ch->bw <= 0)
+			continue;
+		if (ch->x - ch->bw >= x + w || ch->y - ch->bw >= y + h ||
+		    ch->x + ch->w + ch->bw <= x || ch->y + ch->h + ch->bw <= y)
+			continue;
+		draw_border(ch);
+	}
+}
+
 static void draw_line(struct res *d, int x0, int y0, int x1, int y1, uint16_t c)
 {
 	int dx = x1 > x0 ? x1 - x0 : x0 - x1;
@@ -4108,6 +4135,7 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 			for (y = ry; y < ry + rh; y++)
 				px_hspan(d, rx, y, rw, g->fg);
 			damage_add(d, rx, ry, rw, rh);
+			redraw_child_borders(d, rx, ry, rw, rh);
 		}
 		notify_draw(d);
 		break;
@@ -4245,6 +4273,7 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		if (!ch) ch = d->h - cy;
 		win_fill(d, cx, cy, cw, ch);
 		damage_add(d, cx, cy, cw, ch);
+		redraw_child_borders(d, cx, cy, cw, ch);
 		/*
 		 * r[1] is `exposures`. When set, the client is asking to be
 		 * told to repaint what we just erased.
