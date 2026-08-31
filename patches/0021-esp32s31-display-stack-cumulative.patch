@@ -1,0 +1,3189 @@
+esp32s31: the display stack, cumulative - PPA blend ioctl and RX-EOF completion
+
+The four files below are wholly ours (they do not exist upstream), and the
+patch series had fallen behind the 7.1 tree they live in: the PPA blend work
+of 2026-08-30 existed only in the gitignored linux-71-port/. This patch is a
+CUMULATIVE diff from the 6.12 BSP baseline (the linux-esp32-s31 submodule,
+which scripts/port-kernel.sh carries into every fresh port tree) to the
+current 7.1 state, verified byte-identical on reconstruction. For these four
+files it SUPERSEDES the hunks in 0005/0006/0016/0017/0020 - on a fresh port,
+copy the 6.12 files in and apply only this. (0006 set the precedent: these
+snapshots overlap, they are not a quilt stack.)
+
+New since 0020, previously unpreserved:
+
+  * DRM_ESP32S31_PPA_BLEND: fixed-alpha two-layer blend in hardware, dst may
+    equal bg for in-place compositing. Fill and SRM already had ioctls; blend
+    was debugfs-only, so every compositor on this board blended in software.
+  * An ARGB sprite blend path (per-pixel alpha source over an opaque
+    background) - the one blend where nothing has to be made coherent twice.
+  * PPA completion signalled by the 2D-DMA RX channel's IN_SUC_EOF, not the
+    PPA's own EOF interrupt - IDF's dma2d callbacks do the same and none of
+    them use the PPA interrupt. Waiting on the wrong bit cost 7.8x and skewed
+    every PPA-vs-CPU decision made while it was wrong.
+  * ppa_spin_us tuning notes: raising 300 -> 3000 only measured the sleep it
+    replaced; the spin threshold stays at 300.
+
+Deliberately NOT captured: the usbhid diagnostics in drivers/hid/usbhid/
+(in-handler timing, short-report and io_error counters). They are
+instrumentation, not product, and stay local to the working tree.
+
+--- a/drivers/gpu/drm/espressif/esp32s31-lcd.c
++++ b/drivers/gpu/drm/espressif/esp32s31-lcd.c
+@@ -49,6 +49,11 @@
+ #include <uapi/drm/esp32s31_drm.h>
+ #include <drm/drm_drv.h>
+ #include <drm/drm_fb_dma_helper.h>
++#include <drm/clients/drm_client_setup.h>
++#include <drm/drm_client_event.h>
++#include <drm/drm_client_event.h>
++#include <drm/drm_client_event.h>
++#include <drm/drm_print.h>
+ #include <drm/drm_fbdev_dma.h>
+ #include <drm/drm_gem_dma_helper.h>
+ #include <drm/drm_gem_framebuffer_helper.h>
+@@ -191,6 +196,8 @@
+ 	struct drm_plane cursor;
+ 	struct drm_crtc_funcs crtc_funcs;	/* simple-pipe's, plus cursor */
+ 	u32 *cur_argb;
++	dma_addr_t cur_phys;		/* the same sprite, for the PPA */
++	size_t cur_alloc;
+ 	struct drm_framebuffer *cur_fb;	/* image already copied from this */			/* ARGB8888 source, kept across moves */
+ 	unsigned int cur_w, cur_h;
+ 	int cur_x, cur_y;		/* where it is composited right now */
+@@ -199,6 +206,14 @@
+ 	unsigned int dbg_cur_moves;
+ 	unsigned int dbg_cur_fbchg;
+ 	u64 dbg_cur_ns, dbg_cur_ns_max;	/* cursor plane updates, for latency work */
++	/*
++	 * The composite itself, separately. The counter above times the atomic
++	 * plane update, but a pointer move arrives through the LEGACY cursor
++	 * ioctl and never touches that path - so it read 0 ns over 151 moves
++	 * and said nothing at all about what compositing costs.
++	 */
++	u64 dbg_paint_ns, dbg_paint_max;
++	u32 dbg_paint_n, dbg_paint_ppa;
+ 
+ 	struct dma_chan *dma;
+ 	/*
+@@ -239,6 +254,9 @@
+ 	u16 *scale_xmap;	/* output column -> source column, per mode */
+ 	u64 dbg_gdma_ns;
+ 	unsigned int dbg_gdma_rows;
++	unsigned int dbg_gdma_fail;
++	u64 dbg_sync_ns;
++	u64 dbg_sync_ns_max;
+ 	/* Which arm of the commit path each update took, to stop guessing. */
+ 	unsigned int dbg_path_full, dbg_path_rects, dbg_path_cpu,
+ 		     dbg_path_cpuscale, dbg_path_ppa;
+@@ -368,6 +386,10 @@
+ 	const struct drm_connector_helper_funcs *orig_conn_helper;
+ 	struct drm_connector_helper_funcs conn_helper;
+ 	void *fb_virt;
++
++	/* Console framebuffer handover; see esp32s31_lcd_client_work(). */
++	struct work_struct client_work;
++	bool client_wanted;
+ };
+ 
+ static inline struct esp32s31_lcd *to_esp32s31_lcd(struct drm_device *drm)
+@@ -544,12 +566,90 @@
+  *
+  * Turn it on if a full-panel image matters more than sharpness.
+  */
++/*
++ * Override the panel's pixel clock, in kHz. 0 keeps whatever the panel driver
++ * advertises.
++ *
++ * The panel entry says 18 MHz, which over htotal 861 x vtotal 496 is ~42 Hz -
++ * and 42 Hz is the floor under interaction latency here, because a keystroke
++ * cannot appear until the next scanout. The measured ~30 ms is essentially one
++ * frame period plus pipeline. 800x480 RGB panels of this class normally run
++ * 25-33 MHz, so 18 MHz looks like a conservative inherited default rather than
++ * a limit; 861 * 496 * 60 = 25,623 kHz would give 60 Hz and take one frame from
++ * 23.8 ms to 16.7 ms.
++ *
++ * A parameter rather than an edit to panel-simple.c: that file is upstream, the
++ * panel may not tolerate an arbitrary clock, and this way a bad value is one
++ * reboot away from being undone instead of a reflash.
++ */
++/*
++ * 60 Hz by default: 861 x 496 x 60 = 25,623 kHz.
++ *
++ * The panel entry advertises 18 MHz, which is ~42 Hz, and 800x480 panels of
++ * this class normally run 25-33 MHz - the low figure looks like an inherited
++ * default rather than a limit, and the panel drives 25.6 MHz without complaint.
++ *
++ * It buys no latency: an injected key still reaches the driver's commit counter
++ * in ~30 ms either way, because that measurement stops before the panel is
++ * involved. What it buys is motion - 24 ms between frames instead of 34 - and
++ * it was checked for a bandwidth penalty rather than assumed free: CoreMark
++ * 950 at 60 Hz against 949 at 42 Hz, with the desktop idle.
++ *
++ * The default, at the reduced render size, where it is measured and known
++ * good. Note it was NOT safe to enable alongside native at the same time: 60 Hz
++ * was verified at 640x384 and native was verified at 42 Hz, but the untested
++ * combination of the two hung early userspace. Changing one variable at a time
++ * is not pedantry here.
++ *
++ * Set pclk_khz=0 to return to whatever the panel driver advertises.
++ */
++static unsigned int pclk_khz = 25623;
++module_param(pclk_khz, uint, 0644);
++MODULE_PARM_DESC(pclk_khz,
++		 "override the panel pixel clock in kHz (0 = the panel's own)");
++
+ static bool upscale;
+ module_param(upscale, bool, 0644);
+ MODULE_PARM_DESC(upscale,
+ 		 "upscale a reduced render to fill the panel instead of centring it 1:1");
+ 
+-static char *render = "640x384";
++/*
++ * Native by default.
++ *
++ * 640x384 was chosen when memory was the binding constraint: a smaller render
++ * buffer meant clients stopped being paged out, and the black borders were the
++ * price. lvdesk costs 76 kB resident where Xorg cost ~4,700, so the constraint
++ * has moved, and native was re-measured rather than assumed:
++ *
++ *   640x384   30.0  30.1  30.4 ms   MemAvailable 2744 kB
++ *   800x480   29.7  29.9  29.0 ms   MemAvailable 2520 kB
++ *
++ * Within noise for 224 kB. The PPA pass it was expected to remove did not go
++ * away either - ppa_ops stayed at one per update, because that engine is doing
++ * the damage copy rather than the scaling. So this is a change of appearance,
++ * not of speed: the desktop fills the panel instead of sitting in a black
++ * frame.
++ *
++ * This is now the boot default, and the hang that previously prevented it is
++ * fixed rather than avoided. Two separate bugs held it up:
++ *
++ *  1. CMA arithmetic. The console framebuffer and the desktop's used to coexist
++ *     with the private scanout buffer - three allocations of ~768 KB from a
++ *     4 MB pool - so the third was refused and there was no desktop. The driver
++ *     now releases the console client when a master takes over
++ *     (esp32s31_lcd_client_work()), so there are only ever two.
++ *
++ *  2. The m2m GDMA damage copy hung the machine. It requires dst_x == 0, which
++ *     a centred render never has, so at 640x384 (+80+48) it never ran; at
++ *     native it ran for the first time and wedged silently on its busy-wait.
++ *     It is off by default now - see gdma_copy.
++ *
++ * Keeping place_valid true at native matters too: a surprising amount of this
++ * driver is gated on that flag - the cursor plane, the CPU copy path, and the
++ * restore blit among them - so returning early here used to disable paths that
++ * have nothing to do with scaling.
++ */
++static char *render = "";
+ module_param(render, charp, 0644);
+ MODULE_PARM_DESC(render,
+ 		 "render at WxH and upscale to the panel with the PPA, e.g. 640x384 (empty = native)");
+@@ -569,6 +669,35 @@
+  * scaled size has to come out whole; otherwise the edge of the image would not
+  * land on a pixel boundary and the border would creep.
+  */
++/*
++ * Does render= ask for the panel's own size?
++ *
++ * Three spellings mean the same thing and all three have to work, because this
++ * parameter is writable at runtime and that is how it is meant to be used:
++ *
++ *   - empty, the documented "native";
++ *   - whitespace, because `echo "" > render` writes a newline and a zero-byte
++ *     `printf %s ""` write never reaches the store at all, so a shell cannot
++ *     otherwise clear it;
++ *   - the panel's literal resolution, which esp32s31_lcd_place() rejects as
++ *     "nothing to do" and which therefore used to be reported as an unusable
++ *     value rather than as native.
++ */
++static bool esp32s31_lcd_render_is_native(const struct drm_display_mode *native)
++{
++	unsigned int rw, rh;
++	const char *s = render;
++
++	if (!s)
++		return true;
++	while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r')
++		s++;
++	if (!*s)
++		return true;
++	return sscanf(s, "%ux%u", &rw, &rh) == 2 &&
++	       rw == native->hdisplay && rh == native->vdisplay;
++}
++
+ static bool esp32s31_lcd_place(const struct drm_display_mode *native,
+ 			       unsigned int rw, unsigned int rh,
+ 			       struct esp32s31_lcd_place *out)
+@@ -668,6 +797,9 @@
+  * would make the compositor pace its repaints against a clock that does not
+  * exist.
+  */
++/* Defined below; get_modes is the first point the scanout size is known. */
++static int esp32s31_lcd_alloc_scanout(struct esp32s31_lcd *lcd);
++
+ static int esp32s31_lcd_get_modes(struct drm_connector *connector)
+ {
+ 	struct esp32s31_lcd *lcd = to_esp32s31_lcd(connector->dev);
+@@ -684,15 +816,74 @@
+ 	if (!native)
+ 		return n;
+ 
++	if (pclk_khz) {
++		unsigned int was = native->clock;
++
++		native->clock = pclk_khz;
++		drm_mode_set_crtcinfo(native, 0);
++		drm_info(&lcd->drm,
++			 "pixel clock overridden %u -> %u kHz (%u -> %u Hz)\n",
++			 was, pclk_khz,
++			 was * 1000 / (native->htotal * native->vtotal),
++			 pclk_khz * 1000 / (native->htotal * native->vtotal));
++	}
++
+ 	/* Remember the panel's real timing; the CRTC is always driven with it. */
+ 	drm_mode_copy(&lcd->native, native);
+ 	lcd->native_valid = true;
+ 
+-	if (!esp32s31_lcd_parse_render(native, &pl)) {
+-		if (render && *render)
++	/*
++	 * First moment the size is known, so take the scanout buffer here
++	 * rather than lazily at the first modeset that wants scaling.
++	 *
++	 * It is permanent either way - the allocator is idempotent and nothing
++	 * frees it - so allocating late only means allocating at the worst
++	 * moment. The region is `reusable` CMA, which the kernel fills with
++	 * movable pages whenever the display is not using it (CmaFree is
++	 * already 1356 kB of 4096 kB at boot with no X), so a 750 KB contiguous
++	 * request has to *migrate* those pages out. Under desktop memory
++	 * pressure on a 15 MB machine that migration fails, and the driver
++	 * silently drops scaling and drives the panel at the client's smaller
++	 * timing - which changes what the user sees and what every measurement
++	 * measures. Probe itself is too early: get_modes has not run there.
++	 */
++	if (esp32s31_lcd_alloc_scanout(lcd))
++		drm_warn(&lcd->drm,
++			 "scanout buffer not reserved (CMA busy already); scaling may be lost\n");
++
++	if (esp32s31_lcd_render_is_native(native) ||
++	    !esp32s31_lcd_parse_render(native, &pl)) {
++		if (!esp32s31_lcd_render_is_native(native)) {
+ 			drm_warn(&lcd->drm,
+ 				 "render=%s unusable for a %ux%u panel; the scale must be a whole number of 1/16ths on both axes\n",
+ 				 render, native->hdisplay, native->vdisplay);
++			return n;
++		}
++
++		/*
++		 * Native: give the placement an identity rather than leaving it
++		 * invalid, and advertise no reduced mode.
++		 *
++		 * Returning early here used to leave place_valid false, and a
++		 * surprising amount of this driver is gated on that flag - the
++		 * cursor plane, the CPU copy path, and the restore blit in the
++		 * plane update among them. So asking for the panel's own
++		 * resolution, which is what an empty render= means and what the
++		 * parameter's own description advertises, quietly disabled
++		 * paths that have nothing to do with scaling. It boots to a
++		 * hung fbcon.
++		 *
++		 * An identity placement keeps every one of those paths live:
++		 * esp32s31_lcd_scaling() still reports false because the
++		 * adjusted mode is the native one, and esp32s31_lcd_scaled()
++		 * still reports false because out == render. Nothing scales;
++		 * everything else behaves as it does at a reduced size.
++		 */
++		pl.render_w = pl.out_w = native->hdisplay;
++		pl.render_h = pl.out_h = native->vdisplay;
++		pl.dst_x = pl.dst_y = 0;
++		lcd->place = pl;
++		lcd->place_valid = true;
+ 		return n;
+ 	}
+ 	rw = pl.render_w;
+@@ -882,12 +1073,67 @@
+ module_param(ppa_min_bytes, uint, 0644);
+ MODULE_PARM_DESC(ppa_min_bytes,
+ 		 "bytes above which the PPA/GDMA is preferred over the CPU");
++
++/*
++ * Hand the damage copy to a kworker instead of doing it in the commit.
++ *
++ * **Off by default: it made every DIRTYFB more than twice as expensive.**
++ *
++ * Deferring exists so that a cursor move does not hold the CRTC lock across a
++ * copy. But DIRTYFB is a *synchronous* commit, so a client that damages every
++ * frame never escapes the copy - it pays for it on the *next* commit, where
++ * copy_sync() calls flush_work() and blocks until the kworker has run. That
++ * round trip is charged to the client's ioctl, so it appears as fixed
++ * per-commit overhead rather than as pixel cost, which is exactly how it hid.
++ *
++ * Measured with lvdesk/dirtybench.c, 50 reps, median ioctl time:
++ *
++ *                       deferred   inline
++ *      single 64x16      3.66 ms   1.62 ms
++ *      2 opposite corners 3.80 ms  1.71 ms
++ *      4 scattered        3.99 ms  1.86 ms
++ *
++ * 2.15-2.26x, and the tail improves as much as the median (p90 4.10 -> 2.31).
++ * The driver's own counters explain all of it: 107 flush_work() waits over
++ * ~400 commits, totalling 787 ms - **7.4 ms per wait**, which is what it costs
++ * to get a kworker scheduled on this board. 107 x 7.4 / 400 = 1.97 ms per
++ * commit, against a measured difference of 1.96.
++ *
++ * The rationale is also dormant for the desktop that exists: lvdesk draws its
++ * pointer in LVGL and never uses the DRM cursor plane, so cursor_moves and
++ * cursor fb_changes both read 0. This was an X11-era optimisation still being
++ * paid for by a client that cannot benefit from it. Kept as a parameter
++ * because a client that *does* drive the cursor plane would want it back.
++ */
++/*
++ * Minimum cursor rectangle, in pixels, that is worth handing to the PPA.
++ * 0 keeps every cursor on the CPU, which is the MEASURED right answer:
++ * 241-315 us per paint on the CPU against 407-491 us through the engine.
++ * The blend itself is not the problem - making the cached scanout coherent
++ * with the engine either side of it is. Kept as a toggle because it is a
++ * correct implementation of a per-pixel-alpha blend and the trade would flip
++ * on a bigger sprite or a coherent mapping. See docs/accel-plan.md.
++ */
++static int cursor_ppa_px;
++module_param(cursor_ppa_px, int, 0644);
++MODULE_PARM_DESC(cursor_ppa_px,
++		 "composite the cursor with the PPA at or above this many pixels (0 = never)");
++
++static bool defer_copy;
++module_param(defer_copy, bool, 0644);
++MODULE_PARM_DESC(defer_copy,
++		 "hand the damage copy to a workqueue instead of doing it inline");
+ #define ESP32S31_PPA_MIN_BYTES	ppa_min_bytes
+ 
+ /* Defined below the update path, with the code they belong to. */
+ static void esp32s31_lcd_copy_sync(struct esp32s31_lcd *lcd,
+ 				   int x1, int y1, int x2, int y2);
+ static void esp32s31_lcd_copy_worker(struct work_struct *work);
++static void esp32s31_lcd_copy_one(struct esp32s31_lcd *lcd,
++				  struct drm_gem_dma_object *obj,
++				  struct drm_framebuffer *fb,
++				  const struct esp32s31_lcd_place *pl,
++				  bool scaled, u32 x1, u32 y1, u32 x2, u32 y2);
+ /* Both defined below the update path, with the code they belong to. */
+ static void esp32s31_lcd_scale_rect_cpu(struct esp32s31_lcd *lcd,
+ 					const void *src, unsigned int src_pitch,
+@@ -937,6 +1183,9 @@
+ }
+ 
+ 
++/* Defined with the other module parameters, below the pipe callbacks. */
++static void esp32s31_lcd_rec_boot_arm(struct esp32s31_lcd *lcd);
++
+ static void esp32s31_lcd_pipe_enable(struct drm_simple_display_pipe *pipe,
+ 				     struct drm_crtc_state *crtc_state,
+ 				     struct drm_plane_state *plane_state)
+@@ -958,14 +1207,19 @@
+ 	if (scaling) {
+ 		if (esp32s31_lcd_alloc_scanout(lcd)) {
+ 			/*
+-			 * The reserved pool allocates in power-of-two page
+-			 * orders, so two 640x480 client buffers round to 1 MB
+-			 * each and take the whole 2 MB region, leaving nothing
+-			 * for this. Say so rather than silently falling back to
+-			 * driving the panel at the smaller mode's timing.
++			 * Not "the client buffers took it" - that wording
++			 * described the old 2 MB coherent pool, whose
++			 * power-of-two allocator rounded two 640x480 clients to
++			 * 1 MB each. Today's region is 4 MB of page-granular
++			 * CMA, and the real failure is migration: `reusable`
++			 * CMA is full of ordinary movable pages, and freeing a
++			 * contiguous run needs somewhere to move them to, which
++			 * a 15 MB machine under desktop pressure does not have.
++			 * Probe now reserves this buffer up front, so reaching
++			 * here means that reservation was skipped or failed.
+ 			 */
+ 			drm_err(&lcd->drm,
+-				"no scanout buffer for %ux%u (pool exhausted by the client buffers); scaling off\n",
++				"no scanout buffer for %ux%u (CMA migration failed; buffer not reserved at probe); scaling off\n",
+ 				lcd->native.hdisplay, lcd->native.vdisplay);
+ 			scaling = false;
+ 		} else {
+@@ -1117,9 +1371,21 @@
+ 	       lcd->base + LCD_MISC_REG);
+ 
+ 	lcd->dbg_scanout_addr = fb_addr;
++	/*
++	 * Report which buffer actually feeds the DMA, not merely whether a
++	 * plane framebuffer exists.
++	 *
++	 * The old test was `plane_state && plane_state->fb`, which is true
++	 * whenever a client has a framebuffer at all - including every case
++	 * where scanout is really the private compositing buffer. It therefore
++	 * printed "from plane fb" while the DMA read scan_phys, and cost an
++	 * afternoon chasing a copy that looked redundant: if the panel really
++	 * were scanning out the client's buffer, the per-frame damage copy into
++	 * the private one would be writing to memory nobody reads. It is not.
++	 */
+ 	drm_info(&lcd->drm, "diag: enable scanout at %pad, %zu bytes, from %s\n",
+ 		 &fb_addr, fb_bytes,
+-		 (plane_state && plane_state->fb) ? "plane fb" : "reserved fb");
++		 (fb_addr == lcd->scan_phys) ? "private buffer" : "plane fb");
+ 
+ 	ret = esp32s31_lcd_start_scanout(lcd, fb_addr, fb_bytes);
+ 	if (ret) {
+@@ -1141,6 +1407,8 @@
+ 	drm_info(&lcd->drm, "scanout started: " DRM_MODE_FMT " fb=%pad %zu bytes, pclk /%u\n",
+ 		 DRM_MODE_ARG(mode), &fb_addr, fb_bytes, prescale);
+ 
++	esp32s31_lcd_rec_boot_arm(lcd);
++
+ 	/*
+ 	 * Run the vblank timer for as long as the pipe is enabled, rather than
+ 	 * leaving it to .enable_vblank refcounting. Relying on the refcount left
+@@ -1161,9 +1429,39 @@
+ static void esp32s31_lcd_pipe_disable(struct drm_simple_display_pipe *pipe)
+ {
+ 	struct esp32s31_lcd *lcd = to_esp32s31_lcd(pipe->crtc.dev);
++	struct drm_crtc *crtc = &pipe->crtc;
+ 	u32 val;
+ 
+-	drm_crtc_vblank_off(&pipe->crtc);
++	/*
++	 * Complete this commit's flip event before anything is torn down.
++	 *
++	 * The event is normally armed in pipe_update(), but a commit that
++	 * *disables* the pipe never calls update() - the plane is going away,
++	 * not being redrawn - so the event sat in crtc->state->event and was
++	 * never sent. flip_done then waited out its full ten seconds, and
++	 * because the next commit blocks in
++	 * drm_atomic_helper_wait_for_dependencies() until the previous one
++	 * signals, the modeset that followed timed out for another ten.
++	 *
++	 * Measured, handing the panel back from the desktop to the console:
++	 * drm_atomic_helper_shutdown() took 10.4 s and the client's modeset
++	 * ten more, both ending in "flip_done timed out". That is what made
++	 * stopping the desktop look like a hung board.
++	 *
++	 * Send it here, while vblank is still on - drm_crtc_vblank_off() below
++	 * flushes events already queued against vblank, but not one that was
++	 * never armed.
++	 */
++	if (crtc->state && crtc->state->event) {
++		struct drm_pending_vblank_event *event = crtc->state->event;
++
++		crtc->state->event = NULL;
++		spin_lock_irq(&crtc->dev->event_lock);
++		drm_crtc_send_vblank_event(crtc, event);
++		spin_unlock_irq(&crtc->dev->event_lock);
++	}
++
++	drm_crtc_vblank_off(crtc);
+ 	hrtimer_cancel(&lcd->vblank_timer);
+ 	writel(0, lcd->base + LCD_DMA_INT_ENA_REG);
+ 
+@@ -1218,6 +1516,25 @@
+ 		return;
+ 
+ 	/*
++	 * Start the clock here, before the early-out below.
++	 *
++	 * This used to be set *after* that early-out, but the early-out is a
++	 * `goto arm_event` and arm_event ends with
++	 *
++	 *	t_enter = ktime_get_ns() - t_enter;
++	 *
++	 * so every skipped commit subtracted an uninitialised stack value and
++	 * added the result to dbg_upd_ns. The counter read 3.08 *seconds* per
++	 * commit - close to uptime, because the garbage was usually zero - and
++	 * it had been lying for as long as the early-out has existed. GCC did
++	 * not warn.
++	 *
++	 * Skipped commits are real commits with a real cost, so timing them is
++	 * also more correct than not. Divide by updates+skipped for an average.
++	 */
++	t_enter = ktime_get_ns();
++
++	/*
+ 	 * Nothing to do if the plane did not actually change.
+ 	 *
+ 	 * A legacy cursor ioctl pulls the primary plane into its atomic state
+@@ -1246,7 +1563,6 @@
+ 	esp32s31_lcd_copy_sync(lcd, 0, 0, 0, 0);
+ 
+ 	lcd->dbg_updates++;
+-	t_enter = ktime_get_ns();
+ 	if (lcd->dbg_prev_update_ns) {
+ 		u64 gap = t_enter - lcd->dbg_prev_update_ns;
+ 
+@@ -1387,7 +1703,32 @@
+ 				lcd->copy_nrect++;
+ 			}
+ 
+-			if (lcd->copy_nrect) {
++			if (lcd->copy_nrect && !defer_copy) {
++				/*
++				 * Inline: do the copy here rather than handing
++				 * it to a kworker. Deferring releases the CRTC
++				 * lock sooner, which is what makes a cursor
++				 * move cheap - but DIRTYFB is synchronous, so
++				 * a client that damages every frame pays for
++				 * the hand-off anyway on the *next* commit,
++				 * where copy_sync() flushes the work.
++				 */
++				unsigned int ci;
++
++				for (ci = 0; ci < lcd->copy_nrect; ci++)
++					esp32s31_lcd_copy_one(lcd, obj, fb, &pl,
++						scaled,
++						lcd->copy_rect[ci].x1,
++						lcd->copy_rect[ci].y1,
++						lcd->copy_rect[ci].x2,
++						lcd->copy_rect[ci].y2);
++				if (lcd->cur_argb) {
++					lcd->cur_on = false;
++					esp32s31_lcd_cursor_paint(lcd,
++						lcd->cur_x, lcd->cur_y);
++				}
++				lcd->copy_nrect = 0;
++			} else if (lcd->copy_nrect) {
+ 				/*
+ 				 * Hold the framebuffer until the work is done -
+ 				 * the commit's reference goes away as soon as
+@@ -1553,6 +1894,24 @@
+ 
+ arm_event:
+ 	/*
++	 * Tell the recorder a frame is ready.
++	 *
++	 * This has to be at the label, not before it: every ordinary commit
++	 * reaches here through one of the gotos above (cursor-only moves, the
++	 * scaled path, the no-damage case), so a notify placed on the
++	 * fall-through saw exactly zero commits.
++	 *
++	 * Driving capture from here rather than from a timer is the whole
++	 * point - reaching this function means the screen changed, so an idle
++	 * desktop costs nothing and the encoder runs only while there is
++	 * something worth filming. The call is cheap and queues the encode
++	 * elsewhere; doing it inline would hold the commit for ~7 ms and cause
++	 * the stutter one is usually trying to measure.
++	 */
++	esp32s31_jpeg_rec_notify(lower_32_bits(lcd->scan_phys),
++				 lcd->native.hdisplay, lcd->native.vdisplay);
++
++	/*
+ 	 * Arm the flip event against the emulated vblank so it is delivered
+ 	 * with a real timestamp. Sending it immediately, as this did before,
+ 	 * avoids stalling the commit but reports a presentation time that never
+@@ -1675,6 +2034,170 @@
+  *
+  * Returns false without doing anything if it cannot help.
+  */
++/*
++ * Use the memory-to-memory GDMA channel for the damage copy.
++ *
++ * This path requires dst_x == 0 and a matching pitch, which a *centred* render
++ * never has - render=640x384 sits at +80+48 - so at any reduced size it never
++ * ran at all. At native it becomes reachable for the first time, and the first
++ * thing it did was wedge the machine silently, with no oops and no console,
++ * as soon as fbcon started writing.
++ *
++ * The bug was the wait, not the engine. dma_sync_wait() busy-spins on the
++ * cookie with cpu_relax() for up to five seconds, and the cookie is only
++ * advanced by the channel's completion interrupt - so on any commit that
++ * reaches here with interrupts disabled, which console writes can, it spins
++ * for ever. That is a hang by construction, and it is why this looked like a
++ * mode-specific display fault.
++ *
++ * The wait below is now bounded and reports the context it timed out in, so
++ * the worst case is a slow frame that falls back to the PPA rather than a dead
++ * board. Both the timeout and the path itself are runtime-settable.
++ *
++ * Measured, once the wait stopped hanging: a full-screen 768,000-byte copy -
++ * the largest this path can issue, and the one fbcon makes when it takes the
++ * panel back - completes in **6 ms**. So the engine was never the problem and
++ * the path is worth keeping. Occasionally one runs long (one in a boot, at
++ * 42.7 s, exceeded 20 ms), which is what the old five-second spin turned into
++ * an apparently dead board. The default bound is 50 ms: eight times the
++ * measured worst normal case, and short enough that falling back to the PPA
++ * costs a frame rather than the machine.
++ *
++ * The context is reported because it was the first hypothesis and it was
++ * wrong: the stall happens in *process* context, not with interrupts off.
++ */
++static bool gdma_copy = true;
++module_param(gdma_copy, bool, 0644);
++
++/* ------------------------------------------------- record from boot ------- */
++
++/*
++ * Filming a boot has to start before userspace exists. The driver is scanning
++ * out at 1.69 s and the ext4 root is not mounted until 4.94 s, so a recorder
++ * armed from an init script misses the whole early console - which is the part
++ * worth filming. Arming here covers it, and the RAM ring only has to bridge
++ * those ~3.3 s rather than the whole 65 s boot.
++ *
++ * The trigger is a magic word in an LP_SYSTEM store register, and both the
++ * choice of register and the choice of *that* mechanism matter:
++ *
++ *   - It is NOT in flash. An earlier attempt put its trigger in hart0's NVS,
++ *     and backing the change out did nothing at all, because the stock
++ *     firmware kept acting on what had been written. See "Undo has to cover
++ *     flash state" in docs/current-state.md.
++ *   - It survives a warm reboot - measured - which is how a recording is
++ *     armed: write the word, reboot, and the next boot is filmed.
++ *   - It does NOT survive an EN reset or a power cycle - also measured - so it
++ *     cannot get stuck armed in a way that outlives unplugging the board.
++ *   - It is cleared here, on read, so one arming films exactly one boot.
++ *
++ * **Most of LP_STORE belongs to the ROM.** esp_rom/esp32s31/rom/rtc.h assigns
++ * STORE1 to the slow-clock calibration, 2 and 3 to the boot time, 4 to the ROM
++ * log control and crystal frequency, 5 to the deep-sleep entry length, 6 to
++ * the wake entry address and reset cause, 7 to a memory CRC, 8 to the sleep
++ * wake stub and 9 to the LP core wakeup cause. Reading zero at runtime does
++ * not mean a slot is free: STORE5 was tried first and read back zero every
++ * boot because the ROM rewrites it, and writing STORE6 wedged hart0 outright -
++ * no console at either baud - because that is where the wake entry address
++ * lives. Only an EN reset recovered it.
++ *
++ * STORE10..15 are unclaimed by the ROM. This uses STORE12.
++ */
++#define LP_STORE12_PA		0x2070005c
++#define REC_BOOT_MAGIC		0x52454331	/* "REC1" */
++
++static bool rec_boot;
++module_param(rec_boot, bool, 0644);
++MODULE_PARM_DESC(rec_boot,
++		 "record from boot regardless of the LP_STORE5 trigger");
++
++/*
++ * Sized for the gap between arming (1.7 s) and the drainer attaching, which is
++ * after the root filesystem mounts at ~4.9 s plus the init scripts ahead of it.
++ * A dense console frame is ~85 KB at q60, so a 1 MB buffer held only ~12 and
++ * dropped 25 - five seconds of boot lost. This is freed the moment the drainer
++ * hands over to the session settings, so it costs nothing for the rest of the
++ * run; it is only ever held while the machine is otherwise empty.
++ */
++static uint rec_kb = 3072;
++module_param(rec_kb, uint, 0644);
++MODULE_PARM_DESC(rec_kb, "boot recording ring size in KB");
++
++static uint rec_fps = 5;
++module_param(rec_fps, uint, 0644);
++MODULE_PARM_DESC(rec_fps, "boot recording frame rate cap");
++
++static uint rec_q = 60;
++module_param(rec_q, uint, 0644);
++MODULE_PARM_DESC(rec_q, "boot recording JPEG quality");
++
++/*
++ * Read the trigger and clear it. Split out so the clear happens exactly once
++ * even though this is called from the pipe-enable path, which runs again on
++ * every mode set.
++ */
++static bool esp32s31_lcd_rec_boot_triggered(struct esp32s31_lcd *lcd)
++{
++	void __iomem *reg;
++	bool armed = false;
++	u32 val;
++
++	if (rec_boot)
++		return true;
++
++	reg = ioremap(LP_STORE12_PA, sizeof(u32));
++	if (!reg) {
++		drm_warn(&lcd->drm, "boot recording: cannot map LP_STORE12\n");
++		return false;
++	}
++	val = readl(reg);
++	if (val == REC_BOOT_MAGIC) {
++		writel(0, reg);		/* one arming films one boot */
++		armed = true;
++	}
++	/*
++	 * Report what was actually read. A silent "not armed" is
++	 * indistinguishable from "the register does not read back here", and
++	 * the two need completely different fixes.
++	 */
++	drm_info(&lcd->drm, "boot recording trigger: LP_STORE12 = 0x%08x%s\n",
++		 val, armed ? " (armed)" : "");
++	iounmap(reg);
++	return armed;
++}
++
++static void esp32s31_lcd_rec_boot_arm(struct esp32s31_lcd *lcd)
++{
++	static bool done;
++	int ret;
++
++	if (done)
++		return;
++	done = true;
++
++	if (!rec_kb || !esp32s31_lcd_rec_boot_triggered(lcd))
++		return;
++
++	/*
++	 * A failure here must not take the display down with it - the whole
++	 * point is to film a boot, and a boot that dies because the camera
++	 * could not start is worse than no film.
++	 */
++	ret = esp32s31_jpeg_rec_start(rec_kb * 1024, rec_fps, rec_q);
++	if (ret)
++		drm_warn(&lcd->drm, "boot recording refused: %d\n", ret);
++	else
++		drm_info(&lcd->drm, "boot recording armed: %u KB, %u fps, q%u\n",
++			 rec_kb, rec_fps, rec_q);
++}
++MODULE_PARM_DESC(gdma_copy,
++		 "use the m2m GDMA channel for the damage copy");
++
++static unsigned int gdma_timeout_us = 50000;
++module_param(gdma_timeout_us, uint, 0644);
++MODULE_PARM_DESC(gdma_timeout_us,
++		 "give up on a GDMA damage copy after this long and use the PPA instead");
++
+ static bool esp32s31_lcd_gdma_rows(struct esp32s31_lcd *lcd,
+ 				   struct drm_gem_dma_object *obj,
+ 				   const struct drm_framebuffer *fb,
+@@ -1685,9 +2208,10 @@
+ 	struct dma_async_tx_descriptor *tx;
+ 	enum dma_status status;
+ 	dma_cookie_t cookie;
++	ktime_t deadline;
+ 	size_t len;
+ 
+-	if (!lcd->m2m || !obj)
++	if (!gdma_copy || !lcd->m2m || !obj)
+ 		return false;
+ 	/* One descriptor only exists when the rows are contiguous both sides. */
+ 	if (fb->pitches[0] != pitch || pl->dst_x != 0)
+@@ -1708,10 +2232,41 @@
+ 
+ 	cookie = dmaengine_submit(tx);
+ 	dma_async_issue_pending(lcd->m2m);
+-	status = dma_sync_wait(lcd->m2m, cookie);
++
++	/*
++	 * Bounded, and deliberately not dma_sync_wait(): that spins for up to
++	 * five seconds waiting on a cookie which only the completion interrupt
++	 * advances, so a commit that arrives with interrupts disabled never
++	 * leaves it. ktime_get() keeps working in that state, so the deadline
++	 * is honest even when the completion cannot arrive.
++	 *
++	 * On timeout, drop the transfer and return false; the caller then does
++	 * the copy with the PPA, so this costs a slow frame rather than the
++	 * screen. terminate_async, not terminate_sync - the sync form sleeps
++	 * and this may not be a context that can.
++	 */
++	deadline = ktime_add_us(ktime_get(), gdma_timeout_us);
++	for (;;) {
++		status = dmaengine_tx_status(lcd->m2m, cookie, NULL);
++		if (status != DMA_IN_PROGRESS)
++			break;
++		if (ktime_after(ktime_get(), deadline)) {
++			status = DMA_ERROR;
++			break;
++		}
++		cpu_relax();
++	}
++
+ 	if (status != DMA_COMPLETE) {
+-		drm_warn_once(&lcd->drm, "gdma row copy did not complete: %d\n",
+-			      status);
++		dmaengine_terminate_async(lcd->m2m);
++		lcd->dbg_gdma_fail++;
++		drm_warn_once(&lcd->drm,
++			      "gdma row copy stalled (status %d) in %s context, %zu bytes; using the PPA instead\n",
++			      status,
++			      irqs_disabled() ? "irqs-off" :
++			      in_interrupt() ? "interrupt" :
++			      in_atomic() ? "atomic" : "process",
++			      len);
+ 		return false;
+ 	}
+ 	lcd->dbg_gdma_rows++;
+@@ -1887,7 +2442,15 @@
+ 		lcd->dbg_copy_overlap++;
+ 	}
+ 	lcd->dbg_copy_sync++;
+-	flush_work(&lcd->copy_work);
++	{
++		u64 t = ktime_get_ns();
++
++		flush_work(&lcd->copy_work);
++		t = ktime_get_ns() - t;
++		lcd->dbg_sync_ns += t;
++		if (t > lcd->dbg_sync_ns_max)
++			lcd->dbg_sync_ns_max = t;
++	}
+ }
+ 
+ /*
+@@ -1955,6 +2518,7 @@
+ static void esp32s31_lcd_cursor_paint(struct esp32s31_lcd *lcd, int cx, int cy)
+ {
+ 	int x1, y1, x2, y2, x, y, ox, oy, cw, ch;
++	ktime_t t_paint;
+ 
+ 	if (!lcd->cur_argb || !lcd->scan_cpu || !lcd->native_valid)
+ 		return;
+@@ -1983,6 +2547,58 @@
+ 	if (x2 <= x1 || y2 <= y1)
+ 		return;
+ 
++	/*
++	 * Hardware path. The destination is the scanout buffer, which is
++	 * already in the reserved region, and the sprite was allocated there
++	 * too - so this is the one blend on the board where nothing has to be
++	 * relocated to reach the engine. Being in the kernel it also skips the
++	 * DRM ioctl that dominates the PPA's fixed cost from userspace.
++	 *
++	 * Gated on a runtime threshold rather than compiled in: a 32x32 cursor
++	 * is 2 KB, which is where the measured blend crossover sits, so this is
++	 * exactly the size at which the answer is not obvious and has to be
++	 * A/B'd on the board.
++	 */
++	t_paint = ktime_get();
++	if (cursor_ppa_px && (x2 - x1) * (y2 - y1) >= cursor_ppa_px) {
++		unsigned int pitch = lcd->native.hdisplay * 2;
++		size_t off = (size_t)(y1 + oy) * pitch;
++		size_t len = (size_t)(y2 - y1) * pitch;
++		int ret;
++
++		/*
++		 * The engine reads main memory, and these pixels are cached and
++		 * may be dirty from the copy path. Write them back before it
++		 * looks, and invalidate afterwards so the CPU does not later
++		 * read - or evict over - its stale copy of what the engine
++		 * wrote.
++		 *
++		 * One range spanning the rectangle's ROWS, which is far more
++		 * than the rectangle: a cursor is a narrow column of a wide
++		 * surface, so a 64-row cursor syncs 102 KB to composite 8 KB.
++		 * Doing it per row instead - 128 small calls rather than two
++		 * large ones - was measured and is WORSE, 783 us against 437:
++		 * the per-call cost of cache maintenance dominates the range.
++		 * This is why the engine loses here; see docs/accel-plan.md.
++		 */
++		dma_sync_single_for_device(lcd->drm.dev, lcd->scan_phys + off,
++					   len, DMA_TO_DEVICE);
++		ret = esp32s31_ppa_blend_argb_sprite(
++			lower_32_bits(lcd->scan_phys),
++			lcd->native.hdisplay, lcd->native.vdisplay,
++			x1 + ox, y1 + oy,
++			lower_32_bits(lcd->cur_phys), lcd->cur_w, lcd->cur_h,
++			x1 - cx, y1 - cy,
++			x2 - x1, y2 - y1);
++		dma_sync_single_for_cpu(lcd->drm.dev, lcd->scan_phys + off,
++					len, DMA_FROM_DEVICE);
++		if (!ret) {
++			lcd->dbg_paint_ppa++;
++			goto painted;
++		}
++		/* Fall through to the CPU on any engine failure. */
++	}
++
+ 	for (y = y1; y < y2; y++) {
+ 		u16 *dst = (u16 *)lcd->scan_cpu +
+ 			   (y + oy) * lcd->native.hdisplay + ox;
+@@ -2014,6 +2630,15 @@
+ 				 ((sg & 0xfc) << 3) | (sb >> 3);
+ 		}
+ 	}
++painted:
++	{
++		u64 d = ktime_get_ns() - ktime_to_ns(t_paint);
++
++		lcd->dbg_paint_ns += d;
++		if (d > lcd->dbg_paint_max)
++			lcd->dbg_paint_max = d;
++		lcd->dbg_paint_n++;
++	}
+ 	lcd->cur_on = true;
+ 	lcd->dbg_cur_moves++;
+ 
+@@ -2056,6 +2681,15 @@
+ 	return 0;
+ }
+ 
++static void esp32s31_lcd_cursor_free(struct esp32s31_lcd *lcd)
++{
++	if (lcd->cur_argb)
++		dma_free_coherent(lcd->drm.dev, lcd->cur_alloc, lcd->cur_argb,
++				  lcd->cur_phys);
++	lcd->cur_argb = NULL;
++	lcd->cur_alloc = 0;
++}
++
+ static void esp32s31_lcd_cursor_update(struct drm_plane *plane,
+ 				       struct drm_atomic_state *state)
+ {
+@@ -2068,8 +2702,7 @@
+ 
+ 	if (!new->fb || !new->crtc) {
+ 		esp32s31_lcd_cursor_lift(lcd);
+-		kfree(lcd->cur_argb);
+-		lcd->cur_argb = NULL;
++		esp32s31_lcd_cursor_free(lcd);
+ 		lcd->cur_fb = NULL;
+ 		return;
+ 	}
+@@ -2087,8 +2720,18 @@
+ 	 */
+ 	px = (size_t)new->fb->width * new->fb->height;
+ 	if (lcd->cur_w != new->fb->width || lcd->cur_h != new->fb->height) {
+-		kfree(lcd->cur_argb);
+-		lcd->cur_argb = kmalloc_array(px, sizeof(u32), GFP_KERNEL);
++		esp32s31_lcd_cursor_free(lcd);
++		/*
++		 * dma_alloc_coherent, not kmalloc: the PPA can only address the
++		 * reserved region, so a sprite in ordinary kernel memory cannot
++		 * be composited by the engine at all. It costs nothing to put
++		 * it here - the sprite is written once per cursor change and
++		 * only ever read afterwards, so the cached-vs-uncached question
++		 * that rules out moving drawables into CMA does not arise.
++		 */
++		lcd->cur_alloc = px * sizeof(u32);
++		lcd->cur_argb = dma_alloc_coherent(lcd->drm.dev, lcd->cur_alloc,
++						   &lcd->cur_phys, GFP_KERNEL);
+ 		lcd->cur_w = new->fb->width;
+ 		lcd->cur_h = new->fb->height;
+ 		lcd->cur_fb = NULL;
+@@ -2105,6 +2748,13 @@
+ 	 */
+ 	if (lcd->cur_fb != new->fb) {
+ 		memcpy(lcd->cur_argb, obj->vaddr, px * sizeof(u32));
++		/*
++		 * Push it out of the D-cache once, here, rather than on every
++		 * move: dma_alloc_coherent hands back cached memory on this
++		 * platform, and the engine reads main memory.
++		 */
++		dma_sync_single_for_device(lcd->drm.dev, lcd->cur_phys,
++					   lcd->cur_alloc, DMA_TO_DEVICE);
+ 		lcd->cur_fb = new->fb;
+ 		lcd->dbg_cur_fbchg++;
+ 	}
+@@ -2126,8 +2776,7 @@
+ 	struct esp32s31_lcd *lcd = to_esp32s31_lcd(plane->dev);
+ 
+ 	esp32s31_lcd_cursor_lift(lcd);
+-	kfree(lcd->cur_argb);
+-	lcd->cur_argb = NULL;
++	esp32s31_lcd_cursor_free(lcd);
+ 	lcd->cur_fb = NULL;
+ 	lcd->cur_w = lcd->cur_h = 0;
+ }
+@@ -2172,8 +2821,7 @@
+ 
+ 	if (!handle) {			/* handle 0 means hide */
+ 		esp32s31_lcd_cursor_lift(lcd);
+-		kfree(lcd->cur_argb);
+-		lcd->cur_argb = NULL;
++		esp32s31_lcd_cursor_free(lcd);
+ 		lcd->cur_fb = NULL;
+ 		lcd->cur_w = lcd->cur_h = 0;
+ 		return 0;
+@@ -2196,8 +2844,10 @@
+ 
+ 	px = (size_t)width * height;
+ 	if (lcd->cur_w != width || lcd->cur_h != height) {
+-		kfree(lcd->cur_argb);
+-		lcd->cur_argb = kmalloc_array(px, sizeof(u32), GFP_KERNEL);
++		esp32s31_lcd_cursor_free(lcd);
++		lcd->cur_alloc = px * sizeof(u32);
++		lcd->cur_argb = dma_alloc_coherent(lcd->drm.dev, lcd->cur_alloc,
++						   &lcd->cur_phys, GFP_KERNEL);
+ 		lcd->cur_w = width;
+ 		lcd->cur_h = height;
+ 	}
+@@ -2207,6 +2857,8 @@
+ 		return -ENOMEM;
+ 	}
+ 	memcpy(lcd->cur_argb, obj->vaddr, px * sizeof(u32));
++	dma_sync_single_for_device(lcd->drm.dev, lcd->cur_phys, lcd->cur_alloc,
++				   DMA_TO_DEVICE);
+ 	lcd->dbg_cur_fbchg++;
+ 	drm_gem_object_put(gem);
+ 
+@@ -2289,6 +2941,79 @@
+  * SoC, so the caller's writes must be pushed out before the engine reads, and
+  * the engine's writes invalidated before the caller reads them back.
+  */
++/*
++ * Hardware alpha blend, foreground over background at a fixed alpha.
++ *
++ * The engine has been able to do this since bring-up but was reachable only
++ * from debugfs, so every compositor on this board blended in software. All
++ * three objects share one geometry because the PPA consumes both inputs in
++ * lockstep, and dst may alias bg to composite in place.
++ */
++static int esp32s31_lcd_ppa_blend_ioctl(struct drm_device *drm, void *data,
++					struct drm_file *file)
++{
++	struct drm_esp32s31_ppa_blend *args = data;
++	struct drm_gem_object *bgo, *fgo, *dsto;
++	struct drm_gem_dma_object *bg, *fg, *dst;
++	size_t need;
++	u32 pic_w;
++	int ret;
++
++	if (!args->w || !args->h || args->fg_alpha > 255)
++		return -EINVAL;
++	if (args->pitch & 1)
++		return -EINVAL;
++	pic_w = args->pitch / 2;
++	if (!pic_w || args->w > pic_w)
++		return -EINVAL;
++
++	bgo = drm_gem_object_lookup(file, args->bg_handle);
++	if (!bgo)
++		return -ENOENT;
++	fgo = drm_gem_object_lookup(file, args->fg_handle);
++	if (!fgo) {
++		drm_gem_object_put(bgo);
++		return -ENOENT;
++	}
++	dsto = drm_gem_object_lookup(file, args->dst_handle);
++	if (!dsto) {
++		drm_gem_object_put(fgo);
++		drm_gem_object_put(bgo);
++		return -ENOENT;
++	}
++	bg = to_drm_gem_dma_obj(bgo);
++	fg = to_drm_gem_dma_obj(fgo);
++	dst = to_drm_gem_dma_obj(dsto);
++
++	need = (size_t)args->h * args->pitch;
++	if (need > bgo->size || need > fgo->size || need > dsto->size) {
++		ret = -EINVAL;
++		goto out;
++	}
++
++	/* Push both inputs out of the D-cache, and make room for the result. */
++	dma_sync_single_for_device(drm->dev, bg->dma_addr, need,
++				   DMA_TO_DEVICE);
++	dma_sync_single_for_device(drm->dev, fg->dma_addr, need,
++				   DMA_TO_DEVICE);
++	if (dsto != bgo)
++		dma_sync_single_for_device(drm->dev, dst->dma_addr, need,
++					   DMA_TO_DEVICE);
++
++	ret = esp32s31_ppa_blend_layers(bg->dma_addr, fg->dma_addr,
++					dst->dma_addr, pic_w, args->h,
++					args->w, args->h,
++					(u8)args->fg_alpha);
++	if (!ret)
++		dma_sync_single_for_cpu(drm->dev, dst->dma_addr, need,
++					DMA_FROM_DEVICE);
++out:
++	drm_gem_object_put(dsto);
++	drm_gem_object_put(fgo);
++	drm_gem_object_put(bgo);
++	return ret;
++}
++
+ static int esp32s31_lcd_ppa_copy_ioctl(struct drm_device *drm, void *data,
+ 				       struct drm_file *file)
+ {
+@@ -2370,19 +3095,153 @@
+ 	return ret;
+ }
+ 
++static int esp32s31_lcd_jpeg_rec_ioctl(struct drm_device *drm, void *data,
++				       struct drm_file *file)
++{
++	struct drm_esp32s31_jpeg_rec *args = data;
++	int ret;
++
++	switch (args->op) {
++	case DRM_ESP32S31_JPEG_REC_START:
++		ret = esp32s31_jpeg_rec_start(args->ring_bytes, args->max_fps,
++					      args->quality);
++		break;
++	case DRM_ESP32S31_JPEG_REC_STOP:
++		ret = esp32s31_jpeg_rec_stop();
++		break;
++	case DRM_ESP32S31_JPEG_REC_STATUS:
++		ret = 0;
++		break;
++	default:
++		return -EINVAL;
++	}
++	if (ret)
++		return ret;
++
++	return esp32s31_jpeg_rec_status(&args->frames, &args->bytes,
++					&args->dropped, &args->running);
++}
++
++static int esp32s31_lcd_jpeg_frame_ioctl(struct drm_device *drm, void *data,
++					 struct drm_file *file)
++{
++	struct drm_esp32s31_jpeg_frame *args = data;
++
++	return esp32s31_jpeg_rec_frame(&args->index,
++				       u64_to_user_ptr(args->ptr),
++				       &args->size, &args->stamp_ns);
++}
++
++/*
++ * Hand the panel's worth of memory back and forth between the console and a
++ * userspace desktop, because there is not enough for both.
++ *
++ * At 800x480 there are three contiguous allocations from one 4 MB CMA pool: the
++ * driver's private scanout buffer (768,000), fbdev emulation's framebuffer for
++ * the console (768,000) and the desktop's render target (770,048). The third is
++ * refused - "CREATE_DUMB: Out of memory" - and the desktop dies. At 640x384 the
++ * console's copy is 491,520 and it all fits, which is why this looked for a
++ * long time like a display bug rather than arithmetic.
++ *
++ * The console and a desktop are never both on screen, so they should not both
++ * be allocated. Note that *suspending* the client - which is all that happens
++ * by default when a master appears - only blanks it; nothing is freed until the
++ * client is unregistered.
++ *
++ * Three things make this work, each of which was learned by getting it wrong:
++ *
++ *  - **Shut the pipeline down before restoring.** master_drop() runs after the
++ *    dying client's framebuffers and GEM objects are released, but the CRTC is
++ *    still scanning one out, and that reference alone pins 770 KB - so the
++ *    console's own allocation then fails. Normally drm_lastclose() ->
++ *    drm_client_dev_restore() takes the display over and drops it; there is no
++ *    client left to do that here.
++ *
++ *  - **Nothing may be writing to the console when it is unregistered.** Tearing
++ *    fbdev out from under an active console writer wedges the machine, and
++ *    intermittently: the same image reached a login prompt on one boot and hung
++ *    at 29 s on the next. S40lvdesk unbinds vtcon1 before starting the desktop
++ *    so there is no writer left to race.
++ *
++ *  - **Do it from a work item.** master_set() runs under dev->master_mutex and
++ *    fbdev unregistration takes console locks.
++ */
++static void esp32s31_lcd_client_work(struct work_struct *work)
++{
++	struct esp32s31_lcd *lcd = container_of(work, struct esp32s31_lcd,
++						client_work);
++
++	if (!READ_ONCE(lcd->client_wanted)) {
++		drm_info(&lcd->drm, "handover: releasing console client\n");
++		drm_client_dev_unregister(&lcd->drm);
++		drm_info(&lcd->drm, "handover: console client released\n");
++		return;
++	}
++
++	drm_info(&lcd->drm, "handover: shutting pipeline down\n");
++	drm_atomic_helper_shutdown(&lcd->drm);
++	drm_info(&lcd->drm, "handover: pipeline down, recreating client\n");
++	drm_client_setup_with_fourcc(&lcd->drm, DRM_FORMAT_RGB565);
++	drm_info(&lcd->drm, "handover: console client restored\n");
++}
++
++static void esp32s31_lcd_master_set(struct drm_device *drm,
++				    struct drm_file *file, bool from_open)
++{
++	struct esp32s31_lcd *lcd = to_esp32s31_lcd(drm);
++
++	drm_info(drm, "handover: master_set\n");
++	WRITE_ONCE(lcd->client_wanted, false);
++	schedule_work(&lcd->client_work);
++}
++
++static void esp32s31_lcd_master_drop(struct drm_device *drm,
++				     struct drm_file *file)
++{
++	struct esp32s31_lcd *lcd = to_esp32s31_lcd(drm);
++
++	drm_info(drm, "handover: master_drop\n");
++	WRITE_ONCE(lcd->client_wanted, true);
++	schedule_work(&lcd->client_work);
++}
++
+ static const struct drm_ioctl_desc esp32s31_lcd_ioctls[] = {
++	DRM_IOCTL_DEF_DRV(ESP32S31_PPA_BLEND, esp32s31_lcd_ppa_blend_ioctl,
++			  DRM_RENDER_ALLOW),
+ 	DRM_IOCTL_DEF_DRV(ESP32S31_PPA_COPY, esp32s31_lcd_ppa_copy_ioctl,
+ 			  DRM_RENDER_ALLOW),
++	DRM_IOCTL_DEF_DRV(ESP32S31_JPEG_REC, esp32s31_lcd_jpeg_rec_ioctl,
++			  DRM_RENDER_ALLOW),
++	DRM_IOCTL_DEF_DRV(ESP32S31_JPEG_FRAME, esp32s31_lcd_jpeg_frame_ioctl,
++			  DRM_RENDER_ALLOW),
+ };
+ 
+ DEFINE_DRM_GEM_DMA_FOPS(esp32s31_lcd_fops);
+ 
++
+ static const struct drm_driver esp32s31_lcd_driver = {
+-	.driver_features	= DRIVER_GEM | DRIVER_MODESET | DRIVER_ATOMIC,
++	/*
++	 * DRIVER_RENDER exists for the MJPEG recorder, which needs no
++	 * modesetting at all - its ioctls are already DRM_RENDER_ALLOW.
++	 *
++	 * Without a render node the recorder has to open the primary node, and
++	 * the FIRST process to open that becomes DRM master. A drainer started
++	 * from an init script therefore took master at S02 and the desktop
++	 * could not have it at S40: "SET_MASTER: Resource busy", then
++	 * "SETCRTC: Permission denied", and lvdesk exited. The panel sat on the
++	 * console showing nothing, and because nothing committed, the recorder
++	 * captured nothing either - a recording that silently filmed a dead
++	 * desktop for two and a half minutes.
++	 */
++	.driver_features	= DRIVER_GEM | DRIVER_MODESET | DRIVER_ATOMIC |
++				  DRIVER_RENDER,
++	.master_set		= esp32s31_lcd_master_set,
++	.master_drop		= esp32s31_lcd_master_drop,
+ 	.fops			= &esp32s31_lcd_fops,
+ 	.ioctls			= esp32s31_lcd_ioctls,
+ 	.num_ioctls		= ARRAY_SIZE(esp32s31_lcd_ioctls),
+ 	DRM_GEM_DMA_DRIVER_OPS_VMAP,
++	DRM_FBDEV_DMA_DRIVER_OPS,
+ 	.name			= DRIVER_NAME,
+ 	.desc			= "Espressif ESP32-S31 LCD_CAM",
+ 	.major			= 1,
+@@ -2390,7 +3249,30 @@
+ };
+ 
+ /*
+- * Complete cursor-only commits without waiting for vblank.
++ * Complete commits without waiting for vblank.
++ *
++ * Default flipped to false 2026-08-25, on measurement. A full-screen xfill
++ * repaint takes ~42 ms of actual work, against a frame period of 23.7 ms at
++ * this panel's 42 Hz, so waiting rounds every repaint up to two whole frames -
++ * 47.45 ms - and the measured median lands there exactly. Alternating the
++ * toggle within one boot, three pairs:
++ *
++ *     wait_vblank=Y   49.2  49.9  49.7 ms   (max 77-103)
++ *     wait_vblank=N   42.6  42.4  41.0 ms   (max 54-76)
++ *
++ * 15% off the median and a third off the tail. The gap histogram is the proof
++ * that this is quantisation rather than work: gap_frames showed 61 updates at
++ * exactly 2 frame periods and none at 1.
++ *
++ * The cost is that a primary-plane copy can now race scanout, so a full-screen
++ * update can tear. Scanout is free-running cyclic DMA into a buffer the driver
++ * copies into, so there is no client buffer being recycled underneath - the
++ * exposure is a visible seam, not corruption. Verified against the panel at
++ * 640x384: clean. Set it back at runtime if a workload makes tearing obvious:
++ *
++ *     echo Y > /sys/module/esp32s31_lcd/parameters/wait_vblank
++ *
++ * Original rationale, still true, for cursor-only commits:
+  *
+  * The default commit tail ends in drm_atomic_helper_wait_for_vblanks(), so
+  * every atomic commit blocks until the next frame boundary - 23.7 ms at this
+@@ -2406,7 +3288,8 @@
+  * The wait is kept for anything touching the primary plane, where it still
+  * does its job of stopping a client reusing a buffer that is being displayed.
+  */
+-static bool wait_vblank = true;
++
++static bool wait_vblank;	/* measured: see above */
+ module_param(wait_vblank, bool, 0644);
+ MODULE_PARM_DESC(wait_vblank,
+ 		 "hold the CRTC lock waiting for vblank after a non-cursor commit");
+@@ -2511,10 +3394,17 @@
+ 	 * moves with the memory map. Diagnostics that want to look at the
+ 	 * displayed pixels must read it from here rather than hardcode one.
+ 	 */
+-	seq_printf(m, "cursor_moves=%u gdma_rows=%u\n",
+-		   lcd->dbg_cur_moves, lcd->dbg_gdma_rows);
++	seq_printf(m, "cursor_moves=%u gdma_rows=%u gdma_fail=%u\n",
++		   lcd->dbg_cur_moves, lcd->dbg_gdma_rows, lcd->dbg_gdma_fail);
+ 	seq_printf(m, "cursor: fb_changes=%u total_ns=%llu max_ns=%llu\n",
+ 		   lcd->dbg_cur_fbchg, lcd->dbg_cur_ns, lcd->dbg_cur_ns_max);
++	seq_printf(m, "cursor paint: n=%u ppa=%u total_ns=%llu max_ns=%llu avg_ns=%llu\n",
++		   lcd->dbg_paint_n, lcd->dbg_paint_ppa, lcd->dbg_paint_ns,
++		   lcd->dbg_paint_max,
++		   lcd->dbg_paint_n ?
++		   div_u64(lcd->dbg_paint_ns, lcd->dbg_paint_n) : 0);
++	seq_printf(m, "copy: sync_ns=%llu sync_ns_max=%llu\n",
++		   lcd->dbg_sync_ns, lcd->dbg_sync_ns_max);
+ 	seq_printf(m, "copy: deferred=%u sync=%u overlap=%u skipped=%u\n",
+ 		   lcd->dbg_copy_defer, lcd->dbg_copy_sync,
+ 		   lcd->dbg_copy_overlap, lcd->dbg_skipped);
+@@ -2643,6 +3533,7 @@
+ 	 * on WARN_ON(!work->func).
+ 	 */
+ 	INIT_WORK(&lcd->copy_work, esp32s31_lcd_copy_worker);
++	INIT_WORK(&lcd->client_work, esp32s31_lcd_client_work);
+ 	drm = &lcd->drm;
+ 	platform_set_drvdata(pdev, lcd);
+ 
+@@ -2743,8 +3634,8 @@
+ 	 * every flip event carrying an invented timestamp, and a compositor
+ 	 * scheduling from it repainted about once every 12 seconds.
+ 	 */
+-	hrtimer_init(&lcd->vblank_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+-	lcd->vblank_timer.function = esp32s31_lcd_vblank_tick;
++	hrtimer_setup(&lcd->vblank_timer, esp32s31_lcd_vblank_tick,
++		      CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+ 
+ 	lcd->irq = platform_get_irq(pdev, 0);
+ 	if (lcd->irq < 0)
+@@ -2891,7 +3782,31 @@
+ 	if (ret)
+ 		return ret;
+ 
+-	drm_fbdev_dma_setup(drm, 16);
++	drm_client_setup_with_fourcc(drm, DRM_FORMAT_RGB565);
++
++	/*
++	 * Reserve the scanout buffer now, at probe, while the machine is still
++	 * empty - not lazily at the first modeset that needs scaling.
++	 *
++	 * The buffer is permanent either way: the allocator is idempotent and
++	 * nothing ever frees it. Taking it late only means taking it at the
++	 * worst possible moment. The region is `reusable` CMA, so the kernel
++	 * fills whatever the display is not using with movable pages - at boot
++	 * with no X running, CmaFree is already down to 1356 kB of 4096 kB -
++	 * and satisfying a 750 KB contiguous request then means *migrating*
++	 * those pages out. On a 15 MB machine under desktop memory pressure
++	 * that migration fails, dma_alloc_coherent returns NULL, and the driver
++	 * silently drops scaling and drives the panel at the client's smaller
++	 * timing instead. That also changes what every measurement is measuring.
++	 *
++	 * native comes from the connector's get_modes, which has run by now via
++	 * drm_dev_register(), so the size is known here.
++	 */
++	if (lcd->scan_cpu)
++		drm_info(drm, "scanout buffer reserved: %zu bytes\n", lcd->scan_size);
++	else
++		drm_info(drm, "scanout buffer deferred; get_modes has not run yet\n");
++
+ 	return 0;
+ }
+ 
+--- a/drivers/gpu/drm/espressif/esp32s31-ppa.c
++++ b/drivers/gpu/drm/espressif/esp32s31-ppa.c
+@@ -38,6 +38,7 @@
+ #include <linux/of_address.h>
+ #include <linux/of_reserved_mem.h>
+ #include <linux/platform_device.h>
++#include <linux/vmalloc.h>
+ #include <linux/mutex.h>
+ #include <linux/seq_file.h>
+ #include <linux/sizes.h>
+@@ -56,6 +57,7 @@
+ #define   PPA_BLEND_TX_CM_RGB565	2
+ #define  PPA_BLEND0_RX_CM_S		0	/* background layer */
+ #define  PPA_BLEND1_RX_CM_S		4	/* foreground layer */
++#define   PPA_BLEND_RX_CM_ARGB8888	0
+ #define   PPA_BLEND_RX_CM_RGB565	2
+ #define PPA_BLEND_TRANS_MODE		0x034
+ #define  PPA_BLEND_EN			BIT(0)
+@@ -142,6 +144,14 @@
+ #define  DMA2D_OUT_MACRO_BLOCK_SIZE_M	GENMASK(10, 9)
+ #define  DMA2D_OUT_DSCR_PORT_EN		BIT(11)
+ #define  DMA2D_OUT_PAGE_BOUND_EN	BIT(12)
++/*
++ * Macro-block reorder. Setting out_macro_block_size is not enough on its own -
++ * this bit is what actually turns the raster fetch into the MCU order the JPEG
++ * encoder consumes, and only TX channel 0 has the feature at all. Without it
++ * the picture comes out recognisable but sheared, with a sawtooth along every
++ * edge whose period is the fetch block width.
++ */
++#define  DMA2D_OUT_REORDER_EN		BIT(16)
+ #define  DMA2D_OUT_RST			BIT(24)
+ #define DMA2D_OUT_INT_RAW		0x004
+ /*
+@@ -165,6 +175,27 @@
+ #define  DMA2D_OUTLINK_START		BIT(21)
+ #define DMA2D_OUT_LINK_ADDR		0x020
+ #define DMA2D_OUT_PERI_SEL		0x038
++/*
++ * Colour-space conversion on a transmit channel.
++ *
++ * "Disabled" is not the reset state. out_color_input_sel defaults to 7, which
++ * does mean CSC off - but out_color_output_sel defaults to 0, which is
++ * "RGB888 to RGB565", so the engine still packs the output. The vendor's
++ * CSC_TX_NONE is input_sel 7, proc_en 0 and output_sel 2 ("output directly"),
++ * and the difference is not subtle: with the default the JPEG encoder saw
++ * every non-black pixel mangled, which decoded as noise wherever the screen
++ * had content and stayed correctly black where it did not.
++ */
++#define DMA2D_OUT_COLOR_CONVERT		0x048
++#define  DMA2D_CSC_OUTPUT_SEL_S		0
++#define  DMA2D_CSC_3B_PROC_EN		BIT(2)
++#define  DMA2D_CSC_INPUT_SEL_S		3
++#define  DMA2D_CSC_OUTPUT_DIRECT	2
++#define  DMA2D_CSC_INPUT_DISABLE	7
++#define DMA2D_OUT_SCRAMBLE		0x04c
++#define  DMA2D_SCRAMBLE_BYTE_2_1_0	0
++
++#define  DMA2D_OUT_PERI_JPEG		0
+ #define  DMA2D_OUT_PERI_PPA_SRM		1
+ #define  DMA2D_OUT_PERI_PPA_BLEND_BG	2
+ #define  DMA2D_OUT_PERI_PPA_BLEND_FG	3
+@@ -200,6 +231,7 @@
+ #define DMA2D_IN_DSCR_CH0		0x530
+ #define DMA2D_IN_PERI_SEL_CH0		0x53c
+ #define  DMA2D_IN_PERI_PPA_BLEND	2
++#define  DMA2D_IN_PERI_JPEG		0
+ #define  DMA2D_IN_PERI_PPA_SRM		1
+ /*
+  * Global 2D-DMA control, separate from the per-block clock in HP_SYS_CLKRST.
+@@ -226,7 +258,9 @@
+ #define DMA2D_DESC_W1_VA_S		0	/* picture height, pixels */
+ #define DMA2D_DESC_W1_HA_S		14	/* picture width, pixels */
+ #define DMA2D_DESC_W1_PBYTE_S		28
++#define  DMA2D_PBYTE_1B_PER_PIXEL	1	/* a plain byte stream */
+ #define  DMA2D_PBYTE_2B_PER_PIXEL	3	/* RGB565 */
++#define  DMA2D_PBYTE_4B_PER_PIXEL	5	/* ARGB8888 */
+ #define DMA2D_DESC_W2_Y_S		0
+ #define DMA2D_DESC_W2_X_S		14
+ #define DMA2D_DESC_W2_MODE_MULTIPLE	BIT(28)
+@@ -263,6 +297,8 @@
+ #define MEMLP_LP_EN			BIT(2)
+ #define MEMLP_FORCE_CTRL		BIT(3)
+ 
++struct jpeg_rec_frame;
++
+ struct esp32s31_ppa {
+ 	struct device *dev;
+ 	void __iomem *ppa;
+@@ -276,6 +312,47 @@
+ 
+ 	void __iomem *ppa_memlp;
+ 	void __iomem *dma2d_memlp;
++
++	/* The JPEG codec: another engine hanging off the same 2D-DMA. */
++	void __iomem *jpeg;
++	void __iomem *jpeg_clkrst;
++	void __iomem *jpeg_memlp;
++	u32 jpeg_last_len;
++	u32 jpeg_count;
++	u64 jpeg_last_ns;
++	/*
++	 * The encoder writes here, and nowhere else. Taking a destination
++	 * address from userspace and bounds-checking it against the reserved
++	 * window was not safe: that window is a *reusable* CMA pool, so when it
++	 * is not holding DMA buffers it holds movable pages - page cache
++	 * included. Writing into it corrupted the running system twice, once
++	 * painting over lvdesk's framebuffer and once zeroing the pages backing
++	 * busybox, which made ls and cat vanish mid-session.
++	 */
++	void *jpeg_buf;
++	dma_addr_t jpeg_buf_dma;
++	int jpeg_irq;
++	struct completion jpeg_done;
++
++	/* MJPEG recorder, see the recorder section */
++	struct mutex jpeg_rec_lock;
++	struct work_struct jpeg_rec_work;
++	void *jpeg_rec_buf;
++	struct jpeg_rec_frame *jpeg_rec_index;
++	u32 jpeg_rec_size, jpeg_rec_used, jpeg_rec_n, jpeg_rec_max;
++	/*
++	 * Circular, with a consumer. jpeg_rec_head is where the next frame is
++	 * written; seq and read count frames produced and consumed, so
++	 * seq - read is what is waiting and a gap in the sequence numbers
++	 * handed to userspace is a dropped frame it can see and record.
++	 */
++	u32 jpeg_rec_head, jpeg_rec_seq, jpeg_rec_read, jpeg_rec_overrun;
++	u32 jpeg_rec_dropped, jpeg_rec_quality;
++	u32 jpeg_rec_notifies;	/* commits seen, before any rate limiting */
++	u32 jpeg_rec_src, jpeg_rec_w, jpeg_rec_h;
++	u64 jpeg_rec_min_gap_ns, jpeg_rec_last_ns;
++	bool jpeg_rec_running;
++	u32 jpeg_status;		/* latched by the ISR, which clears the source */
+ 	void __iomem *desc;		/* uncached HP SRAM */
+ 	u32 desc_phys;
+ 
+@@ -436,7 +513,30 @@
+ MODULE_PARM_DESC(ppa_spin_us,
+ 		 "microseconds to poll for PPA completion before sleeping (0 = always sleep)");
+ 
+-static bool esp32s31_ppa_spin_done(struct esp32s31_ppa *ppa, u32 eof)
++/*
++ * Wait for an operation to finish, on the signal Espressif's own driver uses.
++ *
++ * The poller this replaced watched PPA_INT_RAW, but our ISR clears PPA_INT_CLR
++ * as soon as it runs, so the flag is set and cleared before the spin can
++ * observe it - the spin then burns its whole budget and falls through to a
++ * sleep. Raising ppa_spin_us from 300 to 3000 raised the measured blend wait
++ * from 1,121 us to 3,304 us, which is exactly what a poll that can never
++ * succeed looks like.
++ *
++ * The authority is esp-idf/components/esp_driver_ppa: ppa_blend.c, ppa_srm.c
++ * and ppa_fill.c all complete on the 2D-DMA RECEIVE EOF
++ * (dma2d_rx_event_callbacks_t.on_recv_eof) and none of them use the PPA's own
++ * EOF interrupt. This driver's own timeout fallback already polled that bit,
++ * so the right signal was in the file the whole time.
++ *
++ *	blend 64x64	1,322 us -> 169 us	(setup 9, wait 160)
++ *	                24 KB in 160 us = 150 MB/s, the engine's real rate
++ *
++ * That moved the blend crossover against a cached CPU blend from ~18 KB to
++ * ~2 KB, which is the difference between hardware being useless for
++ * icon-sized work and being 2.3x faster at it.
++ */
++static bool esp32s31_ppa_spin_rx_done(struct esp32s31_ppa *ppa)
+ {
+ 	ktime_t deadline;
+ 
+@@ -445,7 +545,8 @@
+ 
+ 	deadline = ktime_add_us(ktime_get(), ppa_spin_us);
+ 	do {
+-		if (readl(ppa->ppa + PPA_INT_RAW) & eof)
++		if (readl(ppa->dma2d + DMA2D_IN_INT_RAW_CH0) &
++		    DMA2D_IN_SUC_EOF)
+ 			return true;
+ 		cpu_relax();
+ 	} while (ktime_before(ktime_get(), deadline));
+@@ -575,7 +676,7 @@
+ 	 * on a first bring-up the interrupt routing is exactly the thing most
+ 	 * likely to be wrong, and a silent hang is a poor way to find out.
+ 	 */
+-	if (!esp32s31_ppa_spin_done(ppa, PPA_INT_BLEND_EOF) &&
++	if (!esp32s31_ppa_spin_rx_done(ppa) &&
+ 	    !wait_for_completion_timeout(&ppa->done, msecs_to_jiffies(200))) {
+ 		deadline = jiffies + msecs_to_jiffies(200);
+ 		ret = -ETIMEDOUT;
+@@ -648,13 +749,13 @@
+ /* Write one 2D-DMA descriptor at @off within the descriptor window. */
+ static void esp32s31_ppa_desc(struct esp32s31_ppa *ppa, u32 off, u32 addr,
+ 			      u32 pic_w, u32 pic_h, u32 blk_w, u32 blk_h,
+-			      u32 x, u32 y)
++			      u32 x, u32 y, u32 pbyte)
+ {
+ 	writel((blk_h << DMA2D_DESC_W0_VB_S) | (blk_w << DMA2D_DESC_W0_HB_S) |
+ 	       DMA2D_DESC_W0_DMA2D_EN | DMA2D_DESC_W0_SUC_EOF |
+ 	       DMA2D_DESC_W0_OWNER_DMA, ppa->desc + off + DMA2D_DESC_W0);
+ 	writel((pic_h << DMA2D_DESC_W1_VA_S) | (pic_w << DMA2D_DESC_W1_HA_S) |
+-	       (DMA2D_PBYTE_2B_PER_PIXEL << DMA2D_DESC_W1_PBYTE_S),
++	       (pbyte << DMA2D_DESC_W1_PBYTE_S),
+ 	       ppa->desc + off + DMA2D_DESC_W1);
+ 	writel((y << DMA2D_DESC_W2_Y_S) | (x << DMA2D_DESC_W2_X_S),
+ 	       ppa->desc + off + DMA2D_DESC_W2);
+@@ -662,6 +763,14 @@
+ 	writel(0, ppa->desc + off + DMA2D_DESC_NEXT);
+ }
+ 
++static void esp32s31_ppa_desc_rgb565(struct esp32s31_ppa *ppa, u32 off,
++				     u32 addr, u32 pic_w, u32 pic_h,
++				     u32 blk_w, u32 blk_h, u32 x, u32 y)
++{
++	esp32s31_ppa_desc(ppa, off, addr, pic_w, pic_h, blk_w, blk_h, x, y,
++			  DMA2D_PBYTE_2B_PER_PIXEL);
++}
++
+ /* Common transfer-ability setup, shared by the RX and TX channels. */
+ static void esp32s31_ppa_chan_ability(void __iomem *conf0, u32 rst,
+ 				      u32 burst_en, u32 dscr_port,
+@@ -697,36 +806,72 @@
+  * is safe because the output pixel cannot be written until the corresponding
+  * background pixel has been read, so the write pointer trails the read.
+  */
+-static int esp32s31_ppa_blend(struct esp32s31_ppa *ppa,
+-			      u32 bg_addr, u32 fg_addr, u32 out_addr,
+-			      u32 pic_w, u32 pic_h, u32 blk_w, u32 blk_h,
+-			      u8 fg_alpha)
++/*
++ * One blend, described.
++ *
++ * The background and the output share a geometry because the interesting case
++ * is in-place - a cursor composited into the scanout buffer it is already
++ * sitting in. The foreground has its own, because it is a small sprite with
++ * its own stride rather than a window onto the same surface.
++ */
++struct esp32s31_ppa_blend_op {
++	u32 bg_addr, fg_addr, out_addr;
++	u32 bg_pic_w, bg_pic_h, bg_x, bg_y;	/* also the output's */
++	u32 fg_pic_w, fg_pic_h, fg_x, fg_y;
++	u32 blk_w, blk_h;
++	u8 fg_alpha;		/* ignored when fg_argb is set */
++	bool fg_argb;		/* ARGB8888 foreground, per-pixel alpha */
++};
++
++static int esp32s31_ppa_blend_op(struct esp32s31_ppa *ppa,
++				 const struct esp32s31_ppa_blend_op *op)
+ {
+ 	void __iomem *bg = ppa->dma2d + 0 * DMA2D_TX_CH_STRIDE;
+ 	void __iomem *fg = ppa->dma2d + 1 * DMA2D_TX_CH_STRIDE;
+ 	unsigned long deadline;
++	ktime_t t_op, t_wait;
+ 	u32 v;
+ 	int ret = 0;
+ 
+-	if (!blk_w || !blk_h || blk_w > pic_w || blk_h > pic_h)
++	if (!op->blk_w || !op->blk_h ||
++	    op->bg_x + op->blk_w > op->bg_pic_w ||
++	    op->bg_y + op->blk_h > op->bg_pic_h ||
++	    op->fg_x + op->blk_w > op->fg_pic_w ||
++	    op->fg_y + op->blk_h > op->fg_pic_h)
+ 		return -EINVAL;
+-	if ((bg_addr | fg_addr | out_addr) & 3)
++	if ((op->bg_addr | op->fg_addr | op->out_addr) & 3)
+ 		return -EINVAL;
+-	if (!esp32s31_ppa_in_range(ppa, bg_addr, (size_t)pic_w * pic_h * 2) ||
+-	    !esp32s31_ppa_in_range(ppa, fg_addr, (size_t)pic_w * pic_h * 2) ||
+-	    !esp32s31_ppa_in_range(ppa, out_addr, (size_t)pic_w * pic_h * 2)) {
++	if (!esp32s31_ppa_in_range(ppa, op->bg_addr,
++				   (size_t)op->bg_pic_w * op->bg_pic_h * 2) ||
++	    !esp32s31_ppa_in_range(ppa, op->fg_addr,
++				   (size_t)op->fg_pic_w * op->fg_pic_h *
++				   (op->fg_argb ? 4 : 2)) ||
++	    !esp32s31_ppa_in_range(ppa, op->out_addr,
++				   (size_t)op->bg_pic_w * op->bg_pic_h * 2)) {
+ 		dev_err(ppa->dev, "blend buffers outside the reserved region\n");
+ 		return -ERANGE;
+ 	}
+ 
+ 	mutex_lock(&ppa->lock);
++	/*
++	 * Split programming from waiting, as the SRM path already does. Whole-
++	 * operation timing cannot say whether a small blend costs a millisecond
++	 * because the engine is slow or because getting to it is - and that is
++	 * the number that decides where the crossover against the CPU sits.
++	 */
++	t_op = ktime_get();
+ 
+-	esp32s31_ppa_desc(ppa, DMA2D_DESC_BG, bg_addr, pic_w, pic_h,
+-			  blk_w, blk_h, 0, 0);
+-	esp32s31_ppa_desc(ppa, DMA2D_DESC_FG, fg_addr, pic_w, pic_h,
+-			  blk_w, blk_h, 0, 0);
+-	esp32s31_ppa_desc(ppa, DMA2D_DESC_RX, out_addr, pic_w, pic_h,
+-			  blk_w, blk_h, 0, 0);
++	esp32s31_ppa_desc(ppa, DMA2D_DESC_BG, op->bg_addr,
++			  op->bg_pic_w, op->bg_pic_h, op->blk_w, op->blk_h,
++			  op->bg_x, op->bg_y, DMA2D_PBYTE_2B_PER_PIXEL);
++	esp32s31_ppa_desc(ppa, DMA2D_DESC_FG, op->fg_addr,
++			  op->fg_pic_w, op->fg_pic_h, op->blk_w, op->blk_h,
++			  op->fg_x, op->fg_y,
++			  op->fg_argb ? DMA2D_PBYTE_4B_PER_PIXEL :
++					DMA2D_PBYTE_2B_PER_PIXEL);
++	esp32s31_ppa_desc(ppa, DMA2D_DESC_RX, op->out_addr,
++			  op->bg_pic_w, op->bg_pic_h, op->blk_w, op->blk_h,
++			  op->bg_x, op->bg_y, DMA2D_PBYTE_2B_PER_PIXEL);
+ 	wmb();	/* uncached SRAM: order the descriptors before the starts */
+ 
+ 	/* The vendor blend path resets the engine first; the fill path does not. */
+@@ -779,23 +924,36 @@
+ 	writel(readl(ppa->dma2d + DMA2D_IN_LINK_CONF_CH0) | DMA2D_INLINK_START,
+ 	       ppa->dma2d + DMA2D_IN_LINK_CONF_CH0);
+ 
+-	/* Colour modes: RGB565 in, RGB565 out. */
++	/*
++	 * Colour modes. Encodings are from ESP-IDF's ppa_ll.h - ARGB8888 is 0
++	 * and RGB565 is 2 - not from the bit position looking plausible.
++	 */
+ 	writel((PPA_BLEND_RX_CM_RGB565 << PPA_BLEND0_RX_CM_S) |
+-	       (PPA_BLEND_RX_CM_RGB565 << PPA_BLEND1_RX_CM_S) |
++	       ((op->fg_argb ? PPA_BLEND_RX_CM_ARGB8888 :
++			       PPA_BLEND_RX_CM_RGB565) << PPA_BLEND1_RX_CM_S) |
+ 	       (PPA_BLEND_TX_CM_RGB565 << PPA_BLEND_TX_CM_S),
+ 	       ppa->ppa + PPA_BLEND_COLOR_MODE);
+ 
+ 	/*
+-	 * Background opaque, foreground at a fixed alpha. RGB565 carries no
+-	 * alpha channel, so without this the engine has nothing to blend with.
++	 * Where each layer's alpha comes from.
++	 *
++	 * The background is RGB565 and carries none, so it is pinned opaque.
++	 * The foreground is the interesting one: with an RGB565 sprite there
++	 * is no alpha channel either and a single fixed value is all the
++	 * engine can be given, but an ARGB8888 sprite carries a DIFFERENT
++	 * alpha per pixel - which is what a mouse cursor is - and
++	 * PPA_ALPHA_NO_CHANGE tells the engine to use it rather than override
++	 * it. Leaving FIX_VALUE set here would composite the cursor as a solid
++	 * rectangle.
+ 	 */
+ 	writel((0xff << PPA_BLEND0_RX_FIX_ALPHA_S) |
+-	       (fg_alpha << PPA_BLEND1_RX_FIX_ALPHA_S) |
++	       (op->fg_alpha << PPA_BLEND1_RX_FIX_ALPHA_S) |
+ 	       (PPA_ALPHA_FIX_VALUE << PPA_BLEND0_RX_ALPHA_MOD_S) |
+-	       (PPA_ALPHA_FIX_VALUE << PPA_BLEND1_RX_ALPHA_MOD_S),
++	       ((op->fg_argb ? PPA_ALPHA_NO_CHANGE : PPA_ALPHA_FIX_VALUE) <<
++		PPA_BLEND1_RX_ALPHA_MOD_S),
+ 	       ppa->ppa + PPA_BLEND_FIX_ALPHA);
+ 
+-	writel((blk_w << PPA_BLEND_HB_S) | (blk_h << PPA_BLEND_VB_S),
++	writel((op->blk_w << PPA_BLEND_HB_S) | (op->blk_h << PPA_BLEND_VB_S),
+ 	       ppa->ppa + PPA_BLEND_TX_SIZE);
+ 
+ 	/*
+@@ -815,7 +973,10 @@
+ 	writel(PPA_BLEND_EN | PPA_BLEND_TRANS_MODE_UPDATE,
+ 	       ppa->ppa + PPA_BLEND_TRANS_MODE);
+ 
+-	if (!esp32s31_ppa_spin_done(ppa, PPA_INT_BLEND_EOF) &&
++	ppa->last_setup_ns = ktime_to_ns(ktime_sub(ktime_get(), t_op));
++	t_wait = ktime_get();
++
++	if (!esp32s31_ppa_spin_rx_done(ppa) &&
+ 	    !wait_for_completion_timeout(&ppa->done, msecs_to_jiffies(200))) {
+ 		deadline = jiffies + msecs_to_jiffies(200);
+ 		ret = -ETIMEDOUT;
+@@ -829,12 +990,15 @@
+ 		} while (time_before(jiffies, deadline));
+ 	}
+ 
++	ppa->last_wait_ns = ktime_to_ns(ktime_sub(ktime_get(), t_wait));
++	ppa->last_ns = ppa->last_setup_ns + ppa->last_wait_ns;
++
+ 	writel(DMA2D_IN_SUC_EOF, ppa->dma2d + DMA2D_IN_INT_CLR_CH0);
+ 
+ 	if (ret)
+ 		dev_err(ppa->dev,
+ 			"blend %ux%u timed out (rx int_raw=0x%08x bg=0x%08x fg=0x%08x blend_st=0x%08x)\n",
+-			blk_w, blk_h,
++			op->blk_w, op->blk_h,
+ 			readl(ppa->dma2d + DMA2D_IN_INT_RAW_CH0),
+ 			readl(bg + DMA2D_OUT_INT_RAW),
+ 			readl(fg + DMA2D_OUT_INT_RAW),
+@@ -868,7 +1032,16 @@
+ 		return -EINVAL;
+ 
+ 	t0 = ktime_get();
+-	ret = esp32s31_ppa_blend(ppa, bg, fg, out, pw, ph, bw, bh, alpha);
++	{
++		struct esp32s31_ppa_blend_op op = {
++			.bg_addr = bg, .fg_addr = fg, .out_addr = out,
++			.bg_pic_w = pw, .bg_pic_h = ph,
++			.fg_pic_w = pw, .fg_pic_h = ph,
++			.blk_w = bw, .blk_h = bh, .fg_alpha = alpha,
++		};
++
++		ret = esp32s31_ppa_blend_op(ppa, &op);
++	}
+ 	ppa->last_ns = ktime_to_ns(ktime_sub(ktime_get(), t0));
+ 	if (ret)
+ 		return ret;
+@@ -965,14 +1138,14 @@
+ 	mutex_lock(&ppa->lock);
+ 
+ 	/* Source: the whole picture as a single block. */
+-	esp32s31_ppa_desc(ppa, DMA2D_DESC_SRC, src_addr, src_w, src_h,
++	esp32s31_ppa_desc_rgb565(ppa, DMA2D_DESC_SRC, src_addr, src_w, src_h,
+ 			  bw, bh, sx, sy);
+ 	/*
+ 	 * Destination: the block fields are ignored in descriptor-port mode,
+ 	 * and the vendor driver programs a fixed 2x2 there. The output geometry
+ 	 * comes from the picture size and the scaling factor.
+ 	 */
+-	esp32s31_ppa_desc(ppa, DMA2D_DESC_RX, dst_addr, dst_w, dst_h,
++	esp32s31_ppa_desc_rgb565(ppa, DMA2D_DESC_RX, dst_addr, dst_w, dst_h,
+ 			  2, 2, dx, dy);
+ 	wmb();	/* uncached SRAM: order the descriptors before the starts */
+ 
+@@ -1056,7 +1229,7 @@
+ 	writel(scal, ppa->ppa + PPA_SRM_SCAL_ROTATE);
+ 	writel(scal | PPA_SCAL_ROTATE_START, ppa->ppa + PPA_SRM_SCAL_ROTATE);
+ 
+-	if (!esp32s31_ppa_spin_done(ppa, PPA_INT_SRM_EOF) &&
++	if (!esp32s31_ppa_spin_rx_done(ppa) &&
+ 	    !wait_for_completion_timeout(&ppa->done, msecs_to_jiffies(200))) {
+ 		deadline = jiffies + msecs_to_jiffies(200);
+ 		ret = -ETIMEDOUT;
+@@ -1160,6 +1333,63 @@
+ EXPORT_SYMBOL_GPL(esp32s31_ppa_scale_rect);
+ 
+ /*
++ * The blend, exported. It was written when the PPA was brought up and then
++ * reached only from debugfs, so nothing in the running system ever used it.
++ */
++int esp32s31_ppa_blend_layers(u32 bg, u32 fg, u32 out,
++			      u32 pic_w, u32 pic_h, u32 blk_w, u32 blk_h,
++			      u8 fg_alpha)
++{
++	struct esp32s31_ppa *ppa = esp32s31_ppa_instance;
++	struct esp32s31_ppa_blend_op op = {
++		.bg_addr = bg, .fg_addr = fg, .out_addr = out,
++		.bg_pic_w = pic_w, .bg_pic_h = pic_h,
++		.fg_pic_w = pic_w, .fg_pic_h = pic_h,
++		.blk_w = blk_w, .blk_h = blk_h,
++		.fg_alpha = fg_alpha,
++	};
++
++	if (!ppa)
++		return -ENODEV;
++
++	return esp32s31_ppa_blend_op(ppa, &op);
++}
++EXPORT_SYMBOL_GPL(esp32s31_ppa_blend_layers);
++
++/*
++ * Composite an ARGB8888 sprite, with its own per-pixel alpha, into a rectangle
++ * of an RGB565 surface - in place, so `bg` and `out` may be the same address.
++ * ESP-IDF's ppa_blend.c contemplates exactly that case (its cache-maintenance
++ * note calls out in_bg and out_buffer being the same one).
++ *
++ * This is what a cursor is: a small ARGB sprite over whatever the screen
++ * already holds, repainted on every pointer move.
++ */
++int esp32s31_ppa_blend_argb_sprite(u32 bg_out, u32 dst_w, u32 dst_h,
++				   u32 dst_x, u32 dst_y,
++				   u32 sprite, u32 spr_w, u32 spr_h,
++				   u32 spr_x, u32 spr_y,
++				   u32 blk_w, u32 blk_h)
++{
++	struct esp32s31_ppa *ppa = esp32s31_ppa_instance;
++	struct esp32s31_ppa_blend_op op = {
++		.bg_addr = bg_out, .out_addr = bg_out, .fg_addr = sprite,
++		.bg_pic_w = dst_w, .bg_pic_h = dst_h,
++		.bg_x = dst_x, .bg_y = dst_y,
++		.fg_pic_w = spr_w, .fg_pic_h = spr_h,
++		.fg_x = spr_x, .fg_y = spr_y,
++		.blk_w = blk_w, .blk_h = blk_h,
++		.fg_argb = true,
++	};
++
++	if (!ppa)
++		return -ENODEV;
++
++	return esp32s31_ppa_blend_op(ppa, &op);
++}
++EXPORT_SYMBOL_GPL(esp32s31_ppa_blend_argb_sprite);
++
++/*
+  * debugfs: "<hex src> <sw> <sh> <hex dst> <dw> <dh>" scales one surface into
+  * another and times it. Pointed at the scanout buffer, an upscale is visible
+  * on the panel, which is the cheapest proof the engine really did the work.
+@@ -1202,6 +1432,74 @@
+ 	.llseek = default_llseek,
+ };
+ 
++/*
++ * Bring-up interface: "<src-hex> <w> <h> <dst-hex> <dst-size> <quality>".
++ * Both buffers are physical addresses inside the reserved window, so the
++ * scanout buffer can be encoded straight from debugfs and the result read out
++ * of /dev/mem - the same route screenshot.py already uses.
++ */
++static ssize_t esp32s31_jpeg_write(struct file *file, const char __user *ubuf,
++				   size_t len, loff_t *ppos)
++{
++	struct esp32s31_ppa *ppa = file_inode(file)->i_private;
++	u32 src, w, h, quality, out_len = 0;
++	char buf[96];
++	ktime_t t0;
++	int ret;
++
++	if (len >= sizeof(buf))
++		return -EINVAL;
++	if (copy_from_user(buf, ubuf, len))
++		return -EFAULT;
++	buf[len] = '\0';
++
++	if (sscanf(buf, "%x %u %u %u", &src, &w, &h, &quality) != 4)
++		return -EINVAL;
++
++	t0 = ktime_get();
++	ret = esp32s31_jpeg_encode(src, w, h, quality, &out_len);
++	ppa->jpeg_last_ns = ktime_to_ns(ktime_sub(ktime_get(), t0));
++	if (ret)
++		return ret;
++
++	/*
++	 * dev_dbg, not dev_info. This used to log a line per frame, which at
++	 * 30 fps floods the kernel ring buffer, costs real time in the console
++	 * path, and scrolls away the "scanout started" line that tooling parses
++	 * the panel geometry out of. The counters in debugfs carry the same
++	 * information without being emitted 30 times a second.
++	 */
++	dev_dbg(ppa->dev, "jpeg %ux%u q%u at 0x%08x -> %u bytes in %llu ns\n",
++		w, h, quality, src, out_len, ppa->jpeg_last_ns);
++	return len;
++}
++
++/* The last encoded image, readable without going anywhere near /dev/mem. */
++static ssize_t esp32s31_jpeg_out_read(struct file *file, char __user *ubuf,
++				      size_t len, loff_t *ppos)
++{
++	struct esp32s31_ppa *ppa = file_inode(file)->i_private;
++
++	if (!ppa->jpeg_buf || !ppa->jpeg_last_len)
++		return 0;
++	return simple_read_from_buffer(ubuf, len, ppos, ppa->jpeg_buf,
++				       ppa->jpeg_last_len);
++}
++
++static const struct file_operations esp32s31_jpeg_out_fops = {
++	.owner = THIS_MODULE,
++	.open = simple_open,
++	.read = esp32s31_jpeg_out_read,
++	.llseek = default_llseek,
++};
++
++static const struct file_operations esp32s31_jpeg_fops = {
++	.owner = THIS_MODULE,
++	.open = simple_open,
++	.write = esp32s31_jpeg_write,
++	.llseek = default_llseek,
++};
++
+ static irqreturn_t esp32s31_ppa_isr(int irq, void *arg)
+ {
+ 	struct esp32s31_ppa *ppa = arg;
+@@ -1218,6 +1516,999 @@
+ 	return IRQ_HANDLED;
+ }
+ 
++/* ========================= JPEG encoder ============================== */
++
++/*
++ * The JPEG codec is a separate engine, but it is fed by the same 2D-DMA as the
++ * PPA, so it lives in this driver: one owner of the dma2d registers, one
++ * descriptor pool, one mutex. Giving it its own driver would mean mapping
++ * dma2d twice and inventing a channel arbitration protocol between them.
++ *
++ * The division of labour is unusual and worth stating: the hardware produces
++ * only the entropy-coded payload. Everything before the first MCU - SOI, the
++ * quantisation and Huffman tables, the frame and scan headers - is emitted
++ * here in software, and the hardware appends its payload after it. So the
++ * tables written to the registers and the tables written into the DQT/DHT
++ * markers must agree, or the file decodes to garbage rather than failing.
++ *
++ * Addresses came from the SoC headers and were checked against the PPA's,
++ * which are known good - see the comment on the DT node.
++ */
++
++#define JPEG_CONFIG			0x000
++#define  JPEG_CFG_FSM_RST		BIT(0)
++#define  JPEG_CFG_START			BIT(1)
++#define  JPEG_CFG_QNR_PRECISION		BIT(2)
++#define  JPEG_CFG_FF_CHECK_EN		BIT(3)
++#define  JPEG_CFG_SAMPLE_SEL_S		4
++#define  JPEG_CFG_QNR_FIFO_EN		BIT(7)
++#define  JPEG_CFG_LQNR_TBL_SEL_S	8
++#define  JPEG_CFG_CQNR_TBL_SEL_S	10
++#define  JPEG_CFG_COLOR_SPACE_S		12
++#define  JPEG_CFG_DHT_FIFO_EN		BIT(15)
++#define  JPEG_CFG_SOFT_RST		BIT(24)
++#define  JPEG_CFG_FIFO_RST		BIT(25)
++#define  JPEG_CFG_PIXEL_REV		BIT(26)
++#define  JPEG_CFG_TAILER_EN		BIT(27)
++#define  JPEG_CFG_MODE_DECODE		BIT(31)
++#define JPEG_DQT_INFO			0x004
++#define JPEG_PIC_SIZE			0x008
++#define  JPEG_PIC_VA_S			0	/* height */
++#define  JPEG_PIC_HA_S			16	/* width */
++#define JPEG_T0QNR			0x010
++#define JPEG_T1QNR			0x014
++#define JPEG_T2QNR			0x018
++#define JPEG_T3QNR			0x01c
++#define JPEG_INT_RAW			0x038
++#define JPEG_INT_ENA			0x03c
++#define JPEG_INT_ST			0x040
++#define JPEG_INT_CLR			0x044
++#define  JPEG_INT_DONE			BIT(0)
++#define  JPEG_INT_RLE_PARALLEL_ERR	BIT(1)
++#define  JPEG_INT_EN_FRAME_EOF_ERR	BIT(16)
++#define JPEG_DHT_TOTLEN_DC0		0x058
++#define JPEG_DHT_VAL_DC0		0x05c
++#define JPEG_DHT_TOTLEN_AC0		0x060
++#define JPEG_DHT_VAL_AC0		0x064
++#define JPEG_DHT_TOTLEN_DC1		0x068
++#define JPEG_DHT_VAL_DC1		0x06c
++#define JPEG_DHT_TOTLEN_AC1		0x070
++#define JPEG_DHT_VAL_AC1		0x074
++#define JPEG_DHT_CODEMIN_DC0		0x078
++#define JPEG_DHT_CODEMIN_AC0		0x07c
++#define JPEG_DHT_CODEMIN_DC1		0x080
++#define JPEG_DHT_CODEMIN_AC1		0x084
++
++/* HP_SYS_CLKRST jpeg_ctrl0 */
++#define JPEG_CLK_EN			BIT(0)
++#define JPEG_RST_EN			BIT(1)
++
++/* Colour space of the *source* picture, CONFIG bits 14:12. */
++#define JPEG_CS_RGB565			2
++/* Chroma subsampling of the *output*, CONFIG bits 5:4. */
++#define JPEG_SAMPLE_YUV420		2
++
++/*
++ * 2D-DMA block size for the source fetch. Copied from ESP-IDF's enc_hb_tbl:
++ * row JPEG_ENC_SRC_RGB565_HB (2) is {64, 64, 48, 0}, indexed by output
++ * subsampling {444, 422, 420, gray} - so 420 gives 48. The vertical block is
++ * the MCU height, 16 for 420. These are not derivable from anything visible in
++ * the registers; they are hardware tuning constants.
++ */
++#define JPEG_ENC_HB_RGB565_420		48
++
++#define JPEG_ENC_VB_420			16
++#define JPEG_MCU_W			16
++#define JPEG_MCU_H			16
++/*
++ * Runtime overrides for the source fetch geometry, because this is the one
++ * part of the setup that cannot be read out of a header: the block sizes are
++ * hardware tuning constants and the failure mode when they are wrong is a
++ * sheared picture rather than an error.
++ */
++static unsigned int jpeg_hb = JPEG_ENC_HB_RGB565_420;
++module_param(jpeg_hb, uint, 0644);
++MODULE_PARM_DESC(jpeg_hb, "JPEG source fetch block width in pixels");
++
++static unsigned int jpeg_vb = JPEG_ENC_VB_420;
++module_param(jpeg_vb, uint, 0644);
++MODULE_PARM_DESC(jpeg_vb, "JPEG source fetch block height in pixels");
++
++/* 1D descriptors split their length: low 14 bits in vb, the rest in va. */
++#define JPEG_DMA2D_LEN_MASK		0x3fff
++#define JPEG_DMA2D_LEN_SHIFT		14
++
++/* Descriptor slots, after the PPA's two. */
++#define DMA2D_DESC_JPEG_TX		48
++#define DMA2D_DESC_JPEG_RX		72
++
++#define JPEG_HEADER_ALIGN		64	/* cache line */
++#define JPEG_HEADER_MAX			1024
++/* Output buffer the driver owns. 800x480 at q95 measures ~42 KB. */
++#define JPEG_BUF_SIZE			(512 * 1024)
++
++#include "esp32s31-jpeg-tables.h"
++
++/* Zig-zag order, ISO/IEC 10918-1 Figure A.6. */
++static const u8 jpeg_zigzag[64] = {
++	0,  1,  8, 16,  9,  2,  3, 10, 17, 24, 32, 25, 18, 11,  4,  5,
++	12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13,  6,  7, 14, 21, 28,
++	35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51,
++	58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
++};
++
++struct jpeg_hdr {
++	u8 buf[JPEG_HEADER_MAX];
++	u32 len;
++};
++
++static void jpeg_put(struct jpeg_hdr *h, u8 b)
++{
++	if (h->len < JPEG_HEADER_MAX)
++		h->buf[h->len++] = b;
++}
++
++static void jpeg_put16(struct jpeg_hdr *h, u16 v)
++{
++	jpeg_put(h, v >> 8);
++	jpeg_put(h, v & 0xff);
++}
++
++static void jpeg_marker(struct jpeg_hdr *h, u8 m)
++{
++	jpeg_put(h, 0xff);
++	jpeg_put(h, m);
++}
++
++/*
++ * Quantisation table for a quality, the libjpeg scaling that every encoder
++ * uses. Natural order: the hardware wants it that way and DQT zig-zags on the
++ * way out.
++ */
++static void jpeg_quant_table(u32 *out, const u32 *base, u32 quality)
++{
++	u32 scale, i;
++
++	if (quality < 1)
++		quality = 1;
++	if (quality > 100)
++		quality = 100;
++	scale = quality < 50 ? 5000 / quality : 200 - quality * 2;
++
++	for (i = 0; i < 64; i++) {
++		u32 v = (base[i] * scale + 50) / 100;
++
++		out[i] = clamp_val(v, 1u, 255u);
++	}
++}
++
++static void jpeg_write_qnr(struct esp32s31_ppa *ppa, u32 reg, const u32 *tbl)
++{
++	u32 i;
++
++	for (i = 0; i < 64; i++)
++		writel(tbl[i], ppa->jpeg + reg);
++}
++
++static void jpeg_emit_dqt(struct jpeg_hdr *h, u8 id, const u32 *tbl)
++{
++	int i;
++
++	jpeg_marker(h, 0xdb);
++	jpeg_put16(h, 67);
++	jpeg_put(h, id);			/* 8-bit precision, table id */
++	for (i = 0; i < 64; i++)
++		jpeg_put(h, tbl[jpeg_zigzag[i]]);
++}
++
++static void jpeg_emit_dht(struct jpeg_hdr *h, u8 class_id,
++			  const u8 *bits, const u8 *values, u32 nvalues)
++{
++	u32 i;
++
++	jpeg_marker(h, 0xc4);
++	jpeg_put16(h, 2 + 1 + 16 + nvalues);
++	jpeg_put(h, class_id);
++	for (i = 0; i < 16; i++)
++		jpeg_put(h, bits[i]);
++	for (i = 0; i < nvalues; i++)
++		jpeg_put(h, values[i]);
++}
++
++/*
++ * Everything up to the first MCU. YUV420 only, which is what this encoder is
++ * configured for: Y sampled 2x2, Cb and Cr 1x1.
++ */
++static void jpeg_build_header(struct jpeg_hdr *h, u32 w, u32 h_px,
++			      const u32 *lq, const u32 *cq)
++{
++	h->len = 0;
++
++	jpeg_marker(h, 0xd8);			/* SOI */
++
++	/* APP0/JFIF. Not required, but decoders are happier with it. */
++	jpeg_marker(h, 0xe0);
++	jpeg_put16(h, 16);
++	jpeg_put(h, 'J'); jpeg_put(h, 'F'); jpeg_put(h, 'I');
++	jpeg_put(h, 'F'); jpeg_put(h, 0);
++	jpeg_put16(h, 0x0102);			/* version 1.2 */
++	jpeg_put(h, 0);				/* no density units */
++	jpeg_put16(h, 1); jpeg_put16(h, 1);
++	jpeg_put(h, 0); jpeg_put(h, 0);		/* no thumbnail */
++
++	jpeg_emit_dqt(h, 0, lq);
++	jpeg_emit_dqt(h, 1, cq);
++
++	jpeg_marker(h, 0xc0);			/* SOF0, baseline */
++	jpeg_put16(h, 17);
++	jpeg_put(h, 8);				/* 8-bit samples */
++	jpeg_put16(h, h_px);
++	jpeg_put16(h, w);
++	jpeg_put(h, 3);				/* three components */
++	jpeg_put(h, 1); jpeg_put(h, 0x22); jpeg_put(h, 0);	/* Y  2x2, q0 */
++	jpeg_put(h, 2); jpeg_put(h, 0x11); jpeg_put(h, 1);	/* Cb 1x1, q1 */
++	jpeg_put(h, 3); jpeg_put(h, 0x11); jpeg_put(h, 1);	/* Cr 1x1, q1 */
++
++	jpeg_emit_dht(h, 0x00, jpeg_luminance_dc_coefficients,
++		      jpeg_luminance_dc_values,
++		      ARRAY_SIZE(jpeg_luminance_dc_values));
++	jpeg_emit_dht(h, 0x10, jpeg_luminance_ac_coefficients,
++		      jpeg_luminance_ac_values,
++		      ARRAY_SIZE(jpeg_luminance_ac_values));
++	jpeg_emit_dht(h, 0x01, jpeg_chrominance_dc_coefficients,
++		      jpeg_chrominance_dc_values,
++		      ARRAY_SIZE(jpeg_chrominance_dc_values));
++	jpeg_emit_dht(h, 0x11, jpeg_chrominance_ac_coefficients,
++		      jpeg_chrominance_ac_values,
++		      ARRAY_SIZE(jpeg_chrominance_ac_values));
++
++	/*
++	 * Alignment padding goes HERE, before SOS - never after it.
++	 *
++	 * The payload is written by DMA starting at header_len, so header_len
++	 * has to be cache-line aligned, and a comment segment is the tidy way
++	 * to take up the slack. But SOS must be the last marker in the file:
++	 * everything following it is entropy-coded scan data. A COM emitted
++	 * after SOS lands *inside* the scan, where its 0xFF is an unstuffed
++	 * marker byte, and every decoder gives up at that point - which
++	 * produced a structurally perfect JPEG whose first MCU row was neutral
++	 * grey and everything below it black.
++	 *
++	 * SOS itself is 14 bytes, so pad so that what follows it is aligned.
++	 */
++	{
++		u32 after_sos = (h->len + 14) % JPEG_HEADER_ALIGN;
++
++		if (after_sos) {
++			u32 pad = JPEG_HEADER_ALIGN - after_sos;
++
++			/* A COM segment cannot be shorter than 4 bytes. */
++			if (pad < 4)
++				pad += JPEG_HEADER_ALIGN;
++			jpeg_marker(h, 0xfe);		/* COM */
++			jpeg_put16(h, pad - 2);
++			while (pad-- > 4)
++				jpeg_put(h, 0);
++		}
++	}
++
++	jpeg_marker(h, 0xda);			/* SOS - must be last */
++	jpeg_put16(h, 12);
++	jpeg_put(h, 3);
++	jpeg_put(h, 1); jpeg_put(h, 0x00);	/* Y:  DC0 AC0 */
++	jpeg_put(h, 2); jpeg_put(h, 0x11);	/* Cb: DC1 AC1 */
++	jpeg_put(h, 3); jpeg_put(h, 0x11);	/* Cr: DC1 AC1 */
++	jpeg_put(h, 0); jpeg_put(h, 63); jpeg_put(h, 0);
++}
++
++/* JPEG's descriptors differ from the PPA's: SUC_EOF is *not* set (the engine
++ * decides where the data ends), and the output side is one-dimensional with
++ * its length split across the block and picture fields. */
++static void jpeg_desc_src(struct esp32s31_ppa *ppa, u32 off, u32 addr,
++			  u32 w, u32 h)
++{
++	writel((jpeg_vb << DMA2D_DESC_W0_VB_S) |
++	       (jpeg_hb << DMA2D_DESC_W0_HB_S) |
++	       DMA2D_DESC_W0_DMA2D_EN | DMA2D_DESC_W0_OWNER_DMA,
++	       ppa->desc + off + DMA2D_DESC_W0);
++	writel((h << DMA2D_DESC_W1_VA_S) | (w << DMA2D_DESC_W1_HA_S) |
++	       (DMA2D_PBYTE_2B_PER_PIXEL << DMA2D_DESC_W1_PBYTE_S),
++	       ppa->desc + off + DMA2D_DESC_W1);
++	writel(DMA2D_DESC_W2_MODE_MULTIPLE, ppa->desc + off + DMA2D_DESC_W2);
++	writel(addr, ppa->desc + off + DMA2D_DESC_BUFFER);
++	writel(0, ppa->desc + off + DMA2D_DESC_NEXT);
++}
++
++static void jpeg_desc_dst(struct esp32s31_ppa *ppa, u32 off, u32 addr, u32 len)
++{
++	writel(((len & JPEG_DMA2D_LEN_MASK) << DMA2D_DESC_W0_VB_S) |
++	       DMA2D_DESC_W0_OWNER_DMA,
++	       ppa->desc + off + DMA2D_DESC_W0);
++	writel(((len >> JPEG_DMA2D_LEN_SHIFT) << DMA2D_DESC_W1_VA_S) |
++	       (DMA2D_PBYTE_1B_PER_PIXEL << DMA2D_DESC_W1_PBYTE_S),
++	       ppa->desc + off + DMA2D_DESC_W1);
++	writel(0, ppa->desc + off + DMA2D_DESC_W2);
++	writel(addr, ppa->desc + off + DMA2D_DESC_BUFFER);
++	writel(0, ppa->desc + off + DMA2D_DESC_NEXT);
++}
++
++/*
++ * Channel setup for JPEG. Deliberately not esp32s31_ppa_chan_ability(): that
++ * hardcodes a 64-byte burst and no macro block, which is right for the PPA and
++ * wrong here - the codec wants 128-byte bursts, and the source channel has to
++ * fetch 16x16 macro blocks because that is the MCU the encoder consumes.
++ */
++static void jpeg_chan_ability(void __iomem *conf0, u32 rst, u32 burst_en,
++			      u32 dscr_port, u32 burst_len_s, u32 burst_len_m,
++			      u32 mb_s, u32 mb_m, u32 mb_val)
++{
++	u32 v = readl(conf0);
++
++	writel(v | rst, conf0);
++	writel(v & ~rst, conf0);
++
++	v = readl(conf0);
++	v &= ~(burst_len_m | mb_m | dscr_port);
++	v |= burst_en | (DMA2D_BURST_128B << burst_len_s) | (mb_val << mb_s);
++	writel(v, conf0);
++}
++
++static irqreturn_t esp32s31_jpeg_isr(int irq, void *arg)
++{
++	struct esp32s31_ppa *ppa = arg;
++	u32 status = readl(ppa->jpeg + JPEG_INT_ST);
++
++	if (!status)
++		return IRQ_NONE;
++
++	/*
++	 * Latch it: clearing the source is what makes the interrupt go away,
++	 * but it also means the waiter cannot read INT_RAW afterwards - it
++	 * comes back zero and looks like a failed encode.
++	 */
++	ppa->jpeg_status = status;
++	writel(status, ppa->jpeg + JPEG_INT_CLR);
++	complete(&ppa->jpeg_done);
++	return IRQ_HANDLED;
++}
++
++/**
++ * esp32s31_jpeg_encode - compress an RGB565 image to a baseline JPEG
++ * @src: physical address of the RGB565 source, within the reserved window
++ * @w: width in pixels, a multiple of 16
++ * @h: height in pixels, a multiple of 16
++ * @dst: physical address of the output buffer, within the reserved window
++ * @dst_size: bytes available at @dst
++ * @quality: 1..100
++ * @out_len: total JPEG size written
++ *
++ * The output is a complete JPEG: this writes the header itself and the engine
++ * appends the entropy-coded scan and the EOI marker after it.
++ */
++int esp32s31_jpeg_encode(u32 src, u32 w, u32 h, u32 quality, u32 *out_len)
++{
++	struct esp32s31_ppa *ppa = esp32s31_ppa_instance;
++	void __iomem *tx = NULL;
++	struct jpeg_hdr *hdr;
++	u32 lq[64], cq[64];
++	u32 payload_max, produced;
++	unsigned long deadline;
++	u32 cfg, status;
++	int ret = 0;
++
++	u32 dst, dst_size;
++
++	if (!ppa || !ppa->jpeg)
++		return -ENODEV;
++	if (!ppa->jpeg_buf) {
++		ppa->jpeg_buf = dma_alloc_coherent(ppa->dev, JPEG_BUF_SIZE,
++						   &ppa->jpeg_buf_dma,
++						   GFP_KERNEL);
++		if (!ppa->jpeg_buf) {
++			dev_err(ppa->dev, "no JPEG output buffer\n");
++			return -ENOMEM;
++		}
++	}
++	dst = lower_32_bits(ppa->jpeg_buf_dma);
++	dst_size = JPEG_BUF_SIZE;
++	if (!w || !h || (w % JPEG_MCU_W) || (h % JPEG_MCU_H))
++		return -EINVAL;
++	if (quality < 1 || quality > 100)
++		return -EINVAL;
++	if (src & 3)
++		return -EINVAL;
++	if (!esp32s31_ppa_in_range(ppa, src, (size_t)w * h * 2))
++		return -ERANGE;
++
++	hdr = kzalloc(sizeof(*hdr), GFP_KERNEL);
++	if (!hdr)
++		return -ENOMEM;
++
++	jpeg_quant_table(lq, jpeg_luminance_quantization_table, quality);
++	jpeg_quant_table(cq, jpeg_chrominance_quantization_table, quality);
++	jpeg_build_header(hdr, w, h, lq, cq);
++
++	if (dst_size <= hdr->len + JPEG_HEADER_ALIGN) {
++		ret = -ENOSPC;
++		goto out_free;
++	}
++	payload_max = (dst_size - hdr->len) & ~(JPEG_HEADER_ALIGN - 1);
++
++	mutex_lock(&ppa->lock);
++	tx = ppa->dma2d + 0 * DMA2D_TX_CH_STRIDE;
++
++	/*
++	 * Invalidate before the header is written, not after: doing it after
++	 * throws the header away and the file then starts with whatever was in
++	 * that memory. Only the header region needs it - nothing CPU-writes the
++	 * payload area, and sweeping the whole 512 KB buffer cost milliseconds
++	 * of cache maintenance on every frame for no benefit.
++	 */
++	dma_sync_single_for_device(ppa->dev, dst, JPEG_HEADER_MAX,
++				   DMA_FROM_DEVICE);
++
++	/*
++	 * A plain memcpy: this buffer came from dma_alloc_coherent(), so a
++	 * kernel mapping already exists. The ioremap_wc()/iounmap() pair that
++	 * used to be here - left from when the destination was a physical
++	 * address supplied by userspace - cost more per frame than the encode,
++	 * because each one edits the vmalloc area and flushes the TLB.
++	 */
++	memcpy(ppa->jpeg_buf, hdr->buf, hdr->len);
++	wmb();
++
++	/* Clock the codec and take it out of reset. */
++	writel(JPEG_CLK_EN, ppa->jpeg_clkrst);
++	writel(JPEG_CLK_EN | JPEG_RST_EN, ppa->jpeg_clkrst);
++	writel(JPEG_CLK_EN, ppa->jpeg_clkrst);
++
++	cfg = readl(ppa->jpeg + JPEG_CONFIG);
++	writel(cfg | JPEG_CFG_SOFT_RST, ppa->jpeg + JPEG_CONFIG);
++	writel(cfg & ~JPEG_CFG_SOFT_RST, ppa->jpeg + JPEG_CONFIG);
++
++	/*
++	 * Encoder, RGB565 in, 4:2:0 out. The tail flag makes the engine emit
++	 * EOI itself, and ff_check makes it byte-stuff 0xFF in the scan - both
++	 * are required for the output to be a valid JPEG rather than a raw
++	 * coefficient stream.
++	 */
++	cfg = (JPEG_CS_RGB565 << JPEG_CFG_COLOR_SPACE_S) |
++	      (JPEG_SAMPLE_YUV420 << JPEG_CFG_SAMPLE_SEL_S) |
++	      JPEG_CFG_FF_CHECK_EN | JPEG_CFG_TAILER_EN |
++	      JPEG_CFG_QNR_FIFO_EN | JPEG_CFG_DHT_FIFO_EN |
++	      (0 << JPEG_CFG_LQNR_TBL_SEL_S) | (1 << JPEG_CFG_CQNR_TBL_SEL_S);
++	writel(cfg, ppa->jpeg + JPEG_CONFIG);
++
++	/* 8-bit precision for all four quantisation tables. */
++	writel(0, ppa->jpeg + JPEG_DQT_INFO);
++	jpeg_write_qnr(ppa, JPEG_T0QNR, lq);
++	jpeg_write_qnr(ppa, JPEG_T1QNR, cq);
++	jpeg_write_qnr(ppa, JPEG_T2QNR, lq);
++	jpeg_write_qnr(ppa, JPEG_T3QNR, cq);
++
++	/*
++	 * No Huffman tables are written to the hardware, and that is not an
++	 * omission.
++	 *
++	 * The encoder has the standard tables built in; the DHT registers exist
++	 * for the *decoder*, which has to load whatever tables arrive in the
++	 * file it is given. The vendor driver's encode path never touches them
++	 * either - it only emits the DHT marker in software, exactly as
++	 * jpeg_build_header() does above.
++	 *
++	 * Programming them here actively broke the output: every frame decoded
++	 * to a neutral-grey first MCU row with black below, for a real desktop
++	 * and equally for a uniformly filled buffer, because the engine was
++	 * coding against tables that no longer matched the ones declared in the
++	 * header.
++	 */
++
++	writel((w << JPEG_PIC_HA_S) | (h << JPEG_PIC_VA_S),
++	       ppa->jpeg + JPEG_PIC_SIZE);
++
++	jpeg_desc_src(ppa, DMA2D_DESC_JPEG_TX, src, w, h);
++	jpeg_desc_dst(ppa, DMA2D_DESC_JPEG_RX, dst + hdr->len, payload_max);
++	wmb();	/* uncached SRAM: descriptors visible before the channels start */
++
++	/*
++	 * Cache maintenance, in both directions, and neither is optional:
++	 * dma_alloc_coherent returns *cached* memory on this SoC, so a DMA
++	 * engine reads and writes PSRAM behind the D-cache's back.
++	 *
++	 * The source has to be flushed or the engine encodes whatever was last
++	 * written back rather than what is on screen. The destination has to be
++	 * invalidated *before* the transfer as well as after: a stale dirty line
++	 * anywhere in the output range would otherwise be written back on top of
++	 * the payload at some arbitrary later point.
++	 *
++	 * This is what the vendor's own screenshot path does either side of the
++	 * encode, and its absence is what made a structurally perfect JPEG
++	 * decode to a grey first row and black everywhere after.
++	 */
++	/*
++	 * No flush of the source.
++	 *
++	 * It is tempting - the vendor's screenshot path flushes its input - but
++	 * that path encodes a buffer the CPU just wrote. This one encodes the
++	 * scanout buffer, which the display driver fills by DMA and has already
++	 * cache-maintained for its own scanout. There are no CPU-dirty lines to
++	 * push out, and cleaning 768 KB per frame cost real time and evicted
++	 * whatever the rest of the system was working on - which is precisely
++	 * the interference a capture tool exists to avoid.
++	 *
++	 * A caller that hands us a CPU-written buffer must flush it itself.
++	 */
++
++	/* Source channel: 16x16 macro blocks, the MCU the encoder consumes. */
++	jpeg_chan_ability(tx + DMA2D_OUT_CONF0, DMA2D_OUT_RST,
++			  DMA2D_OUTDSCR_BURST_EN, DMA2D_OUT_DSCR_PORT_EN,
++			  DMA2D_OUT_MEM_BURST_LENGTH_S,
++			  DMA2D_OUT_MEM_BURST_LENGTH_M,
++			  DMA2D_OUT_MACRO_BLOCK_SIZE_S,
++			  DMA2D_OUT_MACRO_BLOCK_SIZE_M,
++			  DMA2D_MACRO_BLOCK_16_16);
++	/*
++	 * Pass the pixels through untouched. The codec is told the source is
++	 * RGB565 and does its own colour conversion, so any conversion here is
++	 * corruption.
++	 */
++	/* Only channel 0 has the reorder feature; this driver uses TX0. */
++	writel(readl(tx + DMA2D_OUT_CONF0) | DMA2D_OUT_REORDER_EN,
++	       tx + DMA2D_OUT_CONF0);
++
++	writel((DMA2D_CSC_INPUT_DISABLE << DMA2D_CSC_INPUT_SEL_S) |
++	       (DMA2D_CSC_OUTPUT_DIRECT << DMA2D_CSC_OUTPUT_SEL_S),
++	       tx + DMA2D_OUT_COLOR_CONVERT);
++	writel(DMA2D_SCRAMBLE_BYTE_2_1_0, tx + DMA2D_OUT_SCRAMBLE);
++
++	writel(DMA2D_OUT_PERI_JPEG, tx + DMA2D_OUT_PERI_SEL);
++	writel(ppa->desc_phys + DMA2D_DESC_JPEG_TX, tx + DMA2D_OUT_LINK_ADDR);
++
++	/* Output channel: a plain byte stream, so no macro block. */
++	jpeg_chan_ability(ppa->dma2d + DMA2D_IN_CONF0_CH0, DMA2D_IN_RST,
++			  DMA2D_INDSCR_BURST_EN, DMA2D_IN_DSCR_PORT_EN,
++			  DMA2D_IN_MEM_BURST_LENGTH_S,
++			  DMA2D_IN_MEM_BURST_LENGTH_M,
++			  DMA2D_IN_MACRO_BLOCK_SIZE_S,
++			  DMA2D_IN_MACRO_BLOCK_SIZE_M,
++			  DMA2D_MACRO_BLOCK_NONE);
++	writel(readl(ppa->dma2d + DMA2D_IN_CONF0_CH0) & ~DMA2D_IN_MEM_TRANS_EN,
++	       ppa->dma2d + DMA2D_IN_CONF0_CH0);
++	writel(DMA2D_IN_PERI_JPEG, ppa->dma2d + DMA2D_IN_PERI_SEL_CH0);
++	writel(ppa->desc_phys + DMA2D_DESC_JPEG_RX,
++	       ppa->dma2d + DMA2D_IN_LINK_ADDR_CH0);
++
++	writel(DMA2D_IN_SUC_EOF, ppa->dma2d + DMA2D_IN_INT_CLR_CH0);
++	writel(JPEG_INT_DONE | JPEG_INT_RLE_PARALLEL_ERR |
++	       JPEG_INT_EN_FRAME_EOF_ERR, ppa->jpeg + JPEG_INT_CLR);
++	if (ppa->jpeg_irq > 0) {
++		ppa->jpeg_status = 0;
++		reinit_completion(&ppa->jpeg_done);
++		writel(JPEG_INT_DONE | JPEG_INT_RLE_PARALLEL_ERR |
++		       JPEG_INT_EN_FRAME_EOF_ERR, ppa->jpeg + JPEG_INT_ENA);
++	}
++
++	writel(readl(tx + DMA2D_OUT_LINK_CONF) | DMA2D_OUTLINK_START,
++	       tx + DMA2D_OUT_LINK_CONF);
++	writel(readl(ppa->dma2d + DMA2D_IN_LINK_CONF_CH0) | DMA2D_INLINK_START,
++	       ppa->dma2d + DMA2D_IN_LINK_CONF_CH0);
++
++	writel(readl(ppa->jpeg + JPEG_CONFIG) | JPEG_CFG_START,
++	       ppa->jpeg + JPEG_CONFIG);
++
++	/*
++	 * Polled, not interrupt-driven. The codec has its own interrupt (101)
++	 * but this driver's line is the PPA's, and a whole frame encodes in
++	 * single-digit milliseconds - an interrupt would have to be requested
++	 * and shared for no latency that anything here can observe. Revisit if
++	 * a caller ever wants to overlap encoding with other work.
++	 */
++	/*
++	 * Sleep between polls rather than spinning. A frame takes ~7 ms, and
++	 * burning that as cpu_relax() was the largest single cost of capturing:
++	 * it makes recording the system change the system, which is the one
++	 * thing a capture tool must not do. The codec has its own interrupt
++	 * (101) and could drive a completion instead; this gets most of the
++	 * benefit without wiring a second interrupt line.
++	 */
++	/*
++	 * Wait on the codec's own interrupt. Polling this - even sleeping
++	 * between polls - was the dominant cost of capturing: ~7 ms of frame
++	 * time turned into a couple of dozen timer wakeups, and on this board
++	 * the entry path is expensive enough that recording the system
++	 * measurably changed it. One interrupt per frame instead.
++	 */
++	if (ppa->jpeg_irq > 0) {
++		if (!wait_for_completion_timeout(&ppa->jpeg_done,
++						 msecs_to_jiffies(500)))
++			dev_warn(ppa->dev, "jpeg interrupt timed out\n");
++		writel(0, ppa->jpeg + JPEG_INT_ENA);
++		status = ppa->jpeg_status;
++	} else {
++		deadline = jiffies + msecs_to_jiffies(500);
++		for (;;) {
++			status = readl(ppa->jpeg + JPEG_INT_RAW);
++			if (status & (JPEG_INT_DONE | JPEG_INT_RLE_PARALLEL_ERR |
++				      JPEG_INT_EN_FRAME_EOF_ERR))
++				break;
++			if (time_after(jiffies, deadline))
++				break;
++			usleep_range(200, 400);
++		}
++	}
++
++	if (!(status & JPEG_INT_DONE)) {
++		dev_err(ppa->dev, "jpeg encode failed, int_raw 0x%08x\n",
++			status);
++		ret = status ? -EIO : -ETIMEDOUT;
++		goto out_unlock;
++	}
++	if (status & (JPEG_INT_RLE_PARALLEL_ERR | JPEG_INT_EN_FRAME_EOF_ERR))
++		dev_warn(ppa->dev, "jpeg encode error bits 0x%08x\n", status);
++
++	/*
++	 * The codec being done is not the same as the data being in memory.
++	 * JPEG_INT_DONE says the *encoder* finished; the output channel is
++	 * still draining and, more importantly, has not yet written the
++	 * descriptor back with the length it produced. Reading the descriptor
++	 * at this point returns whatever was programmed into it, which is a
++	 * plausible-looking number rather than an obvious failure - it read
++	 * back as exactly the buffer size, then as exactly zero, depending on
++	 * which field was consulted. Wait for the receive channel's EOF.
++	 */
++	deadline = jiffies + msecs_to_jiffies(100);
++	while (!(readl(ppa->dma2d + DMA2D_IN_INT_RAW_CH0) & DMA2D_IN_SUC_EOF)) {
++		if (time_after(jiffies, deadline)) {
++			dev_err(ppa->dev, "jpeg output DMA never signalled EOF\n");
++			ret = -ETIMEDOUT;
++			goto out_unlock;
++		}
++		cpu_relax();
++	}
++
++	/*
++	 * How much was produced: the output descriptor's block field is
++	 * rewritten by the engine with the byte count it actually wrote.
++	 */
++	/*
++	 * Asymmetric, and it cost a round trip to find: the buffer size goes in
++	 * on the *block* and *picture height* fields (vb/va), and the engine
++	 * reports what it actually wrote back on the *width* fields (hb/ha).
++	 * Reading back the fields that were written produces the buffer size,
++	 * which looks like a plausible answer rather than an obvious failure.
++	 */
++	produced = (readl(ppa->desc + DMA2D_DESC_JPEG_RX + DMA2D_DESC_W0) >>
++		    DMA2D_DESC_W0_HB_S) & GENMASK(13, 0);
++	produced |= ((readl(ppa->desc + DMA2D_DESC_JPEG_RX + DMA2D_DESC_W1) >>
++		      DMA2D_DESC_W1_HA_S) & GENMASK(13, 0)) <<
++		    JPEG_DMA2D_LEN_SHIFT;
++
++	if (!produced || produced > payload_max) {
++		dev_err(ppa->dev,
++			"jpeg produced %u bytes, max %u; rx desc %08x %08x %08x, tx desc %08x %08x %08x\n",
++			produced, payload_max,
++			readl(ppa->desc + DMA2D_DESC_JPEG_RX + DMA2D_DESC_W0),
++			readl(ppa->desc + DMA2D_DESC_JPEG_RX + DMA2D_DESC_W1),
++			readl(ppa->desc + DMA2D_DESC_JPEG_RX + DMA2D_DESC_W2),
++			readl(ppa->desc + DMA2D_DESC_JPEG_TX + DMA2D_DESC_W0),
++			readl(ppa->desc + DMA2D_DESC_JPEG_TX + DMA2D_DESC_W1),
++			readl(ppa->desc + DMA2D_DESC_JPEG_TX + DMA2D_DESC_W2));
++		ret = -EIO;
++		goto out_unlock;
++	}
++
++	*out_len = hdr->len + produced;
++	/* Make the engine's output visible to anything that reads it next. */
++	dma_sync_single_for_cpu(ppa->dev, dst + hdr->len, produced,
++				DMA_FROM_DEVICE);
++	ppa->jpeg_last_len = *out_len;
++	ppa->jpeg_count++;
++
++out_unlock:
++	/*
++	 * Hand TX0 back the way the PPA expects it. The PPA shares this
++	 * channel and does not want macro-block reordering.
++	 */
++	if (tx)
++		writel(readl(tx + DMA2D_OUT_CONF0) & ~DMA2D_OUT_REORDER_EN,
++		       tx + DMA2D_OUT_CONF0);
++	writel(JPEG_INT_DONE | JPEG_INT_RLE_PARALLEL_ERR |
++	       JPEG_INT_EN_FRAME_EOF_ERR, ppa->jpeg + JPEG_INT_CLR);
++	mutex_unlock(&ppa->lock);
++out_free:
++	kfree(hdr);
++	return ret;
++}
++EXPORT_SYMBOL_GPL(esp32s31_jpeg_encode);
++
++
++/* ---------------------------------------------------------------- recorder */
++
++/*
++ * MJPEG capture into RAM, driven by the display's own commit path.
++ *
++ * The point of this is to be able to film the running system without the
++ * filming changing what is being filmed. Two design decisions follow from that
++ * and both matter more than they look:
++ *
++ *  - **Frames are captured on damage, not on a timer.** An idle desktop
++ *    commits nothing, so it costs nothing; the cost appears only while
++ *    something is actually moving, which is exactly when the recording is
++ *    worth having. A timer would pay full price for filming a still image.
++ *
++ *  - **The encode runs on a workqueue, not in the commit.** The commit path
++ *    can sleep, but holding it for the ~7.3 ms an encode takes would delay the
++ *    display and show up as the very stutter one is trying to measure.
++ *
++ * Frames land in a vmalloc ring rather than anything DMA-able: the engine
++ * writes into the driver's coherent buffer as usual and the result - ~20 KB -
++ * is copied out. A 2 MB physically contiguous allocation would have to come
++ * from the same CMA pool the framebuffers live in, and would fail exactly when
++ * the desktop is busy.
++ */
++
++#define JPEG_REC_MAX_FRAMES	2048
++
++struct jpeg_rec_frame {
++	u32 off;
++	u32 len;
++	u64 stamp_ns;
++};
++
++static int jpeg_rec_encode_locked(struct esp32s31_ppa *ppa);
++
++static void esp32s31_jpeg_rec_work(struct work_struct *work)
++{
++	struct esp32s31_ppa *ppa = container_of(work, struct esp32s31_ppa,
++						jpeg_rec_work);
++
++	mutex_lock(&ppa->jpeg_rec_lock);
++	if (ppa->jpeg_rec_running)
++		jpeg_rec_encode_locked(ppa);
++	mutex_unlock(&ppa->jpeg_rec_lock);
++}
++
++/*
++ * Called from the display driver every time it commits a frame. Must be cheap
++ * and must not sleep on anything the commit path holds.
++ */
++void esp32s31_jpeg_rec_notify(u32 scanout, u32 w, u32 h)
++{
++	struct esp32s31_ppa *ppa = esp32s31_ppa_instance;
++	u64 now;
++
++	if (!ppa)
++		return;
++	ppa->jpeg_rec_notifies++;
++	if (!READ_ONCE(ppa->jpeg_rec_running))
++		return;
++
++	/* Rate cap, so a burst of small damages does not queue a burst of
++	 * encodes that then run back to back and stall everything. */
++	now = ktime_get_ns();
++	if (ppa->jpeg_rec_min_gap_ns &&
++	    now - ppa->jpeg_rec_last_ns < ppa->jpeg_rec_min_gap_ns)
++		return;
++	ppa->jpeg_rec_last_ns = now;
++
++	WRITE_ONCE(ppa->jpeg_rec_src, scanout);
++	WRITE_ONCE(ppa->jpeg_rec_w, w);
++	WRITE_ONCE(ppa->jpeg_rec_h, h);
++
++	if (!queue_work(system_unbound_wq, &ppa->jpeg_rec_work))
++		ppa->jpeg_rec_dropped++;	/* one already pending */
++}
++EXPORT_SYMBOL_GPL(esp32s31_jpeg_rec_notify);
++
++/* Encode one frame and append it to the ring. Caller holds jpeg_rec_lock. */
++static int jpeg_rec_encode_locked(struct esp32s31_ppa *ppa)
++{
++	u32 src = READ_ONCE(ppa->jpeg_rec_src);
++	u32 w = READ_ONCE(ppa->jpeg_rec_w);
++	u32 h = READ_ONCE(ppa->jpeg_rec_h);
++	struct jpeg_rec_frame *f;
++	u32 len = 0;
++	int ret;
++
++	u32 off, tail;
++
++	ret = esp32s31_jpeg_encode(src, w, h, ppa->jpeg_rec_quality, &len);
++	if (ret) {
++		ppa->jpeg_rec_dropped++;
++		return ret;
++	}
++
++	/*
++	 * Find contiguous room for the frame, treating the buffer as a ring
++	 * with the consumer's oldest unread frame as the tail. Frames are
++	 * never split across the wrap: the reader hands a single pointer to
++	 * userspace, and a JPEG in two pieces would need either a bounce
++	 * buffer or a two-part copy for no benefit.
++	 *
++	 * When there is no room the NEWEST frame is dropped, not the oldest.
++	 * This used to stop the recording instead, on the reasoning that
++	 * silently discarding the beginning was worse than a short file - true
++	 * when nothing drained the buffer, wrong now that something does. A
++	 * drop is counted and shows up as a gap in the sequence numbers, so it
++	 * is never silent.
++	 */
++	if (ppa->jpeg_rec_seq - ppa->jpeg_rec_read >= ppa->jpeg_rec_max) {
++		ppa->jpeg_rec_overrun++;
++		return -ENOSPC;
++	}
++	if (ppa->jpeg_rec_seq == ppa->jpeg_rec_read) {
++		/* Empty: take the whole buffer from the start. */
++		ppa->jpeg_rec_head = 0;
++		if (len > ppa->jpeg_rec_size) {
++			ppa->jpeg_rec_overrun++;
++			return -ENOSPC;
++		}
++		off = 0;
++	} else {
++		tail = ppa->jpeg_rec_index[ppa->jpeg_rec_read %
++					   ppa->jpeg_rec_max].off;
++		if (ppa->jpeg_rec_head >= tail) {
++			if (ppa->jpeg_rec_head + len <= ppa->jpeg_rec_size)
++				off = ppa->jpeg_rec_head;
++			else if (len < tail)
++				off = 0;		/* wrap to the front */
++			else {
++				ppa->jpeg_rec_overrun++;
++				return -ENOSPC;
++			}
++		} else if (ppa->jpeg_rec_head + len < tail) {
++			off = ppa->jpeg_rec_head;
++		} else {
++			ppa->jpeg_rec_overrun++;
++			return -ENOSPC;
++		}
++	}
++
++	memcpy(ppa->jpeg_rec_buf + off, ppa->jpeg_buf, len);
++	f = &ppa->jpeg_rec_index[ppa->jpeg_rec_seq % ppa->jpeg_rec_max];
++	f->off = off;
++	f->len = len;
++	f->stamp_ns = ktime_get_ns();
++
++	ppa->jpeg_rec_head = off + len;
++	if (ppa->jpeg_rec_head >= ppa->jpeg_rec_size)
++		ppa->jpeg_rec_head = 0;
++	ppa->jpeg_rec_seq++;
++	ppa->jpeg_rec_used += len;
++	ppa->jpeg_rec_n = ppa->jpeg_rec_seq - ppa->jpeg_rec_read;
++	return 0;
++}
++
++int esp32s31_jpeg_rec_start(u32 ring_bytes, u32 max_fps, u32 quality)
++{
++	struct esp32s31_ppa *ppa = esp32s31_ppa_instance;
++	u32 frames;
++	int ret = 0;
++
++	if (!ppa || !ppa->jpeg)
++		return -ENODEV;
++	if (quality < 1 || quality > 100)
++		return -EINVAL;
++	if (ring_bytes < 64 * 1024 || ring_bytes > 8 * 1024 * 1024)
++		return -EINVAL;
++
++	mutex_lock(&ppa->jpeg_rec_lock);
++	if (ppa->jpeg_rec_running) { ret = -EBUSY; goto out; }
++
++	vfree(ppa->jpeg_rec_buf);
++	kvfree(ppa->jpeg_rec_index);
++	frames = min_t(u32, JPEG_REC_MAX_FRAMES, ring_bytes / 4096);
++
++	ppa->jpeg_rec_buf = vmalloc(ring_bytes);
++	ppa->jpeg_rec_index = kvcalloc(frames, sizeof(*ppa->jpeg_rec_index),
++				       GFP_KERNEL);
++	if (!ppa->jpeg_rec_buf || !ppa->jpeg_rec_index) {
++		vfree(ppa->jpeg_rec_buf);
++		kvfree(ppa->jpeg_rec_index);
++		ppa->jpeg_rec_buf = NULL;
++		ppa->jpeg_rec_index = NULL;
++		ret = -ENOMEM;
++		goto out;
++	}
++
++	ppa->jpeg_rec_size = ring_bytes;
++	ppa->jpeg_rec_max = frames;
++	ppa->jpeg_rec_used = 0;
++	ppa->jpeg_rec_n = 0;
++	ppa->jpeg_rec_head = 0;
++	ppa->jpeg_rec_seq = 0;
++	ppa->jpeg_rec_read = 0;
++	ppa->jpeg_rec_overrun = 0;
++	ppa->jpeg_rec_dropped = 0;
++	ppa->jpeg_rec_quality = quality;
++	ppa->jpeg_rec_min_gap_ns = max_fps ? NSEC_PER_SEC / max_fps : 0;
++	ppa->jpeg_rec_last_ns = 0;
++	ppa->jpeg_rec_notifies = 0;
++	WRITE_ONCE(ppa->jpeg_rec_running, true);
++	dev_info(ppa->dev, "jpeg recording: %u KB ring, %u frames max, q%u, cap %u fps\n",
++		 ring_bytes >> 10, frames, quality, max_fps);
++out:
++	mutex_unlock(&ppa->jpeg_rec_lock);
++	return ret;
++}
++EXPORT_SYMBOL_GPL(esp32s31_jpeg_rec_start);
++
++int esp32s31_jpeg_rec_stop(void)
++{
++	struct esp32s31_ppa *ppa = esp32s31_ppa_instance;
++
++	if (!ppa)
++		return -ENODEV;
++	WRITE_ONCE(ppa->jpeg_rec_running, false);
++	cancel_work_sync(&ppa->jpeg_rec_work);
++	dev_info(ppa->dev,
++		 "jpeg recording stopped: %u produced, %u read, %u still held, %u KB, %u encoder-busy, %u overrun, %u commits seen\n",
++		 ppa->jpeg_rec_seq, ppa->jpeg_rec_read, ppa->jpeg_rec_n,
++		 ppa->jpeg_rec_used >> 10, ppa->jpeg_rec_dropped,
++		 ppa->jpeg_rec_overrun, ppa->jpeg_rec_notifies);
++	return 0;
++}
++EXPORT_SYMBOL_GPL(esp32s31_jpeg_rec_stop);
++
++int esp32s31_jpeg_rec_status(u32 *frames, u32 *bytes, u32 *dropped, u32 *running)
++{
++	struct esp32s31_ppa *ppa = esp32s31_ppa_instance;
++
++	if (!ppa)
++		return -ENODEV;
++	*frames = ppa->jpeg_rec_n;		/* waiting to be read */
++	*bytes = ppa->jpeg_rec_used;
++	*dropped = ppa->jpeg_rec_dropped + ppa->jpeg_rec_overrun;
++	*running = READ_ONCE(ppa->jpeg_rec_running);
++	return 0;
++}
++EXPORT_SYMBOL_GPL(esp32s31_jpeg_rec_status);
++
++/* Copy one recorded frame out. Recording must be stopped. */
++/*
++ * Pop the oldest frame the recorder is holding, whether or not it is still
++ * recording. *seq is an output: the frame's sequence number, so a caller
++ * writing a file can see a gap and record that frames were lost rather than
++ * producing a video that silently skips.
++ *
++ * Reading while running is the whole point. Filming a boot through to the
++ * desktop is minutes of video against a buffer of a megabyte or two, so
++ * something has to be draining continuously; the previous rule that recording
++ * had to be stopped first capped a recording at whatever fitted in RAM.
++ */
++int esp32s31_jpeg_rec_frame(u32 *seq, void __user *to, u32 *size, u64 *stamp_ns)
++{
++	struct esp32s31_ppa *ppa = esp32s31_ppa_instance;
++	struct jpeg_rec_frame *f;
++	int ret = 0;
++
++	if (!ppa)
++		return -ENODEV;
++
++	mutex_lock(&ppa->jpeg_rec_lock);
++	if (!ppa->jpeg_rec_buf) { ret = -ENODEV; goto out; }
++	if (ppa->jpeg_rec_read == ppa->jpeg_rec_seq) { ret = -ENOENT; goto out; }
++
++	f = &ppa->jpeg_rec_index[ppa->jpeg_rec_read % ppa->jpeg_rec_max];
++	if (*size < f->len) { *size = f->len; ret = -ENOSPC; goto out; }
++	if (to && copy_to_user(to, ppa->jpeg_rec_buf + f->off, f->len)) {
++		ret = -EFAULT;
++		goto out;
++	}
++	*size = f->len;
++	*stamp_ns = f->stamp_ns;
++	*seq = ppa->jpeg_rec_read;
++
++	/* Only now is the space reclaimed, so a failed copy loses nothing. */
++	ppa->jpeg_rec_used -= f->len;
++	ppa->jpeg_rec_read++;
++	ppa->jpeg_rec_n = ppa->jpeg_rec_seq - ppa->jpeg_rec_read;
++out:
++	mutex_unlock(&ppa->jpeg_rec_lock);
++	return ret;
++}
++EXPORT_SYMBOL_GPL(esp32s31_jpeg_rec_frame);
++
+ static int esp32s31_ppa_probe(struct platform_device *pdev)
+ {
+ 	struct device *dev = &pdev->dev;
+@@ -1263,6 +2554,20 @@
+ 	if (IS_ERR(ppa->dma2d_memlp))
+ 		return PTR_ERR(ppa->dma2d_memlp);
+ 
++	/*
++	 * The JPEG codec is optional: a device tree without these entries still
++	 * gets a working PPA, it just cannot encode. Failing the whole probe
++	 * would take the display's scaler down with it.
++	 */
++	ppa->jpeg = devm_platform_ioremap_resource_byname(pdev, "jpeg");
++	ppa->jpeg_clkrst = devm_platform_ioremap_resource_byname(pdev, "jpeg-clkrst");
++	ppa->jpeg_memlp = devm_platform_ioremap_resource_byname(pdev, "jpeg-memlp");
++	if (IS_ERR(ppa->jpeg) || IS_ERR(ppa->jpeg_clkrst) ||
++	    IS_ERR(ppa->jpeg_memlp)) {
++		dev_info(dev, "no JPEG codec in DT; encode unavailable\n");
++		ppa->jpeg = NULL;
++	}
++
+ 	ret = of_reserved_mem_device_init(dev);
+ 	if (!ret) {
+ 		struct device_node *np;
+@@ -1281,7 +2586,7 @@
+ 	desc_res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "descriptors");
+ 	if (!desc_res)
+ 		return -EINVAL;
+-	if (resource_size(desc_res) < DMA2D_DESC_SIZE)
++	if (resource_size(desc_res) < DMA2D_DESC_JPEG_RX + DMA2D_DESC_SIZE)
+ 		return dev_err_probe(dev, -EINVAL,
+ 				     "descriptor window too small (%pa)\n",
+ 				     &desc_res->start);
+@@ -1298,6 +2603,33 @@
+ 	writel(v, ppa->ppa_memlp);
+ 	v = readl(ppa->dma2d_memlp) & ~(MEMLP_LP_EN | MEMLP_FORCE_CTRL);
+ 	writel(v, ppa->dma2d_memlp);
++	if (ppa->jpeg) {
++		v = readl(ppa->jpeg_memlp) & ~(MEMLP_LP_EN | MEMLP_FORCE_CTRL);
++		writel(v, ppa->jpeg_memlp);
++
++		init_completion(&ppa->jpeg_done);
++		mutex_init(&ppa->jpeg_rec_lock);
++		INIT_WORK(&ppa->jpeg_rec_work, esp32s31_jpeg_rec_work);
++		ppa->jpeg_irq = platform_get_irq_byname_optional(pdev, "jpeg");
++		if (ppa->jpeg_irq > 0 &&
++		    devm_request_irq(dev, ppa->jpeg_irq, esp32s31_jpeg_isr, 0,
++				     "esp32s31-jpeg", ppa)) {
++			dev_warn(dev, "no JPEG irq; falling back to polling\n");
++			ppa->jpeg_irq = 0;
++		}
++
++		/*
++		 * The output buffer is allocated on first use, not here.
++		 *
++		 * It is 512 KB of the same 4 MB CMA pool the framebuffers come
++		 * from, and taking it at probe leaves that much less for the
++		 * display - which matters most at the panel's native size,
++		 * where the scanout buffer and fbdev's are 768 KB each. The
++		 * pool is `reusable`, so a contiguous request has to migrate
++		 * movable pages out of the way, and the tighter it gets the
++		 * longer that takes.
++		 */
++	}
+ 
+ 	/* 2D-DMA feeds the PPA, so bring it up first. */
+ 	esp32s31_ppa_block_enable(ppa->dma2d_clkrst);
+@@ -1379,6 +2711,18 @@
+ 	 * half it is. */
+ 	debugfs_create_u64("last_setup_ns", 0444, ppa->debugfs, &ppa->last_setup_ns);
+ 	debugfs_create_u64("last_wait_ns", 0444, ppa->debugfs, &ppa->last_wait_ns);
++	if (ppa->jpeg) {
++		debugfs_create_file("jpeg", 0200, ppa->debugfs, ppa,
++				    &esp32s31_jpeg_fops);
++		debugfs_create_file("jpeg_out", 0444, ppa->debugfs, ppa,
++				    &esp32s31_jpeg_out_fops);
++		debugfs_create_u32("jpeg_last_len", 0444, ppa->debugfs,
++				   &ppa->jpeg_last_len);
++		debugfs_create_u32("jpeg_count", 0444, ppa->debugfs,
++				   &ppa->jpeg_count);
++		debugfs_create_u64("jpeg_last_ns", 0444, ppa->debugfs,
++				   &ppa->jpeg_last_ns);
++	}
+ 
+ 	dev_info(dev, "PPA ready: ppa.date=0x%08x dma2d.date=0x%08x irq=%d\n",
+ 		 ppa->ppa_date, ppa->dma2d_date, ppa->irq);
+--- a/drivers/gpu/drm/espressif/esp32s31-ppa.h
++++ b/drivers/gpu/drm/espressif/esp32s31-ppa.h
+@@ -14,6 +14,47 @@
+ 			    u32 dst, u32 dst_w, u32 dst_h,
+ 			    u32 sx, u32 sy, u32 bw, u32 bh, u32 dx, u32 dy,
+ 			    u32 ow, u32 oh);
++/*
++ * Two-layer alpha blend, foreground over background at a FIXED alpha.
++ *
++ * The engine has been able to do this since the PPA was brought up, but it was
++ * reachable only from debugfs - so every compositor here blended in software,
++ * and docs/accel-plan.md recorded it as "implemented, unused" for long enough
++ * that the note was read as "not available". It is available.
++ *
++ * This entry point takes ONE alpha for the whole foreground, because an RGB565
++ * source has no alpha channel to read. For per-pixel alpha use
++ * esp32s31_ppa_blend_argb_sprite() below.
++ */
++int esp32s31_ppa_blend_layers(u32 bg, u32 fg, u32 out,
++			      u32 pic_w, u32 pic_h, u32 blk_w, u32 blk_h,
++			      u8 fg_alpha);
++
++/*
++ * Composite an ARGB8888 sprite with per-pixel alpha into a rectangle of an
++ * RGB565 surface, in place - `bg_out` is both the background and the output.
++ *
++ * Both addresses must be inside the reserved region the engine is bounded to.
++ */
++int esp32s31_ppa_blend_argb_sprite(u32 bg_out, u32 dst_w, u32 dst_h,
++				   u32 dst_x, u32 dst_y,
++				   u32 sprite, u32 spr_w, u32 spr_h,
++				   u32 spr_x, u32 spr_y,
++				   u32 blk_w, u32 blk_h);
++/*
++ * Compress RGB565 to a complete baseline JPEG. The codec shares this driver's
++ * 2D-DMA, so it lives behind the same interface.
++ */
++int esp32s31_jpeg_encode(u32 src, u32 w, u32 h, u32 quality, u32 *out_len);
++
++/* MJPEG recorder. notify() is called by the display driver on every commit. */
++void esp32s31_jpeg_rec_notify(u32 scanout, u32 w, u32 h);
++int esp32s31_jpeg_rec_start(u32 ring_bytes, u32 max_fps, u32 quality);
++int esp32s31_jpeg_rec_stop(void);
++int esp32s31_jpeg_rec_status(u32 *frames, u32 *bytes, u32 *dropped,
++			     u32 *running);
++int esp32s31_jpeg_rec_frame(u32 *seq, void __user *to, u32 *size,
++			    u64 *stamp_ns);
+ #else
+ static inline int esp32s31_ppa_scale(u32 src, u32 src_w, u32 src_h,
+ 				     u32 dst, u32 dst_w, u32 dst_h)
+@@ -28,6 +69,41 @@
+ {
+ 	return -ENODEV;
+ }
++
++static inline int esp32s31_ppa_blend_layers(u32 bg, u32 fg, u32 out,
++					    u32 pic_w, u32 pic_h,
++					    u32 blk_w, u32 blk_h, u8 fg_alpha)
++{
++	return -ENODEV;
++}
++
++static inline int esp32s31_ppa_blend_argb_sprite(u32 bg_out, u32 dst_w,
++						 u32 dst_h, u32 dst_x,
++						 u32 dst_y, u32 sprite,
++						 u32 spr_w, u32 spr_h,
++						 u32 spr_x, u32 spr_y,
++						 u32 blk_w, u32 blk_h)
++{
++	return -ENODEV;
++}
++
++static inline int esp32s31_jpeg_encode(u32 src, u32 w, u32 h, u32 quality,
++				       u32 *out_len)
++{
++	return -ENODEV;
++}
++
++static inline void esp32s31_jpeg_rec_notify(u32 scanout, u32 w, u32 h) { }
++static inline int esp32s31_jpeg_rec_start(u32 r, u32 f, u32 q) { return -ENODEV; }
++static inline int esp32s31_jpeg_rec_stop(void) { return -ENODEV; }
++static inline int esp32s31_jpeg_rec_status(u32 *a, u32 *b, u32 *c, u32 *d)
++{
++	return -ENODEV;
++}
++static inline int esp32s31_jpeg_rec_frame(u32 *i, void __user *t, u32 *s, u64 *n)
++{
++	return -ENODEV;
++}
+ #endif
+ 
+ #endif /* __ESP32S31_PPA_H__ */
+--- a/include/uapi/drm/esp32s31_drm.h
++++ b/include/uapi/drm/esp32s31_drm.h
+@@ -30,6 +30,28 @@
+  * supported - the engine has no defined overlap behaviour, so callers that
+  * need a scroll must go via a scratch object or fall back to software.
+  */
++/*
++ * Two-layer alpha blend: dst = fg*alpha + bg*(1-alpha), in hardware.
++ *
++ * All three objects must be the same geometry and pitch, because the engine
++ * consumes both inputs in lockstep. dst_handle may equal bg_handle to
++ * composite in place, which is what a compositor wants - the write pointer
++ * trails the read, so it is safe.
++ *
++ * FIXED alpha only. Per-pixel coverage - glyphs, pixel masks - needs an ARGB
++ * source format the driver does not yet program.
++ */
++struct drm_esp32s31_ppa_blend {
++	__u32 bg_handle;
++	__u32 fg_handle;
++	__u32 dst_handle;
++	__u32 pitch;		/* bytes, identical for all three */
++	__u32 w;
++	__u32 h;
++	__u32 fg_alpha;		/* 0-255 */
++	__u32 pad;
++};
++
+ struct drm_esp32s31_ppa_copy {
+ 	__u32 src_handle;
+ 	__u32 dst_handle;
+@@ -43,10 +65,66 @@
+ 	__u32 h;
+ };
+ 
++/*
++ * MJPEG capture of the panel, into kernel RAM.
++ *
++ * This exists so the running system can be filmed without the filming
++ * changing it - a recording that costs 40% of the machine tells you about the
++ * recorder, not the system. Frames are captured when the display commits, not
++ * on a timer, so an idle screen costs nothing.
++ *
++ * Deliberately not debugfs: CONFIG_DEBUG_FS is not compiled into a shipping
++ * kernel here, and turning it on to take a measurement would change the thing
++ * being measured.
++ */
++enum drm_esp32s31_jpeg_rec_op {
++	DRM_ESP32S31_JPEG_REC_STATUS = 0,
++	DRM_ESP32S31_JPEG_REC_START,
++	DRM_ESP32S31_JPEG_REC_STOP,
++};
++
++struct drm_esp32s31_jpeg_rec {
++	__u32 op;		/* enum drm_esp32s31_jpeg_rec_op */
++	__u32 ring_bytes;	/* START: RAM to set aside, 64 KB .. 8 MB */
++	__u32 max_fps;		/* START: rate cap; 0 means every commit */
++	__u32 quality;		/* START: 1..100 */
++	__u32 frames;		/* out: frames captured */
++	__u32 bytes;		/* out: bytes held */
++	__u32 dropped;		/* out: frames skipped, encoder still busy */
++	__u32 running;		/* out */
++};
++
++/*
++ * Pop the oldest frame the recorder is holding. Works while recording, which
++ * is what allows a session longer than the buffer: something drains
++ * continuously to a file instead of the recording being capped by RAM.
++ *
++ * index is an OUTPUT - the frame's sequence number. A gap between successive
++ * sequence numbers means frames were dropped, so a caller writing a file can
++ * record that rather than producing a video that silently skips.
++ *
++ * Returns -ENOENT when nothing is waiting.
++ */
++struct drm_esp32s31_jpeg_frame {
++	__u32 index;		/* out: sequence number; gaps mean drops */
++	__u32 size;		/* in: bytes available; out: bytes needed/written */
++	__u64 ptr;		/* in: destination, or 0 to query the size */
++	__u64 stamp_ns;		/* out: when it was captured */
++};
++
+ #define DRM_ESP32S31_PPA_COPY		0x00
++#define DRM_ESP32S31_JPEG_REC		0x01
++#define DRM_ESP32S31_JPEG_FRAME		0x02
++#define DRM_ESP32S31_PPA_BLEND		0x03
+ 
+ #define DRM_IOCTL_ESP32S31_PPA_COPY	DRM_IOW(DRM_COMMAND_BASE + \
+ 		DRM_ESP32S31_PPA_COPY, struct drm_esp32s31_ppa_copy)
++#define DRM_IOCTL_ESP32S31_PPA_BLEND	DRM_IOW(DRM_COMMAND_BASE + \
++		DRM_ESP32S31_PPA_BLEND, struct drm_esp32s31_ppa_blend)
++#define DRM_IOCTL_ESP32S31_JPEG_REC	DRM_IOWR(DRM_COMMAND_BASE + \
++		DRM_ESP32S31_JPEG_REC, struct drm_esp32s31_jpeg_rec)
++#define DRM_IOCTL_ESP32S31_JPEG_FRAME	DRM_IOWR(DRM_COMMAND_BASE + \
++		DRM_ESP32S31_JPEG_FRAME, struct drm_esp32s31_jpeg_frame)
+ 
+ #if defined(__cplusplus)
+ }
