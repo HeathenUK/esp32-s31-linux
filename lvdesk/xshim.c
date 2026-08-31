@@ -4736,9 +4736,13 @@ static void send_device_event(struct cli *c, uint8_t type, uint8_t detail,
  * A pointer event from the desktop, in coordinates relative to the top-level
  * whose id is `id`. act: 0 motion, 1 press, 2 release.
  */
+static uint16_t ptr_btn_state;		/* Button1Mask.. of held buttons */
+static uint32_t ptr_last_top, ptr_last_win;
+static int ptr_last_x, ptr_last_y;	/* relative to ptr_last_win */
+
 void xshim_pointer(uint32_t id, int x, int y, int button, int act)
 {
-	static uint16_t state;
+#define state ptr_btn_state
 	struct res *top = res_find(id), *w;
 	struct cli *c;
 
@@ -4805,6 +4809,45 @@ void xshim_pointer(uint32_t id, int x, int y, int button, int act)
 	}
 	if (c->fd >= 0)
 		out_flush(c);
+	ptr_last_top = id;
+	ptr_last_win = w->id;
+	ptr_last_x = x;
+	ptr_last_y = y;
+#undef state
+}
+
+/*
+ * A key for the client owning top-level `id`. `sym` is already translated by
+ * the desktop - a Latin-1 character as itself, or an XLW_ wire code (see
+ * xlite/xlite_wirekeys.h). Keys go where the pointer last was inside this
+ * top-level, which is the click-to-type model this desktop already uses for
+ * focus; if the pointer was last elsewhere they start at the top-level and
+ * propagate to whoever selected KeyPress.
+ */
+void xshim_key(uint32_t id, int sym, int press, unsigned int mods)
+{
+	struct res *top = res_find(id), *w = NULL;
+	struct cli *c;
+	int x = 0, y = 0;
+	uint16_t st = (uint16_t)((mods & 0x0F) | ptr_btn_state);
+
+	if (!top || top->type != R_WINDOW || sym <= 0 || sym > 255)
+		return;
+	if (top->owner < 0 || top->owner >= MAXCLI)
+		return;
+	c = &cli[top->owner];
+	if (c->fd < 0)
+		return;
+	if (ptr_last_top == id) {
+		w = res_find(ptr_last_win);
+		x = ptr_last_x;
+		y = ptr_last_y;
+	}
+	if (!w || w->type != R_WINDOW)
+		w = top;
+	send_device_event(c, press ? 2 : 3, (uint8_t)sym, w, x, y,
+			  press ? EV_KEY_PRESS : EV_KEY_RELEASE, st);
+	out_flush(c);
 }
 
 int xshim_fds(int *out, int max)

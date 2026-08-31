@@ -48,6 +48,8 @@ int xshim_fds(int *out, int max);
  * a toolkit's buttons work without the desktop knowing anything about widgets.
  */
 void xshim_pointer(uint32_t id, int x, int y, int button, int act);
+/* sym: Latin-1 char or XLW_ code; mods: Shift=1 Lock=2 Ctrl=4 Mod1=8 */
+void xshim_key(uint32_t id, int sym, int press, unsigned int mods);
 
 /* The client's WM_NAME, or NULL if it never set one. */
 const char *xshim_window_title(uint32_t id);

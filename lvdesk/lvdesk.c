@@ -47,6 +47,7 @@
 #include "src/drivers/lv_drivers.h"
 #include "kms.h"
 #include "xshim.h"
+#include "../xlite/xlite_wirekeys.h"
 #include "lvdesk_art.h"
 
 /*
@@ -322,6 +323,69 @@ static const char keymap[KEY_CNT][2] = {
 };
 
 /* Keys that send a sequence rather than a character. */
+struct winrec;
+static struct winrec *win_focus_ptr(void);
+static uint32_t win_focus_xid(void);
+
+/*
+ * One key for an X client: the evdev code translated to what the wire
+ * carries - a Latin-1 character (keymap + shift + caps, exactly as the
+ * terminal composes one) or an XLW_ code for the specials that do not fit a
+ * byte. Ctrl does NOT fold here and Alt does not ESC-prefix: an X client
+ * gets the character plus the modifier STATE bits and does its own folding,
+ * which is what XLookupString is for.
+ */
+static int xkey_sym(int code)
+{
+	char ch;
+
+	switch (code) {
+	case KEY_ENTER:		return XLW_RETURN;
+	case KEY_KPENTER:	return XLW_KPENTER;
+	case KEY_BACKSPACE:	return XLW_BACKSPACE;
+	case KEY_TAB:		return XLW_TAB;
+	case KEY_ESC:		return XLW_ESCAPE;
+	case KEY_DELETE:	return XLW_DELETE;
+	case KEY_INSERT:	return XLW_INSERT;
+	case KEY_LEFT:		return XLW_LEFT;
+	case KEY_RIGHT:		return XLW_RIGHT;
+	case KEY_UP:		return XLW_UP;
+	case KEY_DOWN:		return XLW_DOWN;
+	case KEY_HOME:		return XLW_HOME;
+	case KEY_END:		return XLW_END;
+	case KEY_PAGEUP:	return XLW_PRIOR;
+	case KEY_PAGEDOWN:	return XLW_NEXT;
+	case KEY_F1:		return XLW_F1;
+	case KEY_F2:		return XLW_F1 + 1;
+	case KEY_F3:		return XLW_F1 + 2;
+	case KEY_F4:		return XLW_F1 + 3;
+	case KEY_F5:		return XLW_F1 + 4;
+	case KEY_F6:		return XLW_F1 + 5;
+	case KEY_F7:		return XLW_F1 + 6;
+	case KEY_F8:		return XLW_F1 + 7;
+	case KEY_F9:		return XLW_F1 + 8;
+	case KEY_F10:		return XLW_F1 + 9;
+	case KEY_F11:		return XLW_F1 + 10;
+	case KEY_F12:		return XLW_F1 + 11;
+	}
+	if (code < 0 || code >= KEY_CNT)
+		return 0;
+	ch = keymap[code][shift ? 1 : 0];
+	if (!ch)
+		return 0;
+	if (mod_caps) {
+		if (ch >= 'a' && ch <= 'z') ch -= 32;
+		else if (ch >= 'A' && ch <= 'Z') ch += 32;
+	}
+	return (unsigned char)ch;
+}
+
+static unsigned int xkey_mods(void)
+{
+	return (shift ? 1u : 0) | (mod_caps ? 2u : 0) |
+	       (mod_ctrl ? 4u : 0) | (mod_alt ? 8u : 0);
+}
+
 static const char *keyseq(int code)
 {
 	switch (code) {
@@ -897,8 +961,23 @@ static int kbd_poll(void)
 				}
 				continue;
 			}
-			if (!ev.value)		/* release; 2 is autorepeat */
+			if (!ev.value) {	/* release; 2 is autorepeat */
+				/*
+				 * An X client tracks key state from the event
+				 * stream, so releases must arrive - a client
+				 * that only ever sees presses believes every
+				 * key is still held. Nothing else here wants
+				 * them.
+				 */
+				if (!pw_ta && win_focus_xid()) {
+					int sym = xkey_sym(ev.code);
+
+					if (sym)
+						xshim_key(win_focus_xid(), sym,
+							  0, xkey_mods());
+				}
 				continue;
+			}
 			kbd_key(ev.code);
 		} while (read(kbd_fds[i], &ev, sizeof(ev)) == sizeof(ev));
 	}
@@ -2255,6 +2334,16 @@ static void win_focus_next(void)
  * dropping the key on the floor. A desktop with windows open and a keyboard
  * that does nothing is a bug, not a state worth preserving.
  */
+static struct winrec *win_focus_ptr(void)
+{
+	return win_focus;
+}
+
+static uint32_t win_focus_xid(void)
+{
+	return win_focus ? win_focus->xid : 0;
+}
+
 static void win_deliver_key(int code)
 {
 	static uint32_t last_ms;
@@ -2272,6 +2361,13 @@ static void win_deliver_key(int code)
 			       code);
 			fflush(stdout);
 		}
+		return;
+	}
+	if (w->xid) {
+		int sym = xkey_sym(code);
+
+		if (sym)
+			xshim_key(w->xid, sym, 1, xkey_mods());
 		return;
 	}
 	if (w->on_key) {

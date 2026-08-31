@@ -7,6 +7,7 @@
  * this file.
  */
 #include "xlite.h"
+#include "xlite_wirekeys.h"
 
 #include <errno.h>
 #include <poll.h>
@@ -114,6 +115,14 @@ static void decode(struct xdpy *x, const unsigned char *e, XEvent *ev)
 		ev->xbutton.y = (short)g16(e + 26);
 		ev->xbutton.state = g16(e + 28);
 		ev->xbutton.same_screen = e[30];
+		/*
+		 * The keycode keeps the WIRE value, including the XLW_ low
+		 * codes for specials: several Xlib APIs take a KeyCode - an
+		 * unsigned char - so a widened 0xFF54 would truncate to 'T'
+		 * at the CALLER's boundary and collide with a real letter.
+		 * Low codes survive that truncation; the keysym APIs below
+		 * (XLookupString, XKeycodeToKeysym, XkbLookupKeySym) widen.
+		 */
 		ev->xbutton.button = e[1];	/* keycode for key events */
 		ev->xany.window = ev->xbutton.window;
 		break;

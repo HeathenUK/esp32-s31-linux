@@ -7,6 +7,7 @@
  * implements what the application OBSERVES - a laid-out tree of labelled
  * boxes that fire named actions when clicked - rather than Xt's class system.
  */
+#include "../xlite/xlite_wirekeys.h"
 #include "xtlite.h"
 
 #include <stdarg.h>
@@ -838,6 +839,8 @@ static void parse_line(struct wid *w, const char *line)
 	}
 	if (strstr(mods, "Ctrl"))  t->mods |= ControlMask;
 	if (strstr(mods, "Shift")) t->mods |= ShiftMask;
+	if (strchr(mods, ':'))     t->anymods = 1;
+	if (strstr(mods, "None"))  t->exact = 1;
 	t->actions = strdup(colon + 1);
 	if (!t->actions)
 		return;
@@ -944,7 +947,7 @@ static void dispatch(struct wid *w, XEvent *ev)
 		detail = ev->xbutton.button;
 		mods = ev->xbutton.state & (ControlMask | ShiftMask);
 	} else if (type == KeyPress) {
-		detail = ev->xkey.keycode;
+		detail = xlw_widen(ev->xkey.keycode);
 		mods = ev->xkey.state & (ControlMask | ShiftMask);
 	}
 	xt_note("dispatch type=%d detail=%u mods=%u to %s (%d trans)", type,
@@ -956,8 +959,11 @@ static void dispatch(struct wid *w, XEvent *ev)
 			continue;
 		if (t->detail && t->detail != detail)
 			continue;
-		if (t->mods != mods)
-			continue;
+		if (!t->anymods) {
+			if (t->exact ? mods != t->mods
+				     : (mods & t->mods) != t->mods)
+				continue;
+		}
 		run_actions(w, t->actions, ev);
 		return;
 	}
@@ -1278,9 +1284,26 @@ void XtAppMainLoop(XtAppContext app)
 			break;
 		case ButtonPress:
 		case ButtonRelease:
-		case KeyPress:
 			dispatch(w, &ev);
 			break;
+		case KeyPress:
+		case KeyRelease: {
+			/*
+			 * Keys follow XtSetKeyboardFocus: the first ancestor
+			 * (or the window itself) that has aimed its keyboard
+			 * at a descendant sends every key there instead.
+			 */
+			struct wid *t = w, *a;
+
+			for (a = w; a; a = a->parent)
+				if (a->kbd_focus) {
+					t = a->kbd_focus;
+					break;
+				}
+			if (ev.type == KeyPress)
+				dispatch(t, &ev);
+			break;
+		}
 		case ConfigureNotify:
 			/*
 			 * Only a shell can be resized from outside; children
@@ -1407,8 +1430,16 @@ Window XtWindow(Widget w) { return w ? WID(w)->win : None; }
 XTLITE_IMPL(XtSetKeyboardFocus)
 void XtSetKeyboardFocus(Widget sub, Widget descendant)
 {
-	(void)sub; (void)descendant;	/* one shell, one focus */
-	xt_ignored("call", "XtSetKeyboardFocus");
+	struct wid *s = WID(sub);
+
+	/*
+	 * Ignoring this is what made typing into xcalc do nothing: its digit
+	 * translations live on the LCD widget, and this call is how every key
+	 * landing anywhere in the shell is aimed there.
+	 */
+	s->kbd_focus = descendant ? WID(descendant) : NULL;
+	xt_note("keyboard focus of %s -> %s", s->name,
+		s->kbd_focus ? s->kbd_focus->name : "(none)");
 }
 
 XTLITE_IMPL(XtOwnSelection)

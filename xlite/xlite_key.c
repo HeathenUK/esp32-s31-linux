@@ -12,6 +12,7 @@
  * code, which is most of the entries a client asks for.
  */
 #include "xlite.h"
+#include "xlite_wirekeys.h"
 
 #include <X11/keysym.h>
 
@@ -100,7 +101,7 @@ XLITE_IMPL(XKeycodeToKeysym)
 KeySym XKeycodeToKeysym(Display *dpy, KeyCode kc, int index)
 {
 	(void)dpy; (void)index;
-	return kc;
+	return xlw_widen(kc);
 }
 
 XLITE_IMPL(XLookupKeysym)
@@ -113,7 +114,7 @@ KeySym XLookupKeysym(XKeyEvent *ev, int index)
 XLITE_IMPL(XLookupString)
 int XLookupString(XKeyEvent *ev, char *buf, int n, KeySym *ks, XComposeStatus *st)
 {
-	KeySym k = ev ? ev->keycode : NoSymbol;
+	KeySym k = ev ? xlw_widen(ev->keycode) : NoSymbol;
 
 	(void)st;
 	if (ks)
@@ -395,3 +396,22 @@ Status XMatchVisualInfo(Display *dpy, int screen, int depth, int class,
 
 XLITE_IMPL(XFreeColormap)
 int XFreeColormap(Display *dpy, Colormap c) { (void)dpy; (void)c; return 1; }
+
+/*
+ * XKB's keysym lookup, which xfiles uses for every keystroke. Same identity
+ * as the rest of this file: the keycode in the event IS the keysym (wire
+ * specials were already widened at decode). mods_rtrn reports which
+ * modifiers the lookup consumed - the server folded Shift into the character
+ * before sending, so Shift is consumed and the caller must not reapply it.
+ */
+XLITE_IMPL(XkbLookupKeySym)
+Bool XkbLookupKeySym(Display *dpy, KeyCode key, unsigned int mods,
+		     unsigned int *mods_rtrn, KeySym *sym_rtrn)
+{
+	(void)dpy;
+	if (mods_rtrn)
+		*mods_rtrn = mods & 1;	/* ShiftMask, already applied */
+	if (sym_rtrn)
+		*sym_rtrn = xlw_widen(key);
+	return key != 0;
+}

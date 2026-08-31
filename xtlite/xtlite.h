@@ -55,6 +55,15 @@ struct trans {
 	int type;			/* ButtonPress, KeyPress, ... */
 	unsigned detail;		/* button number or keysym */
 	unsigned mods;			/* required modifier mask */
+	/*
+	 * Xt's three modifier-matching modes. ':' means the keysym already
+	 * accounts for modifiers, so ignore them entirely - xcalc's operators
+	 * are ':<Key>*' and arrive as Shift+8. 'None' means exactly none.
+	 * Plain patterns require their listed modifiers and DON'T CARE about
+	 * the rest; requiring exact equality is what made '*' unreachable.
+	 */
+	unsigned char anymods;		/* ':' prefix: keysym alone decides */
+	unsigned char exact;		/* 'None': no modifiers allowed */
 	char *actions;			/* "digit(7)" etc., verbatim */
 };
 
@@ -118,6 +127,11 @@ struct wid {
 
 	struct trans *trans;
 	int ntrans, transcap;
+
+	/* XtSetKeyboardFocus target: keys landing anywhere under this widget
+	 * are redispatched to the named descendant. xcalc aims every digit at
+	 * its LCD widget this way. */
+	struct wid *kbd_focus;
 
 	/* XtAddEventHandler registrations, grown on demand like the rest. */
 	struct evh {
