@@ -2594,11 +2594,17 @@ the feed at the first EOI) thumbnail correctly; progressive, grayscale and
 anything decoding over 1280x960 (a 2.4 MB transient CMA cap, not a codec
 limit) exit nonzero and keep the generic icon. Enabled by
 XDG_CACHE_HOME=/root/.cache in /etc/profile (overlay AND the live card);
-the PPM cache persists on SD, so revisits are instant. Measured: ~0.45 s
-per thumbnail end-to-end (was ~0.8 s through the wrapper), and a bare
-process spawn on this board measures ~0.35 s - that is the floor for any
-exec-per-file design, and why a resident thumbnail daemon is the only
-remaining big lever (rejected: RAM). The decode is ~8 ms, the scale ~2 ms. Decode register lore lives in
+the PPM cache persists on SD, so revisits are instant. Measured (amortised
+over 10 runs - per-run $() timing brackets cost more than the tool and
+inflated every earlier number): **135 ms per warm thumbnail, 81 ms of which
+is the bare spawn floor** (fork+exec+exit of the 2.4 KB freestanding
+binary from a busybox shell). The work itself is ~54 ms: ioctl ~30
+(persistent decode buffer, /dev/s31-jpeg misc device instead of the
+64-194 ms DRM open), SD read + single-write PPM the rest. The decode is
+~8 ms, the scale ~2 ms. Correction from the same round: a TRIVIAL syscall
+is ~5 us here - the ms-class costs are subsystem-specific (sockets,
+spawns, DRM open, CMA), not the entry path. Below ~80 ms means a resident
+daemon (rejected: RAM). Decode register lore lives in
 patches/0023 (OUT descriptors take their length from HB/HA; DQT_INFO is a
 table-id map; RX REORDER rebuilds rasters; completion is DCT_DONE).
 
