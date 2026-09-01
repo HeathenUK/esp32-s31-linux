@@ -5535,6 +5535,17 @@ int main(void)
 	vt_takeover();
 	signal(SIGCHLD, on_sigchld);
 	signal(SIGUSR1, on_sigusr1);
+	/*
+	 * A client killed with server events still queued makes the next
+	 * write() to its socket raise SIGPIPE, whose default disposition
+	 * killed the whole desktop - silently: no log line, no kernel
+	 * "unhandled signal", just a vanished lvdesk (2026-09-01, killall
+	 * xfiles after a right-click did it; every x11sweep killall rolled
+	 * the same dice). out_flush() already handles a failed write - the
+	 * reaper sees the dead fd - but that path is unreachable until the
+	 * signal is ignored and write() is allowed to return EPIPE.
+	 */
+	signal(SIGPIPE, SIG_IGN);
 	child_exited = 1;
 	wpa_log = getenv("LVDESK_WPALOG") != NULL;
 	atexit(wpa_cleanup);

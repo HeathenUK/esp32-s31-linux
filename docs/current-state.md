@@ -2501,3 +2501,43 @@ Practical guidance that follows from the numbers:
 - Do not diagnose air problems from ping alone: the Mac's own power save
   pollutes board->Mac RTT, and the gateway deprioritises ICMP. Calibrate
   with a second station before blaming the link.
+
+## xfiles right-click, the stub census, and a desktop-killing SIGPIPE (2026-09-01)
+
+**xfiles has no built-in context menu by design.** Right-click spawns an
+external `xfilesctl menu <files>` script (upstream README); we ship none, so
+the click is delivered (verified: `posix_spawnp: No such file or directory`
+in xfiles' stderr) and nothing visible happens. Opening a FILE has the same
+shape: xfiles execs `$OPENER` (default xdg-open), also not shipped -
+double-click on a folder navigates, double-click on a file silently fails.
+Every file *operation* (menu, open, delete, drop actions) funnels through
+these missing scripts, so a future context menu means shipping an xfilesctl
+(recommended: lvdesk-native menu over the ctl socket + busybox file ops, not
+an xmenu port that would need real grab semantics in xlite).
+
+**Stub census under a fully VERIFIED interactive session** (window position
+moves between launches - every aim was re-derived from a screenshot and each
+interaction confirmed to land: selection underline, directory change):
+click-select, folder open, keyboard nav, rubber-band, icon-drag-onto-folder,
+right-click hit 4 of xlite's stubs, 6 calls total:
+    XWindowEvent x3        ICCCM gettimestamp() for selection timestamps
+    XSetSelectionOwner x1  claiming PRIMARY for the selected files
+    XGetSelectionOwner x1  ditto
+    XUngrabPointer x1      after right-click
+None affect anything visible: the selection machinery only matters when
+another client pastes (none here), and grabs are no-ops on a single-seat
+shim. The other 26 stubbed functions xfiles links (fontset fallback,
+thumbnails via XInitImage, focus/reparent WM calls, error-text formatting)
+stayed dormant. Two real gaps, neither stub-caused: no opener, no xfilesctl.
+In-window drag-move of a file onto a folder does not complete (ctrldnd's
+event loop hits the stubbed selection/grab calls and bails) - but even
+completed it would only call the missing xfilesctl.
+
+**The desktop died silently during this testing - SIGPIPE, now fixed.**
+`killall xfiles` after a right-click left queued server events; the next
+write() to the dead client socket raised SIGPIPE, whose default disposition
+killed lvdesk with no log line and no kernel record. out_flush() always
+handled write failure correctly, but that path was unreachable until
+`signal(SIGPIPE, SIG_IGN)` (now in lvdesk main). Every x11sweep's killall
+had been rolling the same dice. Verified: the same kill pattern now leaves
+the desktop standing.
