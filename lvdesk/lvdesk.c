@@ -1554,7 +1554,12 @@ static void term_spawn(void)
 		setenv("TERM", getenv("LVDESK_TERM") ? getenv("LVDESK_TERM")
 						    : "vt102", 1);
 		setenv("PS1", "$ ", 1);
-		execl("/bin/sh", "sh", "-i", NULL);
+		/*
+		 * argv[0] "-sh" marks a login shell so /etc/profile is read -
+		 * that is where PATH and OPENER (xfiles' opener) come from.
+		 * Plain "sh -i" left terminal-launched X apps without them.
+		 */
+		execl("/bin/sh", "-sh", "-i", NULL);
 		_exit(1);
 	}
 	fcntl(fd, F_SETFL, O_NONBLOCK);
@@ -2581,15 +2586,14 @@ static void ctl_init(void)
 	fflush(stdout);
 }
 
-static void ctl_poll(void)
-{
-	char buf[128];
-	int n, idx, w, h;
+static void ctxmenu_open(const char *replyfifo, char *items);
+static void term_raise_and_run(const char *cmd);
 
-	if (ctl_fd < 0)
-		return;
-	while ((n = (int)read(ctl_fd, buf, sizeof(buf) - 1)) > 0) {
-		buf[n] = '\0';
+static void ctl_line(char *buf)
+{
+	int idx, w, h;
+
+	{
 		if (!strncmp(buf, "list", 4)) {
 			int i;
 
@@ -2632,7 +2636,64 @@ static void ctl_poll(void)
 				lv_obj_set_size(wins[idx].win, w, h);
 				xwin_push_size(wins[idx].win);
 			}
+		} else if (!strncmp(buf, "menu ", 5)) {
+			/*
+			 * menu <replyfifo> <item1>|<item2>|...
+			 * Shows a native context menu at the pointer; the
+			 * chosen label (or an empty line on dismissal) is
+			 * written to the reply fifo. The client is plain
+			 * busybox sh - see /usr/bin/xfilesctl.
+			 */
+			char *fifo = buf + 5;
+			char *items = strchr(fifo, ' ');
+
+			if (items) {
+				*items++ = '\0';
+				ctxmenu_open(fifo, items);
+			}
+		} else if (!strncmp(buf, "run ", 4)) {
+			/* Type a command into the built-in terminal. */
+			term_raise_and_run(buf + 4);
 		}
+	}
+}
+
+/*
+ * A FIFO is a byte stream: two echos can arrive in one read and one write
+ * can arrive split. The old fixed-buffer read handled neither - harmless
+ * for "max 0" by hand, fatal for menu requests carrying filenames. Lines
+ * are accumulated and dispatched whole; a write without a trailing newline
+ * (printf by hand) is dispatched when the fifo drains.
+ */
+static void ctl_poll(void)
+{
+	static char acc[768];
+	static size_t accn;
+	char *nl;
+	int n;
+
+	if (ctl_fd < 0)
+		return;
+	while ((n = (int)read(ctl_fd, acc + accn,
+			      sizeof(acc) - 1 - accn)) > 0) {
+		accn += (size_t)n;
+		acc[accn] = '\0';
+		while ((nl = memchr(acc, '\n', accn)) != NULL) {
+			size_t rest;
+
+			*nl = '\0';
+			ctl_line(acc);
+			rest = accn - (size_t)(nl + 1 - acc);
+			memmove(acc, nl + 1, rest);
+			accn = rest;
+			acc[accn] = '\0';
+		}
+		if (accn == sizeof(acc) - 1)
+			accn = 0;	/* flooded without a newline: drop */
+	}
+	if (accn) {
+		ctl_line(acc);
+		accn = 0;
 	}
 }
 
@@ -3661,10 +3722,50 @@ static lv_obj_t *wifi_list, *wifi_status;
 static void wifi_scan_restore(void);
 static void scan_watch_stop(void);
 
+/*
+ * Context-menu reply path. The ctl `menu` request carries a fifo the shell
+ * client is reading; exactly one line goes back - the chosen label, or an
+ * empty line when the menu is dismissed. Dismissal funnels through
+ * popover_close() (scrim click, another popover opening, a tray toggle),
+ * so the reply-on-close lives there and clears the path first, making a
+ * second send a no-op.
+ */
+static char ctx_reply[96];
+
+static void ctx_reply_to(const char *path, const char *sel)
+{
+	struct stat st;
+	int fd;
+
+	fd = open(path, O_WRONLY | O_NONBLOCK);
+	if (fd < 0)
+		return;
+	/* The client opens its fifo O_RDWR, so a regular file here means a
+	 * bogus path was passed in; refuse to write into it. */
+	if (fstat(fd, &st) == 0 && S_ISFIFO(st.st_mode)) {
+		if (sel && *sel)
+			write(fd, sel, strlen(sel));
+		write(fd, "\n", 1);
+	}
+	close(fd);
+}
+
+static void ctx_reply_send(const char *sel)
+{
+	char path[sizeof(ctx_reply)];
+
+	if (!ctx_reply[0])
+		return;
+	snprintf(path, sizeof(path), "%s", ctx_reply);
+	ctx_reply[0] = '\0';
+	ctx_reply_to(path, sel);
+}
+
 static void popover_close(void)
 {
 	scan_watch_stop();
 	wifi_scan_restore();	/* never leave scan_ssid cleared behind us */
+	ctx_reply_send("");	/* a dismissed menu still answers its client */
 	if (pop_obj) { lv_obj_delete(pop_obj); pop_obj = NULL; }
 	if (pop_scrim) { lv_obj_delete(pop_scrim); pop_scrim = NULL; }
 	pop_owner = NULL;
@@ -3732,6 +3833,144 @@ static lv_obj_t *popover_open(lv_obj_t *anchor, int w, int h)
 
 	pop_owner = owner;
 	return pop_obj;
+}
+
+/* ---------------------------------------------------- context menu (ctl) */
+
+/*
+ * The context menu is a popover anchored to the pointer instead of a tray
+ * icon: same scrim, same light dismissal, same single-popup rule. Costs a
+ * dozen transient LVGL objects from the existing pool and nothing else -
+ * this is why xfiles' menu is drawn here rather than by an xmenu port,
+ * which would have needed real grab semantics in xlite and its own text
+ * stack. See docs/current-state.md (xfiles right-click).
+ */
+static void ctx_item_cb(lv_event_t *e)
+{
+	lv_obj_t *btn = lv_event_get_target(e);
+	lv_obj_t *list = lv_obj_get_parent(btn);
+	const char *txt = lv_list_get_button_text(list, btn);
+	char sel[64], path[sizeof(ctx_reply)];
+
+	/*
+	 * Order matters twice here: popover_close() frees the label (copy
+	 * the text first) AND sends the empty dismissal reply (take the
+	 * path and clear it first, so that send is a no-op and the real
+	 * answer below is the only line the client ever reads).
+	 */
+	snprintf(sel, sizeof(sel), "%s", txt ? txt : "");
+	snprintf(path, sizeof(path), "%s", ctx_reply);
+	ctx_reply[0] = '\0';
+	popover_close();
+	if (path[0])
+		ctx_reply_to(path, sel);
+}
+
+static void ctxmenu_open(const char *replyfifo, char *items)
+{
+	static const char owner_key;	/* address serves as pop_owner token */
+	int32_t sw = lv_display_get_horizontal_resolution(NULL);
+	int32_t sh = lv_display_get_vertical_resolution(NULL);
+	char *labels[12];
+	int n = 0, i, w, h;
+	int32_t x, y;
+	size_t maxlen = 0;
+	lv_obj_t *list;
+	char *tok;
+
+	if (strncmp(replyfifo, "/tmp/", 5) != 0)
+		return;
+	for (tok = strtok(items, "|");
+	     tok && n < (int)(sizeof(labels) / sizeof(labels[0]));
+	     tok = strtok(NULL, "|")) {
+		if (!*tok)
+			continue;
+		labels[n++] = tok;
+		if (strlen(tok) > maxlen)
+			maxlen = strlen(tok);
+	}
+	if (!n)
+		return;
+
+	popover_close();	/* answers any pending menu with "" first */
+	snprintf(ctx_reply, sizeof(ctx_reply), "%s", replyfifo);
+
+	w = 40 + (int)maxlen * 9;
+	if (w < 120) w = 120;
+	if (w > 300) w = 300;
+	h = n * 30 + 10;	/* 30 px rows + panel padding and border */
+
+	pop_scrim = lv_obj_create(lv_layer_top());
+	lv_obj_remove_style_all(pop_scrim);
+	lv_obj_set_size(pop_scrim, sw, sh);
+	lv_obj_set_pos(pop_scrim, 0, 0);
+	lv_obj_set_style_bg_opa(pop_scrim, LV_OPA_TRANSP, 0);
+	lv_obj_add_flag(pop_scrim, LV_OBJ_FLAG_CLICKABLE);
+	lv_obj_add_event_cb(pop_scrim, pop_scrim_cb, LV_EVENT_CLICKED, NULL);
+
+	pop_obj = lv_obj_create(lv_layer_top());
+	lv_obj_set_size(pop_obj, w, h);
+	lv_obj_set_style_radius(pop_obj, 0, 0);
+	lv_obj_set_style_bg_color(pop_obj, lv_color_hex(COL_PANEL), 0);
+	lv_obj_set_style_border_width(pop_obj, 1, 0);
+	lv_obj_set_style_border_color(pop_obj, lv_color_hex(COL_HDR_FOCUS), 0);
+	lv_obj_set_style_pad_all(pop_obj, 4, 0);
+	lv_obj_set_style_text_font(pop_obj, FONT_UI, 0);
+	lv_obj_set_style_text_color(pop_obj, lv_color_hex(COL_PANEL_TEXT), 0);
+	lv_obj_remove_flag(pop_obj, LV_OBJ_FLAG_SCROLLABLE);
+
+	/* At the pointer, clamped on-screen like every context menu. */
+	x = ptr_x;
+	y = ptr_y;
+	if (x + w > sw - 2) x = sw - 2 - w;
+	if (y + h > sh - TASKBAR_H) y = sh - TASKBAR_H - h;
+	if (x < 2) x = 2;
+	if (y < 2) y = 2;
+	lv_obj_set_pos(pop_obj, x, y);
+
+	/*
+	 * Styled like the wifi popover's list: default lv_list theme (which
+	 * is what gives the rows their pressed feedback) with the corners,
+	 * padding and font overridden. remove_style_all() here killed the
+	 * column layout - layout is a style - and stacked every row at 0,0.
+	 */
+	list = lv_list_create(pop_obj);
+	lv_obj_set_size(list, LV_PCT(100), LV_PCT(100));
+	lv_obj_set_style_radius(list, 0, 0);
+	lv_obj_set_style_pad_all(list, 0, 0);
+	lv_obj_set_style_text_font(list, FONT_UI, 0);
+	for (i = 0; i < n; i++) {
+		lv_obj_t *b = lv_list_add_button(list, NULL, labels[i]);
+
+		lv_obj_set_style_pad_left(b, 6, 0);
+		lv_obj_set_height(b, 30);
+		lv_obj_set_flex_align(b, LV_FLEX_ALIGN_START,
+				      LV_FLEX_ALIGN_CENTER,
+				      LV_FLEX_ALIGN_CENTER);
+		lv_obj_add_event_cb(b, ctx_item_cb, LV_EVENT_CLICKED, NULL);
+	}
+
+	pop_owner = &owner_key;
+}
+
+/* Type one command line into the built-in terminal and bring it up front. */
+static void term_raise_and_run(const char *cmd)
+{
+	struct winrec *w;
+
+	if (term.fd < 0 || !cmd || !*cmd)
+		return;
+	write(term.fd, cmd, strlen(cmd));
+	write(term.fd, "\n", 1);
+	w = win_find(term.win);
+	if (w) {
+		if (w->minimised) {
+			lv_obj_remove_flag(w->win, LV_OBJ_FLAG_HIDDEN);
+			w->minimised = 0;
+		}
+		lv_obj_move_foreground(w->win);
+		win_set_focus(w);
+	}
 }
 
 /* ------------------------------------------------------------------ wifi */
@@ -4832,7 +5071,7 @@ static void kms_flush_cb(lv_display_t *d, const lv_area_t *area, uint8_t *px)
 #define MAXMOUSE 8
 /* pty + slack + every keyboard and mouse we may have open */
 /* +5: the X shim's listening socket and up to four connected clients. */
-#define NFDS        (2 + MAXKBD + MAXMOUSE + 6)
+#define NFDS        (2 + MAXKBD + MAXMOUSE + 7)	/* +1: the ctl fifo */
 /*
  * How long to sleep once the desktop has gone quiet.
  *
@@ -6054,6 +6293,17 @@ int main(void)
 		if (wpa_ev_fd >= 0 && n < NFDS) {
 			i_wifi = n;
 			fds[n].fd = wpa_ev_fd; fds[n].events = POLLIN; n++;
+		}
+		/*
+		 * The ctl fifo was never in this set, so a command sat unread
+		 * until some OTHER fd or timer woke the loop - a `raise` from
+		 * a script always felt laggy, and the xfilesctl menu flow made
+		 * it visible: the chosen action ran seconds after the click.
+		 * ctl_poll() drains it after every wakeup; this makes the
+		 * write itself the wakeup.
+		 */
+		if (ctl_fd >= 0 && n < NFDS) {
+			fds[n].fd = ctl_fd; fds[n].events = POLLIN; n++;
 		}
 		i_kbd = n;
 		for (int ki = 0; ki < kbd_n && n < NFDS; ki++) {

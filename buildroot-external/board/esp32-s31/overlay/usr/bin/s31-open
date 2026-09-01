@@ -1,0 +1,16 @@
+#!/bin/sh
+# The desktop's opener ($OPENER for xfiles). No image viewer or editor
+# exists on this desktop, so "open" means: directories in a new xfiles,
+# everything else viewed with less in the built-in lvdesk terminal (the
+# ctl `run` command types into its shell and raises the window).
+CTL=/tmp/lvdesk.ctl
+f=$1
+[ -n "$f" ] || exit 0
+# xfiles WAITS for its opener (ewaitpid after posix_spawnp), so a nested
+# xfiles must be detached or the parent window freezes until it closes.
+if [ -d "$f" ]; then
+	setsid xfiles "$f" >/dev/null 2>&1 &
+	exit 0
+fi
+[ -p "$CTL" ] || exit 0
+printf 'run less "%s"\n' "$f" > "$CTL"

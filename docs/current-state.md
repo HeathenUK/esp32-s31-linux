@@ -2541,3 +2541,42 @@ handled write failure correctly, but that path was unreachable until
 `signal(SIGPIPE, SIG_IGN)` (now in lvdesk main). Every x11sweep's killall
 had been rolling the same dice. Verified: the same kill pattern now leaves
 the desktop standing.
+
+## xfiles context menu and opener - lvdesk-native, shipped (2026-09-01)
+
+Right-click in xfiles now works end to end with zero new resident RAM:
+
+    xfiles --spawns--> /usr/bin/xfilesctl (busybox sh, XIP)
+      --ctl fifo--> lvdesk draws a NATIVE LVGL menu at the pointer
+      --reply fifo--> script runs the action with busybox tools
+
+- **lvdesk ctl grew `menu` and `run`.** `menu <replyfifo> <a>|<b>|...`
+  pops a popover-styled list at the pointer (clamped on-screen, light
+  dismissal via the existing scrim); the chosen label - or an empty line on
+  dismissal, sent from popover_close() so every path answers exactly once -
+  goes back on the caller's fifo. `run <cmd>` types a line into the built-in
+  terminal's shell and raises the window; it is how "Open" views files
+  (busybox less) and "Properties" shows listings, since the desktop has no
+  standalone viewer. The client side is PURE SHELL: mkfifo + `exec 3<>` (no
+  blocking open) + `read -t 30`. No lvmenu binary was needed.
+- **The ctl fifo is now line-parsed and in the main poll set.** It was
+  read with a fixed buffer (stream splits/merges corrupted commands) and
+  NEVER polled - a ctl command sat unread until some other fd or timer woke
+  the loop, which is why every scripted `raise` always felt laggy and menu
+  actions ran seconds late. The write itself is now the wakeup; actions are
+  instant (click -> less running measured under 1 s).
+- **The terminal is a login shell now** (`argv[0] "-sh"`): /etc/profile is
+  read, which is where PATH and OPENER come from. `OPENER=s31-open` is in
+  the overlay's /etc/profile AND appended to the live card's (the card
+  predates the overlay change - the usual SD-state trap).
+- **Menu v1 actions**: file selection -> Open / Delete (with a confirm
+  submenu) / Properties; empty space -> Terminal here / New folder /
+  Properties. Rename and free-text prompts wait for a native text-entry
+  popover (the wifi password machinery is the natural donor).
+- **Staging trap, cost an iteration**: /usr/bin IS the XIP overlay, so a
+  new overlay script must ALSO be in XIP_ROOTS in the Makefile or xip-fast
+  packs an image without it and /usr/bin hides the ext4 copy. Relatedly,
+  /bin is read-only at runtime too (busybox is in XIP_ROOTS) - the old
+  note that "/bin is not overlaid" is stale; SD-test deploys go in /root.
+- RAM: menu = a dozen transient LVGL objects from the existing pool;
+  scripts are XIP (zero RSS); busybox does the file ops. Nothing resident.

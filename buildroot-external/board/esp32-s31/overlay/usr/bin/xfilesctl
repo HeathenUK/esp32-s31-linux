@@ -1,0 +1,69 @@
+#!/bin/sh
+# xfilesctl - xfiles' delegate for menus and file operations.
+#
+# xfiles has NO built-in context menu or file ops: right-click and Ctrl-keys
+# spawn this script (see the xfiles README). Upstream's example needs xmenu,
+# dmenu, xterm, xmessage and xclip; none fit this board. Here the menu is
+# drawn NATIVELY by lvdesk (ctl `menu` command, a popover at the pointer) and
+# the operations are busybox. The whole client is shell: the reply rides a
+# private fifo, opened <> so neither end ever blocks on the other being late.
+#
+#   $1   = event (menu, ^L, drop-ask, ...)
+#   rest = the selected files, absolute paths
+CTL=/tmp/lvdesk.ctl
+[ -p "$CTL" ] || exit 0
+
+menu() {
+	rf=/tmp/lvmenu.$$
+	mkfifo "$rf" 2>/dev/null || return 1
+	old_ifs=$IFS; IFS='|'
+	printf 'menu %s %s\n' "$rf" "$*" > "$CTL"
+	IFS=$old_ifs
+	sel=
+	exec 3<>"$rf"
+	read -t 30 sel <&3
+	exec 3<&-
+	rm -f "$rf"
+	printf '%s' "$sel"
+}
+
+term_run() {
+	printf 'run %s\n' "$*" > "$CTL"
+}
+
+ev=$1; shift
+case "$ev" in
+menu)
+	if [ $# -gt 0 ]; then
+		sel=$(menu "Open" "Delete" "Properties")
+	else
+		sel=$(menu "Terminal here" "New folder" "Properties")
+	fi
+	case "$sel" in
+	Open)
+		for f; do s31-open "$f"; done
+		;;
+	Delete)
+		c=$(menu "Confirm delete ($#)" "Cancel")
+		case "$c" in "Confirm delete"*) rm -rf -- "$@" ;; esac
+		;;
+	Properties)
+		if [ $# -gt 0 ]; then
+			term_run "ls -ld -- $*"
+		else
+			term_run "cd $PWD && ls -la | head -30"
+		fi
+		;;
+	"Terminal here")
+		term_run "cd $PWD"
+		;;
+	"New folder")
+		# No text prompt yet: create a unique name, rename later
+		# from the terminal. mkdir -p never clobbers.
+		n=1; while [ -e "$PWD/new-folder-$n" ]; do n=$((n+1)); done
+		mkdir -p "$PWD/new-folder-$n"
+		;;
+	esac
+	;;
+esac
+exit 0
