@@ -1,0 +1,12 @@
+#!/bin/sh
+# Toggle hardware thumbnails, for A/B testing and preference.
+#   s31-thumbs on|off|status|purge
+F=/etc/s31-thumbs-off
+case "$1" in
+on)     rm -f "$F"; echo "thumbnails on" ;;
+off)    : > "$F";   echo "thumbnails off (running xfiles still spawns the"
+        echo "gate per file; relaunch xfiles to drop even that)" ;;
+purge)  rm -rf /root/.cache/thumbnails; echo "thumbnail cache cleared" ;;
+status) [ -e "$F" ] && echo off || echo on ;;
+*)      echo "usage: s31-thumbs on|off|status|purge"; exit 1 ;;
+esac

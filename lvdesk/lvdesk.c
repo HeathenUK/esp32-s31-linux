@@ -5318,6 +5318,21 @@ static void mouse_scan(void)
 		}
 		{
 			/*
+			 * Pin event timestamps to CLOCK_MONOTONIC so the
+			 * input-lag metric below can subtract them from the
+			 * same clock. Without this the metric compared the
+			 * kernel's stamp against LVGL's loop-accumulated
+			 * tick - different origins - and its <10 s sanity
+			 * filter rejected every event: it reported "0 ms
+			 * over 0 events" from the day it was written, which
+			 * is how a 100 ms input regression shipped past it.
+			 */
+			int clk = CLOCK_MONOTONIC;
+
+			ioctl(fd, EVIOCSCLOCKID, &clk);
+		}
+		{
+			/*
 			 * Injected devices bypass acceleration entirely.
 			 *
 			 * The test harness asks for absolute coordinates, and
@@ -5475,8 +5490,15 @@ static int mouse_poll(void)
 					 * large here is real lag the user felt.
 					 */
 					{
-						uint32_t age = lv_tick_get() -
-							       ev_ms;
+						struct timespec mn;
+						uint32_t age;
+
+						clock_gettime(CLOCK_MONOTONIC,
+							      &mn);
+						age = (uint32_t)
+						      (mn.tv_sec * 1000 +
+						       mn.tv_nsec / 1000000) -
+						      ev_ms;
 
 						if (age < 10000) {
 							in_lag_sum += age;

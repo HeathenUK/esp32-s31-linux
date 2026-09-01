@@ -77,6 +77,7 @@ struct xdpy {
 
 	int shm_fd;			/* last fd received with SCM_RIGHTS */
 	int fd;
+	int wake[2];			/* worker->event-wait doorbell pipe */
 	/*
 	 * The sequence number is pub.request, not a field of our own: the
 	 * extension libraries build requests through _XGetRequest(), which

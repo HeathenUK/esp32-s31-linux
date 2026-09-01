@@ -103,6 +103,15 @@ void cmain(long *sp)
 	if (argc < 3)
 		xexit(1);
 
+	/*
+	 * The A/B switch: `s31-thumbs off` creates this file and every
+	 * thumbnail attempt exits before touching the SD or the codec.
+	 * (xfiles still pays one ~80 ms spawn per file until relaunched
+	 * without XDG_CACHE_HOME - the flag kills the WORK, not the exec.)
+	 */
+	if (sys(48, AT_FDCWD, (long)"/etc/s31-thumbs-off", 0, 0, 0) == 0)
+		xexit(1);
+
 	fd = xopen(argv[1], O_RDONLY, 0);
 	if (fd < 0)
 		xexit(1);

@@ -88,3 +88,20 @@ if [ -e "${TARGET_DIR}/etc/init.d/S02klogd" ]; then
 	mv "${TARGET_DIR}/etc/init.d/S02klogd" \
 	   "${TARGET_DIR}/etc/init.d/S07klogd"
 fi
+
+# The X11 shim libraries ship in XIP and ONLY in XIP. A stock copy left in
+# the target becomes the SD lower layer under the overlay, and an overlay
+# failure then silently demotes every client to the fat upstream libs
+# instead of failing loudly. Delete them from the target outright; the
+# overlay staging is the sole source. (Live card cleaned 2026-09-01; this
+# makes re-imaging preserve that.)
+for lib in libX11.so.6.4.0 libXt.so.6.0.0 libXaw7.so.7.0.0 libXmu.so.6.2.0 \
+           libICE.so.6.3.0 libSM.so.6.0.1 libXext.so.6.4.0 libXpm.so.4.11.0 \
+           libXrender.so.1.3.0 libXft.so.2.3.9 libfontconfig.so.1.16.0 \
+           libXcursor.so.1.0.2; do
+    ov="${BR2_EXTERNAL_ESP32_S31_PATH}/board/esp32-s31/overlay/usr/lib/${lib}"
+    tg="${TARGET_DIR}/usr/lib/${lib}"
+    if [ -f "$tg" ] && [ -f "$ov" ] && ! cmp -s "$tg" "$ov"; then
+        rm -f "$tg"
+    fi
+done

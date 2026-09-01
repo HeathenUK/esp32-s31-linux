@@ -2632,3 +2632,58 @@ Debug leverage that made this tractable: XSHIM_TRACE (existing) shows every
 request with resource types; XSHIM_IMGDBG (new) logs PutImage geometry and
 clip state. The stuck-client signature - a log that simply STOPS after a
 worker-thread request - is the reply-eaten deadlock.
+
+## The 2026-09-01 "everything got slow" triage (measured, closed)
+
+The complaint: +10 s boot, −1 MB RAM, laggy desktop, all appearing the day
+context menus and JPEG thumbnails landed. All three were measured; none of
+the three is the thumbnail or menu code.
+
+- **Boot +10 s is the service tail, not the desktop.** lvdesk still starts
+  at 27.7 s from reset - unchanged. rcS now runs to 48.9 s because
+  S40network takes 14.7 s and the Bluetooth-week services (dbus,
+  bluetoothd, bluealsa, crond) queue behind it. The desktop is usable long
+  before rcS finishes; the "slower boot" is the login prompt, not the UI.
+- **RAM −1.1 MB is the daemon stack, itemised by killing services one at a
+  time:** bluealsa 256 KB + bluetoothd 372 KB + dbus ~180 KB + keylog,
+  crond, udevd ~596 KB. With all of them stopped the no-apps desktop is
+  back at 2400 KB free. CmaFree 16 KB is *healthy* - CMA is movable page
+  cache and reclaims on demand; do not read it as exhaustion. The 915 KB
+  persistent decode buffers were also reverted to transient allocs.
+- **Input lag: thumbnails are exonerated by fresh-boot A/B.** Four
+  fresh-boot arms (uinject demo load, repaired in_lag instrument):
+  thumbs ON avg 81 / 249 ms, OFF avg 140 / 525 ms - ON is not worse, and
+  run-to-run variance (3x between identical arms) dwarfs any toggle
+  effect. Baseline without xfiles: avg 64 ms. The cost driver is having an
+  X client on screen at all (motion forwarding through xshim's ~2 ms
+  socket writes), plus intermittent multi-hundred-ms stalls that hit some
+  boots and not others - that is the open lead, not the thumbnailer.
+  Same-boot arm pairs are worthless here: ON 211→614 / OFF 285→781 in
+  sequence position, i.e. the second arm always loses.
+- **The in_lag tray metric had been broken since birth**: it compared
+  kernel input timestamps (CLOCK_REALTIME by default) against lv_tick's
+  loop-accumulated ms. Fixed with EVIOCSCLOCKID(CLOCK_MONOTONIC) at mouse
+  open and clock_gettime(CLOCK_MONOTONIC) at read. Historical in_lag
+  numbers predating this are garbage.
+
+## Concurrent JPEG encode + decode wedges the SoC (guarded)
+
+Running the thumbnail decoder while mjpegrec's encoder is active
+reproducibly wedged the chip - full serial silence, needing two resets
+(the first reset after a wedge stalls before hart1; the second works).
+Decode alone: 20/20 clean. A drain-to-idle on the decode exit path
+(DCT_DONE wait + INLINK/OUTLINK_STOP) reduced but did not eliminate it.
+Without a TRM the failing hand-off between the shared codec/DMA2D state
+machines is not attributable, so the driver now refuses decode with
+-EBUSY while the recorder runs (s31-thumb falls back to the generic
+icon). Verified: decode during recording returns EBUSY, no wedge.
+
+## Shim libraries can never fall back to stock again
+
+Stale upstream X11 libraries were found on the SD *under* the XIP
+overlay - so any overlay failure silently demoted every client to the
+fat stock libs instead of failing. The live card is cleaned (12/12 shim
+under overlay) and post-build.sh now deletes any target/usr/lib copy of
+the replaced libraries that differs from the overlay's shim, so a
+re-image can't reintroduce them. Policy: shims live in XIP only; a
+missing shim must fail loudly.

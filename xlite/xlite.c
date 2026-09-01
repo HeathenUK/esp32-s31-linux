@@ -11,6 +11,7 @@
 
 #include <errno.h>
 #include <poll.h>
+#include <fcntl.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -266,6 +267,8 @@ void xlite_queue(struct xdpy *x, const unsigned char *e)
 	decode(x, e, &x->q[x->qtail]);
 	x->qtail = next;
 	x->pub.qlen++;
+	if (x->wake[1] >= 0)
+		write(x->wake[1], "", 1);
 }
 
 static void deliver_error(struct xdpy *x, const unsigned char *e)
@@ -501,6 +504,31 @@ Display *XOpenDisplay(const char *name)
 	 * the server is in the same process tree.
 	 */
 	x->shm_fd = -1;			/* 0 is a real descriptor */
+	/*
+	 * The doorbell: when a worker thread's locked reply-read drains the
+	 * socket, the main thread's events land in the QUEUE and the socket
+	 * goes quiet - so an event wait polling only the socket sleeps its
+	 * full timeout with input sitting queued. xfiles' thumbnail thread
+	 * did exactly this and every click and keystroke lagged up to
+	 * 100 ms while thumbnails generated. xlite_queue() writes a byte
+	 * here; the event wait polls both descriptors.
+	 */
+	if (pipe(x->wake) < 0) {
+		x->wake[0] = x->wake[1] = -1;
+	} else {
+		int i;
+
+		/*
+		 * Nonblocking both ends - a full pipe must not stall
+		 * xlite_queue() and the drain reads must not stall the
+		 * wait - and cloexec, because this client fork+execs.
+		 */
+		for (i = 0; i < 2; i++) {
+			fcntl(x->wake[i], F_SETFL,
+			      fcntl(x->wake[i], F_GETFL, 0) | O_NONBLOCK);
+			fcntl(x->wake[i], F_SETFD, FD_CLOEXEC);
+		}
+	}
 	x->fd = socket(AF_UNIX, SOCK_STREAM, 0);
 	if (x->fd < 0) {
 		free(x);
@@ -794,12 +822,29 @@ static int xlite_wait_event(struct xdpy *x, XEvent *ev, int dequeue_it)
 			got = 1;
 		}
 		xlite_out_release();
-		if (got)
-			return 0;
-		{
-			struct pollfd pfd = { x->fd, POLLIN, 0 };
+		if (got) {
+			/* Swallow stale doorbell bytes outside the lock. */
+			if (x->wake[0] >= 0) {
+				char b[16];
 
-			poll(&pfd, 1, 100);
+				while (read(x->wake[0], b, sizeof(b)) ==
+				       (ssize_t)sizeof(b))
+					;
+			}
+			return 0;
+		}
+		{
+			struct pollfd pfd[2] = {
+				{ x->fd, POLLIN, 0 },
+				{ x->wake[0], POLLIN, 0 },
+			};
+
+			poll(pfd, x->wake[0] >= 0 ? 2 : 1, 1000);
+			if (pfd[1].revents & POLLIN) {
+				char b[16];
+
+				read(x->wake[0], b, sizeof(b));
+			}
 		}
 	}
 }

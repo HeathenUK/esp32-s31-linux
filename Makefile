@@ -452,7 +452,7 @@ XIP_ROOTFS_IMG := $(BUILD_DIR)/rootfs-xip.cramfs
 # which image, and why libXft belongs here).
 XIP_ROOTS ?= bin/busybox usr/sbin/wpa_supplicant usr/sbin/iw usr/bin/lvdesk \
 	usr/libexec/bluetooth/bluetoothd \
-	usr/bin/xfilesctl usr/bin/s31-open usr/bin/s31-thumb usr/bin/xfilesthumb
+	usr/bin/xfilesctl usr/bin/s31-open usr/bin/s31-thumb usr/bin/xfilesthumb usr/bin/s31-thumbs
 
 # In the closure but deliberately left on the card. NEEDED is not the same as
 # hot: lvdesk links libasound for the volume mixer and occasional PCM writes,
