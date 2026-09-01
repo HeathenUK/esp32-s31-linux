@@ -245,6 +245,9 @@ static void pw_close(void);
 static lv_obj_t *taskbar;
 static lv_obj_t *sysinfo;		/* task bar free-memory readout */
 static char sysinfo_last[192];
+static lv_obj_t *wifi_tray_clip;	/* bright-glyph clip window, see tray_wifi_update */
+static int wifi_tray_h;			/* full LV_SYMBOL_WIFI glyph height */
+static int wifi_tray_bucket = -1;	/* last painted signal bucket */
 #define MAXKBD 8
 static int kbd_fds[MAXKBD];
 static int kbd_n;
@@ -3785,6 +3788,47 @@ static int wifi_link_level(void)
 }
 
 /*
+ * Tray icon signal levels: the same LV_SYMBOL_WIFI glyph twice - a dim
+ * skeleton underneath and a bright copy inside a bottom-anchored clipping
+ * window whose height tracks RSSI, so the arcs light from the dot outward
+ * the way every phone draws it. The glyph itself is unchanged.
+ *
+ * Runs on the shared 5 s tick (SIGNAL_POLL is two unix-socket syscalls,
+ * ~0.1% of a core at this cadence) and repaints only when the bucket
+ * changes; the damage is one glyph-sized rectangle. Thresholds match the
+ * bars most UIs draw: > -63 dBm full, -63..-75 mid, below that the dot,
+ * dim skeleton when there is no association (or no supplicant yet).
+ */
+static void tray_wifi_update(void)
+{
+	/* lit height per bucket, in 16ths of the glyph height */
+	static const uint8_t lit16[] = { 0, 7, 11, 16 };
+	int rssi, b;
+
+	if (!wifi_tray_clip)
+		return;
+	rssi = wifi_link_level();
+	if (rssi <= -95)
+		b = 0;
+	else if (rssi < -75)
+		b = 1;
+	else if (rssi < -63)
+		b = 2;
+	else
+		b = 3;
+	if (b == wifi_tray_bucket)
+		return;
+	wifi_tray_bucket = b;
+	if (b == 0) {
+		lv_obj_add_flag(wifi_tray_clip, LV_OBJ_FLAG_HIDDEN);
+	} else {
+		lv_obj_remove_flag(wifi_tray_clip, LV_OBJ_FLAG_HIDDEN);
+		lv_obj_set_height(wifi_tray_clip, wifi_tray_h * lit16[b] / 16);
+		lv_obj_align(wifi_tray_clip, LV_ALIGN_BOTTOM_MID, 0, 0);
+	}
+}
+
+/*
  * Order the list the way every desktop does: whatever we are connected to
  * first, then strongest signal down. Insertion sort - AP_MAX is 16 and this
  * runs once per scan, so anything cleverer is wasted code.
@@ -5758,12 +5802,42 @@ int main(void)
 					   lv_color_hex(COL_HDR_TEXT), 0);
 		lv_label_set_text(sysinfo, "M: --KB");
 
-		l = lv_label_create(tray);
+		/*
+		 * Wi-Fi. Same glyph as ever, but layered so signal strength
+		 * shows: a dim skeleton with a bright copy clipped to a
+		 * bottom-anchored window whose height tray_wifi_update()
+		 * drives from RSSI. The labels and the clip must not be
+		 * clickable or they would steal the tap from the container
+		 * that opens the popover.
+		 */
+		lv_obj_t *wicon = lv_obj_create(tray);
+		lv_obj_remove_style_all(wicon);
+		l = lv_label_create(wicon);
 		lv_label_set_text(l, LV_SYMBOL_WIFI);
 		lv_obj_set_style_text_font(l, FONT_UI, 0);
 		lv_obj_set_style_text_color(l, lv_color_hex(COL_HDR_TEXT), 0);
-		lv_obj_add_flag(l, LV_OBJ_FLAG_CLICKABLE);
-		lv_obj_add_event_cb(l, tray_wifi_cb, LV_EVENT_CLICKED, NULL);
+		lv_obj_set_style_text_opa(l, LV_OPA_40, 0);
+		lv_obj_remove_flag(l, LV_OBJ_FLAG_CLICKABLE);
+		lv_obj_update_layout(l);	/* geometry is deferred */
+		wifi_tray_h = lv_obj_get_height(l);
+		lv_obj_set_size(wicon, lv_obj_get_width(l), wifi_tray_h);
+		lv_obj_align(l, LV_ALIGN_BOTTOM_MID, 0, 0);
+		wifi_tray_clip = lv_obj_create(wicon);
+		lv_obj_remove_style_all(wifi_tray_clip);
+		lv_obj_set_width(wifi_tray_clip, lv_obj_get_width(l));
+		lv_obj_remove_flag(wifi_tray_clip,
+				   LV_OBJ_FLAG_CLICKABLE |
+				   LV_OBJ_FLAG_SCROLLABLE);
+		lv_obj_add_flag(wifi_tray_clip, LV_OBJ_FLAG_HIDDEN);
+		l = lv_label_create(wifi_tray_clip);
+		lv_label_set_text(l, LV_SYMBOL_WIFI);
+		lv_obj_set_style_text_font(l, FONT_UI, 0);
+		lv_obj_set_style_text_color(l, lv_color_hex(COL_HDR_TEXT), 0);
+		lv_obj_remove_flag(l, LV_OBJ_FLAG_CLICKABLE);
+		lv_obj_align(l, LV_ALIGN_BOTTOM_MID, 0, 0);
+		lv_obj_add_flag(wicon, LV_OBJ_FLAG_CLICKABLE);
+		lv_obj_add_event_cb(wicon, tray_wifi_cb, LV_EVENT_CLICKED,
+				    NULL);
 
 		l = lv_label_create(tray);
 		lv_label_set_text(l, LV_SYMBOL_VOLUME_MAX);
@@ -6173,6 +6247,9 @@ int main(void)
 			 * wakeups.
 			 */
 			clock_update();
+			/* Same economics: polls RSSI, repaints on bucket
+			 * change only. */
+			tray_wifi_update();
 		}
 	}
 	return 0;
