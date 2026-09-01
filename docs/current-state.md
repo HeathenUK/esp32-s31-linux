@@ -2380,3 +2380,29 @@ bluetoothctl and the bluealsa tools live on the SD. Classic keyboards go
 through kernel hidp straight to evdev (bluetoothd out of the per-key
 path); BLE keyboards go through bluetoothd's HoG into uhid (CONFIG_UHID
 still to enable when one shows up). Pairing itself awaits a real device.
+
+### Bluetooth correction: classic-only is the vendor-validated mode (2026-09-01)
+
+Dual-mode BTDM inits and enables without error, the hosted layer advertises
+"BT/BLE dual mode" - and the controller then answers Read_Local_Features
+with "BR/EDR Not Supported" (features[4] bit 37). The kernel therefore
+refused all classic security ("hci0: security requested but not available"
+was an LE-SMP message from bluez courting the earbuds' Fast-Pair side; the
+classic bearer never actually existed), bluez treated the adapter as
+LE-only, and every "classic" discovery was silently LE. The classic code IS
+shipped (libbredr_app.a, 551 symbols, linked and initialized) - but
+Espressif's own S31 A2DP example in IDF master uses
+CONFIG_BTDM_CTRL_MODE_BR_EDR_ONLY with BLE off, and in that mode the
+feature mask comes back honest (0xf8 -> 0x98, SSP host bits present),
+bluetoothd (ControllerMode=bredr in /etc/bluetooth/main.conf on the card)
+adopts the adapter, and inquiry runs. Classic-only loader is also 98 KB
+SMALLER than the old BLE-only one (1,523,376 bytes; 508 KB factory
+headroom back).
+
+Traded away, deliberately: BLE (so BLE-HID/HOG waits; note the unresolved
+smp.c "security requested but not available" for whenever LE returns, and
+that CONFIG_UHID is still off). Combined BTDM's dishonest feature mask is
+worth re-testing on future IDF drops - the blob may mature. Pairing the
+soundcore Liberty 4 NC awaits the next session; the sequence that should
+now work: scan on, pair C0:BB:2D:C8:DF:A2, trust, connect, then
+aplay -D bluealsa:DEV=C0:BB:2D:C8:DF:A2 through s31-play.
