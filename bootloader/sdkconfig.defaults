@@ -31,10 +31,15 @@ CONFIG_USB_HOST_HUBS_SUPPORTED=y
 CONFIG_USB_HOST_HUB_MULTI_LEVEL=y
 CONFIG_USB_HOST_HW_BUFFER_BIAS_IN=y
 
-# Classic-only BT, matching Espressif's own S31 A2DP example config
-# (sdkconfig.defaults: BTDM_CTRL_MODE_BR_EDR_ONLY, BLE off). Combined BTDM
-# mode enables and inits without error but the controller then answers
-# Read_Local_Features with "BR/EDR Not Supported" (features[4] bit37), so
-# the kernel refuses all classic security and bluez treats the adapter as
-# LE-only. Classic-only is the vendor-validated shape.
-CONFIG_BTDM_CTRL_MODE_BR_EDR_ONLY=y
+# Dual-mode BT. The June-era controller blob answered Read_Local_Features
+# with "BR/EDR Not Supported" in this mode (features[4] bit37) - the kernel
+# then refuses classic security and bluez runs the adapter LE-only, which
+# is why this was briefly BR_EDR_ONLY. The 2026-08 IDF pin carries the
+# reworked BR/EDR controller (LMP negotiation, ACL underflow deadlock,
+# memory-safety fixes) and the official a2dp_gatts_coex example supports
+# the S31 in exactly this mode. If the mask ever lies again
+# (debugfs bluetooth/hci0/features: features[4] & 0x20 set), fall back to
+# BR_EDR_ONLY, which is always honest. bluez policy stays
+# ControllerMode=bredr in /etc/bluetooth/main.conf regardless, so pairing
+# never chases a device's LE/Fast-Pair side by accident.
+CONFIG_BTDM_CTRL_MODE_BTDM=y

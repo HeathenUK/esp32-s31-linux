@@ -24,7 +24,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Pinned by CI. ESP_IDF_REF is a master commit that predates any release tag,
 # and is the only revision known to carry working esp32s31 support.
 ENV IDF_PATH=/opt/esp-idf
-ENV ESP_IDF_REF=a602e67b0bf9ee0806dc4e1df7afc9affedf5c33
+ENV ESP_IDF_REF=2067f3ae32b7e7b61a0f3a052df63d619cd7c61d
 ENV TOOLCHAIN_RELEASE_TAG=esp32s31-linux-gcc-15.2.0-4
 
 RUN git clone --filter=blob:none https://github.com/espressif/esp-idf.git "$IDF_PATH" \

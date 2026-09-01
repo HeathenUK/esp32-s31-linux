@@ -2406,3 +2406,28 @@ worth re-testing on future IDF drops - the blob may mature. Pairing the
 soundcore Liberty 4 NC awaits the next session; the sequence that should
 now work: scan on, pair C0:BB:2D:C8:DF:A2, trust, connect, then
 aplay -D bluealsa:DEV=C0:BB:2D:C8:DF:A2 through s31-play.
+
+### IDF bumped to master; dual-mode BT restored by the new blob (2026-09-01)
+
+ESP_IDF_REF went a602e67b (June 17) -> 2067f3ae (Aug 28) in both
+Dockerfiles; only the IDF layers rebuild (apt cached). The window carried
+the whole BR/EDR maturation (LMP negotiation blocking, ACL underflow
+deadlock, memory-safety/DoS fixes, controller deep-review), the S31
+DFS clk_tree refcount fix, a Wi-Fi beacon timestamp workaround, a PHY lib
+update, and PSRAM/PMP permission hardening. Fallout fixed on the way: the
+new esp gcc 16.1 dropped `-mespv-spec=2p2` (the spec now rides only in the
+-march `_xespv2p2` suffix - flag removed from bootloader cmake), and the
+stale build cache pointed at the old toolchain path (rm -rf
+bootloader/build). The BSP/Korvo repo has no changes since June; esp-hosted
+upstream nothing consumable.
+
+With the new blob, CONFIG_BTDM_CTRL_MODE_BTDM reports HONESTLY:
+features[4] 0xf8 -> 0xd8 (BR/EDR-not-supported clear, LE set, SSP host
+bits present), bluetoothd adopts the adapter. Dual-mode loader is
+1,757,504 bytes (274 KB headroom). bluez policy stays
+ControllerMode=bredr for deterministic classic pairing; LE is now
+available whenever that policy is lifted. udevd stays on SD: measured
+164 KB RSS there vs 28 KB in XIP, but the pages are clean and evictable
+and no comfortable partition geometry brings it back (xip2 free 57 KB vs
+udevd 264 KB; thinning factory below ~140 KB headroom is imprudent when
+the controller blob swings hundreds of KB between drops).

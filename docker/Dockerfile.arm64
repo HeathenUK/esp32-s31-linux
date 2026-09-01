@@ -29,7 +29,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 ENV IDF_PATH=/opt/esp-idf
-ENV ESP_IDF_REF=a602e67b0bf9ee0806dc4e1df7afc9affedf5c33
+ENV ESP_IDF_REF=2067f3ae32b7e7b61a0f3a052df63d619cd7c61d
 
 RUN git clone --filter=blob:none https://github.com/espressif/esp-idf.git "$IDF_PATH" \
     && git -C "$IDF_PATH" checkout "$ESP_IDF_REF" \
