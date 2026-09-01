@@ -4386,6 +4386,15 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		const uint8_t *src = r + 24;
 		int y, x, pad;
 
+		if (getenv("XSHIM_IMGDBG"))
+			fprintf(stderr,
+				"xshim: PutImage dst=0x%x ok=%d fmt=%d %dx%d+%d+%d depth=%d len=%d clip=%d %d,%d-%d,%d dclip=%d,%d-%d,%d ax=%d,%d\n",
+				get32(r + 4), drawable_ok(d), fmt, iw, ih,
+				dx, dy, depth, len, gcclip_on,
+				gcclip_x0, gcclip_y0, gcclip_x1, gcclip_y1,
+				d ? d->cx0 : -1, d ? d->cy0 : -1,
+				d ? d->cx1 : -1, d ? d->cy1 : -1,
+				d ? d->ax : -1, d ? d->ay : -1);
 		if (!drawable_ok(d) || fmt != 2 || iw <= 0 || ih <= 0)
 			break;
 		pad = depth <= 8 ? ((iw + 3) & ~3) :

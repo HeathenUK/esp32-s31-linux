@@ -5,3 +5,5 @@ export LOGNAME=root
 # xfiles opens files via $OPENER (default xdg-open, not shipped). s31-open
 # views files in the lvdesk terminal and detaches nested xfiles windows.
 export OPENER=s31-open
+# xfiles thumbnails on: it derives its cache from XDG_CACHE_HOME.
+export XDG_CACHE_HOME=/root/.cache

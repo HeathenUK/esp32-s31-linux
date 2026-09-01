@@ -56,21 +56,67 @@ static int writeall(int fd, const void *buf, size_t n)
  * through _XGetRequest(), which is what keeps their requests and ours in the
  * order they were issued. Two buffers could not.
  */
+/*
+ * The output lock. xfiles draws thumbnails from a worker thread while its
+ * main thread handles events, and both build requests in place in the one
+ * output buffer - real Xlib serialises this with LockDisplay held across
+ * the whole call, and XInitThreads() here already claims success. Without
+ * it, a flush from one thread mid-fill of the other's request sent a torn
+ * request, and the thumbnail thread's commitdraw simply vanished: pixels
+ * present in the layer pixmap, nothing on screen until the next
+ * main-thread redraw.
+ *
+ * Held from xlite_req() (buffer reservation) to xlite_send() (request
+ * complete); recursive, because a full buffer flushes from inside
+ * xlite_req(). The INPUT side (replies, events) is deliberately unlocked:
+ * the reader would otherwise hold the lock while blocked in read() and
+ * deadlock every other thread. That is safe for the clients this library
+ * serves - only main threads read events - and wrong in general.
+ */
+static pthread_mutex_t xlite_out_lock;
+static pthread_once_t xlite_out_once = PTHREAD_ONCE_INIT;
+
+static void xlite_out_lock_init(void)
+{
+	pthread_mutexattr_t a;
+
+	pthread_mutexattr_init(&a);
+	pthread_mutexattr_settype(&a, PTHREAD_MUTEX_RECURSIVE);
+	pthread_mutex_init(&xlite_out_lock, &a);
+	pthread_mutexattr_destroy(&a);
+}
+
+void xlite_out_acquire(void)
+{
+	pthread_once(&xlite_out_once, xlite_out_lock_init);
+	pthread_mutex_lock(&xlite_out_lock);
+}
+
+void xlite_out_release(void)
+{
+	pthread_mutex_unlock(&xlite_out_lock);
+}
+
 unsigned char *xlite_req(struct xdpy *x, int opcode, int detail, int words)
 {
-	unsigned char *r = _XGetRequest(&x->pub, (CARD8)opcode,
-					(size_t)words * 4);
+	unsigned char *r;
 
-	if (!r)
+	xlite_out_acquire();
+	r = _XGetRequest(&x->pub, (CARD8)opcode, (size_t)words * 4);
+	if (!r) {
+		xlite_out_release();
 		return NULL;
+	}
 	r[1] = (unsigned char)detail;
 	return r;
 }
 
-/* The bytes are already in the shared buffer; nothing to push. */
+/* The bytes are already in the shared buffer; releasing the lock is the
+ * "send". Every REQ() in this library pairs with exactly one call here. */
 int xlite_send(struct xdpy *x, const unsigned char *r)
 {
 	(void)x; (void)r;
+	xlite_out_release();
 	return 0;
 }
 
@@ -401,9 +447,24 @@ static int pump(struct xdpy *x, uint32_t want, unsigned char *hdr,
 int xlite_reply(struct xdpy *x, uint32_t seq, unsigned char *hdr,
 		unsigned char **extra, size_t *nextra)
 {
-	if (xlite_flush(x) < 0)		/* it cannot answer what we still hold */
+	int r;
+
+	/*
+	 * Reply reads hold the display lock: without it, a worker thread's
+	 * reply is consumed by the main thread's event wait, logged as
+	 * "unmatched reply", and the worker hangs forever - which is how
+	 * xfiles' thumbnail thread died on its first AllocColor. Events
+	 * drained here on the way to the reply are queued, and the event
+	 * wait picks them up from the queue under the same lock.
+	 */
+	xlite_out_acquire();
+	if (xlite_flush(x) < 0) {	/* it cannot answer what we still hold */
+		xlite_out_release();
 		return 0;
-	return pump(x, seq, hdr, extra, nextra);
+	}
+	r = pump(x, seq, hdr, extra, nextra);
+	xlite_out_release();
+	return r;
 }
 
 /* ------------------------------------------------------------- connection */
@@ -677,8 +738,10 @@ int XEventsQueued(Display *d, int mode)
 	 * then never reaches its timers - xclock drew the right time once and
 	 * never ticked again.
 	 */
+	xlite_out_acquire();
 	while (xlite_read_more(x, 0))
 		pump_ex(x, 0, NULL, NULL, NULL, 0);
+	xlite_out_release();
 	return x->pub.qlen;
 }
 
@@ -704,26 +767,53 @@ static void dequeue(struct xdpy *x, XEvent *ev)
 	}
 }
 
+/*
+ * The event waits cannot block inside the lock - a worker thread would
+ * starve until the next input event - and cannot read the socket unlocked,
+ * or they eat other threads' replies. So: drain nonblockingly under the
+ * lock, and sleep in poll() outside it. The 100 ms cap covers the window
+ * where another thread consumed the readable bytes between our poll waking
+ * and the lock being taken; events it drained are waiting in the queue.
+ */
+static int xlite_wait_event(struct xdpy *x, XEvent *ev, int dequeue_it)
+{
+	for (;;) {
+		int got = 0;
+
+		xlite_out_acquire();
+		if (x->qhead == x->qtail) {
+			xlite_flush(x);
+			while (xlite_read_more(x, 0))
+				pump_ex(x, 0, NULL, NULL, NULL, 0);
+		}
+		if (x->qhead != x->qtail) {
+			if (dequeue_it)
+				dequeue(x, ev);
+			else
+				*ev = x->q[x->qhead];
+			got = 1;
+		}
+		xlite_out_release();
+		if (got)
+			return 0;
+		{
+			struct pollfd pfd = { x->fd, POLLIN, 0 };
+
+			poll(&pfd, 1, 100);
+		}
+	}
+}
+
 XLITE_IMPL(XNextEvent)
 int XNextEvent(Display *d, XEvent *ev)
 {
-	struct xdpy *x = XD(d);
-
-	while (x->qhead == x->qtail)
-		pump(x, 0, NULL, NULL, NULL);
-	dequeue(x, ev);
-	return 0;
+	return xlite_wait_event(XD(d), ev, 1);
 }
 
 XLITE_IMPL(XPeekEvent)
 int XPeekEvent(Display *d, XEvent *ev)
 {
-	struct xdpy *x = XD(d);
-
-	while (x->qhead == x->qtail)
-		pump(x, 0, NULL, NULL, NULL);
-	*ev = x->q[x->qhead];
-	return 0;
+	return xlite_wait_event(XD(d), ev, 0);
 }
 
 XLITE_IMPL(XSetErrorHandler)

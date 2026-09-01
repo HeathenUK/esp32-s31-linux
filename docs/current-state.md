@@ -2580,3 +2580,44 @@ Right-click in xfiles now works end to end with zero new resident RAM:
   note that "/bin is not overlaid" is stale; SD-test deploys go in /root.
 - RAM: menu = a dozen transient LVGL objects from the existing pool;
   scripts are XIP (zero RSS); busybox does the file ops. Nothing resident.
+
+## Hardware thumbnails: JPEG decode + PPA scale into xfiles (2026-09-01)
+
+xfiles thumbnails now come from the codec: `xfilesthumb` (XIP) runs
+`s31-thumb <file> <out.ppm> 64`, which feeds the JPEG through
+DRM_ESP32S31_JPEG_THUMB - hardware decode, then PPA SRM scale, one ioctl.
+Board-generated captures AND the first frame of any mjpeg (the tool bounds
+the feed at the first EOI) thumbnail correctly; progressive, grayscale and
+anything decoding over 1280x960 (a 2.4 MB transient CMA cap, not a codec
+limit) exit nonzero and keep the generic icon. Enabled by
+XDG_CACHE_HOME=/root/.cache in /etc/profile (overlay AND the live card);
+the PPM cache persists on SD, so revisits are instant. Measured: 0.35-0.61 s
+per thumbnail end-to-end, almost all of it process spawn and DRM open - the
+decode is ~8 ms and the scale ~2 ms. Decode register lore lives in
+patches/0023 (OUT descriptors take their length from HB/HA; DQT_INFO is a
+table-id map; RX REORDER rebuilds rasters; completion is DCT_DONE).
+
+**The medium was the harder half: xlite was not thread-safe, and xfiles
+draws thumbnails from a worker thread.** Three separate failures stacked:
+
+- The widget composes BGRA32 client images against DefaultDepth - correct
+  on the 24-bit servers upstream targets, undefined on our 16-bit one.
+  xlite now recognises that caller shape (depth<=16, pad 32, no stride),
+  carries the image as 32bpp and declares depth 24 on the wire, where
+  xshim's PutImage already converts BGRA to RGB565.
+- Both threads build requests in place in one output buffer. A flush from
+  one thread mid-fill of the other's tore requests: the thumbnail pixels
+  reached the layer pixmap and the commitdraw after them vanished. xlite
+  now holds a recursive output lock from xlite_req() to xlite_send() -
+  XInitThreads() had been returning success all along.
+- The reply path was unlocked, so the worker's first AllocColor reply was
+  eaten by the main thread's blocking event read and the worker hung
+  forever - which also silently stopped thumbnail GENERATION after one
+  file. Replies now hold the lock end-to-end; the event waits drain
+  nonblockingly under the lock and sleep in poll() outside it (100 ms cap,
+  or a worker's queued events would wait for the next input event).
+
+Debug leverage that made this tractable: XSHIM_TRACE (existing) shows every
+request with resource types; XSHIM_IMGDBG (new) logs PutImage geometry and
+clip state. The stuck-client signature - a log that simply STOPS after a
+worker-thread request - is the reply-eaten deadlock.

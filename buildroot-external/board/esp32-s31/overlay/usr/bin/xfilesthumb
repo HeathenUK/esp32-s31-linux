@@ -1,0 +1,11 @@
+#!/bin/sh
+# xfiles' thumbnailer: hardware JPEG decode + PPA scale via s31-thumb.
+# Anything unsupported (progressive, grayscale, >1280x960, non-JPEG) exits
+# nonzero and xfiles keeps the generic icon. MJPEG works because s31-thumb
+# bounds the bitstream at the first EOI - frame one becomes the thumbnail.
+case "${1##*.}" in
+jpg|jpeg|JPG|JPEG|mjpeg|mjpg)
+	exec s31-thumb "$1" "$2" 64
+	;;
+esac
+exit 1

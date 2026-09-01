@@ -2152,6 +2152,19 @@ XImage *XCreateImage(Display *dpy, Visual *vis, unsigned int depth, int format,
 	im->bitmap_pad = pad ? pad : 32;
 	im->depth = (int)depth;
 	im->bits_per_pixel = depth <= 8 ? 8 : depth <= 16 ? 16 : 32;
+	/*
+	 * xfiles' thumbnailer composes BGRA and passes DefaultDepth with
+	 * bitmap_pad 32 and no stride - correct on the 24/32-bit servers it
+	 * was written against, impossible on this 16-bit one under strict
+	 * Xlib rules (bits_per_pixel comes from the server's format list).
+	 * Recognise that caller shape and carry the image as 32bpp; the
+	 * wire request then declares depth 24 and xshim's PutImage already
+	 * converts BGRA bytes to RGB565. The one legitimate caller this
+	 * could misread - a true 16bpp image with pad 32 and no stride -
+	 * does not exist among the clients this library serves.
+	 */
+	if (depth > 8 && depth <= 16 && pad == 32 && !stride)
+		im->bits_per_pixel = 32;
 	im->bytes_per_line = stride ? stride :
 		(int)(((w * im->bits_per_pixel + 31) / 32) * 4);
 	im->f.destroy_image = ximg_destroy;
@@ -2226,7 +2239,9 @@ int XPutImage(Display *dpy, Drawable d, GC gc, XImage *im, int sx, int sy,
 			p16(r + 16, dx);
 			p16(r + 18, dy + done);
 			r[20] = 0;
-			r[21] = (unsigned char)im->depth;
+			/* 32bpp data must say so; see XCreateImage above. */
+			r[21] = im->bits_per_pixel == 32 ? 24 :
+				(unsigned char)im->depth;
 			for (y = 0; y < nrows; y++)
 				memcpy(r + 24 + (size_t)y * rowb,
 				       im->data +

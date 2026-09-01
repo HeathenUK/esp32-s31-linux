@@ -29,13 +29,23 @@
 
 /* --------------------------------------------------------------- output */
 
+void xlite_out_acquire(void);
+void xlite_out_release(void);
+
 int xlite_flush(struct xdpy *x)
 {
-	size_t n = (size_t)(x->pub.bufptr - x->pub.buffer);
-	const char *p = x->pub.buffer;
+	size_t n;
+	const char *p;
+	int rc = 0;
 
-	if (!n)
+	xlite_out_acquire();
+	n = (size_t)(x->pub.bufptr - x->pub.buffer);
+	p = x->pub.buffer;
+
+	if (!n) {
+		xlite_out_release();
 		return 0;
+	}
 	while (n) {
 		ssize_t w = write(x->fd, p, n);
 
@@ -44,12 +54,15 @@ int xlite_flush(struct xdpy *x)
 				continue;
 			if (x->ioerrh)
 				x->ioerrh(&x->pub);
-			return -1;
+			rc = -1;
+			break;
 		}
 		p += w; n -= w;
 	}
-	x->pub.bufptr = x->pub.buffer;
-	return 0;
+	if (!rc)
+		x->pub.bufptr = x->pub.buffer;
+	xlite_out_release();
+	return rc;
 }
 
 /*
