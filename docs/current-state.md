@@ -2424,9 +2424,12 @@ upstream nothing consumable.
 With the new blob, CONFIG_BTDM_CTRL_MODE_BTDM reports HONESTLY:
 features[4] 0xf8 -> 0xd8 (BR/EDR-not-supported clear, LE set, SSP host
 bits present), bluetoothd adopts the adapter. Dual-mode loader is
-1,757,504 bytes (274 KB headroom). bluez policy stays
-ControllerMode=bredr for deterministic classic pairing; LE is now
-available whenever that policy is lifted. udevd stays on SD: measured
+1,757,504 bytes (274 KB headroom). The ControllerMode=bredr policy was
+then REMOVED (/etc/bluetooth/main.conf deleted): with an honest
+controller both bearers run - classic page 0xd8, LE feature page live,
+central+peripheral roles. For classic pairing of dual-mode devices, use a
+bredr transport filter in the bluetoothctl session so discovery creates
+BR/EDR-native records rather than chasing a device's Fast-Pair LE side. udevd stays on SD: measured
 164 KB RSS there vs 28 KB in XIP, but the pages are clean and evictable
 and no comfortable partition geometry brings it back (xip2 free 57 KB vs
 udevd 264 KB; thinning factory below ~140 KB headroom is imprudent when
