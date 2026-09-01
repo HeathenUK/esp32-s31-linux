@@ -33,15 +33,12 @@ these four files exactly as 0021 superseded its predecessors. New since
   * Decode bring-up knobs (jpeg_thumb_raw, jpeg_dec_reorder,
     jpeg_dec_scramble, jpeg_dec_debug), runtime-writable so hypotheses
     cost echoes rather than kernel builds.
-
---- a/drivers/gpu/drm/espressif/esp32s31-lcd.c
-Second round (same day): /dev/s31-jpeg, a misc device carrying the same
-thumb ioctl - opening /dev/dri/card0 measured 64-194 ms of DRM core
-per-open work against 10 ms of hardware - and persistent decode buffers
-for the <=800x480 common case (the transient 768 KB coherent alloc cost
-~30 ms in zeroing and CMA bookkeeping per call, the encoder's jpeg_buf
-already set the keep-it precedent). Warm thumbnail: 135 ms end to end,
-81 ms of which is the process-spawn floor.
+Third round: transient buffers restored (the persistent pair held 915 KB
+of CMA forever - memory is the binding constraint, 30 ms per background
+thumbnail is not); decode exit waits for the RX channel FSM and stops
+both links on every path; and decode refuses with -EBUSY while the
+recorder runs - interleaving them wedged the SoC to full serial silence,
+reproducibly, and without a TRM the failing hand-off is not attributable.
 
 --- a/drivers/gpu/drm/espressif/esp32s31-lcd.c
 +++ b/drivers/gpu/drm/espressif/esp32s31-lcd.c
@@ -1417,7 +1414,7 @@ already set the keep-it precedent). Warm thumbnail: 135 ms end to end,
  #define  DMA2D_OUT_RST			BIT(24)
  #define DMA2D_OUT_INT_RAW		0x004
  /*
-@@ -160,11 +172,33 @@
+@@ -160,11 +172,34 @@
   */
  #define  PPA_SRM_DSCR_PORT_BLK		34
  #define DMA2D_OUT_INT_CLR		0x010
@@ -1425,6 +1422,7 @@ already set the keep-it precedent). Warm thumbnail: 135 ms end to end,
  #define DMA2D_OUT_LINK_CONF		0x01c
  #define  DMA2D_OUTLINK_STOP		BIT(20)
  #define  DMA2D_OUTLINK_START		BIT(21)
++#define  DMA2D_OUTLINK_STOP		BIT(20)
  #define DMA2D_OUT_LINK_ADDR		0x020
  #define DMA2D_OUT_PERI_SEL		0x038
 +/*
@@ -1451,7 +1449,7 @@ already set the keep-it precedent). Warm thumbnail: 135 ms end to end,
  #define  DMA2D_OUT_PERI_PPA_SRM		1
  #define  DMA2D_OUT_PERI_PPA_BLEND_BG	2
  #define  DMA2D_OUT_PERI_PPA_BLEND_FG	3
-@@ -189,6 +223,7 @@
+@@ -189,10 +224,12 @@
  #define DMA2D_IN_INT_ST_CH0		0x50c
  #define DMA2D_IN_INT_CLR_CH0		0x510
  #define  DMA2D_IN_SUC_EOF		BIT(1)
@@ -1459,7 +1457,12 @@ already set the keep-it precedent). Warm thumbnail: 135 ms end to end,
  #define DMA2D_IN_LINK_CONF_CH0		0x51c
  #define  DMA2D_INLINK_AUTO_RET		BIT(20)
  #define  DMA2D_INLINK_STOP		BIT(21)
-@@ -200,6 +235,7 @@
+ #define  DMA2D_INLINK_START		BIT(22)
++#define  DMA2D_INLINK_STOP		BIT(21)
+ #define DMA2D_IN_LINK_ADDR_CH0		0x520
+ #define DMA2D_IN_STATE_CH0		0x524
+ #define  DMA2D_IN_STATE_S		20
+@@ -200,6 +237,7 @@
  #define DMA2D_IN_DSCR_CH0		0x530
  #define DMA2D_IN_PERI_SEL_CH0		0x53c
  #define  DMA2D_IN_PERI_PPA_BLEND	2
@@ -1467,7 +1470,7 @@ already set the keep-it precedent). Warm thumbnail: 135 ms end to end,
  #define  DMA2D_IN_PERI_PPA_SRM		1
  /*
   * Global 2D-DMA control, separate from the per-block clock in HP_SYS_CLKRST.
-@@ -226,7 +262,9 @@
+@@ -226,7 +264,9 @@
  #define DMA2D_DESC_W1_VA_S		0	/* picture height, pixels */
  #define DMA2D_DESC_W1_HA_S		14	/* picture width, pixels */
  #define DMA2D_DESC_W1_PBYTE_S		28
@@ -1477,7 +1480,7 @@ already set the keep-it precedent). Warm thumbnail: 135 ms end to end,
  #define DMA2D_DESC_W2_Y_S		0
  #define DMA2D_DESC_W2_X_S		14
  #define DMA2D_DESC_W2_MODE_MULTIPLE	BIT(28)
-@@ -263,6 +301,8 @@
+@@ -263,6 +303,8 @@
  #define MEMLP_LP_EN			BIT(2)
  #define MEMLP_FORCE_CTRL		BIT(3)
  
@@ -1486,7 +1489,7 @@ already set the keep-it precedent). Warm thumbnail: 135 ms end to end,
  struct esp32s31_ppa {
  	struct device *dev;
  	void __iomem *ppa;
-@@ -276,6 +316,51 @@
+@@ -276,6 +318,47 @@
  
  	void __iomem *ppa_memlp;
  	void __iomem *dma2d_memlp;
@@ -1509,10 +1512,6 @@ already set the keep-it precedent). Warm thumbnail: 135 ms end to end,
 +	 */
 +	void *jpeg_buf;
 +	dma_addr_t jpeg_buf_dma;
-+	void *thumb_pix;		/* persistent <=800x480 decode target */
-+	dma_addr_t thumb_pix_dma;
-+	void *thumb_th;			/* persistent thumbnail + scratch */
-+	dma_addr_t thumb_th_dma;
 +	int jpeg_irq;
 +	struct completion jpeg_done;
 +
@@ -1538,7 +1537,7 @@ already set the keep-it precedent). Warm thumbnail: 135 ms end to end,
  	void __iomem *desc;		/* uncached HP SRAM */
  	u32 desc_phys;
  
-@@ -436,7 +521,30 @@
+@@ -436,7 +519,30 @@
  MODULE_PARM_DESC(ppa_spin_us,
  		 "microseconds to poll for PPA completion before sleeping (0 = always sleep)");
  
@@ -1570,7 +1569,7 @@ already set the keep-it precedent). Warm thumbnail: 135 ms end to end,
  {
  	ktime_t deadline;
  
-@@ -445,7 +553,8 @@
+@@ -445,7 +551,8 @@
  
  	deadline = ktime_add_us(ktime_get(), ppa_spin_us);
  	do {
@@ -1580,7 +1579,7 @@ already set the keep-it precedent). Warm thumbnail: 135 ms end to end,
  			return true;
  		cpu_relax();
  	} while (ktime_before(ktime_get(), deadline));
-@@ -575,7 +684,7 @@
+@@ -575,7 +682,7 @@
  	 * on a first bring-up the interrupt routing is exactly the thing most
  	 * likely to be wrong, and a silent hang is a poor way to find out.
  	 */
@@ -1589,7 +1588,7 @@ already set the keep-it precedent). Warm thumbnail: 135 ms end to end,
  	    !wait_for_completion_timeout(&ppa->done, msecs_to_jiffies(200))) {
  		deadline = jiffies + msecs_to_jiffies(200);
  		ret = -ETIMEDOUT;
-@@ -648,13 +757,13 @@
+@@ -648,13 +755,13 @@
  /* Write one 2D-DMA descriptor at @off within the descriptor window. */
  static void esp32s31_ppa_desc(struct esp32s31_ppa *ppa, u32 off, u32 addr,
  			      u32 pic_w, u32 pic_h, u32 blk_w, u32 blk_h,
@@ -1605,7 +1604,7 @@ already set the keep-it precedent). Warm thumbnail: 135 ms end to end,
  	       ppa->desc + off + DMA2D_DESC_W1);
  	writel((y << DMA2D_DESC_W2_Y_S) | (x << DMA2D_DESC_W2_X_S),
  	       ppa->desc + off + DMA2D_DESC_W2);
-@@ -662,6 +771,14 @@
+@@ -662,6 +769,14 @@
  	writel(0, ppa->desc + off + DMA2D_DESC_NEXT);
  }
  
@@ -1620,7 +1619,7 @@ already set the keep-it precedent). Warm thumbnail: 135 ms end to end,
  /* Common transfer-ability setup, shared by the RX and TX channels. */
  static void esp32s31_ppa_chan_ability(void __iomem *conf0, u32 rst,
  				      u32 burst_en, u32 dscr_port,
-@@ -697,36 +814,72 @@
+@@ -697,36 +812,72 @@
   * is safe because the output pixel cannot be written until the corresponding
   * background pixel has been read, so the write pointer trails the read.
   */
@@ -1708,7 +1707,7 @@ already set the keep-it precedent). Warm thumbnail: 135 ms end to end,
  	wmb();	/* uncached SRAM: order the descriptors before the starts */
  
  	/* The vendor blend path resets the engine first; the fill path does not. */
-@@ -779,23 +932,36 @@
+@@ -779,23 +930,36 @@
  	writel(readl(ppa->dma2d + DMA2D_IN_LINK_CONF_CH0) | DMA2D_INLINK_START,
  	       ppa->dma2d + DMA2D_IN_LINK_CONF_CH0);
  
@@ -1752,7 +1751,7 @@ already set the keep-it precedent). Warm thumbnail: 135 ms end to end,
  	       ppa->ppa + PPA_BLEND_TX_SIZE);
  
  	/*
-@@ -815,7 +981,10 @@
+@@ -815,7 +979,10 @@
  	writel(PPA_BLEND_EN | PPA_BLEND_TRANS_MODE_UPDATE,
  	       ppa->ppa + PPA_BLEND_TRANS_MODE);
  
@@ -1764,7 +1763,7 @@ already set the keep-it precedent). Warm thumbnail: 135 ms end to end,
  	    !wait_for_completion_timeout(&ppa->done, msecs_to_jiffies(200))) {
  		deadline = jiffies + msecs_to_jiffies(200);
  		ret = -ETIMEDOUT;
-@@ -829,12 +998,15 @@
+@@ -829,12 +996,15 @@
  		} while (time_before(jiffies, deadline));
  	}
  
@@ -1781,7 +1780,7 @@ already set the keep-it precedent). Warm thumbnail: 135 ms end to end,
  			readl(ppa->dma2d + DMA2D_IN_INT_RAW_CH0),
  			readl(bg + DMA2D_OUT_INT_RAW),
  			readl(fg + DMA2D_OUT_INT_RAW),
-@@ -868,7 +1040,16 @@
+@@ -868,7 +1038,16 @@
  		return -EINVAL;
  
  	t0 = ktime_get();
@@ -1799,7 +1798,7 @@ already set the keep-it precedent). Warm thumbnail: 135 ms end to end,
  	ppa->last_ns = ktime_to_ns(ktime_sub(ktime_get(), t0));
  	if (ret)
  		return ret;
-@@ -923,7 +1104,7 @@
+@@ -923,7 +1102,7 @@
  			    u32 src_addr, u32 src_w, u32 src_h,
  			    u32 dst_addr, u32 dst_w, u32 dst_h,
  			    u32 sx, u32 sy, u32 bw, u32 bh,
@@ -1808,7 +1807,7 @@ already set the keep-it precedent). Warm thumbnail: 135 ms end to end,
  {
  	void __iomem *tx = ppa->dma2d + 0 * DMA2D_TX_CH_STRIDE;
  	u32 sx_int, sx_frag, sy_int, sy_frag, scal;
-@@ -948,8 +1129,17 @@
+@@ -948,8 +1127,17 @@
  		return -EINVAL;
  	if ((src_addr | dst_addr) & 3)
  		return -EINVAL;
@@ -1828,7 +1827,7 @@ already set the keep-it precedent). Warm thumbnail: 135 ms end to end,
  		dev_err(ppa->dev, "srm buffers outside the reserved region\n");
  		return -ERANGE;
  	}
-@@ -965,14 +1155,14 @@
+@@ -965,14 +1153,14 @@
  	mutex_lock(&ppa->lock);
  
  	/* Source: the whole picture as a single block. */
@@ -1845,7 +1844,7 @@ already set the keep-it precedent). Warm thumbnail: 135 ms end to end,
  			  2, 2, dx, dy);
  	wmb();	/* uncached SRAM: order the descriptors before the starts */
  
-@@ -1056,7 +1246,7 @@
+@@ -1056,7 +1244,7 @@
  	writel(scal, ppa->ppa + PPA_SRM_SCAL_ROTATE);
  	writel(scal | PPA_SCAL_ROTATE_START, ppa->ppa + PPA_SRM_SCAL_ROTATE);
  
@@ -1854,7 +1853,7 @@ already set the keep-it precedent). Warm thumbnail: 135 ms end to end,
  	    !wait_for_completion_timeout(&ppa->done, msecs_to_jiffies(200))) {
  		deadline = jiffies + msecs_to_jiffies(200);
  		ret = -ETIMEDOUT;
-@@ -1155,11 +1345,68 @@
+@@ -1155,11 +1343,68 @@
  		return -ENODEV;
  
  	return esp32s31_ppa_srm(ppa, src, src_w, src_h, dst, dst_w, dst_h,
@@ -1924,7 +1923,7 @@ already set the keep-it precedent). Warm thumbnail: 135 ms end to end,
   * debugfs: "<hex src> <sw> <sh> <hex dst> <dw> <dh>" scales one surface into
   * another and times it. Pointed at the scanout buffer, an upscale is visible
   * on the panel, which is the cheapest proof the engine really did the work.
-@@ -1185,7 +1432,7 @@
+@@ -1185,7 +1430,7 @@
  
  	t0 = ktime_get();
  	ret = esp32s31_ppa_srm(ppa, src, sw, sh, dst, dw, dh,
@@ -1933,7 +1932,7 @@ already set the keep-it precedent). Warm thumbnail: 135 ms end to end,
  	ppa->last_ns = ktime_to_ns(ktime_sub(ktime_get(), t0));
  	if (ret)
  		return ret;
-@@ -1202,6 +1449,74 @@
+@@ -1202,6 +1447,74 @@
  	.llseek = default_llseek,
  };
  
@@ -2008,7 +2007,7 @@ already set the keep-it precedent). Warm thumbnail: 135 ms end to end,
  static irqreturn_t esp32s31_ppa_isr(int irq, void *arg)
  {
  	struct esp32s31_ppa *ppa = arg;
-@@ -1218,6 +1533,1767 @@
+@@ -1218,6 +1531,1779 @@
  	return IRQ_HANDLED;
  }
  
@@ -2784,7 +2783,6 @@ already set the keep-it precedent). Warm thumbnail: 135 ms end to end,
 +MODULE_PARM_DESC(jpeg_dec_debug, "decode: dump channel state on completion");
 +
 +#define JPEG_DEC_IN_MAX			(512 * 1024)
-+#define ESP32S31_THUMB_TH_SIZE		(256 * 256 * 2 + 16384)
 +#define JPEG_DEC_MAX_W			1280
 +#define JPEG_DEC_MAX_H			960
 +
@@ -3192,8 +3190,23 @@ already set the keep-it precedent). Warm thumbnail: 135 ms end to end,
 +		 * the end of the picture; observed, not documented.
 +		 */
 +		if (st & BIT(11)) {
-+			/* Let the RX fifo's last bursts drain. */
-+			usleep_range(1000, 1500);
++			/*
++			 * DCT_DONE is the CODEC finished, not the pixels in
++			 * memory: the RX channel is still draining. A blind
++			 * 1 ms margin here mostly worked - until the
++			 * recorder's encode interleaved with thumbnail
++			 * decodes and its channel resets landed on an
++			 * in-flight burst, wedging the AXI hard enough that
++			 * the whole SoC went silent (reproduced with a
++			 * decode hammer under mjpegrec; decode alone was
++			 * 20/20 clean). Wait for the channel FSM to idle.
++			 */
++			unsigned long drain = jiffies + msecs_to_jiffies(50);
++
++			while ((readl(ppa->dma2d + DMA2D_IN_STATE_CH0) &
++				(7u << 20)) &&
++			       !time_after(jiffies, drain))
++				usleep_range(100, 200);
 +			break;
 +		}
 +		if (time_after(jiffies, deadline)) {
@@ -3210,6 +3223,16 @@ already set the keep-it precedent). Warm thumbnail: 135 ms end to end,
 +		}
 +		usleep_range(300, 600);
 +	}
++
++	/*
++	 * Stop both links on EVERY exit - success, error and timeout alike.
++	 * The stop bits self-clear; a channel left mid-descriptor is exactly
++	 * the state the next operation's reset pulse must never meet.
++	 */
++	writel(readl(tx + DMA2D_OUT_LINK_CONF) | DMA2D_OUTLINK_STOP,
++	       tx + DMA2D_OUT_LINK_CONF);
++	writel(readl(ppa->dma2d + DMA2D_IN_LINK_CONF_CH0) | DMA2D_INLINK_STOP,
++	       ppa->dma2d + DMA2D_IN_LINK_CONF_CH0);
 +
 +	if (jpeg_dec_debug)
 +		dev_info(ppa->dev,
@@ -3253,6 +3276,18 @@ already set the keep-it precedent). Warm thumbnail: 135 ms end to end,
 +
 +	if (!ppa || !ppa->jpeg)
 +		return -ENODEV;
++	/*
++	 * Decode and the recorder's encode do not coexist: interleaving
++	 * them wedged the SoC to full serial silence twice, reproducibly
++	 * (decode hammer under mjpegrec; decode alone is 20/20 clean, and
++	 * a drain-to-idle exit only reduced the rate). Without a TRM the
++	 * failing hand-off is not attributable, so while a recording is
++	 * running thumbnails simply refuse - xfiles keeps its generic
++	 * icon and retries on a later visit. Recording is an
++	 * instrumentation activity; this trade costs nothing day to day.
++	 */
++	if (READ_ONCE(ppa->jpeg_rec_running))
++		return -EBUSY;
 +	if (!jpeg_len || jpeg_len > JPEG_DEC_IN_MAX)
 +		return -EINVAL;
 +	if (max_dim < 16 || max_dim > 256)
@@ -3289,27 +3324,14 @@ already set the keep-it precedent). Warm thumbnail: 135 ms end to end,
 +	}
 +
 +	/*
-+	 * The decode buffer for the common case (board captures, <=800x480)
-+	 * is allocated once and kept, exactly like the encoder's jpeg_buf:
-+	 * a transient 768 KB dma_alloc_coherent cost ~30 ms per thumbnail
-+	 * in allocation, zeroing and CMA bookkeeping before any pixel
-+	 * moved. Larger pictures still allocate transiently - they are the
-+	 * rare case and 2.4 MB is not a sum to hold against a 4 MB pool.
++	 * Transient, and staying that way: keeping this buffer between
++	 * calls saved ~30 ms per thumbnail and HELD 915 KB of the CMA
++	 * pool, which showed up directly as ~900 KB less MemAvailable with
++	 * one xfiles open. Memory is the binding constraint on this board;
++	 * 30 ms on a background thumbnail is not.
 +	 */
 +	pix_sz = (size_t)ji->pw * ji->ph * 2;
-+	if (ji->pw <= 800 && ji->ph <= 480) {
-+		if (!ppa->thumb_pix) {
-+			ppa->thumb_pix = dma_alloc_coherent(ppa->dev,
-+							    800 * 480 * 2,
-+							    &ppa->thumb_pix_dma,
-+							    GFP_KERNEL);
-+		}
-+		pix_buf = ppa->thumb_pix;
-+		pix_dma = ppa->thumb_pix_dma;
-+	} else {
-+		pix_buf = dma_alloc_coherent(ppa->dev, pix_sz, &pix_dma,
-+					     GFP_KERNEL);
-+	}
++	pix_buf = dma_alloc_coherent(ppa->dev, pix_sz, &pix_dma, GFP_KERNEL);
 +	if (!pix_buf) {
 +		ret = -ENOMEM;
 +		goto out;
@@ -3335,18 +3357,7 @@ already set the keep-it precedent). Warm thumbnail: 135 ms end to end,
 +	 */
 +	mw = max(ji->w, ji->h);
 +	th_sz = (size_t)max_dim * max_dim * 2 + 16384;
-+	if (th_sz <= ESP32S31_THUMB_TH_SIZE) {
-+		if (!ppa->thumb_th)
-+			ppa->thumb_th = dma_alloc_coherent(ppa->dev,
-+							   ESP32S31_THUMB_TH_SIZE,
-+							   &ppa->thumb_th_dma,
-+							   GFP_KERNEL);
-+		th_buf = ppa->thumb_th;
-+		th_dma = ppa->thumb_th_dma;
-+	} else {
-+		th_buf = dma_alloc_coherent(ppa->dev, th_sz, &th_dma,
-+					    GFP_KERNEL);
-+	}
++	th_buf = dma_alloc_coherent(ppa->dev, th_sz, &th_dma, GFP_KERNEL);
 +	if (!th_buf) {
 +		ret = -ENOMEM;
 +		goto out;
@@ -3433,9 +3444,9 @@ already set the keep-it precedent). Warm thumbnail: 135 ms end to end,
 +	*out_h = oh;
 +	ret = 0;
 +out:
-+	if (th_buf && th_buf != ppa->thumb_th)
++	if (th_buf)
 +		dma_free_coherent(ppa->dev, th_sz, th_buf, th_dma);
-+	if (pix_buf && pix_buf != ppa->thumb_pix)
++	if (pix_buf)
 +		dma_free_coherent(ppa->dev, pix_sz, pix_buf, pix_dma);
 +	if (in_buf)
 +		dma_free_coherent(ppa->dev, jpeg_len, in_buf, in_dma);
@@ -3776,7 +3787,7 @@ already set the keep-it precedent). Warm thumbnail: 135 ms end to end,
  static int esp32s31_ppa_probe(struct platform_device *pdev)
  {
  	struct device *dev = &pdev->dev;
-@@ -1263,6 +3339,20 @@
+@@ -1263,6 +3349,20 @@
  	if (IS_ERR(ppa->dma2d_memlp))
  		return PTR_ERR(ppa->dma2d_memlp);
  
@@ -3797,7 +3808,7 @@ already set the keep-it precedent). Warm thumbnail: 135 ms end to end,
  	ret = of_reserved_mem_device_init(dev);
  	if (!ret) {
  		struct device_node *np;
-@@ -1281,7 +3371,7 @@
+@@ -1281,7 +3381,7 @@
  	desc_res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "descriptors");
  	if (!desc_res)
  		return -EINVAL;
@@ -3806,7 +3817,7 @@ already set the keep-it precedent). Warm thumbnail: 135 ms end to end,
  		return dev_err_probe(dev, -EINVAL,
  				     "descriptor window too small (%pa)\n",
  				     &desc_res->start);
-@@ -1298,6 +3388,33 @@
+@@ -1298,6 +3398,33 @@
  	writel(v, ppa->ppa_memlp);
  	v = readl(ppa->dma2d_memlp) & ~(MEMLP_LP_EN | MEMLP_FORCE_CTRL);
  	writel(v, ppa->dma2d_memlp);
@@ -3840,7 +3851,7 @@ already set the keep-it precedent). Warm thumbnail: 135 ms end to end,
  
  	/* 2D-DMA feeds the PPA, so bring it up first. */
  	esp32s31_ppa_block_enable(ppa->dma2d_clkrst);
-@@ -1379,6 +3496,21 @@
+@@ -1379,6 +3506,21 @@
  	 * half it is. */
  	debugfs_create_u64("last_setup_ns", 0444, ppa->debugfs, &ppa->last_setup_ns);
  	debugfs_create_u64("last_wait_ns", 0444, ppa->debugfs, &ppa->last_wait_ns);
