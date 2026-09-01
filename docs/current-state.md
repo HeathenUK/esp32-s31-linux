@@ -2434,3 +2434,70 @@ BR/EDR-native records rather than chasing a device's Fast-Pair LE side. udevd st
 and no comfortable partition geometry brings it back (xip2 free 57 KB vs
 udevd 264 KB; thinning factory below ~140 KB headroom is imprudent when
 the controller blob swings hundreds of KB between drops).
+
+## Hosted Wi-Fi throughput: the gap was power save, not the transport (2026-09-01)
+
+The question was why Linux TCP saw ~300 KB/s when hart0's raw-injection test
+had measured 25.8 Mbit/s. Answer: **esp_wifi was running WIFI_PS_MIN_MODEM**,
+and nothing in the current stack ever turned it off.
+
+**The fix lives in `esp-hosted-fg/slave/main/slave_wifi_std.c`** (our fork):
+`esp_wifi_set_ps(WIFI_PS_NONE)` + readback log on every STA_CONNECTED. Two
+earlier attempts went into `bootloader/main/hosted_wifi.c` and did nothing -
+**that file is dead code**: `CONFIG_S31_HOSTED_WIFI_ENABLE` is not set and
+Wi-Fi association is owned end-to-end by the esp-hosted slave RPC path
+(`slave_wifi_std`), driven from the Linux driver. The tell was hart0's log
+saying `slave_wifi_std: Sta mode connected` and `wifi:pm start, type: 1`
+(1 = MIN_MODEM) while hosted_wifi.c's own log line never appeared. After the
+fix the same line reads `type: 0` and the slave logs
+`power save forced off, readback=0`.
+
+Numbers (16 MB HTTP download from a host on the same 2.4 GHz BSS, x3 runs):
+
+    before   267 / 326 / 290 KB/s   ping RTT 13-135 ms, 400-900 ms comas
+    after    681 / 650 / 690 KB/s   ping RTT 5.3/7.2/16.4 ms (min/avg/max)
+
+The power-save signature, for next time: host->board ping shows a descending
+staircase (613, 509, 398, 293, 182, 73 ms...) - the AP's queue draining after
+the STA wakes. RSSI was -60 dBm throughout; signal was never the problem.
+Also eliminated by measurement: Bluetooth coex (powering hci0 off changed
+nothing), hart0 DFS (pinning the cpufreq floor changed nothing), TCP loss
+(zero retransmits in the window-limited runs).
+
+**What the path can actually carry** (UDP, measured with `rootfs/udpblast.c`
+on the board and a python receiver/sender on the host):
+
+    host->board flood     3.4-3.7 MB/s delivered at wlan0, near-zero drops
+                          (but NO listening socket - kernel-only cost)
+    board->host 16 KB     ~1.45 MB/s end-to-end (511/512 datagrams arrived)
+    board->host 1400 B    ~385 KB/s - and the same blast against LOOPBACK
+                          does ~237 KB/s. The radio is not the TX limit.
+
+**The remaining wall is hart1 CPU per syscall/packet**, consistent with the
+old af_unix measurement (read ~1.3 ms / write ~2.1 ms): a blocking 1400 B
+sendto costs ~3.6-5.8 ms wall regardless of destination, and 16 KB datagrams
+get 10x the bytes for the same call count. wget uses only ~27% CPU during a
+download; the rest of the per-packet cost is kernel-side.
+
+**Measured and rejected: `.text..fast` on the network spine.** 42 functions -
+socket syscall layer, skb alloc/free, netif/NAPI/GRO core, IPv4 rx/tx, TCP
+fast paths, UDP, and the s31-hosted driver's poll/xmit/irq (~70 KB of the
+275 KB section) - moved to RAM and verified at 0xc08xxxxx in System.map.
+Result: loopback 237->219 KB/s, Wi-Fi blast 385->354, TCP downloads
+identical. Reverted. The arithmetic says why: 5.8 ms at 320 MHz is ~2M
+cycles per sendto - no 6x fetch penalty on a ~30k-instruction path explains
+that; the cost is structural (somewhere in entry/wakeup/softirq scheduling,
+not in the flash residency of the stack bodies). Finding those cycles is a
+separate investigation - see the "socket syscalls cost ms" memory.
+
+Practical guidance that follows from the numbers:
+- Transfers to/from the board should use big buffers per syscall (wget and
+  curl already do; anything hand-rolled should copy >=16 KB per call).
+- `tcp_rmem` stays at the 131072 default: post-fix BDP is ~5 KB, the window
+  is nowhere near binding, and a 1 MB bump measured no better.
+- Offered load far above ~3 MB/s collapses delivery to ~zero rather than
+  shedding gracefully (both before and after the fix) - do not stream
+  blindly at the board.
+- Do not diagnose air problems from ping alone: the Mac's own power save
+  pollutes board->Mac RTT, and the gateway deprioritises ICMP. Calibrate
+  with a second station before blaming the link.
