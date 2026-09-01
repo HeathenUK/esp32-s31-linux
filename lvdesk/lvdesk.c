@@ -27,6 +27,7 @@
 #include <linux/input.h>
 #include <linux/kd.h>
 #include <sys/inotify.h>
+#include <sys/mman.h>
 #include <sys/ioctl.h>
 #include <poll.h>
 #include <sys/stat.h>
@@ -5785,6 +5786,18 @@ static void mouse_init(void)
 
 int main(void)
 {
+	/*
+	 * The desktop must never wait on the SD card to move the pointer or
+	 * open a menu. Its heap and stack are a few hundred KB - measured
+	 * 212 KB RSS with 60 KB already swapped out after 13 minutes of
+	 * uptime, each swapped page a ~3.2 ms SD round trip taken mid-
+	 * interaction. Lock everything, current and future; children are
+	 * unaffected (locks do not survive fork). The XIP text costs
+	 * nothing to lock - it is flash-mapped, not page cache.
+	 */
+	if (!getenv("LVDESK_NO_MLOCK") &&
+	    mlockall(MCL_CURRENT | MCL_FUTURE) != 0)
+		perror("lvdesk: mlockall");
 	term_log = getenv("LVDESK_TERMLOG") != NULL;
 	prof_on = getenv("LVDESK_PROF") != NULL;
 	rect_log = getenv("LVDESK_RECTLOG") != NULL;

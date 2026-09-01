@@ -2687,3 +2687,26 @@ under overlay) and post-build.sh now deletes any target/usr/lib copy of
 the replaced libraries that differs from the overlay's shim, so a
 re-image can't reintroduce them. Policy: shims live in XIP only; a
 missing shim must fail loudly.
+
+## lvdesk is pinned - the compositor can never page (2026-09-01)
+
+mlockall(MCL_CURRENT | MCL_FUTURE) at the top of main (LVDESK_NO_MLOCK
+opts out). Before: 13 minutes of uptime had already swapped 60 KB of the
+compositor's heap to SD and charged it 12 major faults - each one a
+~3.2 ms SD round trip taken while moving the pointer or opening a menu.
+After: VmLck == VmRSS (1252 KB idle, ~2060 KB with a full-screen client,
+because MCL_FUTURE locks client surfaces as xshim allocates them), VmSwap
+0, and under xfiles + two uinject demo passes majflt stayed exactly flat
+and pgscan_direct did not move. Locks do not survive fork, so terminal
+children are not pinned.
+
+The honest cost: ~1.25 MB stays resident instead of being evicted. The
+old "lvdesk is only 212 KB RSS" was the *symptom* of the problem - the
+desktop had been paged out and re-faulted on demand. Clients can still
+page (that is what swap is for); the compositor, cursor, menus and tray
+cannot.
+
+Next knob if foreground stalls reappear: min_free_kbytes (currently
+1024) - pgscan_direct was nonzero after long uptimes, and raising the
+watermark moves reclaim onto kswapd instead of the allocating thread.
+Runtime-tunable, A/B before adopting.
