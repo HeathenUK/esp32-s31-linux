@@ -1,12 +1,17 @@
 /*
- * s31-thumb <in.jpg> <out.ppm> [maxdim]
+ * s31-thumb <in> <out.ppm> [maxdim]  -  also installed AS xfilesthumb.
  *
  * Hardware thumbnail: the S31 JPEG codec decodes and the PPA scales, via
  * the DRM_IOCTL_ESP32S31_JPEG_THUMB one-call ioctl; this tool only reads
  * the file, bounds the feed at the first EOI (so the first frame of a
  * concatenated MJPEG works), and writes the result as a binary PPM for
  * xfiles' thumbnailer. Exits nonzero on anything unsupported - progressive,
- * grayscale, oversized - and xfilesthumb then leaves the generic icon.
+ * grayscale, oversized - and xfiles keeps its generic icon.
+ *
+ * There is no filename filter, deliberately: the four magic bytes are read
+ * first and anything that is not a JPEG exits before the bulk read. That
+ * replaces the shell wrapper this used to hide behind - process spawn is
+ * ~ms-expensive here and the wrapper's only job was a case statement.
  */
 #include <fcntl.h>
 #include <stdint.h>
@@ -49,10 +54,18 @@ int main(int argc, char **argv)
 	fd = open(argv[1], O_RDONLY);
 	if (fd < 0)
 		return 1;
-	n = read(fd, in, sizeof(in));
-	close(fd);
-	if (n < 4 || in[0] != 0xff || in[1] != 0xd8)
+	n = read(fd, in, 4);
+	if (n < 4 || in[0] != 0xff || in[1] != 0xd8) {
+		close(fd);
 		return 1;
+	}
+	{
+		ssize_t m = read(fd, in + 4, sizeof(in) - 4);
+
+		if (m > 0)
+			n += m;
+	}
+	close(fd);
 
 	/* Bound the feed at the first EOI: MJPEG files concatenate frames. */
 	for (i = 2; i + 1 < (size_t)n; i++) {

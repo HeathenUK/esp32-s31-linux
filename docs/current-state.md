@@ -2583,17 +2583,22 @@ Right-click in xfiles now works end to end with zero new resident RAM:
 
 ## Hardware thumbnails: JPEG decode + PPA scale into xfiles (2026-09-01)
 
-xfiles thumbnails now come from the codec: `xfilesthumb` (XIP) runs
-`s31-thumb <file> <out.ppm> 64`, which feeds the JPEG through
-DRM_ESP32S31_JPEG_THUMB - hardware decode, then PPA SRM scale, one ioctl.
+xfiles thumbnails now come from the codec: `xfilesthumb` IS `s31-thumb`
+(a symlink - the shell wrapper it briefly hid behind cost one ~0.35 s
+process spawn per file, which was half the per-thumbnail time; the binary
+gates on JPEG magic bytes instead of filenames, reading 4 bytes before the
+bulk). It feeds the JPEG through DRM_ESP32S31_JPEG_THUMB - hardware
+decode, then PPA SRM scale, one ioctl.
 Board-generated captures AND the first frame of any mjpeg (the tool bounds
 the feed at the first EOI) thumbnail correctly; progressive, grayscale and
 anything decoding over 1280x960 (a 2.4 MB transient CMA cap, not a codec
 limit) exit nonzero and keep the generic icon. Enabled by
 XDG_CACHE_HOME=/root/.cache in /etc/profile (overlay AND the live card);
-the PPM cache persists on SD, so revisits are instant. Measured: 0.35-0.61 s
-per thumbnail end-to-end, almost all of it process spawn and DRM open - the
-decode is ~8 ms and the scale ~2 ms. Decode register lore lives in
+the PPM cache persists on SD, so revisits are instant. Measured: ~0.45 s
+per thumbnail end-to-end (was ~0.8 s through the wrapper), and a bare
+process spawn on this board measures ~0.35 s - that is the floor for any
+exec-per-file design, and why a resident thumbnail daemon is the only
+remaining big lever (rejected: RAM). The decode is ~8 ms, the scale ~2 ms. Decode register lore lives in
 patches/0023 (OUT descriptors take their length from HB/HA; DQT_INFO is a
 table-id map; RX REORDER rebuilds rasters; completion is DCT_DONE).
 
