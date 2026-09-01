@@ -3799,23 +3799,40 @@ static int wifi_link_level(void)
  * bars most UIs draw: > -63 dBm full, -63..-75 mid, below that the dot,
  * dim skeleton when there is no association (or no supplicant yet).
  */
+static int wifi_rssi_bucket(int rssi)
+{
+	if (rssi <= -95)
+		return 0;
+	if (rssi < -75)
+		return 1;
+	if (rssi < -63)
+		return 2;
+	return 3;
+}
+
 static void tray_wifi_update(void)
 {
 	/* lit height per bucket, in 16ths of the glyph height */
 	static const uint8_t lit16[] = { 0, 7, 11, 16 };
-	int rssi, b;
+	int rssi, b, b_hi, b_lo;
 
 	if (!wifi_tray_clip)
 		return;
 	rssi = wifi_link_level();
-	if (rssi <= -95)
-		b = 0;
-	else if (rssi < -75)
-		b = 1;
-	else if (rssi < -63)
-		b = 2;
-	else
-		b = 3;
+	/*
+	 * 3 dB Schmitt band. RSSI at a fixed desk measures -59..-66 across
+	 * the day, straddling the -63 boundary, so an unhysteresed bucket
+	 * flips the outer arc every few ticks. To move UP a bucket the
+	 * signal must clear the boundary by 3 dB; to move DOWN it must
+	 * fall 3 dB past it; inside the band the icon holds.
+	 */
+	b_hi = wifi_rssi_bucket(rssi - 3);
+	b_lo = wifi_rssi_bucket(rssi + 3);
+	b = wifi_tray_bucket;
+	if (b_hi > b)
+		b = b_hi;
+	else if (b_lo < b)
+		b = b_lo;
 	if (b == wifi_tray_bucket)
 		return;
 	wifi_tray_bucket = b;
