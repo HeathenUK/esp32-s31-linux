@@ -3158,3 +3158,42 @@ and alive.py then reports "emitting bytes, no prompt". Bound every
 network wait in a board script (`wget -T`), never `set --` inside a
 function that still needs its arguments, and read alive.py's line dump
 before calling a board dead.
+
+## Motion batching, memfd-born surfaces, and the bitpool knob (2026-09-02)
+
+**One socket flush per loop pass, not per MotionNotify.** `xshim_pointer()`
+flushed the client after every motion event, and a socket write is 1-6 ms
+here. Buttons still flush immediately; motion now waits for
+`xshim_flush()`, which lvdesk calls right before it sleeps in `poll()`,
+so nothing is delayed past the point the desktop yields the CPU. Same
+25 s `uinject session`, same day, xfiles up:
+
+| | lag avg | worst | xshim writes | write time |
+|---|---|---|---|---|
+| before | 24 ms | 360 ms | 3070 | 844 ms |
+| after | **6 ms** | 163 ms | 650 | 280 ms |
+
+**Surfaces over 64 KB are born as memfds.** A client loading pixels via
+xlite-SHM asks for the fd behind a drawable, and `px_share()` answered by
+creating one and copying the surface into it - 733 KB per maximised
+window, two such requests measured **292 ms of a 3.0 s maximise**. With
+`px_alloc()` allocating anything over 64 KB as a memfd from the start the
+same two requests cost **11 ms**. The maximise overall did not move
+clearly (2.9 / 2.0 / 5.0 s across three runs against 3.0 before): during
+a maximise we send exactly one Configure, one Expose and one Map, and
+the ~100 requests that follow are xfiles repainting its icon cells -
+legitimate work, each paying the ~2 ms flash-fetch floor per request.
+That floor is the profile-guided hot-text item, not a shim change.
+Shmem rises accordingly (3.1 MB with xfiles maximised) as AnonPages
+falls; the pages were always there, they are just shared now.
+
+**`S31_A2DP_BITPOOL`** picks the SBC bitpool within what the sink
+accepted. The codec is 6-9% of a core at any bitpool; what a smaller
+frame buys is fewer packets per second inside the sink's 679-byte MTU -
+every packet being a socket write, an HCI worker pass and a transport
+interrupt. From the frame arithmetic (joint stereo, 8 subbands, 16
+blocks: frame = 13 + 2 x bitpool bytes): bitpool 32 -> 8 frames/packet,
+43 packets/s; 26 -> 10, 34/s; 20 -> 12, 29/s. NOT yet measured - the
+earbuds were asleep when the arms ran - so the daemon default is still
+libsbc's choice. The daemon also does its D-Bus housekeeping every 16th
+packet instead of every packet.

@@ -30,6 +30,7 @@ void xshim_mem_report(void);
 
 /* Service any ready clients. Non-blocking. */
 void xshim_poll(void);
+void xshim_flush(void);
 
 /*
  * The listening fd plus every connected client, for a caller that already

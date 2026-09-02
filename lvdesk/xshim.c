@@ -372,6 +372,41 @@ static uint16_t *px_alloc(struct res *r, int w, int h)
 	r->bpp = (r->depth && r->depth <= 8) ? 1 : 2;
 	n = (size_t)w * h * r->bpp;
 
+	/*
+	 * Big surfaces are born shareable. A client that loads pixels through
+	 * xlite-SHM asks for the memfd behind a drawable, and px_share() used
+	 * to answer by creating one and COPYING the surface into it: 733 KB
+	 * per maximised window, and two such requests measured 292 ms of a
+	 * 3.0 s maximise - the single largest item in it. Allocating anything
+	 * over 64 KB as a memfd from the start makes that request a sendmsg.
+	 * memfd pages are zero-filled on first touch, so the calloc semantics
+	 * every drawing path relies on are unchanged; and they are only
+	 * committed as they are touched, exactly like calloc's. Small
+	 * surfaces keep calloc - an fd per icon-sized pixmap is not worth it.
+	 */
+	if (n >= 65536) {
+		int fd = memfd_create("xshim-surface", 0);
+
+		if (fd >= 0 && ftruncate(fd, (off_t)n) == 0) {
+			void *m = mmap(NULL, n, PROT_READ | PROT_WRITE,
+				       MAP_SHARED, fd, 0);
+
+			if (m != MAP_FAILED) {
+				r->px = m;
+				r->shm_fd = fd;
+				r->shm_len = n;
+				if (r->type == R_PIXMAP) {
+					mem_pix += n; n_pix++;
+				} else {
+					mem_win += n; n_win++;
+				}
+				return r->px;
+			}
+		}
+		if (fd >= 0)
+			close(fd);
+		/* fall through to the heap on any failure */
+	}
 	r->px = calloc((size_t)w * h, r->bpp);
 	if (!r->px)
 		return NULL;
@@ -1597,6 +1632,9 @@ static uint32_t xsp_op_n[256];
  * volume - a fast loop asked to repaint everything looks identical to a
  * slow loop on the profile until you divide. */
 static uint64_t xsp_op_px[256];
+/* Events SENT, by type - which of them a client answers with a full
+ * repaint is the question a slow resize turns on. */
+static uint32_t xsp_ev[64];
 /*
  * Wall time in a handler is NOT lvdesk's cost. There is one core: after
  * send_reply wakes the client, the client runs and this process is simply
@@ -1689,6 +1727,24 @@ static void xsp_dump(void)
 				(unsigned long long)
 				(xsp_op_cpu[top[t]] / 1000000));
 		fprintf(stderr, "\n");
+	}
+	{
+		static const char *evn[] = { [6] = "Motion", [7] = "Enter",
+			[8] = "Leave", [12] = "Expose", [19] = "Map",
+			[22] = "Configure", [4] = "Press", [5] = "Release" };
+		int k, any = 0;
+
+		for (k = 0; k < 64; k++)
+			if (xsp_ev[k]) {
+				fprintf(stderr, "%s %s(%d)=%u",
+					any ? "" : "xsp:   sent:", 
+					(k < 32 && evn[k]) ? evn[k] : "ev", k,
+					xsp_ev[k]);
+				any = 1;
+			}
+		if (any)
+			fprintf(stderr, "\n");
+		memset(xsp_ev, 0, sizeof(xsp_ev));
 	}
 	memset(xsp_op_ns, 0, sizeof(xsp_op_ns));
 	memset(xsp_op_n, 0, sizeof(xsp_op_n));
@@ -1793,6 +1849,8 @@ static void send_event_d(struct cli *c, uint8_t type, uint8_t detail,
 	e[1] = detail;
 	put16(e + 2, c->seq);
 	memcpy(e + 4, d, n > 28 ? 28 : n);
+	if (xsp_on > 0 && type < 64)
+		xsp_ev[type]++;
 	out_push(c, e, 32);
 }
 
@@ -5116,7 +5174,17 @@ void xshim_pointer(uint32_t id, int x, int y, int button, int act)
 	} else {
 		send_device_event(c, 6, 0, w, x, y, EV_MOTION, state);
 	}
-	if (c->fd >= 0)
+	/*
+	 * Buttons go out now; motion waits for xshim_flush(), which lvdesk
+	 * calls once per loop pass just before it sleeps in poll(). A socket
+	 * write is 1-6 ms on this board, and the desktop was paying one per
+	 * MotionNotify: 3070 writes and 844 ms of write time in a 25 s
+	 * interactive session, ~7% of the core, most of it motion. Batching
+	 * costs the client nothing it can see - the flush happens before the
+	 * desktop yields the CPU - and a run of motion events coalesces into
+	 * one write.
+	 */
+	if (c->fd >= 0 && act != 0)
 		out_flush(c);
 	ptr_last_top = id;
 	ptr_last_win = w->id;
@@ -5317,6 +5385,18 @@ static void client_data(struct cli *c)
 		c->n -= off;
 	}
 	out_flush(c);
+}
+
+/* Flush every client with buffered output. Called by lvdesk once per loop
+ * pass, before it sleeps, so anything deferred (motion) is on the wire
+ * before the CPU is yielded. */
+void xshim_flush(void)
+{
+	int i;
+
+	for (i = 0; i < MAXCLI; i++)
+		if (cli[i].fd >= 0 && cli[i].outn)
+			out_flush(&cli[i]);
 }
 
 void xshim_poll(void)

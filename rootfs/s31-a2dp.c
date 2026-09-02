@@ -654,8 +654,28 @@ int main(int argc, char **argv)
 
 	sbc_init_a2dp(&sbc, 0L, &chosen, sizeof(chosen));
 	sbc.endian = SBC_LE;
+	/*
+	 * Bitpool is the one knob the cost responds to, and it responds by
+	 * PACKET COUNT, not codec time: the codec is 6-9% of a core whatever
+	 * the bitpool, but a smaller frame packs more frames into the sink's
+	 * 679-byte MTU, and every packet is a socket write (~0.8 ms), an
+	 * HCI worker pass and a transport interrupt. S31_A2DP_BITPOOL picks
+	 * within what the sink accepted; the default is libsbc's choice.
+	 */
+	if (getenv("S31_A2DP_BITPOOL")) {
+		int bp = atoi(getenv("S31_A2DP_BITPOOL"));
+
+		if (bp < chosen.min_bitpool) bp = chosen.min_bitpool;
+		if (bp > chosen.max_bitpool) bp = chosen.max_bitpool;
+		sbc.bitpool = (uint8_t)bp;
+	}
 	codesize = sbc_get_codesize(&sbc);
 	framelen = sbc_get_frame_length(&sbc);
+	fprintf(stderr, "s31-a2dp: bitpool=%u framelen=%zu -> %d frames/packet, "
+		"%.1f packets/s\n", sbc.bitpool, framelen,
+		(int)(((size_t)wmtu - 13) / framelen),
+		(double)sbc_freq_hz(chosen.freq) /
+		((codesize / 4) * (double)(((size_t)wmtu - 13) / framelen)));
 	pcm = malloc(codesize);
 	pkt = malloc(wmtu > 0 ? (size_t)wmtu : 1024);
 	if (!pcm || !pkt)
@@ -816,7 +836,10 @@ int main(int argc, char **argv)
 				late_max = 0; wr_max = 0;
 			}
 		}
-		dbus_connection_read_write_dispatch(conn, 0);
+		/* Bus housekeeping every 16th packet: a dispatch is a poll()
+		 * and it was costing one syscall per packet for nothing. */
+		if ((seq & 15) == 0)
+			dbus_connection_read_write_dispatch(conn, 0);
 		if (!transport_ready) {
 			fprintf(stderr, "s31-a2dp: transport went away\n");
 			break;

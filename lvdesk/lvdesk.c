@@ -6381,6 +6381,7 @@ int main(void)
 		 * timing matters.
 		 */
 		ms = (int)next;
+		xshim_flush();		/* deferred client output, before we sleep */
 		{
 			struct timespec a, b;
 
