@@ -2898,10 +2898,14 @@ with the sink, acquires the transport fd and writes RTP-framed SBC.
 **Idle cost: 3 ticks in 5 s (0.6% of a core) against bluealsa's ~460
 (92%).** That is the whole point of the exercise.
 
-Status 2026-09-02: **streams end to end** - 345 packets, no errors, the
-whole 8 s file, to the soundcore Liberty 4 NC. Awaiting an ear: nothing
-here has heard it, and this board has had instruments call its audio
-working while it played pure noise.
+Status 2026-09-02: **WORKS, CONFIRMED BY EAR.** 345 packets, no errors,
+the whole 8 s file to the soundcore Liberty 4 NC, and a human heard the
+four-note arpeggio correctly - C4/E4/G4/C5, distinct notes, clean
+envelope, stereo audible. BlueALSA is no longer needed for playback.
+
+Known cosmetic fault in the TEST FILE, not the path: it is 44.1 kHz sent
+over a transport negotiated at 48 kHz, so it plays ~9% sharp. Either
+resample, or offer 44.1 kHz first and hold the peer to it.
 
 Costs: **0.6% of a core registered and idle** (3 ticks in 5 s, against
 bluealsa's ~460) and **43% while actually encoding** (216 ticks in 5 s)
