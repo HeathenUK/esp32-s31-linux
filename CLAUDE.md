@@ -142,8 +142,9 @@ for kernel work; the rootfs only needs rebuilding when userspace changes.
   `CMDLINE_FORCE`, not the DTS). Capture with `echo > /proc/profile`, the
   workload, then `gzip -c /proc/profile | base64` to the host and
   `scripts/board/resolve-profile.py System.map dump.b64`. Only kernel-mode
-  ticks are sampled; the idle loop polls here, so idle shows as
-  `cpu_idle_poll`. The paragraph below is kept for the history of the trade.
+  ticks are sampled, and idle shows up as `cpu_idle_poll` only because it
+  shares a 64-byte bucket with `default_idle_call` (WFI) - the idle loop does
+  not poll. Resolution is the bucket, not the symbol. The paragraph below is kept for the history of the trade.
 - **The kernel does not fit with both profiling and the radios.** (historical) The linux
   partition is 5,636,096 bytes and there is very little slack. In-core profiling
   (`CONFIG_PROFILING`, which *selects* `PERF_EVENTS`) and Wi-Fi + Bluetooth +
