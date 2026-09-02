@@ -2731,3 +2731,35 @@ Next knob if foreground stalls reappear: min_free_kbytes (currently
 1024) - pgscan_direct was nonzero after long uptimes, and raising the
 watermark moves reclaim onto kswapd instead of the allocating thread.
 Runtime-tunable, A/B before adopting.
+
+## bluealsa was eating the whole machine (2026-09-02)
+
+**`bluealsa` busy-waits at ~92% of the single core with no Bluetooth
+device connected, nothing playing, and a clean log.** The spinning
+thread is glib's `pool-spawner` (8817 ticks against 151 for the main
+thread), so this is glib's thread pool under musl, not Bluetooth work.
+
+Measured, idle desktop, fresh boot, 10 s windows:
+
+| | system idle | lvdesk input lag |
+|---|---|---|
+| bluealsa running | **0 ticks of 1000** | 170-411 ms avg, 582-1270 worst |
+| bluealsa stopped | 388 of 600 (65%) | **25 ms avg, 159 ms worst** |
+
+This is the real cause of "the desktop got slow during Bluetooth week" -
+not thumbnails, not the context menu, not the kernel. It also explains
+why the earlier lag A/B arms were so noisy and why thumbnails ON kept
+beating OFF: every arm was competing with a spinning daemon for the only
+core, so the arms were measuring scheduler luck.
+
+`S47bluealsa` no longer autostarts. `touch /etc/s31-btaudio-on` enables
+it for Bluetooth audio; the glib spin is worth fixing at source before
+that becomes the default again.
+
+**Method note:** this was found by per-process CPU accounting
+(`/proc/<pid>/stat` utime+stime deltas over a fixed window) during real
+interaction, after the xshim request profile showed requests that draw
+NOTHING - QueryPictFormats, a 140-byte static reply - "taking" 20-847 ms.
+Wall time in a handler on a one-core box is not the handler's cost. The
+profiler now records CLOCK_THREAD_CPUTIME_ID alongside wall time so the
+two can never be confused again.

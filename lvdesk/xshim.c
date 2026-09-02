@@ -1593,6 +1593,28 @@ static uint64_t xsp_read, xsp_handle, xsp_write, xsp_poll, xsp_calls;
 /* handle time by request: core ops 0..127, RENDER minors at 128+minor */
 static uint64_t xsp_op_ns[256];
 static uint32_t xsp_op_n[256];
+/* pixels touched per request, so ns/px separates a slow loop from sheer
+ * volume - a fast loop asked to repaint everything looks identical to a
+ * slow loop on the profile until you divide. */
+static uint64_t xsp_op_px[256];
+/*
+ * Wall time in a handler is NOT lvdesk's cost. There is one core: after
+ * send_reply wakes the client, the client runs and this process is simply
+ * off-CPU, with the wall clock still running. QueryPictFormats "taking"
+ * 20 ms - a 140-byte static reply - is that, not work. CPU time per handler
+ * separates "we are slow" from "we are waiting for the client".
+ */
+static uint64_t xsp_op_cpu[256];
+static uint64_t xsp_cpu_total;
+uint64_t xshim_px_acc;
+
+static uint64_t xsp_cpu_now(void)
+{
+	struct timespec t;
+
+	clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t);
+	return (uint64_t)t.tv_sec * 1000000000ull + t.tv_nsec;
+}
 static int xsp_on = -1;
 
 static uint64_t xsp_now(void)
@@ -1613,12 +1635,13 @@ static void xsp_dump(void)
 	last = now;
 	if (xsp_calls)
 		fprintf(stderr, "xsp: %llu calls  poll=%lluus read=%lluus "
-			"handle=%lluus write=%lluus (per call p=%llu r=%llu "
-			"h=%llu w=%llu)\n",
+			"handle=%lluus(cpu %lluus) write=%lluus (per call "
+			"p=%llu r=%llu h=%llu w=%llu)\n",
 			(unsigned long long)xsp_calls,
 			(unsigned long long)(xsp_poll / 1000),
 			(unsigned long long)(xsp_read / 1000),
 			(unsigned long long)(xsp_handle / 1000),
+			(unsigned long long)(xsp_cpu_total / 1000),
 			(unsigned long long)(xsp_write / 1000),
 			(unsigned long long)(xsp_poll / 1000 / xsp_calls),
 			(unsigned long long)(xsp_read / 1000 / xsp_calls),
@@ -1641,13 +1664,23 @@ static void xsp_dump(void)
 		}
 		fprintf(stderr, "xsp:   top:");
 		for (t = 0; t < 4 && top[t] >= 0; t++)
-			fprintf(stderr, "  %s%u x%u %llums",
+			fprintf(stderr, "  %s%u x%u %llums %lluKpx %lluns/px",
 				top[t] >= 128 ? "R" : "",
 				(unsigned)(top[t] >= 128 ? top[t] - 128
 							 : top[t]),
 				xsp_op_n[top[t]],
 				(unsigned long long)
-				(xsp_op_ns[top[t]] / 1000000));
+				(xsp_op_ns[top[t]] / 1000000),
+				(unsigned long long)
+				(xsp_op_px[top[t]] / 1000),
+				(unsigned long long)
+				(xsp_op_px[top[t]] ?
+				 xsp_op_ns[top[t]] / xsp_op_px[top[t]] : 0));
+		for (t = 0; t < 4 && top[t] >= 0; t++)
+			fprintf(stderr, "%s cpu %llums",
+				t ? "," : "\nxsp:   cpu:",
+				(unsigned long long)
+				(xsp_op_cpu[top[t]] / 1000000));
 		fprintf(stderr, "\n");
 	}
 	memset(xsp_op_ns, 0, sizeof(xsp_op_ns));
@@ -2139,11 +2172,13 @@ static void render_fill(struct res *d, struct pict *dp, int x, int y,
 
 		for (j = y0; j < y1; j++)
 			px_hspan(d, x0, j, x1 - x0, c);
+		xshim_px_acc += (uint64_t)(x1 - x0) * (y1 - y0);
 		return;
 	}
 	for (j = y0; j < y1; j++)
 		for (i = x0; i < x1; i++)
 			blend_px(d, i, j, r8, g8, b8, a8, op);
+	xshim_px_acc += (uint64_t)(x1 - x0) * (y1 - y0);
 }
 
 static struct glyph *glyph_find(struct gset *s, uint32_t id)
@@ -2729,6 +2764,8 @@ static void render_composite(struct cli *c, const uint8_t *r)
 						}
 					}
 				}
+				xshim_px_acc += (uint64_t)(x1 - x0) *
+						(y1 - y0);
 				damage_add(d, dx, dy, w, h);
 				notify_draw(d);
 				return;
@@ -5032,13 +5069,19 @@ static void client_data(struct cli *c)
 			break;
 		if (xsp_on) {
 			uint64_t th = xsp_now(), dt;
+			uint64_t tc = xsp_cpu_now(), dc;
 			int key = r[0] < 128 ? r[0] : 128 + (r[1] & 0x7F);
 
+			xshim_px_acc = 0;
 			handle(c, r, len);
 			dt = xsp_now() - th;
+			dc = xsp_cpu_now() - tc;
 			xsp_handle += dt;
+			xsp_cpu_total += dc;
 			xsp_op_ns[key] += dt;
+			xsp_op_cpu[key] += dc;
 			xsp_op_n[key]++;
+			xsp_op_px[key] += xshim_px_acc;
 			xsp_calls++;
 		} else {
 			handle(c, r, len);
