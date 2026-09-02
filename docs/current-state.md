@@ -2888,3 +2888,30 @@ core, not a real effect. Decoding an image is not cheaper than not
 decoding it; the honest statement is that the thumbnail path is fast
 enough not to matter, at ~160-220 ms per image of which ~56 ms is the
 process spawn.
+
+## s31-a2dp: our own A2DP source (2026-09-02)
+
+`rootfs/s31-a2dp.c`, 496 lines, libdbus + libsbc, **no glib**. Registers
+an A2DP *source* endpoint on bluez's Media API, lets bluez negotiate SBC
+with the sink, acquires the transport fd and writes RTP-framed SBC.
+
+**Idle cost: 3 ticks in 5 s (0.6% of a core) against bluealsa's ~460
+(92%).** That is the whole point of the exercise.
+
+Status: the endpoint registers and waits correctly
+("endpoint registered, waiting for a sink"); the streaming path is
+written but NOT yet verified against real headphones, because the
+earbuds would not answer paging. Verify BY EAR before believing it -
+instruments have called this board's audio working while it played pure
+noise before.
+
+**Trap found doing this: XIP_SKIP exposes the SD copy, and the SD copy
+can be STALE rather than missing.** Moving bluetoothd out of the XIP
+image made the system run `/usr/libexec/bluetooth/bluetoothd` from the
+card - an **Aug 23 build, 797,012 bytes, with zero "a2dp" strings** -
+while the current build is 1,224,572 bytes with the plugin. The symptom
+was `org.bluez.Media1` having no `RegisterEndpoint`, i.e. exactly the
+failure that the LE-era `-p gap` allow-list used to cause, from a
+completely different cause. Checking that the file EXISTS on the SD
+lower layer is not enough; check that it is the file you just built.
+The card's copy has been refreshed.
