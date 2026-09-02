@@ -54,6 +54,7 @@ BR2_PACKAGE_SBC=y
 # actually sends per A2DP packet. SD-layer binaries, so they cost nothing
 # until run.
 BR2_PACKAGE_BLUEZ5_UTILS_TOOLS=y
+BR2_PACKAGE_BLUEZ5_UTILS_MONITOR=y
 # BR2_PACKAGE_BLUEZ5_UTILS_DEPRECATED is not set
 # BR2_PACKAGE_BLUEZ5_UTILS_PLUGINS_NETWORK is not set
 # BR2_PACKAGE_DROPBEAR is not set

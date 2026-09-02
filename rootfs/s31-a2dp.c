@@ -33,6 +33,7 @@
 #include <time.h>
 #include <poll.h>
 #include <sched.h>
+#include <sys/syscall.h>
 #include <sys/mman.h>
 
 #define EP_PATH		"/s31/a2dp/source"
@@ -406,6 +407,8 @@ static int transport_acquire(DBusConnection *conn, int *write_mtu)
 	int fd = -1;
 	dbus_uint16_t rmtu = 0, wmtu = 0;
 
+	if (!transport_path[0])
+		return -1;	/* cleared under us - an empty path aborts libdbus */
 	m = dbus_message_new_method_call("org.bluez", transport_path,
 					 "org.bluez.MediaTransport1",
 					 "Acquire");
@@ -536,7 +539,14 @@ int main(int argc, char **argv)
 	{
 		struct sched_param sp = { .sched_priority = 5 };
 
-		if (sched_setscheduler(0, SCHED_FIFO, &sp) != 0)
+		/*
+		 * The raw syscall, not sched_setscheduler(): musl implements
+		 * that function as an unconditional ENOSYS stub (it objects to
+		 * Linux's per-thread semantics), which is how this daemon ran
+		 * an entire afternoon of "RT priority changed nothing" tests at
+		 * nice 0. busybox chrt uses the syscall and works.
+		 */
+		if (syscall(SYS_sched_setscheduler, 0, SCHED_FIFO, &sp) != 0)
 			perror("s31-a2dp: SCHED_FIFO (continuing)");
 		if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0)
 			perror("s31-a2dp: mlockall (continuing)");
@@ -580,16 +590,30 @@ int main(int argc, char **argv)
 			}
 		}
 	}
-	/* The sink may take a moment to move the transport to "active". */
-	for (int i = 0; i < 20 && fd < 0; i++) {
-		fd = transport_acquire(conn, &wmtu);
+	/*
+	 * Acquire, patiently. A transport can be handed to us and then
+	 * withdrawn while the sink finishes its own setup - seen as
+	 * SetConfiguration on .../fd1, Acquire -EIO, then ClearConfiguration
+	 * and a fresh transport a moment later - so this keeps pumping the
+	 * bus and goes back to waiting whenever the path is cleared, rather
+	 * than retrying a name that no longer exists.
+	 */
+	for (int i = 0; i < 120 && fd < 0; i++) {
+		if (transport_ready && transport_path[0])
+			fd = transport_acquire(conn, &wmtu);
 		if (fd < 0) {
 			dbus_connection_read_write_dispatch(conn, 250);
-			continue;
+			if (!transport_ready && (i % 4) == 3)
+				if (find_transport(conn)) {
+					transport_ready = 1;
+					transport_config(conn);
+				}
 		}
 	}
-	if (fd < 0)
+	if (fd < 0) {
+		fprintf(stderr, "s31-a2dp: no usable transport after 30 s\n");
 		return 1;
+	}
 	fprintf(stderr, "s31-a2dp: transport fd=%d write_mtu=%d\n", fd, wmtu);
 
 	sbc_init_a2dp(&sbc, 0L, &chosen, sizeof(chosen));
