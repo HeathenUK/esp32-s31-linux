@@ -605,7 +605,17 @@ int main(int argc, char **argv)
 				fprintf(stderr, "s31-a2dp: bus closed\n");
 				return 1;
 			}
-			if (++spins % 5 == 0 && find_transport(conn)) {
+			/*
+			 * Prefer being told. Scanning ObjectManager after only a
+			 * second found bluez's half-built transport (.../fd1) while
+			 * it was still negotiating with the sink; Acquire on it
+			 * returned -EIO and bluez then tore the whole stream down
+			 * (ClearConfiguration, no replacement for 30 s). Waiting
+			 * 8 s before falling back leaves room for SetConfiguration,
+			 * which is the normal path; the scan is for the case where
+			 * the stream already existed before we started.
+			 */
+			if (++spins % 40 == 0 && find_transport(conn)) {
 				transport_ready = 1;
 				/*
 				 * No SetConfiguration means no negotiated blob,
