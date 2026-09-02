@@ -2790,3 +2790,45 @@ went from 233 KB OVER its partition to 2.18 MB free.
 **Bluetooth is now opt-in:** `touch /etc/s31-bluetooth-on && reboot`
 starts bluetoothd and bluealsa. Off, they cost no CPU, no RAM and no
 flash; on, bluetoothd runs from the SD lower layer (~800 KB RSS).
+
+## Where the desktop's time goes now (2026-09-02, end of day)
+
+Measured on a fresh boot with the realistic `uinject session` load
+(one uinput device for the whole run - respawning uinject per action
+makes the desktop's inotify rescan charge the input path 1.4-1.8 s per
+5 s window that no user would ever pay):
+
+| | before today | now |
+|---|---|---|
+| input lag, client up | 170-411 ms avg | **15 ms avg**, worst 190 |
+| system idle, idle desktop | 0% | 38-65% |
+| MemFree | 1892 kB | 3264 kB |
+| process spawn | 53.6 ms | 29.0 ms |
+| desktop starts | 27.7 s | 25.2 s |
+| rcS ends | 48.9 s | 40.4 s |
+| xfiles launch | 11.4 s | 5.0 s |
+
+**Still slow, and where it actually goes:**
+
+- **Maximise/restore xfiles: ~2.6 s** (`rootfs/resizebench.c` sends the
+  ctl command and samples both processes' CPU until they go quiet). The
+  split is the finding: **lvdesk 140 ticks against the client's 20** -
+  seven eighths of a resize is ours. One maximise paints 6.1 M fill
+  pixels and 1.5 M composite pixels, about 20 screenfuls, and the fills
+  arrive as single large rectangles (798x410 into a 768x515 pixmap),
+  not as many small ones.
+- **One xlite-SHM GetPixmapFd costs 86-355 ms** (once 1347 ms) inside a
+  resize: `px_share()` allocates a memfd, mmaps it and copies 733 KB.
+  MAP_POPULATE was tried and reverted (3149/3623 ms against 2549/2722) -
+  prefaulting moves the page cost, it does not remove it. The fix has to
+  avoid the allocate-and-copy, e.g. by backing large pixmaps with a
+  memfd from creation so sharing is free.
+- **xfiles' own CPU is 2.1 s of a 5.0 s launch** against xclock's 0.56 s,
+  so most of what remains in launch is the client, not the desktop.
+
+**Profiling method that found all of this:** per-process CPU accounting
+over a fixed window during the real interaction, plus xshim's request
+profiler now recording pixels touched and CLOCK_THREAD_CPUTIME_ID next
+to wall time, plus per-phase WORST-single-visit timers in lvdesk's loop.
+Averages hid every one of these; the worst-visit line is what exposed
+the input path stalling for 600-950 ms at a time.

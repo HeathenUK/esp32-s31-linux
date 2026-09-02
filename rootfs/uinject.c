@@ -131,6 +131,17 @@ static void home(void)
 	msleep(120);
 }
 
+static void wheel(int notches)
+{
+	int i, dir = notches > 0 ? 1 : -1, n = notches < 0 ? -notches : notches;
+
+	for (i = 0; i < n; i++) {
+		emit(mouse_fd, EV_REL, REL_WHEEL, dir);
+		syn(mouse_fd);
+		msleep(60);
+	}
+}
+
 static void click(int down)
 {
 	emit(mouse_fd, EV_KEY, BTN_LEFT, down);
@@ -441,6 +452,41 @@ int main(int argc, char **argv)
 		while (time(NULL) < end) {
 			move_to(700, 400, 40, 8);
 			move_to(80, 60, 40, 8);
+		}
+	} else if (!strcmp(what, "session")) {
+		/*
+		 * What a person actually does, from ONE process.
+		 *
+		 * `stress` is continuous motion and `dragstress` is one long
+		 * drag; neither looks like use. This alternates the four
+		 * things a user does to a desktop - move to a target, click
+		 * it, drag a window, scroll a list - with human-length pauses
+		 * between them, so a profile taken under it apportions cost
+		 * the way the complaint does.
+		 *
+		 * One uinput device for the whole run. Respawning uinject per
+		 * action creates and destroys a device each time, and the
+		 * desktop's inotify-driven rescan then charges the input path
+		 * 1.4-1.8 s per 5 s window that no user would ever pay.
+		 */
+		int secs = argc > 2 ? atoi(argv[2]) : 30;
+		time_t end = time(NULL) + secs;
+
+		while (time(NULL) < end) {
+			move_to(600, 260, 24, 8);	/* cross to a window */
+			msleep(200);
+			click(1); click(0);		/* click something */
+			msleep(400);
+			move_to(300, 20, 16, 8);	/* to a title bar */
+			click(1);
+			move_to(420, 180, 20, 10);	/* drag it */
+			click(0);
+			msleep(300);
+			move_to(600, 300, 16, 8);	/* over the list */
+			wheel(-3);			/* scroll down */
+			msleep(250);
+			wheel(2);			/* and back */
+			msleep(400);
 		}
 	} else if (!strcmp(what, "dragstress")) {
 		/*

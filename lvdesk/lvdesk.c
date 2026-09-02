@@ -5096,6 +5096,12 @@ static void kms_flush_cb(lv_display_t *d, const lv_area_t *area, uint8_t *px)
  */
 static int prof_on;
 static uint64_t prof_wait, prof_input, prof_timer, prof_refr;
+/*
+ * Averages hide the thing the user complains about. A loop that is 6 ms
+ * typical and 150 ms once a second FEELS like 150 ms, so track the worst
+ * single visit to each phase as well as the total.
+ */
+static uint64_t prof_max_input, prof_max_timer, prof_max_refr;
 static uint64_t prof_term, prof_kbd, prof_mouse, prof_wifi, prof_wait4, prof_curs, prof_xs;
 static uint32_t prof_loops, prof_refrs;
 
@@ -5109,6 +5115,9 @@ static uint64_t prof_ns(void)
 
 #define PROF_START(v) uint64_t v = prof_on ? prof_ns() : 0
 #define PROF_ADD(acc, v) do { if (prof_on) (acc) += prof_ns() - (v); } while (0)
+#define PROF_ADD_MAX(acc, mx, v) do { if (prof_on) { \
+		uint64_t _d = prof_ns() - (v); (acc) += _d; \
+		if (_d > (mx)) (mx) = _d; } } while (0)
 
 /*
  * Implementation of the LVGL profiler hooks declared in lv_prof_hooks.h.
@@ -6485,7 +6494,7 @@ int main(void)
 			 */
 			if (hw_cursor && cursor_pending && !busy)
 				cursor_settle();
-			PROF_ADD(prof_input, t0);
+			PROF_ADD_MAX(prof_input, prof_max_input, t0);
 		}
 
 		/*
@@ -6505,11 +6514,11 @@ int main(void)
 		 * than the panel refreshes, so this cannot outrun the hardware.
 		 */
 		if (frame_due) {
-			{ PROF_START(t0); lv_timer_handler(); PROF_ADD(prof_timer, t0); }
+			{ PROF_START(t0); lv_timer_handler(); PROF_ADD_MAX(prof_timer, prof_max_timer, t0); }
 			{
 				PROF_START(t0);
 				lv_refr_now(NULL);
-				PROF_ADD(prof_refr, t0);
+				PROF_ADD_MAX(prof_refr, prof_max_refr, t0);
 			}
 		}
 		prof_loops++;
@@ -6537,6 +6546,13 @@ int main(void)
 					(unsigned long long)(prof_input / 1000 / prof_loops),
 					(unsigned long long)(prof_timer / 1000 / prof_loops),
 					(unsigned long long)(prof_refr / 1000 / prof_loops));
+				fprintf(stderr,
+					"  WORST single visit: input=%llums "
+					"timer=%llums refr=%llums\n",
+					(unsigned long long)(prof_max_input / 1000000),
+					(unsigned long long)(prof_max_timer / 1000000),
+					(unsigned long long)(prof_max_refr / 1000000));
+				prof_max_input = prof_max_timer = prof_max_refr = 0;
 				fprintf(stderr,
 					"  input split: xshim=%llums "
 					"term=%llums kbd=%llums "

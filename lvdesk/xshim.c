@@ -1605,6 +1605,12 @@ static uint64_t xsp_op_px[256];
  * separates "we are slow" from "we are waiting for the client".
  */
 static uint64_t xsp_op_cpu[256];
+/*
+ * Extension requests are keyed by minor opcode, and two extensions can
+ * share one - "R1" was ambiguous between RENDER and anything else the
+ * client asked for. Record the major so a hot request can be named.
+ */
+static uint8_t xsp_op_major[256];
 static uint64_t xsp_cpu_total;
 uint64_t xshim_px_acc;
 
@@ -1664,10 +1670,11 @@ static void xsp_dump(void)
 		}
 		fprintf(stderr, "xsp:   top:");
 		for (t = 0; t < 4 && top[t] >= 0; t++)
-			fprintf(stderr, "  %s%u x%u %llums %lluKpx %lluns/px",
+			fprintf(stderr, "  %s%u/maj%u x%u %llums %lluKpx %lluns/px",
 				top[t] >= 128 ? "R" : "",
 				(unsigned)(top[t] >= 128 ? top[t] - 128
 							 : top[t]),
+				(unsigned)xsp_op_major[top[t]],
 				xsp_op_n[top[t]],
 				(unsigned long long)
 				(xsp_op_ns[top[t]] / 1000000),
@@ -1685,6 +1692,9 @@ static void xsp_dump(void)
 	}
 	memset(xsp_op_ns, 0, sizeof(xsp_op_ns));
 	memset(xsp_op_n, 0, sizeof(xsp_op_n));
+	memset(xsp_op_px, 0, sizeof(xsp_op_px));
+	memset(xsp_op_cpu, 0, sizeof(xsp_op_cpu));
+	xsp_cpu_total = 0;
 	xsp_read = xsp_handle = xsp_write = xsp_poll = xsp_calls = 0;
 }
 
@@ -2734,6 +2744,74 @@ static void render_composite(struct cli *c, const uint8_t *r)
 						       mb->w + m->ax +
 						       mask_x - dx;
 
+					if (mb->bpp == 2 && m->depth != 1) {
+						/*
+						 * Same runs, 16-bit mask.
+						 * Coverage comes from the red
+						 * channel, so full coverage is
+						 * (v >> 11) == 31 and none is
+						 * (v >> 11) == 0.
+						 */
+						const uint16_t *mrow =
+						  mb->px + mbase;
+
+						i2 = i0;
+						while (i2 < i1) {
+							int st;
+
+							while (i2 < i1 &&
+							       (mrow[i2] >> 11)
+							       == 0)
+								i2++;
+							st = i2;
+							while (i2 < i1 &&
+							       (mrow[i2] >> 11)
+							       == 31)
+								i2++;
+							if (i2 > st) {
+								size_t nb =
+								  (size_t)
+								  (i2 - st) * 2;
+								if (sb != db)
+									memcpy(&drow[st],
+									       &srow[st],
+									       nb);
+								else
+									memmove(&drow[st],
+										&srow[st],
+										nb);
+							}
+							if (i2 < i1 &&
+							    (mrow[i2] >> 11)) {
+								int cov =
+								  (((mrow[i2] >> 11)
+								    & 0x1F) * 255)
+								  / 31;
+								uint16_t v =
+								  srow[i2];
+								uint16_t *pd =
+								  &drow[i2];
+								int sr = (v >> 11) << 3;
+								int sg = ((v >> 5) & 0x3F) << 2;
+								int sb8 = (v & 0x1F) << 3;
+								int dr = (*pd >> 11) << 3;
+								int dg = ((*pd >> 5) & 0x3F) << 2;
+								int db8 = (*pd & 0x1F) << 3;
+
+								dr += ((sr - dr) * cov) >> 8;
+								dg += ((sg - dg) * cov) >> 8;
+								db8 += ((sb8 - db8) * cov) >> 8;
+								*pd = (uint16_t)
+								  (((dr & 0xF8) << 8) |
+								   ((dg & 0xFC) << 3) |
+								   (db8 >> 3));
+								i2++;
+							}
+						}
+						xshim_px_acc += (uint64_t)
+								(i1 - i0);
+						continue;
+					}
 					if (mb->bpp == 1) {
 						const uint8_t *mrow =
 						  (const uint8_t *)mb->px +
@@ -3279,6 +3357,28 @@ static int render_request(struct cli *c, const uint8_t *r, int len)
 			int bx0 = 1 << 30, by0 = 1 << 30;
 			int bx1 = -(1 << 30), by1 = -(1 << 30);
 
+			if (xsp_on > 0) {
+				/*
+				 * Is this batch a few big rectangles or a
+				 * thousand small ones? The answer decides
+				 * whether to make fills faster or to stop
+				 * asking for them. Rate limited: one line a
+				 * second, never per rect.
+				 */
+				static uint64_t lastf;
+				uint64_t nowf = xsp_now();
+
+				if (nowf - lastf > 1000000000ull) {
+					lastf = nowf;
+					fprintf(stderr, "xsp: FILL batch "
+						"nrect=%d dst=%dx%d bpp=%d "
+						"first=%dx%d\n",
+						(int)((end - p) / 8),
+						d->w, d->h, b->bpp,
+						(int)get16(p + 4),
+						(int)get16(p + 6));
+				}
+			}
 			pict_clip(dp, &px0, &py0, &px1, &py1);
 			for (; p + 8 <= end; p += 8) {
 				int rx = gets16(p), ry = gets16(p + 2);
@@ -3318,9 +3418,37 @@ static int render_request(struct cli *c, const uint8_t *r, int len)
 						(size_t)y * b->w + x0;
 					int nn = x1 - x0;
 
+					/*
+					 * Store 32 bits at a time. A halfword
+					 * store per pixel measured 78 ns/px
+					 * (~19 cycles at 240 MHz) for a loop
+					 * that is one store - the cost is the
+					 * write to PSRAM, not the arithmetic,
+					 * so the fix is fewer, wider writes
+					 * rather than a cleverer loop.
+					 */
+					if (nn >= 8) {
+						uint32_t c2 =
+						  ((uint32_t)col << 16) | col;
+						uint32_t *q32;
+						int n32;
+
+						if ((uintptr_t)q & 2) {
+							*q++ = col;
+							nn--;
+						}
+						q32 = (uint32_t *)q;
+						n32 = nn >> 1;
+						while (n32--)
+							*q32++ = c2;
+						q = (uint16_t *)q32;
+						nn &= 1;
+					}
 					while (nn--)
 						*q++ = col;
 				}
+				xshim_px_acc += (uint64_t)(x1 - x0) *
+						(y1 - y0);
 				if (x0 < bx0) bx0 = x0;
 				if (y0 < by0) by0 = y0;
 				if (x1 > bx1) bx1 = x1;
@@ -4700,6 +4828,15 @@ static int px_share(struct res *r)
 		close(fd);
 		return 0;
 	}
+	/*
+	 * MAP_POPULATE was tried here and REVERTED, 2026-09-02: maximising
+	 * xfiles measured 3149/3623 ms with it against 2549/2722 ms without.
+	 * Prefaulting only moves the page-allocation and zeroing cost from
+	 * the memcpy's faults into the mmap call; on this board that work is
+	 * the expense, not the trap overhead. The one xlite-SHM GetPixmapFd
+	 * in a resize still costs 86-355 ms (once 1347 ms) - the fix has to
+	 * avoid allocating and copying 733 KB, not fault it more eagerly.
+	 */
 	m = mmap(NULL, n, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
 	if (m == MAP_FAILED) {
 		close(fd);
@@ -5165,6 +5302,8 @@ static void client_data(struct cli *c)
 			xsp_cpu_total += dc;
 			xsp_op_ns[key] += dt;
 			xsp_op_cpu[key] += dc;
+			if (key >= 128)
+				xsp_op_major[key] = r[0];
 			xsp_op_n[key]++;
 			xsp_op_px[key] += xshim_px_acc;
 			xsp_calls++;
