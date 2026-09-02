@@ -32,6 +32,8 @@
 #include <errno.h>
 #include <time.h>
 #include <poll.h>
+#include <sched.h>
+#include <sys/mman.h>
 
 #define EP_PATH		"/s31/a2dp/source"
 #define A2DP_SOURCE_UUID "0000110A-0000-1000-8000-00805F9B34FB"
@@ -71,6 +73,14 @@ struct sbc_caps {
 static char transport_path[256];
 static int transport_ready;
 static struct sbc_caps chosen;
+
+static uint64_t cpu_us(void)
+{
+	struct timespec t;
+
+	clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t);
+	return (uint64_t)t.tv_sec * 1000000ull + t.tv_nsec / 1000;
+}
 
 static uint64_t now_us(void)
 {
@@ -489,9 +499,48 @@ int main(int argc, char **argv)
 	int fd = -1, wmtu = 0;
 	unsigned char *pcm, *pkt;
 	size_t codesize, framelen;
-	uint64_t t0, sent_us = 0;
+	uint64_t t0, sent_us = 0, report_at = 0;
 	unsigned int seq = 0, ts = 0;
 	int max_frames = 15;
+	/*
+	 * Dropout accounting. "Solid A2DP while Wi-Fi is busy" is the actual
+	 * requirement, so measure the thing that breaks: how far behind real
+	 * time the writer falls. The sink plays from a small buffer; if we
+	 * are late handing frames over, that is a gap the ear hears. late_ms
+	 * is the worst lateness in the current window, stalls counts writes
+	 * that could not go out immediately.
+	 */
+	long stalls = 0, late_max = 0, late_events = 0;
+	/* per-packet cost split: is it the encode, or the write? */
+	uint64_t t_enc = 0, t_wr = 0, wr_max = 0, t_rd = 0, c_enc = 0;
+	int loop = getenv("S31_A2DP_LOOP") != NULL;
+
+	/*
+	 * Real-time priority, because this is a real-time job on a machine
+	 * with ONE core and a desktop on it.
+	 *
+	 * Measured without it: 38.7 ms of WALL time per packet inside
+	 * sbc_encode() against 0.23 ms per frame of actual codec work
+	 * (rootfs/sbcbench.c) - i.e. almost all of it was this process being
+	 * descheduled while lvdesk and its clients ran. The stream fell
+	 * behind real time at about 2 s per 5 s and the sink crackled
+	 * continuously. Wall time is not CPU time on this board; that
+	 * confusion has now cost two separate investigations.
+	 *
+	 * The priority is deliberately low (5): the daemon sleeps between
+	 * packets, so it needs to be woken PROMPTLY rather than to run a
+	 * lot, and a high FIFO priority on one core would starve the
+	 * desktop it is playing for. mlockall is cheap here - a few hundred
+	 * KB - and stops a page fault landing mid-packet.
+	 */
+	{
+		struct sched_param sp = { .sched_priority = 5 };
+
+		if (sched_setscheduler(0, SCHED_FIFO, &sp) != 0)
+			perror("s31-a2dp: SCHED_FIFO (continuing)");
+		if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0)
+			perror("s31-a2dp: mlockall (continuing)");
+	}
 
 	dbus_error_init(&err);
 	conn = dbus_bus_get(DBUS_BUS_SYSTEM, &err);
@@ -559,6 +608,22 @@ int main(int argc, char **argv)
 		perror("s31-a2dp: open");
 		return 1;
 	}
+	/*
+	 * A big input buffer, because this is a REAL-TIME path.
+	 *
+	 * One SBC frame is 512 bytes of PCM and stdio's default buffer is
+	 * 4 KB, so every eighth frame went to the SD card - in the middle of
+	 * the audio loop, at this board's ~3.2 ms per request and worse when
+	 * the page cache is under pressure. Measured before the fix: 52 ms
+	 * per packet in "encode", against 8 ms to write and ~2 ms of actual
+	 * SBC work, so the stream ran at a third of real time and the sink
+	 * crackled continuously. The codec was never the problem.
+	 */
+	{
+		static char inbuf[256 * 1024];
+
+		setvbuf(in, inbuf, _IOFBF, sizeof(inbuf));
+	}
 	if (in != stdin)
 		fseek(in, 44, SEEK_SET);	/* skip a canonical WAV header */
 
@@ -573,11 +638,15 @@ int main(int argc, char **argv)
 		size_t off = 13, nframes = 0;
 		ssize_t w;
 
+		uint64_t tenc0 = now_us(), cenc0 = cpu_us();
+
 		while (off + framelen <= (size_t)wmtu &&
 		       nframes < (size_t)max_frames) {
 			ssize_t enc, wrote = 0;
+			uint64_t trd0 = now_us();
 			size_t rd = fread(pcm, 1, codesize, in);
 
+			t_rd += now_us() - trd0;
 			if (rd < codesize)
 				break;
 			/*
@@ -596,8 +665,15 @@ int main(int argc, char **argv)
 			nframes++;
 			ts += (unsigned int)(codesize / 4);	/* stereo s16 */
 		}
-		if (!nframes)
+		if (!nframes) {
+			if (loop && in != stdin) {
+				fseek(in, 44, SEEK_SET);
+				continue;
+			}
 			break;
+		}
+		t_enc += now_us() - tenc0;
+		c_enc += cpu_us() - cenc0;
 		pkt[0] = 0x80;			/* RTP v2 */
 		pkt[1] = 96;			/* dynamic payload type */
 		pkt[2] = (seq >> 8) & 0xff; pkt[3] = seq & 0xff;
@@ -607,11 +683,20 @@ int main(int argc, char **argv)
 		pkt[12] = (unsigned char)nframes;	/* SBC payload header */
 		seq++;
 
-		w = write(fd, pkt, off);
+		{
+			uint64_t tw0 = now_us(), d;
+
+			w = write(fd, pkt, off);
+			d = now_us() - tw0;
+			t_wr += d;
+			if (d > wr_max)
+				wr_max = d;
+		}
 		if (w < 0) {
 			if (errno == EAGAIN) {
 				struct pollfd p = { .fd = fd, .events = POLLOUT };
 
+				stalls++;
 				poll(&p, 1, 100);
 				continue;
 			}
@@ -644,8 +729,32 @@ int main(int argc, char **argv)
 			int64_t ahead = (int64_t)sent_us -
 					(int64_t)(now_us() - t0);
 
-			if (ahead > 20000)
+			if (ahead > 20000) {
 				usleep((useconds_t)(ahead - 10000));
+			} else if (ahead < 0) {
+				/* behind real time: the sink is starving */
+				long late = (long)(-ahead / 1000);
+
+				if (late > late_max)
+					late_max = late;
+				if (late > 20)
+					late_events++;
+			}
+			if (now_us() - t0 > report_at) {
+				report_at += 5000000ull;
+				fprintf(stderr, "s31-a2dp: %us %u pkts "
+					"late_max=%ld ms stalls=%ld | per pkt: "
+					"read=%lluus encode=%lluus(cpu %lluus) "
+					"write=%lluus worst=%lluus\n",
+					(unsigned)((now_us() - t0) / 1000000),
+					seq, late_max, stalls,
+					(unsigned long long)(seq ? t_rd / seq : 0),
+					(unsigned long long)(seq ? (t_enc - t_rd) / seq : 0),
+					(unsigned long long)(seq ? c_enc / seq : 0),
+					(unsigned long long)(seq ? t_wr / seq : 0),
+					(unsigned long long)wr_max);
+				late_max = 0; wr_max = 0;
+			}
 		}
 		dbus_connection_read_write_dispatch(conn, 0);
 		if (!transport_ready) {

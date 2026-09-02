@@ -2967,3 +2967,57 @@ Now XIP-resident again, all at Rss 0 for their text: bluetoothd (192 kB
 RSS total), libglib, and **s31-a2dp (60 kB RSS)**. Only `iw` stays on the
 SD lower layer - it is a hand-typed CLI that nothing on the boot or
 runtime path calls, and it was that or 40 KB over the partition.
+
+## Why A2DP crackles, measured (2026-09-02)
+
+Per packet (8 SBC frames = 21.3 ms of audio at 48 kHz), streaming to the
+Liberty 4 NC:
+
+| | wall | cpu |
+|---|---|---|
+| fread of PCM | 8.4 ms | |
+| sbc_encode | 39.3 ms | **11.6 ms** |
+| write to L2CAP | 6.5 ms | |
+| **total** | **~54 ms for 21.3 ms of audio** | |
+
+So the stream runs at about 40% of real time and falls behind ~1.3 s
+every 5 s, which is what the ear hears as continuous crackling.
+
+**It is NOT coexistence.** The control matters: with Wi-Fi fully DOWN
+the lateness is identical (3112 ms at 5 s, 6632 at 10 s). Wi-Fi
+association and even a ping flood change it very little. Two earlier
+claims in this file - that paging fails with wlan0 up and succeeds
+instantly with it down - were also confounded and are corrected below.
+
+**It is not preemption either**, though it looked like it: 28 of the
+39 ms in sbc_encode is off-CPU, but SCHED_FIFO priority 5 plus mlockall
+changed nothing measurable. The remaining 11.6 ms of CPU per packet is
+itself 54% of a core, and rootfs/sbcbench.c says the codec alone should
+cost 0.23 ms per frame (1.8 ms per packet) - so encode is running ~6x
+slower in the daemon than in the bench and that gap is unexplained.
+
+Levers, in order of expected value:
+- **Cut the work**: 44.1 kHz instead of 48 (8%), a lower bitpool, or 4
+  subbands. sbcbench measures all of these; 4 subbands was 7.1% against
+  8.5% for a whole core of real-time audio.
+- **Explain the 6x**: the bench encodes one cache-hot buffer repeatedly
+  and the daemon streams fresh data. If that is the whole difference it
+  is a memory-bandwidth story, which is a known shape on this board.
+- **hart0 offload** is the structural answer but is not simple: the
+  L2CAP channel is owned by bluez on Linux, so hart0 cannot inject into
+  it without breaking the one-host model.
+
+## Corrections to earlier coexistence claims
+
+- "BT paging times out with wlan0 up and succeeds instantly when down"
+  was **confounded** - the earbuds were in pairing mode in the fast
+  cases. With an awake, bonded sink: **15-20 s either way**, Wi-Fi up
+  costing ~3-4 s and one failure in three. Under a ping flood, 4 of 8
+  attempts fail. Wi-Fi hurts paging, but it does not block it.
+- `esp_coex_preference_set(ESP_COEX_PREFER_BT)` was tried and made it
+  **worse**: 0 of 8 connects against the default's 4 of 8, with a
+  control (Wi-Fi down, same firmware) connecting in 16.6 s to prove the
+  sink was awake. Reverted; see the note in esp-hosted slave_bt.c.
+- We are on the **latest esp-idf master** (2067f3ae, 2026-08-28) - a
+  live fetch shows zero commits since, and the recent a2dp/bt fixes are
+  already ancestors of it.
