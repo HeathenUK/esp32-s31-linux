@@ -1,0 +1,80 @@
+#!/bin/sh
+
+DAEMON="bluetoothd"
+PIDFILE="/var/run/$DAEMON.pid"
+
+BLUETOOTHD_ARGS="-n"
+
+# shellcheck source=/dev/null
+[ -r "/etc/default/$DAEMON" ] && . "/etc/default/$DAEMON"
+
+start() {
+	# Bluetooth is OPT-IN on this board. bluetoothd no longer lives in the
+	# XIP image (that flash pays for a static busybox, worth ~20 ms on every
+	# exec), so running it costs ~800 KB of RSS from the SD lower layer - on
+	# a 15.4 MB machine that is only worth paying when Bluetooth is in use.
+	# bluealsa is gated the same way and additionally busy-waits on 92% of
+	# the core, so leaving both off is what makes the desktop snappy.
+	# Enable both with:  touch /etc/s31-bluetooth-on && reboot
+	if [ ! -f /etc/s31-bluetooth-on ]; then
+		echo "bluetoothd: off (touch /etc/s31-bluetooth-on to enable)"
+		return 0
+	fi
+	printf 'Starting %s: ' "$DAEMON"
+	# shellcheck disable=SC2086 # we need the word splitting
+	start-stop-daemon --start --background --make-pidfile \
+		--pidfile "$PIDFILE" --exec "/usr/libexec/bluetooth/$DAEMON" \
+		-- $BLUETOOTHD_ARGS
+	status=$?
+	if [ "$status" -eq 0 ]; then
+		echo "OK"
+	else
+		echo "FAIL"
+	fi
+	return "$status"
+}
+
+stop() {
+	printf 'Stopping %s: ' "$DAEMON"
+	start-stop-daemon --stop --pidfile "$PIDFILE" \
+		--exec "/usr/libexec/bluetooth/$DAEMON"
+	status=$?
+	if [ "$status" -eq 0 ]; then
+		echo "OK"
+	else
+		echo "FAIL"
+		return "$status"
+	fi
+	while start-stop-daemon --stop --test --quiet --pidfile "$PIDFILE" \
+		--exec "/usr/libexec/bluetooth/$DAEMON"; do
+		sleep 0.1
+	done
+	rm -f "$PIDFILE"
+	return "$status"
+}
+
+restart() {
+	stop
+	start
+}
+
+reload() {
+	printf 'Reloading %s: ' "$DAEMON"
+	start-stop-daemon --stop --signal HUP -q --pidfile "$PIDFILE" \
+		--exec "/usr/libexec/bluetooth/$DAEMON"
+	status=$?
+	if [ "$status" -eq 0 ]; then
+		echo "OK"
+	else
+		echo "FAIL"
+	fi
+	return "$status"
+}
+
+case "$1" in
+	start|stop|restart|reload)
+		"$1";;
+	*)
+		echo "Usage: $0 {start|stop|restart|reload}"
+		exit 1
+esac

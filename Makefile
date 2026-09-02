@@ -230,7 +230,12 @@ else
 PROF_TWEAKS := --disable PROFILING --disable PERF_EVENTS
 endif
 
-DIAG ?= 1
+# debugfs OFF by default. It is not mounted at runtime anyway, but compiling
+# it in costs 1.14 MB of RAM on a 15.4 MB machine - measured 2026-09-02,
+# MemFree 1892 kB with it against 3032 kB without, Slab 4260 against 3840 -
+# and 232 KB of the linux partition. Build with DIAG=1 when a driver's
+# debugfs knobs are actually needed; screenshot.py does not need it.
+DIAG ?= 0
 ifeq ($(DIAG),0)
 DIAG_TWEAKS := --disable DEBUG_FS
 else
@@ -469,7 +474,15 @@ XIP_ROOTS ?= bin/busybox usr/sbin/wpa_supplicant usr/sbin/iw usr/bin/lvdesk \
 # through glib; it left XIP when bluetoothd grew 427 KB of classic-BT
 # profiles (hid/hog/audio/avrcp/client support). From the SD lower layer
 # its pages are simply never faulted.
-XIP_SKIP ?= libasound.so.2.0.0 libblkid.so.1.1.0 libpcre2-8.so.0.15.0
+# bluetoothd and glib leave the XIP image (2026-09-02) to pay for a STATIC
+# busybox, which is worth far more: dynamic linking costs ~20 ms on every
+# exec here (51.3 ms against 30.9 ms measured with rootfs/spawnbench.c) and
+# boot alone forks 301 times. Bluetooth is opt-in now - neither bluetoothd
+# nor bluealsa autostarts - so their pages cost nothing at all until
+# /etc/s31-bluetooth-on exists, where before they cost 2 MB of flash
+# permanently. Both still load, from the SD lower layer of the same overlay.
+XIP_SKIP ?= libasound.so.2.0.0 libblkid.so.1.1.0 libpcre2-8.so.0.15.0 \
+	bluetoothd libglib-2.0.so.0.8600.5
 
 # XIP_ROOTS_DESKTOP was defined here and referenced NOWHERE - dead since the
 # desktop was set aside for text mode, so anything listed in it was silently

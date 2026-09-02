@@ -2763,3 +2763,30 @@ NOTHING - QueryPictFormats, a 140-byte static reply - "taking" 20-847 ms.
 Wall time in a handler on a one-core box is not the handler's cost. The
 profiler now records CLOCK_THREAD_CPUTIME_ID alongside wall time so the
 two can never be confused again.
+
+## Spawn cost: dynamic linking is ~20 ms of every exec (2026-09-02)
+
+`rootfs/spawnbench.c` splits a process spawn into its parts:
+
+| | cost |
+|---|---|
+| fork + exit | 13 ms |
+| vfork + exit | 12.6 ms (vfork buys nothing - fork is not the problem) |
+| exec, static 258 KB binary | 14 ms |
+| exec, dynamic busybox 734 KB | 52 ms |
+
+Size is not the variable; the `ld.so` resolve is. busybox is the shell
+behind every init script, every helper the desktop spawns and every
+applet in a pipeline, and **boot forks 301 times**. Building it static
+(`CONFIG_STATIC=y` in busybox.fragment) took a spawn from 53.6 ms to
+29.4 ms and boot from rcS-ends-48.9 s to 40.5 s, with the desktop
+starting at 25.2 s instead of 27.7 s.
+
+It costs 582 KB of flash, paid for by moving `bluetoothd` and
+`libglib` out of the XIP image - Bluetooth is opt-in now, so those pages
+cost nothing at all until `/etc/s31-bluetooth-on` exists. The XIP image
+went from 233 KB OVER its partition to 2.18 MB free.
+
+**Bluetooth is now opt-in:** `touch /etc/s31-bluetooth-on && reboot`
+starts bluetoothd and bluealsa. Off, they cost no CPU, no RAM and no
+flash; on, bluetoothd runs from the SD lower layer (~800 KB RSS).

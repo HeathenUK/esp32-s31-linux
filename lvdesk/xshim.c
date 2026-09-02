@@ -2714,6 +2714,91 @@ static void render_composite(struct cli *c, const uint8_t *r)
 					srow = sb->px +
 					       (size_t)(py + ss->ay) * sb->w +
 					       ss->ax + (sx - dx);
+					/*
+					 * Hoist the mask row out of the pixel
+					 * loop, then take the shape masks in
+					 * RUNS. An icon's mask is nearly all
+					 * 0 or all 255 - transparent surround
+					 * and opaque body - so per-pixel
+					 * coverage arithmetic is paid almost
+					 * entirely on pixels that need none of
+					 * it. Skipping a transparent run and
+					 * memcpy'ing an opaque one leaves only
+					 * the antialiased edge on the slow
+					 * path. Byte masks only (A8 and
+					 * depth-1); a 16-bit mask keeps the
+					 * generic loop below.
+					 */
+					{
+					size_t mbase = (size_t)(my + m->ay) *
+						       mb->w + m->ax +
+						       mask_x - dx;
+
+					if (mb->bpp == 1) {
+						const uint8_t *mrow =
+						  (const uint8_t *)mb->px +
+						  mbase;
+						int bin = m->depth == 1;
+
+						i2 = i0;
+						while (i2 < i1) {
+							int st;
+
+							while (i2 < i1 &&
+							       !mrow[i2])
+								i2++;
+							st = i2;
+							while (i2 < i1 &&
+							       (bin ? mrow[i2]
+								: mrow[i2] ==
+								  255))
+								i2++;
+							if (i2 > st) {
+								size_t nb =
+								  (size_t)
+								  (i2 - st) * 2;
+								if (sb != db)
+									memcpy(&drow[st],
+									       &srow[st],
+									       nb);
+								else
+									memmove(&drow[st],
+										&srow[st],
+										nb);
+							}
+							/* partial coverage:
+							 * one pixel, then look
+							 * for the next run */
+							if (i2 < i1 &&
+							    mrow[i2]) {
+								int cov =
+								  mrow[i2];
+								uint16_t v =
+								  srow[i2];
+								uint16_t *pd =
+								  &drow[i2];
+								int sr = (v >> 11) << 3;
+								int sg = ((v >> 5) & 0x3F) << 2;
+								int sb8 = (v & 0x1F) << 3;
+								int dr = (*pd >> 11) << 3;
+								int dg = ((*pd >> 5) & 0x3F) << 2;
+								int db8 = (*pd & 0x1F) << 3;
+
+								dr += ((sr - dr) * cov) >> 8;
+								dg += ((sg - dg) * cov) >> 8;
+								db8 += ((sb8 - db8) * cov) >> 8;
+								*pd = (uint16_t)
+								  (((dr & 0xF8) << 8) |
+								   ((dg & 0xFC) << 3) |
+								   (db8 >> 3));
+								i2++;
+							}
+						}
+						xshim_px_acc += (uint64_t)
+								(i1 - i0);
+						continue;
+					}
+					}
 					for (i2 = i0; i2 < i1; i2++) {
 						int mxx = mask_x + (i2 - dx);
 						int raw, cov;

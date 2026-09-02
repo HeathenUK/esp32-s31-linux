@@ -10,3 +10,16 @@ CONFIG_NTPD=y
 # We are a client. Serving time to the network is not this board's job.
 # CONFIG_FEATURE_NTPD_SERVER is not set
 CONFIG_FEATURE_NTPD_CONF=y
+
+# Link busybox statically.
+#
+# Dynamic linking costs ~38 ms on EVERY exec on this board, measured
+# 2026-09-02 with rootfs/spawnbench.c: fork alone 13 ms, exec of a static
+# 258 KB binary 14 ms, exec of dynamic busybox (734 KB) 52 ms. Size is not
+# the variable - the ld.so resolve is. busybox is the shell behind every
+# init script, every menu action and every helper the desktop spawns, so
+# that 38 ms is paid hundreds of times during boot alone.
+#
+# It costs flash (libc is no longer shared with it) and nothing in RAM:
+# the binary is file-backed in the XIP image, so its text stays at Rss 0.
+CONFIG_STATIC=y

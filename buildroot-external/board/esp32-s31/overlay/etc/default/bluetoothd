@@ -1,2 +1,7 @@
-# The GAP plugin is the only built-in profile required by this LE-only image.
-BLUETOOTHD_ARGS="-n -p gap"
+# Do NOT pass "-p <plugin>". It is an ALLOW-list, and "-p gap" - a leftover
+# from when this image was LE-only - loaded the GAP plugin and silently
+# dropped a2dp and avrcp. org.bluez.Media1 then had no RegisterApplication,
+# BlueALSA could not register its endpoint, and every A2DP connect failed
+# with "br-connection-profile-unavailable" while the log said nothing about
+# plugins. Cost most of a session, 2026-09-01.
+BLUETOOTHD_ARGS="-n"
