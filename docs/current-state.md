@@ -2832,3 +2832,59 @@ profiler now recording pixels touched and CLOCK_THREAD_CPUTIME_ID next
 to wall time, plus per-phase WORST-single-visit timers in lvdesk's loop.
 Averages hid every one of these; the worst-visit line is what exposed
 the input path stalling for 600-950 ms at a time.
+
+## Bluetooth: what is actually possible here (2026-09-02)
+
+**A2DP cannot be carved out to hart0 while Linux keeps HID.** The hosted
+Bluetooth is a VHCI transport: hart0 runs the *controller*, Linux runs
+the *host* stack (bluez). ESP-IDF's A2DP source is part of Bluedroid,
+which is itself a host stack - so putting it on hart0 means two host
+stacks contending for one controller over one HCI, which is not a thing
+a controller supports. It is one or the other:
+
+- Linux is the host (today): bluez gives HID, pairing and SDP natively,
+  and audio needs a userspace A2DP source on Linux.
+- hart0 is the host: Bluedroid owns everything, and every profile Linux
+  wants - HID especially - has to be re-exported to Linux over a custom
+  channel. That is a large amount of work to keep one keyboard working.
+
+So the plan is to keep bluez and **replace bluealsa**, which is the only
+piece that misbehaves: `bluetoothd` measured 0% CPU, while bluealsa's
+glib `pool-spawner` thread busy-waits on 92% of the core. bluez is not
+the problem and a lighter Bluetooth *stack* would not fix anything.
+
+A minimal A2DP source is a bounded job: register an endpoint on bluez's
+Media API over D-Bus, take the transport fd it hands back, encode SBC,
+write. One direction, one codec, no glib - the same reasoning that
+produced xlite. bluealsa is general-purpose (sink and source, HFP,
+multiple codecs) and we use one corner of it.
+
+**Coexistence is still unexplained.** SW coex IS enabled
+(CONFIG_ESP_COEX_SW_COEXIST_ENABLE=y in the built loader config), and
+the Wi-Fi power-save hypothesis was tested and NOT supported - see the
+comment in esp-hosted-fg slave_wifi_std.c. Paging still times out with
+wlan0 up. Separately, the SoC hard-wedged three times during BT connect
+attempts with Wi-Fi up, hart0 logging
+`OLC: r_olc_page_recycle_sch resched failed` - a controller-level
+scheduling failure that needs its own investigation before Bluetooth is
+trustworthy alongside Wi-Fi.
+
+## Thumbnails are enabled and mostly work; two real defects
+
+Reported as "all black". They are not disabled (`s31-thumbs status` says
+on, no kill file) and most images decode: of six JPEGs, four produced
+real pixels and rendered. The defects are:
+
+- **`red.jpg` (903 bytes) fails to decode**, driver error 0x8000, ret=-5.
+  s31-thumb correctly writes no file on failure.
+- **A missing thumbnail renders as an EMPTY CELL**, not the generic image
+  icon, so a failed or not-yet-generated thumbnail looks like a blank.
+  That is the visible complaint and it is worth fixing at the xfiles
+  fallback rather than by faking a placeholder PPM.
+
+**Correction to an earlier claim:** thumbnails ON did measure "faster"
+than OFF, but that was scheduler noise from bluealsa spinning on the
+core, not a real effect. Decoding an image is not cheaper than not
+decoding it; the honest statement is that the thumbnail path is fast
+enough not to matter, at ~160-220 ms per image of which ~56 ms is the
+process spawn.
