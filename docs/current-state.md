@@ -3123,3 +3123,38 @@ stream was already late_max 0 before any of this.
   interrupts/s were present through every measurement here.
 - `/tmp` is tmpfs: decoding a btmon capture there wedged the board.
   Write captures to `/root` and stream the decode through awk.
+
+## What A2DP playback costs, and what Wi-Fi adds (2026-09-02)
+
+Real track (collectathon.wav, 85 s, 44.1 kHz stereo, 15 MB on the card),
+played through s31-a2dp from XIP to the Liberty 4 NC. Per-process
+utime+stime over the window; the `idle` column is /proc/stat's, which
+this board under-reports (see s31-cpu-measurement), so trust the
+process rows over it.
+
+| arm | idle | s31-a2dp | hci0 kworker | Wi-Fi | stream |
+|---|---|---|---|---|---|
+| A idle, no playback | 87% | - | - | - | - |
+| B music, Wi-Fi idle | 55% | 20.4% | 8.0% | - | 0 ms late, 0 stalls |
+| C music + download | 23% | 27.5% | 10.3% | 290 KB/s | 0 ms, 0 stalls |
+| D music + upload | 17% | 24.2% | 12.7% | 459 KB/s | 0 ms, 0 stalls |
+| E music + both | 24% | 31.0% | 15.5% | 257 + 120 KB/s | 0 ms, 0 stalls |
+
+**Playback alone is ~30% of the core**: the daemon 20% (codec ~6-9%,
+the rest per-packet read/write syscalls and pacing at 43 packets/s) and
+the kernel's HCI transmit worker 8%, at 47 hosted interrupts/s. The
+per-process figures rise in the Wi-Fi arms because interrupt work lands
+on whoever is running; the daemon is not doing more.
+
+**Wi-Fi on top costs Wi-Fi, not audio.** With the coex hint set the
+stream never fell behind in any arm. What the hint spends: a download
+runs at ~250-290 KB/s instead of ~328, an upload at 459 KB/s instead of
+958 (udpblast, 1400 B), and both together at 257 + 120 KB/s. Idle drops
+to ~20%, so there is headroom left for the desktop but not a lot.
+
+**Two of today's "wedges" were my own scripts holding the console** - a
+`sleep` given a tick count instead of seconds sat in the login shell,
+and alive.py then reports "emitting bytes, no prompt". Bound every
+network wait in a board script (`wget -T`), never `set --` inside a
+function that still needs its arguments, and read alive.py's line dump
+before calling a board dead.
