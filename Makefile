@@ -355,12 +355,18 @@ coremark: rootfs
 
 # Keep this decimal because POSIX test(1) and truncate(1) do not accept the
 # partition table's 0x-prefixed value.
-ROOTFS_PARTITION_SIZE ?= 6160384
+ROOTFS_PARTITION_SIZE ?= 6422528
 XIP2_PARTITION_SIZE ?= 1507328
 # The XIP kernel must start on a 4-MiB Sv32 megapage boundary, so the linux
 # partition stays at 0x400000 and rootfs takes every byte the kernel does not
 # need. Keep this in step with bootloader/partitions.csv.
-LINUX_PARTITION_SIZE ?= 6422528
+# 256 KB moved from linux to rootfs, 2026-09-02. The kernel had permanent
+# slack once debugfs was compiled out (5,894,105 bytes in a 6,422,528 byte
+# partition) and the XIP userspace image had 8 KB, which is not enough to
+# add anything. Geometry lives in THREE places and all three are changed
+# together: this file, bootloader/partitions.csv, and the constants in
+# bootloader/main/main.c - which appear TWICE there.
+LINUX_PARTITION_SIZE ?= 6160384
 
 # Flashing knobs. These were hardcoded to /dev/ttyUSB0 and a bare `esptool`,
 # which is a Linux-only assumption: on macOS the adapter is /dev/cu.usbserial-*
@@ -456,6 +462,7 @@ XIP_ROOTFS_IMG := $(BUILD_DIR)/rootfs-xip.cramfs
 # by measurement, not guesswork (see the note above about which binaries go in
 # which image, and why libXft belongs here).
 XIP_ROOTS ?= bin/busybox usr/sbin/wpa_supplicant usr/sbin/iw usr/bin/lvdesk \
+	usr/bin/s31-a2dp \
 	usr/libexec/bluetooth/bluetoothd \
 	usr/bin/xfilesctl usr/bin/s31-open usr/bin/s31-thumb usr/bin/xfilesthumb usr/bin/s31-thumbs
 
@@ -474,15 +481,13 @@ XIP_ROOTS ?= bin/busybox usr/sbin/wpa_supplicant usr/sbin/iw usr/bin/lvdesk \
 # through glib; it left XIP when bluetoothd grew 427 KB of classic-BT
 # profiles (hid/hog/audio/avrcp/client support). From the SD lower layer
 # its pages are simply never faulted.
-# bluetoothd and glib leave the XIP image (2026-09-02) to pay for a STATIC
-# busybox, which is worth far more: dynamic linking costs ~20 ms on every
-# exec here (51.3 ms against 30.9 ms measured with rootfs/spawnbench.c) and
-# boot alone forks 301 times. Bluetooth is opt-in now - neither bluetoothd
-# nor bluealsa autostarts - so their pages cost nothing at all until
-# /etc/s31-bluetooth-on exists, where before they cost 2 MB of flash
-# permanently. Both still load, from the SD lower layer of the same overlay.
-XIP_SKIP ?= libasound.so.2.0.0 libblkid.so.1.1.0 libpcre2-8.so.0.15.0 \
-	bluetoothd libglib-2.0.so.0.8600.5
+# `iw` goes to the SD layer, not bluetoothd. Evicting bluetoothd to pay for
+# the static busybox was a bad trade and is reverted: it put the daemon on
+# the card, where an Aug-23 copy WITHOUT the a2dp plugin was still sitting,
+# and A2DP broke in a way that looked exactly like the old LE-only plugin
+# bug. Anything that runs wants to be in XIP; `iw` is a hand-run CLI that
+# nothing on the boot path touches, so its pages are the ones to give up.
+XIP_SKIP ?= libasound.so.2.0.0 libblkid.so.1.1.0 libpcre2-8.so.0.15.0 iw
 
 # XIP_ROOTS_DESKTOP was defined here and referenced NOWHERE - dead since the
 # desktop was set aside for text mode, so anything listed in it was silently

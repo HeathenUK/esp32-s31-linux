@@ -2915,3 +2915,32 @@ failure that the LE-era `-p gap` allow-list used to cause, from a
 completely different cause. Checking that the file EXISTS on the SD
 lower layer is not enough; check that it is the file you just built.
 The card's copy has been refreshed.
+
+## 256 KB moved from the linux partition to rootfs (2026-09-02)
+
+Evicting bluetoothd from XIP to pay for the static busybox was a bad
+trade and is reverted. It put the daemon on the card, where an **Aug 23
+copy without the a2dp plugin** was still sitting, and A2DP broke in a way
+that looked exactly like the old LE-only `-p gap` bug from a completely
+different cause. Anything that RUNS belongs in flash.
+
+The space came from dead slack: with debugfs compiled out the kernel is
+5,894,105 bytes in what was a 6,422,528 byte partition. 256 KB moved
+across, so now:
+
+    linux    0x400000  0x5E0000   kernel 5,894,105, slack 266,279
+    rootfs   0x9E0000  0x620000   XIP image 6,221,824, free 200,704
+
+**Geometry lives in THREE places and all three must agree**:
+`bootloader/partitions.csv`, `LINUX_PARTITION_SIZE`/
+`ROOTFS_PARTITION_SIZE` in the Makefile, and the constants in
+`bootloader/main/main.c` - which appear TWICE there. The loader validates
+the flashed table against its constants and refuses to boot on a
+mismatch, reporting "Linux partition not found", which reads like a
+missing partition rather than a size disagreement. The linux OFFSET did
+not change, so core1_trampoline.S was untouched.
+
+Now XIP-resident again, all at Rss 0 for their text: bluetoothd (192 kB
+RSS total), libglib, and **s31-a2dp (60 kB RSS)**. Only `iw` stays on the
+SD lower layer - it is a hand-typed CLI that nothing on the boot or
+runtime path calls, and it was that or 40 KB over the partition.
