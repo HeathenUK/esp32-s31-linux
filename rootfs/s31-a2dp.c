@@ -311,6 +311,83 @@ static int register_endpoint(DBusConnection *conn, const char *adapter)
 	return 0;
 }
 
+/*
+ * Find a transport without being told about one.
+ *
+ * BlueZ 5.79 does not necessarily call SetConfiguration on our endpoint:
+ * when the sink is already configured it exposes the stream under the
+ * REMOTE SEP instead, at .../devXX/sepN/fdN, and an application is
+ * expected to go and find it. Waiting for SetConfiguration alone left us
+ * registered and idle while a perfectly good SBC transport sat there.
+ *
+ * So ask the object manager for anything implementing MediaTransport1.
+ * The interface name appears in the reply as a plain string, so the tree
+ * does not need decoding in full: walk to each object path, then check
+ * its interface names.
+ */
+static int find_transport(DBusConnection *conn)
+{
+	DBusMessage *m, *r;
+	DBusMessageIter it, objs;
+	DBusError err;
+	int found = 0;
+
+	m = dbus_message_new_method_call("org.bluez", "/",
+					 "org.freedesktop.DBus.ObjectManager",
+					 "GetManagedObjects");
+	if (!m)
+		return 0;
+	dbus_error_init(&err);
+	r = dbus_connection_send_with_reply_and_block(conn, m, 5000, &err);
+	dbus_message_unref(m);
+	if (!r) {
+		dbus_error_free(&err);
+		return 0;
+	}
+	if (!dbus_message_iter_init(r, &it) ||
+	    dbus_message_iter_get_arg_type(&it) != DBUS_TYPE_ARRAY) {
+		dbus_message_unref(r);
+		return 0;
+	}
+	dbus_message_iter_recurse(&it, &objs);
+	while (!found &&
+	       dbus_message_iter_get_arg_type(&objs) == DBUS_TYPE_DICT_ENTRY) {
+		DBusMessageIter ent, ifaces;
+		const char *path = NULL;
+
+		dbus_message_iter_recurse(&objs, &ent);
+		dbus_message_iter_get_basic(&ent, &path);
+		dbus_message_iter_next(&ent);
+		if (path && dbus_message_iter_get_arg_type(&ent) ==
+		    DBUS_TYPE_ARRAY) {
+			dbus_message_iter_recurse(&ent, &ifaces);
+			while (dbus_message_iter_get_arg_type(&ifaces) ==
+			       DBUS_TYPE_DICT_ENTRY) {
+				DBusMessageIter kv;
+				const char *iname = NULL;
+
+				dbus_message_iter_recurse(&ifaces, &kv);
+				dbus_message_iter_get_basic(&kv, &iname);
+				if (iname && !strcmp(iname,
+						     "org.bluez.MediaTransport1")) {
+					snprintf(transport_path,
+						 sizeof(transport_path),
+						 "%s", path);
+					found = 1;
+					break;
+				}
+				dbus_message_iter_next(&ifaces);
+			}
+		}
+		dbus_message_iter_next(&objs);
+	}
+	dbus_message_unref(r);
+	if (found)
+		fprintf(stderr, "s31-a2dp: found transport %s\n",
+			transport_path);
+	return found;
+}
+
 /* Acquire the transport: returns the fd, or -1. */
 static int transport_acquire(DBusConnection *conn, int *write_mtu)
 {
@@ -348,6 +425,53 @@ static int transport_acquire(DBusConnection *conn, int *write_mtu)
 	return fd;
 }
 
+/*
+ * Read the negotiated SBC blob off a transport we found ourselves.
+ * MediaTransport1.Configuration is the same four bytes SetConfiguration
+ * would have handed us.
+ */
+static void transport_config(DBusConnection *conn)
+{
+	DBusMessage *m, *r;
+	DBusMessageIter it, var, arr;
+	DBusError err;
+	const char *iface = "org.bluez.MediaTransport1";
+	const char *prop = "Configuration";
+	unsigned char *c = NULL;
+	int n = 0;
+
+	m = dbus_message_new_method_call("org.bluez", transport_path,
+					 "org.freedesktop.DBus.Properties",
+					 "Get");
+	if (!m)
+		return;
+	dbus_message_append_args(m, DBUS_TYPE_STRING, &iface,
+				 DBUS_TYPE_STRING, &prop, DBUS_TYPE_INVALID);
+	dbus_error_init(&err);
+	r = dbus_connection_send_with_reply_and_block(conn, m, 5000, &err);
+	dbus_message_unref(m);
+	if (!r) {
+		dbus_error_free(&err);
+		return;
+	}
+	if (dbus_message_iter_init(r, &it) &&
+	    dbus_message_iter_get_arg_type(&it) == DBUS_TYPE_VARIANT) {
+		dbus_message_iter_recurse(&it, &var);
+		if (dbus_message_iter_get_arg_type(&var) == DBUS_TYPE_ARRAY) {
+			dbus_message_iter_recurse(&var, &arr);
+			dbus_message_iter_get_fixed_array(&arr, &c, &n);
+			if (n >= (int)sizeof(chosen)) {
+				memcpy(&chosen, c, sizeof(chosen));
+				fprintf(stderr, "s31-a2dp: transport config "
+					"freq=0x%x chan=0x%x bitpool %u-%u\n",
+					chosen.freq, chosen.chan_mode,
+					chosen.min_bitpool, chosen.max_bitpool);
+			}
+		}
+	}
+	dbus_message_unref(r);
+}
+
 static int sbc_freq_hz(unsigned int f)
 {
 	return (f & FREQ_44100) ? 44100 : 48000;
@@ -367,6 +491,7 @@ int main(int argc, char **argv)
 	size_t codesize, framelen;
 	uint64_t t0, sent_us = 0;
 	unsigned int seq = 0, ts = 0;
+	int max_frames = 15;
 
 	dbus_error_init(&err);
 	conn = dbus_bus_get(DBUS_BUS_SYSTEM, &err);
@@ -383,11 +508,27 @@ int main(int argc, char **argv)
 		return 1;
 	fprintf(stderr, "s31-a2dp: endpoint registered, waiting for a sink\n");
 
-	/* Pump the bus until bluez configures us. */
-	while (!transport_ready) {
-		if (!dbus_connection_read_write_dispatch(conn, 200)) {
-			fprintf(stderr, "s31-a2dp: bus closed\n");
-			return 1;
+	/*
+	 * Wait for bluez to configure us - but also go looking. A sink that
+	 * is already streaming-capable when we start gets no SetConfiguration
+	 * call at all; its transport is simply there.
+	 */
+	{
+		int spins = 0;
+
+		while (!transport_ready) {
+			if (!dbus_connection_read_write_dispatch(conn, 200)) {
+				fprintf(stderr, "s31-a2dp: bus closed\n");
+				return 1;
+			}
+			if (++spins % 5 == 0 && find_transport(conn)) {
+				transport_ready = 1;
+				/*
+				 * No SetConfiguration means no negotiated blob,
+				 * so read it from the transport itself.
+				 */
+				transport_config(conn);
+			}
 		}
 	}
 	/* The sink may take a moment to move the transport to "active". */
@@ -411,6 +552,8 @@ int main(int argc, char **argv)
 	if (!pcm || !pkt)
 		return 1;
 
+	fprintf(stderr, "s31-a2dp: codesize=%zu framelen=%zu mtu=%d\n",
+		codesize, framelen, wmtu);
 	in = strcmp(path, "-") ? fopen(path, "rb") : stdin;
 	if (!in) {
 		perror("s31-a2dp: open");
@@ -430,17 +573,26 @@ int main(int argc, char **argv)
 		size_t off = 13, nframes = 0;
 		ssize_t w;
 
-		while (off + framelen <= (size_t)wmtu && nframes < 15) {
-			ssize_t enc;
+		while (off + framelen <= (size_t)wmtu &&
+		       nframes < (size_t)max_frames) {
+			ssize_t enc, wrote = 0;
 			size_t rd = fread(pcm, 1, codesize, in);
 
 			if (rd < codesize)
 				break;
+			/*
+			 * sbc_encode() returns the INPUT bytes consumed, not
+			 * the size of what it wrote - that comes back in the
+			 * last argument. Using the return value as the output
+			 * length advances the packet by 512 bytes a frame
+			 * instead of 77, so every write overruns the L2CAP
+			 * MTU and the sink hears nothing at all.
+			 */
 			enc = sbc_encode(&sbc, pcm, codesize, pkt + off,
-					 (size_t)wmtu - off, NULL);
-			if (enc <= 0)
+					 (size_t)wmtu - off, &wrote);
+			if (enc <= 0 || wrote <= 0)
 				break;
-			off += (size_t)enc;
+			off += (size_t)wrote;
 			nframes++;
 			ts += (unsigned int)(codesize / 4);	/* stereo s16 */
 		}
@@ -461,6 +613,20 @@ int main(int argc, char **argv)
 				struct pollfd p = { .fd = fd, .events = POLLOUT };
 
 				poll(&p, 1, 100);
+				continue;
+			}
+			if (errno == EMSGSIZE && max_frames > 1) {
+				/*
+				 * The MTU bluez reports is not always what the
+				 * socket will take. Rather than guess the
+				 * overhead, halve the frames per packet and
+				 * carry on - it converges in a couple of
+				 * steps and costs one dropped packet.
+				 */
+				max_frames /= 2;
+				fprintf(stderr, "s31-a2dp: EMSGSIZE at %zu "
+					"bytes, %d frames/packet now\n",
+					off, max_frames);
 				continue;
 			}
 			perror("s31-a2dp: write");

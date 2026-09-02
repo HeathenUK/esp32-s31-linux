@@ -2898,12 +2898,31 @@ with the sink, acquires the transport fd and writes RTP-framed SBC.
 **Idle cost: 3 ticks in 5 s (0.6% of a core) against bluealsa's ~460
 (92%).** That is the whole point of the exercise.
 
-Status: the endpoint registers and waits correctly
-("endpoint registered, waiting for a sink"); the streaming path is
-written but NOT yet verified against real headphones, because the
-earbuds would not answer paging. Verify BY EAR before believing it -
-instruments have called this board's audio working while it played pure
-noise before.
+Status 2026-09-02: **streams end to end** - 345 packets, no errors, the
+whole 8 s file, to the soundcore Liberty 4 NC. Awaiting an ear: nothing
+here has heard it, and this board has had instruments call its audio
+working while it played pure noise.
+
+Costs: **0.6% of a core registered and idle** (3 ticks in 5 s, against
+bluealsa's ~460) and **43% while actually encoding** (216 ticks in 5 s)
+for 48 kHz joint-stereo SBC at bitpool 43. That is the right shape - pay
+only while playing - but the encode itself is worth optimising: a lower
+bitpool or 44.1 kHz would cut it.
+
+Two things this cost, both worth knowing:
+
+- **BlueZ 5.79 may never call SetConfiguration on your endpoint.** When
+  the sink is already configured, the stream appears under the REMOTE
+  SEP at `.../devXX/sepN/fdN` and the application has to go and find it.
+  Waiting for SetConfiguration alone left us registered and idle beside
+  a perfectly good SBC transport. s31-a2dp now also walks ObjectManager
+  for anything implementing MediaTransport1 and reads the negotiated
+  blob from the transport's own Configuration property.
+- **`sbc_encode()` returns INPUT bytes consumed, not output length** -
+  the written size comes back through its last argument. Using the
+  return value advanced the packet by 512 bytes a frame instead of 77,
+  so every write overran the L2CAP MTU with EMSGSIZE and the sink heard
+  nothing. The symptom looks like an MTU problem and is an API problem.
 
 **Trap found doing this: XIP_SKIP exposes the SD copy, and the SD copy
 can be STALE rather than missing.** Moving bluetoothd out of the XIP
