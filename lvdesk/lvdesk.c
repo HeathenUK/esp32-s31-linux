@@ -27,7 +27,6 @@
 #include <linux/input.h>
 #include <linux/kd.h>
 #include <sys/inotify.h>
-#include <sys/mman.h>
 #include <sys/ioctl.h>
 #include <poll.h>
 #include <sys/stat.h>
@@ -5787,17 +5786,24 @@ static void mouse_init(void)
 int main(void)
 {
 	/*
-	 * The desktop must never wait on the SD card to move the pointer or
-	 * open a menu. Its heap and stack are a few hundred KB - measured
-	 * 212 KB RSS with 60 KB already swapped out after 13 minutes of
-	 * uptime, each swapped page a ~3.2 ms SD round trip taken mid-
-	 * interaction. Lock everything, current and future; children are
-	 * unaffected (locks do not survive fork). The XIP text costs
-	 * nothing to lock - it is flash-mapped, not page cache.
+	 * NO mlockall here, and this is measured, not assumed.
+	 *
+	 * Pinning the desktop looks obviously right - it had 60 KB swapped
+	 * out and 12 major faults after 13 minutes - but that is ~38 ms of
+	 * SD round trips spread over 13 minutes, against an input latency
+	 * that averages hundreds of ms. mlockall(MCL_CURRENT|MCL_FUTURE)
+	 * measured WORSE: fresh-boot arms with xfiles up and a uinject demo
+	 * load gave 367 and 411 ms average (worst 1163/1270) pinned against
+	 * 170 and 313 ms (worst 610/996) unpinned, 2026-09-02.
+	 *
+	 * The mechanism is MCL_FUTURE plus the fact that xshim lives in this
+	 * process: every client pixmap we allocate on a client's behalf -
+	 * 618 KB, 539 KB, 309 KB, 254 KB for one xfiles window - becomes
+	 * unevictable for the lifetime of the desktop. On a 15.4 MB machine
+	 * that pushes the pressure onto the clients, and the clients are
+	 * what the user is waiting for. Memory is the binding constraint;
+	 * do not trade MB for ms here.
 	 */
-	if (!getenv("LVDESK_NO_MLOCK") &&
-	    mlockall(MCL_CURRENT | MCL_FUTURE) != 0)
-		perror("lvdesk: mlockall");
 	term_log = getenv("LVDESK_TERMLOG") != NULL;
 	prof_on = getenv("LVDESK_PROF") != NULL;
 	rect_log = getenv("LVDESK_RECTLOG") != NULL;

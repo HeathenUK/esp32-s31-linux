@@ -2688,7 +2688,28 @@ the replaced libraries that differs from the overlay's shim, so a
 re-image can't reintroduce them. Policy: shims live in XIP only; a
 missing shim must fail loudly.
 
-## lvdesk is pinned - the compositor can never page (2026-09-01)
+## lvdesk is NOT pinned - mlockall measured WORSE and was reverted
+
+**2026-09-02: the section below is kept for the reasoning, but its
+conclusion was wrong and the pin is gone.** Fresh-boot arms (xfiles up,
+uinject demo load, repaired in_lag) with the identical binary and kernel:
+
+| lvdesk        | avg lag        | worst          |
+|---------------|----------------|----------------|
+| mlockall on   | 367, 411 ms    | 1163, 1270 ms  |
+| mlockall off  | 170, 313 ms    | 610, 996 ms    |
+| off, shipped  | 192 ms         | 582 ms         |
+
+The arithmetic that should have been done first: the paging the pin
+prevented was 12 major faults in 13 minutes, about 38 ms of SD round
+trips *in total*, against an input latency averaging hundreds of ms. The
+harm is MCL_FUTURE combined with xshim living inside lvdesk - every
+client pixmap the shim allocates (618, 539, 309, 254 KB for a single
+xfiles window) becomes unevictable for the desktop's lifetime, so the
+pressure lands on the clients, which is exactly what the user waits for.
+Memory is the binding constraint: do not trade MB for ms here.
+
+## Superseded reasoning: lvdesk is pinned - the compositor can never page (2026-09-01)
 
 mlockall(MCL_CURRENT | MCL_FUTURE) at the top of main (LVDESK_NO_MLOCK
 opts out). Before: 13 minutes of uptime had already swapped 60 KB of the
