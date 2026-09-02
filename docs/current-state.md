@@ -3021,3 +3021,42 @@ Levers, in order of expected value:
 - We are on the **latest esp-idf master** (2067f3ae, 2026-08-28) - a
   live fetch shows zero commits since, and the recent a2dp/bt fixes are
   already ancestors of it.
+
+## The A2DP bottleneck is the hosted transport's interrupt cost, not SBC
+
+**There is no hardware SBC on this SoC.** Checked: no SBC symbols in the
+S31 ROM or its linker scripts, and the only audio peripherals in
+`soc/esp32s31/register/soc/` are `dac_*` and `i2s_*`. The JPEG codec is
+the sole media accelerator. `SOC_BLE_AUDIO_SUPPORTED` is LE Audio
+*protocol* support in the controller, not a codec block. SBC on this
+family is always software - Bluedroid ships its own encoder for the ESP
+side, and we use libsbc on the Linux side.
+
+**And the codec is not the problem.** The same sbcbench run, identical
+work, measured:
+
+| | cost |
+|---|---|
+| system quiet | 453 ms CPU per 5 s of audio = **9.1% of a core** |
+| Bluetooth link streaming | 1383 ms = **27.7% of a core** |
+
+Three times the CPU for byte-identical work. The cause is interrupt
+load, counted directly on the hosted-transport IRQ (21):
+
+| | interrupts |
+|---|---|
+| BT connected, idle | 34 in 10 s = **3/s** |
+| streaming A2DP | 479 in 10 s = **47/s** |
+
+That is one interrupt per A2DP packet, and the arithmetic closes: the
+bench lost 930 ms over 5 s = 186 ms/s, against 47 IRQ/s, so **each
+hosted-transport interrupt costs ~4 ms**. At 47/s that is ~19% of the
+core stolen from every process on the machine, which is exactly the
+inflation measured, and it is why the encoder "takes" 11.6 ms of CPU per
+packet when the codec itself needs 1.8 ms.
+
+**So the lever is the transport, not the codec**: fewer interrupts per
+unit of audio (batch several ACL packets per doorbell) or a cheaper
+handler (`esp32s31-hosted-sram.c` is ours; its hot path runs from XIP
+flash at ~6x). Hardware SBC would not have helped even if it existed -
+the packets, and therefore the interrupts, would be identical.
