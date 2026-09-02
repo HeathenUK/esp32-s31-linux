@@ -35,3 +35,4 @@ linux-71-port/
 /lvgl/
 /lvdesk/*.bin
 xlite/stubs.c
+rootfs/*.bin
