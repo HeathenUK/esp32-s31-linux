@@ -110,6 +110,13 @@ enum s31_hosted_control_type {
 	S31_HOSTED_CTRL_WIFI_LINK_EVENT,
 	S31_HOSTED_CTRL_WIFI_STATION_INFO,
 	S31_HOSTED_CTRL_WIFI_STATION_INFO_RESPONSE,
+	/*
+	 * Radio coexistence knobs, applied on hart0. Bluetooth's host stack is
+	 * on Linux, so hart0 cannot otherwise learn that A2DP is streaming, and
+	 * every coexistence hypothesis used to cost a loader reflash.
+	 */
+	S31_HOSTED_CTRL_COEX_SET,
+	S31_HOSTED_CTRL_COEX_SET_RESPONSE,
 };
 
 enum s31_hosted_link_state {
@@ -154,6 +161,25 @@ struct s31_hosted_clock_stamp {
 
 /* CPU_FREQ_SET data payload. target_mhz is the PM floor requested by Linux;
  * actual_mhz is the current FreeRTOS/ESP-PM-selected frequency. */
+/* COEX_SET payload: exactly the 16 data bytes of a control message. */
+enum s31_hosted_coex_op {
+	S31_HOSTED_COEX_GET = 0,		/* result = scheme period, arg = interval */
+	S31_HOSTED_COEX_PREFER = 1,		/* arg: 0 wifi, 1 bt, 2 balance */
+	S31_HOSTED_COEX_BT_SET = 2,		/* arg: ESP_COEX_BT_ST_* bits */
+	S31_HOSTED_COEX_BT_CLEAR = 3,
+	S31_HOSTED_COEX_INTERVAL = 4,		/* arg: coex scheme interval */
+	S31_HOSTED_COEX_FLEX_PERIOD = 5,	/* arg: flexible period */
+	S31_HOSTED_COEX_WIFI_SET = 6,
+	S31_HOSTED_COEX_WIFI_CLEAR = 7,
+};
+
+struct s31_hosted_coex_msg {
+	s31_u32 op;
+	s31_u32 arg;
+	s31_u32 status;		/* esp_err_t, 0 on success */
+	s31_u32 result;
+} __attribute__((packed));
+
 struct s31_hosted_cpu_freq_msg {
 	s31_u32 target_mhz;
 	s31_u32 actual_mhz;

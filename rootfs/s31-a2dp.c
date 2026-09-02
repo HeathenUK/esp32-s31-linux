@@ -34,6 +34,8 @@
 #include <poll.h>
 #include <sched.h>
 #include <sys/syscall.h>
+#include <sys/ioctl.h>
+#include "s31_hosted_sram.h"
 #include <sys/mman.h>
 
 #define EP_PATH		"/s31/a2dp/source"
@@ -74,6 +76,29 @@ struct sbc_caps {
 static char transport_path[256];
 static int transport_ready;
 static struct sbc_caps chosen;
+
+/*
+ * Tell hart0's coexistence scheduler that A2DP is streaming, which is what
+ * ESP-IDF's own A2DP source does through esp_coex_status_bit_set(). With
+ * the Bluetooth host on Linux nobody else can. Best effort: a kernel
+ * without the knob just means no hint.
+ */
+#define S31_HOSTED_IOC_COEX _IOWR('S', 0x37, struct s31_hosted_coex_msg)
+static void coex_hint(int streaming)
+{
+	struct s31_hosted_coex_msg m = {
+		.op = streaming ? S31_HOSTED_COEX_BT_SET : S31_HOSTED_COEX_BT_CLEAR,
+		.arg = 0x10,			/* ESP_COEX_BT_ST_A2DP_STREAMING */
+	};
+	int fd = open("/dev/esps0", O_RDWR);
+
+	if (fd < 0)
+		return;
+	if (ioctl(fd, S31_HOSTED_IOC_COEX, &m) == 0)
+		fprintf(stderr, "s31-a2dp: coex A2DP_STREAMING %s (status %d)\n",
+			streaming ? "set" : "cleared", (int)m.status);
+	close(fd);
+}
 
 static uint64_t cpu_us(void)
 {
@@ -615,6 +640,7 @@ int main(int argc, char **argv)
 		return 1;
 	}
 	fprintf(stderr, "s31-a2dp: transport fd=%d write_mtu=%d\n", fd, wmtu);
+	coex_hint(1);
 
 	sbc_init_a2dp(&sbc, 0L, &chosen, sizeof(chosen));
 	sbc.endian = SBC_LE;
@@ -786,6 +812,7 @@ int main(int argc, char **argv)
 			break;
 		}
 	}
+	coex_hint(0);
 	fprintf(stderr, "s31-a2dp: done, %u packets\n", seq);
 	sbc_finish(&sbc);
 	close(fd);

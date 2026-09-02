@@ -134,7 +134,17 @@ for kernel work; the rootfs only needs rebuilding when userspace changes.
 - **The loader app is `hello_world.bin` at 0x20000**, not `bootloader.bin`.
   Those `boot:` log lines come from it. Repartitioning means reflashing all
   three.
-- **The kernel does not fit with both profiling and the radios.** The linux
+- **OBSOLETE since 2026-09-02 - profiling now fits with the radios.** With
+  debugfs compiled out (`DIAG=0`, the default) and 256 KB moved from the
+  linux partition to rootfs, `make linux PROF=1` builds a kernel with
+  `CONFIG_PROFILING`, Wi-Fi, Bluetooth and sound at 5,968,137 of 6,160,384
+  bytes, and appends `profile=6` to `CONFIG_CMDLINE` (the command line is
+  `CMDLINE_FORCE`, not the DTS). Capture with `echo > /proc/profile`, the
+  workload, then `gzip -c /proc/profile | base64` to the host and
+  `scripts/board/resolve-profile.py System.map dump.b64`. Only kernel-mode
+  ticks are sampled; the idle loop polls here, so idle shows as
+  `cpu_idle_poll`. The paragraph below is kept for the history of the trade.
+- **The kernel does not fit with both profiling and the radios.** (historical) The linux
   partition is 5,636,096 bytes and there is very little slack. In-core profiling
   (`CONFIG_PROFILING`, which *selects* `PERF_EVENTS`) and Wi-Fi + Bluetooth +
   sound are mutually exclusive: the three features are ~500 KB, the partition

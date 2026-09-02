@@ -3060,3 +3060,66 @@ unit of audio (batch several ACL packets per doorbell) or a cheaper
 handler (`esp32s31-hosted-sram.c` is ours; its hot path runs from XIP
 flash at ~6x). Hardware SBC would not have helped even if it existed -
 the packets, and therefore the interrupts, would be identical.
+
+## A2DP alongside Wi-Fi: FIXED - tell coex that A2DP is streaming (2026-09-02)
+
+**The fix is one status bit, set at the right moment.** ESP-IDF's
+coexistence scheduler time-slices the radio between Wi-Fi and Bluetooth
+(period >= 100 ms in the Wi-Fi-connected scheme), and this controller
+gives the host only 4 ACL credits, so at most 4 A2DP packets can wait
+for BT's slice. Under a Wi-Fi download that starved the stream: btmon
+showed ACL transmissions collapsing from ~43/s to 7-20/s with completion
+events still tracking them - the controller was completing fewer packets
+over the air, not losing credits. IDF's own A2DP source fixes exactly
+this by calling `esp_coex_status_bit_set(ESP_COEX_ST_TYPE_BT,
+ESP_COEX_BT_ST_A2DP_STREAMING)`; with the host stack on Linux, nobody
+did.
+
+Now `s31-a2dp` sets that bit through a new hosted control message
+(`S31_HOSTED_CTRL_COEX_SET`, ioctl `S31_HOSTED_IOC_COEX` on `/dev/esps0`)
+when it acquires the transport, and clears it when it stops. Measured,
+same 5.9 MB download while streaming:
+
+| coex hint | Wi-Fi | stream |
+|---|---|---|
+| A2DP_STREAMING set (daemon) | 245-263 KB/s | **late_max 0 ms, 0 stalls** - every arm |
+| cleared, same session | 328 KB/s | late_max 2832 ms, 83 stalls |
+
+Preference (wifi/bt/balance) and scheme interval (x0.5, x2) made no
+further difference once the bit was set. The cost is ~22% of Wi-Fi
+throughput *while music plays*, which is the trade the arbiter exists
+to make.
+
+**Setting the bit at boot does nothing** - tried, ESP_OK, no effect.
+The scheme is chosen when the link state changes, so the hint has to
+be set while the A2DP link exists. That is why it is the daemon's job.
+
+`s31-coex get|prefer|bt-set|bt-clear|interval|wifi-set|wifi-clear` is
+the runtime knob for anything further; a coexistence hypothesis is an
+`echo` now, not an eight-minute loader reflash.
+
+**Wi-Fi TX was never the problem**: `udpblast` at 648 KB/s alongside the
+stream was already late_max 0 before any of this.
+
+### What else this investigation established
+
+- **musl's `sched_setscheduler()` is an ENOSYS stub**, so the daemon's
+  real-time priority never applied until it used the raw syscall. With
+  it, per-packet write fell 3.7 -> 0.76 ms and encode 5.9 -> 2.0 ms.
+- **bluealsa is gone.** The unified Bluetooth flag had been starting its
+  92% spinner alongside bluetoothd, which contaminated a day of
+  measurements; the "crackle" root cause was that, not coexistence.
+- **The profiling kernel fits with the radios now** (5,968,137 of
+  6,160,384 bytes) - `make linux PROF=1` also appends `profile=6`, and
+  `scripts/board/resolve-profile.py` resolves a dump. Under a Wi-Fi
+  download hart1 was ~38% idle; under Wi-Fi TX it is saturated by the IP
+  stack spread thin (`s31_send_payload_meta` 7.2% on top).
+- **A full ring on hart0 drops the frame - HCI included**
+  (`bootloader/main/hosted_sram.c`, `ring->drops++`). Not implicated in
+  this failure (credits tracked), but a flow-control event must never be
+  dropped; that is open.
+- **The 8BitDo receiver sits behind a full-speed hub** (`214b:7260`),
+  the split-transaction case that costs ~55% of the core; 1161 USB
+  interrupts/s were present through every measurement here.
+- `/tmp` is tmpfs: decoding a btmon capture there wedged the board.
+  Write captures to `/root` and stream the decode through awk.

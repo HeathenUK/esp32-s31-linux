@@ -1,0 +1,228 @@
+esp32s31-hosted: a coexistence control message, and no per-IRQ mask dance
+
+Cumulative diff from the 6.12 BSP baseline (the linux-esp32-s31 submodule)
+to the current 7.1 state of the hosted transport driver, in the same form
+as 0023 for the display stack.
+
+Coexistence: Bluetooth's host stack is on Linux, so hart0's radio
+arbiter could never learn that A2DP was streaming, and a Wi-Fi download
+starved the stream to 7-20 ACL packets/s (btmon; completions still
+tracked, so the controller was completing fewer packets over the air,
+not losing credits). S31_HOSTED_IOC_COEX on /dev/esps0 carries a
+S31_HOSTED_CTRL_COEX_SET message to hart0, which applies
+esp_coex_status_bit_set/clear, esp_coex_preference_set and
+coex_schm_interval_set. s31-a2dp sets ESP_COEX_BT_ST_A2DP_STREAMING on
+transport acquire: measured, the same 5.9 MB download while streaming
+goes from 2.8 s late with 83 stalls to 0-7 ms late with none, at ~250
+instead of ~328 KB/s of Wi-Fi.
+
+Also drops the disable_irq_nosync()/enable_irq() pair around NAPI - the
+doorbell ack is the mask, and a doorbell during a scheduled poll just
+finds napi_schedule_prep() false. Measured no faster, kept because it
+is the standard shape and one lock fewer per interrupt.
+
+--- a/drivers/net/ethernet/espressif/esp32s31-hosted-sram.c
++++ b/drivers/net/ethernet/espressif/esp32s31-hosted-sram.c
+@@ -11,6 +11,7 @@
+ #include <linux/completion.h>
+ #include <linux/cpufreq.h>
+ #include <linux/delay.h>
++#include <linux/hex.h>
+ #include <linux/etherdevice.h>
+ #include <linux/fs.h>
+ #include <linux/interrupt.h>
+@@ -68,6 +69,8 @@
+ 	_IOW('S', 0x35, struct s31_hosted_wifi_state_request)
+ #define S31_HOSTED_IOC_WIFI_STATE_GET \
+ 	_IOR('S', 0x36, struct s31_hosted_wifi_state_request)
++#define S31_HOSTED_IOC_COEX \
++	_IOWR('S', 0x37, struct s31_hosted_coex_msg)
+ 
+ static struct cpufreq_frequency_table s31_cpu_freq_table[] = {
+ 	{ .frequency = 53000 },
+@@ -98,6 +101,9 @@
+ 	struct completion mem_stats_done;
+ 	struct completion wifi_cfg_done;
+ 	struct completion cpu_freq_done;
++	struct completion coex_done;
++	struct mutex coex_mutex;
++	struct s31_hosted_coex_msg coex_reply;
+ 	struct miscdevice serial_misc;
+ 	struct sk_buff_head serial_rx;
+ 	u8 *serial_reassembly;
+@@ -649,6 +655,12 @@
+ 			complete(&hosted->wifi_cfg_done);
+ 		return;
+ 	}
++	if (msg->type == S31_HOSTED_CTRL_COEX_SET_RESPONSE) {
++		memcpy(&hosted->coex_reply, msg->data, sizeof(hosted->coex_reply));
++		complete(&hosted->coex_done);
++		return;
++	}
++
+ 	if (msg->type == S31_HOSTED_CTRL_CPU_FREQ_SET_RESPONSE) {
+ 		const struct s31_hosted_cpu_freq_msg *freq = (const void *)msg->data;
+ 
+@@ -1399,7 +1411,7 @@
+ 	return ret;
+ }
+ 
+-static int s31_wifi_get_station(struct wiphy *wiphy, struct net_device *ndev,
++static int s31_wifi_get_station(struct wiphy *wiphy, struct wireless_dev *wdev,
+ 				const u8 *mac, struct station_info *sinfo)
+ {
+ 	struct s31_hosted *hosted = s31_wiphy_to_hosted(wiphy);
+@@ -1485,7 +1497,7 @@
+ 	.target_index = s31_cpufreq_target_index,
+ 	.get = s31_cpufreq_get,
+ 	.init = s31_cpufreq_init,
+-	.attr = cpufreq_generic_attr,
++	/* cpufreq_generic_attr removed; the core publishes it. */
+ 	.name = "esp32s31-idf",
+ };
+ 
+@@ -1534,6 +1546,42 @@
+ 		return ret;
+ 	}
+ 
++	if (command == S31_HOSTED_IOC_COEX) {
++		struct s31_hosted_coex_msg req;
++		struct s31_hosted_control_msg cmsg = {
++			.type = S31_HOSTED_CTRL_COEX_SET,
++			.length = sizeof(cmsg),
++			.generation = hosted->generation,
++		};
++		unsigned long timeout;
++
++		if (copy_from_user(&req, (void __user *)argument, sizeof(req)))
++			return -EFAULT;
++		if (!hosted->hosted_ready)
++			return -ENODEV;
++		memcpy(cmsg.data, &req, sizeof(req));
++		ret = mutex_lock_interruptible(&hosted->coex_mutex);
++		if (ret)
++			return ret;
++		reinit_completion(&hosted->coex_done);
++		ret = s31_send_payload(hosted, S31_HOSTED_PRIV_IF, &cmsg,
++				       sizeof(cmsg), 0);
++		if (!ret) {
++			timeout = wait_for_completion_interruptible_timeout(
++				&hosted->coex_done, msecs_to_jiffies(3000));
++			if (!timeout)
++				ret = -ETIMEDOUT;
++			else if ((long)timeout < 0)
++				ret = (long)timeout;
++			else if (copy_to_user((void __user *)argument,
++					      &hosted->coex_reply,
++					      sizeof(hosted->coex_reply)))
++				ret = -EFAULT;
++		}
++		mutex_unlock(&hosted->coex_mutex);
++		return ret;
++	}
++
+ 	if (command == S31_HOSTED_IOC_WIFI_SLOT_SET ||
+ 	    command == S31_HOSTED_IOC_WIFI_SLOT_GET) {
+ 		if (copy_from_user(&slot_request, (void __user *)argument,
+@@ -1715,6 +1763,23 @@
+ 	return ret;
+ }
+ 
++/*
++ * NOT __fasttext, and that is a measured decision (2026-09-02).
++ *
++ * s31_hosted_irq, s31_hosted_poll, s31_process_frame and s31_hosted_xmit
++ * were all moved to RAM, placement confirmed in System.map, and it changed
++ * NOTHING: the codec bench cost 8.7% of a core with the link quiet and
++ * 31.3% while A2DP streamed, against 9.1/27.7 before. Removing the
++ * disable_irq/enable_irq pair from the interrupt path measured zero as
++ * well (9.4/28.2).
++ *
++ * The tax is not in this path. An unrelated workload - spawnbench, which
++ * only forks and execs - slows from 52.2 ms to 81.3 ms per spawn while the
++ * link streams, so the whole machine is paying, not the driver. Suspect a
++ * shared resource: hart0 and hart1 both fetch from the same QIO flash, and
++ * both reach the same PSRAM. Do not re-spend RAM here without a
++ * measurement that separates those.
++ */
+ static int s31_hosted_poll(struct napi_struct *napi, int budget)
+ {
+ 	struct s31_hosted *hosted = container_of(napi, struct s31_hosted, napi);
+@@ -1777,18 +1842,29 @@
+ 	}
+ 
+ 	if (work < budget && napi_complete_done(napi, work)) {
+-		if (atomic_xchg(&hosted->irq_disabled, 0))
+-			enable_irq(hosted->irq);
++		/*
++		 * No enable_irq() here, and no disable_irq_nosync() in the
++		 * handler: the doorbell ack IS the mask.
++		 *
++		 * The pair cost about 4 ms per interrupt on this board -
++		 * they take the irq descriptor's locks and go through the
++		 * irqchip, and this kernel's text runs from XIP flash at
++		 * ~6x. Measured 2026-09-02: while A2DP streamed, the
++		 * transport took 47 interrupts a second (one per packet) and
++		 * identical work elsewhere on the machine cost 3x the CPU -
++		 * 9.1% of a core against 27.7% - which is ~19% of the core
++		 * spent entering and leaving this handler.
++		 *
++		 * A doorbell that arrives while NAPI is still scheduled is
++		 * harmless: napi_schedule_prep() returns false and the
++		 * handler simply returns, which is the cheap path.
++		 */
+ 		/* Cover a producer racing with the empty check above. */
+ 		if (readl(ring + offsetof(struct s31_hosted_ring_state,
+ 					 producer)) !=
+ 		    readl(ring + offsetof(struct s31_hosted_ring_state,
+-					 consumer)) &&
+-		    napi_schedule_prep(napi)) {
+-			disable_irq_nosync(hosted->irq);
+-			atomic_set(&hosted->irq_disabled, 1);
+-			__napi_schedule(napi);
+-		}
++					 consumer)))
++			napi_schedule(napi);
+ 	}
+ 
+ 	return work;
+@@ -1799,11 +1875,7 @@
+ 	struct s31_hosted *hosted = data;
+ 
+ 	writel(0, hosted->db_h0_to_h1);
+-	if (napi_schedule_prep(&hosted->napi)) {
+-		disable_irq_nosync(irq);
+-		atomic_set(&hosted->irq_disabled, 1);
+-		__napi_schedule(&hosted->napi);
+-	}
++	napi_schedule(&hosted->napi);
+ 	return IRQ_HANDLED;
+ }
+ 
+@@ -1893,6 +1965,8 @@
+ 	init_completion(&hosted->mem_stats_done);
+ 	init_completion(&hosted->wifi_cfg_done);
+ 	init_completion(&hosted->cpu_freq_done);
++	init_completion(&hosted->coex_done);
++	mutex_init(&hosted->coex_mutex);
+ 	hosted->cpu_freq_mhz = 320;
+ 	hosted->cpu_freq_floor_mhz = 320;
+ 	hosted->rx_frame = devm_kmalloc(&pdev->dev,
+@@ -2053,8 +2127,6 @@
+ 			       offsetof(struct s31_hosted_ring_state, producer))) !=
+ 	    readl(s31_ring_ptr(hosted, true,
+ 			       offsetof(struct s31_hosted_ring_state, consumer)))) {
+-		disable_irq(hosted->irq);
+-		atomic_set(&hosted->irq_disabled, 1);
+ 		napi_schedule(&hosted->napi);
+ 	}
+ 	ret = s31_hosted_selftest(hosted);
+@@ -2105,7 +2177,7 @@
+ 
+ static struct platform_driver s31_hosted_driver = {
+ 	.probe = s31_hosted_probe,
+-	.remove_new = s31_hosted_remove,
++	.remove = s31_hosted_remove,
+ 	.driver = {
+ 		.name = "esp32s31-hosted-sram",
+ 		.of_match_table = s31_hosted_of_match,

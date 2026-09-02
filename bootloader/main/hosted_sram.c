@@ -15,6 +15,9 @@
 #include "esp_sleep.h"
 #include "esp_system.h"
 #include "esp_timer.h"
+#include "esp_rom_sys.h"
+#include "esp_coexist.h"
+#include "private/esp_coexist_internal.h"
 #include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -345,6 +348,75 @@ static bool process_mem_stats_control(const struct s31_hosted_control_msg *msg)
 	return true;
 }
 
+/*
+ * Coexistence knobs from Linux. The measurements that motivate this: with
+ * a Wi-Fi download running, btmon shows A2DP ACL transmissions to the sink
+ * collapsing from ~43/s to 7-20/s while completion events still track them,
+ * i.e. the controller completes fewer packets over the air. Coexistence is
+ * time-sliced with a period of 100 ms or more, and this controller gives
+ * the host only 4 ACL credits, so at most 4 packets can wait for BT's
+ * slice - which caps A2DP near 4 packets per period. These ops let Linux
+ * tell coex what BT is doing and tune the scheme at runtime.
+ */
+static bool process_coex_control(const struct s31_hosted_control_msg *msg)
+{
+	struct s31_hosted_coex_msg req, resp = { 0 };
+	struct s31_hosted_control_msg response = {
+		.type = S31_HOSTED_CTRL_COEX_SET_RESPONSE,
+		.length = sizeof(response),
+		.generation = s_ctrl->generation,
+	};
+
+	if (msg->type != S31_HOSTED_CTRL_COEX_SET)
+		return false;
+	memcpy(&req, msg->data, sizeof(req));
+	resp.op = req.op;
+	resp.arg = req.arg;
+#if CONFIG_ESP_COEX_SW_COEXIST_ENABLE
+	switch (req.op) {
+	case S31_HOSTED_COEX_GET:
+		resp.result = coex_schm_curr_period_get();
+		resp.arg = coex_schm_interval_get();
+		resp.status = ESP_OK;
+		break;
+	case S31_HOSTED_COEX_PREFER:
+		resp.status = esp_coex_preference_set((esp_coex_prefer_t)req.arg);
+		break;
+	case S31_HOSTED_COEX_BT_SET:
+		resp.status = esp_coex_status_bit_set(ESP_COEX_ST_TYPE_BT, req.arg);
+		break;
+	case S31_HOSTED_COEX_BT_CLEAR:
+		resp.status = esp_coex_status_bit_clear(ESP_COEX_ST_TYPE_BT, req.arg);
+		break;
+	case S31_HOSTED_COEX_INTERVAL:
+		resp.status = coex_schm_interval_set(req.arg) ? ESP_FAIL : ESP_OK;
+		resp.result = coex_schm_interval_get();
+		break;
+	case S31_HOSTED_COEX_FLEX_PERIOD:
+		/* Declared in the private header behind a config this loader does
+		 * not set; wire it when a measurement asks for it. */
+		resp.status = ESP_ERR_NOT_SUPPORTED;
+		break;
+	case S31_HOSTED_COEX_WIFI_SET:
+		resp.status = esp_coex_status_bit_set(ESP_COEX_ST_TYPE_WIFI, req.arg);
+		break;
+	case S31_HOSTED_COEX_WIFI_CLEAR:
+		resp.status = esp_coex_status_bit_clear(ESP_COEX_ST_TYPE_WIFI, req.arg);
+		break;
+	default:
+		resp.status = ESP_ERR_INVALID_ARG;
+	}
+	ESP_LOGI("coex", "op %u arg %u -> status %d result %u",
+		 (unsigned)req.op, (unsigned)req.arg, (int)resp.status,
+		 (unsigned)resp.result);
+#else
+	resp.status = ESP_ERR_NOT_SUPPORTED;
+#endif
+	memcpy(response.data, &resp, sizeof(resp));
+	(void)s31_hosted_sram_send_control(&response, sizeof(response));
+	return true;
+}
+
 static bool process_cpu_freq_control(const struct s31_hosted_control_msg *msg)
 {
 	struct s31_hosted_cpu_freq_msg request;
@@ -452,6 +524,8 @@ static void process_h1_frame(const uint8_t *frame, size_t frame_length)
 		msg = (const void *)(frame + offset);
 		if (process_cpu_freq_control(msg))
 			return;
+		if (process_coex_control(msg))
+			return;
 		if (process_clock_control(msg))
 			return;
 		if (process_mem_stats_control(msg))
@@ -518,7 +592,29 @@ int s31_hosted_sram_ap_tx(const void *data, size_t length)
 
 int s31_hosted_sram_hci_tx(const void *data, size_t length)
 {
-	return s31_hosted_sram_send(S31_HOSTED_HCI_IF, data, length, 0);
+	/*
+	 * An HCI frame must not be dropped. A lost Number-of-Completed-Packets
+	 * event is a Bluetooth credit the host never gets back, and with only
+	 * four ACL credits on this controller that is a quarter of the A2DP
+	 * pipeline gone until reconnect. A Wi-Fi download can fill the
+	 * hart0->hart1 ring for a moment; hart1 drains it within a NAPI poll,
+	 * so waiting briefly - outside the critical section - almost always
+	 * succeeds. 50 x 100 us bounds it at 5 ms, and a drop past that is
+	 * counted and logged instead of silent.
+	 */
+	int tries = 50, ret;
+	static uint32_t logged;
+
+	for (;;) {
+		ret = s31_hosted_sram_send(S31_HOSTED_HCI_IF, data, length, 0);
+		if (ret == 0 || --tries == 0)
+			break;
+		esp_rom_delay_us(100);
+	}
+	if (ret && (logged++ & 63) == 0)
+		ESP_LOGW(TAG, "HCI frame dropped: hart0->hart1 ring full for 5 ms (%u drops)",
+			 (unsigned)s_ctrl->h0_to_h1.drops);
+	return ret;
 }
 
 static void drain_h1_ring(void)
