@@ -226,7 +226,14 @@ endif
 PROF ?= 0
 ifeq ($(PROF),1)
 PROF_TWEAKS := --enable PROFILING --enable PERF_EVENTS
+# /proc/profile only exists with profile= on the command line, and the
+# command line is CONFIG_CMDLINE (CMDLINE_FORCE), not the DTS. profile=6 is
+# 64-byte buckets in a 256 KB buffer; profile=2 allocates ~4 MB and starves
+# userspace, which reads as "hangs in udev" - see docs/current-state.md.
+# Appended to whatever the defconfig carries, so it never diverges from it.
+PROF_CMDLINE_TWEAK = --set-str CMDLINE "$$(sed -n 's/^CONFIG_CMDLINE=\"\(.*\)\"/\1/p' $(LINUX_OUT)/.config) profile=6"
 else
+PROF_CMDLINE_TWEAK :=
 PROF_TWEAKS := --disable PROFILING --disable PERF_EVENTS
 endif
 
@@ -257,6 +264,7 @@ linux: toolchain | $(LINUX_OUT)
 		--set-str BUILTIN_DTB_NAME "espressif/esp32s31_generic" \
 		--enable RISCV_ISA_C \
 		--enable PROFILING \
+		$(PROF_CMDLINE_TWEAK) \
 		$(HZ_TWEAKS) \
 		--disable RISCV_ISA_V \
 		--disable RISCV_ISA_V_DEFAULT_ENABLE \
