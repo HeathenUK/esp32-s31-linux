@@ -3380,3 +3380,91 @@ icache (~line 272), through the ROM call, with a flash-back plan.
   whole-surface clear to zero on a memfd pixmap can drop its pages instead
   of writing them, with no NULL px and no munmap sizing, which is where the
   three uniform-pixmap attempts died. The ~705 KB target stands.
+
+## Four of the reassessment's items, taken forward (2026-09-03)
+
+### Boot: the crypto engines had no compute clock - 26.4 s to the desktop is 21.0 s
+
+The RSA/ECC self-test was not a broken block. `CRYPTO_CTRL0` bit 2
+(`SEC_CLK_EN`, the compute clock for the RSA and ECC cores) was never set by
+`esp32s31-crypto.c`, and hart0's `CONFIG_ESP_CRYPTO_CLK_ON_DEMAND=y` gates
+the PLL_F240M reference those cores run from between its own operations, so
+`QUERY_CLEAN` answered (bus clock) and `START_MODEXP` never completed. IDF's
+own `system_internal.c` documents the same stuck-in-ROM failure mode.
+
+Fix: the driver sets bit 2 (`patches/0025`), and the loader is built with
+`CONFIG_ESP_CRYPTO_CLK_ON_DEMAND=n` and hart0's hardware MPI/ECC off
+(`bootloader/sdkconfig.defaults`), so the clocks stay on and the engines
+belong to Linux. Measured on the next boot:
+
+    kernel scanout        7.85 s  ->  1.68 s
+    SD card up            8.74 s  ->  2.22 s
+    first rcS script     14.01 s  ->  8.27 s
+    S40lvdesk starts     25.33 s  -> 19.84 s
+    lvdesk on the panel  26.43 s  -> 21.00 s
+    rcS complete         40.86 s  -> 35.32 s
+
+Still open: the self-test now fails *instantly* with -EIO (a result
+mismatch) instead of -110, so the probe still does not register the AES/SHA
+offload. Nothing in userspace needs it; it is a driver correctness item,
+not a boot one.
+
+### Idle: the touch poll no longer owns the timer
+
+`i2c-esp32s31.c` now waits for each transfer on the controller's interrupt
+(CLIC 21, already in the device tree, never requested) instead of a 10 us
+sleep-poll; `use_irq=0` restores polling at runtime. `gt1158_polled.c`
+polls at 20 ms only while touched and backs off to `idle_poll_ms` (60)
+after `idle_after` (25) quiet polls. Idle desktop, 10 s windows:
+
+    riscv-timer interrupts/s   669  ->  125-154
+    i2c interrupts/s             -       45      (3 per poll at 60 ms)
+    busy ticks per 10 s       49-52  ->  50      (unchanged; the cost was
+                                                  wakeups, not CPU time)
+
+### RAM: xfiles' two full-window masks are 8 kB instead of 705 kB
+
+The uniform-pixmap idea, done the fourth way. A `struct res` now carries a
+`hole` flag: set when a surface is allocated (memfd and calloc pages are
+zero until touched) and when a whole-surface clear to zero is turned into
+`fallocate(PUNCH_HOLE)` on a memfd-born surface; cleared by every write
+path (`op_target_ex`, `blend_px`, the SHM `Damaged` notification) and
+carried across alias installs. Two readers honour it: a zero fill into a
+hole surface returns without writing (xfiles clears its A8 mask sheets a
+cell at a time - 62 partial `FillRectangles` per maximise - and each memset
+was refilling the pages), and `Composite` through a hole mask returns for
+Over/Add/Atop/OverReverse/Dst. The last part is what makes it stick: a
+read fault on shared memory allocates, so the first attempt punched holes
+that the compositor immediately refilled (Shmem 2,564 -> 2,488 kB, the
+"win" that was not one).
+
+Like for like, xfiles maximised, `/proc/<lvdesk>/smaps` per surface:
+
+                              stock lvdesk    hole-aware
+    768x515 A8 mask              388 kB          4 kB
+    798x410 A8 mask              320 kB          4 kB
+    MemAvailable               1,532 kB      2,440 kB
+    Shmem                      3,072 kB      2,364 kB
+
+The census (`SIGUSR1`) no longer walks a hole - walking it would
+materialise it - and prints `HOLE (not walked)` instead. Shipped in the
+XIP image; the screenshot after the change is pixel-identical in content.
+
+### Kernel hot text in SRAM: the plan, and a finding that came first
+
+hart0 has 86 KB of internal SRAM free (84 KB largest block, 82 KB
+historical minimum), so a 64 KB window at `0x2F052000-0x2F062000` (directly
+below the audio DMA reservation) is possible with ~18 KB of hart0 margin.
+The full plan - loader reservation, a `.text.sram` output section after
+`_end` with VMA `0xC1800000`, a static early PTE page plus a late
+`create_pgd_mapping` with `PAGE_KERNEL_EXEC`, the bootstrap copy next to
+`__copy_data` - is in the session notes and is not started, because
+planning it found something cheaper: **the interrupt spine is in flash.**
+`entry.o`'s code is `.irqentry.text`, so the `*entry.o(.text .text.*)`
+line in `.text.fast` matched nothing, and `irq-esp32s31-clic.o`,
+`timer-riscv.o`, `kernel/irq/{chip,handle}.o` and `softirq.o` were never
+listed. `handle_exception`, `esp32s31_clic_handle_irq`,
+`riscv_timer_interrupt`, `handle_fasteoi_irq` and `handle_softirqs` all
+ran from flash on every interrupt and tick. Moving them is a linker-script
+change (in progress); the first attempt does not boot and is being
+bisected with the new `make linux EARLYCON=1` knob.

@@ -32,6 +32,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
+#include <fcntl.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -96,6 +97,9 @@ struct res {
 	int font_idx;			/* fonts only: index into xfonts[] */
 	uint8_t depth;			/* pixmaps: 1 means an alpha bitmap */
 	uint8_t dirty;			/* pixmaps: has anything ever drawn here */
+	uint8_t hole;			/* every pixel is known to be 0: nothing
+					 * has written since allocation or since a
+					 * whole-surface clear was punched out */
 	uint8_t bpp;			/* bytes per pixel in px: 1 or 2 */
 	int shm_fd;			/* memfd backing px, or -1 */
 	size_t shm_len;
@@ -162,6 +166,7 @@ static int cur_owner;			/* client whose request is in flight */
  * to the byte rather than by inference.
  */
 static size_t mem_win, mem_pix, mem_glyph;
+static unsigned long n_punch;	/* whole-surface clears turned into holes */
 static int n_win, n_pix;
 static int lfd = -1;
 static void (*win_cb)(uint32_t id, int w, int h);
@@ -395,6 +400,7 @@ static uint16_t *px_alloc(struct res *r, int w, int h)
 				r->px = m;
 				r->shm_fd = fd;
 				r->shm_len = n;
+				r->hole = 1;
 				if (r->type == R_PIXMAP) {
 					mem_pix += n; n_pix++;
 				} else {
@@ -410,6 +416,7 @@ static uint16_t *px_alloc(struct res *r, int w, int h)
 	r->px = calloc((size_t)w * h, r->bpp);
 	if (!r->px)
 		return NULL;
+	r->hole = 1;
 	if (r->type == R_PIXMAP) {
 		mem_pix += n; n_pix++;
 	} else {
@@ -452,6 +459,8 @@ static int alias_break_ex(struct res *w, int keep_contents)
 	else
 		memset(own, 0, n);
 	w->px = own;
+	/* zeroed: all zero; copied: whatever the pixmap was known to be */
+	w->hole = keep_contents ? (pm && pm->px && pm->hole) : 1;
 	w->alias = 0;
 	notify_draw(w);			/* the desktop caches this pointer */
 	mem_win += n; n_win++;
@@ -517,6 +526,8 @@ void xshim_mem_report(void)
 		"glyphs %zu kB, total %zu kB\n", n_win, mem_win / 1024,
 		n_pix, mem_pix / 1024, mem_glyph / 1024,
 		(mem_win + mem_pix + mem_glyph) / 1024);
+	fprintf(stderr, "xshim: %lu whole-surface clears punched to holes\n",
+		n_punch);
 
 	/*
 	 * The census that decides what to do about it. Totals say the pixmaps
@@ -546,7 +557,7 @@ void xshim_mem_report(void)
 			 */
 			size_t k, tot = (size_t)res[i].w * res[i].h, runs = 1;
 
-			if (res[i].px && tot) {
+			if (res[i].px && tot && !res[i].hole) {
 				if (res[i].bpp == 1) {
 					const uint8_t *q = (uint8_t *)res[i].px;
 
@@ -572,6 +583,7 @@ void xshim_mem_report(void)
 				runs,
 				runs * (res[i].bpp + 2) / 1024,
 				runs * (res[i].bpp + 2) * 100 / (n ? n : 1),
+				res[i].hole ? " HOLE (not walked)" :
 				res[i].dirty ? "" : " NEVER DRAWN");
 		}
 	}
@@ -609,6 +621,7 @@ static void px_set(struct res *d, int x, int y, uint16_t c)
 	if (ax < d->cx0 || ay < d->cy0 || ax >= d->cx1 || ay >= d->cy1)
 		return;
 	b->dirty = 1;
+	b->hole = 0;
 	if (b->bpp == 1)
 		((uint8_t *)b->px)[(size_t)ay * b->w + ax] = (uint8_t)c;
 	else
@@ -804,6 +817,7 @@ static struct res *op_target_ex(struct res *d, int full_cover)
 	if (!b->px)
 		return NULL;
 	b->dirty = 1;
+	b->hole = 0;
 	return b;
 }
 
@@ -968,6 +982,7 @@ static void win_fill(struct res *d, int x, int y, int w, int h)
 		    pm->h == d->h && pm->bpp == d->bpp) {
 			px_release(d);
 			d->px = pm->px;
+			d->hole = pm->hole;
 			d->alias = pm->id;
 			/*
 			 * The desktop CACHES this pointer (lvdesk keeps it in
@@ -2096,6 +2111,7 @@ static void blend_px(struct res *d, int x, int y, int r8, int g8, int b8,
 	if (ax < d->cx0 || ay < d->cy0 || ax >= d->cx1 || ay >= d->cy1)
 		return;
 	b->dirty = 1;
+	b->hole = 0;
 	if (b->bpp == 1) {
 		/*
 		 * One byte of intensity. This is the same quantity the RGB565
@@ -2723,6 +2739,18 @@ static void render_composite(struct cli *c, const uint8_t *r)
 			fprintf(stderr, "xshim:   masked composite %dx%d "
 				"(%d bytes) src=%s\n", w, h, w * h * 2,
 				sp->solid ? "solid" : "picture");
+		/*
+		 * A mask that is known to be all zero (fresh, or a punched
+		 * whole-surface clear) makes these operators no-ops. Skipping
+		 * the read is what keeps the punched pages punched: a read
+		 * fault on shared memory allocates, so compositing through the
+		 * mask would silently refill the 705 kB it just freed.
+		 */
+		if (!mp->solid && m->buf && m->buf->hole &&
+		    (op == PICT_OP_OVER || op == PICT_OP_ADD ||
+		     op == PICT_OP_ATOP || op == PICT_OP_OVER_REVERSE ||
+		     op == PICT_OP_DST))
+			return;
 		x0 = dx; y0 = dy; x1 = dx + w; y1 = dy + h;
 		pict_clip(dp, &x0, &y0, &x1, &y1);
 
@@ -3404,12 +3432,27 @@ static int render_request(struct cli *c, const uint8_t *r, int len)
 			    gets16(p) + (int)get16(p + 4) >= d->w &&
 			    gets16(p + 2) + (int)get16(p + 6) >= d->h)
 				full = 1;
+			int was_hole = d->buf && d->buf->hole;
+
 			b = op_target_ex(d, full);
 			if (!b)
 				return 1;
 			col = (uint16_t)(((cr & 0xF8) << 8) |
 					 ((cg & 0xFC) << 3) |
 					 (cb >> 3));
+			/*
+			 * Zero into a surface that is known to be all zero
+			 * changes nothing, so do nothing - and in particular
+			 * do not memset, which is what was refilling the
+			 * punched masks: xfiles clears its A8 mask sheets a
+			 * cell at a time (62 partial FillRectangles per
+			 * maximise, traced 2026-09-03). Nothing changed, so
+			 * there is no damage to report either.
+			 */
+			if (was_hole && (b->bpp == 1 ? cr == 0 : col == 0)) {
+				b->hole = 1;
+				return 1;
+			}
 			int px0 = -32768, py0 = -32768;
 			int px1 = 32767, py1 = 32767;
 			int bx0 = 1 << 30, by0 = 1 << 30;
@@ -3458,6 +3501,36 @@ static int render_request(struct cli *c, const uint8_t *r, int len)
 				if (y1 > d->cy1) y1 = d->cy1;
 				if (x0 >= x1 || y0 >= y1)
 					continue;
+				/*
+				 * A whole-surface clear to zero on a memfd-born
+				 * surface does not need to write anything: punch
+				 * the pages out and the kernel hands back zero
+				 * pages on the next touch, ours or the client's
+				 * (it maps the same memfd). This is the uniform-
+				 * pixmap idea from px_alloc() done where the three
+				 * earlier attempts died: no NULL px, no munmap
+				 * with a recomputed size. xfiles clears its
+				 * full-window A8 masks like this on every frame,
+				 * and those two masks were 705 kB of resident
+				 * zeros. Damage still accrues below.
+				 */
+				if (b->shm_fd >= 0 && x0 == 0 && y0 == 0 &&
+				    x1 == b->w && y1 == b->h &&
+				    ((b->bpp == 1 && cr == 0) ||
+				     (b->bpp == 2 && col == 0)) &&
+				    fallocate(b->shm_fd, FALLOC_FL_PUNCH_HOLE |
+					      FALLOC_FL_KEEP_SIZE, 0,
+					      (off_t)b->shm_len) == 0) {
+					n_punch++;
+					b->hole = 1;
+					xshim_px_acc += (uint64_t)(x1 - x0) *
+							(y1 - y0);
+					if (x0 < bx0) bx0 = x0;
+					if (y0 < by0) by0 = y0;
+					if (x1 > bx1) bx1 = x1;
+					if (y1 > by1) by1 = y1;
+					continue;
+				}
 				if (b->bpp == 1) {
 					/*
 					 * An A8 surface stores one intensity
@@ -3644,6 +3717,7 @@ static void xshm_request(struct cli *c, const uint8_t *r, int len)
 				"non-zero\n", p->id, nz, tot);
 		}
 		p->dirty = 1;
+		p->hole = 0;
 		notify_draw(p);
 	}
 }

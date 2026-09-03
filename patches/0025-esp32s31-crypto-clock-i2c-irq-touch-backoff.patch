@@ -1,0 +1,277 @@
+esp32s31: crypto compute clock, interrupt-driven I2C, touch poll back-off
+
+Cumulative diff from the 6.12 BSP baseline (the linux-esp32-s31 submodule)
+to the current 7.1 state of three port drivers, in the same form as 0023
+and 0024. Regenerate with:
+
+    for f in drivers/crypto/esp32s31-crypto.c \
+             drivers/i2c/busses/i2c-esp32s31.c \
+             drivers/input/touchscreen/gt1158_polled.c; do
+        diff -u linux-esp32-s31/$f linux-71-port/$f \
+            --label a/$f --label b/$f
+    done
+
+Crypto: the probe's RSA and ECC self-tests timed out three times for
+6.2 s of every boot (error -110), and the LCD, USB and SD card all
+probed behind it. The engines had no compute clock: CRYPTO_CTRL0 bit 2
+(SEC_CLK_EN) was never set, and hart0's on-demand crypto clock policy
+gated the PLL_F240M reference between its own operations. The driver
+now sets bit 2; the loader is built with CONFIG_ESP_CRYPTO_CLK_ON_DEMAND=n
+and hart0's hardware MPI/ECC off, so the clocks stay on and the engines
+belong to Linux (bootloader/sdkconfig.defaults).
+
+I2C: each transfer was waited for with a 10 us sleep-poll, ~11 hrtimer
+expiries and context switches per short transfer. With the touchscreen
+polling twice every 20 ms that was 550 of the 669 timer interrupts a
+second on an idle desktop (2026-09-03). The controller's interrupt was
+already in the device tree (CLIC 21, matrix source 24) and unused; the
+wait is now one interrupt per transfer, with the poll kept behind the
+use_irq module parameter for A/B.
+
+GT1158: polls at poll_ms (20) only while something is touching; after
+idle_after (25) quiet polls it backs off to idle_poll_ms (60) and snaps
+back on first contact. All three are 0644 module parameters.
+
+--- a/drivers/crypto/esp32s31-crypto.c
++++ b/drivers/crypto/esp32s31-crypto.c
+@@ -88,6 +88,15 @@
+ 
+ /* HP_SYS_CLKRST.crypto_ctrl0, from the S31 IDF register definitions. */
+ #define S31_CRYPTO_SYS_CLK	BIT(0)
++/*
++ * The compute clock for the RSA and ECC cores. Without it every register
++ * still answers - QUERY_CLEAN reads 1 - but START_MODEXP and ECC START
++ * never complete, and the probe's self-test timed out three times for
++ * 6.2 s of every boot (2026-09-03). The source select in bits [21:20]
++ * and the PLL_F240M gate it needs are hart0's: its loader is built with
++ * CONFIG_ESP_CRYPTO_CLK_ON_DEMAND=n so they stay on.
++ */
++#define S31_CRYPTO_SEC_CLK	BIT(2)
+ #define S31_CRYPTO_AES_CLK	BIT(4)
+ #define S31_CRYPTO_SHA_CLK	BIT(6)
+ #define S31_CRYPTO_RSA_CLK	BIT(8)
+@@ -817,8 +826,7 @@
+ static struct akcipher_alg s31_rsa_alg = {
+ 	.encrypt = s31_rsa_encrypt,
+ 	.decrypt = s31_rsa_decrypt,
+-	.sign = s31_rsa_decrypt,
+-	.verify = s31_rsa_encrypt,
++	/* .sign/.verify moved to the "sig" alg type. */
+ 	.set_pub_key = s31_rsa_set_pub_key,
+ 	.set_priv_key = s31_rsa_set_priv_key,
+ 	.max_size = s31_rsa_max_size,
+@@ -1133,8 +1141,9 @@
+ 		dev_warn(&pdev->dev, "SHA DMA unavailable (%d), using PIO\n", ret);
+ 	}
+ 	value = readl(dev->clkrst);
+-	writel(value | S31_CRYPTO_SYS_CLK | S31_CRYPTO_AES_CLK |
+-	       S31_CRYPTO_SHA_CLK | S31_CRYPTO_RSA_CLK | S31_CRYPTO_ECC_CLK,
++	writel(value | S31_CRYPTO_SYS_CLK | S31_CRYPTO_SEC_CLK |
++	       S31_CRYPTO_AES_CLK | S31_CRYPTO_SHA_CLK | S31_CRYPTO_RSA_CLK |
++	       S31_CRYPTO_ECC_CLK,
+ 	       dev->clkrst);
+ 	ret = s31_crypto_selftest(dev);
+ 	if (ret) {
+--- a/drivers/i2c/busses/i2c-esp32s31.c
++++ b/drivers/i2c/busses/i2c-esp32s31.c
+@@ -15,8 +15,10 @@
+ 
+ #include <linux/bitfield.h>
+ #include <linux/clk.h>
++#include <linux/completion.h>
+ #include <linux/delay.h>
+ #include <linux/i2c.h>
++#include <linux/interrupt.h>
+ #include <linux/io.h>
+ #include <linux/iopoll.h>
+ #include <linux/module.h>
+@@ -67,6 +69,11 @@
+ #define ESP32S31_I2C_TIME_OUT		BIT(8)
+ #define ESP32S31_I2C_NACK		BIT(10)
+ #define ESP32S31_I2C_INT_ALL		GENMASK(17, 0)
++#define ESP32S31_I2C_INT_ERR		(ESP32S31_I2C_NACK | \
++					 ESP32S31_I2C_TIME_OUT | \
++					 ESP32S31_I2C_ARBITRATION_LOST)
++/* masked status: RAW & ENA, the same bit layout */
++#define ESP32S31_I2C_INT_ST		0x2c
+ 
+ /* ESP32S31_I2C_SCL_HIGH_PERIOD */
+ #define ESP32S31_I2C_SCL_HIGH		GENMASK(8, 0)
+@@ -109,8 +116,40 @@
+ 	void __iomem *base;
+ 	void __iomem *clkrst;
+ 	u32 bus_freq_hz;
++	int irq;			/* 0: no interrupt, poll */
++	struct completion done;
++	u32 int_st;			/* status captured by the ISR */
+ };
+ 
++/*
++ * Runtime A/B for the wait strategy. Polling the RAW register with a 10 us
++ * usleep_range costs ~11 hrtimer expiries and context switches per short
++ * transfer; the touchscreen's 50 polls a second made that 550 of the 669
++ * timer interrupts on an idle desktop (2026-09-03). One interrupt per
++ * transfer instead. The knob is for measuring, not for shipping either way.
++ */
++static bool use_irq = true;
++module_param(use_irq, bool, 0644);
++MODULE_PARM_DESC(use_irq, "wait for transfers with the interrupt (default) or by polling");
++
++static irqreturn_t esp32s31_i2c_isr(int irq, void *data)
++{
++	struct esp32s31_i2c *i2c = data;
++	u32 st = readl(i2c->base + ESP32S31_I2C_INT_ST);
++
++	if (!st)
++		return IRQ_NONE;
++	/*
++	 * One-shot: the CLIC line is level, so the source has to deassert
++	 * before this returns. Dropping INT_ENA does that; RAW is left for
++	 * the waiter and cleared by the next execute() or recover().
++	 */
++	writel(0, i2c->base + ESP32S31_I2C_INT_ENA);
++	i2c->int_st = st;
++	complete(&i2c->done);
++	return IRQ_HANDLED;
++}
++
+ static void esp32s31_i2c_update(struct esp32s31_i2c *i2c, u32 reg, u32 clear,
+ 				u32 set)
+ {
+@@ -221,18 +260,34 @@
+ /* Run the command list already loaded and wait for it to retire. */
+ static int esp32s31_i2c_execute(struct esp32s31_i2c *i2c, u32 done_flag)
+ {
++	u32 mask = done_flag | ESP32S31_I2C_INT_ERR;
++	bool irq = i2c->irq > 0 && use_irq;
+ 	u32 status;
+ 	int ret;
+ 
+ 	writel(ESP32S31_I2C_INT_ALL, i2c->base + ESP32S31_I2C_INT_CLR);
++	if (irq) {
++		reinit_completion(&i2c->done);
++		i2c->int_st = 0;
++		writel(mask, i2c->base + ESP32S31_I2C_INT_ENA);
++	}
+ 	esp32s31_i2c_commit(i2c);
+ 	esp32s31_i2c_update(i2c, ESP32S31_I2C_CTR, 0, ESP32S31_I2C_TRANS_START);
+ 
+-	ret = readl_poll_timeout(i2c->base + ESP32S31_I2C_INT_RAW, status,
+-				 status & (done_flag | ESP32S31_I2C_NACK |
+-					   ESP32S31_I2C_TIME_OUT |
+-					   ESP32S31_I2C_ARBITRATION_LOST),
+-				 10, ESP32S31_I2C_XFER_TIMEOUT_US);
++	if (irq) {
++		if (wait_for_completion_timeout(&i2c->done,
++				usecs_to_jiffies(ESP32S31_I2C_XFER_TIMEOUT_US))) {
++			status = i2c->int_st;
++			ret = 0;
++		} else {
++			writel(0, i2c->base + ESP32S31_I2C_INT_ENA);
++			ret = -ETIMEDOUT;
++		}
++	} else {
++		ret = readl_poll_timeout(i2c->base + ESP32S31_I2C_INT_RAW,
++					 status, status & mask, 10,
++					 ESP32S31_I2C_XFER_TIMEOUT_US);
++	}
+ 	if (ret) {
+ 		dev_dbg(i2c->dev, "transfer stalled, int_raw=%#x\n",
+ 			readl(i2c->base + ESP32S31_I2C_INT_RAW));
+@@ -257,6 +312,7 @@
+ {
+ 	esp32s31_i2c_update(i2c, ESP32S31_I2C_CTR, 0, ESP32S31_I2C_FSM_RST);
+ 	esp32s31_i2c_reset_fifo(i2c);
++	writel(0, i2c->base + ESP32S31_I2C_INT_ENA);
+ 	writel(ESP32S31_I2C_INT_ALL, i2c->base + ESP32S31_I2C_INT_CLR);
+ 	esp32s31_i2c_commit(i2c);
+ }
+@@ -415,6 +471,22 @@
+ 	if (ret)
+ 		return ret;
+ 
++	/* hw_init() left INT_ENA at 0, so nothing can fire before this. */
++	init_completion(&i2c->done);
++	i2c->irq = platform_get_irq_optional(pdev, 0);
++	if (i2c->irq == -EPROBE_DEFER)
++		return i2c->irq;
++	if (i2c->irq > 0) {
++		ret = devm_request_irq(&pdev->dev, i2c->irq, esp32s31_i2c_isr,
++				       0, dev_name(&pdev->dev), i2c);
++		if (ret)
++			return dev_err_probe(&pdev->dev, ret,
++					     "failed to request irq\n");
++	} else {
++		i2c->irq = 0;
++		dev_info(&pdev->dev, "no interrupt, polling\n");
++	}
++
+ 	i2c_set_adapdata(&i2c->adap, i2c);
+ 	i2c->adap.owner = THIS_MODULE;
+ 	i2c->adap.algo = &esp32s31_i2c_algo;
+--- a/drivers/input/touchscreen/gt1158_polled.c
++++ b/drivers/input/touchscreen/gt1158_polled.c
+@@ -45,12 +45,28 @@
+  */
+ static unsigned int poll_ms = 20;
+ module_param(poll_ms, uint, 0644);
+-MODULE_PARM_DESC(poll_ms, "poll interval in ms");
++MODULE_PARM_DESC(poll_ms, "poll interval in ms while touched");
++
++/*
++ * Measured 2026-09-03 on an idle desktop: this poll was 550 of the 669
++ * timer interrupts a second, because each of its two I2C transfers is
++ * sleep-polled in 10 us steps. Nothing touches the panel most of the time,
++ * so back off once it has been quiet for idle_after polls and snap back to
++ * poll_ms on the first contact. The first touch after a quiet spell is seen
++ * within idle_poll_ms instead of poll_ms; every later frame at poll_ms.
++ */
++static unsigned int idle_poll_ms = 60;
++module_param(idle_poll_ms, uint, 0644);
++MODULE_PARM_DESC(idle_poll_ms, "poll interval in ms after idle_after quiet polls (0 = never back off)");
++static unsigned int idle_after = 25;
++module_param(idle_after, uint, 0644);
++MODULE_PARM_DESC(idle_after, "quiet polls before backing off to idle_poll_ms");
+ 
+ struct gt1158 {
+ 	struct i2c_client *client;
+ 	struct input_dev *input;
+ 	struct touchscreen_properties prop;
++	unsigned int quiet;		/* consecutive polls with no contact */
+ };
+ 
+ static int gt1158_read(struct i2c_client *client, u16 reg, u8 *buf, u16 len)
+@@ -120,9 +136,22 @@
+ ack:
+ 	/* The vendor acks every cycle; so does the part's happiness. */
+ 	gt1158_write_byte(client, GT1158_REG_COOR, 0);
+-	/* Apply a runtime poll_ms change; reading it here keeps 0644 honest. */
+-	if (input_get_poll_interval(input) != poll_ms)
+-		input_set_poll_interval(input, poll_ms);
++	/*
++	 * Pick the interval for the NEXT poll. Reading the parameters here
++	 * keeps their 0644 honest: a change applies within one poll.
++	 */
++	{
++		unsigned int want = poll_ms;
++
++		if (n > 0)
++			ts->quiet = 0;
++		else if (ts->quiet < idle_after)
++			ts->quiet++;
++		if (idle_poll_ms && ts->quiet >= idle_after)
++			want = idle_poll_ms;
++		if (input_get_poll_interval(input) != want)
++			input_set_poll_interval(input, want);
++	}
+ }
+ 
+ static int gt1158_probe(struct i2c_client *client)
+@@ -180,6 +209,7 @@
+ 	error = input_setup_polling(input, gt1158_poll);
+ 	if (error)
+ 		return error;
++	input_set_max_poll_interval(input, 500);
+ 	input_set_poll_interval(input, poll_ms);
+ 
+ 	return input_register_device(input);

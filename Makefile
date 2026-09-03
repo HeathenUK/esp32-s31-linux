@@ -237,6 +237,18 @@ PROF_CMDLINE_TWEAK :=
 PROF_TWEAKS := --disable PROFILING --disable PERF_EVENTS
 endif
 
+# EARLYCON=1 puts the S31 UART earlycon on the command line so a kernel that
+# dies before console_init() says where. Self-cleaning: a plain build strips
+# it again, because .config's CMDLINE persists across builds (the defconfig is
+# not re-applied) and would otherwise carry it for ever.
+EARLYCON ?= 0
+CMDLINE_NOW = $$(sed -n 's/^CONFIG_CMDLINE=\"\(.*\)\"/\1/p' $(LINUX_OUT)/.config | sed 's/ earlycon//g')
+ifeq ($(EARLYCON),1)
+EARLYCON_TWEAK = --set-str CMDLINE "$(CMDLINE_NOW) earlycon"
+else
+EARLYCON_TWEAK = --set-str CMDLINE "$(CMDLINE_NOW)"
+endif
+
 # debugfs OFF by default. It is not mounted at runtime anyway, but compiling
 # it in costs 1.14 MB of RAM on a 15.4 MB machine - measured 2026-09-02,
 # MemFree 1892 kB with it against 3032 kB without, Slab 4260 against 3840 -
@@ -265,6 +277,7 @@ linux: toolchain | $(LINUX_OUT)
 		--enable RISCV_ISA_C \
 		--enable PROFILING \
 		$(PROF_CMDLINE_TWEAK) \
+		$(EARLYCON_TWEAK) \
 		$(HZ_TWEAKS) \
 		--disable RISCV_ISA_V \
 		--disable RISCV_ISA_V_DEFAULT_ENABLE \

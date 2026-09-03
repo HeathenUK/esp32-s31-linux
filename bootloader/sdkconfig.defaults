@@ -43,3 +43,12 @@ CONFIG_USB_HOST_HW_BUFFER_BIAS_IN=y
 # ControllerMode=bredr in /etc/bluetooth/main.conf regardless, so pairing
 # never chases a device's LE/Fast-Pair side by accident.
 CONFIG_BTDM_CTRL_MODE_BTDM=y
+
+# Linux's crypto driver shares CRYPTO_CTRL0 with this app. On-demand
+# gating cleared the compute clock and the PLL_F240M reference between
+# hart0's own operations, and the RSA/ECC engines then never completed a
+# Linux request (6.2 s of self-test timeouts every boot, 2026-09-03).
+# Keep the clocks on, and leave the engines to Linux.
+CONFIG_ESP_CRYPTO_CLK_ON_DEMAND=n
+CONFIG_MBEDTLS_HARDWARE_MPI=n
+CONFIG_MBEDTLS_HARDWARE_ECC=n
