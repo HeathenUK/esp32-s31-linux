@@ -3231,3 +3231,152 @@ Kconfig.flash_freq` offers only 80/40/20 MHz, and there is no
 `SOC_MEMSPI_TIMING_TUNING_BY_DQS`, IDF cannot yet train the S31 above
 80 MHz. The XIP penalty is inherent at QIO-80; the remaining levers are
 hot-text placement and narrower code paths, not the flash mode.
+
+## Reassessment against the record, measured (2026-09-03)
+
+A round of "what is left" that started by reading this file, the plans and
+memory, then measuring on the live board rather than proposing. Everything
+below is a number taken today; the earlier list that proposed a splash screen
+(hart0 has drawn one since day one), starting lvdesk before fbcon (the
+handover is deliberate, `docs/native-800x480.md`) and faster flash (already
+QIO-80) is withdrawn in full.
+
+### Boot: where 26.4 s to the desktop actually goes
+
+    0.0 -  0.6   kernel core init
+    0.6 -  7.6   esp32s31-crypto probe: RSA (2 s), ECC P-256 (2 s) and
+                 P-384 (2 s) self-tests ALL time out (-110). Every later
+                 probe - LCD, USB, SD - waits behind it.
+    7.6 -  8.9   LCD scanout 7.85, USB hub, SD card up at 8.74
+    8.9 - 10.3   cramfs /init -> ext4 mount, journal recovery every boot
+                 (the board is never unmounted cleanly)
+   10.3 - 14.0   overlay /init, busybox init, inittab sysinit, rcS start
+   14.0 - 25.3   init scripts: S05xip 2.3, S02sysctl 1.1, S10udevd 1.1,
+                 S11modules 0.65 (CONFIG_MODULES is off - a no-op),
+                 S30clock 0.6, S01growroot 0.56, S01seedrng 0.4 (the board
+                 has a hardware TRNG), syslogd+klogd 0.6
+   25.3 - 26.4   lvdesk start -> its own scanout
+
+The crypto self-test is the single largest item and is pure waiting:
+`drivers/crypto/esp32s31-crypto.c` polls `RSA_QUERY_IDLE` and `ECC_INT_RAW`
+for 2,000,000 us each and the blocks never answer. Nothing in userspace uses
+kernel crypto offload (wpa_supplicant carries its own; BlueZ uses software
+AES). Turning `CONFIG_CRYPTO_DEV_ESP32S31` off, or fixing whatever clock or
+power gate the block needs, is worth ~6.2 s of a 26 s boot.
+
+Console rendering is a real boot cost: with fbcon bound, 100 lines to
+`/dev/tty0` take **0.95 s** (0.27 s to the 1 Mbps serial console, 0.15 s to
+/dev/null) - ~8 ms per scrolled line, which is one 768 KB framebuffer move
+in PSRAM. Boot prints 185 kernel lines (115 of them KERN_INFO) plus ~300 init
+lines to both consoles: roughly 2-3 s. `loglevel=5` would keep warnings and
+the init progress lines on the panel and drop the driver chatter; that is a
+`CONFIG_CMDLINE` rebuild and a taste decision, recorded here rather than made.
+
+### The CPU frequency governor does nothing
+
+`ondemand` is the governor, 53-320 MHz, sampling every 150 ms with a
+100 ms declared transition latency. Its `time_in_state` says the CPU was at
+**80 MHz for 96%** of a 3.3 h uptime and it made 4,388 transitions. But
+`cpuinfo_cur_freq` - the value hart0 actually reports - read **320 MHz on
+every sample**, idle, with Wi-Fi disconnected, and with bluetoothd stopped
+and hci0 down. hart0 holds the shared CPU clock at maximum (the Wi-Fi
+driver in PS_NONE keeps a power-management lock). So there is no 80 MHz
+latency trap, and there is no lever here either: the governor's 4,388
+"transitions" were hosted control round trips that changed nothing.
+`performance` would only remove that traffic. The memory note claiming
+hart0 "reclocks APB 160<->240 constantly" is out of date.
+
+### Idle: what wakes the core when nothing is happening
+
+10 s windows on an idle desktop, per `/proc/interrupts` and
+`voluntary_ctxt_switches`:
+
+    dwc2 USB            1,055 irq/s   full-speed SOF; physical (hub), known
+    riscv-timer           669 irq/s   see below
+    esp32s31-lcd           53 irq/s   hardware vblank, counted, not used
+                                      (hw_vblank=0, the hrtimer still runs)
+    ksoftirqd              91 wake/s
+    kworker events_freezable 55/s     the GT1158 touch poll (20 ms)
+    kworker events         44/s
+    lvdesk                 19/s       2.2% of the core at idle
+
+**The touchscreen poll is 550 of the 669 timer interrupts.** Setting its
+`poll` to 0 took riscv-timer from 669 to **118/s**. Each 20 ms poll is two
+I2C transfers, and `i2c-esp32s31.c` waits for each with
+`readl_poll_timeout(..., 10, ...)` - a 10 us `usleep_range` per iteration,
+so ~11 hrtimer expiries and context switches per poll. Tick accounting could
+not resolve the CPU cost (49-52 busy ticks per 10 s in every arm), so it is
+under ~2%; the fix is interrupt-driven or spin-polled I2C in our own driver,
+and a slower poll while nothing is touching. `poll` is writable in sysfs
+(max is clamped to 20).
+
+### RAM: the census, so it is not re-argued
+
+    MemTotal 15,428   MemFree 4,788 (idle, no X clients)   Slab 3,992
+    AnonPages 1,504   Shmem 752   KernelStack 360   PageTables 348
+    "4197K kernel code" in the boot Memory: line is flash, not RAM:
+    System.map puts .data+.bss+.text..fast at ~770 KB, matching the
+    1,028 K "reserved".
+
+sysfs is 6.7k nodes: `/sys/devices/platform/soc` 2,724,
+`/sys/devices/virtual` 1,473, `/sys/firmware` (the device tree) 816,
+`/sys/bus` 490, `/sys/module` 239. Nothing dominates; kernfs is 814 KB only
+because the board has that many real devices. Closed.
+
+Per-process: udevd 140 KB anon plus 80 KB of `/run/udev`; each long-lived
+interactive shell holds a single **280 KB** anonymous mapping (a fresh
+`sh -c` is 36 KB, static and dynamic busybox alike - it is something the
+interactive shell does, not the static link). Two such shells are 560 KB and
+unexplained.
+
+`/var/log/lvdesk.log` had grown to **644 KB of tmpfs** because the card's
+S40lvdesk still exported `LVDESK_PROF=1 XSHIM_PROF=1` from the profiling
+sessions; removed on the card (the repo copy never had it), log truncated,
+lvdesk restarted with "console keyboard off" confirmed.
+
+hart0's internal SRAM heap: 233 KB total, **86 KB free, 84 KB largest
+block, 82 KB historical minimum** (`s31-freertos-mem`). That is the budget
+for `docs/hot-text-plan.md` phase 3 (kernel hot text in SRAM): ~64 KB with
+margin. Temper it: the code already in `.text..fast` is what would move,
+and the tick's remaining ~380 us is in inlined flash code that is not.
+
+### The S31 cache has a hardware prefetcher, and it is off - and it cannot be turned on from Linux
+
+`cache_reg.h` for the S31 has per-core instruction-cache **autoload**
+(`CACHE_L1_ICACHE1_AUTOLOAD_CTRL_REG` at 0x2C0000FC: ENA bit 0, trigger
+miss/hit/both in bits 3-4, two address sections SCT0/SCT1 at 0x100-0x10C)
+and a data-cache autoload at 0x110. On the running board every one reads
+**0x2** (DONE set, ENA clear) for both harts, and nothing in IDF's S31
+startup or our loader enables it; the ROM API is
+`Cache_Enable_L1_CORE1_ICache(CACHE_LL_CACHE_AUTOLOAD)` at cache-enable
+time. For a kernel that fetches from 80 MHz flash through a 16 KB icache
+this is the one SoC feature nobody had tried.
+
+Tried at runtime, twice, with `devmem`: sections set first (flash 16 MB +
+PSRAM 16 MB, then kernel partition only), then ENA. **Both times the hart
+died the instant ENA was written** - no output at either baud, the
+card-resident log ends at the line before the write, `reset.py` recovers it
+and the register comes back clear. Do not retry from Linux. If it is tried
+again it belongs in the loader, at the point `main.c` prepares hart1's
+icache (~line 272), through the ROM call, with a flash-back plan.
+
+### Small items confirmed today
+
+- udev: 27 stock rule files, nothing in our scripts or lvdesk consumes
+  them (devtmpfs makes the nodes, lvdesk watches `/dev/input` itself). The
+  boot-audit table already measured `udev not run` as the fastest arm
+  (rcS 37.1 vs 43.0 s). Removing S10udevd and the no-op S11modules is
+  ~1.8 s of rcS, ~220 KB of RAM and the whole nice-19 coldplug.
+- The LCD driver's software vblank hrtimer runs at the frame rate forever
+  because `hw_vblank` defaults to 0, while the hardware vblank interrupt
+  fires 53/s and is only counted. ~42 hrtimer wakeups/s for nothing;
+  `/sys/module/esp32s31_lcd/parameters/hw_vblank` is the runtime knob the
+  driver comment asks to be confirmed and then switched.
+- `page-cluster` is 0 and `read_ahead_kb` 512 on a device whose cost is
+  per request (4k 8 ms, 64k 11 ms). Swap is barely used (76 KB), so this is
+  moot today and worth revisiting only if swap-ins reappear.
+- `CONFIG_SHMEM=y` and `CONFIG_MEMFD_CREATE=y`, so the memfd-born surfaces
+  from 2026-09-02 support `fallocate(FALLOC_FL_PUNCH_HOLE)` - a
+  whole-surface clear to zero on a memfd pixmap can drop its pages instead
+  of writing them, with no NULL px and no munmap sizing, which is where the
+  three uniform-pixmap attempts died. The ~705 KB target stands.
