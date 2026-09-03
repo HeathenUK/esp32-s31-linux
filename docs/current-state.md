@@ -3465,6 +3465,19 @@ line in `.text.fast` matched nothing, and `irq-esp32s31-clic.o`,
 `timer-riscv.o`, `kernel/irq/{chip,handle}.o` and `softirq.o` were never
 listed. `handle_exception`, `esp32s31_clic_handle_irq`,
 `riscv_timer_interrupt`, `handle_fasteoi_irq` and `handle_softirqs` all
-ran from flash on every interrupt and tick. Moving them is a linker-script
-change (in progress); the first attempt does not boot and is being
-bisected with the new `make linux EARLYCON=1` knob.
+ran from flash on every interrupt and tick.
+
+**Moving them does not boot, and the reason is not known.** Three arms,
+each verified in System.map to have placed the symbols in RAM, each
+flashed and reset-watched at 1 Mbps: (A) the whole spine minus `entry.o`,
+(B) the object list with the IRQENTRY/SOFTIRQENTRY overrides removed, and
+the full spine with `earlycon` on the command line - all produced **zero
+bytes** where the same watcher sees 13.5 KB from a good kernel, so the
+hart dies before `parse_early_param`, or earlycon itself never works here
+(unverified either way: nobody has seen an earlycon line from this port).
+A fourth arm adding only `kernel/softirq.o` was built and not tried.
+The layout deltas are innocent-looking (`.text.fast` +10.7 KB, everything
+after it shifts by 8-12 KB, `_sdata`/`init_thread_union`/`__copy_data`
+unchanged). The linker script is back to the shipped list; `make linux
+EARLYCON=1` is kept for whoever picks this up, and the first thing to
+establish is whether earlycon prints on a good kernel at all.
