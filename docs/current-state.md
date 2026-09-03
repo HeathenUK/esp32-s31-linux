@@ -3516,3 +3516,19 @@ boot-time measurement of that mode is 8,541 irq/s (8 kHz microframe SOF),
 so even if it booted it would cost more, not less. Keep the hub for its
 ports; expect nothing from it for CPU. Both receivers are found at boot
 when attached at boot; see the hot-plug note above for the other case.
+
+### High-speed root port with the USB 3.0 hub, booted cleanly: unusable (2026-09-03)
+
+`make linux USB_HS=1` (new knob, appends `dwc2.host_full_speed=0`) boots the
+root port at high speed so the hub's transaction translator carries the
+full/low-speed devices. Clean boot, watched at 1 Mbps: the kernel comes up,
+then every init script runs 3-10x slower than the full-speed boot -
+S01growroot 3.5 s (0.56), S02sysctl 9.1 s (1.1), S05xip 14.5 s (2.3), udevd
+starting at 77 s (22) - with a `dw_mmc data error` at 11.8 s and a GDMA row
+copy stall on the way. It never produced a login prompt within seven
+minutes, twice. That is the 8 kHz microframe SOF plus per-microframe split
+scheduling that descriptor DMA cannot take (the record's 8,541 irq/s,
+CoreMark 599), now with udev coldplug on top. The runtime switch earlier
+in the day wedged for the same reason, not because of the switch.
+Conclusion stands: the hub is neutral at forced full speed and harmful at
+high speed. Shipped kernel restored.

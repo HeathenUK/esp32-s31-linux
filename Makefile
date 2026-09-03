@@ -241,13 +241,19 @@ endif
 # dies before console_init() says where. Self-cleaning: a plain build strips
 # it again, because .config's CMDLINE persists across builds (the defconfig is
 # not re-applied) and would otherwise carry it for ever.
+# USB_HS=1 boots the dwc2 root port at high speed (dwc2.host_full_speed=0)
+# instead of the forced full speed we ship. Same self-cleaning rule.
 EARLYCON ?= 0
-CMDLINE_NOW = $$(sed -n 's/^CONFIG_CMDLINE=\"\(.*\)\"/\1/p' $(LINUX_OUT)/.config | sed 's/ earlycon//g')
+USB_HS ?= 0
+CMDLINE_NOW = $$(sed -n 's/^CONFIG_CMDLINE=\"\(.*\)\"/\1/p' $(LINUX_OUT)/.config | sed 's/ earlycon//g; s/ dwc2.host_full_speed=0//g')
+CMDLINE_ADD :=
 ifeq ($(EARLYCON),1)
-EARLYCON_TWEAK = --set-str CMDLINE "$(CMDLINE_NOW) earlycon"
-else
-EARLYCON_TWEAK = --set-str CMDLINE "$(CMDLINE_NOW)"
+CMDLINE_ADD += earlycon
 endif
+ifeq ($(USB_HS),1)
+CMDLINE_ADD += dwc2.host_full_speed=0
+endif
+EARLYCON_TWEAK = --set-str CMDLINE "$(CMDLINE_NOW)$(if $(CMDLINE_ADD), $(CMDLINE_ADD),)"
 
 # debugfs OFF by default. It is not mounted at runtime anyway, but compiling
 # it in costs 1.14 MB of RAM on a 15.4 MB machine - measured 2026-09-02,
