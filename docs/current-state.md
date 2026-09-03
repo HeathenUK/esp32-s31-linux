@@ -3481,3 +3481,24 @@ after it shifts by 8-12 KB, `_sdata`/`init_thread_union`/`__copy_data`
 unchanged). The linker script is back to the shipped list; `make linux
 EARLYCON=1` is kept for whoever picks this up, and the first thing to
 establish is whether earlycon prints on a good kernel at all.
+
+## A hot-plugged hub's ports are never scanned (2026-09-03)
+
+Swapping the full-speed hub for a USB 3.0 hub (Genesys 05e3:0610) left no
+input devices at all: the hub enumerated ("4 ports detected") and the
+Logitech receiver and 8BitDo receiver behind it were never seen. Forcing a
+fresh scan - `echo 1-1:1.0 > /sys/bus/usb/drivers/hub/unbind` then `bind` -
+found both immediately on ports 3 and 4, and lvdesk picked the mouse up on
+its next rescan. At the time the hub read `power/runtime_status=suspended`
+(usbcore autosuspend, 2 s), so the working theory is that a suspended hub
+signals port changes by remote wakeup and dwc2 in `host_full_speed=Y`
+mode never surfaces it; the previous hub was attached at boot with its
+devices, so the initial port scan found them and hot-plug never mattered.
+Runtime workaround applied on the card for this session only:
+`echo on > /sys/bus/usb/devices/1-1/power/control` (and `usb1`). Not
+persisted, because the theory is untested: the test is a replug with the
+hub kept awake. Note the hub runs at full speed regardless (speed=12,
+"not running at top speed"): with `host_full_speed=Y` the root port is
+FS, the hub's transaction translator is bypassed, and the interrupt rate
+is the same ~1,040/s as before. A high-speed hub buys nothing here unless
+the root port runs at HS, which the record measured at 8,541 irq/s.
