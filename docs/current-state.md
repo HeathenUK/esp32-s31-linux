@@ -3502,3 +3502,17 @@ hub kept awake. Note the hub runs at full speed regardless (speed=12,
 FS, the hub's transaction translator is bypassed, and the interrupt rate
 is the same ~1,040/s as before. A high-speed hub buys nothing here unless
 the root port runs at HS, which the record measured at 8,541 irq/s.
+
+### Does a USB 3.0 hub help? Measured: no (2026-09-03)
+
+With the root port forced to full speed (`host_full_speed=Y`, the shipped
+mode) the Genesys USB 3.0 hub runs at 12 Mbit/s like the old one, its
+transaction translator is bypassed, and idle dwc2 interrupts are
+**1,016/s** against ~1,040/s before: the same 1 kHz SOF. The only way the
+hub's TT can take the low/full-speed work is a high-speed root port, and
+switching to that at runtime (`unbind`, `host_full_speed=0`, `bind`)
+**wedged the board silently** - a reset recovered it. The record's
+boot-time measurement of that mode is 8,541 irq/s (8 kHz microframe SOF),
+so even if it booted it would cost more, not less. Keep the hub for its
+ports; expect nothing from it for CPU. Both receivers are found at boot
+when attached at boot; see the hot-plug note above for the other case.
