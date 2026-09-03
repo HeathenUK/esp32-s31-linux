@@ -3671,3 +3671,33 @@ Whether the core allows that dance on a descriptor-mode channel is the
 next experiment; if it does not, split support in descriptor mode is a
 silicon limit and the answer for full-speed devices on a high-speed bus
 stays "buffer DMA at ~37% of the core".
+
+### Splits in descriptor DMA: implemented, tried, impossible on this core (2026-09-03)
+
+The full attempt is `patches/0027-...-NOT-APPLIED.patch` with its result in
+the header. The short version: the earlier XactErr was an artefact (the
+descriptor start path never set `HCSPLT_SPLTENA`); with the split really
+enabled, the core sends the start-split and then never completes, errors,
+halts or interrupts - the descriptor stays active, the request times out
+15 s later, and the stuck channel starves the whole controller, hub
+included, until reset. There is no event for software to drive the
+complete-split from. So on this core, full/low-speed devices behind a
+high-speed hub can only use buffer DMA with the 8 kHz SOF.
+
+Corrected on the way: Espressif's HAL does **not** do splits either (no
+HCSPLT code at all; its hub driver refuses TT devices). What it has is
+SCHED_INFO for native high-speed periodic endpoints, which is also what
+our driver needed and was missing - kept in the record, not in the tree.
+
+**What USB 2.0 can be here, then**, all measured today:
+- High-speed devices only (nothing full/low-speed on the bus): descriptor
+  DMA, SOF off, the same CPU cost as the full-speed bus. Untested only for
+  lack of such a device.
+- Full/low-speed input on a high-speed bus: buffer DMA at ~37% of the core
+  with dwc2's interrupt objects in `.text..fast` (arm C), less if the HID
+  poll intervals are raised on the command line
+  (`usbhid.mousepoll=4 kbpoll=8 jspoll=8` - never rebind at runtime, that
+  went to 11k irq/s and stayed there). Reproduce with `make linux
+  USB_HS=1` plus `*dwc2/{hcd_intr,core_intr,hcd,hcd_queue}.o` in
+  `S31_FAST_OBJS`.
+- Shipped: full speed, SOF off, 0 USB interrupts idle.

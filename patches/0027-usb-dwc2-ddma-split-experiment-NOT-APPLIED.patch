@@ -1,0 +1,403 @@
+usb: dwc2: split transactions in descriptor-DMA mode - tried, does not work (NOT APPLIED)
+
+Diff from the shipped dwc2 state (patches/0026 applied to the baseline) to
+the 2026-09-03 experiment. Kept for the record; the port tree is back to
+the 0026 state. Apply with `patch -p1` in linux-71-port to repeat it.
+
+What it does: lets control/bulk/interrupt split QHs into descriptor mode,
+sets HCSPLT_SPLTENA on the descriptor start path (upstream only sets it
+on the buffer path, so the first experiment addressed the full-speed
+device directly at high speed and got XactErr - that result was void),
+fixes dwc2_frame_incr_val() for split intervals (microframes, not
+frames), derives HCTSIZ.SCHED_INFO for split periodic channels and
+writes 0xff for non-periodic ones (Espressif's HAL found channels
+freezing otherwise), keeps PING off splits, keeps descriptor DMA on at
+host init for a high-speed root device (dma_desc_fs_enable only with
+host_full_speed), keeps the buffer-DMA ACK/NAK/NYET handlers off
+descriptor channels, adds dwc2.split_trace (count every response) and
+dwc2.split_sw_csplit (drive the complete-split from software on a halt).
+
+What happened, clean high-speed boot, Genesys hub at 480 Mbit/s, Logitech
+and 8BitDo receivers behind it, SOF off, 0 USB irq/s, cpubench 70 M/s:
+the first control transfer to a device behind the hub goes out as a
+start-split and then NOTHING - no ACK, NYET, XactErr, halt or completion
+interrupt, ever; the descriptor stays active and the request times out
+(-110) 15 s later. The stuck channel then starves the controller: the
+hub's own hub_ext_port_status requests time out too and USB is dead until
+reset. The software complete-split fallback never engages because there
+is no event to engage on. Conclusion: this core does not sequence split
+transactions in Scatter/Gather DMA mode and gives software nothing to
+sequence them with; the only working path for full/low-speed devices
+behind a high-speed hub is buffer DMA with the 8 kHz SOF.
+
+--- a/drivers/usb/dwc2/hcd.c
++++ b/drivers/usb/dwc2/hcd.c
+@@ -596,6 +596,16 @@
+ 			hcintmsk |= HCINTMSK_XFERCOMPL;
+ 	}
+ 
++	/*
++	 * dwc2.split_trace=1: report every response on a split channel in
++	 * descriptor mode without halting it, so one boot shows whether the
++	 * core sequences SSPLIT/CSPLIT itself (dwc2_hc_n_intr counts them).
++	 */
++	if (dwc2_split_trace && hsotg->params.dma_desc_enable && chan->do_split)
++		hcintmsk |= HCINTMSK_XFERCOMPL | HCINTMSK_ACK | HCINTMSK_NAK |
++			    HCINTMSK_NYET | HCINTMSK_XACTERR |
++			    HCINTMSK_DATATGLERR | HCINTMSK_FRMOVRUN;
++
+ 	if (chan->error_state && !chan->do_split &&
+ 	    chan->ep_type != USB_ENDPOINT_XFER_ISOC) {
+ 		if (dbg_hc(chan))
+@@ -1416,7 +1426,7 @@
+ 	u32 hcchar;
+ 	u32 hctsiz = 0;
+ 
+-	if (chan->do_ping)
++	if (chan->do_ping && !chan->do_split)
+ 		hctsiz |= TSIZ_DOPNG;
+ 
+ 	if (chan->ep_type == USB_ENDPOINT_XFER_ISOC)
+@@ -1429,8 +1439,18 @@
+ 	/* 0 - 1 descriptor, 1 - 2 descriptors, etc */
+ 	hctsiz |= (chan->ntd - 1) << TSIZ_NTD_SHIFT & TSIZ_NTD_MASK;
+ 
+-	/* Non-zero only for high-speed interrupt endpoints */
+-	hctsiz |= chan->schinfo << TSIZ_SCHINFO_SHIFT & TSIZ_SCHINFO_MASK;
++	/*
++	 * Microframe mask for periodic channels; 0xff on non-periodic ones.
++	 * Espressif's HAL for this core found non-periodic channels freezing
++	 * with the field left 0 (usb_dwc_ll.h), and dwc2_hc_cleanup() never
++	 * resets chan->schinfo, so say it explicitly.
++	 */
++	if (chan->ep_type == USB_ENDPOINT_XFER_INT ||
++	    chan->ep_type == USB_ENDPOINT_XFER_ISOC)
++		hctsiz |= chan->schinfo << TSIZ_SCHINFO_SHIFT &
++			  TSIZ_SCHINFO_MASK;
++	else
++		hctsiz |= TSIZ_SCHINFO_MASK;
+ 
+ 	if (dbg_hc(chan)) {
+ 		dev_vdbg(hsotg->dev, "%s: Channel %d\n", __func__,
+@@ -1451,6 +1471,20 @@
+ 		dev_vdbg(hsotg->dev, "Wrote %pad to HCDMA(%d)\n",
+ 			 &chan->desc_list_addr, chan->hc_num);
+ 
++	/*
++	 * Start the split. dwc2_hc_init() programmed hub/port/xactpos; as in
++	 * dwc2_hc_start_transfer(), the enable bit is set only when the
++	 * channel goes live. Without it the core addresses the full-speed
++	 * device directly at high speed and the hub never forwards it:
++	 * three timeouts, XCS_XACT_ERR, -EPROTO (measured 2026-09-03).
++	 */
++	if (chan->do_split) {
++		u32 hcsplt = dwc2_readl(hsotg, HCSPLT(chan->hc_num));
++
++		hcsplt |= HCSPLT_SPLTENA;
++		dwc2_writel(hsotg, hcsplt, HCSPLT(chan->hc_num));
++	}
++
+ 	hcchar = dwc2_readl(hsotg, HCCHAR(chan->hc_num));
+ 	hcchar &= ~HCCHAR_MULTICNT_MASK;
+ 	hcchar |= chan->multi_count << HCCHAR_MULTICNT_SHIFT &
+@@ -2606,7 +2640,8 @@
+ 	 */
+ 
+ 	chan->ep_is_in = (dwc2_hcd_is_pipe_in(&urb->pipe_info) != 0);
+-	if (chan->ep_is_in)
++	/* PING is a high-speed protocol; never against a device behind a TT */
++	if (chan->ep_is_in || qh->do_split)
+ 		chan->do_ping = 0;
+ 	else
+ 		chan->do_ping = qh->ping_state;
+@@ -2632,12 +2667,13 @@
+ 	else
+ 		chan->do_split = 0;
+ 
++
+ 	/* Set the transfer attributes */
+ 	dwc2_hc_init_xfer(hsotg, chan, qtd);
+ 
+ 	/* For non-dword aligned buffers */
+-	if (hsotg->params.host_dma && qh->do_split &&
+-	    chan->ep_is_in && (chan->xfer_dma & 0x3)) {
++	if (hsotg->params.host_dma && !hsotg->params.dma_desc_enable &&
++	    qh->do_split && chan->ep_is_in && (chan->xfer_dma & 0x3)) {
+ 		dev_vdbg(hsotg->dev, "Non-aligned buffer\n");
+ 		if (dwc2_alloc_split_dma_aligned_buf(hsotg, qh, chan)) {
+ 			dev_err(hsotg->dev,
+@@ -4931,6 +4967,13 @@
+  *
+  *     echo 1 > /sys/module/dwc2/parameters/defer_irq_reenable
+  */
++bool dwc2_split_trace;
++module_param_named(split_trace, dwc2_split_trace, bool, 0644);
++MODULE_PARM_DESC(split_trace, "count every response on split channels in descriptor DMA mode");
++bool dwc2_split_sw_csplit;
++module_param_named(split_sw_csplit, dwc2_split_sw_csplit, bool, 0644);
++MODULE_PARM_DESC(split_sw_csplit, "drive the complete-split from software in descriptor DMA mode");
++
+ static bool dwc2_defer_irq_reenable;
+ module_param_named(defer_irq_reenable, dwc2_defer_irq_reenable, bool, 0644);
+ MODULE_PARM_DESC(defer_irq_reenable,
+--- a/drivers/usb/dwc2/hcd.h
++++ b/drivers/usb/dwc2/hcd.h
+@@ -86,6 +86,9 @@
+  * host mode. It contains the data items needed to transfer packets to an
+  * endpoint via a host channel.
+  */
++extern bool dwc2_split_trace;
++extern bool dwc2_split_sw_csplit;
++
+ struct dwc2_host_chan {
+ 	u8 hc_num;
+ 
+@@ -127,6 +130,7 @@
+ 
+ 	u8 requests;
+ 	u8 schinfo;
++	u16 split_frame;		/* DDMA sw-CSPLIT fallback: frame of the SSPLIT ack */
+ 	u16 ntd;
+ 	enum dwc2_halt_status halt_status;
+ 	u32 hcint;
+--- a/drivers/usb/dwc2/hcd_ddma.c
++++ b/drivers/usb/dwc2/hcd_ddma.c
+@@ -51,8 +51,48 @@
+ 
+ static u16 dwc2_frame_incr_val(struct dwc2_qh *qh)
+ {
+-	return qh->dev_speed == USB_SPEED_HIGH ?
+-	       (qh->host_interval + 8 - 1) / 8 : qh->host_interval;
++	/*
++	 * The frame list is indexed by full (1 ms) frame when the host runs
++	 * at high speed. host_interval is in microframes both for a
++	 * high-speed device and for a full/low-speed one behind a TT
++	 * (dwc2_qh_init() multiplies urb->interval by 8 when do_split), so
++	 * both divide by 8; a split QH used to get its microframe interval
++	 * applied as frames (a bInterval=8 mouse polled every 64 ms).
++	 */
++	if (qh->dev_speed == USB_SPEED_HIGH || qh->do_split)
++		return (qh->host_interval + 8 - 1) / 8;
++	return qh->host_interval;
++}
++
++/*
++ * Experiment knob: 0 = derive from the microframe scheduler, else use the
++ * value verbatim (0x01 / 0x1d / 0xff are the arms of the SCHED_INFO test).
++ */
++static unsigned int dwc2_split_schinfo_override;
++module_param_named(split_schinfo, dwc2_split_schinfo_override, uint, 0644);
++MODULE_PARM_DESC(split_schinfo, "HCTSIZ.SCHED_INFO for split periodic channels (0 = derive)");
++
++/*
++ * SCHED_INFO for a full/low-speed periodic endpoint behind a high-speed
++ * hub: bit n = microframe n of every frame this channel is listed in.
++ * Start split in the microframe the uframe scheduler chose, complete
++ * splits in Y+2..Y+4 (USB 2.0 11.18.4).
++ */
++static u8 dwc2_split_schinfo(struct dwc2_hsotg *hsotg, struct dwc2_qh *qh)
++{
++	unsigned int y = 0;
++	u8 mask;
++
++	if (dwc2_split_schinfo_override)
++		return dwc2_split_schinfo_override;
++	if (hsotg->params.uframe_sched && qh->num_hs_transfers > 0)
++		y = (qh->hs_transfers[0].start_schedule_us /
++		     DWC2_HS_PERIODIC_US_PER_UFRAME) % 8;
++	mask = BIT(y);				/* SSPLIT */
++	mask |= (0x1c << y) & 0xff;		/* CSPLIT Y+2..Y+4 */
++	if (y > 3)
++		mask |= 0x1c >> (8 - y);	/* wrapped into the next frame */
++	return mask;
+ }
+ 
+ static int dwc2_desc_list_alloc(struct dwc2_hsotg *hsotg, struct dwc2_qh *qh,
+@@ -248,7 +288,9 @@
+ 		return;
+ 
+ 	chan->schinfo = 0;
+-	if (chan->speed == USB_SPEED_HIGH && qh->host_interval) {
++	if (qh->do_split) {
++		chan->schinfo = dwc2_split_schinfo(hsotg, qh);
++	} else if (chan->speed == USB_SPEED_HIGH && qh->host_interval) {
+ 		j = 1;
+ 		/* TODO - check this */
+ 		inc = (8 + qh->host_interval - 1) / qh->host_interval;
+@@ -314,9 +356,15 @@
+ {
+ 	int retval;
+ 
+-	if (qh->do_split) {
++	/*
++	 * ESP32-S31 port, 2026-09-03: control, bulk and interrupt splits are
++	 * allowed into descriptor mode (upstream refuses every split here).
++	 * Isochronous splits are not: the isoc descriptor indexing below
++	 * assumes one descriptor per (micro)frame of a native endpoint.
++	 */
++	if (qh->do_split && qh->ep_type == USB_ENDPOINT_XFER_ISOC) {
+ 		dev_err(hsotg->dev,
+-			"SPLIT Transfers are not supported in Descriptor DMA mode.\n");
++			"isochronous split transfers are not supported in descriptor DMA mode\n");
+ 		retval = -EINVAL;
+ 		goto err0;
+ 	}
+@@ -1271,7 +1319,8 @@
+ 	}
+ 
+ 	if (halt_status == DWC2_HC_XFER_COMPLETE) {
+-		if (chan->hcint & HCINTMSK_NYET) {
++		/* A NYET on a complete-split is not a PING request. */
++		if ((chan->hcint & HCINTMSK_NYET) && !chan->do_split) {
+ 			/*
+ 			 * Got a NYET on the last transaction of the transfer.
+ 			 * It means that the endpoint should be in the PING
+--- a/drivers/usb/dwc2/hcd_intr.c
++++ b/drivers/usb/dwc2/hcd_intr.c
+@@ -1794,6 +1794,80 @@
+ }
+ 
+ /*
++ * Split transactions in descriptor DMA mode (ESP32-S31 port, 2026-09-03).
++ *
++ * Counters, not per-event prints: at 8 kHz a dev_info per event is a
++ * millisecond of console each. Summary is rate-limited.
++ */
++static u32 dwc2_split_stats[16];
++
++static void dwc2_split_trace_event(struct dwc2_hsotg *hsotg,
++				   struct dwc2_host_chan *chan, int chnum,
++				   u32 hcint)
++{
++	static u32 events;
++	int b;
++
++	for (b = 0; b < 16; b++)
++		if (hcint & BIT(b))
++			dwc2_split_stats[b]++;
++	if (++events % 512 == 0 || dwc2_split_trace)
++		dev_info_ratelimited(hsotg->dev,
++			"split ch%d hcint 0x%04x hfnum 0x%04x hcsplt 0x%08x hctsiz 0x%08x | compl %u halt %u ack %u nak %u nyet %u xacterr %u frmovrun %u dtgl %u\n",
++			chnum, hcint, dwc2_readl(hsotg, HFNUM) & 0x3fff,
++			dwc2_readl(hsotg, HCSPLT(chnum)),
++			dwc2_readl(hsotg, HCTSIZ(chnum)),
++			dwc2_split_stats[0], dwc2_split_stats[1],
++			dwc2_split_stats[5], dwc2_split_stats[4],
++			dwc2_split_stats[6], dwc2_split_stats[7],
++			dwc2_split_stats[9], dwc2_split_stats[10]);
++}
++
++/*
++ * Fallback for a core that halts after each split phase in descriptor
++ * mode (dwc2.split_sw_csplit=1): re-arm the same channel on the same
++ * descriptor, never release it. HCDMA and HCTSIZ survive a halt.
++ */
++static bool dwc2_split_rearm(struct dwc2_hsotg *hsotg,
++			     struct dwc2_host_chan *chan, int chnum,
++			     struct dwc2_qtd *qtd)
++{
++	u16 now = dwc2_hcd_get_frame_number(hsotg);
++	u32 hcsplt, hcchar;
++
++	if (!dwc2_split_sw_csplit)
++		return false;
++
++	if ((chan->hcint & HCINTMSK_ACK) && !chan->complete_split) {
++		chan->complete_split = 1;	/* the TT took the SSPLIT */
++		chan->split_frame = now;
++	} else if ((chan->hcint & HCINTMSK_NYET) && chan->complete_split) {
++		/* TT not done; retry CSPLIT unless the frame is gone */
++		if (dwc2_frame_num_gt(now,
++				      dwc2_frame_num_inc(chan->split_frame, 4)))
++			chan->complete_split = 0;
++	} else if (chan->hcint & HCINTMSK_NAK) {
++		chan->complete_split = 0;	/* nothing to report */
++	} else {
++		return false;
++	}
++
++	hcsplt = dwc2_readl(hsotg, HCSPLT(chnum));
++	hcsplt &= ~HCSPLT_COMPSPLT;
++	if (chan->complete_split)
++		hcsplt |= HCSPLT_COMPSPLT;
++	hcsplt |= HCSPLT_SPLTENA;
++	dwc2_writel(hsotg, hcsplt, HCSPLT(chnum));
++
++	hcchar = dwc2_readl(hsotg, HCCHAR(chnum));
++	hcchar |= HCCHAR_CHENA;
++	hcchar &= ~HCCHAR_CHDIS;
++	dwc2_writel(hsotg, hcchar, HCCHAR(chnum));
++	chan->hcint = 0;
++	return true;
++}
++
++/*
+  * Handles a host Channel Halted interrupt in DMA mode. This handler
+  * determines the reason the channel halted and proceeds accordingly.
+  */
+@@ -1884,6 +1958,25 @@
+ 		dwc2_hc_babble_intr(hsotg, chan, chnum, qtd);
+ 	} else if (chan->hcint & HCINTMSK_FRMOVRUN) {
+ 		dwc2_hc_frmovrun_intr(hsotg, chan, chnum, qtd);
++	} else if (hsotg->params.dma_desc_enable) {
++		/*
++		 * Descriptor DMA halted with no completion or error bit. For a
++		 * split channel this is the case that decides the design: ACK
++		 * alone means the core stopped after the start split and
++		 * expects the driver to issue the complete split (buffer-DMA
++		 * semantics) - dwc2_split_rearm() does that when enabled.
++		 * Otherwise run the descriptor completion scan with XACT_ERR:
++		 * a descriptor still Active is left alone and the QH is
++		 * re-queued; one marked PKTERR completes -EPROTO. The
++		 * buffer-DMA NYET/NAK/ACK handlers below release the channel
++		 * without touching the frame list or descriptor list and must
++		 * never run in this mode.
++		 */
++		dwc2_split_trace_event(hsotg, chan, chnum, chan->hcint);
++		if (chan->do_split && dwc2_split_rearm(hsotg, chan, chnum, qtd))
++			return;
++		dwc2_hcd_complete_xfer_ddma(hsotg, chan, chnum,
++					    DWC2_HC_XFER_XACT_ERR);
+ 	} else if (!out_nak_enh) {
+ 		if (chan->hcint & HCINTMSK_NYET) {
+ 			/*
+@@ -2087,6 +2180,19 @@
+ 	qtd = list_first_entry(&chan->qh->qtd_list, struct dwc2_qtd,
+ 			       qtd_list_entry);
+ 
++	if (hsotg->params.dma_desc_enable && chan->do_split &&
++	    !(hcint & HCINTMSK_CHHLTD)) {
++		/*
++		 * Trace-only interrupt (dwc2.split_trace): the core has not
++		 * halted, there is nothing to complete, and the buffer-DMA
++		 * ACK/NAK/NYET handlers below must not run - each releases
++		 * the channel through the non-descriptor path.
++		 */
++		dwc2_split_trace_event(hsotg, chan, chnum, hcint);
++		chan->hcint = 0;
++		return;
++	}
++
+ 	if (!hsotg->params.host_dma) {
+ 		if ((hcint & HCINTMSK_CHHLTD) && hcint != HCINTMSK_CHHLTD)
+ 			hcint &= ~HCINTMSK_CHHLTD;
+--- a/drivers/usb/dwc2/params.c
++++ b/drivers/usb/dwc2/params.c
+@@ -128,7 +128,16 @@
+ 	 * rebuild per hypothesis.
+ 	 */
+ 	p->dma_desc_enable = desc_dma;
+-	p->dma_desc_fs_enable = desc_dma;
++	/*
++	 * dma_desc_fs_enable is a runtime toggle that switches descriptor DMA
++	 * OFF on every root-port disable (hcd_intr.c) and back on only when a
++	 * FULL-speed device enumerates at the root (hcd.c GetPortStatus).
++	 * Behind a high-speed hub that never happens, so with a high-speed
++	 * root port it would leave the controller in buffer-DMA mode with the
++	 * 8 kHz SOF. Use it only with the root port pinned to full speed;
++	 * otherwise descriptor DMA is on from host init (2026-09-03).
++	 */
++	p->dma_desc_fs_enable = desc_dma && host_full_speed;
+ 	/* ESP-IDF uses SINGLE transfers when enabling this DWC2 AHB master. */
+ 	p->ahbcfg = GAHBCFG_HBSTLEN_SINGLE << GAHBCFG_HBSTLEN_SHIFT;
+ 	/*
