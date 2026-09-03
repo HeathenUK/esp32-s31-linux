@@ -3568,3 +3568,41 @@ autosuspend while open (usbhid supports it if the device does remote
 wakeup; the hub hot-plug note above says remote wakeup through dwc2 is
 unproven here), and the hart0 host in FS-only mode (IDF's host has no
 transaction translator, but at forced full speed there is none to need).
+
+## USB 2.0 as the golden goal: what the controller can and cannot do (2026-09-03)
+
+Established from the driver source and one high-speed boot, before any
+numbers: the first genuine 480 Mbit/s link on this board came up today
+(`usb 1-1: new high-speed USB device` for the Genesys hub, with the
+Logitech and 8BitDo receivers enumerating as full-speed behind it). The
+link is not the problem. The problem is what dwc2 has to do for full/low
+speed devices behind a high-speed hub:
+
+- `dwc2_hcd_qh_init_ddma()` refuses split transactions outright
+  ("SPLIT Transfers are not supported in Descriptor DMA mode"), and that is
+  the Synopsys IP's limit, not a driver choice.
+- So dwc2 runs descriptor DMA in `dma_desc_fs_enable` form: it is switched
+  on only when the device on the root port itself is full-speed
+  (`hcd.c` ~3613, "Enable descriptor DMA only if a full speed device is
+  connected"). A high-speed hub on the root port keeps the controller in
+  buffer-DMA mode for everything. That is why the earlier "Enabling
+  descriptor DMA mode" line is absent from every high-speed boot.
+- In buffer-DMA mode the periodic schedule is software: `dwc2_sof_intr()`
+  walks the inactive list every (micro)frame and issues the SSPLIT/CSPLIT
+  phases, and every phase completes with a channel interrupt. So at high
+  speed the SOF interrupt is required (the `sof_irq` gate correctly does
+  not apply there) and runs at 8 kHz, plus a channel interrupt per split
+  phase per polled endpoint.
+
+Consequences for the goal:
+
+- **High-speed devices alone** (no full/low-speed device on the bus) would
+  run descriptor DMA with SOF off and be as cheap as the full-speed bus is
+  now. Untested only because no such device is attached.
+- **Full-speed input devices on a high-speed bus** cost the 8 kHz software
+  schedule on this IP, with any hub, in either host stack (IDF's has no
+  transaction translator at all). The only lever is the cost per
+  interrupt, which today is flash-resident dwc2 code; arm C below measures
+  what moving it to RAM buys.
+- A full-speed hub cannot be hidden behind a high-speed one: its devices
+  are still full-speed devices behind the high-speed hub's translator.
