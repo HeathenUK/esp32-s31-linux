@@ -3532,3 +3532,39 @@ CoreMark 599), now with udev coldplug on top. The runtime switch earlier
 in the day wedged for the same reason, not because of the switch.
 Conclusion stands: the hub is neutral at forced full speed and harmful at
 high speed. Shipped kernel restored.
+
+## The USB interrupt flood was a dwc2 leftover, not full-speed USB (2026-09-03)
+
+Separating the two things the record had always lumped together:
+
+    all HID bound, lvdesk polling            1,037 irq/s
+    usbhid unbound (no HID polling)          1,037 irq/s
+    hub driver unbound (root port alone)     1,035 irq/s
+    usbhid mousepoll=4 kbpoll=8 jspoll=8     1,094 irq/s
+
+So the 1 kHz was never the devices; it was the start-of-frame interrupt.
+`GINTMSK` read `0xF300080E` - SOF (bit 3) set - because `dwc2_hcd_qh_add()`
+enables it on the first periodic QH and `dwc2_hcd_qh_unlink()` never
+clears it in descriptor-DMA mode, where `dwc2_sof_intr()` has nothing to
+do (the periodic schedule is the hardware frame list, and the DDMA path
+reads the frame number itself). Clearing the bit by hand:
+
+    USB interrupts, idle            1,039/s  ->  0/s
+    control transfers               HID rebind clean, 0 errors
+    interrupt-IN transfers          413 events, 4 ms average lag (by hand)
+    cpubench, ABA same boot         70.3-70.7 / 65.9-67.3 / 68.9-71.0 M/s
+
+About 6% of the core, which is the whole "USB tax" the record attributed
+to full-speed SOF churn. The enable is now gated on `dwc2.sof_irq`
+(default off; `patches/0026`), verified on a clean boot: `GINTMSK
+0xF3000806`, 0 USB irq/s idle, both receivers and all five input devices
+present, cpubench 69-70 M/s. High-speed mode would gain the same way in
+principle (its SOF is 8 kHz) but its split scheduling is a separate,
+software cost, and it did not reach a shell today; not retested.
+
+What is left of USB's idle cost is the real work: one completion per HID
+report when something moves. Two further ideas, not done: HID runtime
+autosuspend while open (usbhid supports it if the device does remote
+wakeup; the hub hot-plug note above says remote wakeup through dwc2 is
+unproven here), and the hart0 host in FS-only mode (IDF's host has no
+transaction translator, but at forced full speed there is none to need).

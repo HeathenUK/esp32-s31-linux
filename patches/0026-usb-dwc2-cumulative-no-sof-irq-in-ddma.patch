@@ -1,0 +1,1041 @@
+usb: dwc2: no start-of-frame interrupt in descriptor-DMA mode (cumulative)
+
+Cumulative diff from the 6.12 BSP baseline (the linux-esp32-s31 submodule)
+to the current 7.1 state of drivers/usb/dwc2, in the same form as 0023-0025.
+It supersedes the dwc2 hunks of 0018 and 0019 (kept for history).
+Regenerate with:
+
+    for f in $(cd linux-71-port && git -C ../linux-esp32-s31 ls-files drivers/usb/dwc2 2>/dev/null || ls drivers/usb/dwc2); do
+        diff -u linux-esp32-s31/$f linux-71-port/$f --label a/$f --label b/$f
+    done
+
+The new part: dwc2_hcd_qh_add() enables GINTSTS_SOF when the first
+periodic QH appears, and dwc2_hcd_qh_unlink() never clears it in
+descriptor-DMA mode, while dwc2_sof_intr() has nothing to walk in that
+mode (the periodic schedule is the hardware frame list, and
+dwc2_hcd_start_xfer_ddma() reads the frame number itself). Every board
+therefore ran a 1 kHz SOF interrupt - 8 kHz at high speed - for nothing.
+
+Measured 2026-09-03 on the ESP32-S31 (root port forced to full speed, a
+Logitech receiver and an 8BitDo receiver behind a hub, descriptor DMA):
+masking the bit by hand took idle USB interrupts from 1,039/s to 0 with
+control and interrupt-IN transfers unaffected (HID rebind clean, 413 input
+events at 4 ms average lag), and cpubench 66.3-67.3 -> 70.3-71.0 M/s,
+about 6% of the core. The enable is now gated on a module parameter,
+sof_irq (default off), so the old behaviour is one boot argument away.
+
+--- a/drivers/usb/dwc2/core.c
++++ b/drivers/usb/dwc2/core.c
+@@ -43,6 +43,7 @@
+ 	/* Backup global regs */
+ 	gr = &hsotg->gr_backup;
+ 
++	gr->gintsts = dwc2_readl(hsotg, GINTSTS);
+ 	gr->gotgctl = dwc2_readl(hsotg, GOTGCTL);
+ 	gr->gintmsk = dwc2_readl(hsotg, GINTMSK);
+ 	gr->gahbcfg = dwc2_readl(hsotg, GAHBCFG);
+@@ -577,6 +578,7 @@
+ {
+ 	switch (hsotg->dr_mode) {
+ 	case USB_DR_MODE_HOST:
++		dwc2_force_mode(hsotg, true);
+ 		/*
+ 		 * NOTE: This is required for some rockchip soc based
+ 		 * platforms on their host-only dwc2.
+--- a/drivers/usb/dwc2/core.h
++++ b/drivers/usb/dwc2/core.h
+@@ -667,6 +667,7 @@
+ /**
+  * struct dwc2_gregs_backup - Holds global registers state before
+  * entering partial power down
++ * @gintsts:		Backup of GINTSTS register
+  * @gotgctl:		Backup of GOTGCTL register
+  * @gintmsk:		Backup of GINTMSK register
+  * @gahbcfg:		Backup of GAHBCFG register
+@@ -683,6 +684,7 @@
+  * @valid:		True if registers values backuped.
+  */
+ struct dwc2_gregs_backup {
++	u32 gintsts;
+ 	u32 gotgctl;
+ 	u32 gintmsk;
+ 	u32 gahbcfg;
+@@ -1127,6 +1129,9 @@
+ #define DWC2_FS_IOT_ID		0x55310000
+ #define DWC2_HS_IOT_ID		0x55320000
+ 
++#define DWC2_RESTORE_DCTL BIT(0)
++#define DWC2_RESTORE_DCFG BIT(1)
++
+ #if IS_ENABLED(CONFIG_USB_DWC2_HOST) || IS_ENABLED(CONFIG_USB_DWC2_DUAL_ROLE)
+ 	union dwc2_hcd_internal_flags {
+ 		u32 d32;
+@@ -1421,7 +1426,7 @@
+ #define dwc2_is_device_connected(hsotg) (hsotg->connected)
+ #define dwc2_is_device_enabled(hsotg) (hsotg->enabled)
+ int dwc2_backup_device_registers(struct dwc2_hsotg *hsotg);
+-int dwc2_restore_device_registers(struct dwc2_hsotg *hsotg, int remote_wakeup);
++int dwc2_restore_device_registers(struct dwc2_hsotg *hsotg, unsigned int flags);
+ int dwc2_gadget_enter_hibernation(struct dwc2_hsotg *hsotg);
+ int dwc2_gadget_exit_hibernation(struct dwc2_hsotg *hsotg,
+ 				 int rem_wakeup, int reset);
+@@ -1436,6 +1441,9 @@
+ int dwc2_hsotg_tx_fifo_average_depth(struct dwc2_hsotg *hsotg);
+ void dwc2_gadget_init_lpm(struct dwc2_hsotg *hsotg);
+ void dwc2_gadget_program_ref_clk(struct dwc2_hsotg *hsotg);
++int dwc2_gadget_backup_critical_registers(struct dwc2_hsotg *hsotg);
++int dwc2_gadget_restore_critical_registers(struct dwc2_hsotg *hsotg,
++					   unsigned int flags);
+ static inline void dwc2_clear_fifo_map(struct dwc2_hsotg *hsotg)
+ { hsotg->fifo_map = 0; }
+ #else
+@@ -1460,7 +1468,7 @@
+ static inline int dwc2_backup_device_registers(struct dwc2_hsotg *hsotg)
+ { return 0; }
+ static inline int dwc2_restore_device_registers(struct dwc2_hsotg *hsotg,
+-						int remote_wakeup)
++						unsigned int flags)
+ { return 0; }
+ static inline int dwc2_gadget_enter_hibernation(struct dwc2_hsotg *hsotg)
+ { return 0; }
+@@ -1483,6 +1491,11 @@
+ { return 0; }
+ static inline void dwc2_gadget_init_lpm(struct dwc2_hsotg *hsotg) {}
+ static inline void dwc2_gadget_program_ref_clk(struct dwc2_hsotg *hsotg) {}
++static inline int dwc2_gadget_backup_critical_registers(struct dwc2_hsotg *hsotg)
++{ return 0; }
++static inline int dwc2_gadget_restore_critical_registers(struct dwc2_hsotg *hsotg,
++							 unsigned int flags)
++{ return 0; }
+ static inline void dwc2_clear_fifo_map(struct dwc2_hsotg *hsotg) {}
+ #endif
+ 
+@@ -1506,6 +1519,8 @@
+ void dwc2_host_enter_clock_gating(struct dwc2_hsotg *hsotg);
+ void dwc2_host_exit_clock_gating(struct dwc2_hsotg *hsotg, int rem_wakeup);
+ bool dwc2_host_can_poweroff_phy(struct dwc2_hsotg *dwc2);
++int dwc2_host_backup_critical_registers(struct dwc2_hsotg *hsotg);
++int dwc2_host_restore_critical_registers(struct dwc2_hsotg *hsotg);
+ static inline void dwc2_host_schedule_phy_reset(struct dwc2_hsotg *hsotg)
+ { schedule_work(&hsotg->phy_reset_work); }
+ #else
+@@ -1545,6 +1560,10 @@
+ 					       int rem_wakeup) {}
+ static inline bool dwc2_host_can_poweroff_phy(struct dwc2_hsotg *dwc2)
+ { return false; }
++static inline int dwc2_host_backup_critical_registers(struct dwc2_hsotg *hsotg)
++{ return 0; }
++static inline int dwc2_host_restore_critical_registers(struct dwc2_hsotg *hsotg)
++{ return 0; }
+ static inline void dwc2_host_schedule_phy_reset(struct dwc2_hsotg *hsotg) {}
+ 
+ #endif
+--- a/drivers/usb/dwc2/gadget.c
++++ b/drivers/usb/dwc2/gadget.c
+@@ -397,7 +397,7 @@
+ {
+ 	struct dwc2_hsotg_req *req;
+ 
+-	req = kzalloc(sizeof(*req), flags);
++	req = kzalloc_obj(*req, flags);
+ 	if (!req)
+ 		return NULL;
+ 
+@@ -4049,7 +4049,7 @@
+ 		return -EINVAL;
+ 	}
+ 
+-	ep_type = desc->bmAttributes & USB_ENDPOINT_XFERTYPE_MASK;
++	ep_type = usb_endpoint_type(desc);
+ 	mps = usb_endpoint_maxp(desc);
+ 	mc = usb_endpoint_maxp_mult(desc);
+ 
+@@ -4604,6 +4604,14 @@
+ 	if (!hsotg)
+ 		return -ENODEV;
+ 
++	/* Exit clock gating when driver is stopped. */
++	if (hsotg->params.power_down == DWC2_POWER_DOWN_PARAM_NONE &&
++	    hsotg->bus_suspended && !hsotg->params.no_clock_gating) {
++		spin_lock_irqsave(&hsotg->lock, flags);
++		dwc2_gadget_exit_clock_gating(hsotg, 0);
++		spin_unlock_irqrestore(&hsotg->lock, flags);
++	}
++
+ 	/* all endpoints should be shutdown */
+ 	for (ep = 1; ep < hsotg->num_of_eps; ep++) {
+ 		if (hsotg->eps_in[ep])
+@@ -4615,6 +4623,7 @@
+ 	spin_lock_irqsave(&hsotg->lock, flags);
+ 
+ 	hsotg->driver = NULL;
++	hsotg->gadget.dev.of_node = NULL;
+ 	hsotg->gadget.speed = USB_SPEED_UNKNOWN;
+ 	hsotg->enabled = 0;
+ 
+@@ -5203,11 +5212,11 @@
+  * if controller power were disabled.
+  *
+  * @hsotg: Programming view of the DWC_otg controller
+- * @remote_wakeup: Indicates whether resume is initiated by Device or Host.
++ * @flags: Defines which registers should be restored.
+  *
+  * Return: 0 if successful, negative error code otherwise
+  */
+-int dwc2_restore_device_registers(struct dwc2_hsotg *hsotg, int remote_wakeup)
++int dwc2_restore_device_registers(struct dwc2_hsotg *hsotg, unsigned int flags)
+ {
+ 	struct dwc2_dregs_backup *dr;
+ 	int i;
+@@ -5223,7 +5232,10 @@
+ 	}
+ 	dr->valid = false;
+ 
+-	if (!remote_wakeup)
++	if (flags & DWC2_RESTORE_DCFG)
++		dwc2_writel(hsotg, dr->dcfg, DCFG);
++
++	if (flags & DWC2_RESTORE_DCTL)
+ 		dwc2_writel(hsotg, dr->dctl, DCTL);
+ 
+ 	dwc2_writel(hsotg, dr->daintmsk, DAINTMSK);
+@@ -5309,6 +5321,49 @@
+ 	dev_dbg(hsotg->dev, "GREFCLK=0x%08x\n", dwc2_readl(hsotg, GREFCLK));
+ }
+ 
++int dwc2_gadget_backup_critical_registers(struct dwc2_hsotg *hsotg)
++{
++	int ret;
++
++	/* Backup all registers */
++	ret = dwc2_backup_global_registers(hsotg);
++	if (ret) {
++		dev_err(hsotg->dev, "%s: failed to backup global registers\n",
++			__func__);
++		return ret;
++	}
++
++	ret = dwc2_backup_device_registers(hsotg);
++	if (ret) {
++		dev_err(hsotg->dev, "%s: failed to backup device registers\n",
++			__func__);
++		return ret;
++	}
++
++	return 0;
++}
++
++int dwc2_gadget_restore_critical_registers(struct dwc2_hsotg *hsotg,
++					   unsigned int flags)
++{
++	int ret;
++
++	ret = dwc2_restore_global_registers(hsotg);
++	if (ret) {
++		dev_err(hsotg->dev, "%s: failed to restore registers\n",
++			__func__);
++		return ret;
++	}
++	ret = dwc2_restore_device_registers(hsotg, flags);
++	if (ret) {
++		dev_err(hsotg->dev, "%s: failed to restore device registers\n",
++			__func__);
++		return ret;
++	}
++
++	return 0;
++}
++
+ /**
+  * dwc2_gadget_enter_hibernation() - Put controller in Hibernation.
+  *
+@@ -5326,18 +5381,9 @@
+ 	/* Change to L2(suspend) state */
+ 	hsotg->lx_state = DWC2_L2;
+ 	dev_dbg(hsotg->dev, "Start of hibernation completed\n");
+-	ret = dwc2_backup_global_registers(hsotg);
+-	if (ret) {
+-		dev_err(hsotg->dev, "%s: failed to backup global registers\n",
+-			__func__);
+-		return ret;
+-	}
+-	ret = dwc2_backup_device_registers(hsotg);
+-	if (ret) {
+-		dev_err(hsotg->dev, "%s: failed to backup device registers\n",
+-			__func__);
++	ret = dwc2_gadget_backup_critical_registers(hsotg);
++	if (ret)
+ 		return ret;
+-	}
+ 
+ 	gpwrdn = GPWRDN_PWRDNRSTN;
+ 	udelay(10);
+@@ -5345,20 +5391,34 @@
+ 	if (gusbcfg & GUSBCFG_ULPI_UTMI_SEL) {
+ 		/* ULPI interface */
+ 		gpwrdn |= GPWRDN_ULPI_LATCH_EN_DURING_HIB_ENTRY;
+-	}
+-	dwc2_writel(hsotg, gpwrdn, GPWRDN);
+-	udelay(10);
++		dwc2_writel(hsotg, gpwrdn, GPWRDN);
++		udelay(10);
+ 
+-	/* Suspend the Phy Clock */
+-	pcgcctl = dwc2_readl(hsotg, PCGCTL);
+-	pcgcctl |= PCGCTL_STOPPCLK;
+-	dwc2_writel(hsotg, pcgcctl, PCGCTL);
+-	udelay(10);
++		/* Suspend the Phy Clock */
++		pcgcctl = dwc2_readl(hsotg, PCGCTL);
++		pcgcctl |= PCGCTL_STOPPCLK;
++		dwc2_writel(hsotg, pcgcctl, PCGCTL);
++		udelay(10);
+ 
+-	gpwrdn = dwc2_readl(hsotg, GPWRDN);
+-	gpwrdn |= GPWRDN_PMUACTV;
+-	dwc2_writel(hsotg, gpwrdn, GPWRDN);
+-	udelay(10);
++		gpwrdn = dwc2_readl(hsotg, GPWRDN);
++		gpwrdn |= GPWRDN_PMUACTV;
++		dwc2_writel(hsotg, gpwrdn, GPWRDN);
++		udelay(10);
++	} else {
++		/* UTMI+ Interface */
++		dwc2_writel(hsotg, gpwrdn, GPWRDN);
++		udelay(10);
++
++		gpwrdn = dwc2_readl(hsotg, GPWRDN);
++		gpwrdn |= GPWRDN_PMUACTV;
++		dwc2_writel(hsotg, gpwrdn, GPWRDN);
++		udelay(10);
++
++		pcgcctl = dwc2_readl(hsotg, PCGCTL);
++		pcgcctl |= PCGCTL_STOPPCLK;
++		dwc2_writel(hsotg, pcgcctl, PCGCTL);
++		udelay(10);
++	}
+ 
+ 	/* Set flag to indicate that we are in hibernation */
+ 	hsotg->hibernated = 1;
+@@ -5414,6 +5474,7 @@
+ 	u32 gpwrdn;
+ 	u32 dctl;
+ 	int ret = 0;
++	unsigned int flags = 0;
+ 	struct dwc2_gregs_backup *gr;
+ 	struct dwc2_dregs_backup *dr;
+ 
+@@ -5476,6 +5537,7 @@
+ 		dctl = dwc2_readl(hsotg, DCTL);
+ 		dctl |= DCTL_PWRONPRGDONE;
+ 		dwc2_writel(hsotg, dctl, DCTL);
++		flags |= DWC2_RESTORE_DCTL;
+ 	}
+ 	/* Wait for interrupts which must be cleared */
+ 	mdelay(2);
+@@ -5483,20 +5545,9 @@
+ 	dwc2_writel(hsotg, 0xffffffff, GINTSTS);
+ 
+ 	/* Restore global registers */
+-	ret = dwc2_restore_global_registers(hsotg);
+-	if (ret) {
+-		dev_err(hsotg->dev, "%s: failed to restore registers\n",
+-			__func__);
+-		return ret;
+-	}
+-
+-	/* Restore device registers */
+-	ret = dwc2_restore_device_registers(hsotg, rem_wakeup);
+-	if (ret) {
+-		dev_err(hsotg->dev, "%s: failed to restore device registers\n",
+-			__func__);
++	ret = dwc2_gadget_restore_critical_registers(hsotg, flags);
++	if (ret)
+ 		return ret;
+-	}
+ 
+ 	if (rem_wakeup) {
+ 		mdelay(10);
+@@ -5530,19 +5581,9 @@
+ 	dev_dbg(hsotg->dev, "Entering device partial power down started.\n");
+ 
+ 	/* Backup all registers */
+-	ret = dwc2_backup_global_registers(hsotg);
+-	if (ret) {
+-		dev_err(hsotg->dev, "%s: failed to backup global registers\n",
+-			__func__);
+-		return ret;
+-	}
+-
+-	ret = dwc2_backup_device_registers(hsotg);
+-	if (ret) {
+-		dev_err(hsotg->dev, "%s: failed to backup device registers\n",
+-			__func__);
++	ret = dwc2_gadget_backup_critical_registers(hsotg);
++	if (ret)
+ 		return ret;
+-	}
+ 
+ 	/*
+ 	 * Clear any pending interrupts since dwc2 will not be able to
+@@ -5589,11 +5630,8 @@
+ {
+ 	u32 pcgcctl;
+ 	u32 dctl;
+-	struct dwc2_dregs_backup *dr;
+ 	int ret = 0;
+ 
+-	dr = &hsotg->dr_backup;
+-
+ 	dev_dbg(hsotg->dev, "Exiting device partial Power Down started.\n");
+ 
+ 	pcgcctl = dwc2_readl(hsotg, PCGCTL);
+@@ -5610,21 +5648,10 @@
+ 
+ 	udelay(100);
+ 	if (restore) {
+-		ret = dwc2_restore_global_registers(hsotg);
+-		if (ret) {
+-			dev_err(hsotg->dev, "%s: failed to restore registers\n",
+-				__func__);
+-			return ret;
+-		}
+-		/* Restore DCFG */
+-		dwc2_writel(hsotg, dr->dcfg, DCFG);
+-
+-		ret = dwc2_restore_device_registers(hsotg, 0);
+-		if (ret) {
+-			dev_err(hsotg->dev, "%s: failed to restore device registers\n",
+-				__func__);
++		ret = dwc2_gadget_restore_critical_registers(hsotg, DWC2_RESTORE_DCTL |
++							     DWC2_RESTORE_DCFG);
++		if (ret)
+ 			return ret;
+-		}
+ 	}
+ 
+ 	/* Set the Power-On Programming done bit */
+--- a/drivers/usb/dwc2/hcd_ddma.c
++++ b/drivers/usb/dwc2/hcd_ddma.c
+@@ -373,10 +373,36 @@
+ 		dwc2_release_channel_ddma(hsotg, qh);
+ 	spin_unlock_irqrestore(&hsotg->lock, flags);
+ 
++	/*
++	 * The frame list is the periodic schedule for the WHOLE controller, so
++	 * it may only be torn down once nothing periodic is left. The test used
++	 * to be "uframe_sched || !periodic_channels", and with uframe_sched
++	 * enabled - which it is here - that is unconditionally true. Freeing
++	 * any one periodic endpoint therefore destroyed the schedule for every
++	 * other one.
++	 *
++	 * It never came back. The frame list is only allocated in
++	 * dwc2_hcd_qh_init_ddma(), and only for a NEW qh that finds it NULL;
++	 * endpoints that already had a qh simply stopped being scheduled, with
++	 * dwc2_update_frame_list() logging "hsotg->frame_list = 00000000" and
++	 * returning. The device stayed enumerated and bound, and went quiet.
++	 *
++	 * Observed on this board: unplugging the mouse killed the keyboard.
++	 * The keyboard's interrupt URBs completed -ESHUTDOWN, no further
++	 * transfers were scheduled for it, and rebinding usbhid brought it
++	 * back - because that created a new qh, which reallocated the list.
++	 * That also explains why it looked intermittent and why it appeared to
++	 * move between devices: any teardown of any periodic endpoint takes
++	 * down whichever devices are left.
++	 *
++	 * periodic_qh_count is decremented in dwc2_hcd_qh_unlink() before the
++	 * free path runs, so by here it counts the endpoints that REMAIN. If a
++	 * caller ever frees without unlinking, this leaks 256 bytes rather
++	 * than silently stopping all input - the safer direction by far.
++	 */
+ 	if ((qh->ep_type == USB_ENDPOINT_XFER_ISOC ||
+ 	     qh->ep_type == USB_ENDPOINT_XFER_INT) &&
+-	    (hsotg->params.uframe_sched ||
+-	     !hsotg->periodic_channels) && hsotg->frame_list) {
++	    !hsotg->periodic_qh_count && hsotg->frame_list) {
+ 		dwc2_per_sched_disable(hsotg);
+ 		dwc2_frame_list_free(hsotg);
+ 	}
+--- a/drivers/usb/dwc2/hcd_queue.c
++++ b/drivers/usb/dwc2/hcd_queue.c
+@@ -26,6 +26,11 @@
+ #include "core.h"
+ #include "hcd.h"
+ 
++/* See dwc2_hcd_qh_add(): keep the SOF interrupt in descriptor-DMA mode. */
++static bool dwc2_sof_irq;
++module_param_named(sof_irq, dwc2_sof_irq, bool, 0644);
++MODULE_PARM_DESC(sof_irq, "enable the start-of-frame interrupt in descriptor-DMA mode (default off; it does nothing there)");
++
+ /* Wait this long before releasing periodic reservation */
+ #define DWC2_UNRESERVE_DELAY (msecs_to_jiffies(5))
+ 
+@@ -1215,7 +1220,7 @@
+  */
+ static void dwc2_unreserve_timer_fn(struct timer_list *t)
+ {
+-	struct dwc2_qh *qh = from_timer(qh, t, unreserve_timer);
++	struct dwc2_qh *qh = timer_container_of(qh, t, unreserve_timer);
+ 	struct dwc2_hsotg *hsotg = qh->hsotg;
+ 	unsigned long flags;
+ 
+@@ -1302,7 +1307,7 @@
+ 	}
+ 
+ 	/* Cancel pending unreserve; if canceled OK, unreserve was pending */
+-	if (del_timer(&qh->unreserve_timer))
++	if (timer_delete(&qh->unreserve_timer))
+ 		WARN_ON(!qh->unreserve_pending);
+ 
+ 	/*
+@@ -1459,8 +1464,7 @@
+ 	/* Initialize QH */
+ 	qh->hsotg = hsotg;
+ 	timer_setup(&qh->unreserve_timer, dwc2_unreserve_timer_fn, 0);
+-	hrtimer_init(&qh->wait_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+-	qh->wait_timer.function = &dwc2_wait_timer_fn;
++	hrtimer_setup(&qh->wait_timer, &dwc2_wait_timer_fn, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+ 	qh->ep_type = ep_type;
+ 	qh->ep_is_in = ep_is_in;
+ 
+@@ -1586,7 +1590,7 @@
+ 		return NULL;
+ 
+ 	/* Allocate memory */
+-	qh = kzalloc(sizeof(*qh), mem_flags);
++	qh = kzalloc_obj(*qh, mem_flags);
+ 	if (!qh)
+ 		return NULL;
+ 
+@@ -1615,7 +1619,7 @@
+ void dwc2_hcd_qh_free(struct dwc2_hsotg *hsotg, struct dwc2_qh *qh)
+ {
+ 	/* Make sure any unreserve work is finished. */
+-	if (del_timer_sync(&qh->unreserve_timer)) {
++	if (timer_delete_sync(&qh->unreserve_timer)) {
+ 		unsigned long flags;
+ 
+ 		spin_lock_irqsave(&hsotg->lock, flags);
+@@ -1687,7 +1691,17 @@
+ 	status = dwc2_schedule_periodic(hsotg, qh);
+ 	if (status)
+ 		return status;
+-	if (!hsotg->periodic_qh_count) {
++	/*
++	 * ESP32-S31 port: in descriptor-DMA mode the periodic schedule lives
++	 * in the hardware frame list and dwc2_sof_intr() has nothing to walk,
++	 * but this enable fires on the first periodic QH and the unlink path
++	 * below never clears it in that mode - so every board ran a 1 kHz
++	 * (8 kHz at high speed) SOF interrupt for nothing. Measured 2026-09-03
++	 * with the mask cleared by hand: 1,039 -> 0 USB interrupts/s idle,
++	 * control and interrupt transfers unaffected. Runtime knob for A/B.
++	 */
++	if (!hsotg->periodic_qh_count &&
++	    (!hsotg->params.dma_desc_enable || dwc2_sof_irq)) {
+ 		intr_mask = dwc2_readl(hsotg, GINTMSK);
+ 		intr_mask |= GINTSTS_SOF;
+ 		dwc2_writel(hsotg, intr_mask, GINTMSK);
+--- a/drivers/usb/dwc2/hcd.c
++++ b/drivers/usb/dwc2/hcd.c
+@@ -3238,7 +3238,7 @@
+ 
+ static void dwc2_wakeup_detected(struct timer_list *t)
+ {
+-	struct dwc2_hsotg *hsotg = from_timer(hsotg, t, wkp_timer);
++	struct dwc2_hsotg *hsotg = timer_container_of(hsotg, t, wkp_timer);
+ 	u32 hprt0;
+ 
+ 	dev_dbg(hsotg->dev, "%s()\n", __func__);
+@@ -3574,11 +3574,9 @@
+ 			port_status |= USB_PORT_STAT_C_OVERCURRENT << 16;
+ 		}
+ 
+-		if (!hsotg->flags.b.port_connect_status) {
++		if (dwc2_is_device_mode(hsotg)) {
+ 			/*
+-			 * The port is disconnected, which means the core is
+-			 * either in device mode or it soon will be. Just
+-			 * return 0's for the remainder of the port status
++			 * Just return 0's for the remainder of the port status
+ 			 * since the port register can't be read if the core
+ 			 * is in device mode.
+ 			 */
+@@ -3648,13 +3646,11 @@
+ 		if (wvalue != USB_PORT_FEAT_TEST && (!windex || windex > 1))
+ 			goto error;
+ 
+-		if (!hsotg->flags.b.port_connect_status) {
++		if (dwc2_is_device_mode(hsotg)) {
+ 			/*
+-			 * The port is disconnected, which means the core is
+-			 * either in device mode or it soon will be. Just
+-			 * return without doing anything since the port
+-			 * register can't be written if the core is in device
+-			 * mode.
++			 * Just return 0's for the remainder of the port status
++			 * since the port register can't be read if the core
++			 * is in device mode.
+ 			 */
+ 			break;
+ 		}
+@@ -3855,7 +3851,7 @@
+ {
+ 	struct dwc2_hcd_urb *urb;
+ 
+-	urb = kzalloc(struct_size(urb, iso_descs, iso_desc_count), mem_flags);
++	urb = kzalloc_flex(*urb, iso_descs, iso_desc_count, mem_flags);
+ 	if (urb)
+ 		urb->packet_count = iso_desc_count;
+ 	return urb;
+@@ -4377,7 +4373,7 @@
+ 	if (hsotg->bus_suspended)
+ 		goto skip_power_saving;
+ 
+-	if (hsotg->flags.b.port_connect_status == 0)
++	if (!(dwc2_read_hprt0(hsotg) & HPRT0_CONNSTS))
+ 		goto skip_power_saving;
+ 
+ 	switch (hsotg->params.power_down) {
+@@ -4459,6 +4455,7 @@
+ 	 * Power Down mode.
+ 	 */
+ 	if (hprt0 & HPRT0_CONNSTS) {
++		set_bit(HCD_FLAG_HW_ACCESSIBLE, &hcd->flags);
+ 		hsotg->lx_state = DWC2_L0;
+ 		goto unlock;
+ 	}
+@@ -4774,7 +4771,7 @@
+ 		qh_allocated = true;
+ 	}
+ 
+-	qtd = kzalloc(sizeof(*qtd), mem_flags);
++	qtd = kzalloc_obj(*qtd, mem_flags);
+ 	if (!qtd) {
+ 		retval = -ENOMEM;
+ 		goto fail1;
+@@ -4835,6 +4832,7 @@
+ 	struct dwc2_hsotg *hsotg = dwc2_hcd_to_hsotg(hcd);
+ 	int rc;
+ 	unsigned long flags;
++	int urb_status;
+ 
+ 	dev_dbg(hsotg->dev, "DWC OTG HCD URB Dequeue\n");
+ 	dwc2_dump_urb_info(hcd, urb, "urb_dequeue");
+@@ -4859,11 +4857,12 @@
+ 
+ 	/* Higher layer software sets URB status */
+ 	spin_unlock(&hsotg->lock);
++	urb_status = urb->status;
+ 	usb_hcd_giveback_urb(hcd, urb, status);
+ 	spin_lock(&hsotg->lock);
+ 
+ 	dev_dbg(hsotg->dev, "Called usb_hcd_giveback_urb()\n");
+-	dev_dbg(hsotg->dev, "  urb->status = %d\n", urb->status);
++	dev_dbg(hsotg->dev, "  urb->status = %d\n", urb_status);
+ out:
+ 	spin_unlock_irqrestore(&hsotg->lock, flags);
+ 
+@@ -5188,7 +5187,7 @@
+ 
+ 	cancel_work_sync(&hsotg->phy_reset_work);
+ 
+-	del_timer(&hsotg->wkp_timer);
++	timer_delete(&hsotg->wkp_timer);
+ }
+ 
+ static void dwc2_hcd_release(struct dwc2_hsotg *hsotg)
+@@ -5356,7 +5355,7 @@
+ 	memset(&hsotg->hc_ptr_array[0], 0, sizeof(hsotg->hc_ptr_array));
+ 
+ 	for (i = 0; i < num_channels; i++) {
+-		channel = kzalloc(sizeof(*channel), GFP_KERNEL);
++		channel = kzalloc_obj(*channel);
+ 		if (!channel)
+ 			goto error3;
+ 		channel->hc_num = i;
+@@ -5616,6 +5615,49 @@
+ 	return 0;
+ }
+ 
++int dwc2_host_backup_critical_registers(struct dwc2_hsotg *hsotg)
++{
++	int ret;
++
++	/* Backup all registers */
++	ret = dwc2_backup_global_registers(hsotg);
++	if (ret) {
++		dev_err(hsotg->dev, "%s: failed to backup global registers\n",
++			__func__);
++		return ret;
++	}
++
++	ret = dwc2_backup_host_registers(hsotg);
++	if (ret) {
++		dev_err(hsotg->dev, "%s: failed to backup host registers\n",
++			__func__);
++		return ret;
++	}
++
++	return 0;
++}
++
++int dwc2_host_restore_critical_registers(struct dwc2_hsotg *hsotg)
++{
++	int ret;
++
++	ret = dwc2_restore_global_registers(hsotg);
++	if (ret) {
++		dev_err(hsotg->dev, "%s: failed to restore registers\n",
++			__func__);
++		return ret;
++	}
++
++	ret = dwc2_restore_host_registers(hsotg);
++	if (ret) {
++		dev_err(hsotg->dev, "%s: failed to restore host registers\n",
++			__func__);
++		return ret;
++	}
++
++	return 0;
++}
++
+ /**
+  * dwc2_host_enter_hibernation() - Put controller in Hibernation.
+  *
+@@ -5631,18 +5673,9 @@
+ 	u32 gpwrdn;
+ 
+ 	dev_dbg(hsotg->dev, "Preparing host for hibernation\n");
+-	ret = dwc2_backup_global_registers(hsotg);
+-	if (ret) {
+-		dev_err(hsotg->dev, "%s: failed to backup global registers\n",
+-			__func__);
+-		return ret;
+-	}
+-	ret = dwc2_backup_host_registers(hsotg);
+-	if (ret) {
+-		dev_err(hsotg->dev, "%s: failed to backup host registers\n",
+-			__func__);
++	ret = dwc2_host_backup_critical_registers(hsotg);
++	if (ret)
+ 		return ret;
+-	}
+ 
+ 	/* Enter USB Suspend Mode */
+ 	hprt0 = dwc2_readl(hsotg, HPRT0);
+@@ -5836,20 +5869,9 @@
+ 	dwc2_writel(hsotg, 0xffffffff, GINTSTS);
+ 
+ 	/* Restore global registers */
+-	ret = dwc2_restore_global_registers(hsotg);
+-	if (ret) {
+-		dev_err(hsotg->dev, "%s: failed to restore registers\n",
+-			__func__);
+-		return ret;
+-	}
+-
+-	/* Restore host registers */
+-	ret = dwc2_restore_host_registers(hsotg);
+-	if (ret) {
+-		dev_err(hsotg->dev, "%s: failed to restore host registers\n",
+-			__func__);
++	ret = dwc2_host_restore_critical_registers(hsotg);
++	if (ret)
+ 		return ret;
+-	}
+ 
+ 	if (rem_wakeup) {
+ 		dwc2_hcd_rem_wakeup(hsotg);
+@@ -5916,19 +5938,9 @@
+ 		dev_warn(hsotg->dev, "Suspend wasn't generated\n");
+ 
+ 	/* Backup all registers */
+-	ret = dwc2_backup_global_registers(hsotg);
+-	if (ret) {
+-		dev_err(hsotg->dev, "%s: failed to backup global registers\n",
+-			__func__);
+-		return ret;
+-	}
+-
+-	ret = dwc2_backup_host_registers(hsotg);
+-	if (ret) {
+-		dev_err(hsotg->dev, "%s: failed to backup host registers\n",
+-			__func__);
++	ret = dwc2_host_backup_critical_registers(hsotg);
++	if (ret)
+ 		return ret;
+-	}
+ 
+ 	/*
+ 	 * Clear any pending interrupts since dwc2 will not be able to
+@@ -5997,19 +6009,9 @@
+ 
+ 	udelay(100);
+ 	if (restore) {
+-		ret = dwc2_restore_global_registers(hsotg);
+-		if (ret) {
+-			dev_err(hsotg->dev, "%s: failed to restore registers\n",
+-				__func__);
+-			return ret;
+-		}
+-
+-		ret = dwc2_restore_host_registers(hsotg);
+-		if (ret) {
+-			dev_err(hsotg->dev, "%s: failed to restore host registers\n",
+-				__func__);
++		ret = dwc2_host_restore_critical_registers(hsotg);
++		if (ret)
+ 			return ret;
+-		}
+ 	}
+ 
+ 	/* Drive resume signaling and exit suspend mode on the port. */
+--- a/drivers/usb/dwc2/params.c
++++ b/drivers/usb/dwc2/params.c
+@@ -76,10 +76,26 @@
+ MODULE_PARM_DESC(host_full_speed,
+ 		 "Pin the host port to full speed so hubs avoid split transactions");
+ 
++static bool desc_dma = true;
++module_param(desc_dma, bool, 0644);
++MODULE_PARM_DESC(desc_dma,
++		 "use descriptor DMA for periodic transfers (default on); "
++		 "off costs CPU but tests the cached-coherent-memory theory");
++
+ static void dwc2_set_esp32s31_params(struct dwc2_hsotg *hsotg)
+ {
+ 	struct dwc2_core_params *p = &hsotg->params;
+ 
++	/*
++	 * Say which side of the coherency question this device landed on.
++	 * "dma_alloc_coherent returns cached memory here" has been repeated in
++	 * this project's notes for a long time without anyone checking it, and
++	 * descriptor DMA is exactly where it would bite.
++	 */
++	dev_info(hsotg->dev, "DMA is %s per the device tree\n",
++		 hsotg->dev->dma_coherent ? "COHERENT (descriptors cached)"
++					  : "non-coherent (descriptors uncached)");
++
+ 	p->phy_type = DWC2_PHY_TYPE_PARAM_UTMI;
+ 	p->phy_utmi_width = 16;
+ 	p->host_dma = true;
+@@ -94,14 +110,52 @@
+ 	 * by about 15x, taking the controller's cost with an idle keyboard
+ 	 * from ~7% of this core to under 1%.
+ 	 */
+-	p->dma_desc_enable = true;
+-	p->dma_desc_fs_enable = true;
++	/*
++	 * Runtime toggle, because descriptor DMA is the leading suspect for
++	 * keystrokes that go missing for a few seconds and then come back.
++	 *
++	 * The descriptor lists live in dma_alloc_coherent() memory, and on this
++	 * SoC that returns CACHED memory - the same trap that bit the AXI GDMA
++	 * and the PPA, both of which had to be pointed at an uncached alias
++	 * before their engines would read what the CPU had written. If the
++	 * controller and the CPU disagree about a descriptor here, periodic IN
++	 * transfers simply stop being collected until something evicts the
++	 * line, which is exactly what "it works, then stops, then works again"
++	 * looks like from the keyboard.
++	 *
++	 * Turning it off costs CPU (the comment below is why it was turned on)
++	 * but proves or disproves the theory in one reboot instead of a
++	 * rebuild per hypothesis.
++	 */
++	p->dma_desc_enable = desc_dma;
++	p->dma_desc_fs_enable = desc_dma;
+ 	/* ESP-IDF uses SINGLE transfers when enabling this DWC2 AHB master. */
+ 	p->ahbcfg = GAHBCFG_HBSTLEN_SINGLE << GAHBCFG_HBSTLEN_SHIFT;
+ 	/*
+-	 * S31 implements 896 FIFO words.  The generic DWC2 minimum assumes
+-	 * enough RAM for two maximum packets plus high-bandwidth periodic
+-	 * traffic and would otherwise program 1556 words past the SRAM end.
++	 * S31 implements 896 FIFO words (GHWCFG3 = 0x038046E8, DFIFODEPTH in
++	 * bits 31:16). The generic DWC2 minimum assumes enough RAM for two
++	 * maximum packets plus high-bandwidth periodic traffic and would
++	 * otherwise program 1556 words past the SRAM end.
++	 *
++	 * The split is biased for IN traffic, which is what this board
++	 * actually carries: every device on it is a HID interrupt IN endpoint.
++	 * Those live entirely in the RX FIFO and never touch the periodic TX
++	 * FIFO, which exists for periodic OUT data.
++	 *
++	 * The previous split gave 512/128/256 - a quarter of the FIFO parked
++	 * on periodic TX, idle, while four interrupt IN endpoints polling at
++	 * 1 ms through a hub shared 512 words of RX. An RX FIFO that fills
++	 * drops the incoming packet, and a dropped HID report is a lost
++	 * keystroke or, if it was the report carrying the key release, a key
++	 * stuck down until the next one arrives.
++	 *
++	 * These numbers are Espressif's own IN-biased configuration for this
++	 * core, from esp-usb host/usb/src/hcd_dwc.c _calculate_fifo_from_bias()
++	 * under CONFIG_USB_HOST_HW_BUFFER_BIAS_IN, evaluated for a HS PHY:
++	 *
++	 *	nptx = dfifo_depth / 16 = 1024 / 16 =  64
++	 *	ptx  = dfifo_depth /  8 = 1024 /  8 = 128
++	 *	rx   = 896 - 128 - 64               = 704
+ 	 */
+ 	p->host_rx_fifo_size = 512;
+ 	p->host_nperio_tx_fifo_size = 128;
+@@ -407,7 +461,7 @@
+ 	  .data = dwc2_set_amlogic_a1_params },
+ 	{ .compatible = "amcc,dwc-otg", .data = dwc2_set_amcc_params },
+ 	{ .compatible = "apm,apm82181-dwc-otg", .data = dwc2_set_amcc_params },
+-	{ .compatible = "sophgo,cv1800-usb",
++	{ .compatible = "sophgo,cv1800b-usb",
+ 	  .data = dwc2_set_cv1800_params },
+ 	{ .compatible = "st,stm32f4x9-fsotg",
+ 	  .data = dwc2_set_stm32f4x9_fsotg_params },
+@@ -1102,11 +1156,33 @@
+ 	return 0;
+ }
+ 
++static int dwc2_limit_speed(struct dwc2_hsotg *hsotg)
++{
++	enum usb_device_speed usb_speed;
++
++	usb_speed = usb_get_maximum_speed(hsotg->dev);
++	switch (usb_speed) {
++	case USB_SPEED_LOW:
++		dev_err(hsotg->dev, "Maximum speed cannot be forced to low-speed\n");
++		return -EINVAL;
++	case USB_SPEED_FULL:
++		if (hsotg->params.speed == DWC2_SPEED_PARAM_LOW)
++			break;
++		hsotg->params.speed = DWC2_SPEED_PARAM_FULL;
++		break;
++	default:
++		break;
++	}
++
++	return 0;
++}
++
+ typedef void (*set_params_cb)(struct dwc2_hsotg *data);
+ 
+ int dwc2_init_params(struct dwc2_hsotg *hsotg)
+ {
+ 	set_params_cb set_params;
++	int ret;
+ 
+ 	dwc2_set_default_params(hsotg);
+ 	dwc2_get_device_properties(hsotg);
+@@ -1124,6 +1200,10 @@
+ 		}
+ 	}
+ 
++	ret = dwc2_limit_speed(hsotg);
++	if (ret)
++		return ret;
++
+ 	dwc2_check_params(hsotg);
+ 
+ 	return 0;
+--- a/drivers/usb/dwc2/platform.c
++++ b/drivers/usb/dwc2/platform.c
+@@ -387,8 +387,11 @@
+ {
+ 	struct dwc2_hsotg *hsotg = platform_get_drvdata(dev);
+ 
+-	dwc2_disable_global_interrupts(hsotg);
+-	synchronize_irq(hsotg->irq);
++	if (hsotg->ll_hw_enabled) {
++		dwc2_disable_global_interrupts(hsotg);
++		synchronize_irq(hsotg->irq);
++		dwc2_lowlevel_hw_disable(hsotg);
++	}
+ }
+ 
+ /**
+@@ -666,9 +669,13 @@
+ static int __maybe_unused dwc2_suspend(struct device *dev)
+ {
+ 	struct dwc2_hsotg *dwc2 = dev_get_drvdata(dev);
+-	bool is_device_mode = dwc2_is_device_mode(dwc2);
++	bool is_device_mode;
+ 	int ret = 0;
+ 
++	if (!dwc2->ll_hw_enabled)
++		return 0;
++
++	is_device_mode = dwc2_is_device_mode(dwc2);
+ 	if (is_device_mode)
+ 		dwc2_hsotg_suspend(dwc2);
+ 
+@@ -705,6 +712,14 @@
+ 		regulator_disable(dwc2->usb33d);
+ 	}
+ 
++	if (is_device_mode)
++		ret = dwc2_gadget_backup_critical_registers(dwc2);
++	else
++		ret = dwc2_host_backup_critical_registers(dwc2);
++
++	if (ret)
++		return ret;
++
+ 	if (dwc2->ll_hw_enabled &&
+ 	    (is_device_mode || dwc2_host_can_poweroff_phy(dwc2))) {
+ 		ret = __dwc2_lowlevel_hw_disable(dwc2);
+@@ -714,11 +729,32 @@
+ 	return ret;
+ }
+ 
++static int dwc2_restore_critical_registers(struct dwc2_hsotg *hsotg)
++{
++	struct dwc2_gregs_backup *gr;
++
++	gr = &hsotg->gr_backup;
++
++	if (!gr->valid) {
++		dev_err(hsotg->dev, "No valid register backup, failed to restore\n");
++		return -EINVAL;
++	}
++
++	if (gr->gintsts & GINTSTS_CURMODE_HOST)
++		return dwc2_host_restore_critical_registers(hsotg);
++
++	return dwc2_gadget_restore_critical_registers(hsotg, DWC2_RESTORE_DCTL |
++						      DWC2_RESTORE_DCFG);
++}
++
+ static int __maybe_unused dwc2_resume(struct device *dev)
+ {
+ 	struct dwc2_hsotg *dwc2 = dev_get_drvdata(dev);
+ 	int ret = 0;
+ 
++	if (!dwc2->ll_hw_enabled)
++		return 0;
++
+ 	if (dwc2->phy_off_for_suspend && dwc2->ll_hw_enabled) {
+ 		ret = __dwc2_lowlevel_hw_enable(dwc2);
+ 		if (ret)
+@@ -726,6 +762,18 @@
+ 	}
+ 	dwc2->phy_off_for_suspend = false;
+ 
++	/*
++	 * During suspend it's possible that the power domain for the
++	 * DWC2 controller is disabled and all register values get lost.
++	 * In case the GUSBCFG register is not initialized, it's clear the
++	 * registers must be restored.
++	 */
++	if (!(dwc2_readl(dwc2, GUSBCFG) & GUSBCFG_TOUTCAL_MASK)) {
++		ret = dwc2_restore_critical_registers(dwc2);
++		if (ret)
++			return ret;
++	}
++
+ 	if (dwc2->params.activate_stm_id_vb_detection) {
+ 		unsigned long flags;
+ 		u32 ggpio, gotgctl;
+@@ -776,7 +824,7 @@
+ 		.pm = &dwc2_dev_pm_ops,
+ 	},
+ 	.probe = dwc2_driver_probe,
+-	.remove_new = dwc2_driver_remove,
++	.remove = dwc2_driver_remove,
+ 	.shutdown = dwc2_driver_shutdown,
+ };
+ 
