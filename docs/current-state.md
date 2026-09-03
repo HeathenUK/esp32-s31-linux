@@ -3606,3 +3606,41 @@ Consequences for the goal:
   what moving it to RAM buys.
 - A full-speed hub cannot be hidden behind a high-speed one: its devices
   are still full-speed devices behind the high-speed hub's translator.
+
+### High-speed arms, measured (2026-09-03)
+
+Same hub (Genesys, 480 Mbit/s link), same receivers behind it, `USB_HS=1`
+builds. dwc2 stays in buffer-DMA mode at high speed (see above), so the
+8 kHz SOF is on and every split phase is a channel interrupt.
+
+    arm                                        boot        USB irq/s   cpubench
+    full speed, shipped (SOF off)              normal          0       70 M/s
+    HS, dwc2 in flash                          no shell in 7 min (init scripts 3-10x slower)
+    HS, dwc2 ISR objects in .text..fast        lvdesk 33 s   7,917     44 M/s
+      ... with usbhid unbound (SOF alone)                    8,050     57 M/s
+
+So at high speed with the interrupt path in RAM: the 8 kHz SOF alone costs
+~19% of the core and the HID split traffic another ~19%. The desktop's
+mouse and keyboard work in that mode. Two cautions from the same boot:
+rebinding usbhid at high speed (to try slower `mousepoll`/`kbpoll`) left
+the controller at 11,200-11,400 irq/s and cpubench 18-46 M/s, erratic, and
+it did not recover on rebinding with defaults - a buffer-DMA split
+scheduling problem that a clean boot does not show. The `.text..fast`
+addition is reverted for the shipped full-speed kernel, where USB
+interrupts are ~0 and 45 KB of PSRAM would buy nothing; `make linux
+USB_HS=1` plus re-adding `*dwc2/{hcd_intr,core_intr,hcd,hcd_queue}.o` to
+`S31_FAST_OBJS` reproduces arm C.
+
+**The actual path to USB 2.0 without the 8 kHz.** IDF's host HAL
+(`esp_hal_usb/usb_dwc_hal.c:388-436`) schedules split transactions in
+descriptor-DMA mode natively, per microframe through `HCTSIZ.SCHED_INFO`;
+the Synopsys core supports it, Linux's `hcd_ddma.c` simply refuses
+(`-EINVAL`). Teaching dwc2's DDMA path to issue splits the way IDF does
+would make a full-speed device behind a high-speed hub cost what it costs
+on the full-speed bus today: no SOF, one interrupt per completed
+transfer. That is a real driver feature, not a knob, and it is a patch to
+upstream dwc2 - a deliberate exception to "off-the-shelf" if it is taken.
+The PHY is not in the picture: the IDF-vs-Linux PHY and controller
+bring-up comparison found them register-identical, with the FIFO split
+(512/128/256 programmed against the 704/64/128 the comment claims) the
+only difference worth fixing before real high-speed traffic.

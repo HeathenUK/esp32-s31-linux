@@ -245,13 +245,20 @@ endif
 # instead of the forced full speed we ship. Same self-cleaning rule.
 EARLYCON ?= 0
 USB_HS ?= 0
-CMDLINE_NOW = $$(sed -n 's/^CONFIG_CMDLINE=\"\(.*\)\"/\1/p' $(LINUX_OUT)/.config | sed 's/ earlycon//g; s/ dwc2.host_full_speed=0//g')
+# USB_BUFDMA=1 adds dwc2.desc_dma=0 (buffer DMA): the only mode in which
+# full/low-speed devices behind a high-speed hub work, because descriptor
+# DMA refuses split transactions (hcd_ddma.c). Costs the 8 kHz SOF.
+USB_BUFDMA ?= 0
+CMDLINE_NOW = $$(sed -n 's/^CONFIG_CMDLINE=\"\(.*\)\"/\1/p' $(LINUX_OUT)/.config | sed 's/ earlycon//g; s/ dwc2.host_full_speed=0//g; s/ dwc2.desc_dma=0//g')
 CMDLINE_ADD :=
 ifeq ($(EARLYCON),1)
 CMDLINE_ADD += earlycon
 endif
 ifeq ($(USB_HS),1)
 CMDLINE_ADD += dwc2.host_full_speed=0
+endif
+ifeq ($(USB_BUFDMA),1)
+CMDLINE_ADD += dwc2.desc_dma=0
 endif
 EARLYCON_TWEAK = --set-str CMDLINE "$(CMDLINE_NOW)$(if $(CMDLINE_ADD), $(CMDLINE_ADD),)"
 
