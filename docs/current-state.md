@@ -3197,3 +3197,37 @@ blocks: frame = 13 + 2 x bitpool bytes): bitpool 32 -> 8 frames/packet,
 earbuds were asleep when the arms ran - so the daemon default is still
 libsbc's choice. The daemon also does its D-Bus housekeeping every 16th
 packet instead of every packet.
+
+## Flash is already QIO at 80 MHz - the maximum this IDF supports for the S31 (2026-09-03)
+
+A "flash may be running DIO" hypothesis was raised and is WRONG; do not
+re-chase it. The mechanism is exactly the standard ESP-IDF one:
+
+- The ROM boots the 2nd-stage bootloader in the safe mode stamped in its
+  header (DIO). Both `bootloader.bin` and `hello_world.bin` headers say
+  DIO (`esptool image-info`).
+- The 2nd stage is compiled with `CONFIG_ESPTOOLPY_FLASHMODE_QIO=y`, and
+  `bootloader_flash_config_esp32s31.c:246` is
+  `#if CONFIG_ESPTOOLPY_FLASHMODE_QIO || ..._QOUT -> bootloader_enable_qio_mode();`
+  - gated on the **Kconfig symbol, not the header byte**. It issues the
+  flash chip's Quad-Enable and switches the controller to QIO. hart1's
+  XIP reads go through that same controller, so the kernel runs QIO too.
+- **Measured** (`rootfs/flashbw.c`, streaming a 1.3 MB XIP-mapped file):
+  22-32 MB/s. DIO at 80 MHz cannot exceed ~17 MB/s sustained (2 data
+  lines plus per-cache-line command/address/dummy overhead); QIO at
+  80 MHz works out to ~30 MB/s. PSRAM streams at ~90 MB/s for the same
+  loop, so the XIP penalty is ~3x for sequential reads and ~6x for
+  branchy instruction fetch (the earlier .text..fast measurement).
+
+The one genuine oddity is cosmetic: the derived string
+`CONFIG_ESPTOOLPY_FLASHMODE="dio"` disagrees with the `_QIO=y` symbol
+(sdkconfig was not regenerated after the symbol changed), so esptool
+stamps DIO into the app header. Harmless today because the QIO enable
+is compiled in regardless; worth regenerating sdkconfig for hygiene.
+
+**The frequency lever is closed in this IDF.** `spi_flash/esp32s31/
+Kconfig.flash_freq` offers only 80/40/20 MHz, and there is no
+`mspi_timing_tuning/port/esp32s31/` - so despite `soc_caps` advertising
+`SOC_MEMSPI_TIMING_TUNING_BY_DQS`, IDF cannot yet train the S31 above
+80 MHz. The XIP penalty is inherent at QIO-80; the remaining levers are
+hot-text placement and narrower code paths, not the flash mode.
