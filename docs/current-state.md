@@ -3644,3 +3644,30 @@ The PHY is not in the picture: the IDF-vs-Linux PHY and controller
 bring-up comparison found them register-identical, with the FIFO split
 (512/128/256 programmed against the 704/64/128 the comment claims) the
 only difference worth fixing before real high-speed traffic.
+
+### Descriptor DMA with split QHs allowed, first try (2026-09-03)
+
+Three-line experiment: `dma_desc_fs_enable=false` so DESCDMA stays set at
+host init for a high-speed root device, `dwc2_hcd_qh_init_ddma()` accepts
+`do_split` QHs, and periodic channels that talk at high speed get
+`HCTSIZ.SCHED_INFO=0xff` (the field was never assigned in this driver;
+harmless on a full-speed bus, fatal on a high-speed one). Result on a
+clean high-speed boot:
+
+    hub 05e3:0610          enumerates at 480 Mbit/s, 4 ports
+    SOF                    off (GINTMSK 0xF3000806), 0 USB irq/s idle
+    cpubench               69.2-70.2 M/s  <- the full-speed figure, at high speed
+    receivers behind hub   every control transfer fails: XactErr x3 then
+                           "device descriptor read/64, error -71", for ever
+
+So the target is real - a high-speed bus at the same CPU cost as the
+full-speed one - and the remaining gap is exactly split transactions. The
+core does not carry the SSPLIT->CSPLIT sequence on its own in descriptor
+mode: the start-split goes out and the transaction then errors. The
+driver has to drive the complete-split phase itself in the descriptor
+interrupt path (ACK on SSPLIT -> COMPSPLT, re-arm; NYET -> retry next
+microframe), which is what buffer-DMA mode does per transaction today.
+Whether the core allows that dance on a descriptor-mode channel is the
+next experiment; if it does not, split support in descriptor mode is a
+silicon limit and the answer for full-speed devices on a high-speed bus
+stays "buffer DMA at ~37% of the core".
