@@ -154,11 +154,22 @@ static snd_pcm_sframes_t route_pointer(snd_pcm_ioplug_t *io)
 	struct route *r = io->private_data;
 
 	/*
-	 * Everything handed to transfer() has been written to the slave and
-	 * is the slave's problem, so the application's view of the hardware
-	 * pointer is simply how much it has given us.
+	 * What the hardware has actually PLAYED, not what we have handed on.
+	 * Frames written to the slave are still sitting in its buffer, and
+	 * reporting them as played overstates progress by a whole buffer:
+	 * the application believes it is further behind than it is, and
+	 * anything synchronising to the audio clock drifts by that much.
+	 * snd_pcm_delay() is how much is still queued ahead of the last
+	 * frame we wrote.
 	 */
-	return (snd_pcm_sframes_t)(r->transferred % io->buffer_size);
+	snd_pcm_sframes_t delay = 0;
+
+	if (!r->slave || snd_pcm_delay(r->slave, &delay) < 0 || delay < 0)
+		delay = 0;
+	if ((snd_pcm_uframes_t)delay > r->transferred)
+		delay = (snd_pcm_sframes_t)r->transferred;
+	return (snd_pcm_sframes_t)((r->transferred - (snd_pcm_uframes_t)delay)
+				   % io->buffer_size);
 }
 
 static snd_pcm_sframes_t route_transfer(snd_pcm_ioplug_t *io,
