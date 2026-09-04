@@ -4099,3 +4099,37 @@ needs `lv_area_is_in(area, &obj->coords, 0)` and `lv_obj_set_pos(obj, 0, 0)`
 positions relative to the parent's CONTENT area. If the screen has any
 padding the cover can never fire. Do not re-attempt the design until that one
 value is known.
+
+### The frozen backdrop: third attempt, and the exact reason it fails
+
+Geometry was the hypothesis and it is WRONG. Logged at drag start:
+
+    drag_bg 0,0..799,479  screen 0,0..799,479  pad l=0 t=0  disp 800x480  opa=255
+
+The cover exactly matches the screen, the screen has no padding, and image
+opacity is 255. Every geometric and opacity criterion in
+`lv_refr_get_top_obj()` and `lv_image`'s COVER_CHECK is satisfied.
+
+It still loses, and the LVGL profiler says why - **the skip never fires:**
+
+| | EVENT_DRAW_MAIN per frame | per draw |
+|---|---|---|
+| baseline | 23.9 | 1213 us |
+| with the backdrop | 27.8 | 1773 us |
+
+The draw count goes UP by the extra object, and every draw gets slower. So
+LVGL is drawing the whole window stack AND a full-screen image on top of it.
+
+**What is left to check, and it is the last thing:** the source is set with
+`lv_image_set_src(drag_bg, &drag_bg_buf)` where `drag_bg_buf` is an
+`lv_draw_buf_t`. `lv_image`'s cover check rejects on
+`img->src_type == LV_IMAGE_SRC_UNKNOWN` and on
+`lv_color_format_has_alpha(img->cf)`, both of which depend on how the source
+was decoded, not on the geometry. The ghost proves draw_buf sources render
+correctly - but rendering correctly and reporting COVER are different code
+paths. Print `img->src_type` and `img->cf` for `drag_bg`, or pass a proper
+`lv_image_dsc_t` instead, before touching anything else.
+
+Three hypotheses are now eliminated with numbers: the allocation (it was
+failing silently, fixed), the geometry (perfect, logged above), and "the skip
+fires but the blit is dearer than the redraw" (it does not fire at all).
