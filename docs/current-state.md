@@ -835,6 +835,79 @@ Task #21 stays open, but its target is now **2.1 ms, not 3.2 or 10**, and the
 next question is how much of that is the card rather than us - the switch work
 just proved that a large slice was us.
 
+### Task #21 closed: buffered reads are memory-bound, not SD-bound (2026-09-04)
+
+The remaining gap was never the card. A cold buffered read of a file runs at
+~9.5-12.5 MB/s while O_DIRECT sustains 32-38 MB/s, and **the difference is
+`copy_to_user`**, not I/O.
+
+Decisive measurement, 1.5 MiB file (small enough to certainly fit in the page
+cache), three repeats, verifying from `/sys/block/mmcblk0/stat` that the warm
+pass reads **zero sectors**:
+
+    WARM (0 sectors, copy only)   0.110 s   13.6 MB/s
+    COLD - WARM  = the SD part    0.047 s   32   MB/s   <- matches O_DIRECT
+    COLD total                    0.157 s    9.6 MB/s
+
+So the copy costs **2.4x the SD read**. That is the whole story, and it
+explains every negative result in the sweep that led here: readahead 128 / 256 /
+512 / 1024, `max_sectors_kb` 64 / 128 / 256, `dd bs=` 4k / 64k / 1M, and 1 / 2 /
+4 concurrent streams ALL land at 12-14 MB/s with the device only 37-46% busy.
+Four streams is *worse* than one, which is the known write-combine behaviour -
+memory bandwidth is the contended resource, not the card.
+
+**A measurement trap that cost an hour and a wrong conclusion.** Field 4 of
+`/sys/block/*/stat` ("ms spent reading") accumulates per request, so with
+several in flight it sums past wall-clock. O_DIRECT is depth-1 and its ms/io is
+true service time; the buffered path is deeply queued and its ms/io is not
+comparable. Reading the two side by side "showed" a 2x per-request penalty in
+the page-cache path that does not exist. The tell was that the identical
+request size (221.4 KB) reported 13.3 ms/io at readahead 512 and 16.3 at 1024
+**while wall-clock improved**. Compare wall-clock, or compare at equal queue
+depth; never compare ms/io across paths.
+
+A second trap in the same session: an 8 MiB file against ~4 MiB of MemAvailable
+is not warm on the second pass. It read cold both times and made the copy look
+like 100% of the cost rather than 70%. Size the file to fit and check that the
+sector delta is zero.
+
+**Consequences, and they are general - this is not an SD fact:**
+
+- `read()` on this board is capped at ~13.6 MB/s by PSRAM bandwidth regardless
+  of where the data comes from. Storage is not the ceiling; the copy is.
+- **`mmap()` does not pay it.** A file-backed fault inserts the page-cache page
+  into the process page tables with no copy, so demand paging runs at SD speed
+  (2.49 ms + size/48 MB/s), not at 13.6 MB/s. Prefer mmap over read for
+  anything sized in megabytes in code we control.
+- Per-request SD cost fits `t = 2.49 ms + size / 48 MB/s` across 4k, 64k, 192k,
+  256k and 512k, every point within 1.5%.
+- Swap-in from the SD swapfile measures **1.18 MB/s, ~3.3 ms/page** (swapbench,
+  12 MB read back in 10.20 s). Note swapbench's own warning: this kernel has
+  CONFIG_VM_EVENT_COUNTERS off, so its "0 pages swapped in" line is the counter
+  lying, not the swap. `SwapFree` moved 63,952 -> 51,224 kB.
+
+### zram re-examined and still rejected (2026-09-04)
+
+Re-opened because SD per-request cost fell 41%. It does not change the answer,
+and one argument for it was simply wrong:
+
+- **"zram is nearly free because the CPU is 94% idle" is false.** Compression
+  and decompression are memory-bandwidth bound, and memory bandwidth is now
+  measured as the scarcest resource on this board (13.6 MB/s). zram spends
+  exactly the thing there is least of.
+- The residency argument in `etc/s31-swap.conf` stands unchanged: the pool cost
+  2.8-3.2 MB of a 15.4 MB machine and drove clients non-resident (xcalc at
+  16 kB), which *is* the thrash failure mode.
+- **Decisive for a library-heavy workload:** zram only holds ANONYMOUS pages.
+  Text is file-backed, never swapped - under pressure it is dropped and re-read
+  from SD. zram cannot help it, and shrinks the page cache that holds it. For
+  Qt it is strictly counterproductive.
+
+What genuinely changed in its favour is that SD swap-in is dire (1.18 MB/s). So
+if a real Qt app turns out to carry a large anonymous heap, re-measure with a
+*small* pool (8-12 MB, not 24) - on anon evidence, not on principle.
+`ZRAM_MB=0` stands.
+
 ## PPA (Pixel Processing Accelerator)
 
 Working under Linux as of 2026-08-21: `drivers/gpu/drm/espressif/esp32s31-ppa.c`,
