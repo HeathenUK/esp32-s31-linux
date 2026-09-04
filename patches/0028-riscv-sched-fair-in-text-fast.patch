@@ -28,7 +28,7 @@ Regenerate with:
 
 --- a/arch/riscv/kernel/vmlinux-xip.lds.S
 +++ b/arch/riscv/kernel/vmlinux-xip.lds.S
-@@ -94,18 +94,102 @@
+@@ -94,18 +94,101 @@
   * read .text. The file size on disk is mostly symbols, relocations and debug
   * info - vmscan.o is 39,160 bytes on disk and 11,002 bytes of code.
   *
@@ -96,9 +96,27 @@ Regenerate with:
 + * anything has been written there. Same class of self-reference as
 + * arch_sync_dma_for_device above: code that implements the mechanism cannot
 + * live in what the mechanism moves.
-  */
++ */
 +#define S31_FAST_INPUT	*drivers/input/input.o *drivers/input/evdev.o
 +
++/*
++ * pick_next_task_fair is on EVERY context switch and was the last piece of the
++ * switch path still in flash: sched/core.o was moved long ago, so schedule()
++ * and __schedule() already ran from RAM while the task PICKER did not. 23 kB
++ * of text, and worth it. Six settled runs per arm, 3000 iterations each,
++ * switchbench arm C (sched_yield between two runnable tasks, which isolates
++ * the switch with no wakeup and no pipe in the way):
++ *
++ *     in flash  272 294 265 293 295 264 us   mean 280.7
++ *     in RAM    161 157 156 163 156 152 us   mean 157.5
++ *
++ * The ranges do not overlap - the worst run in RAM beats the best run in flash
++ * by 100 us. 1.78x on the most frequent operation on a one-core machine.
++ *
++ * The comment CANNOT live inside the #define below: a block comment breaks the
++ * backslash continuation and the linker script fails with a syntax error at
++ * the line the macro expands to, which is nowhere near this file.
+  */
  #define S31_FAST_OBJS	*hrtimer.o *timer.o *tick-sched.o *tick-common.o \
  			*timekeeping.o *clockevents.o \
 +			*riscv/kernel/traps.o *riscv/kernel/irq.o *riscv/mm/fault.o \
@@ -111,31 +129,12 @@ Regenerate with:
  			*mmc/core/block.o *mmc/core/core.o \
 -			*sched/core.o *sched/build_utility.o
 +			*sched/core.o *sched/build_utility.o \
-+			/*
-+			 * pick_next_task_fair is on EVERY context switch and
-+			 * was the last piece of the switch path still in
-+			 * flash. sched/core.o was moved long ago, so schedule()
-+			 * and __schedule() already ran from RAM while the task
-+			 * PICKER did not. 23 kB of text, and it is worth it:
-+			 * six settled runs per arm, 3000 iterations each,
-+			 * measured with switchbench arm C (sched_yield between
-+			 * two runnable tasks, which isolates the switch with
-+			 * no wakeup and no pipe in the way) -
-+			 *
-+			 *   in flash  272 294 265 293 295 264 us  mean 280.7
-+			 *   in RAM    161 157 156 163 156 152 us  mean 157.5
-+			 *
-+			 * The ranges do not overlap: the worst run with it in
-+			 * RAM beats the best run with it in flash by 100 us.
-+			 * 1.78x on the single most frequent operation on a
-+			 * one-core machine.
-+			 */
 +			*sched/fair.o \
 +			S31_FAST_INPUT
  
  /*
   * SCHED_TEXT has to be excluded too, or the relocation silently half-works.
-@@ -125,6 +209,28 @@
+@@ -125,6 +208,28 @@
  		*(EXCLUDE_FILE(S31_FAST_OBJS) .sched.text)		\
  		__sched_text_end = .;
  
@@ -164,7 +163,7 @@ Regenerate with:
  #undef TEXT_TEXT
  #define TEXT_TEXT							\
  		ALIGN_FUNCTION();					\
-@@ -192,9 +298,23 @@
+@@ -192,9 +297,23 @@
  	 */
  	. = ALIGN(16);
  	__text_fast_start = .;

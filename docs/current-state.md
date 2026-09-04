@@ -4361,3 +4361,54 @@ The coprocessor hook is ~25 us of it. `__switch_to` itself is assembly in
 `entry.S`, which compiles to `.irqentry.text` and so was never covered by the
 `.text..fast` mechanism at all; it sits just below `_etext` in flash. That is
 the next candidate, and it is small.
+
+### What the 2.6x switch actually buys, measured
+
+Two changes took a context switch from 280.7 us to 107.8 us (six settled runs:
+108.6 / 106.7 / 106.2 / 106.2 / 104.4 / 114.7):
+
+| change | switch | patch |
+|---|---|---|
+| baseline | 280.7 us | |
+| pick_next_task_fair into RAM | 157.5 us | 0028 |
+| PIE/HWLoop hook off by default | **107.8 us** | 0029 |
+
+**Do not read 2.6x as 2.6x of anything a user sees.** Measured on real work
+with the fast kernel:
+
+| | fast kernel | recorded baseline |
+|---|---|---|
+| process spawn (fork+exec, static busybox) | 27 ms | 29.4 ms |
+| SD read, 8 MB in 4k requests | 12.8-13.2 MB/s | 12.6 MB/s |
+| five-stage shell pipeline | 167 ms | not recorded |
+| input lag with a client | 18 ms avg | 22 ms avg |
+
+Spawn moved ~8% and SD barely at all, because neither is switch-bound: spawn
+is dominated by exec, ELF loading and page faults off the card, and SD by DMA.
+
+**The honest way to state the win is as reclaimed core, not as a speed-up.**
+173 us saved per switch, against the measured switch rates:
+
+| load | switches/s | core reclaimed |
+|---|---|---|
+| desktop idle | 165 | ~2.9% |
+| during a window drag | 460 | ~8.0% |
+| busiest observed | 804 | ~14% |
+
+That is worth having on a one-core machine and it costs 23 kB of RAM, but it
+is headroom rather than a visible speed-up. Nothing on this board was
+switch-bound; the switch was simply far more expensive than it should be, and
+now it is less so.
+
+**Correctness after the hook change**, since that one trades a safety margin:
+md5sum identical 6/6 and again under concurrent load (the test that caught the
+earlier xesploop corruption), audio plays, bluetoothd/s31-bt/lvdesk all up, an
+X client launches through the shim.
+
+**Still open.** 107.8 us against 2-5 us on comparable hardware. What remains is
+no longer flash fetch - `switch_mm` (604 B) and `__switch_to` (~200 B) are the
+only switch-path code left in flash, under 1 kB between them, which cannot
+account for it. Attributing the rest needs ktime stamps inside `__switch_to`,
+and note that `__switch_to` lives in `.irqentry.text` with the trap entry,
+which must stay in flash because it has to work before the RAM copy runs -
+that is the likely reason the old "interrupt spine in RAM" arms never booted.
