@@ -4203,3 +4203,42 @@ before ~45 s will legitimately show NO-CARRIER.
 The counter-example on this board remains true and is why this was measured
 rather than assumed: backgrounding udev's coldplug STARVED this same script,
 because coldplug is CPU-bound. Association is not.
+
+### Hosted transport: the cost is real, the cheap fix is not (2026-09-04)
+
+The "~4 ms per hosted interrupt" figure was retracted because bluealsa
+confounded it. Re-measured now that bluealsa is gone, using CPU displacement
+against a sustained Wi-Fi download, with the idle arm repeated as a control:
+
+| state | cpubench | hosted irq/s |
+|---|---|---|
+| idle | 70.6 M/s | ~1 |
+| downloading | 40.5 M/s | 163 |
+| idle (control) | 70.5 M/s | ~1 |
+
+**A download costs 43% of the core.** That much is solid. What it does NOT
+show is how much belongs to the interrupt as opposed to the TCP stack, the
+socket copies and wget - which is precisely the confound that voided the old
+number, so it is not being repeated here. Isolating it needs an experiment
+that varies the interrupt rate at constant throughput.
+
+**The free version of that experiment exists in sysfs and is inert here.**
+`napi_defer_hard_irqs` and `gro_flush_timeout` on wlan0:
+
+| arm | cpubench | irq/s |
+|---|---|---|
+| 0 / 0 | 40.8 M/s | 162 |
+| 8 / 200 us | 31.0 M/s | 168 |
+| 32 / 1 ms | 34.0 M/s | 155 |
+| 0 / 0 (control) | 39.3 M/s | 164 |
+
+The interrupt rate does not move across a 32x change in the deferral, so the
+driver never takes the deferred-NAPI path; setting the knobs only adds timer
+work and costs 15-25%. Restored to 0/0.
+
+At 163 irq/s and ~680 KB/s the transport is already carrying ~4.2 KB per
+doorbell against a 1592-byte slot, i.e. ~2.6 slots per interrupt - it is
+partly batched already. Pushing that to the full 8-slot ring is a hart0
+firmware change plus a kernel change plus an ABI bump and a coordinated
+reflash, for a payoff that is unquantified because the attribution above is
+still open. **Do not start it until the attribution experiment is done.**
