@@ -262,9 +262,26 @@ a diagnostic kernel with `CONFIG_PROFILING=y` for `/proc/profile`.
 ## Standing constraints
 
 - **Memory is the binding constraint**, not CPU. 15.4 MB total, of which ~4.3 MB
-  is unreclaimable slab. X wants ~4.7 MB and each client costs the server
-  another 0.4-2 MB. Clients page out under a full desktop, and that is what
-  makes clicks and app launches slow.
+  is slab. X wants ~4.7 MB and each client costs the server another 0.4-2 MB.
+  Clients page out under a full desktop, and that is what makes clicks and app
+  launches slow.
+- **The slab is NOT a lever - do not propose reclaiming it.** Bottomed out
+  2026-09-04. `SReclaimable: 0` is an artefact of `CONFIG_SLUB_TINY`, which
+  omits the reclaimable accounting; without it the same board reports 900 kB of
+  5,192 reclaimable, so it was never "all unreclaimable". The breakdown has no
+  large item: the biggest cache is the device model itself (`kernfs_node`,
+  838 kB in 9,752 nodes), then ~1.9 MB spread across generic `kmalloc-*` that
+  cannot be attributed without tracing this kernel does not have. 300-500 kB is
+  recoverable at best, only by deleting functionality. `/proc/slabinfo` needs
+  `CONFIG_SLUB_DEBUG`, which depends on `!SLUB_TINY`, so `make linux SLABDIAG=1`
+  is the only way to look - and its total is not the shipping total. Full
+  reasoning in `docs/current-state.md`.
+- **`read()` is capped at ~13.6 MB/s by PSRAM copy bandwidth**, not by storage -
+  `copy_to_user` costs 2.4x the SD read itself, and readahead, `max_sectors_kb`,
+  the I/O scheduler and concurrency are all measured inert. `mmap()` does not
+  pay it. The SD per-request cost is `2.49 ms + size/48 MB/s` with a flat
+  ~2.0 ms hardware floor below 16 KiB, so **request size is the only lever**:
+  6 MB as 4 KiB faults is 3.4 s, as 256 KiB reads it is 0.18 s.
 - **Userspace binaries belong in XIP flash** - they then cost **zero RSS**
   (`/usr/bin/Xorg` maps 1,832 kB at Rss 0). Running the same binary from SD
   measured 4x worse. Kernel code is the opposite: it already runs from flash,
