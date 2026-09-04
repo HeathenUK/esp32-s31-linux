@@ -55,6 +55,36 @@
 #define S31_LCD_DMA_LINK_BASE          0x2F078C00U
 #define S31_LCD_DMA_LINK_SIZE          0x00001000U
 #define S31_HP_SHARED_END              0x2F079C00U
+
+/*
+ * OpenSBI's trap and ecall dispatch, executed from internal SRAM.
+ *
+ * OpenSBI is mapped in the flash XIP window and runs in place, so an isolated
+ * ecall refetches its trap path from 80 MHz flash. Measured: the same call is
+ * 1.8 us when a hundred run back to back and the path stays cached, and
+ * 16-18 us (worst 69) once per context switch when it does not.
+ *
+ * 16 KiB here, which is the only SRAM above every other reservation - 25,600
+ * bytes are free between S31_HP_SHARED_END and the top of HP SRAM at
+ * 0x2F080000, so this leaves 9,216 spare.
+ *
+ * It holds the dispatch (sbi_trap.o, sbi_ecall.o, esp32s31.o - 4,976 bytes,
+ * which alone took the context switch 157.5 -> 80.0 us), the trap ENTRY
+ * _trap_handler out of fw_base.S's flash-resident .entry, and the handlers a
+ * trap actually reaches: sbi_timer (Linux reprograms the timer by ecall on
+ * every exit from idle), sbi_ipi, sbi_scratch, and the BASE/TIME/VENDOR ecall
+ * handlers. sbi_hart.o and sbi_domain.o are deliberately left in flash - 11 KiB
+ * between them, and both are init-time, not per-trap.
+ *
+ * PSRAM was tried first, inside OpenSBI's own reserved 64 KiB at
+ * S31_OPENSBI_RW_BASE, and the board does not boot: the loader maps PSRAM for
+ * data, and hart1 cannot fetch instructions from it. Internal SRAM needs no
+ * mapping at all.
+ */
+#define S31_OPENSBI_FAST_BASE          0x2F079C00U
+#define S31_OPENSBI_FAST_SIZE          0x00004000U
+#define S31_OPENSBI_FAST_END           (S31_OPENSBI_FAST_BASE + \
+					S31_OPENSBI_FAST_SIZE)
 #define S31_LINUX_DMA_END              S31_HP_SHARED_END
 
 #if S31_AUDIO_DMA_BASE & 0xFFFU

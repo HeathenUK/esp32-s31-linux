@@ -1579,8 +1579,6 @@ CONFIG_BT_OSAL_USE_ESP_TIMER=y
 
 # default:
 CONFIG_BT_SMP_CRYPTO_STACK_TINYCRYPT=y
-# default:
-# CONFIG_BT_SMP_CRYPTO_STACK_MBEDTLS is not set
 
 #
 # BT Logs
@@ -1628,6 +1626,8 @@ CONFIG_BT_CTRL_TASK_STACK_SIZE=4096
 CONFIG_BT_DUAL_MODE_ARCH=y
 # default:
 CONFIG_BT_CTRL_BLE_ENABLE=y
+# default:
+CONFIG_BT_CTRL_BREDR_ENABLE=y
 
 #
 # Bluetooth controller HCI
@@ -1886,6 +1886,69 @@ CONFIG_BT_LE_DFT_TX_POWER_LEVEL_DBM_EFF=9
 # default:
 # CONFIG_BT_CTRL_LE_VS_CMD_EVT_ENABLED is not set
 # end of BLE Controller Options
+
+#
+# BR/EDR Controller Options
+#
+# default:
+CONFIG_BT_CTRL_BR_EDR_MAX_ACL_CONN=2
+# default:
+CONFIG_BT_CTRL_BR_EDR_ACL_LINK_ENABLE=y
+
+#
+# ACL Tx/Rx buffer number configurations
+#
+# default:
+CONFIG_BT_CTRL_BR_EDR_ACLU_TX_BUF_NB=4
+# default:
+CONFIG_BT_CTRL_BR_EDR_DYNAMIC_ACLU_TX_BUF_NB=0
+# default:
+CONFIG_BT_CTRL_BR_EDR_ACLU_RX_BUF_NB=6
+# end of ACL Tx/Rx buffer number configurations
+
+# default:
+CONFIG_BT_CTRL_BR_EDR_MAX_SYNC_CONN=0
+# default:
+# CONFIG_BT_CTRL_BR_EDR_TEST_MODE_EN is not set
+# default:
+# CONFIG_BT_CTRL_BR_EDR_APB_EN is not set
+# default:
+# CONFIG_BT_CTRL_BR_EDR_APB_EXT_EN is not set
+# default:
+# CONFIG_BT_CTRL_BR_EDR_CPB_TX_EN is not set
+# default:
+# CONFIG_BT_CTRL_BR_EDR_CPB_RX_EN is not set
+# default:
+# CONFIG_BT_CTRL_BR_EDR_HOLD_EN is not set
+# default:
+# CONFIG_BT_CTRL_BR_EDR_LK_STORE_EN is not set
+# default:
+# CONFIG_BT_CTRL_BR_EDR_DTM_EN is not set
+# default:
+# CONFIG_BT_CTRL_BR_EDR_TX_CCA_ENABLED is not set
+
+#
+# TX Power Level settings
+#
+# default:
+CONFIG_BT_CTRL_BR_EDR_TX_PWR_ACL_MIN=-13
+# default:
+CONFIG_BT_CTRL_BR_EDR_TX_PWR_ACL_MAX=4
+# default:
+CONFIG_BT_CTRL_BR_EDR_TX_PWR_PAGE=4
+# default:
+CONFIG_BT_CTRL_BR_EDR_TX_PWR_PSCAN=4
+# default:
+CONFIG_BT_CTRL_BR_EDR_TX_PWR_ISCAN=4
+# end of TX Power Level settings
+
+#
+# BR/EDR Vendor Specific HCI Commands and Events
+#
+# default:
+CONFIG_BT_CTRL_BR_EDR_LEGACY_AUTH_VENDOR_EVT=y
+# end of BR/EDR Vendor Specific HCI Commands and Events
+# end of BR/EDR Controller Options
 
 # default:
 CONFIG_BT_CTRL_MULTI_LINK_ENABLED=y
@@ -4435,6 +4498,8 @@ CONFIG_STACK_CHECK_NONE=y
 CONFIG_BTDM_CONTROLLER_MODE_BTDM=y
 # CONFIG_BT_NIMBLE_COEX_PHY_CODED_TX_RX_TLIM_EN is not set
 CONFIG_BT_NIMBLE_COEX_PHY_CODED_TX_RX_TLIM_DIS=y
+CONFIG_BTDM_CTRL_BR_EDR_MAX_ACL_CONN=2
+CONFIG_BTDM_CTRL_BR_EDR_MAX_SYNC_CONN=0
 CONFIG_SW_COEXIST_ENABLE=y
 CONFIG_ESP32_WIFI_SW_COEXIST_ENABLE=y
 CONFIG_ESP_WIFI_SW_COEXIST_ENABLE=y

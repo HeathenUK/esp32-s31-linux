@@ -91,6 +91,8 @@
 SOC_RESERVE_MEMORY_REGION(S31_AUDIO_DMA_BASE, LINUX_SRAM_START, linux_audio_dma);
 SOC_RESERVE_MEMORY_REGION(LINUX_SRAM_START, LINUX_SRAM_RING_END, hosted_ring);
 SOC_RESERVE_MEMORY_REGION(LINUX_DMA_START, LINUX_DMA_END, linux_devices);
+/* OpenSBI's dispatch runs from here; see S31_OPENSBI_FAST_BASE. */
+SOC_RESERVE_MEMORY_REGION(S31_OPENSBI_FAST_BASE, S31_OPENSBI_FAST_END, opensbi_fast);
 
 static const char *TAG = "boot";
 volatile uint32_t g_core1_fdt;

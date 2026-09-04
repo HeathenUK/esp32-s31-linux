@@ -1,0 +1,156 @@
+usb: dwc2: verify the bus before raising the root port back to high speed
+
+The adaptive root-port speed added in 03c43ac drops to full speed correctly,
+but the way back up was optimistic and flapped the port, which is what a user
+feels as "I plugged a slow device in next to a fast one and the keyboard went
+bad".
+
+_dwc2_hcd_endpoint_disable() fires on EVERY endpoint teardown - a driver
+unbinding, a device being reconfigured, an unrelated device being unplugged -
+and dwc2_speed_note_endpoint_gone() treated that as proof the bus was clear:
+it set split_devices = false and asked for high speed. With a full-speed
+keyboard still attached the port bounced up, tore down every device on the
+bus, took the keyboard's first URB, found it needed a split after all, and
+bounced straight back down. Each leg powers the port off for 200 ms and
+re-enumerates the whole tree.
+
+Reproduced deliberately on the board with an UNRELATED device - "echo 0 >
+1-1.3/authorized; echo 1 > 1-1.3/authorized" - while a full-speed hub, mouse
+and keyboard were attached:
+
+    [ 331.054] root port -> high speed (trying: nothing left that needs splits)
+    [ 331.280] usb 1-1: USB disconnect, device number 7
+    [ 331.281] usb 1-1.3: USB disconnect, device number 8
+    [ 331.511] usb 1-1.4: USB disconnect, device number 9
+    [ 332.992] device 0 needs split transactions: dropping to full speed
+    [ 332.994] root port -> full speed
+    [ 333.032] usb 1-1: USB disconnect, device number 10
+    [ 334.979] usb 1-1.4: new full-speed USB device number 17
+
+Two extra speed switches and four disconnects: ~4 s with no keyboard and no
+mouse, from an event that had nothing to do with the device needing splits.
+
+So ask the bus instead of guessing. Before raising the speed, walk the device
+tree and look for a device that is slower than high speed AND behind a hub -
+parent->parent is the root hub, so a full-speed device plugged straight into
+the root port has no grandparent and needs no split, the port simply runs at
+its speed. If one is found, decline and leave the port alone; declining costs
+nothing and disturbs no device.
+
+The walk takes a mutex, so it lives in the delayed work, which runs in process
+context holding neither hsotg->lock nor any device lock. It is also the
+cheapest place: dwc2_speed_note_endpoint_gone() already returns immediately
+unless the port is at full speed, ignores anything within 10 s of a switch,
+and mod_delayed_work() collapses a storm of teardowns into one run 3 s later.
+A bus with no slow devices on it never walks anything.
+
+The drop path is untouched - it fires from dwc2_hcd_qh_create() on the first
+URB for an endpoint that would need a split, once per endpoint, never per
+transfer.
+
+Verified on the board. The repro above now produces zero extra switches, and
+removal still upgrades: with both full-speed ports logically disabled the port
+went to high speed, and dropped back when they returned.
+
+    [   2.44] root port -> full speed   (full-speed devices present at boot)
+    [ 154.89] root port -> high speed   (both ports disabled, tree clear)
+    [ 156.28] root port -> full speed   (they came back)
+
+--- a/drivers/usb/dwc2/hcd.c
++++ b/drivers/usb/dwc2/hcd.c
+@@ -4895,6 +4895,57 @@
+  * comes back at the new speed - 12 Mbit/s with FSLSSupp set, in which
+  * case no device behind it needs a split any more.
+  */
++/*
++ * Is a device that needs split transactions still attached?
++ *
++ * "An endpoint went away" is NOT the same question, and answering the wrong
++ * one cost four seconds of dead keyboard per event. _dwc2_hcd_endpoint_disable
++ * fires for every teardown - a driver unbinding, a device being reconfigured,
++ * an unrelated device being unplugged - so clearing split_devices there
++ * declared the bus clear while a full-speed keyboard was still sitting on it.
++ * The port then bounced to high speed, tore down every device on the bus, took
++ * the keyboard's first URB, found it needed a split again, and bounced back.
++ * Reproduced deliberately with "echo 0 > authorized" on the mouse: two extra
++ * speed switches and three disconnects, ~4 s with no input devices at all.
++ *
++ * So ask the bus instead of guessing. A device needs splits when it is slower
++ * than high speed AND sits behind a hub - parent->parent is the root hub, so a
++ * full-speed device plugged straight into the root port has no grandparent and
++ * needs no split, the port simply runs at its speed.
++ */
++struct dwc2_split_scan {
++	struct usb_bus *bus;
++	bool found;
++};
++
++static int dwc2_scan_one_device(struct usb_device *udev, void *data)
++{
++	struct dwc2_split_scan *scan = data;
++
++	if (udev->bus == scan->bus && udev->speed < USB_SPEED_HIGH &&
++	    udev->parent && udev->parent->parent)
++		scan->found = true;
++
++	return 0;
++}
++
++static bool dwc2_split_device_present(struct dwc2_hsotg *hsotg)
++{
++	struct dwc2_split_scan scan = {
++		.bus = &dwc2_hsotg_to_hcd(hsotg)->self,
++		.found = false,
++	};
++
++	/*
++	 * Walks the USB device tree under a mutex, so this may only be called
++	 * from the delayed work - process context, holding neither hsotg->lock
++	 * nor any device lock.
++	 */
++	usb_for_each_dev(&scan, dwc2_scan_one_device);
++
++	return scan.found;
++}
++
+ static void dwc2_speed_switch_work(struct work_struct *work)
+ {
+ 	struct dwc2_hsotg *hsotg = container_of(to_delayed_work(work),
+@@ -4905,6 +4956,19 @@
+ 
+ 	if (hsotg->params.speed == speed)
+ 		return;
++
++	/*
++	 * Going back up is only safe once nothing on the bus needs a split.
++	 * Declining costs nothing: the port stays where it is and no device
++	 * is disturbed.
++	 */
++	if (speed != DWC2_SPEED_PARAM_FULL && dwc2_split_device_present(hsotg)) {
++		hsotg->split_devices = true;
++		dev_dbg(hsotg->dev,
++			"staying at full speed: a device behind the hub still needs splits\n");
++		return;
++	}
++
+ 	dev_info(hsotg->dev, "root port -> %s speed%s\n",
+ 		 speed == DWC2_SPEED_PARAM_FULL ? "full" : "high",
+ 		 speed == DWC2_SPEED_PARAM_FULL ?
+@@ -4945,10 +5009,13 @@
+ }
+ 
+ /*
+- * An endpoint went away. If the port is at full speed only because of a
+- * device that needed splits, that device may be the one that left: try
+- * high speed again, debounced. The switch itself tears every endpoint
+- * down, so ignore the storm it causes.
++ * An endpoint went away. That device MAY have been the one that needed
++ * splits, so this is a hint to reconsider - not a statement that the bus is
++ * clear. dwc2_speed_switch_work re-checks the actual device tree before it
++ * touches the port, because acting on the hint alone flapped the port and
++ * killed input for seconds at a time.
++ *
++ * The switch itself tears every endpoint down, so ignore the storm it causes.
+  */
+ void dwc2_speed_note_endpoint_gone(struct dwc2_hsotg *hsotg)
+ {
