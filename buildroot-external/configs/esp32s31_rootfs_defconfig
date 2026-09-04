@@ -75,6 +75,11 @@ BR2_PACKAGE_MEMTESTER=y
 BR2_PACKAGE_TCPDUMP=y
 BR2_PACKAGE_DTC=y
 BR2_PACKAGE_COREMARK=y
+# An off-the-shelf MP3 player. The desktop switches audio outputs by
+# rewriting pcm.!default, so an unmodified ALSA application follows the
+# selected sink with no knowledge of Bluetooth at all - which is the whole
+# point of routing through the loopback rather than teaching apps about it.
+BR2_PACKAGE_MPG123=y
 BR2_PACKAGE_ALSA_UTILS=y
 BR2_PACKAGE_ALSA_UTILS_ALSACTL=y
 BR2_PACKAGE_ALSA_UTILS_ALSAMIXER=y

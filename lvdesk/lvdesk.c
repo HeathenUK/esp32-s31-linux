@@ -5491,25 +5491,31 @@ static void vol_live_cb(lv_event_t *e)
  */
 static void audio_route_read(void)
 {
-	char line[160];
-	FILE *f = fopen("/etc/asound.conf", "r");
+	char line[64];
+	FILE *f = fopen("/run/s31-sink", "r");
 
 	if (!f)
 		return;
-	while (fgets(line, sizeof(line), f))
-		if (strstr(line, "pcm.!default") && strstr(line, "hw:1,0"))
-			audio_out_bt = 1;
+	if (fgets(line, sizeof(line), f) && strstr(line, "hw:1,0"))
+		audio_out_bt = 1;
 	fclose(f);
 }
 
+/*
+ * Name the sink, do not rewrite the ALSA configuration.
+ *
+ * Rewriting asound.conf only moved an application on its NEXT open, because
+ * alsa-lib binds a stream to a device when it opens it. The s31route plugin
+ * reads this file instead and reopens the device underneath a running
+ * application, so an unmodified aplay or mpg123 follows the switch mid-track.
+ */
 static void audio_route_write(int bt)
 {
-	FILE *f = fopen("/etc/asound.conf", "w");
+	FILE *f = fopen("/run/s31-sink", "w");
 
 	if (!f)
 		return;
-	fprintf(f, "pcm.!default { type plug slave.pcm \"hw:%d,0\" }\n"
-		   "ctl.!default { type hw card 0 }\n", bt ? 1 : 0);
+	fprintf(f, "%s\n", bt ? "hw:1,0" : "hw:0,0");
 	fclose(f);
 }
 
