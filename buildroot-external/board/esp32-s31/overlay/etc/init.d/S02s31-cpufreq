@@ -1,0 +1,34 @@
+#!/bin/sh
+#
+# Pin the CPU governor.
+#
+# ondemand is the kernel default and nothing else sets one. It is close to
+# inert for throughput here - cpubench measures ~70 M/s under either governor,
+# because hart0's power manager owns the real clock and Linux only moves its
+# floor - but it is NOT inert for latency. Measured, three runs per arm with
+# the first arm repeated as a control:
+#
+#   ondemand      ctxbench 1299 / 1290 / 1272 us   (spread 27 us)
+#   performance   ctxbench 1219.72 / 1219.61 / 1219.59 us  (spread 0.13 us)
+#   ondemand      ctxbench 1285 / 1270 / 1288 us   (control reproduces)
+#
+# 5% off the mean, and essentially all of the jitter. On a board where a
+# context switch is the largest unexplained cost and the desktop pays it
+# 165 times a second at idle, the jitter matters more than the mean.
+#
+# It also removes a second risk: OpenSBI hardcodes the CLINT timebase at
+# 320 MHz and the DTS agrees, while the clocksource was deliberately moved to
+# the XTAL to be independent of CPU frequency. Whether mtime scales with
+# CPU_CLK is unresolved; pinning the frequency makes the question moot.
+
+case "$1" in
+  start)
+	printf "Pinning CPU governor: "
+	for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+		[ -w "$g" ] && echo performance > "$g" 2>/dev/null
+	done
+	echo "$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null)"
+	;;
+  stop)
+	;;
+esac

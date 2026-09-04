@@ -4051,3 +4051,51 @@ the pattern to follow.
 Do NOT disable the coprocessor hook in a shipped build: it is a measurement
 aid, and a task that actually uses PIE or hardware loops would see another
 task's state. It also costs only 8%.
+
+### Execution pass, 2026-09-04 (governor shipped, two levers withdrawn)
+
+**SHIPPED: governor pinned to `performance`** (`S02s31-cpufreq`). Three runs
+per arm, first arm repeated as a control:
+
+| governor | ctxbench | spread |
+|---|---|---|
+| ondemand | 1299 / 1290 / 1272 us | 27 us |
+| performance | 1219.72 / 1219.61 / 1219.59 us | **0.13 us** |
+| ondemand (control) | 1285 / 1270 / 1288 us | 18 us |
+
+5% off the mean and essentially all of the jitter. Throughput is unchanged
+(cpubench ~70 M/s either way) because hart0 owns the real clock and Linux
+only moves its PM floor - so this is a latency fix, not a throughput one.
+Note `scaling_cur_freq` reads 80000 under ondemand and 320000 under
+performance while cpubench does not move: do not read that file as truth.
+
+**WITHDRAWN: "cut idle wakeups".** Measured, it does not serve
+responsiveness. Idle context switches attribute as: touch poll 100 of 154/s
+(`idle_poll_ms` 60 -> 500 takes ctxt 154 -> 54/s, i2c 43 -> 5/s, cpubench
+70.5 -> 73.2, control reproduces exactly). But those wakeups happen only when
+the machine is otherwise idle, and the price of removing them is first-touch
+latency. **Interrupt-driven touch is impossible on this board**: Espressif's
+own BSP marks the GT1158's INT and RESET lines `GPIO_NUM_NC`, and the DTS
+node has no interrupt property. Polling is a hardware-imposed floor.
+
+During an actual drag the switches are 804/s and attribute to lvdesk (130/s,
+its own input loop), the touch kworker (79/s) and ksoftirqd (60/s) - that is
+mostly necessary work. There is no large free win here.
+
+**WITHDRAWN, SECOND ATTEMPT: the frozen drag backdrop.** The earlier note
+said `lv_snapshot_take_to_draw_buf()` does not exist in this LVGL. **That was
+wrong** - it is at `lvgl/src/draw/snapshot/lv_snapshot.h:68`; the earlier grep
+used a path that does not exist. Rebuilt properly with the pixels from
+`malloc` (768 kB, outside the 512 kB LVGL pool) wrapped by
+`lv_draw_buf_init()`. The backdrop is now genuinely created - and the drag got
+**worse again: 58.6 and 52.8 ms per frame against the 33 ms baseline**.
+
+Signature of both attempts is the same: strictly more work, which is what
+happens when the full-screen image is drawn but `lv_refr_get_top_obj()` does
+NOT select it, so the windows beneath are drawn as well. **The next
+diagnostic is one printf, not another design**: log `drag_bg`'s coords against
+the display size and the screen's padding, because `lv_image`'s cover check
+needs `lv_area_is_in(area, &obj->coords, 0)` and `lv_obj_set_pos(obj, 0, 0)`
+positions relative to the parent's CONTENT area. If the screen has any
+padding the cover can never fire. Do not re-attempt the design until that one
+value is known.
