@@ -3701,3 +3701,42 @@ our driver needed and was missing - kept in the record, not in the tree.
   USB_HS=1` plus `*dwc2/{hcd_intr,core_intr,hcd,hcd_queue}.o` in
   `S31_FAST_OBJS`.
 - Shipped: full speed, SOF off, 0 USB interrupts idle.
+
+## Adaptive USB root-port speed: high speed when nothing needs splits (2026-09-04)
+
+The 37% was the price of running full/low-speed devices through a
+high-speed hub. So the port now picks the speed from the topology
+(`patches/0026`, cumulative dwc2 state):
+
+- Start at high speed with descriptor DMA. A high-speed hub, and any
+  high-speed devices behind it, then cost nothing at idle (SOF off).
+- The first queue head that needs a split transaction - the trigger dwc2
+  already computes for a full/low-speed device behind a high-speed hub -
+  is refused, and the port is dropped to full speed: `HCFG.FSLSSupp` set,
+  port power bounced for 200 ms, the USB core tears the tree down and the
+  hub comes back at 12 Mbit/s, where nothing needs a split. This is the
+  shipped full-speed state of yesterday, reached only when needed.
+- When an endpoint is disabled by a real disconnect, the port tries high
+  speed again 3 s later (the switch's own teardown is ignored for 10 s).
+  If something still needs splits it drops straight back.
+- `dwc2.host_full_speed=Y` pins full speed as before; `dwc2.auto_speed=0`
+  disables the switching. Descriptor DMA stays on from init in adaptive
+  mode (`dma_desc_fs_enable` only with the pin).
+
+Measured, clean boot, Genesys hub with the Logitech and 8BitDo receivers:
+
+    1.79 s  hub at 480 Mbit/s            2.87 s  "device 0 needs split
+    2.90 s  root port -> full speed               transactions: dropping"
+    3.75 s  hub back at 12 Mbit/s        7.14 s  both receivers up
+    8.18 s  first rcS script (8.27 yesterday)   17.8 s lvdesk (19.8)
+
+    steady state: SOF off, 0 USB irq/s, cpubench 69-71 M/s, 5 inputs
+
+The retry path, exercised through `authorized=0` on both receivers (the
+same `usb_disable_device` path a physical unplug takes; a driver unbind
+does NOT reach the HCD's endpoint-disable hook, and this kernel has no
+per-port sysfs control): retry to high speed 3 s later, receivers
+re-enumerate at high speed, split refused, drop back, both receivers
+and the desktop's mouse and keyboard back within 7 s of the trigger,
+0 irq/s after. A bus with only high-speed devices would stay high-speed
+- untested only for lack of such a device.

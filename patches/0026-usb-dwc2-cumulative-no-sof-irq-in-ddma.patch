@@ -1,4 +1,4 @@
-usb: dwc2: no start-of-frame interrupt in descriptor-DMA mode (cumulative)
+usb: dwc2: no SOF interrupt in descriptor-DMA mode; adaptive root-port speed (cumulative)
 
 Cumulative diff from the 6.12 BSP baseline (the linux-esp32-s31 submodule)
 to the current 7.1 state of drivers/usb/dwc2, in the same form as 0023-0025.
@@ -23,6 +23,18 @@ control and interrupt-IN transfers unaffected (HID rebind clean, 413 input
 events at 4 ms average lag), and cpubench 66.3-67.3 -> 70.3-71.0 M/s,
 about 6% of the core. The enable is now gated on a module parameter,
 sof_irq (default off), so the old behaviour is one boot argument away.
+
+Adaptive root-port speed (2026-09-04): the port starts at high speed with
+descriptor DMA. The first queue head that needs split transactions (a
+full/low-speed device behind a high-speed hub - which this core cannot
+carry in descriptor mode, see patches/0027) is refused and the port is
+dropped to full speed: FSLSSupp set, port power bounced for 200 ms, the
+bus re-enumerates as plain full speed. When an endpoint later goes away
+the port tries high speed again after 3 s (ignoring the storm the switch
+itself causes for 10 s). host_full_speed=Y pins full speed as before;
+auto_speed=0 disables the switching. Measured on the first boot: hub at
+high speed at 1.8 s, drop at 2.9 s, both receivers up at 7.1 s, rcS at
+8.2 s - no boot-time cost against the pinned build.
 
 --- a/drivers/usb/dwc2/core.c
 +++ b/drivers/usb/dwc2/core.c
@@ -70,7 +82,20 @@ sof_irq (default off), so the old behaviour is one boot argument away.
  #if IS_ENABLED(CONFIG_USB_DWC2_HOST) || IS_ENABLED(CONFIG_USB_DWC2_DUAL_ROLE)
  	union dwc2_hcd_internal_flags {
  		u32 d32;
-@@ -1421,7 +1426,7 @@
+@@ -1156,6 +1161,12 @@
+ 	u16 periodic_qh_count;
+ 	bool new_connection;
+ 
++	/* ESP32-S31 port: adaptive root-port speed, dwc2_speed_switch_work() */
++	struct delayed_work speed_work;
++	int speed_target;
++	unsigned long speed_switched;	/* jiffies of the last switch */
++	bool split_devices;		/* something behind the hub needs splits */
++
+ 	u16 last_frame_num;
+ 
+ #ifdef CONFIG_USB_DWC2_TRACK_MISSED_SOFS
+@@ -1421,7 +1432,7 @@
  #define dwc2_is_device_connected(hsotg) (hsotg->connected)
  #define dwc2_is_device_enabled(hsotg) (hsotg->enabled)
  int dwc2_backup_device_registers(struct dwc2_hsotg *hsotg);
@@ -79,7 +104,7 @@ sof_irq (default off), so the old behaviour is one boot argument away.
  int dwc2_gadget_enter_hibernation(struct dwc2_hsotg *hsotg);
  int dwc2_gadget_exit_hibernation(struct dwc2_hsotg *hsotg,
  				 int rem_wakeup, int reset);
-@@ -1436,6 +1441,9 @@
+@@ -1436,6 +1447,9 @@
  int dwc2_hsotg_tx_fifo_average_depth(struct dwc2_hsotg *hsotg);
  void dwc2_gadget_init_lpm(struct dwc2_hsotg *hsotg);
  void dwc2_gadget_program_ref_clk(struct dwc2_hsotg *hsotg);
@@ -89,7 +114,7 @@ sof_irq (default off), so the old behaviour is one boot argument away.
  static inline void dwc2_clear_fifo_map(struct dwc2_hsotg *hsotg)
  { hsotg->fifo_map = 0; }
  #else
-@@ -1460,7 +1468,7 @@
+@@ -1460,7 +1474,7 @@
  static inline int dwc2_backup_device_registers(struct dwc2_hsotg *hsotg)
  { return 0; }
  static inline int dwc2_restore_device_registers(struct dwc2_hsotg *hsotg,
@@ -98,7 +123,7 @@ sof_irq (default off), so the old behaviour is one boot argument away.
  { return 0; }
  static inline int dwc2_gadget_enter_hibernation(struct dwc2_hsotg *hsotg)
  { return 0; }
-@@ -1483,6 +1491,11 @@
+@@ -1483,6 +1497,11 @@
  { return 0; }
  static inline void dwc2_gadget_init_lpm(struct dwc2_hsotg *hsotg) {}
  static inline void dwc2_gadget_program_ref_clk(struct dwc2_hsotg *hsotg) {}
@@ -110,7 +135,7 @@ sof_irq (default off), so the old behaviour is one boot argument away.
  static inline void dwc2_clear_fifo_map(struct dwc2_hsotg *hsotg) {}
  #endif
  
-@@ -1506,6 +1519,8 @@
+@@ -1506,6 +1525,8 @@
  void dwc2_host_enter_clock_gating(struct dwc2_hsotg *hsotg);
  void dwc2_host_exit_clock_gating(struct dwc2_hsotg *hsotg, int rem_wakeup);
  bool dwc2_host_can_poweroff_phy(struct dwc2_hsotg *dwc2);
@@ -119,7 +144,7 @@ sof_irq (default off), so the old behaviour is one boot argument away.
  static inline void dwc2_host_schedule_phy_reset(struct dwc2_hsotg *hsotg)
  { schedule_work(&hsotg->phy_reset_work); }
  #else
-@@ -1545,6 +1560,10 @@
+@@ -1545,6 +1566,10 @@
  					       int rem_wakeup) {}
  static inline bool dwc2_host_can_poweroff_phy(struct dwc2_hsotg *dwc2)
  { return false; }
@@ -498,7 +523,7 @@ sof_irq (default off), so the old behaviour is one boot argument away.
  	qh->ep_type = ep_type;
  	qh->ep_is_in = ep_is_in;
  
-@@ -1586,7 +1590,7 @@
+@@ -1586,12 +1590,31 @@
  		return NULL;
  
  	/* Allocate memory */
@@ -507,7 +532,31 @@ sof_irq (default off), so the old behaviour is one boot argument away.
  	if (!qh)
  		return NULL;
  
-@@ -1615,7 +1619,7 @@
+ 	dwc2_qh_init(hsotg, qh, urb, mem_flags);
+ 
++	if (qh->do_split && dwc2_auto_speed &&
++	    hsotg->params.speed != DWC2_SPEED_PARAM_FULL) {
++		/*
++		 * A full/low-speed device behind a high-speed hub. This core
++		 * cannot carry splits in descriptor mode and buffer mode costs
++		 * the 8 kHz SOF, so drop the whole root port to full speed
++		 * instead; the bus re-enumerates and this request is retried
++		 * by the USB core as a plain full-speed transfer.
++		 */
++		if (!hsotg->split_devices)
++			dev_info(hsotg->dev,
++				 "device %d needs split transactions: dropping the root port to full speed\n",
++				 dwc2_hcd_get_dev_addr(&urb->pipe_info));
++		hsotg->split_devices = true;
++		dwc2_speed_request(hsotg, DWC2_SPEED_PARAM_FULL);
++		dwc2_hcd_qh_free(hsotg, qh);
++		return NULL;
++	}
++
+ 	if (hsotg->params.dma_desc_enable &&
+ 	    dwc2_hcd_qh_init_ddma(hsotg, qh, mem_flags) < 0) {
+ 		dwc2_hcd_qh_free(hsotg, qh);
+@@ -1615,7 +1638,7 @@
  void dwc2_hcd_qh_free(struct dwc2_hsotg *hsotg, struct dwc2_qh *qh)
  {
  	/* Make sure any unreserve work is finished. */
@@ -516,7 +565,7 @@ sof_irq (default off), so the old behaviour is one boot argument away.
  		unsigned long flags;
  
  		spin_lock_irqsave(&hsotg->lock, flags);
-@@ -1687,7 +1691,17 @@
+@@ -1687,7 +1710,17 @@
  	status = dwc2_schedule_periodic(hsotg, qh);
  	if (status)
  		return status;
@@ -635,7 +684,89 @@ sof_irq (default off), so the old behaviour is one boot argument away.
  out:
  	spin_unlock_irqrestore(&hsotg->lock, flags);
  
-@@ -5188,7 +5187,7 @@
+@@ -4884,6 +4883,81 @@
+ 		"DWC OTG HCD EP DISABLE: bEndpointAddress=0x%02x, ep->hcpriv=%p\n",
+ 		ep->desc.bEndpointAddress, ep->hcpriv);
+ 	dwc2_hcd_endpoint_disable(hsotg, ep, 250);
++	dwc2_speed_note_endpoint_gone(hsotg);
++}
++
++/*
++ * Adaptive root-port speed (ESP32-S31 port, 2026-09-04). See params.c.
++ *
++ * Switching is a bus event: FSLSSupp can only take effect through a port
++ * reset, so the port is powered down for 200 ms and back up. The core
++ * reports a disconnect, the USB core tears the tree down, and the hub
++ * comes back at the new speed - 12 Mbit/s with FSLSSupp set, in which
++ * case no device behind it needs a split any more.
++ */
++static void dwc2_speed_switch_work(struct work_struct *work)
++{
++	struct dwc2_hsotg *hsotg = container_of(to_delayed_work(work),
++						struct dwc2_hsotg, speed_work);
++	int speed = hsotg->speed_target;
++	unsigned long flags;
++	u32 hcfg, hprt0;
++
++	if (hsotg->params.speed == speed)
++		return;
++	dev_info(hsotg->dev, "root port -> %s speed%s\n",
++		 speed == DWC2_SPEED_PARAM_FULL ? "full" : "high",
++		 speed == DWC2_SPEED_PARAM_FULL ?
++		 " (a device behind the hub needs split transactions)" :
++		 " (trying: nothing left that needs splits)");
++
++	spin_lock_irqsave(&hsotg->lock, flags);
++	hsotg->params.speed = speed;
++	hcfg = dwc2_readl(hsotg, HCFG);
++	if (speed == DWC2_SPEED_PARAM_FULL)
++		hcfg |= HCFG_FSLSSUPP;
++	else
++		hcfg &= ~HCFG_FSLSSUPP;
++	dwc2_writel(hsotg, hcfg, HCFG);
++	hsotg->speed_switched = jiffies;
++	hprt0 = dwc2_read_hprt0(hsotg);
++	hprt0 &= ~HPRT0_PWR;
++	dwc2_writel(hsotg, hprt0, HPRT0);
++	spin_unlock_irqrestore(&hsotg->lock, flags);
++
++	msleep(200);
++
++	spin_lock_irqsave(&hsotg->lock, flags);
++	hprt0 = dwc2_read_hprt0(hsotg);
++	hprt0 |= HPRT0_PWR;
++	dwc2_writel(hsotg, hprt0, HPRT0);
++	spin_unlock_irqrestore(&hsotg->lock, flags);
++}
++
++void dwc2_speed_request(struct dwc2_hsotg *hsotg, int speed)
++{
++	if (!dwc2_auto_speed || hsotg->params.speed == speed)
++		return;
++	hsotg->speed_target = speed;
++	/* down at once; up only after the bus has been quiet for a while */
++	mod_delayed_work(system_wq, &hsotg->speed_work,
++			 speed == DWC2_SPEED_PARAM_FULL ? 0 : 3 * HZ);
++}
++
++/*
++ * An endpoint went away. If the port is at full speed only because of a
++ * device that needed splits, that device may be the one that left: try
++ * high speed again, debounced. The switch itself tears every endpoint
++ * down, so ignore the storm it causes.
++ */
++void dwc2_speed_note_endpoint_gone(struct dwc2_hsotg *hsotg)
++{
++	if (!dwc2_auto_speed || hsotg->params.speed != DWC2_SPEED_PARAM_FULL)
++		return;
++	if (time_before(jiffies, hsotg->speed_switched + 10 * HZ))
++		return;
++	hsotg->split_devices = false;
++	dwc2_speed_request(hsotg, DWC2_SPEED_PARAM_HIGH);
+ }
+ 
+ /*
+@@ -5188,7 +5262,7 @@
  
  	cancel_work_sync(&hsotg->phy_reset_work);
  
@@ -644,7 +775,7 @@ sof_irq (default off), so the old behaviour is one boot argument away.
  }
  
  static void dwc2_hcd_release(struct dwc2_hsotg *hsotg)
-@@ -5356,7 +5355,7 @@
+@@ -5356,7 +5430,7 @@
  	memset(&hsotg->hc_ptr_array[0], 0, sizeof(hsotg->hc_ptr_array));
  
  	for (i = 0; i < num_channels; i++) {
@@ -653,7 +784,23 @@ sof_irq (default off), so the old behaviour is one boot argument away.
  		if (!channel)
  			goto error3;
  		channel->hc_num = i;
-@@ -5616,6 +5615,49 @@
+@@ -5367,6 +5441,7 @@
+ 	/* Initialize work */
+ 	INIT_DELAYED_WORK(&hsotg->start_work, dwc2_hcd_start_func);
+ 	INIT_DELAYED_WORK(&hsotg->reset_work, dwc2_hcd_reset_func);
++	INIT_DELAYED_WORK(&hsotg->speed_work, dwc2_speed_switch_work);
+ 	INIT_WORK(&hsotg->phy_reset_work, dwc2_hcd_phy_reset_func);
+ 	INIT_DELAYED_WORK(&hsotg->irq_reenable_work, dwc2_irq_reenable_work);
+ 
+@@ -5504,6 +5579,7 @@
+  */
+ void dwc2_hcd_remove(struct dwc2_hsotg *hsotg)
+ {
++	cancel_delayed_work_sync(&hsotg->speed_work);
+ 	struct usb_hcd *hcd;
+ 
+ 	dev_dbg(hsotg->dev, "DWC OTG HCD REMOVE\n");
+@@ -5616,6 +5692,49 @@
  	return 0;
  }
  
@@ -703,7 +850,7 @@ sof_irq (default off), so the old behaviour is one boot argument away.
  /**
   * dwc2_host_enter_hibernation() - Put controller in Hibernation.
   *
-@@ -5631,18 +5673,9 @@
+@@ -5631,18 +5750,9 @@
  	u32 gpwrdn;
  
  	dev_dbg(hsotg->dev, "Preparing host for hibernation\n");
@@ -724,7 +871,7 @@ sof_irq (default off), so the old behaviour is one boot argument away.
  
  	/* Enter USB Suspend Mode */
  	hprt0 = dwc2_readl(hsotg, HPRT0);
-@@ -5836,20 +5869,9 @@
+@@ -5836,20 +5946,9 @@
  	dwc2_writel(hsotg, 0xffffffff, GINTSTS);
  
  	/* Restore global registers */
@@ -747,7 +894,7 @@ sof_irq (default off), so the old behaviour is one boot argument away.
  
  	if (rem_wakeup) {
  		dwc2_hcd_rem_wakeup(hsotg);
-@@ -5916,19 +5938,9 @@
+@@ -5916,19 +6015,9 @@
  		dev_warn(hsotg->dev, "Suspend wasn't generated\n");
  
  	/* Backup all registers */
@@ -769,7 +916,7 @@ sof_irq (default off), so the old behaviour is one boot argument away.
  
  	/*
  	 * Clear any pending interrupts since dwc2 will not be able to
-@@ -5997,19 +6009,9 @@
+@@ -5997,19 +6086,9 @@
  
  	udelay(100);
  	if (restore) {
@@ -791,18 +938,52 @@ sof_irq (default off), so the old behaviour is one boot argument away.
  	}
  
  	/* Drive resume signaling and exit suspend mode on the port. */
+--- a/drivers/usb/dwc2/hcd.h
++++ b/drivers/usb/dwc2/hcd.h
+@@ -86,6 +86,10 @@
+  * host mode. It contains the data items needed to transfer packets to an
+  * endpoint via a host channel.
+  */
++extern bool dwc2_auto_speed;
++void dwc2_speed_request(struct dwc2_hsotg *hsotg, int speed);
++void dwc2_speed_note_endpoint_gone(struct dwc2_hsotg *hsotg);
++
+ struct dwc2_host_chan {
+ 	u8 hc_num;
+ 
 --- a/drivers/usb/dwc2/params.c
 +++ b/drivers/usb/dwc2/params.c
-@@ -76,10 +76,26 @@
+@@ -71,15 +71,45 @@
+  * audio.  Writable at runtime; unbind and rebind the platform driver to
+  * re-probe with the new value.
+  */
+-static bool host_full_speed = true;
++static bool host_full_speed;
+ module_param(host_full_speed, bool, 0644);
  MODULE_PARM_DESC(host_full_speed,
- 		 "Pin the host port to full speed so hubs avoid split transactions");
- 
+-		 "Pin the host port to full speed so hubs avoid split transactions");
++		 "Pin the host port to full speed (default: adaptive, see auto_speed)");
++
++/*
++ * Adaptive root-port speed (2026-09-04). Start at high speed with descriptor
++ * DMA: a high-speed hub and high-speed devices then cost nothing at idle.
++ * The moment a queue head needs split transactions - a full/low-speed
++ * device behind a high-speed hub, which this core cannot carry in
++ * descriptor mode and which costs ~37% of the core in buffer mode - the
++ * root port is dropped to full speed and the bus re-enumerates as plain
++ * full speed (what host_full_speed=Y gives permanently). When endpoints go
++ * away it tries high speed again. dwc2_speed_switch_work() in hcd.c.
++ */
++bool dwc2_auto_speed = true;
++module_param_named(auto_speed, dwc2_auto_speed, bool, 0644);
++MODULE_PARM_DESC(auto_speed, "drop the root port to full speed only when a device needs split transactions");
++
 +static bool desc_dma = true;
 +module_param(desc_dma, bool, 0644);
 +MODULE_PARM_DESC(desc_dma,
 +		 "use descriptor DMA for periodic transfers (default on); "
 +		 "off costs CPU but tests the cached-coherent-memory theory");
-+
+ 
  static void dwc2_set_esp32s31_params(struct dwc2_hsotg *hsotg)
  {
  	struct dwc2_core_params *p = &hsotg->params;
@@ -820,7 +1001,7 @@ sof_irq (default off), so the old behaviour is one boot argument away.
  	p->phy_type = DWC2_PHY_TYPE_PARAM_UTMI;
  	p->phy_utmi_width = 16;
  	p->host_dma = true;
-@@ -94,14 +110,52 @@
+@@ -94,14 +124,59 @@
  	 * by about 15x, taking the controller's cost with an idle keyboard
  	 * from ~7% of this core to under 1%.
  	 */
@@ -844,7 +1025,14 @@ sof_irq (default off), so the old behaviour is one boot argument away.
 +	 * rebuild per hypothesis.
 +	 */
 +	p->dma_desc_enable = desc_dma;
-+	p->dma_desc_fs_enable = desc_dma;
++	/*
++	 * dma_desc_fs_enable switches descriptor DMA off on every root-port
++	 * disable and back on only when a FULL-speed device enumerates at the
++	 * root. With the port pinned to full speed that is the shipped
++	 * behaviour; in adaptive mode the high-speed phase would be left in
++	 * buffer DMA with the 8 kHz SOF, so descriptor DMA is on from init.
++	 */
++	p->dma_desc_fs_enable = desc_dma && host_full_speed;
  	/* ESP-IDF uses SINGLE transfers when enabling this DWC2 AHB master. */
  	p->ahbcfg = GAHBCFG_HBSTLEN_SINGLE << GAHBCFG_HBSTLEN_SHIFT;
  	/*
@@ -878,7 +1066,7 @@ sof_irq (default off), so the old behaviour is one boot argument away.
  	 */
  	p->host_rx_fifo_size = 512;
  	p->host_nperio_tx_fifo_size = 128;
-@@ -407,7 +461,7 @@
+@@ -407,7 +482,7 @@
  	  .data = dwc2_set_amlogic_a1_params },
  	{ .compatible = "amcc,dwc-otg", .data = dwc2_set_amcc_params },
  	{ .compatible = "apm,apm82181-dwc-otg", .data = dwc2_set_amcc_params },
@@ -887,7 +1075,7 @@ sof_irq (default off), so the old behaviour is one boot argument away.
  	  .data = dwc2_set_cv1800_params },
  	{ .compatible = "st,stm32f4x9-fsotg",
  	  .data = dwc2_set_stm32f4x9_fsotg_params },
-@@ -1102,11 +1156,33 @@
+@@ -1102,11 +1177,33 @@
  	return 0;
  }
  
@@ -921,7 +1109,7 @@ sof_irq (default off), so the old behaviour is one boot argument away.
  
  	dwc2_set_default_params(hsotg);
  	dwc2_get_device_properties(hsotg);
-@@ -1124,6 +1200,10 @@
+@@ -1124,6 +1221,10 @@
  		}
  	}
  
