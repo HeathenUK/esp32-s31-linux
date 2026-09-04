@@ -4242,3 +4242,41 @@ partly batched already. Pushing that to the full 8-slot ring is a hart0
 firmware change plus a kernel change plus an ABI bump and a coordinated
 reflash, for a payoff that is unquantified because the attribution above is
 still open. **Do not start it until the attribution experiment is done.**
+
+### Frozen backdrop: SOLVED, and the answer is that the idea is wrong here
+
+Fifth attempt made the cover fire. The blocker was **the base object class**,
+not the image: `lv_obj`'s own COVER_CHECK rejects a transparent background, a
+radius or a border, and `lv_image` sets none of them opaquely. Every
+image-specific criterion had already passed - decoder OK, cf 18 (RGB565,
+no alpha), magic 0x19, 800x480, style_opa 255, image_opa 255, rotation 0,
+scale 256/256 - and it was still refused. Adding
+
+    lv_obj_set_style_bg_opa(drag_bg, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(drag_bg, 0, 0);
+    lv_obj_set_style_border_width(drag_bg, 0, 0);
+
+flipped the probe from `top=OTHER` to `top=drag_bg`.
+
+**And with the skip working, the drag is still slower:**
+
+| | per frame | px flushed per 5 s |
+|---|---|---|
+| baseline | 33 ms | 18.0 M |
+| cover firing | 37.6 / 43.1 ms | 14.4 M |
+
+**Fewer pixels, more time.** That is the whole result. The ~24 draws a frame
+were never expensive rasterisation - most are opaque FILLS, which are
+one-stream writes at ~86 MB/s. Replacing them with a full-screen image blit
+substitutes a two-stream read-modify-write (cached malloc source, write-
+combine destination) for a one-stream fill, and on this board that is a loss.
+It is the same "count the streams, not the mapping" rule that corrected the
+CMA question, applied to compositing.
+
+**Closed. Do not attempt again.** The lesson generalises: on this hardware,
+do not replace a fill with a copy. Any future work on drag cost has to make
+the fills cheaper or fewer, not move them.
+
+The one durable gain from the exercise: `lv_obj`'s COVER_CHECK rejecting a
+transparent background is the thing to set first if an opaque cover is ever
+wanted for another purpose.
