@@ -2639,8 +2639,8 @@ static void ctl_line(char *buf)
 			if (strstr(buf, "bt") && bt_tray_icon)
 				icon = lv_obj_get_parent(bt_tray_icon);
 			else if (strstr(buf, "wifi") && wifi_tray_clip)
-				icon = lv_obj_get_parent(
-					lv_obj_get_parent(wifi_tray_clip));
+				/* the clip's parent IS the clickable icon */
+				icon = lv_obj_get_parent(wifi_tray_clip);
 			if (icon)
 				lv_obj_send_event(icon, LV_EVENT_CLICKED, NULL);
 			printf("lvdesk: tray %s\n", icon ? "opened" : "no such icon");
@@ -4056,6 +4056,43 @@ static int pw_target = -1;
 static void wifi_scan_cb(lv_event_t *e);
 static void wifi_show_status(void);
 
+/*
+ * A radio switch for a tray popover.
+ *
+ * The stock theme paints a switch as a grey box whose on and off states are
+ * nearly indistinguishable at this size, which is useless for the one
+ * control in the panel that reports state rather than performing an action.
+ * Track dark, filled with the focus colour when on, pale knob.
+ */
+static lv_obj_t *radio_switch(lv_obj_t *parent, lv_event_cb_t cb, int on)
+{
+	lv_obj_t *sw = lv_switch_create(parent);
+
+	lv_obj_set_size(sw, 34, 18);
+	lv_obj_set_pos(sw, 2, 3);
+	lv_obj_set_style_bg_color(sw, lv_color_hex(COL_HDR), LV_PART_MAIN);
+	lv_obj_set_style_bg_opa(sw, LV_OPA_COVER, LV_PART_MAIN);
+	lv_obj_set_style_bg_color(sw, lv_color_hex(COL_HDR_FOCUS),
+				  LV_PART_INDICATOR | LV_STATE_CHECKED);
+	lv_obj_set_style_bg_opa(sw, LV_OPA_COVER,
+				LV_PART_INDICATOR | LV_STATE_CHECKED);
+	lv_obj_set_style_bg_color(sw, lv_color_hex(0xF0F0F0), LV_PART_KNOB);
+	lv_obj_set_style_shadow_width(sw, 0, LV_PART_KNOB);
+	/*
+	 * Round all three parts. Square, a switch reads as a coloured block
+	 * with no knob - it stops looking like a control at all, which is the
+	 * opposite of the point of using one.
+	 */
+	lv_obj_set_style_radius(sw, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+	lv_obj_set_style_radius(sw, LV_RADIUS_CIRCLE, LV_PART_INDICATOR);
+	lv_obj_set_style_radius(sw, LV_RADIUS_CIRCLE, LV_PART_KNOB);
+	lv_obj_set_style_pad_all(sw, 2, LV_PART_KNOB);
+	lv_obj_add_event_cb(sw, cb, LV_EVENT_VALUE_CHANGED, NULL);
+	if (on)
+		lv_obj_add_state(sw, LV_STATE_CHECKED);
+	return sw;
+}
+
 static int wifi_radio_get(void)
 {
 	struct ifreq ifr;
@@ -4092,15 +4129,13 @@ static void wifi_radio_set(int up)
 
 static void wifi_power_cb(lv_event_t *e)
 {
-	int up = wifi_radio_get();
+	int on = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
 
-	wifi_radio_set(!up);
-	if (!up)
+	wifi_radio_set(on);
+	if (on)
 		wifi_scan_cb(NULL);		/* coming back: look around */
 	else
 		wifi_show_status();
-	lv_label_set_text(lv_obj_get_child(lv_event_get_target(e), 0),
-			  up ? "Wi-Fi: off" : "Wi-Fi: on");
 }
 
 static int wifi_link_level(void)
@@ -4889,7 +4924,7 @@ static int wifi_ev_poll(void)
 
 static void tray_wifi_cb(lv_event_t *e)
 {
-	lv_obj_t *pop = popover_open(lv_event_get_target(e), 260, 216);
+	lv_obj_t *pop = popover_open(lv_event_get_target(e), 260, 190);
 	lv_obj_t *b;
 
 	if (!pop)
@@ -4912,7 +4947,9 @@ static void tray_wifi_cb(lv_event_t *e)
 	wifi_status = lv_label_create(pop);
 	lv_label_set_text(wifi_status, "...");
 	lv_obj_set_style_text_font(wifi_status, FONT_UI, 0);
-	lv_obj_set_pos(wifi_status, 4,
+	lv_obj_set_width(wifi_status, 112);
+	lv_label_set_long_mode(wifi_status, LV_LABEL_LONG_DOT);
+	lv_obj_set_pos(wifi_status, 42,
 		       (22 - (int32_t)lv_font_get_line_height(FONT_UI)) / 2);
 	lv_obj_set_style_radius(b, 0, 0);
 	lv_obj_set_style_bg_color(b, lv_color_hex(COL_HDR_FOCUS), 0);
@@ -4921,16 +4958,7 @@ static void tray_wifi_cb(lv_event_t *e)
 	lv_obj_center(lv_label_create(b));
 	lv_label_set_text(lv_obj_get_child(b, 0), "Rescan");
 
-	b = lv_button_create(pop);
-	lv_obj_set_pos(b, 0, 170);
-	lv_obj_set_size(b, 120, 22);
-	lv_obj_set_style_radius(b, 0, 0);
-	lv_obj_set_style_bg_color(b, lv_color_hex(COL_HDR), 0);
-	lv_obj_set_style_shadow_width(b, 0, 0);
-	lv_obj_add_event_cb(b, wifi_power_cb, LV_EVENT_CLICKED, NULL);
-	lv_obj_center(lv_label_create(b));
-	lv_label_set_text(lv_obj_get_child(b, 0),
-			  wifi_radio_get() ? "Wi-Fi: on" : "Wi-Fi: off");
+	radio_switch(pop, wifi_power_cb, wifi_radio_get());
 
 	wifi_list = lv_list_create(pop);
 	lv_obj_set_size(wifi_list, 242, 138);
@@ -4974,7 +5002,7 @@ static int bt_fd = -1;
 static int bt_powered, bt_scanning;
 static char bt_prompt[64];		/* passkey / confirm text for the panel */
 static char bt_confirm_addr[18];
-static lv_obj_t *bt_list, *bt_status, *bt_power_btn;
+static lv_obj_t *bt_list, *bt_status, *bt_power_sw;
 static void bt_render(void);
 
 static int bt_connect_sock(void)
@@ -5187,12 +5215,11 @@ static void bt_row_cb(lv_event_t *e)
 
 static void bt_power_cb(lv_event_t *e)
 {
-	bt_cmd("power %s", bt_powered ? "off" : "on");
+	int on = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+
+	bt_cmd("power %s", on ? "on" : "off");
 	bt_cmd("status");
 	bt_prompt[0] = 0;
-	/* the daemon's STATE event repaints the rest */
-	lv_label_set_text(lv_obj_get_child(lv_event_get_target(e), 0),
-			  bt_powered ? "Bluetooth: off" : "Bluetooth: on");
 }
 
 static void bt_scan_cb(lv_event_t *e)
@@ -5217,9 +5244,17 @@ static void bt_render(void)
 {
 	int i, pass;
 
-	if (bt_power_btn)
-		lv_label_set_text(lv_obj_get_child(bt_power_btn, 0),
-				  bt_powered ? "Bluetooth: on" : "Bluetooth: off");
+	if (bt_power_sw) {
+		/*
+		 * Follow the daemon, do not fight the finger: setting the
+		 * state programmatically does not raise VALUE_CHANGED, so
+		 * this cannot loop back into bt_power_cb.
+		 */
+		if (bt_powered)
+			lv_obj_add_state(bt_power_sw, LV_STATE_CHECKED);
+		else
+			lv_obj_remove_state(bt_power_sw, LV_STATE_CHECKED);
+	}
 	if (!bt_list)
 		return;
 	if (bt_status) {
@@ -5311,13 +5346,12 @@ static void bt_render(void)
 /* The popover owns these; they must not outlive it. */
 static void bt_forget_widgets(void)
 {
-	bt_list = bt_status = bt_power_btn = NULL;
+	bt_list = bt_status = bt_power_sw = NULL;
 }
 
 static void tray_bt_cb(lv_event_t *e)
 {
-	/* 190 clipped the radio button against the popover's own padding */
-	lv_obj_t *pop = popover_open(lv_event_get_target(e), 260, 216);
+	lv_obj_t *pop = popover_open(lv_event_get_target(e), 260, 190);
 	lv_obj_t *b;
 
 	if (!pop)
@@ -5336,6 +5370,14 @@ static void tray_bt_cb(lv_event_t *e)
 	lv_label_set_text(lv_obj_get_child(b, 0),
 			  bt_confirm_addr[0] ? "Confirm" : "Scan");
 
+	/*
+	 * The radio switch shares the top row with the status and Scan: it is
+	 * state, not an action, so a switch says it and a button did not - and
+	 * a whole row at the bottom of a 242x164 panel was too much rent for
+	 * one control.
+	 */
+	bt_power_sw = radio_switch(pop, bt_power_cb, bt_powered);
+
 	bt_status = lv_label_create(pop);
 	lv_label_set_text(bt_status, "...");
 	lv_obj_set_style_text_font(bt_status, FONT_UI, 0);
@@ -5345,9 +5387,9 @@ static void tray_bt_cb(lv_event_t *e)
 	 * unreadable, and it looked like a rendering fault rather than a long
 	 * string.
 	 */
-	lv_obj_set_width(bt_status, 150);
+	lv_obj_set_width(bt_status, 112);
 	lv_label_set_long_mode(bt_status, LV_LABEL_LONG_DOT);
-	lv_obj_set_pos(bt_status, 4,
+	lv_obj_set_pos(bt_status, 42,
 		       (22 - (int32_t)lv_font_get_line_height(FONT_UI)) / 2);
 
 	bt_list = lv_list_create(pop);
@@ -5356,17 +5398,6 @@ static void tray_bt_cb(lv_event_t *e)
 	lv_obj_set_style_radius(bt_list, 0, 0);
 	lv_obj_set_style_pad_all(bt_list, 0, 0);
 	lv_obj_set_style_text_font(bt_list, FONT_UI, 0);
-
-	bt_power_btn = b = lv_button_create(pop);
-	lv_obj_set_pos(b, 0, 170);
-	lv_obj_set_size(b, 120, 22);
-	lv_obj_set_style_radius(b, 0, 0);
-	lv_obj_set_style_bg_color(b, lv_color_hex(COL_HDR), 0);
-	lv_obj_set_style_shadow_width(b, 0, 0);
-	lv_obj_add_event_cb(b, bt_power_cb, LV_EVENT_CLICKED, NULL);
-	lv_obj_center(lv_label_create(b));
-	lv_label_set_text(lv_obj_get_child(b, 0),
-			  bt_powered ? "Bluetooth: on" : "Bluetooth: off");
 
 	bt_cmd("status");
 	bt_cmd("list");

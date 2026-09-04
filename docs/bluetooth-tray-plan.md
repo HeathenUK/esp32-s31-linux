@@ -189,12 +189,20 @@ The panel is in lvdesk and verified on the hardware:
   flat list made a tap ambiguous. Unpaired rows are dimmed and only appear
   while scanning; paired rows carry a link glyph, connected ones a tick and
   the highlight.
-- **Radio on/off on both popovers.** Bluetooth goes through the daemon's
+- **A radio switch on the top row of both popovers**, sharing the line with
+  the status and the Scan/Rescan button. A switch, not a button: it reports
+  state rather than performing an action, and a whole bottom row was too
+  much rent for one control. Bluetooth goes through the daemon's
   `Adapter1.Powered`; Wi-Fi toggles `IFF_UP` on the interface, because
   wpa_supplicant's DISCONNECT leaves the radio associating and scanning,
   which is not what "off" means to anyone reading a panel. Verified: the
-  Bluetooth button took the adapter powered=1 -> 0 and back, with the label
-  and status following.
+  Bluetooth switch took the adapter powered=1 -> 0 and back, with the
+  status line following.
+
+  The stock theme paints a switch as a grey box whose states are almost
+  indistinguishable, and square it reads as a coloured block with no knob -
+  so `radio_switch()` styles all three parts (dark track, focus-coloured
+  when on, pale knob, circular radius) and both panels share it.
 - Tapping a row connects, disconnects or pairs as appropriate.
 
 Two things learned while testing, both now fixed in the code:
