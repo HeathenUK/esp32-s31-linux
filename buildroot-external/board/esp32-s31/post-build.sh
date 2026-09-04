@@ -105,3 +105,10 @@ for lib in libX11.so.6.4.0 libXt.so.6.0.0 libXaw7.so.7.0.0 libXmu.so.6.2.0 \
         rm -f "$tg"
     fi
 done
+
+# S11modules does nothing on this board and costs 0.49 s of every boot.
+# CONFIG_MODULES is off - there is no /proc/modules and no module to load -
+# and the script's own first act is to exit when /etc/modules-load.d is empty,
+# which it always is. Buildroot installs it unconditionally, so it is removed
+# here rather than shadowed.
+rm -f "${TARGET_DIR}/etc/init.d/S11modules"

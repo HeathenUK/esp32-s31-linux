@@ -1,0 +1,39 @@
+#!/bin/sh
+#
+# Bring the network up WITHOUT holding rcS.
+#
+# Measured from the rcS timestamps, `ifup -a` took 16.65 -> 29.14 s, i.e.
+# 12.5 s and the single largest item in the boot - and all of it lands AFTER
+# the desktop is already on the panel at 17.1 s. Everything behind it in rcS
+# (dbus, bluetoothd, s31-bt, cron) therefore started ~12 s later than it
+# needed to, and the first 18 s of a session competed with boot.
+#
+# The 12.5 s is association and DHCP, which is waiting, not computing, so
+# running it alongside the rest costs the machine very little. Backgrounding
+# is safe here specifically because nothing later in rcS needs the network:
+# checked, dbus, bluetoothd, s31-bt and cron all start regardless.
+#
+# The counter-example on this board is real and worth remembering: when udev's
+# coldplug was backgrounded it starved THIS script instead. The difference is
+# that coldplug is CPU-bound and this is not.
+
+mkdir -p /run/network
+
+case "$1" in
+  start)
+	echo "Starting network: backgrounded"
+	/sbin/ifup -a >/var/log/network.log 2>&1 &
+	;;
+  stop)
+	printf "Stopping network: "
+	/sbin/ifdown -a
+	[ $? = 0 ] && echo "OK" || echo "FAIL"
+	;;
+  restart|reload)
+	"$0" stop
+	"$0" start
+	;;
+  *)
+	echo "Usage: $0 {start|stop|restart}"
+	exit 1
+esac

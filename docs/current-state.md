@@ -4167,3 +4167,39 @@ and `img->cf` from inside LVGL, or set the source from a real
 `lv_image_dsc_t` built over the same pixels and re-run the top_obj probe -
 which is already written and takes one line to restore. The prize is
 unchanged: ~24 object redraws per drag frame collapsing to about two.
+
+### Boot: 10 s off rcS, 2026-09-04
+
+Two changes, both verified from the rcS timestamps on a fresh boot:
+
+- **`S40network` backgrounded.** `ifup -a` was 16.65 -> 29.14 s, the single
+  largest item in the boot, and all of it lands after the desktop is already
+  on the panel. It is association and DHCP, i.e. waiting rather than
+  computing, and nothing later in rcS needs the network - checked: dbus,
+  bluetoothd, s31-bt and cron all start regardless.
+- **`S11modules` deleted** in post-build. `CONFIG_MODULES` is off on this
+  board, there is no `/proc/modules` and nothing to load, and the script's
+  own first act is to exit when `/etc/modules-load.d` is empty, which it
+  always is. It cost 0.49 s per boot to do nothing.
+
+| | before | after |
+|---|---|---|
+| rcS complete | 34.63 s | **24.66 s** |
+| S40network inside rcS | 12.47 s | 0.79 s |
+| dbus-daemon done | 31.53 s | 21.03 s |
+| bluetoothd done | 32.01 s | 22.07 s |
+| s31-bt done | 33.10 s | 23.03 s |
+| desktop on the panel | 17.14 s | 17.28 s |
+
+The desktop appears at the same moment either way - it always did, it starts
+before the network - but the machine now stops competing with its own boot
+ten seconds sooner, and Bluetooth is usable at 22 s instead of 32 s.
+
+**The network still works, checked rather than assumed:** wpa_supplicant
+associates, udhcpc takes a lease (192.168.1.x from the router), wlan0 reaches
+UP/LOWER_UP and pings out at ~40 ms. It is simply asynchronous now, so a check
+before ~45 s will legitimately show NO-CARRIER.
+
+The counter-example on this board remains true and is why this was measured
+rather than assumed: backgrounding udev's coldplug STARVED this same script,
+because coldplug is CPU-bound. Association is not.
