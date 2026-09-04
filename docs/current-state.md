@@ -4496,3 +4496,49 @@ built without the extension, and is `patches/0029`.
 enable writes are the suspects, not the plain 128-bit register stores. The
 probe mechanism added in `patches/0030` makes that easy: add a function id,
 time it from the boot-time initcall, read it in dmesg.
+
+### The coprocessor hook is not the problem: OpenSBI runs from flash
+
+Chased the ~51 us to the end. It is not the instructions, not the memory, and
+not the coprocessor at all.
+
+**Phase timings inside the save**, machine-mode cycles at 320 MHz, 100
+iterations, against a stack buffer (SRAM) and a PSRAM buffer:
+
+| phase | SRAM | PSRAM |
+|---|---|---|
+| loop overhead | 6 cyc | 1 cyc |
+| two enable writes | 15 | 13 |
+| six HWLoop CSR reads | 33 | 19 |
+| eight q-register stores | 13 | 10 |
+| QACC/XACC/UA | 22 | 8 |
+| three movx.r reads | 18 | 6 |
+
+**The entire save is under a hundred cycles, about 300 ns**, and PSRAM is no
+slower than SRAM - both theories (expensive vector moves, uncached state) are
+dead.
+
+**The ecall is the cost, and only when it is cold:**
+
+| the same SBI call | cost |
+|---|---|
+| 100 back to back in an initcall | **1.8 us** |
+| once per real context switch | **16-18 us mean, 69 us worst** |
+
+Identical code, ~10x apart. The difference is cache residency, and the reason
+is in the boot log: `OpenSBI mapped at 0x40380000`, inside the flash MTD
+window at 0x40000000. **OpenSBI executes XIP from 80 MHz flash**, so an
+isolated call refetches its trap entry and dispatch cold, at the same ~6x
+penalty that made `pick_next_task_fair` worth moving.
+
+**This is much bigger than the coprocessor hook.** Every SBI call pays it.
+The fix is to relocate OpenSBI into RAM at boot - a loader change, since the
+loader is what maps it - and it would speed up every trap into machine mode,
+not just this one.
+
+**Instrumentation left in place** for whoever does it: SBI function 3 probes
+the coprocessor dirty state, function 4 times individual save phases against a
+caller-supplied buffer, and `esp32s31_ext_profile=1` makes the switch hook
+report its own mean and worst ecall every 2048 switches into dmesg. That last
+one is how the cold/hot gap above was measured and it is the instrument that
+matters.
