@@ -3974,3 +3974,46 @@ housekeeping tick. `hw_vblank=Y` was tried live and moved the timer rate
 1412 -> 1377 per 10 s, inside noise on one pass - not the ~42/s the driver
 comment predicts. It needs the repeat discipline before being believed either
 way; left at N.
+
+### Where a drag frame actually goes, and one rejected fix (2026-09-04)
+
+With `LV_USE_PROFILER 1` (diagnostic build only), a drag frame breaks down as:
+
+| section | per 5 s | per call |
+|---|---|---|
+| refr_invalid_areas | 1873 ms, n=60 | **31.2 ms per frame** |
+| refr_obj_and_children | 1294 ms, n=195 | 6.6 ms |
+| EVENT_DRAW_MAIN | 1805 ms, **n=1433** | 1.26 ms |
+
+**~24 EVENT_DRAW_MAIN calls per frame at 1.26 ms each IS the frame.** Those
+are not the dragged window - the ghost already replaced that with one image -
+they are the OTHER windows and their children being re-rasterised wherever
+the ghost uncovers them. The drag in the harness passes over the xfiles
+window, which is why there are two dozen of them.
+
+**It is not memory bandwidth.** The startup probe on this build:
+`fb memset 8912 us (86 MB/s), heap memset 8657 us (88 MB/s)`, and read-modify
+-write `fb 11781 us` against `heap 12001 us`. The framebuffer is as fast as
+the heap both ways. 186k px at 86 MB/s is 4.3 ms against the 33 ms measured,
+so the cost is LVGL's rasteriser, ~7.8x a memset over the same area.
+
+**Rejected: freezing the desktop behind the drag.** The idea was sound and
+fits LVGL's model - `lv_refr_get_top_obj()` walks the active screen's
+children for the topmost OPAQUE object covering the damaged area and starts
+there, so one full-screen opaque image as the screen's last child should
+collapse the whole stack into a single blit. It must be a child of the
+SCREEN: `refr_area()` applies that search to the screen only and then draws
+the top and sys layers unconditionally.
+
+It cannot be built this way. **`LV_MEM_SIZE` is 512 KB and a full-screen
+RGB565 snapshot is 768 KB**, so `lv_snapshot_take(lv_screen_active(), ...)`
+returns NULL every time - the backdrop was never created, and a diagnostic
+printf of its coordinates never fired. Measured anyway, the attempt was
+**42.8 ms per frame against the 33 ms baseline**: strictly worse, because
+every drag now also pays a 768 KB allocation that fails. Reverted.
+
+**The precondition for retrying it:** the buffer has to come from outside the
+LVGL pool. This LVGL has no `lv_snapshot_take_to_draw_buf()`, so that means
+either custom draw-buf plumbing over a `malloc`, or growing `LV_MEM_SIZE` by
+~800 KB permanently - which is the wrong trade on a board where memory is the
+binding constraint and the pool already peaks at 25 KB of 512.
