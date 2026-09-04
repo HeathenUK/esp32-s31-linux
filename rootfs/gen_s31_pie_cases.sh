@@ -56,9 +56,14 @@ if grep -q '["\\]' "$work_dir/cases.S"; then
 	exit 1
 fi
 
+# The ISA version rides in -march, not in a separate flag. Espressif's GCC used
+# to take "-march=..._xespv -mespv-spec=2p2"; the current IDF toolchain has
+# dropped -mespv-spec entirely and errors with "did you mean -misa-spec=2.2?",
+# which is a different thing and would silently be wrong. The suffixed form is
+# what the rest of the tree already uses (BR2_RISCV_ISA_EXTRA, CT_ARCH_ARCH),
+# and the readelf assertion below still proves the object came out tagged 2.2.
 "$cc" \
-	-march=rv32imafc_zicsr_zifencei_xespv \
-	-mespv-spec=2p2 -mabi=ilp32f \
+	-march=rv32imafc_zicsr_zifencei_xespv2p2 -mabi=ilp32f \
 	-x assembler -c "$work_dir/cases.S" -o "$work_dir/cases.o"
 
 if ! "$readelf" -A "$work_dir/cases.o" | grep -q 'xespv2p2'; then
