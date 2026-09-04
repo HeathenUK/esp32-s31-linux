@@ -1,0 +1,192 @@
+riscv: put pick_next_task_fair in .text..fast
+
+A context switch on this board cost 280 us. schedule() and __schedule() were
+already relocated to RAM (sched/core.o has been in S31_FAST_OBJS for a while,
+with SCHED_TEXT excluded so .sched.text does not stay behind in flash), but
+the task PICKER was not: pick_next_task_fair lives in sched/fair.o and ran
+from XIP flash on every single switch.
+
+Measured with rootfs/switchbench.c arm C, which is sched_yield() between two
+runnable processes - that isolates the switch with no wakeup and no pipe in
+the way, and it counts the switches the kernel actually performed rather than
+assuming one per iteration. Six runs per arm, 3000 iterations each, 25 s of
+settling first, both arms at the same uptime:
+
+    pick_next_task_fair in flash   272 294 265 293 295 264 us   mean 280.7
+    pick_next_task_fair in RAM     161 157 156 163 156 152 us   mean 157.5
+
+The ranges do not overlap - the worst run with it in RAM beats the best run
+with it in flash by 100 us. 1.78x on the single most frequent operation on a
+one-core machine, for 23 kB of text moved out of flash.
+
+Regenerate with:
+
+    diff -u linux-esp32-s31/arch/riscv/kernel/vmlinux-xip.lds.S \
+            linux-71-port/arch/riscv/kernel/vmlinux-xip.lds.S \
+            --label a/arch/riscv/kernel/vmlinux-xip.lds.S \
+            --label b/arch/riscv/kernel/vmlinux-xip.lds.S
+
+--- a/arch/riscv/kernel/vmlinux-xip.lds.S
++++ b/arch/riscv/kernel/vmlinux-xip.lds.S
+@@ -94,18 +94,102 @@
+  * read .text. The file size on disk is mostly symbols, relocations and debug
+  * info - vmscan.o is 39,160 bytes on disk and 11,002 bytes of code.
+  *
+- * traps.o and irq.o are deliberately absent. Including them lost the irq
+- * tracepoints (/sys/kernel/tracing/events/irq disappeared), removing the
+- * instrument needed to measure any of this.
++ * traps.o and irq.o were deliberately absent on 6.12: including them lost the
++ * irq tracepoints (/sys/kernel/tracing/events/irq disappeared), removing the
++ * instrument needed to measure any of this. That objection no longer applies -
++ * the shipping config disables FTRACE and ENABLE_DEFAULT_TRACERS, so those
++ * tracepoints are not built either way - and on 7.x the cost moved here.
++ *
++ * riscv is converted to the generic entry framework in 7.x, so the whole
++ * syscall entry/exit path is now C (kernel/entry/) inlined into
++ * do_trap_ecall_u in traps.o, where 6.12 did it in entry.S assembly. Measured
++ * on this board, a read()+write() pair costs 15.2 us on 6.12 and 43.0 us on
++ * 7.1 - 2.83x - which is what makes a loaded desktop 4x slower while a bare
++ * one is only 9% slower. That path refetches itself constantly, which is
++ * exactly the case the 5.98x flash-vs-RAM figure applies to.
++ *
++ * The DMA mapping path is here for the same reason. mmc and blk-mq were
++ * already in RAM but dma_direct_map_sg and dma_map_sg_attrs were still in
++ * flash, and every SD request runs both. Measured, 5 reps:
++ *
++ *	                 before        after        6.12
++ *	 4k O_DIRECT   4.34-4.88 ms  4.10-4.53 ms  3.40-3.48
++ *	 256k O_DIRECT 18.75-19.38   17.50-18.12   15.62-16.25
++ *	 sequential     9.52 MB/s    10.1-12.7     13.33
++ *
++ * arch_sync_dma_for_device is DELIBERATELY NOT HERE, and this is the whole
++ * point. Putting it in RAM was tried and is a serious regression: sequential
++ * reads collapsed from 9.52 MB/s to 4.0-5.3, and 256 KB requests went erratic,
++ * alternating 18 and 69-75 ms. It reproduced exactly on a second boot.
++ *
++ * It is the cache-maintenance routine. .text..fast is ordinary cached PSRAM,
++ * so running the flush and invalidate loops from there lets them evict their
++ * own cache lines while they work, and every iteration refetches the code it
++ * is executing. Cache maintenance has to stay somewhere the maintenance does
++ * not reach - which XIP flash is. Do not move it, and be wary of any other
++ * code that operates on the caches.
++ */
++/*
++ * The input path and the string helpers, added 2026-08-27 after profiling.
++ *
++ * /proc/profile under a *fork-free* pointer-motion load (uinject stress, one
++ * process - a shell loop respawning uinject profiles fork, exec and path
++ * lookup instead of the desktop, and did) put input_event at 12.8% of non-idle
++ * time on its own, with evdev_read 2.1%, memset 4.0%, memcpy 2.0% and memmove
++ * 1.9%. Together with the rest of those objects that is ~24% of busy time.
++ *
++ * The cost is 18 KB of RAM: input.o 12,546 + evdev.o 5,980. That is 0.15% of
++ * usable RAM, which is what makes this worth trying at all - the equivalent
++ * idea for *userspace* wanted ~600 KB and was rejected.
++ *
++ * **memcpy, memset and memmove are deliberately NOT here**, and it is not a
++ * judgement call: putting them here does not boot at all. Linux dies before it
++ * can print a character, and the loader's last words are "hart1 released to
++ * OpenSBI" - visible only at 115200, because the bootloader and the console
++ * run at different bauds.
++ *
++ * The reason is bootstrap, not performance. .text..fast sits between _sdata
++ * and __bss_start and is relocated to RAM by the XIP copy in
++ * arch/riscv/mm/init.c, which is itself `memcpy(to, from, data_sz)` - so a
++ * memcpy living in the region being copied is called at its RAM address before
++ * anything has been written there. Same class of self-reference as
++ * arch_sync_dma_for_device above: code that implements the mechanism cannot
++ * live in what the mechanism moves.
+  */
++#define S31_FAST_INPUT	*drivers/input/input.o *drivers/input/evdev.o
++
+ #define S31_FAST_OBJS	*hrtimer.o *timer.o *tick-sched.o *tick-common.o \
+ 			*timekeeping.o *clockevents.o \
++			*riscv/kernel/traps.o *riscv/kernel/irq.o *riscv/mm/fault.o \
++			*dma/direct.o *dma/mapping.o \
++			*kernel/entry/common.o *kernel/entry/syscall-common.o \
+ 			*dw_mmc.o *dw_mmc-pltfm.o *blk-mq.o \
+ 			*blk-core.o *bio.o *blk-merge.o *blk-mq-sched.o \
+ 			*mmc_ops.o *sd_ops.o \
+ 			*workqueue.o *mq-deadline.o \
+ 			*mmc/core/block.o *mmc/core/core.o \
+-			*sched/core.o *sched/build_utility.o
++			*sched/core.o *sched/build_utility.o \
++			/*
++			 * pick_next_task_fair is on EVERY context switch and
++			 * was the last piece of the switch path still in
++			 * flash. sched/core.o was moved long ago, so schedule()
++			 * and __schedule() already ran from RAM while the task
++			 * PICKER did not. 23 kB of text, and it is worth it:
++			 * six settled runs per arm, 3000 iterations each,
++			 * measured with switchbench arm C (sched_yield between
++			 * two runnable tasks, which isolates the switch with
++			 * no wakeup and no pipe in the way) -
++			 *
++			 *   in flash  272 294 265 293 295 264 us  mean 280.7
++			 *   in RAM    161 157 156 163 156 152 us  mean 157.5
++			 *
++			 * The ranges do not overlap: the worst run with it in
++			 * RAM beats the best run with it in flash by 100 us.
++			 * 1.78x on the single most frequent operation on a
++			 * one-core machine.
++			 */
++			*sched/fair.o \
++			S31_FAST_INPUT
+ 
+ /*
+  * SCHED_TEXT has to be excluded too, or the relocation silently half-works.
+@@ -125,6 +209,28 @@
+ 		*(EXCLUDE_FILE(S31_FAST_OBJS) .sched.text)		\
+ 		__sched_text_end = .;
+ 
++/*
++ * NOINSTR_TEXT has to be excluded for the same reason as SCHED_TEXT above.
++ * The generic entry code (irqentry_enter/irqentry_exit, run on every page
++ * fault and every interrupt) and the riscv trap handlers are noinstr, so they
++ * live in .noinstr.text rather than .text and the stock NOINSTR_TEXT collects
++ * them into the flash .text - which wins, because it is emitted first.
++ *
++ * Cost: these functions leave [__noinstr_text_start, __noinstr_text_end], so
++ * they are no longer blacklisted from kprobes and objtool cannot validate
++ * their noinstr-ness. Neither KPROBES nor FTRACE is built in the shipping
++ * config, and the compiler still suppresses instrumentation of the code.
++ */
++#undef NOINSTR_TEXT
++#define NOINSTR_TEXT							\
++		ALIGN_FUNCTION();					\
++		__noinstr_text_start = .;				\
++		*(EXCLUDE_FILE(S31_FAST_OBJS) .noinstr.text)		\
++		__cpuidle_text_start = .;				\
++		*(.cpuidle.text)					\
++		__cpuidle_text_end = .;					\
++		__noinstr_text_end = .;
++
+ #undef TEXT_TEXT
+ #define TEXT_TEXT							\
+ 		ALIGN_FUNCTION();					\
+@@ -192,9 +298,23 @@
+ 	 */
+ 	. = ALIGN(16);
+ 	__text_fast_start = .;
++	/*
++	 * The input section is .text..fast, with two dots, and that is
++	 * load-bearing. From 7.x TEXT_MAIN is unconditionally
++	 *
++	 *     .text .text.[_0-9A-Za-df-rt-z]* ...
++	 *
++	 * which matches .text.fast, so the flash .text above - emitted
++	 * first - claimed every __fasttext function from any object not
++	 * named in S31_FAST_OBJS, and the attribute became a silent no-op.
++	 * 6.12 defined TEXT_MAIN as plain .text without LTO, so it worked
++	 * there. The double dot is the kernel's own convention for exactly
++	 * this (.data..percpu, .bss..page_aligned) and no MAIN glob matches
++	 * it.
++	 */
+ 	.text.fast : AT(ADDR(.text.fast) - LOAD_OFFSET) {
+-		*(.text.fast)
+-		S31_FAST_OBJS(.text .text.* .sched.text)
++		*(.text..fast)
++		S31_FAST_OBJS(.text .text.* .sched.text .noinstr.text)
+ 		/*
+ 		 * Whole objects, by name, rather than an attribute sprinkled
+ 		 * through generic kernel code. Measured with a 72 KB body on

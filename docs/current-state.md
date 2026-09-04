@@ -4320,3 +4320,44 @@ That makes the scheduler core the prime `.text..fast` candidate, and unlike
 the interrupt spine (which did not boot) the timer subsystem precedent shows
 the mechanism works. `switchbench` arm C is the instrument: it isolates the
 switch with no wakeup and no pipe in the way.
+
+### 1.78x on the context switch: the task picker was still in flash
+
+`schedule()` and `__schedule()` were relocated to RAM long ago - `sched/core.o`
+is in `S31_FAST_OBJS`, with `SCHED_TEXT` excluded so `.sched.text` does not
+stay behind. **The task PICKER was not.** `pick_next_task_fair` lives in
+`sched/fair.o`, ran from XIP flash, and is called on every single switch.
+
+Measured with `switchbench` arm C - `sched_yield()` between two runnable
+processes, which isolates the switch with no wakeup and no pipe in the way,
+and counts the switches the kernel actually performed. Six runs per arm, 3000
+iterations each, 25 s of settling, both arms at the same uptime, both flashed
+and booted for the purpose:
+
+| pick_next_task_fair | runs (us) | mean |
+|---|---|---|
+| in flash | 272 / 294 / 265 / 293 / 295 / 264 | **280.7** |
+| in RAM | 161 / 157 / 156 / 163 / 156 / 152 | **157.5** |
+
+**The ranges do not overlap.** The worst run with it in RAM beats the best run
+with it in flash by 100 us. That is 1.78x on the most frequent operation on a
+one-core machine, for 23 kB of text. Shipped as `patches/0028`.
+
+**Where it does and does not show.** Desktop input lag is unchanged at 9 ms
+average (was 10), and that is expected rather than disappointing: lvdesk is a
+single process polling its own descriptors, and a drag is render-bound, so
+neither is switch-bound. The win lands on everything multi-process - app
+launch, the X shim serving clients, SD requests (previously measured at 8.3
+switches each), and the audio daemons.
+
+**The measurement discipline that made it trustworthy**, since this board has
+voided results before: the first reading was taken while Wi-Fi was still
+associating and was thrown away; arm C trends downward for ~60 s after boot,
+so both arms were settled identically; and the control kernel was rebuilt and
+reflashed rather than compared against a number from earlier in the day.
+
+**Still open on the switch.** 157 us is better but not good - normal is 2-5 us.
+The coprocessor hook is ~25 us of it. `__switch_to` itself is assembly in
+`entry.S`, which compiles to `.irqentry.text` and so was never covered by the
+`.text..fast` mechanism at all; it sits just below `_etext` in flash. That is
+the next candidate, and it is small.
