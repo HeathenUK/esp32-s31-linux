@@ -6,8 +6,16 @@
  *
  *   - busybox dd may not honour iflag=direct, so "O_DIRECT" reads were served
  *     partly from the page cache and from readahead. That produced a marginal
- *     rate of ~70 MB/s between 4k and 64k requests on a 40 MHz 4-bit bus whose
- *     ceiling is 20 MB/s - an impossible number that should have been caught.
+ *     rate of ~70 MB/s between 4k and 64k requests, which was rejected at the
+ *     time as impossible against an assumed 20 MB/s ceiling (40 MHz, 4 bits,
+ *     SDR). That ceiling is WRONG and the rejection was right for the wrong
+ *     reason. Measured 2026-09-04 with this tool: 512 KiB requests sustain
+ *     38.7 MB/s, and - the part that rules out the card's own prefetch - the
+ *     RANDOM figure is identical to the sequential one (38.65/38.74/38.75 vs
+ *     38.33 MB/s). So the bus carries about twice what "40 MHz SDR 4-bit"
+ *     allows; it is either DDR or a faster clock than dmesg's "Bus speed"
+ *     line suggests. /sys/kernel/debug/mmc0/ios would say which, and DIAG=0
+ *     compiles it out. Do not re-derive a ceiling from the dmesg clock.
  *   - every measurement was sequential, while swap and program startup are
  *     random. Sequential reads get the card's own prefetch for free.
  *

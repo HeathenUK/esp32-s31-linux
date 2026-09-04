@@ -796,6 +796,45 @@ now switches it, so the next person can retest in one flag rather than an edit.
 is 3.7-3.8 ms (card and bus) and the cost lives in the tail - p99 10-16 ms, max
 to 34 ms - which did not move with HZ. Task #21 stays open, minus one theory.
 
+### Superseded by the OpenSBI SRAM work: 41% of that cost was CPU (2026-09-04)
+
+Re-measured with the same tool and the same sizes after OpenSBI's trap path
+moved into internal SRAM (context switch 280.7 -> 57.2 us). Nothing in the SD
+stack, the driver or the card changed. Five runs each, spread +-0.03 ms:
+
+    4k rand p50   3.79 -> 2.21 ms   (-41.7%)
+    4k seq  p50   3.76 -> 2.30 ms   (-38.8%)
+    p99           10-16 -> 4.2-8.6 ms
+    max           to 34 -> 8.3-11.9 ms
+
+So **~1.6 ms of the old per-request cost was CPU-side** - traps, switches and
+completion wake-ups, all of which a 4 KiB O_DIRECT read is dominated by - and
+it went away without anyone touching the block layer. The whole dw_mmc and
+blk-mq path was already in `.text..fast`, which is why the remaining lever was
+never in the driver.
+
+The tail improved even more than the median, which is the part an interactive
+workload feels.
+
+**Bandwidth is effectively closed; latency is not.** Fitting the three sizes
+(4k 2.21, 64k 3.79, 512k 12.90 ms) gives a **~2.1 ms fixed cost per request**
+and ~47 MB/s marginal. Large requests are at the bus ceiling and small ones are
+almost entirely overhead: a 4 KiB read spends ~0.1 ms moving data and ~2.1 ms
+not moving data. That is what a major fault costs, and it is why paging and
+program startup dominate the desktop's feel.
+
+**The 20 MB/s ceiling in `sdlat.c`'s header was wrong** and has been corrected
+in place. 512 KiB requests sustain 38.7 MB/s, and the RANDOM figure is
+identical to the sequential one (38.65/38.74/38.75 MB/s), which rules out the
+card's own prefetch. The bus therefore carries about twice what "40 MHz SDR
+4-bit" allows - DDR, or a faster clock than dmesg's "Bus speed" line reports.
+`/sys/kernel/debug/mmc0/ios` would settle it and `DIAG=0` compiles it out.
+Do not re-derive a ceiling from the dmesg clock.
+
+Task #21 stays open, but its target is now **2.1 ms, not 3.2 or 10**, and the
+next question is how much of that is the card rather than us - the switch work
+just proved that a large slice was us.
+
 ## PPA (Pixel Processing Accelerator)
 
 Working under Linux as of 2026-08-21: `drivers/gpu/drm/espressif/esp32s31-ppa.c`,
