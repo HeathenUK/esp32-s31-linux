@@ -4412,3 +4412,40 @@ account for it. Attributing the rest needs ktime stamps inside `__switch_to`,
 and note that `__switch_to` lives in `.irqentry.text` with the trap entry,
 which must stay in flash because it has to work before the RAM copy runs -
 that is the likely reason the old "interrupt spine in RAM" arms never booted.
+
+### REJECTED: the interrupt dispatch path in RAM (it trades the switch away)
+
+The whole generic dispatch runs from XIP flash on every interrupt -
+`handle_fasteoi_irq` (chip.o), `handle_irq_event` and `_percpu` (handle.o),
+`generic_handle_domain_irq` (irqdesc.o), `handle_softirqs`, `irq_enter_rcu`
+and `irq_exit` (softirq.o). 10 kB. Moving it to `.text..fast` boots fine and
+helps interrupt-heavy work:
+
+| | dispatch in flash | dispatch in RAM |
+|---|---|---|
+| cpubench, idle | 70.6 M/s | 72.4 M/s |
+| cpubench, during a Wi-Fi download | 40.5 M/s | **47.8 M/s** |
+| core lost to networking | 43% | 34% |
+| **context switch** | **107.8 us** | **171.3 us** |
+
+**It costs 59% on the context switch**, six settled runs either side, and
+reverting to the byte-identical previous image restores 107.6 us - so the
+regression is caused by this change, not by boot variance. That control is
+what makes it safe to reject.
+
+Net for this board: +63.5 us on every switch is ~1% of the core at idle and
+~3% during a drag, permanently, against ~10% recovered only while the network
+is busy. Interactive responsiveness is the priority, so it loses. Reverted.
+
+**The mechanism is not established.** Both flash and PSRAM are cached by the
+same 16 kB L1 icache, so "it is in RAM now" does not by itself explain
+anything - the likely candidate is that growing `.text..fast` by 10 kB moved
+the scheduler path into cache sets that the interrupt path now also occupies,
+i.e. aliasing rather than bandwidth. That would make the result specific to
+this layout and not a general rule about interrupt code.
+
+**What this does establish, and it matters for future work:** `.text..fast` is
+NOT a free win that scales. It has been treated as "move hot code there and it
+gets faster" and that is now measurably false past some point. Anything added
+to it from here has to be measured against the context switch as well as
+against the thing it was meant to speed up.
