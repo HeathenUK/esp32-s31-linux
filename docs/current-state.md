@@ -3910,3 +3910,67 @@ Note for next time: `make rootfs` first regenerates `s31_pie_cases.inc` with
 an ESP-IDF compiler flag (`-mespv-spec=2p2`) that the container's
 `riscv32-esp-elf-gcc` rejects. The generated file is committed; build with
 `$S31_MAKE -o s31-pie-cases rootfs` to skip only that step.
+
+## Performance audit, 2026-09-04
+
+Measured on the shipped build, not inferred. `LVDESK_PROF=1` gives the split;
+`uinject stress` moves the pointer, `uinject dragstress` drags a window.
+
+**Where the machine is now.**
+
+| state | cost |
+|---|---|
+| desktop idle | lvdesk ~1% of the core (input 10 ms + timer 20 ms + refr 5 ms per 5 s) |
+| idle interrupts | riscv-timer 141/s, esp32s31-lcd 57/s, i2c 51/s |
+| input lag, idle | avg 10 ms, worst 102 ms over 1623 events |
+| input lag, xfiles open | avg 22 ms, worst 169 ms |
+| pointer motion, no drag | **0 frames, 0 pixels**; input drain 232-459 ms per 5 s |
+| dragging a window | **timer 3176 ms per 5 s = 64% of the core**, 97 frames, 18.0 M px |
+| resize a native window | ~200 ms of lvdesk CPU |
+| boot | desktop at 17.1 s; rcS finishes 34.6 s |
+
+**The documented conclusion is now REVERSED.** `accel-plan.md` recorded
+"~600 ms per window of per-loop polling overhead... against ~200 ms now spent
+in LVGL. The remaining cost is the poll loop, not rendering." Today the same
+measurement gives, in a steady drag window: input **461 ms** (of which mouse
+205, cursor ioctl 85) against timer **3176 ms**. Rendering is now **7x** the
+input cost. The inotify rescan, cursor pacing and xshim batching between then
+and now took the poll loop out. Everything gated on "fix the poll loop first"
+- per-window planes, the LVGL PPA draw unit - is therefore **unblocked**.
+
+**The drag is not painting too much; it is painting too slowly.** 18.0 M px
+over 97 frames is **186k px per frame** against a 384k-px screen. A 500x310
+ghost is 155k px, so a frame is repainting roughly one ghost's bounding box -
+old and new position merged. There is no redundant area to remove: the lever
+is per-pixel throughput into a write-combine mapping, which is exactly what
+the PPA is for ([[accel-plan]]: for CMA-resident surfaces the engine is
+"roughly sixty times better" than the CPU, and the ghost blit alone was
+costed at 1.4-1.6x).
+
+**The tail has a name.** Worst single LVGL visit in a drag is **92 ms**, which
+matches the 102-169 ms worst input lag: one heavy frame stalls the input
+drain behind it.
+
+**Pointer motion is already optimal** - the hardware cursor plane means
+0 pixels are painted for pure motion. Nothing left there.
+
+**Boot, measured from the rcS timestamps:**
+
+| script | cost |
+|---|---|
+| S40network | **12.5 s** (16.65 -> 29.14) |
+| S45dbus-daemon | 2.2 s |
+| S05xip | 1.9 s |
+| S47s31-bt, S50crond, S10udevd | ~0.8 s each |
+| S11modules | 0.49 s, and it is a no-op |
+
+The desktop is up at 17.1 s but the machine is busy until 34.6 s, so the
+first 18 s of a session compete with boot. S40network is the single biggest
+item and runs entirely after the desktop appears.
+
+**Checked and found already good, do not spend time here:** idle cost, cursor
+motion, the damage list, the KMS commit path, device rescan, the 5 s
+housekeeping tick. `hw_vblank=Y` was tried live and moved the timer rate
+1412 -> 1377 per 10 s, inside noise on one pass - not the ~42/s the driver
+comment predicts. It needs the repeat discipline before being believed either
+way; left at N.
