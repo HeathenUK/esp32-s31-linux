@@ -32,6 +32,7 @@
 #define _GNU_SOURCE
 #include <dbus/dbus.h>
 #include <sbc/sbc.h>
+#include <alsa/asoundlib.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -909,7 +910,25 @@ static struct {
 	char inbuf[256 * 1024];
 	char want[256];			/* file requested while no transport yet */
 	uint64_t want_at;
+	/*
+	 * Route mode: the desktop's audio arrives on the ALSA loopback's
+	 * capture side and goes out over A2DP.
+	 *
+	 * The loopback does NOT block when no application is playing - it
+	 * hands out silence at the full rate (measured: 683 KB in 4 s with
+	 * nothing open). Encoding that would cost ~30% of the core and hold
+	 * the radio for nothing, so the transport is acquired only once real
+	 * audio appears and released again after a couple of seconds of
+	 * quiet. Reading and scanning the loopback while idle is cheap.
+	 */
+	snd_pcm_t *cap;
+	int route;
+	int silent_ms;
 } st;
+
+#define ROUTE_DEV	"hw:1,1"	/* loopback capture; playback is hw:1,0 */
+#define ROUTE_RATE	44100
+#define ROUTE_IDLE_MS	2000		/* quiet for this long -> let go */
 
 #define S31_HOSTED_IOC_COEX _IOWR('S', 0x37, struct s31_hosted_coex_msg)
 static void coex_hint(int streaming)
@@ -1215,9 +1234,118 @@ static void stream_stop(const char *why)
 		fclose(st.in);
 	free(st.pcm);
 	free(st.pkt);
-	memset(&st, 0, sizeof(st));
+	{
+		/* route state outlives an individual stream */
+		snd_pcm_t *cap = st.cap;
+		int route = st.route;
+
+		memset(&st, 0, sizeof(st));
+		st.cap = cap;
+		st.route = route;
+	}
 	transport_release();
 	event("STOPPED %s", why);
+}
+
+static int stream_start(const char *file);
+static size_t src_read(void *buf, size_t bytes);
+static int buf_is_silent(const unsigned char *p, size_t n);
+
+static void route_stop(void)
+{
+	if (st.active)
+		stream_stop("route off");
+	if (st.cap) {
+		snd_pcm_close(st.cap);
+		st.cap = NULL;
+	}
+	st.route = 0;
+	event("ROUTE off");
+}
+
+static int route_start(void)
+{
+	if (st.cap)
+		return 0;
+	if (snd_pcm_open(&st.cap, ROUTE_DEV, SND_PCM_STREAM_CAPTURE, 0) < 0) {
+		st.cap = NULL;
+		return -1;
+	}
+	if (snd_pcm_set_params(st.cap, SND_PCM_FORMAT_S16_LE,
+			       SND_PCM_ACCESS_RW_INTERLEAVED, 2, ROUTE_RATE,
+			       1, 200000) < 0) {
+		snd_pcm_close(st.cap);
+		st.cap = NULL;
+		return -1;
+	}
+	/*
+	 * Start it explicitly. set_params leaves a capture stream PREPARED,
+	 * not RUNNING, and snd_pcm_avail() on a prepared stream answers 0 for
+	 * ever - so a watcher that gates on avail() never reads a byte and
+	 * concludes the desktop is silent while music is plainly playing.
+	 */
+	snd_pcm_start(st.cap);
+	st.route = 1;
+	st.silent_ms = 0;
+	event("ROUTE on");
+	return 0;
+}
+
+/*
+ * Idle in route mode: watch the loopback until something plays.
+ *
+ * It must DRAIN, not nibble. The loopback produces 176 KB/s and the desktop
+ * loop only comes round every ~200 ms, so reading a single small block per
+ * pass left the capture permanently in overrun - snd_pcm_readi returned
+ * -EPIPE for ever and real audio was never noticed at all.
+ */
+static int route_watch(void)
+{
+	unsigned char probe[4096];
+	int loud = 0, guard = 0;
+
+	for (;;) {
+		snd_pcm_sframes_t avail = snd_pcm_avail(st.cap);
+		size_t want, n;
+
+		if (avail == -EPIPE) {
+			snd_pcm_prepare(st.cap);
+			snd_pcm_start(st.cap);
+			break;
+		}
+		if (avail <= 0 || ++guard > 64)
+			break;
+		want = (size_t)avail * 4;
+		if (want > sizeof(probe))
+			want = sizeof(probe);
+		n = src_read(probe, want);
+		if (!n)
+			break;
+		if (!buf_is_silent(probe, n)) {
+			loud = 1;
+			break;
+		}
+	}
+	if (!loud)
+		return 50000;
+	if (!transport_path[0]) {
+		/*
+		 * Audio is playing with nowhere to send it. Say so - rate
+		 * limited, because it is true many times a second - so the
+		 * panel can explain the silence rather than leaving the user
+		 * wondering where the sound went.
+		 */
+		static uint64_t last;
+
+		if (now_us() - last > 5000000ull) {
+			last = now_us();
+			event("ROUTE audio but no connected sink");
+		}
+		return 200000;
+	}
+	if (stream_start(NULL) == 0)
+		event("ROUTE streaming");
+	return 0;
 }
 
 static int stream_start(const char *file)
@@ -1230,14 +1358,16 @@ static int stream_start(const char *file)
 	fd = transport_acquire();
 	if (fd < 0)
 		return -1;
-	st.in = fopen(file, "rb");
-	if (!st.in) {
-		close(fd);
-		transport_release();
-		return -1;
+	if (file) {
+		st.in = fopen(file, "rb");
+		if (!st.in) {
+			close(fd);
+			transport_release();
+			return -1;
+		}
+		setvbuf(st.in, st.inbuf, _IOFBF, sizeof(st.inbuf));
+		fseek(st.in, 44, SEEK_SET);
 	}
-	setvbuf(st.in, st.inbuf, _IOFBF, sizeof(st.inbuf));
-	fseek(st.in, 44, SEEK_SET);
 	st.fd = fd;
 	sbc_init_a2dp(&st.sbc, 0L, &chosen, sizeof(chosen));
 	st.sbc.endian = SBC_LE;
@@ -1253,6 +1383,39 @@ static int stream_start(const char *file)
 	return 0;
 }
 
+/* Read PCM from whichever source is active. Returns bytes, or 0 at the end. */
+size_t src_read(void *buf, size_t bytes)
+{
+	if (st.cap) {
+		snd_pcm_sframes_t n = snd_pcm_readi(st.cap, buf,
+						    (snd_pcm_uframes_t)(bytes / 4));
+
+		if (n == -EPIPE) {		/* overrun: catch up, do not die */
+			snd_pcm_prepare(st.cap);
+			return 0;
+		}
+		if (n < 0)
+			return 0;
+		return (size_t)n * 4;
+	}
+	return st.in ? fread(buf, 1, bytes, st.in) : 0;
+}
+
+int buf_is_silent(const unsigned char *p, size_t n)
+{
+	const int16_t *s = (const int16_t *)p;
+	size_t i;
+
+	/*
+	 * Not memcmp against zero: a codec's idle output dithers by a LSB or
+	 * two, and treating that as music would hold the link open for ever.
+	 */
+	for (i = 0; i < n / 2; i++)
+		if (s[i] > 64 || s[i] < -64)
+			return 0;
+	return 1;
+}
+
 /* One packet: returns the microseconds until the next one is due. */
 static int stream_step(void)
 {
@@ -1262,10 +1425,17 @@ static int stream_step(void)
 
 	while (off + st.framelen <= (size_t)st.wmtu && nframes < (size_t)st.max_frames) {
 		ssize_t enc, wrote = 0;
-		size_t rd = fread(st.pcm, 1, st.codesize, st.in);
+		size_t rd = src_read(st.pcm, st.codesize);
 
 		if (rd < st.codesize)
 			break;
+		if (st.route) {
+			if (buf_is_silent(st.pcm, rd))
+				st.silent_ms += (int)(st.codesize / 4 * 1000 /
+						      ROUTE_RATE);
+			else
+				st.silent_ms = 0;
+		}
 		enc = sbc_encode(&st.sbc, st.pcm, st.codesize, st.pkt + off,
 				 (size_t)st.wmtu - off, &wrote);
 		if (enc <= 0 || wrote <= 0)
@@ -1275,8 +1445,24 @@ static int stream_step(void)
 		st.ts += (unsigned int)(st.codesize / 4);
 	}
 	if (!nframes) {
+		/* route mode never "ends"; a short read is just a hiccup */
+		if (st.route)
+			return 5000;
 		stream_stop("end");
 		return 100000;
+	}
+	if (st.route && st.silent_ms > ROUTE_IDLE_MS) {
+		/* let the radio and the encoder go until sound returns */
+		coex_hint(0);
+		sbc_finish(&st.sbc);
+		close(st.fd);
+		free(st.pcm); free(st.pkt);
+		st.pcm = st.pkt = NULL;
+		st.active = 0;
+		st.silent_ms = 0;
+		transport_release();
+		event("ROUTE idle");
+		return 20000;
 	}
 	st.t_enc += now_us() - tenc0;
 	st.c_enc += cpu_us() - cenc0;
@@ -1529,6 +1715,16 @@ static void cmd(struct cli *c, char *line)
 		snprintf(st.want, sizeof(st.want), "%s", b);
 		st.want_at = now_us();
 		cli_send(c, "OK");
+	} else if (!strcmp(a, "route")) {
+		if (b && !strcmp(b, "on")) {
+			if (route_start() < 0) {
+				cli_send(c, "ERR no loopback");
+				return;
+			}
+		} else {
+			route_stop();
+		}
+		cli_send(c, "OK");
 	} else if (!strcmp(a, "stop")) {
 		st.want[0] = 0;
 		stream_stop("stop");
@@ -1706,6 +1902,10 @@ int main(int argc, char **argv)
 			}
 		if (st.active) {
 			int wait = stream_step();
+
+			timeout = wait / 1000 < timeout ? wait / 1000 : timeout;
+		} else if (st.route) {
+			int wait = route_watch();
 
 			timeout = wait / 1000 < timeout ? wait / 1000 : timeout;
 		}
