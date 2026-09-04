@@ -4017,3 +4017,37 @@ LVGL pool. This LVGL has no `lv_snapshot_take_to_draw_buf()`, so that means
 either custom draw-buf plumbing over a `malloc`, or growing `LV_MEM_SIZE` by
 ~800 KB permanently - which is the wrong trade on a board where memory is the
 binding constraint and the pool already peaks at 25 KB of 512.
+
+### The context switch is ~590 us and the coprocessor hook is only 8% of it
+
+`esp32s31-ext.c` names the ~517 us context switch and nominates its own
+unconditional PIE/HWLoop save/restore as the prime suspect, with a knob to
+test it. Tested, three runs per arm, with the first arm repeated as a control:
+
+| arm | per context switch |
+|---|---|
+| coprocessor save/restore ON (shipped) | 638.3 / 641.7 / 650.3 us |
+| OFF | 592.2 / 601.9 / 583.6 us |
+| ON again, control | 643.7 / 637.6 / 648.5 us |
+
+The control reproduces the first arm to **0.02%**, so this is a real effect
+and not the noise floor that has voided so many sweeps here. **The hook costs
+~51 us of ~643, i.e. 7.9%** - worth having, not the cause.
+
+**The finding is what remains: a context switch costs ~590 us with the hook
+disabled entirely, against 2-5 us on comparable hardware.** That is two
+orders of magnitude, on a single-core machine where every scheduling decision
+pays it, and it is the largest unexplained cost on the board. It is upstream
+of almost everything else: SD requests were measured at 8.3 switches each,
+and any interaction that wakes a second process pays it twice.
+
+Candidates, none yet tested: TLB handling (whether this core has ASIDs at all,
+or every switch is a full `sfence.vma`), cache maintenance on switch, the
+generic entry path (already measured at 2.83x here), and the XIP flash fetch
+penalty (5.98x on branchy code) applying to `__switch_to` itself. The next
+step is attribution, not a redesign - and `ctxbench` plus the knob above is
+the pattern to follow.
+
+Do NOT disable the coprocessor hook in a shipped build: it is a measurement
+aid, and a task that actually uses PIE or hardware loops would see another
+task's state. It also costs only 8%.
