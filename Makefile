@@ -276,6 +276,23 @@ DIAG_TWEAKS := --disable DEBUG_FS
 else
 DIAG_TWEAKS := --enable DEBUG_FS
 endif
+
+# Slab accounting OFF by default, because the thing that reports it is also the
+# thing that costs memory. The shipping kernel sets CONFIG_SLUB_TINY, which is
+# what a 15.4 MB machine wants - but SLUB_DEBUG depends on !SLUB_TINY, and
+# SLUB_DEBUG is what creates /proc/slabinfo and /sys/kernel/slab. So there is
+# no way to see the breakdown of Slab without changing the allocator that
+# produced it.
+#
+# `make linux SLABDIAG=1` builds a kernel that can be asked. Use it for the
+# BREAKDOWN only: turning SLUB_TINY off restores per-CPU slabs and moves the
+# total, so the absolute number from that kernel is not the shipping number.
+SLABDIAG ?= 0
+ifeq ($(SLABDIAG),0)
+SLAB_TWEAKS :=
+else
+SLAB_TWEAKS := --disable SLUB_TINY --enable SLUB_DEBUG
+endif
 LINUX_TARGET ?= xipImage
 
 # An oversized kernel is fatal, because it silently runs past its partition into
@@ -328,6 +345,7 @@ linux: toolchain | $(LINUX_OUT)
 		--enable DEBUG_FS \
 		--enable USB_MON \
 		$(DIAG_TWEAKS) \
+		$(SLAB_TWEAKS) \
 		--set-val LOG_BUF_SHIFT 14 \
 		--enable CMA \
 		--enable DMA_CMA \

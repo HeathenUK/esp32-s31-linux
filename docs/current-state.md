@@ -945,6 +945,81 @@ load time are the whole game for a library-heavy app. Note `fault_around_bytes`
 is a debugfs knob and `DIAG=0` compiles debugfs out, so the default 64 KiB
 (16 pages) is what ships and cannot be tuned at runtime.
 
+## The slab is 4.4 MB and it is NOT a lever. Stop proposing it. (2026-09-04)
+
+This has been raised repeatedly across sessions as "the next big win - 4,420 kB
+of unreclaimable slab, 28.7% of the machine". It was investigated properly and
+**the premise was wrong and the conclusion is that there is no win here.**
+Do not raise it again without new evidence; re-read this section instead.
+
+### The headline number was an accounting artefact
+
+`SReclaimable: 0` is not true. The shipping kernel sets `CONFIG_SLUB_TINY`,
+which omits the separate `kmalloc-rcl-*` caches and does not do the reclaimable
+accounting. Build the same tree without it and the same board reports:
+
+                       shipping (SLUB_TINY)   diagnostic (no SLUB_TINY)
+    Slab                     4,072-4,420 kB        5,192 kB
+    SReclaimable                      0 kB           900 kB
+    SUnreclaim               4,072-4,420 kB        4,292 kB
+
+So ~17% of it is reclaimable under pressure and always was. Every previous
+statement of "28.7% of the machine, all unreclaimable" was reading a hole in
+the accounting, not a property of the machine.
+
+### How to see it at all
+
+`/proc/slabinfo` and `/sys/kernel/slab` come from `CONFIG_SLUB_DEBUG`, which
+depends on `!SLUB_TINY`. There is therefore no way to inspect the breakdown
+without changing the allocator that produced it. `make linux SLABDIAG=1` builds
+a kernel that can be asked; use it for the BREAKDOWN only, never for the total.
+
+### The breakdown, and why each part stays
+
+Top caches, diagnostic kernel, idle desktop (kB of allocated slots):
+
+    838  kernfs_node_cache   9,752 nodes - the device model itself (sysfs)
+    408  kmalloc-1k          \
+    348  kmalloc-64           |
+    280  kmalloc-128          |  ~1,939 kB of generic kmalloc across all
+    236  kmalloc-512          |  buckets: driver allocations, unattributable
+    192  kmalloc-8k           |  without tracing this kernel does not have
+    176  kmalloc-2k           |  (no ftrace, no kmemleak, no perf)
+    160  kmalloc-4k          /
+    270  biovec-max          block layer bio mempool reserves
+    238  radix_tree_node     the page cache index - we WANT this large
+    191  task_struct         90 slots for ~57 tasks; with sighand (96),
+                             signal (53) and mm_struct (51) that is ~390 kB
+                             of per-task cost
+    116  dentry              tiny already
+    110  ext4_groupinfo_4k   954 block groups (see below)
+    102  ext4_inode_cache
+
+There is no single large item to remove. The biggest is the device model, and
+sysfs totals 9,573 entries: /sys/devices 4,896 (platform 3,212, virtual 1,483),
+/sys/kernel 2,622, /sys/firmware 816 (the device tree is exported as files),
+/sys/bus 506. Cutting it means deleting devices and subsystems, not tuning.
+
+### The one real, quantified win, and it is small
+
+The microSD is one ext4 filesystem across the whole 119 GiB card, made with
+defaults: **31,249,920 blocks / 32,768 per group = 954 block groups**, and
+31,260,672 inodes for a filesystem holding a few thousand files. That is what
+`ext4_groupinfo_4k` at 1,008 objects / 110 kB is. A small filesystem (8 GiB,
+`-N` capped inodes) would take it to ~64 groups, about 7 kB.
+
+**~100 kB, or 0.6% of RAM, and it costs a full re-image of the card.** It is
+recorded because it is real and cheap to fold into the next re-image, not
+because it is worth doing on its own.
+
+### Verdict
+
+Realistically 300-500 kB of the 4.4 MB is recoverable, and only by deleting
+device-model features and running fewer processes - roughly 3% of total RAM for
+substantial work and lost functionality. **The slab is the cost of having a
+device model, a block layer, a page cache index and ~57 tasks. It is not a
+lever. The levers are working-set size and request batching.**
+
 ## PPA (Pixel Processing Accelerator)
 
 Working under Linux as of 2026-08-21: `drivers/gpu/drm/espressif/esp32s31-ppa.c`,
