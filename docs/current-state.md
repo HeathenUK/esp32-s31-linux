@@ -3837,3 +3837,56 @@ link-layer beneath it, driving undocumented CCM hardware in the BT MAC
 crypto peripheral at all). Reconstructing that means inferring an
 undocumented radio interface from obfuscated code with no ground truth.
 Not recommended. The route to working BLE HID is an Espressif fix.
+
+## Selectable audio output (2026-09-04)
+
+The volume popover picks between the codec and a connected Bluetooth sink by
+rewriting `pcm.!default` in `/etc/asound.conf`; `s31-bt` streams the ALSA
+loopback's capture side out over A2DP. `s31-tone` is a 440 Hz test tone that
+follows the same file, so a switch can be heard without any other player.
+
+**Cost, measured per process over 10 s windows (ticks/10 = %):**
+
+| state | cost |
+|---|---|
+| Bluetooth connected, output = Speakers | s31-bt does not appear in the census |
+| Bluetooth **selected**, nothing playing | s31-bt does not appear; loopback closed |
+| Bluetooth selected, tone playing | s31-bt 20.4%, hci0 kworker 9.2% |
+
+Choosing the output therefore costs nothing. Streaming costs what SBC costs:
+1.9 ms of CPU per packet at 43 packets a second is ~8%, the L2CAP write ~2%,
+and the rest is the ALSA read path.
+
+**Five faults found getting there, all of them ours:**
+
+- **alsa-lib caches the configuration per process.** Reopening `default`
+  after the picker rewrote the file reopened the OLD device. Switching by
+  hand worked because that was a fresh process; switching in the panel did
+  nothing. `snd_config_update_free_global()` before the open.
+- **One ALSA read per SBC frame** was ~645 syscalls a second to feed 43
+  packets. A syscall costs milliseconds here, so the reads cost more than
+  the encoding. One read per packet: **50.1% -> 20.4%**, and the pointer
+  became usable again while music plays.
+- **The capture stream was opened when Bluetooth was selected**, then
+  drained 176 KB/s of silence for ever. It now opens on first sound, gated
+  by reading the loopback's own `pcm0p/sub0/status`.
+- **`snd_pcm_prepare()` without `snd_pcm_start()`** on an overrun leaves the
+  capture PREPARED, and a PREPARED capture answers `avail()==0` for ever:
+  routing ended silently and never recovered.
+- **BlueZ 5.79 negotiates A2DP at connect time.** A daemon that restarts
+  afterwards has no transport and no callback is coming. It now rescans
+  ObjectManager and calls `Device1.ConnectProfile` for the A2DP sink UUID.
+
+**Volume** goes to whichever sink is live: the codec mixer for speakers
+(perceptual, because that register is not), AVRCP absolute volume on the
+transport's `Volume` property for Bluetooth (linear 0..127, the earpiece
+applies its own curve). **On disconnect** the desktop falls back to the
+speakers rather than playing into a loopback nobody drains.
+
+**RAM.** `s31-bt` is 320 kB RSS of which 36 kB is text, and it has joined
+`XIP_ROOTS`, so in a built image that text is free. The 256 kB static file
+read buffer is now a 64 kB allocation made only while playing a file. The
+large remaining item is a development artefact, not a regression: a
+hand-deployed `/root/lvdesk-new` carries **812 kB of resident text** that
+the XIP copy at `/usr/bin/lvdesk` would cost nothing for. Recovering it
+needs a rootfs rebuild and an SD re-image.
