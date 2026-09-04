@@ -147,3 +147,32 @@ For apps to play through them:
 
 Effort: 1-2 is a day; 3-4 depends on what devices exist to test with; 5 is
 another half day plus the measurements.
+
+## Bearer preference: work around the LE gap without pretending it is fixed (2026-09-04)
+
+LE security is broken in this radio firmware and it is not ours to fix
+(docs/current-state.md, "BLE HID on the S31" - Espressif's own example
+fails the same keyboard). The daemon therefore chooses a bearer instead of
+failing blindly:
+
+- `struct dev` records `bredr` and `le`. The discriminator is free: BlueZ
+  populates **Class only for BR/EDR** devices and **Appearance only for
+  LE** ones, and a `random` AddressType is LE. No discovery-filter
+  juggling, no extra scans.
+- `list` reports `bearer=bredr|le|dual` so the UI can show it.
+- `pair` on a device with a BR/EDR bearer sets the discovery filter to
+  `bredr` first, so a **dual-mode device is paired over classic**, which
+  works. The user sees nothing unusual - that is the "seamless" part.
+- `pair` on an LE-only device still attempts (the blob may be fixed one
+  day) but first emits `WARN <addr> le-only ...`, so the panel can say
+  *why* it is likely to fail instead of showing a generic error.
+
+**Verified:** the earbuds report `bearer=bredr`. **Not yet verified:** the
+dual-mode fallback itself, for want of a dual-mode device to test - the
+8BitDo keyboard never appeared in a BR/EDR-filtered scan across 45 s, so it
+looks LE-only in its current mode and cannot benefit.
+
+Also added, from the measurements: `scan` is refused with
+`ERR busy streaming` while a transport is active, and `play` stops any
+running discovery first. Implemented; still to be exercised against a live
+stream.

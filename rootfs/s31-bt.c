@@ -75,6 +75,17 @@ struct dev {
 	unsigned int class;
 	int paired, trusted, connected, rssi;
 	int audio, hid;
+	/*
+	 * Which bearers this device offers. BlueZ populates Class only for
+	 * BR/EDR devices and Appearance only for LE ones, so the two
+	 * properties discriminate the bearers without juggling discovery
+	 * filters. This matters because LE is broken on this silicon
+	 * (see docs/current-state.md, "BLE HID on the S31"): a dual-mode
+	 * device must be paired over classic, and an LE-only one has to be
+	 * refused with an explanation rather than a generic failure.
+	 */
+	int bredr, le;
+	unsigned int appearance;
 	int used;
 };
 static struct dev devs[MAXDEV];
@@ -141,6 +152,16 @@ static struct dev *dev_get(const char *path)
  * A2DP sink 0x110b). A device that is neither is still listed as "other"
  * once paired, and hidden from scan results.
  */
+/* "dual" reads better than "bredr" for something that offers both. */
+static const char *dev_bearer(const struct dev *d)
+{
+	if (d->bredr && d->le)
+		return "dual";
+	if (d->le)
+		return "le";
+	return "bredr";
+}
+
 static const char *dev_kind(const struct dev *d)
 {
 	unsigned int major = (d->class >> 8) & 0x1f;
@@ -229,9 +250,9 @@ static void dev_line(struct cli *c, const struct dev *d)
 	char line[200];
 
 	snprintf(line, sizeof(line),
-		 "DEV %s paired=%d conn=%d trusted=%d kind=%s rssi=%d \"%s\"",
+		 "DEV %s paired=%d conn=%d trusted=%d kind=%s bearer=%s rssi=%d \"%s\"",
 		 d->addr, d->paired, d->connected, d->trusted, dev_kind(d),
-		 d->rssi, d->name[0] ? d->name : d->addr);
+		 dev_bearer(d), d->rssi, d->name[0] ? d->name : d->addr);
 	if (c)
 		cli_send(c, "%s", line);
 	else
@@ -281,6 +302,19 @@ static int dev_props(struct dev *d, DBusMessageIter *dict)
 				d->class = v;
 				changed = 1;
 			}
+			d->bredr = 1;		/* only BR/EDR devices have one */
+		} else if (!strcmp(key, "Appearance") && t == DBUS_TYPE_UINT16) {
+			dbus_uint16_t v;
+
+			dbus_message_iter_get_basic(&var, &v);
+			d->appearance = v;
+			d->le = 1;		/* GAP appearance is an LE thing */
+		} else if (!strcmp(key, "AddressType") && t == DBUS_TYPE_STRING) {
+			const char *a;
+
+			dbus_message_iter_get_basic(&var, &a);
+			if (a && !strcmp(a, "random"))
+				d->le = 1;
 		} else if (!strcmp(key, "RSSI") && t == DBUS_TYPE_INT16) {
 			dbus_int16_t v;
 
@@ -1410,6 +1444,16 @@ static void cmd(struct cli *c, char *line)
 	} else if (!strcmp(a, "scan")) {
 		int on = b && !strcmp(b, "on");
 
+		if (on && st.active) {
+			/*
+			 * Measured 2026-09-04: discovery during playback costs
+			 * up to 4987 ms of lateness and hundreds of stalls,
+			 * where a quiet radio costs 10-34 ms and none. Wi-Fi
+			 * is NOT the culprit - scanning is.
+			 */
+			cli_send(c, "ERR busy streaming");
+			return;
+		}
 		if (on && !discovering) {
 			/* forget stale discovery results before a new scan */
 			for (i = 0; i < MAXDEV; i++)
@@ -1431,8 +1475,26 @@ static void cmd(struct cli *c, char *line)
 			cli_send(c, "ERR unknown device");
 			return;
 		}
-		if (!strcmp(a, "pair"))
+		if (!strcmp(a, "pair")) {
+			/*
+			 * Prefer classic. LE pairing on this controller
+			 * completes SMP and then dies with a MIC failure -
+			 * Espressif's own esp_hid_host example fails the same
+			 * way on this silicon, so it is not ours to fix. A
+			 * dual-mode device is therefore paired over BR/EDR,
+			 * which works; an LE-only device is still attempted,
+			 * because the blob may be fixed, but the UI is told
+			 * up front that this is the unsupported path.
+			 */
+			event("BEARER %s %s", d->addr, dev_bearer(d));
+			if (d->bredr)
+				set_discovery_transport("bredr");
+			else if (d->le)
+				event("WARN %s le-only - LE security is broken "
+				      "in this radio firmware; pairing may fail",
+				      d->addr);
 			event("PAIRING %s", d->addr);
+		}
 		dev_call(d, a);
 		cli_send(c, "OK");
 	} else if (!strcmp(a, "forget")) {
@@ -1460,6 +1522,10 @@ static void cmd(struct cli *c, char *line)
 		}
 		if (st.active)
 			stream_stop("replaced");
+		if (discovering) {		/* scanning wrecks the stream */
+			adapter_call("StopDiscovery");
+			scan_stop_at = 0;
+		}
 		snprintf(st.want, sizeof(st.want), "%s", b);
 		st.want_at = now_us();
 		cli_send(c, "OK");
