@@ -250,6 +250,7 @@ static lv_obj_t *sysinfo;		/* task bar free-memory readout */
 static char sysinfo_last[192];
 static lv_obj_t *wifi_tray_clip;	/* bright-glyph clip window, see tray_wifi_update */
 static lv_obj_t *bt_tray_icon;		/* declared here: ctl_line() opens panels by name */
+static lv_obj_t *vol_tray_icon;
 static int wifi_tray_h;			/* full LV_SYMBOL_WIFI glyph height */
 static int wifi_tray_bucket = -1;	/* last painted signal bucket */
 #define MAXKBD 8
@@ -2636,7 +2637,9 @@ static void ctl_line(char *buf)
 			 */
 			lv_obj_t *icon = NULL;
 
-			if (strstr(buf, "bt") && bt_tray_icon)
+			if (strstr(buf, "audio") && vol_tray_icon)
+				icon = vol_tray_icon;
+			else if (strstr(buf, "bt") && bt_tray_icon)
 				icon = lv_obj_get_parent(bt_tray_icon);
 			else if (strstr(buf, "wifi") && wifi_tray_clip)
 				/* the clip's parent IS the clickable icon */
@@ -5432,9 +5435,66 @@ static void vol_live_cb(lv_event_t *e)
 	vol_label_set(lv_slider_get_value(lv_event_get_target(e)));
 }
 
+/*
+ * Where the desktop's sound goes.
+ *
+ * Selecting Bluetooth points ALSA's default at the loopback's playback side
+ * and asks s31-bt to stream its capture side out over A2DP; selecting
+ * Speakers points it back at the codec. The control device stays on card 0
+ * either way, so the volume slider keeps working on the hardware mixer.
+ *
+ * Applications pick the change up on their NEXT open - that is how ALSA
+ * works without a sound server, and this board deliberately has none.
+ */
+static int audio_out_bt;
+
+static void audio_route_write(int bt)
+{
+	FILE *f = fopen("/etc/asound.conf", "w");
+
+	if (!f)
+		return;
+	fprintf(f, "pcm.!default { type plug slave.pcm \"hw:%d,0\" }\n"
+		   "ctl.!default { type hw card 0 }\n", bt ? 1 : 0);
+	fclose(f);
+}
+
+static void audio_out_cb(lv_event_t *e)
+{
+	int bt = (int)(intptr_t)lv_event_get_user_data(e);
+	int i;
+
+	audio_out_bt = bt;
+	audio_route_write(bt);
+	if (bt) {
+		for (i = 0; i < btdev_n; i++)
+			if (btdevs[i].paired && !strcmp(btdevs[i].kind, "audio")) {
+				if (!btdevs[i].conn)
+					bt_cmd("connect %s", btdevs[i].addr);
+				break;
+			}
+		bt_cmd("route on");
+	} else {
+		bt_cmd("route off");
+	}
+	popover_close();
+}
+
+static const struct btdev *audio_sink(void)
+{
+	int i;
+
+	for (i = 0; i < btdev_n; i++)
+		if (btdevs[i].paired && !strcmp(btdevs[i].kind, "audio"))
+			return &btdevs[i];
+	return NULL;
+}
+
 static void tray_audio_cb(lv_event_t *e)
 {
-	lv_obj_t *pop = popover_open(lv_event_get_target(e), 230, 76);
+	const struct btdev *sink = audio_sink();
+	lv_obj_t *pop = popover_open(lv_event_get_target(e), 230,
+				     sink ? 132 : 76);
 	int v;
 
 	if (!pop)
@@ -5458,6 +5518,37 @@ static void tray_audio_cb(lv_event_t *e)
 	lv_obj_add_event_cb(vol_slider, vol_live_cb, LV_EVENT_VALUE_CHANGED,
 			    NULL);
 	lv_obj_add_event_cb(vol_slider, vol_set_cb, LV_EVENT_RELEASED, NULL);
+
+	/* The output picker only exists if there is somewhere else to go. */
+	if (sink) {
+		lv_obj_t *b, *l;
+		int k;
+
+		l = lv_label_create(pop);
+		lv_label_set_text(l, "Output");
+		lv_obj_set_style_text_font(l, FONT_UI, 0);
+		lv_obj_set_pos(l, 0, 52);
+
+		for (k = 0; k < 2; k++) {
+			b = lv_button_create(pop);
+			lv_obj_set_pos(b, 0, 70 + k * 24);
+			lv_obj_set_size(b, 212, 22);
+			lv_obj_set_style_radius(b, 0, 0);
+			lv_obj_set_style_shadow_width(b, 0, 0);
+			lv_obj_set_style_bg_color(b,
+				lv_color_hex(audio_out_bt == k ?
+					     COL_HDR_FOCUS : COL_HDR), 0);
+			lv_obj_add_event_cb(b, audio_out_cb, LV_EVENT_CLICKED,
+					    (void *)(intptr_t)k);
+			l = lv_label_create(b);
+			lv_label_set_text(l, k ? (sink->name[0] ? sink->name :
+						  sink->addr) : "Speakers");
+			lv_obj_set_style_text_font(l, FONT_UI, 0);
+			lv_obj_set_width(l, 200);
+			lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
+			lv_obj_align(l, LV_ALIGN_LEFT_MID, 4, 0);
+		}
+	}
 }
 
 /* ---------------------------------------------------------------- display */
@@ -6747,7 +6838,7 @@ int main(void)
 					    LV_EVENT_CLICKED, NULL);
 		}
 
-		l = lv_label_create(tray);
+		vol_tray_icon = l = lv_label_create(tray);
 		lv_label_set_text(l, LV_SYMBOL_VOLUME_MAX);
 		lv_obj_set_style_text_font(l, FONT_UI, 0);
 		lv_obj_set_style_text_color(l, lv_color_hex(COL_HDR_TEXT), 0);

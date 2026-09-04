@@ -215,3 +215,42 @@ Two things learned while testing, both now fixed in the code:
   starts landing between glyphs and the test reports "the panel did not
   open" when the panel is fine. `echo "tray bt" > /tmp/lvdesk.ctl` (also
   `tray wifi`) opens a panel by name; use that.
+
+## Audio route: desktop sound to the earbuds (2026-09-04)
+
+`CONFIG_SND_ALOOP=y`, pinned to card 1 with `snd_aloop.index=1` on the
+kernel command line - it grabbed card 0 otherwise, which silently
+redirected every application's default output into the loopback and left
+the volume mixer attached to a card with no controls.
+
+The volume popover gained an **Output** picker (Speakers / the paired audio
+device), which appears only when there is somewhere else to send sound. It
+rewrites `/etc/asound.conf` - `pcm.!default` to `hw:1,0` for Bluetooth or
+`hw:0,0` for the codec, with `ctl.!default` staying on card 0 so the volume
+slider keeps driving the hardware mixer - and tells the daemon to
+`route on` / `route off`. Applications pick the change up on their next
+open; that is ALSA without a sound server, which this board deliberately
+has none of.
+
+`s31-bt route on` captures the loopback and streams it over A2DP, **gated
+on silence**: the loopback does not block when nothing is playing, it hands
+out silence at the full rate (measured: 683 KB in 4 s with nothing open),
+so encoding it unconditionally would cost ~30% of the core and hold the
+radio for nothing. The transport is taken only when real audio appears and
+released after two seconds of quiet.
+
+Three bugs found while testing, all in the first draft of the watcher:
+
+- it read 1 KB per poll pass against a 176 KB/s stream, so the capture sat
+  in permanent overrun and never returned a byte;
+- it gated on `snd_pcm_avail()`, which answers 0 for ever on a capture
+  stream left PREPARED rather than started - music was playing and the
+  daemon reported silence;
+- audio with no connected sink failed silently, so the panel could not
+  explain where the sound had gone.
+
+**Verified:** idle costs ~2% of the core with nothing playing; audio is
+detected within one poll once it starts; the picker rewrites the ALSA
+default both ways and the daemon receives `ROUTE on`/`off`.
+**Not verified:** the A2DP output itself, by ear - the earbuds were asleep
+for this round. That is the one thing left to confirm.
