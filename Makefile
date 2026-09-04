@@ -320,6 +320,7 @@ linux: toolchain | $(LINUX_OUT)
 		--enable HID_GENERIC \
 		--enable USB_HID \
 		--enable HIDRAW \
+		--enable UHID \
 		--enable DEBUG_FS \
 		--enable USB_MON \
 		$(DIAG_TWEAKS) \
