@@ -1,0 +1,33 @@
+#!/bin/sh
+#
+# The one Bluetooth daemon: pairing agent, device list for the desktop's tray,
+# and the A2DP source. Gated on the same opt-in flag as bluetoothd, because
+# without bluetoothd there is nothing for it to talk to.
+#
+# It must start AFTER bluetoothd (S46) and it registers its media endpoint at
+# startup: BlueZ negotiates A2DP when a device connects, so an endpoint that
+# appears afterwards gets no transport and no callback. Starting here means it
+# is always registered before anything can connect.
+
+DAEMON=/usr/bin/s31-bt
+
+start() {
+	[ -f /etc/s31-bluetooth-on ] || return 0
+	[ -x "$DAEMON" ] || return 0
+	printf "Starting s31-bt: "
+	setsid "$DAEMON" >/var/log/s31-bt.log 2>&1 </dev/null &
+	echo "OK"
+}
+
+stop() {
+	printf "Stopping s31-bt: "
+	# busybox pkill -f matches nothing here; kill by pid or leave duplicates
+	for p in $(pidof s31-bt); do kill "$p"; done
+	echo "OK"
+}
+
+case "$1" in
+	start|stop) "$1";;
+	restart|reload) stop; sleep 1; start;;
+	*) echo "Usage: $0 {start|stop|restart}"; exit 1
+esac

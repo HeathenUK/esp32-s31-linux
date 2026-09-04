@@ -3883,10 +3883,30 @@ transport's `Volume` property for Bluetooth (linear 0..127, the earpiece
 applies its own curve). **On disconnect** the desktop falls back to the
 speakers rather than playing into a loopback nobody drains.
 
-**RAM.** `s31-bt` is 320 kB RSS of which 36 kB is text, and it has joined
-`XIP_ROOTS`, so in a built image that text is free. The 256 kB static file
-read buffer is now a 64 kB allocation made only while playing a file. The
-large remaining item is a development artefact, not a regression: a
-hand-deployed `/root/lvdesk-new` carries **812 kB of resident text** that
-the XIP copy at `/usr/bin/lvdesk` would cost nothing for. Recovering it
-needs a rootfs rebuild and an SD re-image.
+**RAM.** The 256 kB static file read buffer is now a 64 kB allocation made
+only while playing a file, and `s31-bt` has joined `XIP_ROOTS`.
+
+The large item was a development artefact, not a regression: a hand-deployed
+`/root/lvdesk-new` carried **812 kB of resident text** that the XIP copy
+costs nothing for. Recovering it needed **no SD re-image** - the XIP images
+live in the flash `rootfs` and `xip2` partitions and are written with
+esptool. `S05xip` mounts them as `lowerdir=$xip:$sd`, and the leftmost
+lowerdir wins, so flashing the partition shadows the card's older copy
+outright.
+
+| | before | after |
+|---|---|---|
+| lvdesk RSS | 892 kB | 188 kB |
+| s31-bt RSS | 312 kB | 216 kB |
+| MemAvailable, idle | 2116 kB | 3192 kB |
+| MemAvailable, streaming to Bluetooth | 2116 kB | 2868 kB |
+
+The rootfs was rebuilt anyway, because `/etc` is on the card and not
+overlaid: `S47s31-bt` (which must start after `bluetoothd`, since BlueZ
+negotiates A2DP at connect time) and a default `asound.conf` have to live
+there. Those are two small files and were written to the card directly.
+
+Note for next time: `make rootfs` first regenerates `s31_pie_cases.inc` with
+an ESP-IDF compiler flag (`-mespv-spec=2p2`) that the container's
+`riscv32-esp-elf-gcc` rejects. The generated file is committed; build with
+`$S31_MAKE -o s31-pie-cases rootfs` to skip only that step.
