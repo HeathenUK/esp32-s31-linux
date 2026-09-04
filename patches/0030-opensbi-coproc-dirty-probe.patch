@@ -1,0 +1,96 @@
+opensbi: esp32s31: add a coprocessor dirty-state probe (SBI function 3)
+
+Companion to patches/0029. Machine mode writes CLEAN to the PIE state CSR,
+executes one vector load, and reads the state back, returning both readings
+packed into the SBI return value so Linux can print them - the M-mode console
+prints at a different baud from Linux's and lands in the unreadable region
+where the console switches over.
+
+Answer, on this silicon: wrote 2, read 2, and 3 after one vector instruction.
+The hardware raises its own dirty state, so a lazy save is possible in
+principle. See 0029 for why the obvious lazy save did not pay.
+
+Apply against opensbi-esp32-s31.
+diff --git a/platform/generic/espressif/esp32s31.c b/platform/generic/espressif/esp32s31.c
+index df0954a..ba414e5 100644
+--- a/platform/generic/espressif/esp32s31.c
++++ b/platform/generic/espressif/esp32s31.c
+@@ -19,6 +19,7 @@
+ #include <sbi/sbi_string.h>
+ #include <sbi_utils/fdt/fdt_helper.h>
+ #include <sbi/sbi_hart.h>
++#include <sbi/sbi_console.h>
+ #include <sbi/sbi_scratch.h>
+ #include <sbi/sbi_emulate_csr.h>
+ #include <sbi/sbi_hart_pmp.h>
+@@ -57,6 +58,7 @@ extern unsigned int sbi_hart_priv_version_override;
+ #define S31_SBI_COPROC_SWITCH    0
+ #define S31_SBI_COPROC_SAVE      1
+ #define S31_SBI_COPROC_RESTORE   2
++#define S31_SBI_COPROC_PROBE     3
+ #define S31_COPROC_STATE_SIZE    256UL
+ #define S31_HOSTED_BASE          0x2f06af80UL
+ #define S31_HOSTED_DB_H0         0x2058601cUL
+@@ -349,6 +351,7 @@ static struct sbi_ecall_extension esp32s31_flash_ecall_ext = {
+         .handle         = esp32s31_flash_ecall,
+ };
+ 
++static unsigned long esp32s31_probe_coproc_dirty(void);
+ extern void s31_coproc_save(void *state);
+ extern void s31_coproc_restore(const void *state);
+ 
+@@ -363,6 +366,12 @@ static int esp32s31_coproc_ecall(unsigned long extid, unsigned long funcid,
+ 				 struct sbi_trap_regs *regs,
+ 				 struct sbi_ecall_return *out)
+ {
++	/* The probe takes no state pointer, so it must precede the check. */
++	if (funcid == S31_SBI_COPROC_PROBE) {
++		out->value = esp32s31_probe_coproc_dirty();
++		return 0;
++	}
++
+ 	if (!s31_coproc_state_valid(regs->a0))
+ 		return SBI_ERR_INVALID_ADDRESS;
+ 
+@@ -450,6 +459,41 @@ static int esp32s31_timer_init(void)
+         return 0;
+ }
+ 
++/*
++ * Does the PIE unit track its own dirty state?
++ *
++ * The state CSR takes 0..3 and the accessors use INITIAL/CLEAN/DIRTY names,
++ * which is the RISC-V extension-state encoding. If the hardware raises the
++ * state to DIRTY by itself when a vector instruction executes, then the
++ * per-switch save can be skipped whenever the outgoing task left it CLEAN -
++ * which is what makes a lazy save possible, and lazy saving is the only way
++ * to keep the coprocessor's correctness AND its ~50 us per switch.
++ *
++ * Nothing in docs/s31_hardware records the answer, so ask the silicon: set
++ * CLEAN, execute one vector load, read the state back. Printed once at boot.
++ */
++static unsigned long esp32s31_probe_coproc_dirty(void)
++{
++	unsigned long before, after, scratch[4] __attribute__((aligned(16)));
++
++	scratch[0] = scratch[1] = scratch[2] = scratch[3] = 0;
++
++	/* Enable, then declare the state CLEAN. */
++	__asm__ volatile ("csrwi 0x7f2, 1");	/* INITIAL: enables access */
++	__asm__ volatile ("csrwi 0x7f2, 2");	/* CLEAN */
++	before = csr_read(0x7f2);
++
++	/* esp.vld.128.ip q0, a0, 0 - one vector load from scratch. */
++	__asm__ volatile (
++		"mv a0, %0\n"
++		".word 0x0311001f\n"
++		: : "r" (scratch) : "a0", "memory");
++
++	after = csr_read(0x7f2);
++	/* Packed so one SBI return carries both readings: before | after << 8. */
++	return (before & 0xff) | ((after & 0xff) << 8);
++}
++
+ static int esp32s31_final_init(bool cold_boot)
+ {
+ 	int ret;

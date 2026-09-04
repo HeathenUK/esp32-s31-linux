@@ -4449,3 +4449,50 @@ NOT a free win that scales. It has been treated as "move hot code there and it
 gets faster" and that is now measurably false past some point. Anything added
 to it from here has to be measured against the context switch as well as
 against the thing it was meant to speed up.
+
+### The coprocessor hook: what it really costs, and why the obvious fixes fail
+
+The PIE/HWLoop save/restore is ~51 us of a ~155 us context switch. Four things
+are now established that were not before, three of them by asking the silicon
+rather than reasoning about it.
+
+**1. The vector unit is used DELIBERATELY, and the hook is mandatory.**
+`configs/riscv32-esp-linux-musl.config` says it outright: *"xespv2p2 stays
+because this musl fork's string routines are hand-written against it -
+memchr.S, strcmp.S, memcmp.S and xespv_memops.S do not assemble"*. `libc.so`
+contains `esp.vld.128.ip` and `esp.vcmp.eq.u8`, so every task that calls
+`memcmp` or `strcmp` has live coprocessor state.
+
+Defaulting the hook off was tried and **bluetoothd took SIGSEGV in libc.so on
+the first clean boot**, with the byte-identical kernel booting cleanly with the
+hook on. Do not repeat it. Note the contamination is narrow and deliberate:
+only musl and the statically-linked busybox contain vendor instructions;
+lvdesk, bluetoothd, s31-bt and mpg123 contain **zero**, because `S31_USER_ISA`
+excludes them. The per-mode ISA split is working exactly as designed.
+
+**2. The hardware tracks its own dirty state.** Probed via a new SBI function:
+
+    state after writing CLEAN = 2, after one vector insn = 3 -> tracking WORKS
+
+**3. The ecall trap is NOT the cost.** An empty round trip through the same
+extension measures **1716 ns**. So ~49 us of the ~51 is the save and restore
+themselves - 216 bytes each way, ~42 vector register moves, and the enable
+writes - not the trip into machine mode.
+
+**4. The obvious lazy save does not pay.** Skipping the 216-byte save whenever
+the unit is not DIRTY, with the restore left unconditional (skipping it would
+hand the incoming task another task's registers, and there is no trap-on-use
+to catch that), measured **162 us against 155**. No better. Either the skip
+does not trigger or the byte copy is not where the time goes - and given (3)
+says the copy is most of the cost, the first is more likely and worth
+instrumenting before anything else.
+
+**What is shipped.** The hook stays on. The ecall is skipped when BOTH sides
+of a switch are kernel threads, which is provably safe because the kernel is
+built without the extension, and is `patches/0029`.
+
+**The open lead, and it is narrow.** Time the phases INSIDE
+`s31_coproc_save`/`restore` - the QACC/XACC accumulator moves and the CSR
+enable writes are the suspects, not the plain 128-bit register stores. The
+probe mechanism added in `patches/0030` makes that easy: add a function id,
+time it from the boot-time initcall, read it in dmesg.

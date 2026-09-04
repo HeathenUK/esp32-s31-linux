@@ -1,0 +1,198 @@
+riscv: esp32s31: skip the coprocessor ecall between kernel threads, and probe the unit
+
+Two changes to the PIE/HWLoop switch hook, which costs ~51 us of a ~155 us
+context switch.
+
+1. Skip the ecall when BOTH sides of a switch are kernel threads. The kernel
+   and firmware are built with S31_SAFE_ISA, which has neither xespv nor
+   xesploop, so kernel code provably cannot read or write the unit: across a
+   kernel-to-kernel interval the hardware state is untouched and the call is
+   pure cost. Only both - skipping user-to-kernel would be a bug, because the
+   outgoing user task's state must still be saved for the next user task.
+
+2. Add SBI function 3, a probe that asks the silicon whether the unit tracks
+   its own dirty state, and time an empty ecall. Both print at boot. The
+   M-mode console runs at a different baud from Linux's, so returning the
+   readings through the call interface is the only way to read them.
+
+WHAT THE PROBES ESTABLISHED, all of it new:
+
+    esp32s31 coproc: state after writing CLEAN = 2, after one vector insn = 3
+                     -> dirty tracking WORKS, lazy save is possible
+    esp32s31 coproc: empty ecall round trip = 1716 ns
+
+So the trap is NOT the cost - 1.7 us of the ~51. The rest is the save and
+restore themselves: 216 bytes each way plus ~42 vector register moves and the
+enable writes. A lazy save was implemented on the strength of the dirty bit
+and measured 162 us against 155, i.e. no better, so either the skip does not
+trigger or the byte copy is not where the time goes. That is the open lead.
+
+DO NOT simply default the hook off. Tried, and userspace crashed immediately:
+bluetoothd took SIGSEGV in libc.so on the first clean boot. The reason is that
+this musl fork's string routines are hand-written vector assembly - the
+toolchain config says so ("xespv2p2 stays because this musl fork's string
+routines are hand-written against it"), and libc.so contains esp.vld.128.ip
+and esp.vcmp.eq.u8. Every task that calls memcmp or strcmp has live state.
+
+Regenerate with:
+
+    diff -u linux-esp32-s31/arch/riscv/kernel/esp32s31-ext.c \
+            linux-71-port/arch/riscv/kernel/esp32s31-ext.c \
+            --label a/arch/riscv/kernel/esp32s31-ext.c \
+            --label b/arch/riscv/kernel/esp32s31-ext.c
+
+--- a/arch/riscv/kernel/esp32s31-ext.c
++++ b/arch/riscv/kernel/esp32s31-ext.c
+@@ -22,6 +22,7 @@
+ #define S31_SBI_COPROC_SWITCH	0
+ #define S31_SBI_COPROC_SAVE	1
+ #define S31_SBI_COPROC_RESTORE	2
++#define S31_SBI_COPROC_PROBE	3
+ 
+ static_assert(sizeof(struct esp32s31_ext_state) == 256);
+ 
+@@ -37,25 +38,43 @@
+ }
+ 
+ /*
+- * A context switch on this board costs ~517 us, against 2-5 us on comparable
+- * hardware, and that dominates everything: SD requests spend 8.3 switches each,
+- * and USB wakes a kworker on every one of its ~1000 interrupts a second.
+- *
+- * This hook is the prime suspect, because unlike __switch_to_fpu() just above
+- * it in switch_to.h it is completely unconditional - every switch makes an SBI
+- * ecall into M-mode to save 216 bytes of PIE state plus the HWLoop CSRs for the
+- * outgoing task and restore them for the incoming one, whether or not either
+- * task has ever touched the coprocessor.
++ * Save and restore the PIE/HWLoop coprocessor across a context switch.
++ * DEFAULT ON, and it must stay on. See the measurement below before touching.
+  *
+- * Count it, and allow it to be skipped, so the cost can be attributed before
+- * anything is redesigned:
++ * It is unconditional by nature: unlike __switch_to_fpu() just above it in
++ * switch_to.h there is no hardware dirty bit to test, so every switch makes an
++ * SBI ecall into M-mode to save 216 bytes of PIE state plus the HWLoop CSRs
++ * for the outgoing task and restore them for the incoming one.
++ *
++ * It is EXPENSIVE - measured with rootfs/switchbench.c arm C, three runs per
++ * arm with the first repeated as a control:
++ *
++ *     hook on    150.35 157.60 156.63 us
++ *     hook off   105.40 102.10 104.86 us
++ *     hook on    158.65 154.18 153.98 us
++ *
++ * 50.8 us of a 155 us switch, a third of it. It is very tempting.
++ *
++ * DO NOT TURN IT OFF. Tried 2026-09-04 on the reasoning that S31_USER_ISA
++ * contains no xespv and no xesploop, so nothing could dirty the state. That
++ * reasoning is WRONG somewhere, and the board says so: with the hook defaulted
++ * off, bluetoothd took
++ *
++ *     unhandled signal 11 code 0x1 at 0x43693447 in libc.so
++ *
++ * on the first clean boot, while the byte-identical kernel with the hook on
++ * booted with zero segfaults. That is precisely the failure this saves you
++ * from - one task resuming on another's coprocessor state - and it is silent,
++ * rare and extremely hard to attribute. The ISA string is evidently not proof
++ * that no coprocessor state is live.
++ *
++ * The knob remains for measurement only:
+  *
+- *     /sys/kernel/debug/esp32s31_ext/stats
+  *     echo 0 > /sys/module/kernel/parameters/esp32s31_ext_switch_enabled
+  *
+- * Skipping is a MEASUREMENT AID ONLY and is unsafe: any task actually using PIE
+- * or hardware loops will see another task's coprocessor state. Defaults on, and
+- * a reset restores it.
++ * Anything that wants this cost back has to make the save CONDITIONAL - trap
++ * on first coprocessor use per task, the way FPU state is handled - not skip
++ * it wholesale.
+  */
+ static bool s31_ext_switch_enabled = true;
+ core_param(esp32s31_ext_switch_enabled, s31_ext_switch_enabled, bool, 0644);
+@@ -76,6 +95,29 @@
+ 		return;
+ 
+ 	/*
++	 * Kernel threads provably never touch the coprocessor: the kernel and
++	 * firmware are built with S31_SAFE_ISA, which has neither xespv nor
++	 * xesploop (Makefile: "firmware and kernel C code must not borrow task
++	 * coprocessor state"). So when BOTH sides of a switch are kernel
++	 * threads, nothing can read or write the unit in between, the hardware
++	 * state is unchanged across the interval, and the ecall is pure cost.
++	 *
++	 * Only both. Skipping user->kernel would be a bug: the outgoing user
++	 * task's state must still be saved, because the next USER task to run
++	 * would otherwise resume on it.
++	 *
++	 * This is deliberately not the tempting version. Defaulting the whole
++	 * hook off was tried on 2026-09-04 and userspace crashed - musl's
++	 * memcmp and strcmp are vectorised (esp.vld.128.ip, esp.vcmp.eq.u8 in
++	 * libc.so), so nearly every user task has live coprocessor state. The
++	 * ecall itself costs ~50 us of a ~155 us switch; this reclaims the
++	 * share of it spent between kernel threads without touching any of the
++	 * cases that carry state.
++	 */
++	if (!prev->mm && !next->mm)
++		return;
++
++	/*
+ 	 * Timing is opt-in because reading the clock costs more than the thing
+ 	 * being timed: clock_gettime measures ~4 us here, so two reads around
+ 	 * the ecall would dominate it and make the enabled/disabled comparison
+@@ -155,3 +197,55 @@
+ 	return 0;
+ }
+ late_initcall(s31_ext_debugfs_init);
++
++/*
++ * Ask the silicon, once, whether the PIE unit raises its own dirty state.
++ *
++ * If it does, the per-switch save can be skipped whenever the outgoing task
++ * left the unit CLEAN, which is the only way to keep both the coprocessor's
++ * correctness and the ~50 us per switch it currently costs. Nothing in
++ * docs/s31_hardware records the answer and the M-mode console prints at a
++ * different baud from Linux's, so the probe returns its readings instead:
++ * machine mode writes CLEAN, executes one vector load, and reads the state
++ * back. Different values mean the hardware tracks use by itself.
++ */
++static int __init s31_ext_probe_dirty(void)
++{
++	struct sbiret ret = sbi_ecall(S31_SBI_EXT_COPROC,
++				      S31_SBI_COPROC_PROBE, 0, 0, 0, 0, 0, 0);
++	u64 t0, t1;
++	int i;
++
++	if (ret.error) {
++		pr_info("esp32s31 coproc: dirty probe unavailable (%ld)\n",
++			ret.error);
++		return 0;
++	}
++	pr_info("esp32s31 coproc: state after writing CLEAN = %lu, after one vector insn = %lu -> dirty tracking %s\n",
++		ret.value & 0xff, (ret.value >> 8) & 0xff,
++		((ret.value & 0xff) != ((ret.value >> 8) & 0xff)) ?
++			"WORKS, lazy save is possible" : "ABSENT");
++
++	/*
++	 * How much of the hook is the ECALL ITSELF?
++	 *
++	 * Making the save lazy - skipping the whole 216-byte copy when the unit
++	 * is not dirty - did not make a switch cheaper, which says the copy was
++	 * never the cost. The other candidate is the M-mode round trip, and
++	 * OpenSBI is mapped in the flash XIP window (0x40380000), so its trap
++	 * entry and dispatch execute at flash speed on every call.
++	 *
++	 * Time the probe: it takes no arguments, touches no task state, and
++	 * returns immediately. Whatever it costs is the floor for ANY ecall.
++	 */
++	t0 = ktime_get_ns();
++	for (i = 0; i < 100; i++)
++		sbi_ecall(S31_SBI_EXT_COPROC, S31_SBI_COPROC_PROBE,
++			  0, 0, 0, 0, 0, 0);
++	t1 = ktime_get_ns();
++	/* div_u64: a 64-bit divide would need __udivdi3, which the kernel has not. */
++	pr_info("esp32s31 coproc: empty ecall round trip = %llu ns\n",
++		div_u64(t1 - t0, 100));
++	return 0;
++}
++late_initcall(s31_ext_probe_dirty);
