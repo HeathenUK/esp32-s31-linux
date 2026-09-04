@@ -908,6 +908,43 @@ if a real Qt app turns out to carry a large anonymous heap, re-measure with a
 *small* pool (8-12 MB, not 24) - on anon evidence, not on principle.
 `ZRAM_MB=0` stands.
 
+### Can SRAM cut fault latency further? No - the floor is the card (2026-09-04)
+
+Asked directly, and answered with two measurements.
+
+**The fixed cost is flat below 16 KiB.** sdlat, random, n=200, p50:
+
+    1k 2.25   2k 2.20   4k 2.25   8k 2.36   16k 2.51   32k 3.00 ms
+
+A 1 KiB read costs what an 8 KiB read costs. **And it is not CPU-side**: under a
+full-core spinner the p50 rises 2.25 -> 2.93 ms and p90 doubles, but the
+*minimum* moves only 1.99 -> 2.09 ms (+5%). So ~2.0 ms is a per-transaction
+hardware floor; the variance above it is ours (scheduling, completion wake-up).
+
+SRAM has therefore already given what it had to give here - the 41% cut from
+3.79 to 2.21 ms WAS OpenSBI's trap path moving into SRAM, and that harvested
+the CPU-side portion. What is left cannot be relocated.
+
+The one remaining SRAM-shaped candidate is dw_mmc's IDMAC descriptor ring:
+`DESC_RING_BUF_SZ` is PAGE_SIZE, so 4 KiB, which fits the 9,216 bytes free, and
+putting it in uncached SRAM would delete the `dma_sync_single_for_cpu/_device`
+calls the driver makes across the whole ring per operation (dw_mmc.c:238-266).
+**Not worth doing:** that is 64 cache lines twice per request, single-digit
+microseconds against a 2,490 us cost - about 0.3% - for 4 KiB of the scarcest
+memory on the board.
+
+**The lever is request size, not code placement.** Because the floor is
+per-transaction and flat to 16 KiB, batching is worth an order of magnitude
+where relocation is worth a percent:
+
+    6 MB of text as 4 KiB faults    1536 x 2.2 ms  = 3.4 s
+    6 MB of text as 256 KiB reads     24 x 7.6 ms  = 0.18 s      19x
+
+So fault-around, mmap readahead and MAP_POPULATE / madvise(MADV_WILLNEED) at
+load time are the whole game for a library-heavy app. Note `fault_around_bytes`
+is a debugfs knob and `DIAG=0` compiles debugfs out, so the default 64 KiB
+(16 pages) is what ships and cannot be tuned at runtime.
+
 ## PPA (Pixel Processing Accelerator)
 
 Working under Linux as of 2026-08-21: `drivers/gpu/drm/espressif/esp32s31-ppa.c`,
