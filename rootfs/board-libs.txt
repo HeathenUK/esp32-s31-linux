@@ -124,8 +124,6 @@ libharfbuzz-vector.so.0.61421.0
 libharfbuzz.so
 libharfbuzz.so.0
 libharfbuzz.so.0.61421.0
-libICE.so
-libICE.so.6
 libinput.so
 libinput.so.10
 libinput.so.10.13.0
@@ -218,8 +216,6 @@ libseat.so.1
 libsha1.so
 libsha1.so.0
 libsha1.so.0.0.0
-libSM.so
-libSM.so.6
 libss.so
 libss.so.2
 libss.so.2.0

@@ -43,7 +43,15 @@
 
 #define MAXCLI		4
 #define MAXRES		320
-#define MAXATOM		64
+/*
+ * Qt interns far more atoms than the Xaw clients this started with: xclock and
+ * xcalc between them use a couple of dozen, Qt walks straight past 64 during
+ * QXcbConnection setup (_NET_WM_*, _XSETTINGS_*, XInput device properties,
+ * EDID, ...). Running out is not fatal by itself - InternAtom returns 0 - but
+ * a client then compares against atom 0 forever and behaves as if every
+ * property is absent.
+ */
+#define MAXATOM		256
 #define INBUF		65536
 
 /* Our one visual: TrueColor RGB565, matching the panel. */
@@ -158,6 +166,25 @@ struct cli {
 static struct res res[MAXRES];
 static struct cli cli[MAXCLI];
 static char *atom[MAXATOM];
+
+/*
+ * Pointer state. Declared up here rather than beside xshim_pointer() because
+ * the request handler needs it too and sits earlier in the file.
+ */
+static uint16_t ptr_btn_state;		/* Button1Mask.. of held buttons */
+static int ptr_root_x, ptr_root_y;	/* last pointer position, root coords */
+
+/*
+ * Selection ownership. The X server itself only has to remember who claimed
+ * which selection and hand that back - the data never passes through it, the
+ * two clients transfer it between themselves with ConvertSelection and a
+ * property. Qt asks for the owner of CLIPBOARD and PRIMARY during startup and
+ * BLOCKS on the reply, so this small table is the difference between a Qt app
+ * starting and hanging.
+ */
+#define MAXSEL		8
+static struct { uint32_t sel, owner; } selown[MAXSEL];
+static int nselown;
 static int natom;
 static int cur_owner;			/* client whose request is in flight */
 /*
@@ -4530,6 +4557,102 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		break;
 	}
 
+	case 3: {					/* GetWindowAttributes */
+		/*
+		 * Qt calls this on its own windows during creation and blocks
+		 * on the reply. The interesting fields here are map-state and
+		 * your-event-mask; the rest are the fixed answers a server
+		 * with one visual and one colormap always gives.
+		 *
+		 * The reply is 44 bytes, not 32: 24 in d24 plus 12 of extra,
+		 * so the reply LENGTH field is 3. Getting that wrong desyncs
+		 * the client's stream and every later reply is misparsed.
+		 */
+		struct res *w = res_find(get32(r + 4));
+		uint8_t ext[12];
+
+		memset(d24, 0, sizeof d24);
+		memset(ext, 0, sizeof ext);
+		put32(d24 + 0, VISUAL_ID);
+		put16(d24 + 4, 1);			/* InputOutput */
+		d24[6] = 0;				/* bit gravity Forget */
+		d24[7] = 1;				/* win gravity NorthWest */
+		/* backing planes/pixel stay 0; no backing store here */
+		d24[16] = 0;				/* save-under False */
+		d24[17] = 1;				/* map-is-installed */
+		d24[18] = (w && w->mapped) ? 2 : 0;	/* Viewable/Unmapped */
+		d24[19] = 0;				/* override-redirect */
+		put32(d24 + 20, 0);			/* colormap: None */
+		put32(ext + 0, w ? w->event_mask : 0);	/* all-event-masks */
+		put32(ext + 4, w ? w->event_mask : 0);	/* your-event-mask */
+		send_reply(c, 0 /* backing-store NotUseful */, d24, ext, 12);
+		break;
+	}
+	case 38: {					/* QueryPointer */
+		/*
+		 * Qt calls this during window creation and BLOCKS. Answering
+		 * it wrongly is worse than not answering: the coordinates
+		 * decide where menus and tooltips are placed, so a constant
+		 * would put every popup in the corner.
+		 */
+		struct res *w = res_find(get32(r + 4));
+
+		memset(d24, 0, sizeof d24);
+		put32(d24 + 0, ROOT_ID);
+		put32(d24 + 4, 0);			/* child: None */
+		put16(d24 + 8, (uint16_t)ptr_root_x);
+		put16(d24 + 10, (uint16_t)ptr_root_y);
+		put16(d24 + 12, (uint16_t)(ptr_root_x - (w ? w->x : 0)));
+		put16(d24 + 14, (uint16_t)(ptr_root_y - (w ? w->y : 0)));
+		put16(d24 + 16, ptr_btn_state);
+		send_reply(c, 1 /* same-screen */, d24, NULL, 0);
+		break;
+	}
+	case 40: {					/* TranslateCoordinates */
+		/*
+		 * Both windows are on the one screen here, so this is just the
+		 * difference of their origins. Toolkits use it constantly to
+		 * place popups relative to a widget.
+		 */
+		struct res *sw = res_find(get32(r + 4));
+		struct res *dw = res_find(get32(r + 8));
+		int sx = gets16(r + 12), sy = gets16(r + 14);
+		int rx = (sw ? sw->x : 0) + sx, ry = (sw ? sw->y : 0) + sy;
+
+		memset(d24, 0, sizeof d24);
+		put32(d24 + 0, 0);			/* child: None */
+		put16(d24 + 4, (uint16_t)(rx - (dw ? dw->x : 0)));
+		put16(d24 + 6, (uint16_t)(ry - (dw ? dw->y : 0)));
+		send_reply(c, 1 /* same-screen */, d24, NULL, 0);
+		break;
+	}
+	case 22: {					/* SetSelectionOwner */
+		uint32_t owner = get32(r + 4), sel = get32(r + 8);
+		int i;
+
+		for (i = 0; i < nselown; i++)
+			if (selown[i].sel == sel)
+				break;
+		if (i == nselown && nselown < MAXSEL)
+			selown[nselown++].sel = sel;
+		if (i < MAXSEL)
+			selown[i].owner = owner;
+		break;
+	}
+	case 23: {					/* GetSelectionOwner */
+		uint32_t sel = get32(r + 4), owner = 0;
+		int i;
+
+		for (i = 0; i < nselown; i++)
+			if (selown[i].sel == sel) {
+				owner = selown[i].owner;
+				break;
+			}
+		memset(d24, 0, sizeof d24);
+		put32(d24, owner);			/* 0 = None */
+		send_reply(c, 0, d24, NULL, 0);
+		break;
+	}
 	case 2: {					/* ChangeWindowAttributes */
 		/*
 		 * Same value list as CreateWindow. Only the event mask and the
@@ -4748,7 +4871,18 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		}
 		break;
 	}
-	case 19: case 22: case 25:
+	/*
+	 * SetSelectionOwner (22) used to be swallowed here. It is implemented
+	 * above now, because Qt asks for the owner straight afterwards and
+	 * blocks on the answer.
+	 *
+	 * The rest still fall through into PutImage and are saved only by its
+	 * format check rejecting them (ZPixmap is 2; SendEvent's byte 1 is
+	 * propagate, GrabServer's is unused). That is luck, not design - if
+	 * one of these ever needs real handling, give it its own case rather
+	 * than trusting the check.
+	 */
+	case 19: case 25:
 	case 36: case 37: case 42: case 46: case 109:
 	case 72: {					/* PutImage */
 		/*
@@ -5177,7 +5311,7 @@ static void send_device_event(struct cli *c, uint8_t type, uint8_t detail,
  * A pointer event from the desktop, in coordinates relative to the top-level
  * whose id is `id`. act: 0 motion, 1 press, 2 release.
  */
-static uint16_t ptr_btn_state;		/* Button1Mask.. of held buttons */
+
 static uint32_t ptr_last_top, ptr_last_win;
 static int ptr_last_x, ptr_last_y;	/* relative to ptr_last_win */
 
@@ -5192,6 +5326,14 @@ void xshim_pointer(uint32_t id, int x, int y, int button, int act)
 	c = &cli[top->owner];
 	if (c->fd < 0)
 		return;
+	/*
+	 * Root-relative position, recorded BEFORE hit_test rewrites x,y into
+	 * the deepest child's coordinates. QueryPointer answers in root
+	 * coordinates and there is nowhere else to recover them from.
+	 */
+	ptr_root_x = top->x + x;
+	ptr_root_y = top->y + y;
+
 	w = hit_test(top, &x, &y);
 	if (trace_on())
 		fprintf(stderr, "xshim: ptr act=%d -> win 0x%x mask=%08x "
