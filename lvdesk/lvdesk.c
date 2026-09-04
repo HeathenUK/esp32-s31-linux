@@ -5440,13 +5440,26 @@ static void vol_label_set(int v)
  * every pointer motion, and the confirmation tone on each would be a stutter.
  * The label follows the knob live, which is the part the eye wants.
  */
+/* Defined with the routing below; the slider needs to know where sound goes. */
+static int audio_out_bt;
+
 static void vol_set_cb(lv_event_t *e)
 {
 	int v = lv_slider_get_value(lv_event_get_target(e));
 
+	/*
+	 * The codec mixer is not in the Bluetooth path at all - the sink
+	 * plays exactly what it is sent - so on Bluetooth the slider has to
+	 * drive AVRCP absolute volume on the earpiece instead. Both are set:
+	 * the codec keeps the level the speakers will use when the output
+	 * comes back, and neither costs anything to write.
+	 */
 	audio_set_pct(v);
+	if (audio_out_bt)
+		bt_cmd("volume %d", v);
 	vol_label_set(v);
-	audio_bong();
+	if (!audio_out_bt)
+		audio_bong();
 }
 
 static void vol_live_cb(lv_event_t *e)
@@ -5464,8 +5477,30 @@ static void vol_live_cb(lv_event_t *e)
  *
  * Applications pick the change up on their NEXT open - that is how ALSA
  * works without a sound server, and this board deliberately has none.
+ *
+ * Volume: the codec slider is perceptual because that register is not, but
+ * AVRCP absolute volume is a plain 0..127 the earpiece maps with its own
+ * curve, so the Bluetooth path sends the percentage straight through.
  */
-static int audio_out_bt;
+
+/*
+ * Read back where the output actually points. Assuming speakers meant a
+ * restarted desktop lost track of a Bluetooth sink it was still using: the
+ * slider drove the wrong device and the fall-back on disconnect never fired
+ * because, as far as this process knew, Bluetooth was not selected.
+ */
+static void audio_route_read(void)
+{
+	char line[160];
+	FILE *f = fopen("/etc/asound.conf", "r");
+
+	if (!f)
+		return;
+	while (fgets(line, sizeof(line), f))
+		if (strstr(line, "pcm.!default") && strstr(line, "hw:1,0"))
+			audio_out_bt = 1;
+	fclose(f);
+}
 
 static void audio_route_write(int bt)
 {
@@ -6869,6 +6904,7 @@ int main(void)
 		lv_obj_add_event_cb(bt_tray_icon, tray_bt_cb, LV_EVENT_CLICKED,
 				    NULL);
 
+		audio_route_read();	/* where is the output pointing now? */
 		vol_tray_icon = l = lv_label_create(tray);
 		lv_label_set_text(l, LV_SYMBOL_VOLUME_MAX);
 		lv_obj_set_style_text_font(l, FONT_UI, 0);

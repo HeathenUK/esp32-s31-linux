@@ -964,10 +964,53 @@ static void coex_hint(int streaming)
 	close(fd);
 }
 
+static int transport_set_volume(int pct);
+static int want_volume = -1;		/* set before a transport existed */
+
 void transport_seen(const char *path)
 {
 	snprintf(transport_path, sizeof(transport_path), "%s", path);
 	fprintf(stderr, "s31-bt: transport %s\n", path);
+	if (want_volume >= 0)
+		transport_set_volume(want_volume);
+}
+
+/*
+ * A2DP carries no audio stream volume: the sink plays what it is sent, and
+ * the codec mixer on card 0 is not in the path at all. Loudness is set with
+ * AVRCP absolute volume, which BlueZ exposes as the transport's Volume
+ * property on a 0..127 scale. Sent without waiting for a reply - a slider
+ * must not be able to block the desktop on the Bluetooth daemon.
+ */
+static int transport_set_volume(int pct)
+{
+	const char *iface = "org.bluez.MediaTransport1", *prop = "Volume";
+	DBusMessageIter it, var;
+	DBusMessage *m;
+	dbus_uint16_t v;
+
+	if (pct < 0)
+		pct = 0;
+	if (pct > 100)
+		pct = 100;
+	want_volume = pct;
+	if (!transport_path[0])
+		return -1;
+	v = (dbus_uint16_t)((pct * 127 + 50) / 100);
+	m = dbus_message_new_method_call("org.bluez", transport_path,
+					 "org.freedesktop.DBus.Properties",
+					 "Set");
+	if (!m)
+		return -1;
+	dbus_message_iter_init_append(m, &it);
+	dbus_message_iter_append_basic(&it, DBUS_TYPE_STRING, &iface);
+	dbus_message_iter_append_basic(&it, DBUS_TYPE_STRING, &prop);
+	dbus_message_iter_open_container(&it, DBUS_TYPE_VARIANT, "q", &var);
+	dbus_message_iter_append_basic(&var, DBUS_TYPE_UINT16, &v);
+	dbus_message_iter_close_container(&it, &var);
+	dbus_connection_send(conn, m, NULL);
+	dbus_message_unref(m);
+	return 0;
 }
 
 static int pick(unsigned int have, const int *order, int n)
@@ -1897,6 +1940,13 @@ static void cmd(struct cli *c, char *line)
 		} else {
 			route_stop();
 		}
+		cli_send(c, "OK");
+	} else if (!strcmp(a, "volume")) {
+		if (!b) {
+			cli_send(c, "ERR usage: volume 0-100");
+			return;
+		}
+		transport_set_volume(atoi(b));
 		cli_send(c, "OK");
 	} else if (!strcmp(a, "stop")) {
 		st.want[0] = 0;
