@@ -249,8 +249,11 @@ USB_HS ?= 0
 # full/low-speed devices behind a high-speed hub work, because descriptor
 # DMA refuses split transactions (hcd_ddma.c). Costs the 8 kHz SOF.
 USB_BUFDMA ?= 0
-CMDLINE_NOW = $$(sed -n 's/^CONFIG_CMDLINE=\"\(.*\)\"/\1/p' $(LINUX_OUT)/.config | sed 's/ earlycon//g; s/ dwc2.host_full_speed=0//g; s/ dwc2.desc_dma=0//g')
-CMDLINE_ADD :=
+CMDLINE_NOW = $$(sed -n 's/^CONFIG_CMDLINE=\"\(.*\)\"/\1/p' $(LINUX_OUT)/.config | sed 's/ earlycon//g; s/ dwc2.host_full_speed=0//g; s/ dwc2.desc_dma=0//g; s/ snd_aloop.index=1//g')
+# The ALSA loopback must not steal card 0 from the Korvo codec: it would
+# silently redirect every app's default output into the loopback and leave
+# the volume mixer attached to a card with no controls.
+CMDLINE_ADD := snd_aloop.index=1
 ifeq ($(EARLYCON),1)
 CMDLINE_ADD += earlycon
 endif
@@ -321,6 +324,7 @@ linux: toolchain | $(LINUX_OUT)
 		--enable USB_HID \
 		--enable HIDRAW \
 		--enable UHID \
+		--enable SND_ALOOP \
 		--enable DEBUG_FS \
 		--enable USB_MON \
 		$(DIAG_TWEAKS) \

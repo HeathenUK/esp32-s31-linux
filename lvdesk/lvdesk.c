@@ -24,6 +24,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <stdarg.h>
 #include <linux/input.h>
 #include <linux/kd.h>
 #include <sys/inotify.h>
@@ -34,6 +35,8 @@
 #include <pty.h>
 #include <termios.h>
 #include <sys/socket.h>
+#include <net/if.h>
+#include <sys/ioctl.h>
 #include <sys/un.h>
 #include <math.h>
 #include <alsa/asoundlib.h>
@@ -3721,6 +3724,7 @@ static lv_obj_t *wifi_list, *wifi_status;
 
 static void wifi_scan_restore(void);
 static void scan_watch_stop(void);
+static void bt_forget_widgets(void);
 
 /*
  * Context-menu reply path. The ctl `menu` request carries a fifo the shell
@@ -3771,6 +3775,7 @@ static void popover_close(void)
 	pop_owner = NULL;
 	vol_slider = vol_label = NULL;
 	wifi_list = wifi_status = NULL;
+	bt_forget_widgets();
 }
 
 static void pop_scrim_cb(lv_event_t *e)
@@ -4015,6 +4020,65 @@ static int pw_target = -1;
  * Signal for the link we are on, from SIGNAL_POLL. A hidden network never
  * appears in a scan, so this is the only way to show a bar for it.
  */
+/*
+ * Radio power for the Wi-Fi panel.
+ *
+ * IFF_UP on the interface is the honest switch: wpa_supplicant's DISCONNECT
+ * leaves the radio associating and scanning, which is not what "off" means
+ * to anyone reading the panel. SIOCSIFFLAGS is the standard call and needs
+ * no helper process - lvdesk is the compositor and must not fork to answer
+ * a tap.
+ */
+static void wifi_scan_cb(lv_event_t *e);
+static void wifi_show_status(void);
+
+static int wifi_radio_get(void)
+{
+	struct ifreq ifr;
+	int fd = socket(AF_INET, SOCK_DGRAM, 0), up = 0;
+
+	if (fd < 0)
+		return 1;
+	memset(&ifr, 0, sizeof(ifr));
+	snprintf(ifr.ifr_name, sizeof(ifr.ifr_name), "%s", WPA_IFACE);
+	if (ioctl(fd, SIOCGIFFLAGS, &ifr) == 0)
+		up = !!(ifr.ifr_flags & IFF_UP);
+	close(fd);
+	return up;
+}
+
+static void wifi_radio_set(int up)
+{
+	struct ifreq ifr;
+	int fd = socket(AF_INET, SOCK_DGRAM, 0);
+
+	if (fd < 0)
+		return;
+	memset(&ifr, 0, sizeof(ifr));
+	snprintf(ifr.ifr_name, sizeof(ifr.ifr_name), "%s", WPA_IFACE);
+	if (ioctl(fd, SIOCGIFFLAGS, &ifr) == 0) {
+		if (up)
+			ifr.ifr_flags |= IFF_UP;
+		else
+			ifr.ifr_flags &= ~IFF_UP;
+		ioctl(fd, SIOCSIFFLAGS, &ifr);
+	}
+	close(fd);
+}
+
+static void wifi_power_cb(lv_event_t *e)
+{
+	int up = wifi_radio_get();
+
+	wifi_radio_set(!up);
+	if (!up)
+		wifi_scan_cb(NULL);		/* coming back: look around */
+	else
+		wifi_show_status();
+	lv_label_set_text(lv_obj_get_child(lv_event_get_target(e), 0),
+			  up ? "Wi-Fi: off" : "Wi-Fi: on");
+}
+
 static int wifi_link_level(void)
 {
 	char buf[512];
@@ -4801,7 +4865,7 @@ static int wifi_ev_poll(void)
 
 static void tray_wifi_cb(lv_event_t *e)
 {
-	lv_obj_t *pop = popover_open(lv_event_get_target(e), 260, 190);
+	lv_obj_t *pop = popover_open(lv_event_get_target(e), 260, 216);
 	lv_obj_t *b;
 
 	if (!pop)
@@ -4833,6 +4897,17 @@ static void tray_wifi_cb(lv_event_t *e)
 	lv_obj_center(lv_label_create(b));
 	lv_label_set_text(lv_obj_get_child(b, 0), "Rescan");
 
+	b = lv_button_create(pop);
+	lv_obj_set_pos(b, 0, 170);
+	lv_obj_set_size(b, 120, 22);
+	lv_obj_set_style_radius(b, 0, 0);
+	lv_obj_set_style_bg_color(b, lv_color_hex(COL_HDR), 0);
+	lv_obj_set_style_shadow_width(b, 0, 0);
+	lv_obj_add_event_cb(b, wifi_power_cb, LV_EVENT_CLICKED, NULL);
+	lv_obj_center(lv_label_create(b));
+	lv_label_set_text(lv_obj_get_child(b, 0),
+			  wifi_radio_get() ? "Wi-Fi: on" : "Wi-Fi: off");
+
 	wifi_list = lv_list_create(pop);
 	lv_obj_set_size(wifi_list, 242, 138);
 	lv_obj_set_pos(wifi_list, 0, 26);
@@ -4846,6 +4921,432 @@ static void tray_wifi_cb(lv_event_t *e)
 	wifi_show_status();
 	wifi_show_results();
 	wifi_scan_cb(NULL);
+}
+
+/* ------------------------------------------------------------- bluetooth */
+
+/*
+ * The Bluetooth panel talks to s31-bt, not to bluetoothd.
+ *
+ * Pair() and Connect() block for seconds, and this loop IS the compositor,
+ * so it must never make them. s31-bt owns the D-Bus connection and answers
+ * over a control socket in exactly the shape wpa_supplicant uses - one
+ * command per line, events pushed unsolicited - so the socket joins the
+ * poll set below and costs nothing when nobody is talking.
+ */
+#define BT_SOCK		"/var/run/s31-bt.ctl"
+#define BT_MAXDEV	16
+
+struct btdev {
+	char addr[18];
+	char name[40];
+	char kind[10];
+	char bearer[6];
+	int paired, conn;
+};
+static struct btdev btdevs[BT_MAXDEV];
+static int btdev_n;
+static int bt_fd = -1;
+static int bt_powered, bt_scanning;
+static char bt_prompt[64];		/* passkey / confirm text for the panel */
+static char bt_confirm_addr[18];
+static lv_obj_t *bt_list, *bt_status, *bt_tray_icon, *bt_power_btn;
+static void bt_render(void);
+
+static int bt_connect_sock(void)
+{
+	struct sockaddr_un sa = { .sun_family = AF_UNIX };
+	int fd;
+
+	if (bt_fd >= 0)
+		return bt_fd;
+	fd = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (fd < 0)
+		return -1;
+	snprintf(sa.sun_path, sizeof(sa.sun_path), "%s", BT_SOCK);
+	if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
+		close(fd);
+		return -1;
+	}
+	fcntl(fd, F_SETFL, O_NONBLOCK);
+	bt_fd = fd;
+	/* events, then the current picture */
+	write(fd, "monitor\nstatus\nlist\n", 20);
+	return fd;
+}
+
+static void bt_cmd(const char *fmt, ...)
+{
+	char line[160];
+	va_list ap;
+	int n;
+
+	if (bt_connect_sock() < 0)
+		return;
+	va_start(ap, fmt);
+	n = vsnprintf(line, sizeof(line) - 2, fmt, ap);
+	va_end(ap);
+	if (n < 0)
+		return;
+	line[n++] = '\n';
+	if (write(bt_fd, line, (size_t)n) < 0) {
+		close(bt_fd);
+		bt_fd = -1;
+	}
+}
+
+static struct btdev *btdev_find(const char *addr)
+{
+	int i;
+
+	for (i = 0; i < btdev_n; i++)
+		if (!strcmp(btdevs[i].addr, addr))
+			return &btdevs[i];
+	return NULL;
+}
+
+/* One DEV line: DEV <addr> paired=x conn=x trusted=x kind=k bearer=b rssi=n "name" */
+static void bt_dev_line(char *l)
+{
+	struct btdev *d;
+	char addr[18] = "", kind[10] = "", bearer[6] = "";
+	const char *q;
+	int paired = 0, conn = 0;
+
+	if (sscanf(l, "DEV %17s paired=%d conn=%d", addr, &paired, &conn) != 3)
+		return;
+	if ((q = strstr(l, "kind=")))
+		sscanf(q, "kind=%9[a-z]", kind);
+	if ((q = strstr(l, "bearer=")))
+		sscanf(q, "bearer=%5[a-z]", bearer);
+	d = btdev_find(addr);
+	if (!d) {
+		if (btdev_n >= BT_MAXDEV)
+			return;
+		d = &btdevs[btdev_n++];
+		memset(d, 0, sizeof(*d));
+		snprintf(d->addr, sizeof(d->addr), "%s", addr);
+	}
+	d->paired = paired;
+	d->conn = conn;
+	snprintf(d->kind, sizeof(d->kind), "%s", kind);
+	snprintf(d->bearer, sizeof(d->bearer), "%s", bearer);
+	if ((q = strchr(l, '"'))) {
+		size_t k = 0;
+
+		for (q++; *q && *q != '"' && k < sizeof(d->name) - 1; q++)
+			d->name[k++] = *q;
+		d->name[k] = 0;
+	}
+}
+
+static void bt_line(char *l)
+{
+	char addr[18];
+	unsigned key;
+
+	if (!strncmp(l, "DEV ", 4)) {
+		bt_dev_line(l);
+	} else if (sscanf(l, "STATE powered=%d scanning=%d", &bt_powered,
+			  &bt_scanning) == 2) {
+		/* nothing else to do; the render below picks it up */
+	} else if (sscanf(l, "PASSKEY %17s %u", addr, &key) == 2) {
+		snprintf(bt_prompt, sizeof(bt_prompt),
+			 "Type %06u then Enter", key);
+	} else if (sscanf(l, "CONFIRM %17s %u", addr, &key) == 2) {
+		snprintf(bt_prompt, sizeof(bt_prompt), "Confirm %06u?", key);
+		snprintf(bt_confirm_addr, sizeof(bt_confirm_addr), "%s", addr);
+	} else if (!strncmp(l, "PAIRED ", 7)) {
+		snprintf(bt_prompt, sizeof(bt_prompt), "Paired");
+		bt_confirm_addr[0] = 0;
+		bt_cmd("list");
+	} else if (!strncmp(l, "FAIL ", 5)) {
+		const char *why = strrchr(l, ' ');
+
+		snprintf(bt_prompt, sizeof(bt_prompt), "Failed%s%s",
+			 why ? ": " : "", why ? why + 1 : "");
+		bt_confirm_addr[0] = 0;
+	} else if (!strncmp(l, "WARN ", 5) && strstr(l, "le-only")) {
+		snprintf(bt_prompt, sizeof(bt_prompt),
+			 "LE only - unsupported radio");
+	} else if (!strncmp(l, "GONE ", 5)) {
+		char a[18];
+		struct btdev *d;
+
+		if (sscanf(l, "GONE %17s", a) == 1 && (d = btdev_find(a)) &&
+		    !d->paired) {
+			int i = (int)(d - btdevs);
+
+			memmove(d, d + 1, (size_t)(btdev_n - i - 1) * sizeof(*d));
+			btdev_n--;
+		}
+	} else {
+		return;
+	}
+}
+
+static int bt_ev_poll(void)
+{
+	static char buf[512];
+	static int len;
+	ssize_t n;
+	int busy = 0;
+
+	if (bt_fd < 0)
+		return 0;
+	while ((n = recv(bt_fd, buf + len, sizeof(buf) - 1 - (size_t)len,
+			 MSG_DONTWAIT)) > 0) {
+		char *nl;
+
+		len += (int)n;
+		buf[len] = 0;
+		while ((nl = strchr(buf, '\n'))) {
+			*nl = 0;
+			bt_line(buf);
+			busy = 1;
+			len -= (int)(nl + 1 - buf);
+			memmove(buf, nl + 1, (size_t)len + 1);
+		}
+		if (len >= (int)sizeof(buf) - 1)
+			len = 0;
+	}
+	if (n == 0) {			/* daemon exited */
+		close(bt_fd);
+		bt_fd = -1;
+		btdev_n = 0;
+	}
+	if (busy) {
+		if (bt_tray_icon) {
+			int any = 0, i;
+
+			for (i = 0; i < btdev_n; i++)
+				any |= btdevs[i].conn;
+			lv_obj_set_style_text_opa(bt_tray_icon,
+						  any ? LV_OPA_COVER :
+						  bt_powered ? LV_OPA_70 :
+						  LV_OPA_40, 0);
+		}
+		if (bt_list)
+			bt_render();
+	}
+	return busy;
+}
+
+static const char *bt_glyph(const struct btdev *d)
+{
+	if (!strcmp(d->kind, "audio"))
+		return LV_SYMBOL_AUDIO;
+	if (!strcmp(d->kind, "keyboard"))
+		return LV_SYMBOL_KEYBOARD;
+	return LV_SYMBOL_BLUETOOTH;
+}
+
+static void bt_row_cb(lv_event_t *e)
+{
+	int idx = (int)(intptr_t)lv_event_get_user_data(e);
+	struct btdev *d;
+
+	if (idx < 0 || idx >= btdev_n)
+		return;
+	d = &btdevs[idx];
+	bt_prompt[0] = 0;
+	if (d->conn)
+		bt_cmd("disconnect %s", d->addr);
+	else if (d->paired)
+		bt_cmd("connect %s", d->addr);
+	else
+		bt_cmd("pair %s", d->addr);
+	snprintf(bt_prompt, sizeof(bt_prompt), "%s...",
+		 d->conn ? "Disconnecting" : d->paired ? "Connecting" : "Pairing");
+	bt_render();
+}
+
+static void bt_power_cb(lv_event_t *e)
+{
+	bt_cmd("power %s", bt_powered ? "off" : "on");
+	bt_cmd("status");
+	bt_prompt[0] = 0;
+	/* the daemon's STATE event repaints the rest */
+	lv_label_set_text(lv_obj_get_child(lv_event_get_target(e), 0),
+			  bt_powered ? "Bluetooth: off" : "Bluetooth: on");
+}
+
+static void bt_scan_cb(lv_event_t *e)
+{
+	(void)e;
+	bt_prompt[0] = 0;
+	bt_cmd("scan %s", bt_scanning ? "off" : "on");
+	bt_cmd("status");
+}
+
+static void bt_confirm_cb(lv_event_t *e)
+{
+	(void)e;
+	if (bt_confirm_addr[0])
+		bt_cmd("confirm %s yes", bt_confirm_addr);
+	bt_confirm_addr[0] = 0;
+	bt_prompt[0] = 0;
+	bt_render();
+}
+
+static void bt_render(void)
+{
+	int i, pass;
+
+	if (bt_power_btn)
+		lv_label_set_text(lv_obj_get_child(bt_power_btn, 0),
+				  bt_powered ? "Bluetooth: on" : "Bluetooth: off");
+	if (!bt_list)
+		return;
+	if (bt_status) {
+		if (bt_prompt[0])
+			lv_label_set_text_fmt(bt_status, LV_SYMBOL_BLUETOOTH
+					      "  %s", bt_prompt);
+		else if (bt_fd < 0)
+			lv_label_set_text(bt_status, LV_SYMBOL_BLUETOOTH
+					  "  no daemon");
+		else if (!bt_powered)
+			lv_label_set_text(bt_status, LV_SYMBOL_BLUETOOTH "  off");
+		else
+			lv_label_set_text(bt_status, bt_scanning ?
+					  LV_SYMBOL_BLUETOOTH "  Scanning..." :
+					  LV_SYMBOL_BLUETOOTH "  On");
+	}
+	lv_obj_clean(bt_list);
+	/*
+	 * Two sections, with headers, because "paired" and "just seen nearby"
+	 * mean completely different things to the person looking: one is
+	 * theirs and will reconnect, the other is a stranger's headphones
+	 * across the room. Without the split the list is a flat pile in which
+	 * a tap could equally mean "reconnect my earbuds" or "start pairing
+	 * with someone else's laptop".
+	 */
+	for (pass = 0; pass < 2; pass++) {
+		int shown = 0;
+
+		/* Unpaired devices only exist while scanning - otherwise the
+		 * list fills with every advertiser in the building. */
+		if (pass == 1 && !bt_scanning)
+			continue;
+		for (i = 0; i < btdev_n; i++) {
+			lv_obj_t *b, *mark;
+
+			if (!!btdevs[i].paired != (pass == 0))
+				continue;
+			if (!shown) {
+				lv_obj_t *h = lv_list_add_text(bt_list,
+						pass == 0 ? "Paired" : "Available");
+
+				lv_obj_set_style_text_font(h, FONT_UI, 0);
+				lv_obj_set_style_pad_ver(h, 1, 0);
+				lv_obj_set_style_pad_left(h, 6, 0);
+				shown = 1;
+			}
+			b = lv_list_add_button(bt_list, NULL,
+					       btdevs[i].name[0] ? btdevs[i].name :
+					       btdevs[i].addr);
+			lv_obj_set_style_text_font(b, FONT_UI, 0);
+			lv_obj_set_style_pad_ver(b, 2, 0);
+			lv_obj_set_style_pad_left(b, 6, 0);
+			lv_obj_set_flex_align(b, LV_FLEX_ALIGN_START,
+					      LV_FLEX_ALIGN_CENTER,
+					      LV_FLEX_ALIGN_CENTER);
+			lv_obj_set_height(b, 22);
+			lv_obj_add_event_cb(b, bt_row_cb, LV_EVENT_CLICKED,
+					    (void *)(intptr_t)i);
+			if (btdevs[i].conn)
+				lv_obj_set_style_bg_color(b,
+					lv_color_hex(COL_HDR_FOCUS), 0);
+			/* an unpaired row is a weaker offer, so say so */
+			if (pass == 1)
+				lv_obj_set_style_text_opa(b, LV_OPA_70, 0);
+
+			/* class on the right, state inside it - the same
+			 * two-column idiom the Wi-Fi list uses. */
+			mark = lv_label_create(b);
+			lv_label_set_text(mark, bt_glyph(&btdevs[i]));
+			lv_obj_set_style_text_font(mark, FONT_UI, 0);
+			lv_obj_add_flag(mark, LV_OBJ_FLAG_IGNORE_LAYOUT);
+			lv_obj_align(mark, LV_ALIGN_RIGHT_MID, -6, 0);
+			lv_obj_remove_flag(mark, LV_OBJ_FLAG_CLICKABLE);
+			if (btdevs[i].conn || pass == 0) {
+				mark = lv_label_create(b);
+				lv_label_set_text(mark, btdevs[i].conn ?
+						  LV_SYMBOL_OK : LV_SYMBOL_LOOP);
+				lv_obj_set_style_text_font(mark, FONT_UI, 0);
+				lv_obj_set_style_text_opa(mark, btdevs[i].conn ?
+							  LV_OPA_COVER : LV_OPA_50, 0);
+				lv_obj_add_flag(mark, LV_OBJ_FLAG_IGNORE_LAYOUT);
+				lv_obj_align(mark, LV_ALIGN_RIGHT_MID, -28, 0);
+				lv_obj_remove_flag(mark, LV_OBJ_FLAG_CLICKABLE);
+			}
+		}
+	}
+}
+
+/* The popover owns these; they must not outlive it. */
+static void bt_forget_widgets(void)
+{
+	bt_list = bt_status = bt_power_btn = NULL;
+}
+
+static void tray_bt_cb(lv_event_t *e)
+{
+	/* 190 clipped the radio button against the popover's own padding */
+	lv_obj_t *pop = popover_open(lv_event_get_target(e), 260, 216);
+	lv_obj_t *b;
+
+	if (!pop)
+		return;
+	bt_connect_sock();
+
+	b = lv_button_create(pop);
+	lv_obj_set_pos(b, 158, 0);
+	lv_obj_set_size(b, 84, 22);
+	lv_obj_set_style_radius(b, 0, 0);
+	lv_obj_set_style_bg_color(b, lv_color_hex(COL_HDR_FOCUS), 0);
+	lv_obj_set_style_shadow_width(b, 0, 0);
+	lv_obj_add_event_cb(b, bt_confirm_addr[0] ? bt_confirm_cb : bt_scan_cb,
+			    LV_EVENT_CLICKED, NULL);
+	lv_obj_center(lv_label_create(b));
+	lv_label_set_text(lv_obj_get_child(b, 0),
+			  bt_confirm_addr[0] ? "Confirm" : "Scan");
+
+	bt_status = lv_label_create(pop);
+	lv_label_set_text(bt_status, "...");
+	lv_obj_set_style_text_font(bt_status, FONT_UI, 0);
+	/*
+	 * Stop short of the Scan button at x=158. A failure reason can be any
+	 * length, and an unbounded label ran straight under the button -
+	 * unreadable, and it looked like a rendering fault rather than a long
+	 * string.
+	 */
+	lv_obj_set_width(bt_status, 150);
+	lv_label_set_long_mode(bt_status, LV_LABEL_LONG_DOT);
+	lv_obj_set_pos(bt_status, 4,
+		       (22 - (int32_t)lv_font_get_line_height(FONT_UI)) / 2);
+
+	bt_list = lv_list_create(pop);
+	lv_obj_set_size(bt_list, 242, 138);
+	lv_obj_set_pos(bt_list, 0, 26);
+	lv_obj_set_style_radius(bt_list, 0, 0);
+	lv_obj_set_style_pad_all(bt_list, 0, 0);
+	lv_obj_set_style_text_font(bt_list, FONT_UI, 0);
+
+	bt_power_btn = b = lv_button_create(pop);
+	lv_obj_set_pos(b, 0, 170);
+	lv_obj_set_size(b, 120, 22);
+	lv_obj_set_style_radius(b, 0, 0);
+	lv_obj_set_style_bg_color(b, lv_color_hex(COL_HDR), 0);
+	lv_obj_set_style_shadow_width(b, 0, 0);
+	lv_obj_add_event_cb(b, bt_power_cb, LV_EVENT_CLICKED, NULL);
+	lv_obj_center(lv_label_create(b));
+	lv_label_set_text(lv_obj_get_child(b, 0),
+			  bt_powered ? "Bluetooth: on" : "Bluetooth: off");
+
+	bt_cmd("status");
+	bt_cmd("list");
+	bt_render();
 }
 
 /* ----------------------------------------------------------------- audio */
@@ -5071,7 +5572,7 @@ static void kms_flush_cb(lv_display_t *d, const lv_area_t *area, uint8_t *px)
 #define MAXMOUSE 8
 /* pty + slack + every keyboard and mouse we may have open */
 /* +5: the X shim's listening socket and up to four connected clients. */
-#define NFDS        (2 + MAXKBD + MAXMOUSE + 7)	/* +1: the ctl fifo */
+#define NFDS        (2 + MAXKBD + MAXMOUSE + 8)	/* +1 ctl fifo, +1 s31-bt */
 /*
  * How long to sleep once the desktop has gone quiet.
  *
@@ -6137,7 +6638,7 @@ int main(void)
 		lv_obj_remove_flag(l, LV_OBJ_FLAG_CLICKABLE);
 		lv_obj_update_layout(l);	/* geometry is deferred */
 		wifi_tray_h = lv_obj_get_height(l);
-		lv_obj_set_size(wicon, lv_obj_get_width(l), wifi_tray_h);
+		lv_obj_set_size(wicon, lv_obj_get_width(l) + 12, wifi_tray_h + 6);
 		lv_obj_align(l, LV_ALIGN_BOTTOM_MID, 0, 0);
 		wifi_tray_clip = lv_obj_create(wicon);
 		lv_obj_remove_style_all(wifi_tray_clip);
@@ -6155,6 +6656,41 @@ int main(void)
 		lv_obj_add_flag(wicon, LV_OBJ_FLAG_CLICKABLE);
 		lv_obj_add_event_cb(wicon, tray_wifi_cb, LV_EVENT_CLICKED,
 				    NULL);
+
+		/*
+		 * Bluetooth. A plain glyph: unlike Wi-Fi there is no signal
+		 * strength worth showing, so state is carried by opacity -
+		 * dim when the radio is off or the daemon is absent, full
+		 * when something is connected.
+		 */
+		/*
+		 * The glyph is ~12 px wide and the gap between tray icons is
+		 * dead space, so a tap that looks like it landed on the icon
+		 * often hit nothing at all. Wrap it in a container wide enough
+		 * to be a real target on a touch panel; the label inside still
+		 * carries the state through its opacity.
+		 */
+		{
+			lv_obj_t *bicon = lv_obj_create(tray);
+
+			lv_obj_remove_style_all(bicon);
+			bt_tray_icon = lv_label_create(bicon);
+			lv_label_set_text(bt_tray_icon, LV_SYMBOL_BLUETOOTH);
+			lv_obj_set_style_text_font(bt_tray_icon, FONT_UI, 0);
+			lv_obj_set_style_text_color(bt_tray_icon,
+						    lv_color_hex(COL_HDR_TEXT), 0);
+			lv_obj_set_style_text_opa(bt_tray_icon, LV_OPA_40, 0);
+			lv_obj_remove_flag(bt_tray_icon, LV_OBJ_FLAG_CLICKABLE);
+			lv_obj_update_layout(bt_tray_icon);
+			lv_obj_set_size(bicon,
+					lv_obj_get_width(bt_tray_icon) + 12,
+					lv_obj_get_height(bt_tray_icon) + 6);
+			lv_obj_align(bt_tray_icon, LV_ALIGN_CENTER, 0, 0);
+			lv_obj_add_flag(bicon, LV_OBJ_FLAG_CLICKABLE);
+			lv_obj_remove_flag(bicon, LV_OBJ_FLAG_SCROLLABLE);
+			lv_obj_add_event_cb(bicon, tray_bt_cb,
+					    LV_EVENT_CLICKED, NULL);
+		}
 
 		l = lv_label_create(tray);
 		lv_label_set_text(l, LV_SYMBOL_VOLUME_MAX);
@@ -6259,6 +6795,7 @@ int main(void)
 		uint32_t next, elapsed;
 		int n = 0, ms;
 		int i_term, i_wifi, i_kbd, i_mouse, i_watch, n_kbd, n_mouse;
+		int i_bt = -1;
 		int i_x, n_x, xfds[5];
 		int frame_due;
 
@@ -6344,6 +6881,10 @@ int main(void)
 			i_wifi = n;
 			fds[n].fd = wpa_ev_fd; fds[n].events = POLLIN; n++;
 		}
+		if (bt_fd >= 0 && n < NFDS) {
+			i_bt = n;
+			fds[n].fd = bt_fd; fds[n].events = POLLIN; n++;
+		}
 		/*
 		 * The ctl fifo was never in this set, so a command sat unread
 		 * until some OTHER fd or timer woke the loop - a `raise` from
@@ -6401,7 +6942,7 @@ int main(void)
 
 		{
 			int busy = 0;
-			int rd_term, rd_wifi, rd_kbd = 0, rd_mouse = 0, k;
+			int rd_term, rd_wifi, rd_bt, rd_kbd = 0, rd_mouse = 0, k;
 			PROF_START(t0);
 
 			/*
@@ -6417,6 +6958,7 @@ int main(void)
 #define RD_MASK (POLLIN | POLLERR | POLLHUP | POLLNVAL)
 			rd_term = i_term >= 0 && (fds[i_term].revents & RD_MASK);
 			rd_wifi = i_wifi >= 0 && (fds[i_wifi].revents & RD_MASK);
+			rd_bt = i_bt >= 0 && (fds[i_bt].revents & RD_MASK);
 			for (k = 0; k < n_kbd; k++)
 				if (fds[i_kbd + k].revents & RD_MASK) rd_kbd = 1;
 			for (k = 0; k < n_mouse; k++)
@@ -6446,6 +6988,7 @@ int main(void)
 			if (rd_kbd)   { PROF_START(a); busy |= kbd_poll();    PROF_ADD(prof_kbd, a); }
 			if (rd_mouse) { PROF_START(a); busy |= mouse_poll();  PROF_ADD(prof_mouse, a); }
 			if (rd_wifi)  { PROF_START(a); busy |= wifi_ev_poll(); PROF_ADD(prof_wifi, a); }
+			if (rd_bt)    busy |= bt_ev_poll();
 			for (int xi = 0; xi < n_x; xi++)
 				if (fds[i_x + xi].revents & RD_MASK) {
 					PROF_START(a);
