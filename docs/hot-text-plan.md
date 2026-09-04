@@ -172,3 +172,64 @@ Three things this run established that are worth keeping:
 Bluetooth, Wi-Fi and sound all enabled - 6,103,417 bytes with 319 KB spare -
 because the linux partition was grown to 6,422,528. The note elsewhere that
 profiling and the radios are mutually exclusive is stale.
+
+## OpenSBI runs XIP too, and that was the context switch (2026-09-04)
+
+The flash penalty this document is about applies to the **firmware** as much as
+the kernel. OpenSBI is mapped at 0x40380000, inside the flash MTD window, so it
+executes in place and an isolated ecall refetches its whole trap path from
+80 MHz flash.
+
+That, and not the coprocessor save/restore, was the cost in a context switch.
+The decisive measurement was a pair of probes added to the SBI vendor
+extension: the *same* ecall costs **1.8 us** when a hundred run back to back
+and the path stays cached, and **16-18 us (worst 69)** once per context switch
+when it does not. An empty ecall - trap in, return, no work - was 1.7 us, so
+the trap mechanism was never the problem either.
+
+16 KiB of internal SRAM is now reserved at `S31_OPENSBI_FAST_BASE`, and the hot
+path is loaded from flash and copied there by `_start` before mtvec is armed.
+
+| what runs from SRAM | context switch | in-switch ecall |
+|---|---|---|
+| nothing (all XIP) | 280.7 us | - |
+| kernel-thread fast path in the hook | 157.5 us | 16-18 us |
+| + sbi_trap, sbi_ecall, esp32s31 | 80.0 us | 12.3-12.7 us |
+| + the trap ENTRY, sbi_timer, sbi_ipi, sbi_scratch, BASE/TIME/VENDOR | **57.2 us** | |
+
+**4.9x overall.** Measured with `switchbench` arm C (sched_yield, ~2000 real
+switches per run), 8 runs on a settled board: 58.9 54.9 56.4 56.8 57.4 57.5
+58.8 85.5, median 57.5. The 80.0 us baseline's whole spread was 78.2-85.8, so
+every run bar one outlier is below the old minimum.
+
+Moving the entry mattered on its own: the dispatch was already in RAM, but
+every trap still *arrived* in the flash-resident `.entry` and paid a cold
+refetch before reaching any of it.
+
+Three traps, all recorded in the opensbi commit and worth repeating here:
+
+- **PSRAM does not work.** The firmware builds and relocates into OpenSBI's own
+  reserved 64 KiB there and the board does not boot - the loader maps PSRAM for
+  data and hart1 cannot fetch instructions from it. Internal SRAM needs no
+  mapping.
+- **`*a.o *b.o *c.o(.text)` applies the filter to `c.o` only.** The other two
+  are bare file patterns matching every section they have, which dragged rodata,
+  data and bss into the window and made it 32 KiB. One line per object.
+- **Naming it `.text.fastentry` would not have worked.** The flash `.text`
+  output section globs `.text.*` and swallows it - the same trap `.text..fast`
+  hit on the kernel side, described above. It is called `.fastentry`.
+
+### Where this lever now stands
+
+Largely spent, on both sides. The kernel's `.text..fast` is already **256,674
+bytes** of RAM and holds `sched/core.o`, `sched/fair.o`, `entry/common.o`,
+`traps.o`, `irq.o` and the tick and block paths; the profile above is flat
+after those. On the firmware side 9,896 of the 16 KiB window is used, and what
+is left in flash (`sbi_hart.o`, `sbi_domain.o`, 11 KiB between them) is
+init-time, not per-trap.
+
+Further additions buy little and **cost RAM, which is the binding constraint** -
+a census on a settled board reads MemAvailable 3,460 kB of 15,404, with Slab at
+4,420 kB and `SReclaimable: 0`, i.e. 28.7% of the machine unreclaimable. The
+next real responsiveness win is that slab, not more hot text. Breaking it down
+needs `/proc/slabinfo`, which `DIAG=0` compiles out.
