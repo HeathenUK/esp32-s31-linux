@@ -3740,3 +3740,64 @@ re-enumerate at high speed, split refused, drop back, both receivers
 and the desktop's mouse and keyboard back within 7 s of the trigger,
 0 irq/s after. A bus with only high-speed devices would stay high-speed
 - untested only for lack of such a device.
+
+## BLE HID on the S31: Espressif's own example fails too (2026-09-04)
+
+Chasing LE keyboard support to the end. Our stack gets further than any
+previous attempt and then fails in the controller:
+
+- SMP legacy Just Works completes: Pairing Request/Response, Confirm both
+  ways, Random both ways (the keyboard reports `Legacy` in its AuthReq - it
+  has no Secure Connections, so SC is not available as a route).
+- `HCI_LE_Start_Encryption` goes out, and the link drops with
+  `Disconnect Complete, reason 0x3d, MIC Failure`.
+
+Four things were proved correct before blaming anything:
+
+    host key        STK recomputed by hand as s1(TK=0, Srand, Mrand) equals
+                    the LTK in the HCI command, byte for byte (the AES used
+                    to check it was itself validated against FIPS-197 first)
+    key delivery    hart0 checksums every hosted frame and returned Command
+                    Status, so the controller got exactly those bytes
+    controller AES  rootfs/s31-leenc.c runs the Bluetooth spec's own
+                    HCI_LE_Encrypt vector (Core v5 Vol 3 Part H D.1) and the
+                    controller returns the exact expected ciphertext - which
+                    also kills the LTK byte-order theory
+    crypto sharing  a byte-scan of libble_app/libbredr_app/libbtdm_common
+                    finds ZERO references to any AES/SHA/RSA/ECC base or to
+                    CRYPTO_CTRL0; the BT clocks are different registers, so
+                    Linux's crypto driver cannot affect the controller
+
+**Then the decisive test.** IDF's `examples/bluetooth/esp_hid_host` lists
+ESP32-S31 as supported and runs Bluedroid as an on-chip host in BTDM mode -
+none of our code in the path. Built for the S31, pointed at the keyboard by
+name, it finds it correctly (`UUID: 0x1812, APPEARANCE: 0x03c1`) and then:
+
+    BT_APPL: gattc_conn_cb: st=0 rsn=0x100
+    BLE_HIDH: OPEN failed: 0x85
+
+So BLE HID does not work on this silicon with this keyboard in Espressif's
+own reference implementation either. **This is not our bug.** Supporting
+evidence: the S31 controller's LE Secure Connections key generation
+(`wr_base_registry_genEccKeyPair`/`genEcdhKey`) returns -1 unconditionally,
+so LE security in this blob is objectively unfinished.
+
+What remains supported and shipping: Classic BR/EDR pairing and A2DP audio,
+both verified by ear the same day. Classic HID is untried but its whole
+stack is present. `dwc2.le_ltk_swap` stays in the hosted driver (default
+off) as a disproven quirk, and `rootfs/s31-leenc.c` stays as the
+controller-AES known-answer test.
+
+### A2DP is unaffected - and discovery is what breaks it
+
+A separate scare, worth recording because it wasted a session: A2DP looked
+broken after the crypto work. It was not. Two causes, both mine:
+
+- **Five duplicate `s31-bt` daemons**, because busybox `pkill -f` matched
+  nothing; they fought over the same D-Bus objects and no transport came
+  up. Kill by PID from `ps`, and assert zero remain before starting one.
+- **Discovery running during playback.** Measured, 30 s arms, console
+  detached: discovery ON gave `late_max 4987 ms / 298 stalls`; discovery
+  OFF gave `late_max 10-15 ms / 0 stalls` with Wi-Fi UP, and `0-34 ms /
+  0 stalls` with Wi-Fi DOWN. **Wi-Fi is not the cause**; scanning is. The
+  tray must stop discovery while a transport streams.
