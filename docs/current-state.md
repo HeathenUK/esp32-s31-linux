@@ -3801,3 +3801,39 @@ broken after the crypto work. It was not. Two causes, both mine:
   OFF gave `late_max 10-15 ms / 0 stalls` with Wi-Fi UP, and `0-34 ms /
   0 stalls` with Wi-Fi DOWN. **Wi-Fi is not the cause**; scanning is. The
   tray must stop discovery while a transport streams.
+
+### Reading the controller blob: the key handling is correct (2026-09-04)
+
+The blob is not inaccessible - `libble_app.a` is an ordinary 2.5 MB RISC-V
+static archive in the IDF tree, unsigned, linked into our own hart0 build,
+and disassemblable with the toolchain we already have. Most symbols are
+obfuscated (`r_sym_ble_MaeSkMuBxKVBLkmtn6ce`), but the three key-handling
+entry points are named and small: `r_ble_ll_hci_le_encrypt` (136 B),
+`r_ble_ll_conn_hci_le_ltk_reply` (160 B),
+`r_ble_ll_conn_hci_le_start_encrypt` (232 B).
+
+Differential reading, since `le_encrypt` is PROVED correct by the spec
+known-answer test and `start_encrypt` is the failing path:
+
+    le_encrypt    swap(key,16); swap(plaintext,16); AES; swap(result,16)
+    ltk_reply     li a2,16; call r_sym_endian_...       (swaps its LTK)
+    start_encrypt li a2,16; addi a1,s0,12; call r_sym_endian_...
+
+`start_encrypt` byte-swaps the LTK from parameter offset 12 - exactly where
+the spec puts it after handle(2) + rand(8) + ediv(2) - with the same helper
+the other two use. It also validates the 28-byte length, loads rand and
+ediv from the right offsets, and checks connection state first.
+
+**So the controller's HCI-level key handling is correct, and the LTK
+byte-order theory is dead on evidence.** That was the last hypothesis
+fixable from the host side; the `le_ltk_swap` module parameter in the
+hosted driver would have corrupted a correct key, and is kept only as a
+disproven experiment (default off, never exercised - the A/B never reached
+its swapped arm).
+
+What remains is `r_sym_ble_nASeL9KbgL3EYPyzYMZg` and the obfuscated
+link-layer beneath it, driving undocumented CCM hardware in the BT MAC
+(the objects reference the modem block at 0x20100-0x2010a heavily, and no
+crypto peripheral at all). Reconstructing that means inferring an
+undocumented radio interface from obfuscated code with no ground truth.
+Not recommended. The route to working BLE HID is an Espressif fix.
