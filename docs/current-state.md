@@ -4280,3 +4280,43 @@ the fills cheaper or fewer, not move them.
 The one durable gain from the exercise: `lv_obj`'s COVER_CHECK rejecting a
 transparent background is the thing to set first if an opaque cover is ever
 wanted for another purpose.
+
+### The 590 us switch, decomposed at last (2026-09-04)
+
+`rootfs/switchbench.c` measures four layers, each one more than the last, and
+counts the switches the kernel actually performed rather than assuming them.
+Three runs, 2000 iterations per arm:
+
+| arm | us/op | switches counted | what it adds |
+|---|---|---|---|
+| A bare syscall | 1.31 / 2.08 / 5.80 | 0 | the syscall floor |
+| B self-pipe, one process | 11.77 / 12.26 / 12.43 | 0 | + the pipe, provably no switch |
+| C sched_yield, two runnable | 264 / 267 / 309 | one per op | + the switch |
+| D pipe ping-pong | 1201 / 1207 / 1216 | two per op | + block and wake |
+
+**The conclusion, and it is not what the shape of the problem suggested:**
+
+- **Syscalls are fine.** 1.5 us. The `.text..fast` work on the entry path
+  already did its job.
+- **The pipe is fine.** 12 us for two syscalls plus the pipe machinery.
+- **A bare context switch is ~280 us.** That is the cost, and it is still
+  about a hundred times a normal one.
+- **The wakeup path costs roughly as much again.** D is ~1208 us for two
+  switches, i.e. ~600 us a hop against C's 280 us of pure switching, so
+  blocking and being woken adds ~300 us on top of the switch itself.
+
+ctxbench's "590 us per context switch" was therefore a hop, not a switch, and
+it was two costs added together. Both are real; they are different problems.
+
+**Where the 280 us probably goes, with arithmetic rather than a hunch.** The
+coprocessor hook is ~25 us of it (measured 51 us per hop, and a hop is two
+switches), leaving ~255 us. This kernel executes XIP from 80 MHz flash, which
+streams at 22-32 MB/s, and 255 us at 25 MB/s is **~6.4 KB of instruction
+fetch** - which is the right order for `schedule()`, `context_switch()`,
+`pick_next_task()` and `__switch_to` on a 16 KB icache that a switch is very
+likely to thrash. The flash penalty on branchy code is measured at 5.98x.
+
+That makes the scheduler core the prime `.text..fast` candidate, and unlike
+the interrupt spine (which did not boot) the timer subsystem precedent shows
+the mechanism works. `switchbench` arm C is the instrument: it isolates the
+switch with no wakeup and no pipe in the way.
