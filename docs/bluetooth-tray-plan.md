@@ -176,3 +176,34 @@ Also added, from the measurements: `scan` is refused with
 `ERR busy streaming` while a transport is active, and `play` stops any
 running discovery first. Implemented; still to be exercised against a live
 stream.
+
+## Shipped (2026-09-04)
+
+The panel is in lvdesk and verified on the hardware:
+
+- Tray icon (dim / normal / bright by state), popover in the same shape as
+  the Wi-Fi one, status line, Scan, and a device list.
+- **Paired and Available are separate sections with headers.** They mean
+  different things to the person looking - one is theirs and will
+  reconnect, the other is a stranger's headphones across the room - and a
+  flat list made a tap ambiguous. Unpaired rows are dimmed and only appear
+  while scanning; paired rows carry a link glyph, connected ones a tick and
+  the highlight.
+- **Radio on/off on both popovers.** Bluetooth goes through the daemon's
+  `Adapter1.Powered`; Wi-Fi toggles `IFF_UP` on the interface, because
+  wpa_supplicant's DISCONNECT leaves the radio associating and scanning,
+  which is not what "off" means to anyone reading a panel. Verified: the
+  Bluetooth button took the adapter powered=1 -> 0 and back, with the label
+  and status following.
+- Tapping a row connects, disconnects or pairs as appropriate.
+
+Two things learned while testing, both now fixed in the code:
+
+- **The tray icons were not touch targets.** A glyph is ~12 px wide and the
+  gaps between icons were dead space, so taps that looked on-target hit
+  nothing. Both the Wi-Fi and Bluetooth icons now have padded containers.
+- **Never drive the tray by injected pixel coordinates.** The tray is a
+  flex row whose width changes with the memory readout, so a hard-coded x
+  starts landing between glyphs and the test reports "the panel did not
+  open" when the panel is fine. `echo "tray bt" > /tmp/lvdesk.ctl` (also
+  `tray wifi`) opens a panel by name; use that.

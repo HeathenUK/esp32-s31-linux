@@ -249,6 +249,7 @@ static lv_obj_t *taskbar;
 static lv_obj_t *sysinfo;		/* task bar free-memory readout */
 static char sysinfo_last[192];
 static lv_obj_t *wifi_tray_clip;	/* bright-glyph clip window, see tray_wifi_update */
+static lv_obj_t *bt_tray_icon;		/* declared here: ctl_line() opens panels by name */
 static int wifi_tray_h;			/* full LV_SYMBOL_WIFI glyph height */
 static int wifi_tray_bucket = -1;	/* last painted signal bucket */
 #define MAXKBD 8
@@ -2621,6 +2622,29 @@ static void ctl_line(char *buf)
 		} else if (sscanf(buf, "max %d", &idx) == 1) {
 			if (idx >= 0 && idx < win_n)
 				win_toggle_max(&wins[idx]);
+		} else if (!strncmp(buf, "tray ", 5)) {
+			/*
+			 * Open a tray popover by name.
+			 *
+			 * The alternative is injecting a click at the icon's
+			 * pixel coordinates, and those move: the tray is a
+			 * flex row whose width changes with the memory
+			 * readout, so a hard-coded x silently starts landing
+			 * in the gap between two glyphs and the test reports
+			 * "the panel did not open" when the panel is fine.
+			 * Anything automated should use this instead.
+			 */
+			lv_obj_t *icon = NULL;
+
+			if (strstr(buf, "bt") && bt_tray_icon)
+				icon = lv_obj_get_parent(bt_tray_icon);
+			else if (strstr(buf, "wifi") && wifi_tray_clip)
+				icon = lv_obj_get_parent(
+					lv_obj_get_parent(wifi_tray_clip));
+			if (icon)
+				lv_obj_send_event(icon, LV_EVENT_CLICKED, NULL);
+			printf("lvdesk: tray %s\n", icon ? "opened" : "no such icon");
+			fflush(stdout);
 		} else if (!strncmp(buf, "lvmem", 5)) {
 			/*
 			 * The LVGL pool is a static 512 KB taken on faith;
@@ -4950,7 +4974,7 @@ static int bt_fd = -1;
 static int bt_powered, bt_scanning;
 static char bt_prompt[64];		/* passkey / confirm text for the panel */
 static char bt_confirm_addr[18];
-static lv_obj_t *bt_list, *bt_status, *bt_tray_icon, *bt_power_btn;
+static lv_obj_t *bt_list, *bt_status, *bt_power_btn;
 static void bt_render(void);
 
 static int bt_connect_sock(void)
