@@ -501,7 +501,7 @@ XIP_ROOTFS_IMG := $(BUILD_DIR)/rootfs-xip.cramfs
 # by measurement, not guesswork (see the note above about which binaries go in
 # which image, and why libXft belongs here).
 XIP_ROOTS ?= bin/busybox usr/sbin/wpa_supplicant usr/sbin/iw usr/bin/lvdesk \
-	usr/bin/s31-a2dp usr/bin/s31-coex \
+	usr/bin/s31-bt usr/bin/s31-coex \
 	usr/libexec/bluetooth/bluetoothd \
 	usr/bin/xfilesctl usr/bin/s31-open usr/bin/s31-thumb usr/bin/xfilesthumb usr/bin/s31-thumbs
 

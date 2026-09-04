@@ -146,6 +146,14 @@ static const uint32_t term_palette[16] = {
 #define TERM_CH		8
 #define TERM_COLS   74
 #define TERM_ROWS   28
+/*
+ * Tray glyphs are ~12 px wide with an 8 px gap, so a tap that looks like it
+ * hit an icon often hit nothing. This extends each icon's hit box without
+ * touching its size, so the row stays evenly spaced and on one line. Half
+ * the gap, so neighbouring hit boxes meet and never overlap.
+ */
+#define TRAY_TOUCH_PAD	4
+
 #define TASKBAR_H   22
 #define HDR_H       20
 /* Measured cost of an lvdesk window's chrome around its content. */
@@ -2640,7 +2648,7 @@ static void ctl_line(char *buf)
 			if (strstr(buf, "audio") && vol_tray_icon)
 				icon = vol_tray_icon;
 			else if (strstr(buf, "bt") && bt_tray_icon)
-				icon = lv_obj_get_parent(bt_tray_icon);
+				icon = bt_tray_icon;
 			else if (strstr(buf, "wifi") && wifi_tray_clip)
 				/* the clip's parent IS the clickable icon */
 				icon = lv_obj_get_parent(wifi_tray_clip);
@@ -5095,6 +5103,12 @@ static void bt_dev_line(char *l)
 	}
 }
 
+/*
+ * The output sink disconnected on its own - powered off, walked out of
+ * range, went to sleep. Defined below with the rest of the audio routing.
+ */
+static void audio_sink_lost(const char *addr);
+
 static void bt_line(char *l)
 {
 	char addr[18];
@@ -5124,6 +5138,11 @@ static void bt_line(char *l)
 	} else if (!strncmp(l, "WARN ", 5) && strstr(l, "le-only")) {
 		snprintf(bt_prompt, sizeof(bt_prompt),
 			 "LE only - unsupported radio");
+	} else if (!strncmp(l, "DISCONNECTED ", 13)) {
+		char a[18];
+
+		if (sscanf(l, "DISCONNECTED %17s", a) == 1)
+			audio_sink_lost(a);
 	} else if (!strncmp(l, "GONE ", 5)) {
 		char a[18];
 		struct btdev *d;
@@ -5488,6 +5507,26 @@ static const struct btdev *audio_sink(void)
 		if (btdevs[i].paired && !strcmp(btdevs[i].kind, "audio"))
 			return &btdevs[i];
 	return NULL;
+}
+
+static void audio_sink_lost(const char *addr)
+{
+	const struct btdev *s;
+
+	if (!audio_out_bt)
+		return;
+	s = audio_sink();
+	if (s && strcmp(s->addr, addr))
+		return;			/* some other device left */
+	/*
+	 * Leaving the default pointed at the loopback would send every sound
+	 * into a device nothing is draining: silence with no explanation and
+	 * no way back except knowing to open the panel. Fall back to the
+	 * speakers, which applications pick up on their next open.
+	 */
+	audio_out_bt = 0;
+	audio_route_write(0);
+	bt_cmd("route off");
 }
 
 static void tray_audio_cb(lv_event_t *e)
@@ -6784,7 +6823,15 @@ int main(void)
 		lv_obj_remove_flag(l, LV_OBJ_FLAG_CLICKABLE);
 		lv_obj_update_layout(l);	/* geometry is deferred */
 		wifi_tray_h = lv_obj_get_height(l);
-		lv_obj_set_size(wicon, lv_obj_get_width(l) + 12, wifi_tray_h + 6);
+		/*
+		 * Exactly the size of the glyph. Padding the container out to
+		 * make a touch target instead pushed this icon below the line
+		 * the other tray glyphs sit on, and doubled the gap to its
+		 * neighbour, because only the padded icons carried the extra
+		 * width. The touch margin is added invisibly below, which
+		 * costs no layout at all.
+		 */
+		lv_obj_set_size(wicon, lv_obj_get_width(l), wifi_tray_h);
 		lv_obj_align(l, LV_ALIGN_BOTTOM_MID, 0, 0);
 		wifi_tray_clip = lv_obj_create(wicon);
 		lv_obj_remove_style_all(wifi_tray_clip);
@@ -6800,6 +6847,8 @@ int main(void)
 		lv_obj_remove_flag(l, LV_OBJ_FLAG_CLICKABLE);
 		lv_obj_align(l, LV_ALIGN_BOTTOM_MID, 0, 0);
 		lv_obj_add_flag(wicon, LV_OBJ_FLAG_CLICKABLE);
+		lv_obj_remove_flag(wicon, LV_OBJ_FLAG_SCROLLABLE);
+		lv_obj_set_ext_click_area(wicon, TRAY_TOUCH_PAD);
 		lv_obj_add_event_cb(wicon, tray_wifi_cb, LV_EVENT_CLICKED,
 				    NULL);
 
@@ -6809,40 +6858,23 @@ int main(void)
 		 * dim when the radio is off or the daemon is absent, full
 		 * when something is connected.
 		 */
-		/*
-		 * The glyph is ~12 px wide and the gap between tray icons is
-		 * dead space, so a tap that looks like it landed on the icon
-		 * often hit nothing at all. Wrap it in a container wide enough
-		 * to be a real target on a touch panel; the label inside still
-		 * carries the state through its opacity.
-		 */
-		{
-			lv_obj_t *bicon = lv_obj_create(tray);
-
-			lv_obj_remove_style_all(bicon);
-			bt_tray_icon = lv_label_create(bicon);
-			lv_label_set_text(bt_tray_icon, LV_SYMBOL_BLUETOOTH);
-			lv_obj_set_style_text_font(bt_tray_icon, FONT_UI, 0);
-			lv_obj_set_style_text_color(bt_tray_icon,
-						    lv_color_hex(COL_HDR_TEXT), 0);
-			lv_obj_set_style_text_opa(bt_tray_icon, LV_OPA_40, 0);
-			lv_obj_remove_flag(bt_tray_icon, LV_OBJ_FLAG_CLICKABLE);
-			lv_obj_update_layout(bt_tray_icon);
-			lv_obj_set_size(bicon,
-					lv_obj_get_width(bt_tray_icon) + 12,
-					lv_obj_get_height(bt_tray_icon) + 6);
-			lv_obj_align(bt_tray_icon, LV_ALIGN_CENTER, 0, 0);
-			lv_obj_add_flag(bicon, LV_OBJ_FLAG_CLICKABLE);
-			lv_obj_remove_flag(bicon, LV_OBJ_FLAG_SCROLLABLE);
-			lv_obj_add_event_cb(bicon, tray_bt_cb,
-					    LV_EVENT_CLICKED, NULL);
-		}
+		bt_tray_icon = lv_label_create(tray);
+		lv_label_set_text(bt_tray_icon, LV_SYMBOL_BLUETOOTH);
+		lv_obj_set_style_text_font(bt_tray_icon, FONT_UI, 0);
+		lv_obj_set_style_text_color(bt_tray_icon,
+					    lv_color_hex(COL_HDR_TEXT), 0);
+		lv_obj_set_style_text_opa(bt_tray_icon, LV_OPA_40, 0);
+		lv_obj_add_flag(bt_tray_icon, LV_OBJ_FLAG_CLICKABLE);
+		lv_obj_set_ext_click_area(bt_tray_icon, TRAY_TOUCH_PAD);
+		lv_obj_add_event_cb(bt_tray_icon, tray_bt_cb, LV_EVENT_CLICKED,
+				    NULL);
 
 		vol_tray_icon = l = lv_label_create(tray);
 		lv_label_set_text(l, LV_SYMBOL_VOLUME_MAX);
 		lv_obj_set_style_text_font(l, FONT_UI, 0);
 		lv_obj_set_style_text_color(l, lv_color_hex(COL_HDR_TEXT), 0);
 		lv_obj_add_flag(l, LV_OBJ_FLAG_CLICKABLE);
+		lv_obj_set_ext_click_area(l, TRAY_TOUCH_PAD);
 		lv_obj_add_event_cb(l, tray_audio_cb, LV_EVENT_CLICKED, NULL);
 
 		clock_lbl = lv_label_create(tray);
@@ -7275,6 +7307,17 @@ int main(void)
 			/* Same economics: polls RSSI, repaints on bucket
 			 * change only. */
 			tray_wifi_update();
+			/*
+			 * Keep the Bluetooth daemon link up on the same tick.
+			 * It used to be dialled only when the Bluetooth panel
+			 * was opened, so until someone opened that panel the
+			 * desktop knew of no devices at all - and the volume
+			 * popover, which offers an output for each connected
+			 * sink, showed no Bluetooth option no matter what was
+			 * connected. It also means the tray icon tells the
+			 * truth from boot instead of from first use.
+			 */
+			bt_connect_sock();
 		}
 	}
 	return 0;
