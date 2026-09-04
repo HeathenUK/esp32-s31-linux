@@ -4133,3 +4133,37 @@ paths. Print `img->src_type` and `img->cf` for `drag_bg`, or pass a proper
 Three hypotheses are now eliminated with numbers: the allocation (it was
 failing silently, fixed), the geometry (perfect, logged above), and "the skip
 fires but the blit is dearer than the redraw" (it does not fire at all).
+
+### Frozen backdrop, fourth attempt: LVGL rejects the cover, and that is the whole question
+
+Asked LVGL the exact question `refr_area()` asks, by calling the same
+function it calls:
+
+    top_obj(part)=OTHER  top_obj(full)=OTHER  img_opa=255  children=3  last=drag_bg
+
+`lv_refr_get_top_obj()` returns a DIFFERENT object, not the backdrop and not
+NULL - so the backdrop is being rejected and an ordinary window is chosen
+instead. The backdrop is confirmed to be the screen's last child, at full
+opacity, exactly screen-sized, with zero padding.
+
+**Four hypotheses eliminated with numbers:**
+
+| hypothesis | verdict |
+|---|---|
+| the snapshot cannot be allocated | true at first, fixed with a malloc'd buffer |
+| geometry or screen padding | ruled out: 0,0..799,479 against 0,0..799,479, pad 0 |
+| the skip fires but the blit is dearer | ruled out: draws/frame went 23.9 -> 27.8 |
+| LVGL simply does not select it | **confirmed, and this is where it stands** |
+
+The rejection is inside `lv_image`'s `LV_EVENT_COVER_CHECK`, which refuses on
+`src_type == LV_IMAGE_SRC_UNKNOWN`, a colour format with alpha, image opacity
+below `LV_OPA_COVER`, or rotation/scale. Image opacity is 255 and the source
+is RGB565, so the live suspects are `src_type` and `cf`, both set in
+`lv_image_set_src()` from `lv_image_decoder_get_info()`. The source here is an
+`lv_draw_buf_t`, not an `lv_image_dsc_t`.
+
+**Do not spend another board build guessing.** Either print `img->src_type`
+and `img->cf` from inside LVGL, or set the source from a real
+`lv_image_dsc_t` built over the same pixels and re-run the top_obj probe -
+which is already written and takes one line to restore. The prize is
+unchanged: ~24 object redraws per drag frame collapsing to about two.
