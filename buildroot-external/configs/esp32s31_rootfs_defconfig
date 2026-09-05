@@ -410,7 +410,22 @@ BR2_PACKAGE_QT5BASE_EXAMPLES=y
 #
 # Cost: symbol interposition is lost, so LD_PRELOAD over Qt internals stops
 # working. Nothing here does that.
-BR2_PACKAGE_QT5BASE_CUSTOM_CONF_OPTS="-reduce-exports QMAKE_LFLAGS+=-Wl,-Bsymbolic-functions"
+# Qt Lite pruning, chosen to remove LIBRARIES from the load chain rather than
+# just code, because the measured cost is per-DSO symbol lookup.
+#
+#   -no-glib                  Qt uses its own poll-based event dispatcher
+#                             instead of glib's. Drops libglib-2.0 and
+#                             libgthread-2.0 from every Qt process.
+#   -no-feature-sessionmanager X11 session management. Drops libSM and libICE -
+#                             which are the two DANGLING symlinks on this board
+#                             (the versioned targets are in no overlay layer),
+#                             so this removes a latent breakage as well as two
+#                             DSOs.
+#
+# Deliberately NOT pruned: anything under widgets, itemviews, cssparser or the
+# image formats. Those are what an off-the-shelf app expects to find, and the
+# whole point is that unmodified apps keep working.
+BR2_PACKAGE_QT5BASE_CUSTOM_CONF_OPTS="-reduce-exports -no-glib -no-feature-sessionmanager QMAKE_LFLAGS+=-Wl,-Bsymbolic-functions"
 
 # Modules nothing on this board uses. Each one is a whole library that the
 # loader would otherwise have to map and bind before the app starts.

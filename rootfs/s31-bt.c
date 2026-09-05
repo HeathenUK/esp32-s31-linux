@@ -1535,6 +1535,9 @@ static int stream_start(const char *file)
 			return -1;
 		}
 		st.inbuf = malloc(INBUF_BYTES);
+		/* Pinned deliberately: a page fault here is an audible gap. */
+		if (st.inbuf)
+			mlock(st.inbuf, INBUF_BYTES);
 		if (st.inbuf)
 			setvbuf(st.in, st.inbuf, _IOFBF, INBUF_BYTES);
 		fseek(st.in, 44, SEEK_SET);
@@ -1550,8 +1553,12 @@ static int stream_start(const char *file)
 	 * that can go into one.
 	 */
 	st.pcm = malloc(st.codesize * 15);
+	if (st.pcm)
+		mlock(st.pcm, st.codesize * 15);
 	st.pcm_len = 0;
 	st.pkt = malloc(st.wmtu > 0 ? (size_t)st.wmtu : 1024);
+	if (st.pkt)
+		mlock(st.pkt, st.wmtu > 0 ? (size_t)st.wmtu : 1024);
 	st.max_frames = 15;
 	st.t0 = now_us();
 	st.active = 1;
@@ -2072,7 +2079,25 @@ int main(int argc, char **argv)
 		struct sched_param sp = { .sched_priority = 5 };
 
 		syscall(SYS_sched_setscheduler, 0, SCHED_FIFO, &sp);
-		mlockall(MCL_CURRENT | MCL_FUTURE);
+		/*
+		 * MCL_CURRENT only. MCL_FUTURE was here and it is a trap on a
+		 * 15.4 MB machine: it pins every page the heap EVER grows to,
+		 * and musl does not return freed memory to the kernel, so
+		 * anon-RSS becomes an unreclaimable high-water mark rather
+		 * than live usage. Measured: this process read 212 kB after
+		 * half an hour and 6,996 kB after 6.5 hours, at which point it
+		 * invoked the OOM killer and was itself the victim - while
+		 * VmLck tracked VmRSS exactly, so none of it could ever be
+		 * reclaimed or swapped.
+		 *
+		 * The same mistake is already recorded for lvdesk, where
+		 * MCL_FUTURE made xshim's client pixmaps unevictable.
+		 *
+		 * What actually needs pinning is the audio path, so the
+		 * streaming buffers are mlock()ed individually where they are
+		 * allocated. Everything else may be reclaimed.
+		 */
+		mlockall(MCL_CURRENT);
 	}
 
 	dbus_error_init(&err);
