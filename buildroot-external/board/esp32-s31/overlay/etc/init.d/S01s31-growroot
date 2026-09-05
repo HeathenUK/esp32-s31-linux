@@ -10,10 +10,29 @@
 
 case "$1" in
 	start)
+		# noatime, not the kernel's relatime default. Every read of a
+		# file whose atime is older than a day writes metadata back,
+		# which on this board means an SD write and dirty buffer_heads
+		# for a timestamp nothing reads. The root options come from
+		# CONFIG_CMDLINE (which is CMDLINE_FORCE), so setting it there
+		# would cost a kernel rebuild and a flash; a remount here is
+		# free and takes effect before anything else runs.
+		mount -o remount,noatime / 2>/dev/null
 		# resize2fs is a no-op once the filesystem already fills the
 		# partition, so this is safe to run on every boot.
+		# CAP IT. Growing to fill the card costs RAM for nothing: at
+		# 111 GB ext4 lays out 954 block groups and 31 MILLION inodes
+		# for a filesystem holding 261 MB and ~800 files, and it holds
+		# a struct ext4_group_info per group in slab for as long as the
+		# filesystem is mounted, with the group descriptors and bitmaps
+		# in Buffers on top (756 kB measured, ~500 of it reclaimable).
+		# 4 GB is 32 block groups and still 15x the space in use.
+		#
+		# resize2fs cannot SHRINK a mounted filesystem, so this only
+		# takes effect for a card imaged after this change - an already
+		# grown card keeps its 954 groups until it is re-imaged.
 		printf 'Growing root filesystem: '
-		if resize2fs /dev/mmcblk0 >/dev/null 2>&1; then
+		if resize2fs /dev/mmcblk0 4G >/dev/null 2>&1; then
 			echo "OK"
 		else
 			echo "skipped"
