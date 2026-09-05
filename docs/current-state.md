@@ -5132,3 +5132,41 @@ The zero stubs are therefore dead code for our clients, but they remain a
 landmine for any client that reads the keymap itself instead of calling
 XLookupString. If an off-the-shelf app's keyboard misbehaves, that is the first
 place to look.
+
+### Ground truth at last: scripts/xref.sh, and xcalc's right-hand gap is real (2026-09-05)
+
+"Why aren't xcalc's buttons flush with the display bevel?" could not be answered
+from our own stack - libX11, libXt and libXaw are all replacements (xlite,
+xtlite, and an EMPTY libXaw7 whose symbols resolve to xtlite), so every pixel on
+the panel is our layout, not Xaw's. And this project has twice settled "how
+should it look" by reading source and been wrong both times.
+
+`scripts/xref.sh <app>` now answers it properly: it builds the app from the
+tarball Buildroot already downloaded, against **real libXt and libXaw**, in a
+throwaway Debian container, runs it under Xvfb with its own app-defaults
+installed, and captures the window. Disposable container, repo mounted
+read-only, no build volumes touched, nothing near the board.
+
+    scripts/xref.sh xcalc        -> references/xcalc-real.png, 226x394
+
+**The verdict: the gap is authentic.** Real xcalc 1.1.2 - the exact version we
+ship - puts its button grid's right column a few pixels short of the display
+bevel, and the reference shows the identical gap. Our default-size rendering is
+faithful.
+
+What IS ours is the resize behaviour. `xtlite/xtlite.c:scale_tree()` is a
+rubber-sheet reflow that multiplies every descendant's x/y/w/h by the shell's
+growth factor - a deliberate departure from Xaw, whose Form defaults children to
+ChainTop/ChainLeft and would leave a maximised xcalc's grid in one corner of
+empty background. The cost is that nothing which should stay constant does.
+Measured on the same two features, shell 223 -> 800 px (sx = 3.6):
+
+                                    default   maximised   ratio
+    black bevel inset (spec: 6 px)    ~6 px      ~22 px     x3.6
+    bevel-to-grid right edge gap      ~8 px      ~28 px     x3.6
+
+Both scale by exactly the shell factor, which is the whole mechanism. A fix
+would scale positions and container sizes while holding paddings and insets
+constant - but it changes every app's rendering (xclock relies on the current
+scaling to fill its window), so it needs a before/after capture pass across all
+three clients, and now there is a reference to compare against.
