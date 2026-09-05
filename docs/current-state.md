@@ -5250,3 +5250,64 @@ and the container dies with "/run.sh: Is a directory", which reads like a script
 bug rather than a mount one. Build failures are now surfaced instead of being
 swallowed by `>/dev/null`, and the dev-package list covers libxext/libxmu/
 libxkbfile/libxft so an app that needs them configures.
+
+## Window resize: 1010 -> 548 ms of CPU, and where the rest is (2026-09-05)
+
+Task #32's "maximise is 2.6 s, seven eighths of it ours" was measured under the
+spinning bluetoothd AND attributed by wall time in a handler, which on a
+one-core box is not the handler's cost. Re-measured by tick accounting, which
+contention cannot inflate, then optimised:
+
+                       maximise   restore
+    starting point      1010 ms    657 ms
+    win_fill by row      736 ms    388 ms
+    draw_border by span  548 ms    348 ms      -46% / -47% overall
+
+Both were the same defect in different places: **painting a shape by walking
+the area that contains it.** `win_fill` filled window backgrounds a pixel at a
+time through `px_set` (~6 branches, a call and an `alias_break` each) and
+re-derived the colour per pixel via `win_bg_at()` for a fill whose colour never
+changes. `draw_border` walked every pixel of `(w + 2bw) x (h + 2bw)` and
+`continue`d over the interior, so a 150x90 child cost 13,500 `px_set` calls to
+set ~480 pixels - and `redraw_child_borders()` re-ran it after every fill that
+touched them. The file already had the right primitive: `px_hspan`, whose
+comment says `span_clip()` does the same tests ONCE per run and "the caller
+handles alias_break/dirty once per op".
+
+### Where the remaining 352 ms of shim CPU goes
+
+XSHIM_PROF, per request, CLOCK_THREAD_CPUTIME_ID:
+
+    70 PolyFillRectangle  x190  123 ms      <- client repainting
+    12 ConfigureWindow     x68  117 ms      (was 263)
+    74 PolyText8          x180   55 ms      <- client repainting
+    56 ChangeGC           x550   56 ms
+    poll 0.1 ms + read 1.3 ms + write 4.9 ms = 6.3 ms total
+
+**The next lever is Expose coalescing, not drawing.** A maximise sends
+**190 Exposes for 68 ConfigureWindows**, because each configure recursively
+exposes the window and every mapped descendant - so a widget is exposed once
+from its own configure and again from each ancestor's. Those Exposes are what
+drive the 190 PolyFillRectangles, 180 PolyText8s and 550 ChangeGCs, i.e. ~234
+of the 352 ms. Marking windows as needing an Expose and emitting one per window
+per poll pass, instead of immediately, should remove most of the duplication.
+X servers legitimately compress Exposes, so this is within the protocol.
+
+Also worth knowing: much of this burst is self-inflicted. Real Xaw would not
+move those widgets at all on a shell resize (ChainTop/ChainLeft); xtlite's
+`scale_tree()` rubber-sheet reflow is what issues 68 XMoveResizeWindows.
+
+### Two measurements that were confidently wrong
+
+- **"46% of maximise is syscalls"** - from a ptrace PC sample, and FALSE.
+  XSHIM_PROF's CPU counters put socket I/O at 7.5 ms of 527 ms, 1.4%. ptrace
+  sampling catches the process wherever it is **including blocked**, so a
+  process waiting in `poll()` reads as 64% "in" a syscall while using no CPU.
+  `rootfs/pcsample.c` now also histograms the return address, which is what
+  identified the syscalls as musl's CANCELLABLE path (`__syscall_cp_c`:
+  read/write/poll) rather than ioctl - and so as waiting, not working.
+  **Use the CPU-time counters for "what is expensive" and the PC sample only
+  for "where inside our own code".**
+- **Hoisting `win_fill`'s per-row insertion sort** of the obscuring rectangles
+  out of the row loop measured 745/390 against 736/388 - no change. Kept, since
+  it removes an O(rows * k^2) that only looked free, but it was not the cost.
