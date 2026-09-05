@@ -2103,6 +2103,45 @@ void XliteShmDamaged(Display *dpy, Pixmap p)
 	}
 }
 
+/*
+ * The server's pixmap formats.
+ *
+ * SDL asks for these to learn how many bits a pixel of a given depth actually
+ * occupies, and then indexes the array. Returning NULL - which the generated
+ * stub did, benignly, like every other unimplemented entry point - is the one
+ * case where "carry on" cannot work: the caller dereferences the result and
+ * dies. prboom exited on SIGSEGV here with no other symptom, and the shim's
+ * own to-do log named it in a single run.
+ *
+ * Three formats, matching what xshim actually stores: depth 1 for bitmaps,
+ * depth 8 for the paletted surfaces it keeps at one byte per pixel, and depth
+ * 16 for everything else. scanline_pad is 32 because every row in the shim is
+ * padded to a four-byte boundary.
+ */
+XLITE_IMPL(XListPixmapFormats)
+XPixmapFormatValues *XListPixmapFormats(Display *dpy, int *count)
+{
+	static const struct { int d, b; } fmt[] = { {1, 1}, {8, 8}, {16, 16} };
+	XPixmapFormatValues *v;
+	unsigned i, n = sizeof(fmt) / sizeof(fmt[0]);
+
+	(void)dpy;
+	v = malloc(n * sizeof(*v));
+	if (!v) {
+		if (count)
+			*count = 0;
+		return NULL;
+	}
+	for (i = 0; i < n; i++) {
+		v[i].depth = fmt[i].d;
+		v[i].bits_per_pixel = fmt[i].b;
+		v[i].scanline_pad = 32;
+	}
+	if (count)
+		*count = (int)n;
+	return v;
+}
+
 /* ------------------------------------------------------------- images */
 /*
  * XCreateImage / XPutImage / XGetImage.

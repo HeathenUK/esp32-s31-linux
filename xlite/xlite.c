@@ -861,6 +861,77 @@ int XPeekEvent(Display *d, XEvent *ev)
 	return xlite_wait_event(XD(d), ev, 0);
 }
 
+/*
+ * Which mask bit selects an event of this type. Needed only by XMaskEvent.
+ */
+static long ev_mask_for(int type)
+{
+	switch (type) {
+	case KeyPress:		return KeyPressMask;
+	case KeyRelease:	return KeyReleaseMask;
+	case ButtonPress:	return ButtonPressMask;
+	case ButtonRelease:	return ButtonReleaseMask;
+	case MotionNotify:	return PointerMotionMask | ButtonMotionMask;
+	case EnterNotify:	return EnterWindowMask;
+	case LeaveNotify:	return LeaveWindowMask;
+	case FocusIn: case FocusOut:		return FocusChangeMask;
+	case Expose: case GraphicsExpose: case NoExpose:
+						return ExposureMask;
+	case VisibilityNotify:	return VisibilityChangeMask;
+	case PropertyNotify:	return PropertyChangeMask;
+	case CreateNotify:	return SubstructureNotifyMask;
+	case DestroyNotify: case UnmapNotify: case MapNotify:
+	case ReparentNotify: case ConfigureNotify: case GravityNotify:
+	case CirculateNotify:
+		return StructureNotifyMask | SubstructureNotifyMask;
+	default:		return 0;
+	}
+}
+
+/*
+ * Block until an event matching the mask arrives.
+ *
+ * Not optional, and the generated stub's benign "return 0" is actively fatal
+ * here: SDL maps its window with XMapRaised and then calls this to wait for
+ * the MapNotify before finishing setup. Answering immediately without filling
+ * the event in left SDL spinning in that wait - prboom ran, held 1.6 MB, and
+ * never put a window on the screen, with the shim's log filling with
+ * XMaskEvent.
+ *
+ * Non-matching events are consumed rather than left queued. A real server
+ * would keep them; doing that needs a queue this library does not have, and
+ * the alternative - peeking and refusing to advance - spins forever on the
+ * first non-match. The loss is bounded to a masked wait, and the only event
+ * SDL can lose that way is an Expose it repaints on the next frame anyway.
+ */
+XLITE_IMPL(XMaskEvent)
+int XMaskEvent(Display *d, long mask, XEvent *ev)
+{
+	int guard;
+
+	for (guard = 0; guard < 100000; guard++) {
+		if (xlite_wait_event(XD(d), ev, 1) != 0)
+			return 0;
+		if (ev_mask_for(ev->type) & mask)
+			return 0;
+	}
+	return 0;
+}
+
+/* Non-blocking, and non-destructive when it does not match. */
+XLITE_IMPL(XCheckTypedEvent)
+Bool XCheckTypedEvent(Display *d, int type, XEvent *ev)
+{
+	if (!XPending(d))
+		return False;
+	if (xlite_wait_event(XD(d), ev, 0) != 0)	/* peek */
+		return False;
+	if (ev->type != type)
+		return False;
+	xlite_wait_event(XD(d), ev, 1);			/* consume */
+	return True;
+}
+
 XLITE_IMPL(XSetErrorHandler)
 int (*XSetErrorHandler(int (*h)(Display *, XErrorEvent *)))(Display *,
 							    XErrorEvent *)

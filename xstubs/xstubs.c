@@ -110,6 +110,53 @@ void SmcSaveYourselfDone(void *c, int success) { (void)c; (void)success; }
 
 #ifdef STUB_XEXT
 /*
+ * MIT-SHM, answered honestly as absent.
+ *
+ * SDL's X11 driver dlsyms every one of these and refuses to load the driver if
+ * any is missing - so a client that would happily fall back to plain XPutImage
+ * instead falls all the way back to fbcon, on a board with no framebuffer
+ * console to fall back to. Existing and returning False is what lets that
+ * fallback work.
+ *
+ * False is also the truthful answer twice over: this kernel is built without
+ * CONFIG_SYSVIPC, so the shmget() SDL would do next cannot succeed, and the
+ * shim does not implement the extension either.
+ */
+int XShmQueryExtension(void *dpy) { (void)dpy; return 0; }
+int XShmQueryVersion(void *dpy, int *maj, int *min, int *pixmaps)
+{
+	(void)dpy;
+	if (maj) *maj = 0;
+	if (min) *min = 0;
+	if (pixmaps) *pixmaps = 0;
+	return 0;
+}
+void *XShmCreateImage(void *dpy, void *vis, unsigned depth, int fmt, char *data,
+		      void *shminfo, unsigned w, unsigned h)
+{
+	(void)dpy; (void)vis; (void)depth; (void)fmt; (void)data;
+	(void)shminfo; (void)w; (void)h;
+	return 0;
+}
+int XShmAttach(void *dpy, void *shminfo) { (void)dpy; (void)shminfo; return 0; }
+int XShmDetach(void *dpy, void *shminfo) { (void)dpy; (void)shminfo; return 0; }
+int XShmPutImage(void *dpy, unsigned long d, void *gc, void *im, int sx, int sy,
+		 int dx, int dy, unsigned w, unsigned h, int send)
+{
+	(void)dpy; (void)d; (void)gc; (void)im; (void)sx; (void)sy;
+	(void)dx; (void)dy; (void)w; (void)h; (void)send;
+	return 0;
+}
+
+/* Xlib's extension bookkeeping, which the Shm code above would have used. */
+void *XextCreateExtension(void) { return 0; }
+void XextDestroyExtension(void *e) { (void)e; }
+void *XextAddDisplay(void *e, void *dpy, char *n, void *h, int ev, void *d)
+{ (void)e; (void)dpy; (void)n; (void)h; (void)ev; (void)d; return 0; }
+int XextRemoveDisplay(void *e, void *dpy) { (void)e; (void)dpy; return 0; }
+void *XextFindDisplay(void *e, void *dpy) { (void)e; (void)dpy; return 0; }
+int XMissingExtension(void *dpy, const char *name) { (void)dpy; (void)name; return 0; }
+/*
  * The shim advertises no extensions, so a real libXext would answer False here
  * too - after a round trip. This is the same answer without the 64 kB.
  */

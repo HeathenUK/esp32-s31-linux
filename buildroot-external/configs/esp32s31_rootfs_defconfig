@@ -376,3 +376,19 @@ BR2_PACKAGE_XAPP_OCLOCK=y
 # that test pass first; enabling it only turns a working build into a failing
 # one at the very end of a long configure.
 
+# --- Doom -----------------------------------------------------------------
+# prboom, not chocolate-doom: prboom is SDL 1.2, chocolate-doom is SDL2, and
+# on a 15 MB board that difference decides whether it fits. SDL 1.2's X11
+# backend is a plain XCreateImage/XPutImage blit, which is exactly the path
+# measured at 39 fps for a 320x200 surface - the panel's own refresh rate, so
+# the display is not the limit. Sound is why this is prboom and not one of the
+# tiny X11-only ports (doomgeneric, fbdoom): those drop audio entirely, and
+# SDL 1.2 picks up alsa-lib automatically once it is enabled.
+#
+# SDL links the STOCK libX11 at build time and runs against xlite at runtime,
+# exactly as xcalc and xclock already do - post-build.sh deletes the stock
+# libraries and the overlay replacements serve instead.
+BR2_PACKAGE_SDL=y
+BR2_PACKAGE_SDL_X11=y
+BR2_PACKAGE_PRBOOM=y
+BR2_PACKAGE_DOOM_WAD=y

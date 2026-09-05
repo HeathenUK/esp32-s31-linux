@@ -415,3 +415,29 @@ Bool XkbLookupKeySym(Display *dpy, KeyCode key, unsigned int mods,
 		*sym_rtrn = xlw_widen(key);
 	return key != 0;
 }
+
+/*
+ * SDL's X11 driver dlsyms both of these, and its dynamic loader fails the
+ * whole driver if a symbol is absent - so they have to exist, and these two
+ * have to be right or Doom takes no input.
+ *
+ * Same identity as the rest of this file: the keycode in the wire event IS
+ * the keysym, so the reverse mapping is the same function.
+ */
+XLITE_IMPL(XKeysymToKeycode)
+KeyCode XKeysymToKeycode(Display *dpy, KeySym ks)
+{
+	(void)dpy;
+	return (KeyCode)(ks & 0xff);
+}
+
+/* UTF-8 flavour of XLookupString; for Latin-1 the bytes are the same. */
+XLITE_IMPL(Xutf8LookupString)
+int Xutf8LookupString(XIC ic, XKeyPressedEvent *ev, char *buf, int n,
+		      KeySym *ks, Status *st)
+{
+	(void)ic;
+	if (st)
+		*st = 0;
+	return XLookupString((XKeyEvent *)ev, buf, n, ks, NULL);
+}

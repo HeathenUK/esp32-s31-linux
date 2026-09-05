@@ -344,3 +344,17 @@ _XSetLastRequestRead
 _XUnlockMutex_fn
 _XVIDtoVisual
 _Xglobal_lock
+XChangePointerControl
+XCheckTypedEvent
+XGetPointerControl
+XGetWMHints
+XInstallColormap
+XKeysymToKeycode
+XMaskEvent
+XMissingExtension
+XQueryKeymap
+XResetScreenSaver
+XSetExtensionErrorHandler
+XSetWindowColormap
+Xutf8LookupString
+Xutf8TextListToTextProperty
