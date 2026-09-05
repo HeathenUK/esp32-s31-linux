@@ -5170,3 +5170,45 @@ would scale positions and container sizes while holding paddings and insets
 constant - but it changes every app's rendering (xclock relies on the current
 scaling to fill its window), so it needs a before/after capture pass across all
 three clients, and now there is a reference to compare against.
+
+### CORRECTION: xcalc's right-hand gap IS ours, and it is the bevel (2026-09-05)
+
+The first pass at this said the gap was authentic. **That was wrong** - the
+reference gap is symmetric and ours is not. Measured properly, decoding
+references/xcalc-real.png and reading xtlite's own layout trace
+(`XTLITE_TRACE=1`, which prints every widget's computed geometry):
+
+                          real Xaw    ours
+    button grid width       218        218   correct
+    bevel width             218        226   8 px too wide
+    left / right gap        3 / 3      4 / 12
+
+Real xcalc's bevel and button grid are exactly the same width, both spanning
+x 3..220. Ours gets the button grid right and the bevel wrong, and because the
+bevel is the widest child it sets the top-level form's width (234) - so all the
+slack lands on the right of the buttons. That is the asymmetry, and it is
+visible at the default size; `scale_tree()` then multiplies it by the resize
+factor, which is why maximising makes it obvious.
+
+Two contributors in `xtlite/xtlite.c`, neither yet fixed:
+
+  - `layout()` sizes a widget with no explicit width as `tw + 8`. Real Xaw uses
+    `2 * internalWidth`, and xcalc sets `bevel.screen.Label.internalWidth: 1`,
+    so every mode label (INV/DEG/RAD/GRAD/P/HEX) is 6 px wider here than it
+    should be - "GRAD" measures 40 against Xaw's 34.
+  - `layout()` gives a Form a trailing margin equal to each child's own
+    `horizDistance`, so the bevel gains +6 from `screen.horizDistance: 6` and
+    the top-level form +4 from `bevel.horizDistance: 4`. Xaw sizes a Form to
+    the bounding box of its children instead.
+
+**Not fixed here** because the trailing-margin rule is load-bearing: its comment
+records that it exists so a custom widget placed flush at 0,0 and filling its
+shell does not get a stray margin strip, which is xclock. Changing either rule
+needs a before/after pass over all three clients against `scripts/xref.sh`
+references - which now exist, and did not when this code was written.
+
+**Method note:** the first answer here came from eyeballing two screenshots and
+was wrong. The numbers came from decoding the reference PNG (1-bit greyscale,
+and the xwd capture includes the window's 1 px border - measure inside it) and
+from XTLITE_TRACE, which prints the exact widget geometry. Eyeballing a
+screenshot is not a measurement.
