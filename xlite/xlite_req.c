@@ -2284,6 +2284,50 @@ static int ximg_destroy(XImage *im)
 	return 1;
 }
 
+/*
+ * The server's visuals - all one of them.
+ *
+ * A stub returning NULL is not survivable for a client that asks this to find
+ * out what a pixel looks like. SDL does exactly that: with no visual it builds
+ * a surface format whose red/green/blue masks are zero, every SDL_MapRGB then
+ * returns 0, and the client renders a perfectly correct image in which every
+ * pixel is black. prboom did, at 32% of a core, sending well-formed PutImage
+ * requests the shim accepted and drew - all of them black.
+ *
+ * The template and mask are ignored deliberately: this server has one visual,
+ * so it either matches or the caller has no alternative anyway, and answering
+ * with it beats answering with nothing.
+ */
+XLITE_IMPL(XGetVisualInfo)
+XVisualInfo *XGetVisualInfo(Display *dpy, long mask, XVisualInfo *tmpl,
+			    int *nitems)
+{
+	XVisualInfo *vi = calloc(1, sizeof(*vi));
+
+	(void)mask; (void)tmpl;
+	if (!vi) {
+		if (nitems)
+			*nitems = 0;
+		return NULL;
+	}
+	vi->visual = DefaultVisual(dpy, 0);
+	vi->visualid = vi->visual ? vi->visual->visualid : 1;
+	vi->screen = 0;
+	vi->depth = 16;
+	vi->class = TrueColor;
+	vi->red_mask = 0xF800;
+	vi->green_mask = 0x07E0;
+	vi->blue_mask = 0x001F;
+	vi->colormap_size = 32;
+	vi->bits_per_rgb = 6;
+	if (nitems)
+		*nitems = 1;
+	return vi;
+}
+
+XLITE_IMPL(XVisualIDFromVisual)
+VisualID XVisualIDFromVisual(Visual *v) { return v ? v->visualid : 1; }
+
 XLITE_IMPL(XCreateImage)
 XImage *XCreateImage(Display *dpy, Visual *vis, unsigned int depth, int format,
 		     int offset, char *data, unsigned int w, unsigned int h,

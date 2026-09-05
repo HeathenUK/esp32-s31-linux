@@ -5036,6 +5036,23 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		const uint8_t *src = r + 24;
 		int y, x, pad;
 
+		if (getenv("XSHIM_IMGDBG")) {
+			/*
+			 * Count non-zero source bytes. Geometry being right
+			 * tells you the transfer is well formed and nothing
+			 * about whether the client computed any colour: a
+			 * correct blit of an all-black frame looks identical
+			 * to a dropped one on the panel. This is what
+			 * separates "we lost it" from "there was nothing".
+			 */
+			size_t i, nz = 0, tot = (size_t)len > 24 ? len - 24 : 0;
+
+			for (i = 0; i < tot; i++)
+				if (r[24 + i])
+					nz++;
+			fprintf(stderr, "xshim: PutImage nonzero %zu/%zu bytes\n",
+				nz, tot);
+		}
 		if (getenv("XSHIM_IMGDBG"))
 			fprintf(stderr,
 				"xshim: PutImage dst=0x%x ok=%d fmt=%d %dx%d+%d+%d depth=%d len=%d clip=%d %d,%d-%d,%d dclip=%d,%d-%d,%d ax=%d,%d\n",
