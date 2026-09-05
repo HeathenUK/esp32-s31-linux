@@ -5382,8 +5382,28 @@ were attached during this audit. Normal idle is ~600 kB better than it looks.
   free-running cyclic DMA, and the cursor appears long after .enable. The
   private buffer is the cursor's clean background. Removing it costs the
   hardware cursor: 0.3 ms per pointer move against X's 19 ms.
-- **No more XIP moves without repartitioning.** Both images are 100% full
-  (rootfs 6,072 kB, xip2 1,536 kB).
+- ~~No more XIP moves without repartitioning. Both images are 100% full.~~
+  **WRONG - that came from `df` on a cramfs, which ALWAYS reports 100%,
+  because the image is exactly its contents.** The real question is partition
+  headroom, and there is some:
+
+        rootfs (image 1)  partition 6,422,528  image 6,098,944  323,584 free
+        xip2   (image 2)  partition 1,507,328  image 1,449,984   57,344 free
+
+  But there is almost nothing left worth moving. Every process on the board
+  reports RssFile of 0-12 kB - their text is already XIP and costs nothing -
+  with one exception: **udevd, at RssFile 200 kB**. It is 263,680 bytes and its
+  only real dependencies (libblkid, libkmod) already stay on SD, so it would
+  fit in image 1 with ~60 kB to spare.
+
+  It is still probably the wrong trade, for two reasons. Those SD-backed pages
+  are **clean and evictable**, so they already belong to the reclaimable pool
+  that drop_caches returns - moving udevd to XIP stops it competing for page
+  cache rather than handing back 200 kB of MemAvailable. And it spends nearly
+  all remaining flash headroom, which earlier work deliberately kept because
+  the Bluetooth controller blob swings hundreds of KB between IDF drops and a
+  partition move has to reach five places. Rank it below min_free_kbytes and
+  the s31-bt mlock trim.
 - **Slab** - closed previously, unchanged at ~4.3 MB.
 
 ### Live, measured
