@@ -357,3 +357,31 @@ BR2_PACKAGE_QT5BASE_PNG=y
 BR2_PACKAGE_QT5BASE_JPEG=y
 BR2_PACKAGE_QT5BASE_DEFAULT_QPA="xcb"
 BR2_PACKAGE_QT5BASE_EXAMPLES=y
+
+# Build Qt so that LOADING it is cheap. Measured on the board with the caches
+# warm, so this is pure CPU and not SD: dlopen(RTLD_NOW) of libQt5Core is
+# 1.88 s, of Gui 3.57 s, of Widgets 11.91 s - musl has no lazy PLT and binds
+# every symbol eagerly, so each library added slows every later lookup. The
+# three libraries carry 26,485 dynamic symbols and 45,430 relocations between
+# them, and Buildroot passes neither of the options Qt provides for exactly
+# this. Both are QT-side: the soname, the public API and the ABI are unchanged,
+# so off-the-shelf application binaries keep working untouched - which is the
+# whole point, since static linking would have meant rebuilding every app.
+#
+#   -reduce-exports      -fvisibility=hidden, so only Qt's public API reaches
+#                        the dynamic symbol table instead of every internal
+#                        symbol. Smaller tables make every lookup cheaper.
+# -reduce-relocations (-Bsymbolic-functions) was tried and REFUSED by Qt's own
+# configure on this toolchain: "Feature 'reduce_relocations' was enabled, but
+# the pre-condition '!config.win32 && tests.reduce_relocations' failed" - the
+# compile test does not pass for riscv32 here. Do not re-add it without making
+# that test pass first; enabling it only turns a working build into a failing
+# one at the very end of a long configure.
+BR2_PACKAGE_QT5BASE_CUSTOM_CONF_OPTS="-reduce-exports"
+
+# Modules nothing on this board uses. Each one is a whole library that the
+# loader would otherwise have to map and bind before the app starts.
+# BR2_PACKAGE_QT5BASE_NETWORK is not set
+# BR2_PACKAGE_QT5BASE_SQL is not set
+# BR2_PACKAGE_QT5BASE_TEST is not set
+# BR2_PACKAGE_QT5BASE_XML is not set
