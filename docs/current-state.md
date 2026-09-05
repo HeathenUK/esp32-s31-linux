@@ -945,6 +945,109 @@ load time are the whole game for a library-heavy app. Note `fault_around_bytes`
 is a debugfs knob and `DIAG=0` compiles debugfs out, so the default 64 KiB
 (16 pages) is what ships and cannot be tuned at runtime.
 
+## Qt 5.15 runs on this board, from SD, through our shim (2026-09-05)
+
+An unmodified upstream Qt example (`analogclock`) renders correctly on the
+panel: decorated window, taskbar entry, gradient, antialiased hands, correct
+time. Qt lives entirely on the SD card at `/opt/qt5`; nothing is in XIP.
+
+### What it took to get there - six faults, none of them Qt's
+
+  libpcre2-16 missing        Qt's QString is UTF-16 so it links the 16-bit
+                             build. Buildroot will NOT rebuild a package
+                             because its config changed - pcre2-dirclean.
+  Qt's cached configure      It had recorded pcre2 = false from the first
+                             attempt and reused it. qt5base-dirclean.
+  libSM.so.6 / libICE.so.6   DANGLING symlinks on the board - the versioned
+                             targets are in no overlay layer. A name-only
+                             presence check called them present.
+  libfontconfig is a STUB    5,360 bytes against 423,636 upstream.
+                             post-build.sh swaps a dozen X libraries for
+                             hand-written slim ones carrying only the symbols
+                             the existing clients call. Right for this desktop,
+                             wrong for Qt, which calls FcPatternAdd. The full
+                             library now comes from the staging sysroot into
+                             /opt/qt5/lib, so Qt gets a complete implementation
+                             and the desktop keeps the slim one.
+  Shim gaps                  Qt BLOCKS on replies rather than degrading. Added
+                             GetWindowAttributes, Set/GetSelectionOwner,
+                             QueryPointer, TranslateCoordinates, and raised
+                             MAXATOM 64 -> 256 (Qt walks past 64 during
+                             connection setup; overflow returns atom 0 and the
+                             client then treats every property as absent).
+  XKB                        NOT required. Qt logs "XKeyboard extension not
+                             present" and carries on. It is needed for keyboard
+                             input, not for display.
+
+### Steady state is fine. Cold start is the whole problem.
+
+Settled - three consecutive 20 s windows agreeing exactly:
+
+    analogclock CPU 3%   lvdesk CPU 3%   major faults 0
+    RSS 2,428 kB stable  MemAvailable 3,572 kB
+
+No paging at all once up. An earlier "35.8% CPU, 346 faults per 10 s, never
+stops paging" figure was WRONG - sampled ~60 s in, while Qt was still
+initialising.
+
+Cold start is ~20 s of QApplication, and a sampling profiler (rootfs/qtinit.cpp,
+since there is no perf/ftrace/gprof here) puts 73-78% of it inside libc.so with
+the hot addresses resolving to **gnu_lookup_filtered** - musl's symbol lookup,
+run once per DSO per symbol, with no lazy PLT to avoid it.
+
+    QApplication, xcb        20.68 s      (spread 0.8 s)
+    QApplication, minimal     3.58 s
+    dlopen the xcb stack      4.79 s
+    pre-main (link + ctors)   2.3-4.0 s
+
+### The fix that worked, and it is generic
+
+`-Wl,-Bsymbolic-functions` in BR2_TARGET_LDFLAGS - all 355 shared libraries, not
+just Qt. Relocations 45,430 -> 35,079 (-23%); libxcb-randr ~1,500 -> 104.
+Interleaved OLD/NEW/OLD/NEW in one session so drift cancels:
+
+    dlopen the xcb plugin stack   OLD 11.25, 10.30   NEW 7.78, 6.81   -32%
+
+Verified by hardware JPEG that rendering is unchanged, because this alters
+symbol resolution and a library relying on interposition would break here and
+nowhere else. Only FUNCTION references bind, so vtables and typeinfo stay
+interposable and C++ RTTI across DSOs still works.
+
+### Tested and REJECTED, all with numbers
+
+    fontconfig cache pre-built   23.97 s vs 23.3    nothing
+    extra plugins removed        23.63 / 19.60      nothing
+    XKB fallback disabled        22.0 / 22.0 / 22.2 nothing (no xkb data exists)
+    flush X replies immediately  21.05 vs 20.68     nothing - REVERTED
+    -reduce-relocations          refused by Qt's configure test on riscv32
+    -reduce-exports              already on by default; byte-identical output
+    drop Network/SQL/Test/XML    impossible - def_bool y with no prompt, so
+                                 "# ... is not set" is silently ignored
+
+### Method, learned painfully
+
+  - Absolute timings here drift 2x with how settled the board is. The SAME
+    libraries measured 20-21 s and 39-44 s. Compare arms INTERLEAVED in one
+    session or not at all.
+  - Repeated Qt launches drive the board into OOM: it went silent four times and
+    kernel-panicked once. Measure the loader with dlopen (rootfs/dltest.c) -
+    no X server, far less memory, and it isolates the thing being optimised.
+  - The profiler at 200 Hz WEDGED the board; signal delivery is a trap plus a
+    context switch. 20 Hz is ample.
+  - swapoff -a wedges the board when an app holds swap.
+
+### Still open
+
+  - gallery (a real widgets app) reaches ConfigureWindow on its 601x485 window
+    and is then OOM-killed. Memory, not protocol.
+  - s31-bt was holding 7 MB of anonymous memory after 6.5 h. .bss is 8,496
+    bytes and every D-Bus message is unref'd, so the cause is NOT found.
+  - libxcb-merged.so: fifteen sonames symlinked to one library (musl dedupes by
+    device/inode). Built and functional, NEVER cleanly measured.
+  - There is no lighter "embedded Qt" that runs full Qt apps: Qt for MCUs has
+    its own API and no QWidget; Device Creation is the same runtime repackaged.
+    Qt Lite is just the -no-feature-* flags, reachable from CUSTOM_CONF_OPTS.
+
 ## The slab is 4.4 MB and it is NOT a lever. Stop proposing it. (2026-09-04)
 
 This has been raised repeatedly across sessions as "the next big win - 4,420 kB
