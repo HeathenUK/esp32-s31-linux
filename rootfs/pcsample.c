@@ -35,6 +35,24 @@ struct bucket { unsigned long pc; unsigned n; };
 static struct bucket buckets[4096];
 static int nbuckets;
 
+/*
+ * A second histogram, of the RETURN ADDRESS, for samples whose PC landed in a
+ * shared library. "57% in __syscall_cp_asm" says the process is in a syscall
+ * and nothing about which one - and on this board the answer decides whether
+ * to batch DRM commits, evdev reads or something else entirely. ra holds the
+ * caller, which is the useful half.
+ */
+static struct bucket callers[4096];
+static int ncallers;
+
+static void tally_into(struct bucket *b, int *n, unsigned long pc)
+{
+	pc &= ~63UL;
+	for (int i = 0; i < *n; i++)
+		if (b[i].pc == pc) { b[i].n++; return; }
+	if (*n < 4096) { b[*n].pc = pc; b[*n].n = 1; (*n)++; }
+}
+
 static void tally(unsigned long pc)
 {
 	pc &= ~63UL;				/* 64-byte buckets */
@@ -124,6 +142,13 @@ int main(int argc, char **argv)
 		if (waitpid(pid, &st, 0) < 0) break;
 		if (ptrace(PTRACE_GETREGSET, pid, NT_PRSTATUS, &io) == 0) {
 			tally(r.pc);
+			/*
+			 * Only interesting when the PC is NOT in the main
+			 * program: inside our own code the PC already names
+			 * the function, and ra would just name its parent.
+			 */
+			if (r.pc > 0x40000000UL)
+				tally_into(callers, &ncallers, r.ra);
 			got++;
 		}
 		ptrace(PTRACE_DETACH, pid, 0, 0);
@@ -144,6 +169,26 @@ int main(int argc, char **argv)
 		       100.0 * buckets[best].n / (got ? got : 1), who,
 		       buckets[best].pc - base);
 		buckets[best].n = 0;
+	}
+	if (ncallers) {
+		printf("  -- callers (ra) of samples taken inside a library --\n");
+		for (int pass = 0; pass < 8; pass++) {
+			int best = -1;
+
+			for (int i = 0; i < ncallers; i++)
+				if (callers[i].n &&
+				    (best < 0 || callers[i].n > callers[best].n))
+					best = i;
+			if (best < 0 || !callers[best].n) break;
+			char who[128];
+			unsigned long base;
+
+			whereis(pid, callers[best].pc, who, sizeof who, &base);
+			printf("  %5.1f%%  %-30s +0x%lx\n",
+			       100.0 * callers[best].n / (got ? got : 1), who,
+			       callers[best].pc - base);
+			callers[best].n = 0;
+		}
 	}
 	return 0;
 }

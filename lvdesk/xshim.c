@@ -1067,9 +1067,26 @@ static void win_fill(struct res *d, int x, int y, int w, int h)
 		bgp->w > 0 && bgp->h > 0;
 	if (!op_target(d))
 		return;
+	/*
+	 * Sort the obscuring rectangles by x ONCE. This used to be an
+	 * insertion sort inside the row loop, so a form with many children
+	 * re-sorted the same list for every scanline - O(rows * k^2) to
+	 * produce an ordering that never changes. A maximise puts 68
+	 * ConfigureWindows through here, and this function was 268 ms of the
+	 * 527 ms the shim spent handling one.
+	 */
+	for (i = 0; i + 1 < nob; i++)
+		for (k = i + 1; k < nob; k++)
+			if (ob[k].x0 < ob[i].x0) {
+				typeof(ob[0]) t = ob[i];
+
+				ob[i] = ob[k];
+				ob[k] = t;
+			}
 	for (j = y; j < y + h; j++) {
 		int sp[80][2], n = 0, cur = x;
 
+		/* ob is x-sorted, so sp comes out sorted for free. */
 		for (i = 0; i < nob; i++) {
 			if (j < ob[i].y0 || j >= ob[i].y1)
 				continue;
@@ -1079,14 +1096,6 @@ static void win_fill(struct res *d, int x, int y, int w, int h)
 			sp[n][1] = ob[i].x1;
 			n++;
 		}
-		for (i = 0; i < n - 1; i++)		/* insertion sort */
-			for (k = i + 1; k < n; k++)
-				if (sp[k][0] < sp[i][0]) {
-					int t0 = sp[i][0], t1 = sp[i][1];
-
-					sp[i][0] = sp[k][0]; sp[i][1] = sp[k][1];
-					sp[k][0] = t0; sp[k][1] = t1;
-				}
 		for (i = 0; i < n; i++) {
 			int end = sp[i][0] < x + w ? sp[i][0] : x + w;
 
@@ -1123,13 +1132,32 @@ static void draw_border(struct res *w)
 	p = res_find(w->parent);
 	if (!p || p->type != R_WINDOW || !drawable_ok(p))
 		return;
-	for (j = w->y; j < w->y + w->h + 2 * w->bw; j++)
-		for (i = w->x; i < w->x + w->w + 2 * w->bw; i++) {
-			if (i >= w->x + w->bw && i < w->x + w->bw + w->w &&
-			    j >= w->y + w->bw && j < w->y + w->bw + w->h)
-				continue;		/* the child itself */
-			px_set(p, i, j, (uint16_t)w->border_pixel);
+	/*
+	 * Four spans, not a scan of the whole box. This used to walk every
+	 * pixel of (w + 2bw) x (h + 2bw) and `continue` over the interior, so
+	 * painting a ring cost the area it encloses: a 150x90 child was 13,500
+	 * px_set calls - each ~6 branches, a call and an alias_break - to set
+	 * about 480 pixels. With ~60 children, and redraw_child_borders()
+	 * re-running it after every fill that touches them, that was the bulk
+	 * of ConfigureWindow's 263 ms of CPU across one maximise.
+	 */
+	if (!op_target(p))
+		return;
+	{
+		int bw = w->bw, x0 = w->x, y0 = w->y;
+		int tw = w->w + 2 * bw, th = w->h + 2 * bw;
+		uint16_t c = (uint16_t)w->border_pixel;
+
+		for (j = 0; j < bw; j++) {		/* top and bottom */
+			px_hspan(p, x0, y0 + j, tw, c);
+			px_hspan(p, x0, y0 + th - 1 - j, tw, c);
 		}
+		for (j = bw; j < th - bw; j++) {	/* left and right */
+			px_hspan(p, x0, y0 + j, bw, c);
+			px_hspan(p, x0 + tw - bw, y0 + j, bw, c);
+		}
+	}
+	(void)i;
 }
 
 /*
