@@ -11,10 +11,14 @@
 set -e
 SYSROOT=/src/build/buildroot/host/riscv32-buildroot-linux-musl/sysroot
 CC=/src/toolchain/riscv32-esp-linux-musl/bin/riscv32-esp-linux-musl-gcc
+# Bind internal calls at link time - see xstubs/build.sh for the reasoning.
+# These libraries are built outside Buildroot, so BR2_TARGET_LDFLAGS misses them.
+LDHARD="-Wl,-Bsymbolic-functions"
 
 rm -f /src/images/libXft.so.2.3.9	# a failed build must leave nothing to ship
 $CC -O2 -fPIC -shared -Wall -Wno-unused-parameter \
 	-I"$SYSROOT/usr/include" -I"$SYSROOT/usr/include/freetype2" \
+	$LDHARD \
 	-Wl,-soname,libXft.so.2 -o /src/images/libXft.so.2.3.9 \
 	/src/xftlite/xftlite.c
 ${CC%gcc}strip /src/images/libXft.so.2.3.9
@@ -35,7 +39,7 @@ int XkbStdBell(void *dpy, unsigned long win, int percent, unsigned int name)
 	return 1;			/* there is no bell on this board */
 }
 XKB
-$CC -O2 -fPIC -shared -Wall -Wl,-soname,libxkbfile.so.1 \
+$CC -O2 -fPIC -shared -Wall $LDHARD -Wl,-soname,libxkbfile.so.1 \
 	-o /src/images/libxkbfile.so.1.0.2 /tmp/xkbstub.c
 ${CC%gcc}strip /src/images/libxkbfile.so.1.0.2
 

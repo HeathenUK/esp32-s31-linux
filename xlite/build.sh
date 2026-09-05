@@ -8,6 +8,9 @@
 set -e
 SYSROOT=/src/build/buildroot/host/riscv32-buildroot-linux-musl/sysroot
 CC=/src/toolchain/riscv32-esp-linux-musl/bin/riscv32-esp-linux-musl-gcc
+# Bind internal calls at link time - see xstubs/build.sh for the reasoning.
+# These libraries are built outside Buildroot, so BR2_TARGET_LDFLAGS misses them.
+LDHARD="-Wl,-Bsymbolic-functions"
 OUT=/src/images/libX11.so.6.4.0
 rm -f "$OUT"	# a failed build must leave nothing to ship
 
@@ -20,6 +23,7 @@ INSTR=""
 [ -n "$XLITE_INSTRUMENT" ] && INSTR="-DXLITE_INSTRUMENT -finstrument-functions"
 $CC -O2 -fno-omit-frame-pointer -fPIC -shared -Wall -Wno-unused-parameter $INSTR \
 	-I"$SYSROOT/usr/include" -I/src/xlite \
+	$LDHARD \
 	-Wl,-soname,libX11.so.6 \
 	-o "$OUT" /src/xlite/*.c
 ${CC%gcc}strip "$OUT"

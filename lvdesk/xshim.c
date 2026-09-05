@@ -4876,14 +4876,29 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 	 * above now, because Qt asks for the owner straight afterwards and
 	 * blocks on the answer.
 	 *
-	 * The rest still fall through into PutImage and are saved only by its
-	 * format check rejecting them (ZPixmap is 2; SendEvent's byte 1 is
-	 * propagate, GrabServer's is unused). That is luck, not design - if
-	 * one of these ever needs real handling, give it its own case rather
-	 * than trusting the check.
+	 * These seven used to fall through into PutImage, rejected only by its
+	 * format and length checks. That was luck, and thinner luck than the
+	 * old comment claimed: **opcode 42 is SetInputFocus, whose byte 1 is
+	 * revert-to, and RevertToParent is 2 - the same value as ZPixmap**. So
+	 * the commonest focus call in X11 passed the format test and reached
+	 * the geometry reads, which take iw/ih from r+12 and r+14 on a request
+	 * that is only 12 bytes long. Nothing was drawn, because 24 + pad*ih
+	 * can never be <= 12, but every such call read past the end of the
+	 * request first. GetProperty already answers None unconditionally, so
+	 * DeleteProperty genuinely has nothing to do; the rest are server-wide
+	 * state this shim does not keep. Ignore them explicitly.
 	 */
-	case 19: case 25:
-	case 36: case 37: case 42: case 46: case 109:
+	case 19:					/* DeleteProperty */
+	case 25:					/* SendEvent      */
+	case 36:					/* GrabServer     */
+	case 37:					/* UngrabServer   */
+	case 42:					/* SetInputFocus  */
+	case 46:					/* CloseFont      */
+	case 109:					/* ChangeHosts    */
+		if (trace_on())
+			fprintf(stderr, "xshim: ignoring %s (%u)\n",
+				opstr(op), op);
+		break;
 	case 72: {					/* PutImage */
 		/*
 		 * Accepted and DROPPED until now, which meant any client that

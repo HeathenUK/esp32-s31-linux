@@ -4,9 +4,13 @@
 set -e
 SYSROOT=/src/build/buildroot/host/riscv32-buildroot-linux-musl/sysroot
 CC=/src/toolchain/riscv32-esp-linux-musl/bin/riscv32-esp-linux-musl-gcc
+# Bind internal calls at link time - see xstubs/build.sh for the reasoning.
+# These libraries are built outside Buildroot, so BR2_TARGET_LDFLAGS misses them.
+LDHARD="-Wl,-Bsymbolic-functions"
 rm -f /src/images/libXt.so.6.0.0	# a failed build must leave nothing to ship
 $CC -O2 -fPIC -shared -Wall -Wno-unused-parameter \
 	-I"$SYSROOT/usr/include" -I/src/xtlite \
+	$LDHARD \
 	-Wl,-soname,libXt.so.6 -o /src/images/libXt.so.6.0.0 \
 	/src/xtlite/xtlite.c /src/xtlite/xtclass.c
 
@@ -15,8 +19,8 @@ $CC -O2 -fPIC -shared -Wall -Wno-unused-parameter \
 # defines it - these only have to exist so the DT_NEEDED entries in xcalc and
 # each other are satisfied.
 echo 'static const char xtlite_placeholder[] = "xtlite";' > /tmp/empty.c
-$CC -O2 -fPIC -shared -Wl,-soname,libXaw7.so.7 -o /src/images/libXaw7.so.7.0.0 /tmp/empty.c
-$CC -O2 -fPIC -shared -Wl,-soname,libXmu.so.6  -o /src/images/libXmu.so.6.2.0  /tmp/empty.c
+$CC -O2 -fPIC -shared $LDHARD -Wl,-soname,libXaw7.so.7 -o /src/images/libXaw7.so.7.0.0 /tmp/empty.c
+$CC -O2 -fPIC -shared $LDHARD -Wl,-soname,libXmu.so.6  -o /src/images/libXmu.so.6.2.0  /tmp/empty.c
 for f in /src/images/libXt.so.6.0.0 /src/images/libXaw7.so.7.0.0 \
 	 /src/images/libXmu.so.6.2.0; do ${CC%gcc}strip "$f"; done
 ls -l /src/images/libXt.so.6.0.0 /src/images/libXaw7.so.7.0.0 /src/images/libXmu.so.6.2.0 | awk '{printf "  %-34s %7d\n", $9, $5}'

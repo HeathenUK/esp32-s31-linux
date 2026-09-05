@@ -6,10 +6,25 @@ set -e
 CC=/src/toolchain/riscv32-esp-linux-musl/bin/riscv32-esp-linux-musl-gcc
 SYSROOT=/src/build/buildroot/host/riscv32-buildroot-linux-musl/sysroot
 OUT=/src/images
+# Bind each library's internal calls at link time. Only FUNCTION
+# references, so data, vtables and typeinfo stay interposable. Measured
+# -32% on dlopen of a large library chain. BR2_TARGET_LDFLAGS carries
+# this for every Buildroot package, but these libraries are built here,
+# outside Buildroot, so they were getting none of it - and they are the
+# ones every X client on this board loads on every launch.
+LDHARD="-Wl,-Bsymbolic-functions"
 S=/src/xstubs/xstubs.c
 build() {			# soname, output name, -D flag
+	# A failed build must leave nothing to ship. This rm used to sit in the
+	# MIDDLE of the $CC continuation below, where the backslash joined it
+	# onto the compile line and its trailing comment then terminated the
+	# command - so -Wl,-soname,... ran as a command of its own and the
+	# whole script died on the first stub. That is why libSM.so.6 and
+	# libICE.so.6 were dangling symlinks on the card: the stubs behind them
+	# had not been buildable since the line was added.
+	rm -f "$OUT/$2"
 	$CC -O2 -fPIC -shared -Wall -I"$SYSROOT/usr/include" -D"$3" \
-	rm -f "$OUT/$2"	# a failed build must leave nothing to ship
+		$LDHARD \
 		-Wl,-soname,"$1" -o "$OUT/$2" "$S"
 	${CC%gcc}strip "$OUT/$2"
 	ls -l "$OUT/$2" | awk '{printf "  %-24s %7d bytes\n", $9, $5}'
