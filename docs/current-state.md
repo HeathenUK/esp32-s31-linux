@@ -4918,3 +4918,81 @@ caller-supplied buffer, and `esp32s31_ext_profile=1` makes the switch hook
 report its own mean and worst ecall every 2048 switches into dmesg. That last
 one is how the cold/hot gap above was measured and it is the instrument that
 matters.
+
+## bluetoothd's 96% spin was a corrupt device store (2026-09-05)
+
+**`bluetoothd` sat at 95-97% of the single core, from boot, leaking ~10-23 kB/s,
+on what looked like a clean stock image.** It was not plugin-related (97% with
+the default plugin set, with `-p a2dp,avrcp` and with `-P ...`), not an
+interrupt storm (4.4 wireless IRQ/s), and entirely userspace: 40/40 `/proc/PID/
+syscall` samples read "running", with 6 voluntary against 855 involuntary
+context switches in 10 s.
+
+`rootfs/pcsample.c` (a ptrace PC sampler - there is no perf here) placed it:
+
+    79.0%  libc.so      +0x59640      strlen+16, stock musl word-at-a-time
+    18.7%  bluetoothd   +0x8b040..280 sscanf/strtol/strtoul/htons/htonl/strlen
+
+That is UUID and address string parsing, near `sdp_record_free@@Base`, with a
+backward branch closing a loop. Classic quadratic string work.
+
+**The cause was data, not code.** One file in the device store:
+
+    /var/lib/bluetooth/30:ED:A0:F3:CE:9A/E8:26:CF:C1:96:0A/info   3,048,410 bytes
+
+A BlueZ device record is a few hundred bytes. This one's `[General] Services=`
+key had swallowed the entire rest of the file as a GLib-escaped string -
+`\nAddressType=public\n\n[LinkKey]\nKey=067F91...\nType=4\nPINLength=0;` over
+and over, the same link key thousands of times. The trailing `;` is GKeyFile's
+**list separator**, which is the tell: `Services` is written with
+`g_key_file_set_string_list`, and the whole file tail had become a single
+element of that list. So every store re-read the value, re-escaped it, wrote
+the real sections after it, and the next read absorbed those too. The file
+doubles on a schedule.
+
+**The seed is not established.** It is not our musl work - `s31_xespv_memops.S`
+is linked into `s31_string_bench` alone (`s31-tools.mk:40-43`) and never into
+libc, and the disassembly confirms bluetoothd calls stock musl `strlen`. It is
+not our BlueZ patch either, which only deletes plugin entries from
+`Makefile.plugins`. The most plausible story for *this* board is a hard reset
+landing inside a device-store write, leaving a torn file whose `Services=` line
+lost its terminator; from there it is self-sustaining. This board gets
+hard-reset dozens of times a day, so that window is not hypothetical.
+
+**The nastiest part: the graceful stop is the expensive operation.** BlueZ
+serialises the device store on SIGTERM, so `/etc/init.d/S46bluetoothd stop`
+asks it to build ~6 MB of escaped text (the value, plus the tail it re-absorbs)
+on a board with ~1 MB available. It OOMs mid-shutdown. **Stopping bluetoothd
+wedged the board three times in a row** before that was understood, and each
+wedge looked like an unrelated crash. The init script's `stop()` also had an
+**unbounded** `while ... sleep 0.1` wait for the daemon to exit, so the console
+never came back and every subsequent tool call reported NO_SHELL.
+
+Fixed, measured on a fresh boot with Bluetooth enabled:
+
+| | corrupt store | repaired |
+|---|---|---|
+| bluetoothd CPU / 10 s | 967 ticks (**96%**) | **0** |
+| bluetoothd RSS | 3,272 kB, +10 kB/s | **180 kB, flat** |
+| MemAvailable | 1,060 kB | **2,936 kB** |
+| store file | 3,048,410 B | 199 B |
+| `S46bluetoothd stop` | wedges the board | instant |
+
+The pairing was preserved by rebuilding the record from its real head and tail
+(`head -6` and `tail -c 160` - both safe, neither ever buffers the 3 MB line;
+note the true `AddressType` was `static`, while the value embedded in the stale
+blob said `public`). The original is kept at `/root/bt-info.corrupt`.
+
+**`S46bluetoothd` now guards against it** (BlueZ is off-the-shelf and is not
+patched): `guard_store()` runs before start and moves any store file over
+64 kB to `/var/lib/bluetooth-quarantine/` with a loud log line, and the stop
+wait is bounded at 5 s before escalating to KILL. A quarantine costs a 30
+second re-pair; the alternative cost an afternoon. Verified by planting a
+102,400-byte `info` and watching it get moved while the good record was left
+alone.
+
+**This invalidates the Qt verdict.** Every Qt measurement in this repo was
+taken while bluetoothd was eating ~96% of the only core and leaking into OOM -
+which is precisely what would make an off-the-shelf Qt app look unviable. The
+"Qt is not viable here" conclusion is unsafe and needs re-measuring against a
+board that is not being starved.

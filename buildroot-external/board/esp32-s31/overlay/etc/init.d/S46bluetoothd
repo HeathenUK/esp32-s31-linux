@@ -8,6 +8,38 @@ BLUETOOTHD_ARGS="-n"
 # shellcheck source=/dev/null
 [ -r "/etc/default/$DAEMON" ] && . "/etc/default/$DAEMON"
 
+# --- device-store sanity guard ---------------------------------------------
+# A BlueZ device record is a few hundred bytes. On 2026-09-05 one was found at
+# 3,048,410 bytes: the [General] "Services" key had swallowed the whole rest of
+# the file as an escaped string, and because BlueZ re-reads that value and
+# writes it back, every store re-absorbed the tail and the file doubled.
+#
+# The cost was not subtle - bluetoothd sat at 96% of the single core re-parsing
+# it (strlen/strtol/sscanf over 3 MB of UUID text on every store) and leaked
+# ~10 kB/s until the board OOMed. Worse, the graceful stop is what serialises
+# it, so SIGTERM was the most expensive thing you could ask the daemon to do:
+# `/etc/init.d/S46bluetoothd stop` reliably wedged the board.
+#
+# We cannot patch BlueZ (off-the-shelf), so refuse to feed it a corrupt store.
+# Anything wildly oversized is moved aside before start and logged loudly. The
+# pairing is lost when that fires - which is a 30 second re-pair against an
+# afternoon of a wedged board.
+STORE_DIR="/var/lib/bluetooth"
+STORE_MAX=65536
+STORE_QUAR="/var/lib/bluetooth-quarantine"
+
+guard_store() {
+	[ -d "$STORE_DIR" ] || return 0
+	find "$STORE_DIR" -type f | while read -r f; do
+		sz=$(wc -c < "$f" 2>/dev/null) || continue
+		[ "$sz" -gt "$STORE_MAX" ] || continue
+		mkdir -p "$STORE_QUAR"
+		q="$STORE_QUAR/$(echo "${f#$STORE_DIR/}" | tr / _).$(date +%s)"
+		mv "$f" "$q" && \
+			echo "bluetoothd: QUARANTINED corrupt store file, $sz bytes: $f -> $q"
+	done
+}
+
 start() {
 	# Bluetooth is OPT-IN on this board. bluetoothd no longer lives in the
 	# XIP image (that flash pays for a static busybox, worth ~20 ms on every
@@ -20,6 +52,7 @@ start() {
 		echo "bluetoothd: off (touch /etc/s31-bluetooth-on to enable)"
 		return 0
 	fi
+	guard_store
 	printf 'Starting %s: ' "$DAEMON"
 	# shellcheck disable=SC2086 # we need the word splitting
 	start-stop-daemon --start --background --make-pidfile \
@@ -45,8 +78,17 @@ stop() {
 		echo "FAIL"
 		return "$status"
 	fi
+	n=0
 	while start-stop-daemon --stop --test --quiet --pidfile "$PIDFILE" \
 		--exec "/usr/libexec/bluetooth/$DAEMON"; do
+		n=$((n+1))
+		if [ "$n" -gt 50 ]; then
+			echo "bluetoothd: did not exit in 5 s, sending KILL"
+			start-stop-daemon --stop --signal KILL --quiet \
+				--pidfile "$PIDFILE" \
+				--exec "/usr/libexec/bluetooth/$DAEMON"
+			break
+		fi
 		sleep 0.1
 	done
 	rm -f "$PIDFILE"

@@ -202,6 +202,15 @@ for kernel work; the rootfs only needs rebuilding when userspace changes.
   time. GCC had printed `'pending' is used uninitialized` on every build for
   days. **Non-deterministic symptoms from a deterministic image mean
   uninitialised memory** - check the warnings before theorising.
+- **Stopping `bluetoothd` can wedge the board, and a stock daemon spinning in
+  `strlen` usually means corrupt *data*, not corrupt code.** BlueZ serialises
+  its device store on SIGTERM, so if a record in `/var/lib/bluetooth` has gone
+  bad the graceful stop is the most expensive thing you can ask for - one
+  3 MB `info` file made `S46bluetoothd stop` OOM the board three times running.
+  The init script now quarantines any store file over 64 kB before start and
+  bounds its stop wait at 5 s. **Never `cat` a suspect store file**: 3 MB on one
+  line is a 45 s console flood, and awk/sed buffer the whole line. Use
+  `head -6` and `tail -c 160`. Full account in `docs/current-state.md`.
 - **A backup in `/etc/init.d` is executed.** busybox `rcS` globs
   `/etc/init.d/S??*`, so `S40lvdesk.bak` runs alongside `S40lvdesk` - two
   desktops, the second failing to take DRM master, and a board that sat silent
