@@ -945,6 +945,55 @@ load time are the whole game for a library-heavy app. Note `fault_around_bytes`
 is a debugfs knob and `DIAG=0` compiles debugfs out, so the default 64 KiB
 (16 pages) is what ships and cannot be tuned at runtime.
 
+## Qt was evaluated and REMOVED. What to keep from it. (2026-09-05)
+
+Qt 5.15 runs and renders correctly here, but not usably: >120 s to a window for
+a QtGui raster app, and Qt Widgets apps never map a window at all, faulting
+steadily at ~54/s. Slab (4.4 MB, measured irreducible) plus CMA (4.1 MB) leave
+~1.4 MB of page cache for a toolkit whose startup streams through several MB of
+library text, so the working set cannot fit and re-faults forever. XIP would fix
+it - text from flash costs ZERO page cache - but Qt is 16.3 MB against ~1.15 MB
+of free flash across every partition. Off by 14x: a hardware limit, not an
+effort one. All Qt packaging has been removed from the rootfs config.
+
+**Worth keeping, and NOT Qt-specific:**
+
+  -Bsymbolic-functions      In BR2_TARGET_LDFLAGS, so all 355 shared libraries
+                            bind their internal calls at link time. Measured
+                            -32% on dlopen, interleaved. CAVEAT: this was only
+                            ever verified against Qt, and the board has NOT been
+                            re-imaged since, so it is not yet running there.
+                            Verify the real desktop at the next re-image before
+                            trusting it - it removes symbol interposition, so a
+                            library relying on that would break here and nowhere
+                            else.
+  Shim protocol coverage    GetWindowAttributes, Set/GetSelectionOwner,
+                            QueryPointer, TranslateCoordinates, MAXATOM 64->256.
+                            Every X client benefits; QueryPointer and
+                            TranslateCoordinates in particular decide menu and
+                            tooltip placement for ANY toolkit.
+  libSM/libICE are BROKEN   /usr/lib/libSM.so.6 and libICE.so.6 are DANGLING
+                            symlinks - the versioned targets are in no overlay
+                            layer. Anything wanting X session management is
+                            unloadable. Found via Qt; not a Qt problem.
+  musl binds eagerly        gnu_lookup_filtered was 73-78% of a large program's
+                            startup CPU. There is no lazy PLT, so every symbol
+                            of every library is resolved at load. This taxes
+                            every dynamic program on the board, and lazy binding
+                            in our musl fork remains the deepest unexploited
+                            lever for general startup cost.
+  rootfs/dltest.c           Times dlopen of any library. No Qt dependency; kept.
+
+**Method, learned the hard way and applicable to everything here:**
+
+  - Board timings drift 2x with how settled it is. The SAME libraries measured
+    20-21 s and 39-44 s. Interleave arms in ONE session or do not compare.
+  - /sys/block/*/stat field 4 sums service time across in-flight requests, so
+    it is meaningless between a depth-1 reader and a queued one.
+  - A 200 Hz SIGPROF profiler WEDGES this board; 20 Hz is ample.
+  - swapoff -a wedges it when anything holds swap.
+  - Repeated large-app launches OOM it - measure the loader with dlopen instead.
+
 ## Qt 5.15 runs on this board, from SD, through our shim (2026-09-05)
 
 An unmodified upstream Qt example (`analogclock`) renders correctly on the

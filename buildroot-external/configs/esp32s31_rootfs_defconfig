@@ -338,43 +338,23 @@ BR2_TARGET_TZ_ZONELIST="europe"
 BR2_TARGET_LOCALTIME="Europe/London"
 BR2_PACKAGE_XAPP_OCLOCK=y
 
-# Qt5, staged on the SD card rather than in XIP flash.
+# Qt5 was evaluated here and REMOVED. It runs and renders correctly on this
+# board, but not usably: >120 s to a window for a QtGui raster app, and Qt
+# Widgets apps never map a window at all, faulting steadily at ~54/s.
 #
-# This is a deliberate experiment, not a shipping choice: the flash is fully
-# partitioned at 16 MB with ~370 KB of XIP slack, and qt5base alone is an order
-# of magnitude larger than that, so Qt CANNOT go in XIP as things stand. The
-# point is to find out how an off-the-shelf toolkit behaves when it is paged
-# off SD - see docs/current-state.md on why request size, not bandwidth, is
-# what that costs.
+# The cause is structural, not tuning. Of 15.4 MB, slab takes 4.4 MB (measured
+# irreducible - see docs/current-state.md) and CMA 4.1 MB, leaving ~1.4 MB of
+# page cache for a toolkit whose startup streams through several MB of library
+# text. The working set does not fit, so it re-faults forever.
 #
-# Every hard prerequisite was ALREADY satisfied before adding this, which is
-# why the delta is small: BR2_INSTALL_LIBSTDCPP, LIBXCB, XLIB_LIBXEXT,
-# FONTCONFIG, FREETYPE, wchar, NPTL threads and dynamic libs are all on for the
-# existing X clients. Only the xcb-util family, xkbcommon and Qt itself are new.
+# XIP is the only mechanism that would fix it, since text executing from flash
+# costs ZERO page cache - and Qt is 16.3 MB against ~1.15 MB of free flash
+# across every partition. Off by 14x. That is a hardware limit, not an effort
+# one, so no amount of pruning or linker flags reaches it.
 #
-# xcb, not linuxfb or eglfs. There is no /dev/fb0 on this board (fbdev
-# emulation was dropped when lvdesk started driving KMS directly) and no GL, so
-# those two plugins have nothing to render into. lvdesk speaks the X11 core
-# protocol itself, so xcb is the only surface Qt can reach.
-#
-# libxkbcommon is REQUIRED even though lvdesk refuses the XKB extension. Qt
-# 5.15's QXcbKeyboard tries xkb_x11_keymap_new_from_device first and falls back
-# to xkb_keymap_new_from_names when the server has no XKB, building the keymap
-# client-side from xkeyboard-config's rules. Without the library there is no
-# fallback to take.
-#
-# ICU is deliberately OFF - it is tens of megabytes and Qt only needs it for
-# full Unicode collation. OpenGL is off because there is no GPU.
-BR2_PACKAGE_LIBXKBCOMMON=y
-BR2_PACKAGE_QT5=y
-BR2_PACKAGE_QT5BASE_GUI=y
-BR2_PACKAGE_QT5BASE_WIDGETS=y
-BR2_PACKAGE_QT5BASE_XCB=y
-BR2_PACKAGE_QT5BASE_FONTCONFIG=y
-BR2_PACKAGE_QT5BASE_PNG=y
-BR2_PACKAGE_QT5BASE_JPEG=y
-BR2_PACKAGE_QT5BASE_DEFAULT_QPA="xcb"
-BR2_PACKAGE_QT5BASE_EXAMPLES=y
+# Everything learned on the way is in docs/current-state.md, including the
+# seven optimisations tested and rejected with their numbers. Do not re-add Qt
+# without a larger flash.
 
 # Build Qt so that LOADING it is cheap. Measured on the board with the caches
 # warm, so this is pure CPU and not SD: dlopen(RTLD_NOW) of libQt5Core is
@@ -395,41 +375,4 @@ BR2_PACKAGE_QT5BASE_EXAMPLES=y
 # compile test does not pass for riscv32 here. Do not re-add it without making
 # that test pass first; enabling it only turns a working build into a failing
 # one at the very end of a long configure.
-# -Bsymbolic-functions passed DIRECTLY as a qmake linker flag.
-#
-# Qt's own -reduce-relocations does exactly this, and its configure REFUSES it
-# here ("pre-condition tests.reduce_relocations failed") - but that is Qt's
-# compile test failing on riscv32, not the linker flag being unsupported. The
-# flag binds Qt's calls to its own symbols at LINK time, so the loader never
-# looks them up.
-#
-# Why it matters, measured: a sampling profiler puts 73-78% of QApplication's
-# CPU inside libc.so, and the hot addresses resolve to gnu_lookup_filtered -
-# musl's symbol lookup, called once per DSO per symbol, with no lazy binding to
-# avoid it. Qt's three libraries carry 26,485 dynamic symbols between them.
-#
-# Cost: symbol interposition is lost, so LD_PRELOAD over Qt internals stops
-# working. Nothing here does that.
-# Qt Lite pruning, chosen to remove LIBRARIES from the load chain rather than
-# just code, because the measured cost is per-DSO symbol lookup.
-#
-#   -no-glib                  Qt uses its own poll-based event dispatcher
-#                             instead of glib's. Drops libglib-2.0 and
-#                             libgthread-2.0 from every Qt process.
-#   -no-feature-sessionmanager X11 session management. Drops libSM and libICE -
-#                             which are the two DANGLING symlinks on this board
-#                             (the versioned targets are in no overlay layer),
-#                             so this removes a latent breakage as well as two
-#                             DSOs.
-#
-# Deliberately NOT pruned: anything under widgets, itemviews, cssparser or the
-# image formats. Those are what an off-the-shelf app expects to find, and the
-# whole point is that unmodified apps keep working.
-BR2_PACKAGE_QT5BASE_CUSTOM_CONF_OPTS="-reduce-exports -no-glib -no-feature-sessionmanager QMAKE_LFLAGS+=-Wl,-Bsymbolic-functions"
 
-# Modules nothing on this board uses. Each one is a whole library that the
-# loader would otherwise have to map and bind before the app starts.
-# BR2_PACKAGE_QT5BASE_NETWORK is not set
-# BR2_PACKAGE_QT5BASE_SQL is not set
-# BR2_PACKAGE_QT5BASE_TEST is not set
-# BR2_PACKAGE_QT5BASE_XML is not set
