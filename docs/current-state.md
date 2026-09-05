@@ -5457,3 +5457,47 @@ Consequences, all of which point the same way:
 - The general lesson is the one this project keeps relearning: an observation
   of the panel is evidence about pixels, not about causes. "The window is not
   there" had at least two explanations and the boring one was right.
+
+## Doom (2026-09-06) - SDL2 works, the port does not yet draw
+
+**The X11 stack is no longer the suspect.** Four real faults were found and
+fixed (commit 959d426): a missing `XUninstallColormap` disabled SDL2's entire
+X11 driver; six missing Xkb entry points crashed it with `epc=0`; a stubbed
+`XGetWindowAttributes` that never filled its struct made SDL2 read
+uninitialised stack as the window size and ask for 979 MB; and the shim killed
+any client sending a request over its 64 KB input buffer, which SDL2 does on
+every window (`_NET_WM_ICON`, 65,568 bytes).
+
+`rootfs/sdl2probe.c` now proves the whole path from a minimal client:
+software renderer created, 800x480 RGB565 surface, `SDL_GetTicks` advancing
+300 ms in 300 ms, the event queue draining (2 events in 2 s), and the paint
+landing at the shim as `PutImage nonzero 32000/64000 bytes`. **Use this probe
+before blaming the shim for any future SDL failure.**
+
+**chocolate-doom 3.1.1 still does not draw.** It starts, loads and maps a
+window, then spins at 96% of a core in `recvmsg` and sends ZERO PutImage. The
+shim receives only ~79 requests in total and then goes quiet, so it is not
+being hammered - the spin is non-blocking `XPending` polling from the client's
+own tic loop, i.e. `TryRunTics`/`NetUpdate` never returning to `D_Display`.
+Ruled out with measurements, not argument: the render driver table is NOT
+empty (1 driver, `SOFTWARE|PRESENTVSYNC|TARGETTEXTURE`, all the flags it
+asks for); `SDL_GetTicks` is not frozen; the event queue is not stuck.
+
+**Loading is slow enough to have poisoned an earlier verdict.** Init takes
+~60 s: at 10 s the log stops inside `R_Init`, at 60 s it has reached
+`ST_Init`. Note the log ordering lies - stdout is block-buffered to a file
+while xlite's stderr is not - so "it stopped at R_Init" needs a clean exit
+(SIGTERM, not SIGKILL) to flush before it means anything.
+
+That timing **retracts the earlier prboom conclusion**. prboom was judged to
+"render nothing at all" on the strength of all-zero PutImage frames observed
+over 12-45 s windows. If prboom loads on the same timescale, those frames were
+the blank window during loading, not a broken colour path. The verdict was
+drawn too early and should be re-tested with a 2+ minute window before prboom
+is dismissed.
+
+**Memory is the binding constraint here, as everywhere.** chocolate-doom's
+minimum zone is 4 MB (`MIN_RAM`) against ~3.4 MB MemAvailable. Running it
+takes MemAvailable to ~1 MB with 484 kB swapped, and the board wedged twice
+during these runs (silent console, recovered only by `alive.py --reset`).
+Any Doom on this board needs a port whose heap fits, not just one that draws.
