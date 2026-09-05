@@ -43,19 +43,32 @@ static void tally(unsigned long pc)
 	if (nbuckets < 4096) { buckets[nbuckets].pc = pc; buckets[nbuckets].n = 1; nbuckets++; }
 }
 
-/* Which mapping does this address fall in? Answers "which library", which is
- * the first thing worth knowing, before any symbol resolution. */
+/* Which mapping does this address fall in, and what is that FILE's load base?
+ *
+ * The base must be the lowest mapping of the same file, NOT the mapping the PC
+ * happens to land in. An ELF has several PT_LOAD segments and the kernel maps
+ * each separately, so a PC in the executable segment of a multi-segment binary
+ * is offset from that segment, not from the file. Reporting the segment-local
+ * offset makes every symbol lookup wrong - and wrong in a way that still
+ * resolves, because it lands on some earlier unrelated function. That happened:
+ * lvdesk offsets came out ~0x10000 low and "resolved" to nothing, while a libc
+ * offset resolved confidently to pthread_spin_unlock+98 when it was really
+ * __syscall_cp_asm. Two passes: find the containing mapping's file, then the
+ * lowest mapping of that same file. */
 static void whereis(pid_t pid, unsigned long pc, char *out, size_t n, unsigned long *base)
 {
-	char path[64], line[512];
+	char path[64], line[512], want[400];
+	unsigned long lo, hi, lowest = 0;
+	int found = 0;
 	FILE *f;
 
 	snprintf(path, sizeof path, "/proc/%d/maps", pid);
-	f = fopen(path, "r");
 	snprintf(out, n, "?");
+	want[0] = 0;
 	*base = 0;
+
+	f = fopen(path, "r");
 	while (f && fgets(line, sizeof line, f)) {
-		unsigned long lo, hi;
 		char perm[8], p[400];
 
 		p[0] = 0;
@@ -63,12 +76,31 @@ static void whereis(pid_t pid, unsigned long pc, char *out, size_t n, unsigned l
 			continue;
 		if (pc >= lo && pc < hi) {
 			const char *b = strrchr(p, '/');
+
 			snprintf(out, n, "%s", b ? b + 1 : (p[0] ? p : "[anon]"));
-			*base = lo;
+			snprintf(want, sizeof want, "%s", p);
+			*base = lo;			/* anonymous: no better answer */
+			found = 1;
 			break;
 		}
 	}
 	if (f) fclose(f);
+	if (!found || !want[0])
+		return;
+
+	f = fopen(path, "r");
+	while (f && fgets(line, sizeof line, f)) {
+		char perm[8], p[400];
+
+		p[0] = 0;
+		if (sscanf(line, "%lx-%lx %7s %*s %*s %*s %399[^\n]", &lo, &hi, perm, p) < 3)
+			continue;
+		if (!strcmp(p, want) && (!lowest || lo < lowest))
+			lowest = lo;
+	}
+	if (f) fclose(f);
+	if (lowest)
+		*base = lowest;
 }
 
 int main(int argc, char **argv)

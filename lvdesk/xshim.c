@@ -981,6 +981,8 @@ static void win_fill(struct res *d, int x, int y, int w, int h)
 {
 	struct { int x0, y0, x1, y1; } ob[80];
 	int nob = 0, i, j, k;
+	struct res *bgp;
+	int tiled;
 
 	/*
 	 * An aliased window IS its background pixmap, so painting the
@@ -1031,9 +1033,10 @@ static void win_fill(struct res *d, int x, int y, int w, int h)
 	}
 
 	if (d->type != R_WINDOW) {
+		if (!op_target(d))
+			return;
 		for (j = y; j < y + h; j++)
-			for (i = x; i < x + w; i++)
-				px_set(d, i, j, (uint16_t)d->bg);
+			px_hspan(d, x, j, w, (uint16_t)d->bg);
 		return;
 	}
 	for (i = 0; i < MAXRES && nob < (int)(sizeof(ob) / sizeof(ob[0])); i++) {
@@ -1050,6 +1053,20 @@ static void win_fill(struct res *d, int x, int y, int w, int h)
 		ob[nob].y1 = c2->ay - d->ay + c2->h + c2->bw;
 		nob++;
 	}
+	/*
+	 * A window background is a solid colour unless a background PIXMAP is
+	 * set, and win_bg_at() re-derives that per pixel. Decide once, then
+	 * move whole rows: px_set() pays ~6 branches, an alias_break() and a
+	 * call for every single pixel, which a PC profile of one maximise put
+	 * at 16.4% in px_set plus 1.6% in alias_break_ex - for a fill whose
+	 * colour never changes. Only a TILED background still needs the
+	 * per-pixel path, because there the colour really does vary.
+	 */
+	bgp = d->bg_pixmap ? res_find(d->bg_pixmap) : NULL;
+	tiled = bgp && bgp->type == R_PIXMAP && drawable_ok(bgp) &&
+		bgp->w > 0 && bgp->h > 0;
+	if (!op_target(d))
+		return;
 	for (j = y; j < y + h; j++) {
 		int sp[80][2], n = 0, cur = x;
 
@@ -1071,13 +1088,28 @@ static void win_fill(struct res *d, int x, int y, int w, int h)
 					sp[k][0] = t0; sp[k][1] = t1;
 				}
 		for (i = 0; i < n; i++) {
-			for (k = cur; k < sp[i][0] && k < x + w; k++)
-				px_set(d, k, j, win_bg_at(d, k, j));
+			int end = sp[i][0] < x + w ? sp[i][0] : x + w;
+
+			if (end > cur) {
+				if (tiled)
+					for (k = cur; k < end; k++)
+						px_set(d, k, j,
+						       win_bg_at(d, k, j));
+				else
+					px_hspan(d, cur, j, end - cur,
+						 (uint16_t)d->bg);
+			}
 			if (sp[i][1] > cur)
 				cur = sp[i][1];
 		}
-		for (k = cur; k < x + w; k++)
-			px_set(d, k, j, win_bg_at(d, k, j));
+		if (x + w > cur) {
+			if (tiled)
+				for (k = cur; k < x + w; k++)
+					px_set(d, k, j, win_bg_at(d, k, j));
+			else
+				px_hspan(d, cur, j, x + w - cur,
+					 (uint16_t)d->bg);
+		}
 	}
 }
 

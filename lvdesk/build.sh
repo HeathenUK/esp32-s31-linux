@@ -38,5 +38,12 @@ $CC $CFLAGS -o $OUT /src/lvdesk/$APP.c $EXTRA /tmp/lvo/*.o -lm $LIBS
 # never reads. It was being stripped by hand, which meant that the one time it
 # was not, 231 kB of debug symbols went into XIP image 1 and nobody could tell
 # by looking at the tree. A build step cannot be forgotten.
+# LVDESK_SYMS=<path> keeps an unstripped copy somewhere the image never sees.
+# Needed to resolve rootfs/pcsample.c PC offsets back to functions: there is no
+# perf here, the shipped binary has no symbols, and strip does not move code, so
+# offsets taken from the running stripped binary resolve correctly against this.
+# It is deliberately a separate path rather than a "do not strip" switch - the
+# thing that must never happen is symbols reaching the flash image.
+[ -n "$LVDESK_SYMS" ] && { cp "$OUT" "$LVDESK_SYMS"; echo "unstripped copy: $LVDESK_SYMS"; }
 ${CC%gcc}strip "$OUT"
 ls -la $OUT
