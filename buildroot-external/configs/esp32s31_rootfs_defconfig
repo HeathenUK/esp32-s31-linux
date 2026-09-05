@@ -238,7 +238,25 @@ BR2_PACKAGE_XAPP_XCALC=y
 # entry, so every X client maps 72 kB of libxcb for nothing. That matters here
 # for the same reason everything else does: it is 72 kB of text paged off the
 # SD card on a board with ~3 MB free.
-BR2_TARGET_LDFLAGS="-Wl,--as-needed"
+# -Bsymbolic-functions for EVERY shared library on the board, not just Qt.
+#
+# musl has no lazy PLT: it resolves every symbol eagerly at load, walking the
+# DSO list once per symbol. A sampling profiler puts 73-78% of a Qt cold start
+# inside libc.so, and the hot addresses resolve to gnu_lookup_filtered - that
+# lookup. The same tax is paid by every dynamically linked program here, it is
+# just most visible on the largest one.
+#
+# -Bsymbolic-functions binds a library's calls to its OWN functions at link
+# time, so the loader never looks them up. Measured on Qt alone, relocations
+# fell 45,430 -> 35,079 (-23%): Core -36%, Gui -30%, Widgets -16%.
+#
+# Cost: a library can no longer have its internal function calls interposed.
+# Only FUNCTION references are bound, not data, so vtables and typeinfo stay
+# interposable and C++ RTTI across DSOs still works - which is why this is the
+# -functions variant and not plain -Bsymbolic. Nothing on this board LD_PRELOADs
+# over a library's internals; rootfs/ioctlprof.c interposes libc's ioctl, and
+# libc comes from the external toolchain, so it is not affected.
+BR2_TARGET_LDFLAGS="-Wl,--as-needed -Wl,-Bsymbolic-functions"
 
 BR2_PACKAGE_XFONT_FONT_MISC_MISC=y
 # Adobe Symbol, for the mathematical glyphs clients select per-GC (xcalc's
@@ -377,7 +395,22 @@ BR2_PACKAGE_QT5BASE_EXAMPLES=y
 # compile test does not pass for riscv32 here. Do not re-add it without making
 # that test pass first; enabling it only turns a working build into a failing
 # one at the very end of a long configure.
-BR2_PACKAGE_QT5BASE_CUSTOM_CONF_OPTS="-reduce-exports"
+# -Bsymbolic-functions passed DIRECTLY as a qmake linker flag.
+#
+# Qt's own -reduce-relocations does exactly this, and its configure REFUSES it
+# here ("pre-condition tests.reduce_relocations failed") - but that is Qt's
+# compile test failing on riscv32, not the linker flag being unsupported. The
+# flag binds Qt's calls to its own symbols at LINK time, so the loader never
+# looks them up.
+#
+# Why it matters, measured: a sampling profiler puts 73-78% of QApplication's
+# CPU inside libc.so, and the hot addresses resolve to gnu_lookup_filtered -
+# musl's symbol lookup, called once per DSO per symbol, with no lazy binding to
+# avoid it. Qt's three libraries carry 26,485 dynamic symbols between them.
+#
+# Cost: symbol interposition is lost, so LD_PRELOAD over Qt internals stops
+# working. Nothing here does that.
+BR2_PACKAGE_QT5BASE_CUSTOM_CONF_OPTS="-reduce-exports QMAKE_LFLAGS+=-Wl,-Bsymbolic-functions"
 
 # Modules nothing on this board uses. Each one is a whole library that the
 # loader would otherwise have to map and bind before the app starts.

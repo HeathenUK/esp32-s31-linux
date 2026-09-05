@@ -118,6 +118,38 @@ static void prof_report(void)
 		       100.0 * r[best].n / (nsamp ? nsamp : 1), r[best].name);
 		r[best].n = 0;
 	}
+	/*
+	 * Attribution to a library is not enough to choose a fix: libc.so holds
+	 * the dynamic loader, malloc AND the string routines, and those imply
+	 * completely different work. Emit the raw offsets of the hottest
+	 * addresses so they can be resolved against the real symbol table on
+	 * the host, rather than guessed at from here.
+	 */
+	struct Hot { unsigned long off; unsigned n; int lib; };
+	static Hot hot[4096];
+	int nh = 0;
+	for (unsigned i = 0; i < nsamp; i++) {
+		int j = -1;
+		for (int k = 0; k < nr; k++)
+			if (samp[i] >= r[k].lo && samp[i] < r[k].hi) { j = k; break; }
+		if (j < 0) continue;
+		unsigned long off = (samp[i] - r[j].lo) & ~63UL;	/* 64-byte buckets */
+		int f = -1;
+		for (int k = 0; k < nh; k++)
+			if (hot[k].off == off && hot[k].lib == j) { f = k; break; }
+		if (f < 0) { if (nh >= 4096) continue; hot[nh].off = off; hot[nh].lib = j; hot[nh].n = 0; f = nh++; }
+		hot[f].n++;
+	}
+	printf("PROF --- hottest addresses (resolve with nm/addr2line) ---\n");
+	for (int pass = 0; pass < 15; pass++) {
+		int best = -1;
+		for (int k = 0; k < nh; k++)
+			if (hot[k].n && (best < 0 || hot[k].n > hot[best].n)) best = k;
+		if (best < 0 || !hot[best].n) break;
+		printf("PROF   %5.2f s  %s+0x%lx\n", hot[best].n * 0.05,
+		       r[hot[best].lib].name, hot[best].off);
+		hot[best].n = 0;
+	}
 	fflush(stdout);
 }
 
