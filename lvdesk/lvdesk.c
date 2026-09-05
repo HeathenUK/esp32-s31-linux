@@ -2610,13 +2610,34 @@ static void ctl_line(char *buf)
 		if (!strncmp(buf, "list", 4)) {
 			int i;
 
-			for (i = 0; i < win_n; i++)
-				printf("lvdesk: win %d %dx%d+%d+%d%s\n", i,
+			/*
+			 * Report WINDOWS, not slots. win_n is a high-water
+			 * mark and win_close() clears ->win without lowering
+			 * it, so closed slots were listed too - with whatever
+			 * geometry lv_obj_get_width(NULL) returned. A harness
+			 * that picked a window by index off this list then
+			 * addressed a dead slot, `raise` did nothing, and the
+			 * test read "the desktop did not repaint" when the
+			 * desktop was fine.
+			 *
+			 * The name comes with it, so anything automated can
+			 * say which window it means instead of counting.
+			 */
+			for (i = 0; i < win_n; i++) {
+				const char *nm;
+
+				if (!wins[i].win)
+					continue;
+				nm = wins[i].tlabel ?
+				     lv_label_get_text(wins[i].tlabel) : "?";
+				printf("lvdesk: win %d %dx%d+%d+%d%s %s\n", i,
 				       (int)lv_obj_get_width(wins[i].win),
 				       (int)lv_obj_get_height(wins[i].win),
 				       (int)lv_obj_get_x(wins[i].win),
 				       (int)lv_obj_get_y(wins[i].win),
-				       wins[i].maximised ? " MAX" : "");
+				       wins[i].maximised ? " MAX" : "",
+				       nm ? nm : "?");
+			}
 			fflush(stdout);
 		} else if (sscanf(buf, "raise %d", &idx) == 1) {
 			if (idx >= 0 && idx < win_n && wins[idx].win) {
