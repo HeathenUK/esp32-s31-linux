@@ -56,7 +56,27 @@
 
 #if LV_USE_STDLIB_MALLOC == LV_STDLIB_BUILTIN
 /** Size of the pool `lv_malloc()` allocates from. Needs to be at least 2kB (2048). */
-#define LV_MEM_SIZE (512 * 1024)
+/*
+ * Sized from measurement, not faith. The ctl `lvmem` command reports LVGL's
+ * own high-water mark, and it is IMMOVABLE at 347,416 bytes: boot, three X
+ * clients up, six maximise/restore cycles, and xfiles' thumbnail path (the
+ * heaviest allocator path there is - hardware JPEG decode plus PPA scaling)
+ * all leave it exactly there. Steady-state usage is 5-7%.
+ *
+ * 512 KB therefore carried ~165 KB of slack that was resident and committed:
+ * lvdesk's heap measured 472 KB of a 520 KB pool with the desktop idle, and it
+ * is the largest single userspace allocation on a 15 MB board.
+ *
+ * 400 KB keeps 62 KB - 18% - over a peak that nothing has been able to move.
+ * If LVGL ever fails an allocation, raise this first and re-read `lvmem`;
+ * do not guess.
+ *
+ * Note what this does NOT cover: lvdesk's RSS still grows 520 -> 1708 KB with
+ * three clients, because xshim allocates a backing buffer per top-level window
+ * outside this pool. That is the documented design (69 xcalc windows cost one
+ * buffer, not 69) and is not slack.
+ */
+#define LV_MEM_SIZE (400 * 1024)
 
 /** Place the pool at a fixed address instead of allocating it as a normal array.
  *  0: unused.
