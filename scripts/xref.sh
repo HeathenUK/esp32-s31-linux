@@ -30,7 +30,12 @@ TAR=$(ls "$REPO"/buildroot/dl/xapp_"$APP"/"$APP"-*.tar.* 2>/dev/null | head -1 |
 echo "--- reference build of $(basename "$TAR") against real Xaw ---"
 
 mkdir -p "$REPO/$(dirname "$OUT")"
-WORK=$(mktemp -d)
+# The work directory must live INSIDE the repo. On macOS `mktemp -d` returns a
+# /var/folders path that Docker Desktop does not share, so the bind mount
+# silently creates a DIRECTORY at the target and the container dies with
+# "/run.sh: Is a directory" - which reads like a script bug, not a mount one.
+WORK="$REPO/.xref-work"
+rm -rf "$WORK"; mkdir -p "$WORK"
 trap 'rm -rf "$WORK"' EXIT
 
 cat > "$WORK/run.sh" <<'INNER'
@@ -38,13 +43,13 @@ set -e
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq >/dev/null 2>&1
 apt-get install -y -qq build-essential pkg-config xutils-dev libxaw7-dev \
-    libxt-dev libx11-dev xvfb x11-apps x11-utils xfonts-base imagemagick \
-    >/dev/null 2>&1
+    libxt-dev libx11-dev libxext-dev libxmu-dev libxkbfile-dev libxft-dev \
+    xvfb x11-apps x11-utils xfonts-base imagemagick >/dev/null 2>&1
 mkdir -p /b /usr/share/X11/app-defaults && cd /b
 tar -xf /tarball
 cd */
-./configure --prefix=/usr >/dev/null 2>&1
-make -j"$(nproc)" >/dev/null 2>&1
+./configure --prefix=/usr >/tmp/conf.log 2>&1 || { echo "CONFIGURE FAILED"; tail -12 /tmp/conf.log; exit 1; }
+make -j"$(nproc)" >/tmp/make.log 2>&1 || { echo "BUILD FAILED"; tail -12 /tmp/make.log; exit 1; }
 # The app-defaults ARE the layout spec; without them the app lays out wrong and
 # the reference is worthless.
 for f in app-defaults/*; do

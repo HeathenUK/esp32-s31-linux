@@ -36,3 +36,4 @@ linux-71-port/
 /lvdesk/*.bin
 xlite/stubs.c
 rootfs/*.bin
+.xref-work/

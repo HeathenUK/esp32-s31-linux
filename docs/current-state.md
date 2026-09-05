@@ -5212,3 +5212,41 @@ was wrong. The numbers came from decoding the reference PNG (1-bit greyscale,
 and the xwd capture includes the window's 1 px border - measure inside it) and
 from XTLITE_TRACE, which prints the exact widget geometry. Eyeballing a
 screenshot is not a measurement.
+
+### xtlite geometry fixed, and oclock now runs (2026-09-05)
+
+Both layout rules corrected, verified against `scripts/xref.sh` references:
+
+                    real Xaw   before   after
+    screen             -         214      208
+    bevel             218        226      218
+    top-level form    226        234      226
+    button grid       218        218      218
+
+xcalc's window is now byte-identical in size to the real one (226x394) and the
+bevel and keypad edges line up. xclock still renders correctly - the flush case
+its custom widget depends on is kept as an explicit exception in `layout()`.
+
+`oclock` was never in the rootfs (no defconfig entry, no tarball). It is now
+buildable: the tarball sits in `buildroot/dl/xapp_oclock/`, and cross-compiling
+it against OUR replacement libraries - not the sysroot's stock ones, which want
+libxcb, libSM and libICE - gives a 31 KB binary whose entire DT_NEEDED is
+libXmu, libXt, libXext, libX11, libxkbfile, libc. Deployed to `/root/oclock`.
+
+It also confirmed the libxkbfile stub was the right call from a second
+direction: oclock's link failed on `XkbStdBell` until the stub was on the
+library path, and that is the only symbol it wants.
+
+**Known gap: oclock is square, not round.** Real oclock is a 120x120 SHAPED
+window; our libXext is a stub, so `XShapeCombineMask` is a no-op and the window
+stays rectangular. The face, hands and jewel all draw correctly inside it.
+Implementing SHAPE would need the extension in xshim plus real calls in
+libXext - worth knowing before any app that wants a non-rectangular window.
+
+**scripts/xref.sh fixes from this use:** the work directory must live inside the
+repo, because on macOS `mktemp -d` returns a /var/folders path Docker Desktop
+does not share - the bind mount then silently creates a DIRECTORY at the target
+and the container dies with "/run.sh: Is a directory", which reads like a script
+bug rather than a mount one. Build failures are now surfaced instead of being
+swallowed by `>/dev/null`, and the dev-package list covers libxext/libxmu/
+libxkbfile/libxft so an app that needs them configures.
