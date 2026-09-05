@@ -77,6 +77,17 @@ struct res {
 	 * whole tree.
 	 */
 	uint16_t *px;			/* owner only */
+	/*
+	 * Coalesced Expose. paint_subtree() walks a window and every mapped
+	 * descendant, so a maximise - which reconfigures each widget in turn
+	 * - exposed the same widget once from its own configure and again
+	 * from every ancestor's: 190 Exposes for 68 ConfigureWindows, and
+	 * the client repainted for each one. Accumulate here and emit one
+	 * per window at the end of the poll pass instead. X servers are
+	 * explicitly allowed to compress Exposes.
+	 */
+	int exp_pend, exp_cli;
+	int ex0, ey0, ex1, ey1;
 	struct res *buf;		/* who owns the pixels we draw into */
 	/*
 	 * Damage accumulated since the desktop last presented this buffer, in
@@ -1982,6 +1993,54 @@ static void send_expose(struct cli *c, struct res *w, int x, int y, int ww,
 
 static void draw_border(struct res *w);
 
+/* Union this rectangle into the window's pending Expose. */
+static void queue_expose(struct cli *c, struct res *w, int x, int y,
+			 int ww, int hh)
+{
+	if (ww <= 0 || hh <= 0)
+		return;
+	if (!w->exp_pend) {
+		w->ex0 = x; w->ey0 = y;
+		w->ex1 = x + ww; w->ey1 = y + hh;
+		w->exp_cli = (int)(c - cli);
+		w->exp_pend = 1;
+		return;
+	}
+	if (x < w->ex0) w->ex0 = x;
+	if (y < w->ey0) w->ey0 = y;
+	if (x + ww > w->ex1) w->ex1 = x + ww;
+	if (y + hh > w->ey1) w->ey1 = y + hh;
+}
+
+/*
+ * Emit one Expose per window that accumulated damage this pass. Called at the
+ * end of the poll pass, so a burst of reconfigures produces one repaint per
+ * widget rather than one per ancestor that happened to walk over it.
+ */
+static void expose_flush(void)
+{
+	int i;
+
+	for (i = 0; i < MAXRES; i++) {
+		struct res *w = &res[i];
+		struct cli *c;
+
+		if (!w->exp_pend)
+			continue;
+		w->exp_pend = 0;
+		if (w->exp_cli < 0 || w->exp_cli >= MAXCLI)
+			continue;
+		c = &cli[w->exp_cli];
+		if (c->fd < 0)
+			continue;
+		send_expose(c, w, w->ex0, w->ey0,
+			    w->ex1 - w->ex0, w->ey1 - w->ey0);
+	}
+	for (i = 0; i < MAXCLI; i++)
+		if (cli[i].fd >= 0 && cli[i].outn)
+			out_flush(&cli[i]);
+}
+
 /*
  * Paint a window's background and border, tell it to redraw, and do the same
  * for everything mapped beneath it.
@@ -2002,7 +2061,7 @@ static void paint_subtree(struct cli *c, struct res *w)
 
 	win_fill(w, 0, 0, w->w, w->h);
 	draw_border(w);
-	send_expose(c, w, 0, 0, w->w, w->h);
+	queue_expose(c, w, 0, 0, w->w, w->h);
 	for (i = 0; i < MAXRES; i++)
 		if (res[i].type == R_WINDOW && res[i].parent == w->id &&
 		    res[i].mapped && &res[i] != w)
@@ -5714,8 +5773,18 @@ void xshim_poll(void)
 			xsp_poll += xsp_now() - tp;
 			xsp_dump();
 		}
-		if (pr <= 0)
+		/*
+		 * Still flush. A queued Expose can come from something that is
+		 * not client traffic at all - a taskbar click that raises a
+		 * window - and this pass then has nothing to poll. Returning
+		 * here left the Expose queued until some later pass happened
+		 * to have client data, which for a raised-but-idle window is
+		 * never: the window stayed on the taskbar and off the screen.
+		 */
+		if (pr <= 0) {
+			expose_flush();
 			return;
+		}
 	}
 	for (i = 0; i < n; i++) {
 		if (!(p[i].revents & (POLLIN | POLLERR | POLLHUP)))
@@ -5745,6 +5814,7 @@ void xshim_poll(void)
 			client_data(&cli[map[i]]);
 		}
 	}
+	expose_flush();
 }
 
 #ifdef XSHIM_STANDALONE

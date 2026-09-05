@@ -5311,3 +5311,30 @@ move those widgets at all on a shell resize (ChainTop/ChainLeft); xtlite's
 - **Hoisting `win_fill`'s per-row insertion sort** of the obscuring rectangles
   out of the row loop measured 745/390 against 736/388 - no change. Kept, since
   it removes an O(rows * k^2) that only looked free, but it was not the cost.
+
+### Expose coalescing done: 548 -> 505 ms, and the bug it nearly shipped
+
+`paint_subtree()` sent an Expose per window as it walked, so a widget was
+exposed once from its own ConfigureWindow and again from every ancestor's -
+190 Exposes for 68 configures, each driving a client repaint. Windows now
+accumulate a pending Expose rectangle and one is emitted per window at the end
+of the poll pass. X servers are explicitly allowed to compress Exposes.
+
+    maximise  548 -> 505 ms      restore  348 -> 330 ms
+
+Overall for task #32: **maximise 1010 -> 505 ms, restore 657 -> 330 ms, both
+-50%.**
+
+**The first version measured 468/288 and was WRONG.** `expose_flush()` was
+called at the end of `xshim_poll()`, after the `if (pr <= 0) return;` early
+exit - so a pass with no client traffic returned without flushing. A queued
+Expose can come from something that is not client traffic at all (a taskbar
+click that raises a window), and for a raised-but-idle window no later pass
+ever had data to trigger the flush: **xcalc stayed on the taskbar and off the
+screen.** The faster number was the daemon simply not repainting.
+
+smoke.py passed 19/19 with the bug present, and so did the three-client
+screenshot - the window it lost was one the harness never raises. What caught
+it was deliberately exercising the risky path by hand: raise a covered window
+and look. **A regression suite that passes is not evidence that a change to the
+repaint path is correct; drive the specific case the change endangers.**
