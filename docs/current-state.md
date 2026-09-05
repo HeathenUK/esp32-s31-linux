@@ -5338,3 +5338,74 @@ screenshot - the window it lost was one the harness never raises. What caught
 it was deliberately exercising the risky path by hand: raise a covered window
 and look. **A regression suite that passes is not evidence that a change to the
 repaint path is correct; drive the specific case the change endangers.**
+
+## Idle memory audit: where the 15,404 kB is, and what is actually available (2026-09-05)
+
+Asked for ways to drive idle MemAvailable from ~2.9 MB toward 5-6 MB. The
+headline is that **most of it is already there and MemAvailable does not say so.**
+
+    before drop_caches   MemFree 2,740   MemAvailable 2,764
+    after  drop_caches   MemFree 5,348   MemAvailable 4,016
+
+2.6 MB is page cache the kernel hands straight back under pressure.
+MemAvailable's formula assumes half the file pages stay resident, so on a box
+this small it reads ~2 MB low. **Do not size a workload against MemAvailable
+here** - measure with a drop_caches arm, or just let the allocation happen.
+
+### The ledger at idle
+
+    Slab                    4,284-4,360   closed, see the slab entry
+    2 x 756 kB dma-coherent     1,512     compositor plane + private scanout
+    page cache              2,600-3,700   reclaimable, as above
+    anon (real daemons)         ~1,220    lvdesk 264, s31-bt 212, bluetoothd 176,
+                                          udevd 160, dbus 84, ntpd 32
+    KernelStack/PageTables/
+    Vmalloc/Percpu              ~1,230
+    MemFree                 2,300-2,740
+
+Note when reading any of these: a console session is ~300 kB of anon, and two
+were attached during this audit. Normal idle is ~600 kB better than it looks.
+
+### Closed, with evidence - do not re-propose
+
+- **CMA cannot be shrunk and would not help.** The DTS comment already carries
+  the measurement: MemTotal is 15,456 kB with CmaTotal at 4,096 and 15,456 kB
+  with it at 0. `reusable` (not `no-map`) means the kernel already places
+  anonymous pages and page cache in whatever the display is not using, so
+  nothing was ever taken. A low CmaFree means the page cache is living there,
+  which is the design working. 3 MiB is rejected outright - pageblock alignment
+  is 4 MiB and riscv does not define ARCH_FORCE_MAX_ORDER.
+- **The second 756 kB buffer is structural.** vmallocinfo shows two
+  dma-coherent regions of 774,144 bytes: lvdesk's plane and the driver's
+  private scanout buffer. `esp32s31_lcd_composite()` returns true
+  unconditionally because this engine answers -ENXIO to retargeting a
+  free-running cyclic DMA, and the cursor appears long after .enable. The
+  private buffer is the cursor's clean background. Removing it costs the
+  hardware cursor: 0.3 ms per pointer move against X's 19 ms.
+- **No more XIP moves without repartitioning.** Both images are 100% full
+  (rootfs 6,072 kB, xip2 1,536 kB).
+- **Slab** - closed previously, unchanged at ~4.3 MB.
+
+### Live, measured
+
+- **min_free_kbytes 1024 -> 512 is +744 kB of MemAvailable** (3,896 -> 4,640)
+  with MemFree unchanged - pure watermark, the kernel simply lets allocations
+  run further before reclaiming. One line in an init script, reversible. The
+  cost is a smaller emergency reserve for a burst allocation.
+
+### Live, not yet established
+
+- **swappiness 10 -> 60.** The obvious target is ~1.2 MB of idle daemon anon on
+  a box with 64 MB of SD swap. NOT MEASURED: the one arm run here filled the
+  page cache with a `cat` in the same step, so its MemFree drop was the harness,
+  not the knob. Needs a clean arm.
+- **s31-bt mlocks 212 kB** - the whole Mlocked figure is s31-bt, and that memory
+  can never swap. Ours, so trimming the pinned set to the audio path is
+  available.
+- **udevd, 360 kB (160 anon + 200 file)** - the largest single process. busybox
+  mdev would reclaim most of it. The risk is USB hotplug semantics, which matter
+  on this board.
+- **ntpd, 32 kB** - a resident daemon for something a periodic job could do.
+
+Realistic total: ~0.75 MB certain, ~1.5 MB plausible, on top of the ~2.6 MB
+that is already reclaimable but unreported.
