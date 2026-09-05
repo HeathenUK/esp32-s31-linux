@@ -445,6 +445,26 @@ ESPFLASH = $(ESPTOOL) -p $(SERIAL_PORT) -b $(ESPTOOL_BAUD) write-flash
 # would let a target be written to images/ when its build-tree copy is merely
 # not created yet.
 flashfile = $(if $(wildcard $(1)),$(1),$(CURDIR)/images/$(notdir $(1)))
+
+# flashfile falls back to images/ when the build directory is not on the host -
+# and it usually is not, because $(BUILD_DIR) is a Docker volume. The fallback
+# is SILENT, so a build that succeeded inside the container and was never
+# copied out gets flashed as whatever images/ still holds. esptool then writes
+# it, verifies the hash, and reports complete success while putting month-old
+# content on the board. That cost two full flashes and forty minutes on
+# 2026-09-05, with the board dutifully running the old libraries afterwards.
+#
+# Say which file is actually going to the board, and when it was built, before
+# every flash. Use `make sync-images` to copy fresh artefacts out of the volume.
+sayflash = @f="$(call flashfile,$(1))"; \
+	echo "--- flashing $$f"; \
+	echo "    built $$(date -r "$$f" '+%Y-%m-%d %H:%M' 2>/dev/null || echo UNKNOWN)"
+
+# Copy build artefacts out of the Docker volume into images/, which is where
+# the flash targets look when the build directory is not visible on the host.
+sync-images:
+	@echo "--- copying build artefacts out of the container volume ---"
+	./docker/build.sh 'for f in rootfs-xip.cramfs rootfs-xip2.cramfs rootfs.squashfs; do if [ -f /src/build/$$f ]; then cp -v /src/build/$$f /src/images/$$f; fi; done'
 BUILDROOT_MAKE = $(MAKE) -C $(BUILDROOT_DIR) O=$(BUILDROOT_OUT) \
 	BR2_EXTERNAL=$(BUILDROOT_EXTERNAL) BR2_DL_DIR=$(BUILDROOT_DL_DIR)
 
@@ -695,6 +715,7 @@ xip-image:
 	echo "XIP image $$XIP_SIZE bytes, $$(($(ROOTFS_PARTITION_SIZE) - $$XIP_SIZE)) bytes free in the rootfs partition"
 
 flash-xip-rootfs:
+	$(call sayflash,$(XIP_ROOTFS_IMG))
 	$(ESPFLASH) $(ROOTFS_OFFSET) $(call flashfile,$(XIP_ROOTFS_IMG))
 
 # Historical/user-facing name for the root filesystem image.
@@ -828,6 +849,7 @@ xip2-rootfs: xip2-stage
 	echo "xip2 image $$SZ bytes, $$(($(XIP2_PARTITION_SIZE) - $$SZ)) bytes free"
 
 flash-xip2-rootfs:
+	$(call sayflash,$(XIP2_ROOTFS_IMG))
 	$(ESPFLASH) $(XIP2_OFFSET) $(call flashfile,$(XIP2_ROOTFS_IMG))
 
 

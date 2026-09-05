@@ -202,6 +202,15 @@ for kernel work; the rootfs only needs rebuilding when userspace changes.
   time. GCC had printed `'pending' is used uninitialized` on every build for
   days. **Non-deterministic symptoms from a deterministic image mean
   uninitialised memory** - check the warnings before theorising.
+- **A flash target can silently write a stale image.** `flashfile` falls back
+  to `images/<name>` when the build directory is absent - and it usually is,
+  because `$(BUILD_DIR)` is a Docker volume. So a build that succeeded inside
+  the container and was never copied out gets flashed as whatever `images/`
+  still holds; esptool writes it, **verifies the hash, and reports success**
+  while putting old content on the board. Run **`make sync-images`** after any
+  containerised image build, and read the `--- flashing <path> / built <date>`
+  line the flash targets now print. Two full flashes were wasted on 2026-09-05
+  before the board's library sizes gave it away.
 - **Stopping `bluetoothd` can wedge the board, and a stock daemon spinning in
   `strlen` usually means corrupt *data*, not corrupt code.** BlueZ serialises
   its device store on SIGTERM, so if a record in `/var/lib/bluetooth` has gone
