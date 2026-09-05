@@ -5082,3 +5082,53 @@ a genuine regression.
 the only one of the seven with a plausible real consumer - toolkits use it for
 WM protocols and drag-and-drop - so if an off-the-shelf app misbehaves in a way
 that involves synthetic events, that is where to look first.
+
+### libxkbfile: a built stub that was never listed, costing 276 KB (2026-09-05)
+
+Prompted by "we shouldn't be shipping the full fat x11 libs". Checking both
+overlay layers on the live board confirmed the replaced set is all ours -
+libX11 95,736 (stock is ~1.3 MB), libXt 42,804, libXaw7/libXmu 5,156 empty
+placeholders, libXext 5,352, libXpm 9,544, libfontconfig 5,360, libXcursor
+5,412 - with no stock copy on the ext4 underneath at all.
+
+**But libxkbfile was the stock 120,488-byte library.** `xftlite/build.sh`
+builds a 5,212-byte stub for it and always has; it was simply missing from
+`X11_REPLACEMENTS`, so `x11-stage` never installed it. And because stock
+libxkbfile links libxcb, that one omission kept **libxcb (128,696), libXau
+(9,476) and libXdmcp (17,672)** alive too - 276 KB, and `XIP2_SKIP` pushed the
+whole chain onto the SD layer where it costs real RSS, all because xclock's
+DT_NEEDED lists `libxkbfile.so.1`.
+
+xclock's use of it is one function. Verified before shipping the stub:
+
+    xclock undefined Xkb symbols : XkbStdBell   (exactly one)
+    stub exported symbols        : XkbStdBell   (exactly one)
+
+Added to `X11_REPLACEMENTS` and removed from `XIP2_SKIP` along with the xcb
+chain, which then leaves the closure altogether rather than being paid for from
+the card. Measured after:
+
+    xclock mapped libraries  libX11 libXaw7 libXft libXmu libXrender libXt
+                             libxkbfile libc     - no libxcb/libXau/libXdmcp
+    xclock RSS               148 kB
+    MemAvailable, 3 clients  2280-2476 kB  ->  3076 kB
+
+smoke.py 19/19, all three clients render correctly.
+
+### While there: keyboard input does NOT go through the server keymap
+
+`GetKeyboardMapping` (op 101) returns all zeros and `GetModifierMapping` (118/
+119) returns 32 zero bytes, which reads like broken text input - it is not.
+**`xlite/xlite_key.c` implements the keysym layer in our libX11**:
+`XLookupString`, `XKeycodeToKeysym` and `XkbLookupKeySym`, on the design that
+the keycode in the wire event IS the keysym. The translation never reaches the
+server, which is why refusing the XKB extension costs nothing.
+
+Verified live rather than reasoned about: focusing xcalc by its **title bar**
+(not the button grid - the first attempt clicked inside it and the result was
+ambiguous) and typing `1234` put 1234 in its display.
+
+The zero stubs are therefore dead code for our clients, but they remain a
+landmine for any client that reads the keymap itself instead of calling
+XLookupString. If an off-the-shelf app's keyboard misbehaves, that is the first
+place to look.

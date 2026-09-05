@@ -603,10 +603,18 @@ xip-rootfs: rootfs xip-image
 # xftlite replace them, and leaving them out meant x11-stage silently shipped
 # the STOCK libraries into XIP while the replacements existed only in the
 # /root development tree - so the board ran one set and the images held another.
+# libxkbfile was BUILT by xftlite and never listed here, so x11-stage never
+# installed it and the board ran the stock 120,488-byte library instead of our
+# 5,212-byte stub. That one omission kept libxcb (128,696), libXau (9,476) and
+# libXdmcp (17,672) alive as well - 276 KB of library, resident from the SD
+# layer rather than XIP, because xclock calls exactly ONE libxkbfile function:
+# XkbStdBell, which rings a bell on hardware that has no bell. Verified before
+# shipping the stub that XkbStdBell is xclock's only Xkb import and the only
+# symbol the stub exports.
 X11_REPLACEMENTS := libX11.so.6.4.0 libXt.so.6.0.0 libXaw7.so.7.0.0 \
 	libXmu.so.6.2.0 libICE.so.6.3.0 libSM.so.6.0.1 libXext.so.6.4.0 \
 	libXpm.so.4.11.0 libXrender.so.1.3.0 libXft.so.2.3.9 \
-	libfontconfig.so.1.16.0 libXcursor.so.1.0.2
+	libfontconfig.so.1.16.0 libXcursor.so.1.0.2 libxkbfile.so.1.0.2
 
 x11-stage:
 	@echo "--- installing the X11 replacements into the overlay ---"
@@ -805,8 +813,14 @@ XIP2_STAGE := $(BUILD_DIR)/xipstage2
 # pages are clean and evictable once boot is over.
 XIP2_ROOTS ?= usr/bin/xcalc usr/bin/xclock usr/bin/xfiles \
 	usr/lib/libasound.so.2.0.0
-XIP2_SKIP ?= libblkid.so.1.1.0 libxkbfile.so.1.0.2 libxcb.so.1.1.0 \
-	libXau.so.6.0.0 libXdmcp.so.6.0.0
+# libxkbfile and the xcb chain used to be pushed to the SD layer here, because
+# the STOCK libxkbfile is 120,488 bytes and drags libxcb (128,696), libXau
+# (9,476) and libXdmcp (17,672) behind it - 276 KB of flash for xclock's one
+# call to XkbStdBell. That trade is gone: xftlite builds a 5,212-byte stub
+# exporting exactly XkbStdBell (verified to be xclock's only Xkb import), it is
+# in X11_REPLACEMENTS now, and with it in place libxcb, libXau and libXdmcp
+# leave the closure altogether rather than being paid for from the card.
+XIP2_SKIP ?= libblkid.so.1.1.0
 
 # Staged separately from image creation, because image 1 has to know what is
 # in here before it stages itself - see the EXCLUDE_DIR note in xip-rootfs.
