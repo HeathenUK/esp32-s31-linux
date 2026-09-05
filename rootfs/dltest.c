@@ -5,13 +5,16 @@
 #define _GNU_SOURCE
 #include <dlfcn.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <time.h>
 static double now(void){struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return t.tv_sec+t.tv_nsec/1e9;}
 int main(int argc,char**argv){
 	double a,b;
 	void *h;
 	const char *lib = argc>1?argv[1]:"/opt/qt5/lib/libQt5Widgets.so.5";
-	a=now(); h=dlopen(lib, RTLD_NOW|RTLD_GLOBAL); b=now();
-	printf("dlopen(%s) RTLD_NOW: %.2f s %s\n", lib, b-a, h?"ok":dlerror());
+	int lazy = getenv("DLT_LAZY") != NULL;
+	a=now(); h=dlopen(lib, (lazy?RTLD_LAZY:RTLD_NOW)|RTLD_GLOBAL); b=now();
+	printf("dlopen(%s) %s: %.2f s %s\n", lib, lazy?"RTLD_LAZY":"RTLD_NOW",
+	       b-a, h?"ok":dlerror());
 	return 0;
 }
