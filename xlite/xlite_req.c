@@ -274,6 +274,14 @@ int XSetWindowColormap(Display *dpy, Window w, Colormap c)
 
 XLITE_IMPL(XInstallColormap)
 int XInstallColormap(Display *dpy, Colormap c) { (void)dpy; (void)c; return 1; }
+/* The pair matters more than the function does. The shim has a single
+ * visual and no colormap machinery, so both of these are no-ops - but
+ * SDL2 dlsyms a fixed list of 125 Xlib names and marks its ENTIRE X11
+ * driver unavailable if one is missing, then falls back to the dummy
+ * video driver and reports only "x11 not available". Absence of a
+ * function a caller will never meaningfully use is still fatal. */
+XLITE_IMPL(XUninstallColormap)
+int XUninstallColormap(Display *dpy, Colormap c) { (void)dpy; (void)c; return 1; }
 
 XLITE_IMPL(XMapSubwindows)
 int XMapSubwindows(Display *dpy, Window w) { return simple_win(dpy, 9, w); }
@@ -1616,6 +1624,107 @@ Status XGetGeometry(Display *dpy, Drawable d, Window *root, int *px, int *py,
 	if (w) *w = g16(hdr + 16);
 	if (h) *h = g16(hdr + 18);
 	if (bw) *bw = g16(hdr + 20);
+	free(extra);
+	return 1;
+}
+
+/*
+ * XGetWindowAttributes is TWO requests, and that is not a detail.
+ *
+ * GetWindowAttributes (3) carries the visual, class, gravities, map state,
+ * colormap and event masks. It does NOT carry x, y, width, height, depth or
+ * root - those live in GetGeometry (14). Real Xlib issues both and merges
+ * them, so a client that asks for its own size gets it from the geometry
+ * half. The shim already answered request 3 (for Qt), but xlite never sent
+ * either, and the generic stub returned 0 WITHOUT TOUCHING the struct.
+ *
+ * A caller that does not check the return value then reads its own
+ * uninitialised stack as the window size. SDL2 does exactly that in
+ * SetupWindowData, which is how a 320x200 window became -1657983272x1 and
+ * sent SDL2 on to ask the kernel for 979 MB. The allocation failed, the
+ * software renderer failed with it, and SDL_CreateRenderer reported
+ * "Couldn't find matching render driver" - a message about flags, for a
+ * fault that had nothing to do with flags. Filling the struct is the fix;
+ * returning a status nobody reads is not.
+ */
+XLITE_IMPL(XGetWindowAttributes)
+Status XGetWindowAttributes(Display *dpy, Window w, XWindowAttributes *a)
+{
+	unsigned char hdr[32], *extra = NULL;
+	size_t nextra = 0;
+	unsigned gw = 0, gh = 0, gbw = 0, gdepth = 0;
+	int gx = 0, gy = 0;
+	Window root = 0;
+	uint32_t seq;
+
+	if (!a)
+		return 0;
+	memset(a, 0, sizeof *a);
+
+	/* geometry half first: it is the half callers actually use */
+	if (!XGetGeometry(dpy, w, &root, &gx, &gy, &gw, &gh, &gbw, &gdepth))
+		return 0;
+	a->x = gx;
+	a->y = gy;
+	a->width = (int)gw;
+	a->height = (int)gh;
+	a->border_width = (int)gbw;
+	a->depth = (int)gdepth;
+	a->root = root;
+	a->visual = DefaultVisual(dpy, 0);
+	a->screen = DefaultScreenOfDisplay(dpy);
+
+	{
+		REQ(dpy, 3, 0, 2);
+		p32(r + 4, w);
+		seq = x->pub.request;
+		xlite_send(x, r);
+		if (!xlite_reply(x, seq, hdr, &extra, &nextra)) {
+			/* geometry is still valid and is what callers read */
+			a->class = InputOutput;
+			a->map_state = IsViewable;
+			return 1;
+		}
+	}
+	a->backing_store        = hdr[1];
+	a->class                = g16(hdr + 12);
+	a->bit_gravity          = hdr[14];
+	a->win_gravity          = hdr[15];
+	a->backing_planes       = g32(hdr + 16);
+	a->backing_pixel        = g32(hdr + 20);
+	a->save_under           = hdr[24];
+	a->map_installed        = hdr[25];
+	a->map_state            = hdr[26];
+	a->override_redirect    = hdr[27];
+	a->colormap             = g32(hdr + 28);
+	if (extra && nextra >= 12) {
+		a->all_event_masks      = (long)g32(extra + 0);
+		a->your_event_mask      = (long)g32(extra + 4);
+		a->do_not_propagate_mask = (long)g16(extra + 8);
+	}
+	free(extra);
+	return 1;
+}
+
+/* Same trap, smaller blast radius: the out-parameters must be written. */
+XLITE_IMPL(XGetInputFocus)
+int XGetInputFocus(Display *dpy, Window *focus, int *revert_to)
+{
+	unsigned char hdr[32], *extra = NULL;
+	size_t nextra = 0;
+	uint32_t seq;
+
+	if (focus) *focus = None;
+	if (revert_to) *revert_to = RevertToNone;
+	{
+		REQ(dpy, 43, 0, 1);
+		seq = x->pub.request;
+		xlite_send(x, r);
+		if (!xlite_reply(x, seq, hdr, &extra, &nextra))
+			return 0;
+	}
+	if (revert_to) *revert_to = hdr[1];
+	if (focus) *focus = g32(hdr + 8);
 	free(extra);
 	return 1;
 }

@@ -390,5 +390,13 @@ BR2_PACKAGE_XAPP_OCLOCK=y
 # libraries and the overlay replacements serve instead.
 BR2_PACKAGE_SDL=y
 BR2_PACKAGE_SDL_X11=y
-BR2_PACKAGE_PRBOOM=y
+# prboom 2.5.0 (2008) does not draw here. It runs, maps a 320x200 window and
+# sends well-formed PutImage requests at ~10/s in which EVERY BYTE IS ZERO -
+# in 8-bit mode too, where the bytes are palette indices, so it is not a
+# palette problem: it renders nothing at all. SDL underneath it is provably
+# correct (rootfs/sdltest.c reports driver=x11, bpp=16, R/G/B f800/07e0/001f,
+# MapRGB(255,0,0)=f800, and paints visible colour bands through the shim).
+# BR2_PACKAGE_PRBOOM=y
+BR2_PACKAGE_SDL2_X11=y
+BR2_PACKAGE_CHOCOLATE_DOOM=y
 BR2_PACKAGE_DOOM_WAD=y

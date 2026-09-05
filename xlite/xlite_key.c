@@ -104,6 +104,76 @@ KeySym XKeycodeToKeysym(Display *dpy, KeyCode kc, int index)
 	return xlw_widen(kc);
 }
 
+/*
+ * Xkb: answer "this server has no Xkb", honestly and completely.
+ *
+ * The shim has no keymap - lvdesk delivers keycodes that ARE Latin-1 keysyms,
+ * which XKeycodeToKeysym above reports as an identity - so there is nothing
+ * for Xkb to describe and XkbQueryExtension returning False is the truthful
+ * answer. A caller told that then uses the core protocol, which works here.
+ *
+ * These exist because absence is not the same answer as False. SDL2 resolves
+ * every Xlib name it might use with dlsym at startup and stores the result in
+ * a function pointer; a name it cannot find leaves that pointer NULL. It then
+ * calls XkbQueryExtension and XkbSetDetectableAutoRepeat WITHOUT checking,
+ * because in SDL_x11sym.h the Xkb block sits under the XFIXES module marker
+ * rather than BASEXLIB - so a missing Xkb symbol clears the XFIXES flag, the
+ * X11 driver still loads, and the call goes through a null pointer. The
+ * result is SIGSEGV with epc=0 inside X11_InitKeyboard, which reads as a
+ * corrupt binary rather than a missing function.
+ *
+ * The remaining four are only reachable behind a non-NULL XkbDescPtr, which
+ * XkbQueryExtension returning False prevents. They are implemented anyway so
+ * the group cannot half-exist: that asymmetry is what caused the crash.
+ */
+XLITE_IMPL(XkbQueryExtension)
+Bool XkbQueryExtension(Display *dpy, int *opcode, int *event, int *error,
+		       int *major, int *minor)
+{
+	(void)dpy;
+	if (opcode) *opcode = 0;
+	if (event)  *event  = 0;
+	if (error)  *error  = 0;
+	if (major)  *major  = 0;
+	if (minor)  *minor  = 0;
+	return False;
+}
+
+XLITE_IMPL(XkbSetDetectableAutoRepeat)
+Bool XkbSetDetectableAutoRepeat(Display *dpy, Bool detectable, Bool *supported)
+{
+	(void)dpy; (void)detectable;
+	/* Not supported: the caller must expect a KeyRelease for every repeat. */
+	if (supported) *supported = False;
+	return False;
+}
+
+XLITE_IMPL(XkbGetState)
+Status XkbGetState(Display *dpy, unsigned int spec, void *state)
+{
+	(void)dpy; (void)spec; (void)state;
+	return 1;			/* anything but Success (0) */
+}
+
+XLITE_IMPL(XkbKeycodeToKeysym)
+KeySym XkbKeycodeToKeysym(Display *dpy, KeyCode kc, int group, int level)
+{
+	(void)group; (void)level;
+	return XKeycodeToKeysym(dpy, kc, 0);
+}
+
+XLITE_IMPL(XkbFreeClientMap)
+void XkbFreeClientMap(void *xkb, unsigned int which, Bool free_map)
+{
+	(void)xkb; (void)which; (void)free_map;
+}
+
+XLITE_IMPL(XkbFreeKeyboard)
+void XkbFreeKeyboard(void *xkb, unsigned int which, Bool free_all)
+{
+	(void)xkb; (void)which; (void)free_all;
+}
+
 XLITE_IMPL(XLookupKeysym)
 KeySym XLookupKeysym(XKeyEvent *ev, int index)
 {

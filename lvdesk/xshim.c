@@ -146,6 +146,11 @@ struct cli {
 	uint8_t in[INBUF];
 	size_t n;
 	/*
+	 * Bytes still to be swallowed from a request too big to buffer.
+	 * See the oversized-request path in client_data().
+	 */
+	size_t skip;
+	/*
 	 * Replies and events accumulate here and go out in ONE write at the
 	 * flush points. Measured with XSHIM_PROF: a single write() on this
 	 * board costs ~2.1 ms (the af_unix/skb/wakeup path is kernel text
@@ -5703,6 +5708,22 @@ static void client_data(struct cli *c)
 		c->n -= need;
 	}
 
+	/*
+	 * Still swallowing an oversized request from an earlier read? Discard
+	 * before anything is parsed - the bytes in the middle of a request
+	 * are not requests, and treating them as such desynchronises the
+	 * stream far more destructively than the request itself did.
+	 */
+	if (c->skip) {
+		size_t d = c->skip < c->n ? c->skip : c->n;
+
+		memmove(c->in, c->in + d, c->n - d);
+		c->n -= d;
+		c->skip -= d;
+		if (c->skip)
+			return;			/* nothing parseable yet */
+	}
+
 	while (c->n - off >= 4) {
 		const uint8_t *r = c->in + off;
 		int len = get16(r + 2) * 4;
@@ -5716,11 +5737,39 @@ static void client_data(struct cli *c)
 			return;
 		}
 		if ((size_t)len > sizeof(c->in)) {
-			fprintf(stderr, "xshim: %s is %d bytes, larger than "
-				"the %zu-byte input buffer - raise INBUF\n",
+			/*
+			 * Swallow it, do not drop the client.
+			 *
+			 * The server advertises INBUF/4 as its maximum request
+			 * length, but Xlib does not split every request to
+			 * respect it: XChangeProperty in particular sends
+			 * whatever it is given in one go. SDL2 sets
+			 * _NET_WM_ICON from a 128x128 RGBA icon, which is
+			 * 65,536 bytes of property plus headers - 65,568, just
+			 * over the buffer - and killing the connection for it
+			 * took the whole client down at startup.
+			 *
+			 * Raising INBUF is the wrong trade: it is a per-client
+			 * buffer on a board where memory is the binding
+			 * constraint, and it only moves the cliff. Discarding
+			 * the request keeps the stream in sync at no cost, and
+			 * what is lost here is a window icon that lvdesk never
+			 * draws - it renders its own chrome.
+			 *
+			 * A skipped request that expected a reply would leave
+			 * its client waiting. Nothing that large has a reply:
+			 * the big requests are property and image writes,
+			 * which are all one-way.
+			 */
+			size_t avail = c->n - off;
+			size_t drop = (size_t)len < avail ? (size_t)len : avail;
+
+			fprintf(stderr, "xshim: %s is %d bytes, larger than the "
+				"%zu-byte input buffer - discarding it\n",
 				opstr(r[0]), len, sizeof(c->in));
-			client_drop(c, 1);
-			return;
+			c->skip = (size_t)len - drop;
+			off += drop;
+			continue;
 		}
 		if (c->n - off < (size_t)len)
 			break;
