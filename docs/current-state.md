@@ -982,6 +982,11 @@ effort one. All Qt packaging has been removed from the rootfs config.
                             every dynamic program on the board, and lazy binding
                             in our musl fork remains the deepest unexploited
                             lever for general startup cost.
+                            **WRONG - CLOSED 2026-09-05.** Measured directly on
+                            this desktop, the whole client chain dlopens in
+                            10-20 ms. That 73-78% was Qt's 45,430 relocations,
+                            not a property of the board. See the carry-over
+                            section at the end of this file.
   rootfs/dltest.c           Times dlopen of any library. No Qt dependency; kept.
 
 **Method, learned the hard way and applicable to everything here:**
@@ -4996,3 +5001,84 @@ taken while bluetoothd was eating ~96% of the only core and leaking into OOM -
 which is precisely what would make an off-the-shelf Qt app look unviable. The
 "Qt is not viable here" conclusion is unsafe and needs re-measuring against a
 board that is not being starved.
+
+## The post-Qt carry-over list, worked through (2026-09-05)
+
+Four of the five items from "Qt was evaluated and REMOVED. What to keep from
+it." are now closed. Two were real bugs, one was a genuine gap, and one turns
+out to have been a wrong conclusion.
+
+### -Bsymbolic-functions was never reaching the libraries that matter
+
+It went into `BR2_TARGET_LDFLAGS` after the Qt work, which covers all 355
+Buildroot packages. But `libX11` (xlite), `libXt`/`libXaw7`/`libXmu` (xtlite),
+`libXft` (xftlite) and `libICE`/`libSM`/`libXext`/`libXpm` (xstubs) are built
+by their own scripts **outside Buildroot** - so the one set of libraries every
+X client here loads on every launch was getting none of it. Added to all four.
+
+Relocations, exact (`readelf -r`), which is drift-free unlike a timing:
+
+    libX11    216 -> 156   -27.8%
+    libXt     144 -> 121   -16.0%
+    libXft     47 ->  46    -2.1%
+    TOTAL     542 -> 458   -15.5%
+
+Exported dynamic symbols are identical before and after on every library
+(457/142/77/16/7) - the flag binds internal FUNCTION calls and does not change
+what a library offers. **Honest scale: 84 relocations, not Qt's 10,351.** Tens
+of milliseconds, not seconds, because xlite is already small. Free, correct,
+and in the right place, but do not expect to feel it.
+
+### xstubs had not been buildable, which is why libSM/libICE dangled
+
+`xstubs/build.sh` had the "a failed build must leave nothing to ship" `rm`
+inserted INSIDE the `$CC` continuation, where the backslash joined it onto the
+compile line and its trailing comment terminated the command. `set -e` then
+killed the script on the first stub. Meanwhile `post-build.sh` had already
+deleted the stock libraries expecting these to replace them, and the XIP
+closure never staged them because staging is NEEDED-driven and nothing links
+them. Present nowhere; `libSM.so.6` and `libICE.so.6` were dangling symlinks.
+Build fixed, stubs installed, both resolve.
+
+### musl's eager binding is NOT the deep lever it was written up as - CLOSED
+
+The previous entry called lazy binding "the deepest unexploited lever for
+general startup cost", on the strength of `gnu_lookup_filtered` being 73-78% of
+**Qt's** startup. Measured directly on this desktop instead:
+
+    dlopen the whole client chain (libXaw7 -> libXt -> libX11 -> ...)  10-20 ms
+    dlopen libX11 alone                                                    20 ms
+    fork + exit                                                          11.0 ms
+    fork + exec /bin/true (static busybox)                               21.3 ms
+
+So the entire dynamic-link cost of starting an X client here is 10-20 ms, and
+~10 ms of the exec is not linking at all. That was an artefact of Qt's size:
+45,430 relocations against this desktop's 458. **Forking musl's dynamic linker
+to add a lazy PLT would buy a fraction of 20 ms per launch and is not worth
+it.** Do not propose it again without a workload that has Qt's relocation
+count, and this board cannot hold one.
+
+### The shim's PutImage fall-through was thinner luck than documented
+
+Seven opcodes fell into `PutImage`, and the comment said the format check saved
+them. Opcode 42 is SetInputFocus, whose byte 1 is revert-to - and
+`RevertToParent` is 2, the same value as `ZPixmap`. The commonest focus call in
+X11 passed the format test and reached the geometry reads, taking iw/ih from
+`r+12` and `r+14` of a 12-byte request. Nothing was ever drawn, because
+`24 + pad*ih` cannot be <= 12, but every such call read past the end of the
+request first. Each opcode now has its own case.
+
+### Smoke thresholds retuned - the old ones were set under the CPU hog
+
+`MEM_FLOOR_KB` 1400 -> 1800 and `DRAG_CPU_MAX_MS` 2600 -> 1500. The old
+"healthy baseline" of 1760 ms for a drag was two thirds scheduler contention
+with the spinning bluetoothd. Repaired, the same drag measures **960/990/1010
+ms across three runs** - a 2-5% spread. Thresholds that loose would have passed
+a genuine regression.
+
+### Still open from that list
+
+`SendEvent` (25) is now an explicit no-op rather than an accidental one. It is
+the only one of the seven with a plausible real consumer - toolkits use it for
+WM protocols and drag-and-drop - so if an off-the-shelf app misbehaves in a way
+that involves synthetic events, that is where to look first.

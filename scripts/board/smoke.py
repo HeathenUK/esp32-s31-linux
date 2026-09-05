@@ -76,13 +76,22 @@ CLIENTS = ["xclock", "xcalc", "xfiles"]
 # from a few green runs after any deliberate change rather than nudging them to
 # make a red run go away.
 #
-#   MemAvailable   ~1900 kB idle with the desktop up and no clients.
-#   drag CPU       1760 ms observed on a healthy board for one uinject drag.
-#                  This is the heaviest interactive path there is, so it is the
-#                  most useful regression signal here - but the absolute number
-#                  means nothing without a baseline to compare against.
-MEM_FLOOR_KB = 1400
-DRAG_CPU_MAX_MS = 2600
+#   MemAvailable   ~2900 kB idle with the desktop up and no clients;
+#                  2280-2476 kB with xclock, xcalc and xfiles all up.
+#   drag CPU       990-1010 ms over two runs for one uinject drag. This is the
+#                  heaviest interactive path there is, so it is the most useful
+#                  regression signal here - but the absolute number means
+#                  nothing without a baseline to compare against.
+#
+# RETUNED 2026-09-05. The previous values (1400 kB / 2600 ms) were calibrated
+# against a board where bluetoothd was spinning on 96% of the single core and
+# leaking into OOM - see the corrupt-device-store entry in current-state.md.
+# The old "healthy baseline" of 1760 ms was two thirds scheduler contention,
+# and thresholds set from it were loose enough to pass a real regression. On a
+# repaired board the drag measures 990-1010 ms with a 2% spread, so these are
+# set with roughly 50% headroom over what is now actually observed.
+MEM_FLOOR_KB = 1800
+DRAG_CPU_MAX_MS = 1500
 
 
 def run_on_board(script: str, timeout: str = "300") -> str:
@@ -227,7 +236,7 @@ awk -v a=$S -v b=$E -v t=$((B-A)) 'BEGIN{printf "DRAG_WALL=%.2f DRAG_TICKS=%d\n"
         print(f"        drag: {wall:.2f}s wall (incl. ~2.6s settle), "
               f"lvdesk {ticks} ticks = {ticks * 10} ms of CPU")
         check(f"drag CPU < {DRAG_CPU_MAX_MS} ms", ticks * 10 < DRAG_CPU_MAX_MS,
-              f"{ticks * 10} ms (baseline ~1760)")
+              f"{ticks * 10} ms (baseline 960-1010)")
 
     # --- the shim answered everything --------------------------------------
     print("shim:")
