@@ -892,6 +892,13 @@ struct sbc_caps {
 #define ALLOC_SNR	(1 << 1)
 
 static char transport_path[256];
+
+/*
+ * Backoff for the transport rescan below. File scope so the BlueZ signal
+ * handlers can reset it: if the bus tells us anything changed, the next look
+ * should be immediate rather than a minute away.
+ */
+static uint64_t scan_gap = 3000000ull;
 static struct sbc_caps chosen;
 
 /* streaming state */
@@ -1487,14 +1494,37 @@ static int route_watch(void)
 		 */
 		static uint64_t last_scan;
 
-		if (now_us() - last_scan > 3000000ull) {
+		/*
+		 * Backed off, because this is the FALLBACK path and it used to
+		 * run every 3 s for as long as audio was routed to a sink that
+		 * was not there - hours, with sleeping earbuds. Each pass asks
+		 * for GetManagedObjects, whose reply carries every BlueZ object
+		 * and all their properties, so it is the largest allocation
+		 * this daemon makes and it was making it 7,800 times per
+		 * 6.5 hours. musl keeps freed small allocations in its arena
+		 * rather than returning them, so that churn is what grew the
+		 * heap to ~7 MB.
+		 *
+		 * Backing off 3 s -> 60 s cuts that to ~400 passes, ~20x
+		 * fewer, and costs nothing that matters: InterfacesAdded still
+		 * arrives the instant BlueZ has something to say (we match on
+		 * it and reset the backoff there), the first look is still at
+		 * 3 s, and this path only runs when there is NO transport - so
+		 * no audio is flowing and nothing here can glitch a stream.
+		 */
+		if (now_us() - last_scan > scan_gap) {
 			last_scan = now_us();
 			load_objects();
-			if (transport_path[0])
+			if (transport_path[0]) {
+				scan_gap = 3000000ull;
 				event("ROUTE found transport %s",
 				      transport_path);
-			else
+			} else {
 				a2dp_connect_profile();
+				scan_gap *= 2;
+				if (scan_gap > 60000000ull)
+					scan_gap = 60000000ull;
+			}
 		}
 	}
 	if (!transport_path[0]) {
@@ -1756,6 +1786,15 @@ static DBusHandlerResult signal_filter(DBusConnection *c, DBusMessage *msg,
 	if (dbus_message_is_signal(msg, "org.freedesktop.DBus.ObjectManager",
 				   "InterfacesAdded")) {
 		const char *path = NULL;
+
+		/*
+		 * BlueZ has something new to say, so the rescan backoff is
+		 * stale - look again promptly rather than up to a minute from
+		 * now. This is what keeps the backoff from costing any real
+		 * responsiveness: the slow path only stays slow while the bus
+		 * is silent.
+		 */
+		scan_gap = 3000000ull;
 
 		if (dbus_message_iter_init(msg, &it) &&
 		    dbus_message_iter_get_arg_type(&it) == DBUS_TYPE_OBJECT_PATH) {
