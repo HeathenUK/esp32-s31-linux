@@ -236,6 +236,45 @@ static int simple_win(Display *dpy, int op, Window w)
 
 XLITE_IMPL(XMapWindow)
 int XMapWindow(Display *dpy, Window w) { return simple_win(dpy, 8, w); }
+/*
+ * Map and raise. SDL uses this rather than XMapWindow, so leaving it a stub
+ * meant the surface was created, sized and never put on screen - prboom sat
+ * idle at 0 ms of CPU behind a black window.
+ */
+XLITE_IMPL(XMapRaised)
+int XMapRaised(Display *dpy, Window w)
+{
+	XRaiseWindow(dpy, w);
+	return simple_win(dpy, 8, w);
+}
+
+/*
+ * Colormaps, for the 8-bit paletted path.
+ *
+ * The shim has one visual and it is 16-bit TrueColor, so there is no colormap
+ * to create and nothing to install. Returning a non-zero handle rather than
+ * the stub's 0 matters: a client that checks the result treats 0 as failure,
+ * and SDL's 8-bit path would rather have a colormap it cannot use than none.
+ * The pixels still go through the TrueColor path; this only stops the client
+ * concluding the server is broken.
+ */
+XLITE_IMPL(XCreateColormap)
+Colormap XCreateColormap(Display *dpy, Window w, Visual *v, int alloc)
+{
+	(void)dpy; (void)w; (void)v; (void)alloc;
+	return (Colormap)1;
+}
+
+XLITE_IMPL(XSetWindowColormap)
+int XSetWindowColormap(Display *dpy, Window w, Colormap c)
+{
+	(void)dpy; (void)w; (void)c;
+	return 1;
+}
+
+XLITE_IMPL(XInstallColormap)
+int XInstallColormap(Display *dpy, Colormap c) { (void)dpy; (void)c; return 1; }
+
 XLITE_IMPL(XMapSubwindows)
 int XMapSubwindows(Display *dpy, Window w) { return simple_win(dpy, 9, w); }
 XLITE_IMPL(XUnmapWindow)
@@ -2121,7 +2160,13 @@ void XliteShmDamaged(Display *dpy, Pixmap p)
 XLITE_IMPL(XListPixmapFormats)
 XPixmapFormatValues *XListPixmapFormats(Display *dpy, int *count)
 {
-	static const struct { int d, b; } fmt[] = { {1, 1}, {8, 8}, {16, 16} };
+	/*
+	 * These MUST match what xshim sends in the connection setup, because
+	 * XCreateImage below derives bits_per_pixel from them: the server said
+	 * {1,1}, {16,16}, {24,32}, so saying anything else here makes the two
+	 * halves of the same stack disagree about the size of a pixel.
+	 */
+	static const struct { int d, b; } fmt[] = { {1, 1}, {16, 16}, {24, 32} };
 	XPixmapFormatValues *v;
 	unsigned i, n = sizeof(fmt) / sizeof(fmt[0]);
 
@@ -2140,6 +2185,75 @@ XPixmapFormatValues *XListPixmapFormats(Display *dpy, int *count)
 	if (count)
 		*count = (int)n;
 	return v;
+}
+
+/*
+ * Out-parameter fillers.
+ *
+ * These are the dangerous shape for this library. The generated stub returns 0
+ * and lets the client carry on, which is right for a call whose result nobody
+ * inspects - and WRONG here, because 0 is Success and the caller then uses a
+ * structure that was never written. It reads whatever was on the stack.
+ *
+ * That cost two SIGSEGVs in prboom with no message beyond the signal:
+ * XListPixmapFormats (SDL indexes the array it returns) and
+ * Xutf8TextListToTextProperty below (SDL passes the property straight to
+ * XSetWMName). If a stub has a pointer out-parameter, it has to be written by
+ * hand or it is a crash waiting for a caller.
+ */
+XLITE_IMPL(Xutf8TextListToTextProperty)
+int Xutf8TextListToTextProperty(Display *dpy, char **list, int count,
+				XICCEncodingStyle style, XTextProperty *tp)
+{
+	const char *src = (count > 0 && list && list[0]) ? list[0] : "";
+	size_t n = strlen(src);
+
+	(void)dpy; (void)style;
+	if (!tp)
+		return -1;
+	tp->value = (unsigned char *)malloc(n + 1);
+	if (!tp->value) {
+		tp->nitems = 0;
+		tp->format = 8;
+		tp->encoding = 31;		/* XA_STRING */
+		return -1;
+	}
+	memcpy(tp->value, src, n + 1);
+	tp->encoding = 31;			/* XA_STRING */
+	tp->format = 8;
+	tp->nitems = n;
+	return 0;				/* Success */
+}
+
+/*
+ * The shim answers QueryPointer for real, but nothing here needs the answer
+ * badly enough to pay a round trip on a path SDL calls per frame. Zeroed and
+ * honest beats uninitialised: the caller gets a valid, if uninteresting,
+ * pointer position rather than stack contents.
+ */
+XLITE_IMPL(XQueryPointer)
+Bool XQueryPointer(Display *dpy, Window w, Window *root, Window *child,
+		   int *rx, int *ry, int *wx, int *wy, unsigned int *mask)
+{
+	(void)dpy; (void)w;
+	if (root)  *root = 0;
+	if (child) *child = 0;
+	if (rx) *rx = 0;
+	if (ry) *ry = 0;
+	if (wx) *wx = 0;
+	if (wy) *wy = 0;
+	if (mask) *mask = 0;
+	return True;
+}
+
+/* 32 bytes of keyboard state; no key held is the truthful answer here. */
+XLITE_IMPL(XQueryKeymap)
+int XQueryKeymap(Display *dpy, char keys[32])
+{
+	(void)dpy;
+	if (keys)
+		memset(keys, 0, 32);
+	return 0;
 }
 
 /* ------------------------------------------------------------- images */
@@ -2190,7 +2304,38 @@ XImage *XCreateImage(Display *dpy, Visual *vis, unsigned int depth, int format,
 	im->bitmap_bit_order = LSBFirst;
 	im->bitmap_pad = pad ? pad : 32;
 	im->depth = (int)depth;
-	im->bits_per_pixel = depth <= 8 ? 8 : depth <= 16 ? 16 : 32;
+	/*
+	 * bits_per_pixel comes from the SERVER'S pixmap format for this depth,
+	 * which is what Xlib does and the only rule that serves every caller.
+	 *
+	 * This used to be a heuristic - "depth 16 with bitmap_pad 32 and no
+	 * stride means someone composed BGRA" - with a comment asserting that
+	 * the caller it would misread did not exist. SDL 1.2 is exactly that
+	 * caller: it asks for a true 16bpp surface in that shape, then adopts
+	 * our bytes_per_line as its pitch having already allocated at its own.
+	 * Promoting it to 32bpp made it write 1280-byte rows into a buffer
+	 * sized for 640, 128 kB past the end every frame, and prboom died in
+	 * musl's get_meta() on the next free() - a crash that points at the
+	 * heap and says nothing about the image.
+	 *
+	 * A guess about which client is asking cannot be right for both. The
+	 * format list can, because it is the server describing itself.
+	 */
+	{
+		XPixmapFormatValues *pf;
+		int nf = 0, i;
+
+		im->bits_per_pixel = depth <= 8 ? 8 : depth <= 16 ? 16 : 32;
+		pf = XListPixmapFormats(dpy, &nf);
+		if (pf) {
+			for (i = 0; i < nf; i++)
+				if (pf[i].depth == (int)depth) {
+					im->bits_per_pixel = pf[i].bits_per_pixel;
+					break;
+				}
+			free(pf);
+		}
+	}
 	/*
 	 * xfiles' thumbnailer composes BGRA and passes DefaultDepth with
 	 * bitmap_pad 32 and no stride - correct on the 24/32-bit servers it
@@ -2202,8 +2347,20 @@ XImage *XCreateImage(Display *dpy, Visual *vis, unsigned int depth, int format,
 	 * could misread - a true 16bpp image with pad 32 and no stride -
 	 * does not exist among the clients this library serves.
 	 */
-	if (depth > 8 && depth <= 16 && pad == 32 && !stride)
-		im->bits_per_pixel = 32;
+	/*
+	 * ...and that caller DOES exist: SDL 1.2 asks for exactly this shape -
+	 * depth 16, bitmap_pad 32, no stride - for a true 16bpp surface, then
+	 * adopts our bytes_per_line as its pitch having already allocated the
+	 * buffer at its own. Promoting it to 32bpp made SDL write 200 rows of
+	 * 1280 bytes into a 128,000-byte allocation: 128 kB past the end, every
+	 * frame. prboom died in musl's get_meta() on the next free(), which
+	 * points at the heap and says nothing about the image.
+	 *
+	 * So the promotion is opt-in now, and correct Xlib behaviour is the
+	 * default. xfiles is off-the-shelf and cannot be changed, but its
+	 * launcher is ours, so s31-open sets XLITE_IMG32 for it.
+	 */
+
 	im->bytes_per_line = stride ? stride :
 		(int)(((w * im->bits_per_pixel + 31) / 32) * 4);
 	im->f.destroy_image = ximg_destroy;
