@@ -87,18 +87,28 @@ done
 TOP=$(( $(wins) - 1 ))
 rm -f /tmp/sm.mjpeg
 if [ -x /root/mjpegrec ]; then
-	/root/mjpegrec /tmp/sm.mjpeg 3 8 90 256 >/dev/null 2>&1 &
-	REC=$!
-	usleep 500000
 	A=$(ticks)
 	ctl "max $TOP"
 	sleep 3
 	B=$(ticks)
+	# RECORD THE RESTORE, NOT THE MAXIMISE. During a maximise the client is
+	# busy redrawing, so anything that depends on client traffic still works
+	# and a broken build passes - measured, with the Expose-flush bug
+	# reintroduced on purpose. The failure needs a RESIZE (the client must
+	# redraw at the new size) followed by a RAISE while the client is idle:
+	# the Expose is queued with no traffic behind it to flush it, and the
+	# window never comes back. That is the sequence a human hit.
+	/root/mjpegrec /tmp/sm.mjpeg 3 8 90 256 >/dev/null 2>&1 &
+	REC=$!
+	usleep 300000
+	ctl "max $TOP"                  # restore - a resize
+	sleep 1
+	ctl "raise $TOP"                # ...then a raise, client idle
+	sleep 1
 	wait $REC 2>/dev/null
 	SZ=$(wc -c < /tmp/sm.mjpeg 2>/dev/null || echo 0)
-	ctl "max $TOP"                  # restore
-	[ "$SZ" -gt 0 ] && ok "maximise repaints" "${SZ} bytes captured" \
-	                || no "maximise repaints" "no frames - nothing was drawn"
+	[ "$SZ" -gt 0 ] && ok "restore+raise repaints" "${SZ} bytes captured" \
+	                || no "restore+raise repaints" "no frames - nothing was drawn"
 	[ "$SZ" -gt 35000 ] && ok "window has content" "${SZ} bytes" \
 	                    || no "window has content" "${SZ} bytes - blank or flat"
 	echo "CHK|maximise CPU|INFO|$(( (B - A) * 10 )) ms"
@@ -107,7 +117,7 @@ if [ -x /root/mjpegrec ]; then
 	# memory regression and failed this on a healthy board.
 	rm -f /tmp/sm.mjpeg
 else
-	no "maximise repaints" "/root/mjpegrec missing"
+	no "restore+raise repaints" "/root/mjpegrec missing"
 fi
 
 # --- the shim answered everything ----------------------------------------

@@ -5429,3 +5429,31 @@ were attached during this audit. Normal idle is ~600 kB better than it looks.
 
 Realistic total: ~0.75 MB certain, ~1.5 MB plausible, on top of the ~2.6 MB
 that is already reclaimable but unreported.
+
+### CORRECTION: the "lost Expose" bug was never a bug (2026-09-05)
+
+The Expose-coalescing entry above says the first version dropped repaints and
+left xcalc "on the taskbar and off the screen". **That was minimise.** A
+taskbar click on the focused window toggles it minimised - ordinary desktop
+behaviour - and the window was clicked from the taskbar right after a restore.
+The desktop was correct and the observation was misread.
+
+Consequences, all of which point the same way:
+
+- The `expose_flush()` on the `if (pr <= 0) return;` path in `xshim_poll()`
+  fixes no demonstrated failure. It is kept because a queued Expose with no
+  client traffic behind it would otherwise wait for the next pass with traffic,
+  which is a real if unobserved hazard - but it must not be described as a fix
+  for something seen.
+- The 468/288 ms measured before adding it were NOT "the daemon failing to
+  repaint". The current honest numbers are 505/330 ms with the flush, and the
+  difference is the cost of flushing on idle passes.
+- Two rounds of building a regression check for this failed because the failure
+  did not exist. Recording that explicitly: **a check that cannot be made to go
+  red on a deliberately broken build is not evidence the check is weak - first
+  question whether the bug is real.** Reintroducing the "bug" and watching
+  smoke pass 12/12 was the signal, and it was read as a harness weakness for
+  two iterations before the actual explanation arrived.
+- The general lesson is the one this project keeps relearning: an observation
+  of the panel is evidence about pixels, not about causes. "The window is not
+  there" had at least two explanations and the boring one was right.
