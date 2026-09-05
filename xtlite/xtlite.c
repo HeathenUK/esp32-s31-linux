@@ -390,6 +390,9 @@ static void wid_configure(struct wid *w)
 	}
 	w->pref_w = res_int(w, "width", "Width", 0);
 	w->pref_h = res_int(w, "height", "Height", 0);
+	/* Xaw Label defaults: internalWidth 4, internalHeight 2. */
+	w->int_w = res_int(w, "internalWidth", "InternalWidth", 4);
+	w->int_h = res_int(w, "internalHeight", "InternalHeight", 2);
 	w->horiz_dist = res_int(w, "horizDistance", "HorizDistance", -1);
 	w->vert_dist = res_int(w, "vertDistance", "VertDistance", -1);
 	s = res_get(w, "fromHoriz", "FromHoriz");
@@ -440,8 +443,8 @@ static void layout(struct wid *w, int defdist)
 						 strlen(c->label)) : 8;
 			int th = cf ? cf->ascent + cf->descent : 13;
 
-			c->w = c->pref_w ? c->pref_w : tw + 8;
-			c->h = c->pref_h ? c->pref_h : th + 4;
+			c->w = c->pref_w ? c->pref_w : tw + 2 * c->int_w;
+			c->h = c->pref_h ? c->pref_h : th + 2 * c->int_h;
 		}
 		c->x = c->from_horiz ? c->from_horiz->x + c->from_horiz->w +
 				       2 * c->from_horiz->bw + hd : hd;
@@ -454,14 +457,28 @@ static void layout(struct wid *w, int defdist)
 			c->from_horiz ? c->from_horiz->name : "-",
 			c->from_vert ? c->from_vert->name : "-");
 		/*
-		 * The trailing margin mirrors this child's own leading one, so
-		 * a widget placed flush at 0,0 - a custom widget filling its
-		 * shell - does not get a stray defdist strip on two sides.
+		 * Xaw sizes a Form to the bounding box of its children plus
+		 * the FORM's own defaultDistance - one uniform margin, not
+		 * each child's own leading distance. Mirroring the child's
+		 * distance instead made a container as much wider than its
+		 * contents as that child's margin: xcalc's bevel gained +6
+		 * from screen.horizDistance: 6 and came out 226 against real
+		 * Xaw's 218, which is the whole of the asymmetric gap to the
+		 * right of its keypad.
+		 *
+		 * The flush case the old rule protected is kept explicitly: a
+		 * custom widget placed at 0,0 to fill its shell (xclock,
+		 * oclock) must not gain a margin strip on two sides.
 		 */
-		if (c->x + c->w + 2 * c->bw + hd > right)
-			right = c->x + c->w + 2 * c->bw + hd;
-		if (c->y + c->h + 2 * c->bw + vd > bottom)
-			bottom = c->y + c->h + 2 * c->bw + vd;
+		{
+			int mh = (c->x == 0 && hd == 0) ? 0 : defdist;
+			int mv = (c->y == 0 && vd == 0) ? 0 : defdist;
+
+			if (c->x + c->w + 2 * c->bw + mh > right)
+				right = c->x + c->w + 2 * c->bw + mh;
+			if (c->y + c->h + 2 * c->bw + mv > bottom)
+				bottom = c->y + c->h + 2 * c->bw + mv;
+		}
 	}
 	if (w->nkids) {
 		w->w = right;

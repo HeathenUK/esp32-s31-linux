@@ -108,6 +108,15 @@ struct wid {
 	 */
 	int lx, ly, lw, lh;
 	int pref_w, pref_h;		/* width/height resources, 0 = from label */
+	/*
+	 * Xaw pads a label by internalWidth/internalHeight on EACH side.
+	 * This used to be a hardcoded +8/+4, which made every unsized
+	 * widget too wide: xcalc sets bevel.screen.Label.internalWidth: 1,
+	 * so "GRAD" measured 40 here against Xaw's 34, and the error
+	 * accumulated up through screen and bevel until the button grid
+	 * sat 8 px left of the display's right edge.
+	 */
+	int int_w, int_h;
 	int justify;			/* 0 left, 1 centre, 2 right - Xaw's values */
 	XFontStruct *fnt;		/* per-widget font, NULL = the default */
 	int bw;
