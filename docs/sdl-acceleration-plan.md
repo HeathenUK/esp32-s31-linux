@@ -294,3 +294,70 @@ pages the server no longer composites - the window would freeze on its last
 frame. xlite drops the mapping on ConfigureNotify, which covers a child
 resized along with its parent. Nothing here resizes a parent without the
 child following.
+
+## Phase 2 (PPA CLUT): NOT wired up, and why - with a correction
+
+**Correction first.** An earlier note here said the PPA "loses under load" at
+these sizes, quoting 3.77 ms against the CPU's 2.20 ms. That is the 32 KB row
+of the table in `docs/accel-plan.md` and it does NOT generalise:
+
+    rect      bytes    quiet CPU/PPA    loaded CPU/PPA
+    64x64       8192   0.06 / 0.44      0.06 / 2.16
+    128x128    32768   0.49 / 1.06      2.20 / 3.77
+    320x240   153600   3.09 / 2.99     11.98 / 6.96   <- PPA wins 1.7x
+
+**Under load, at 153 KB, the PPA is 1.7x FASTER.** The crossover under load
+sits between 32 KB and 153 KB, so for a large window the hardware is the right
+answer and the instinct to use it is correct.
+
+**The blocker is memory, not the engine.** `esp32s31_ppa_in_range()` refuses
+any buffer outside the region declared for the PPA, and that region is
+`lcd_reserved` - the CMA pool. Our 8-bit window buffer is a memfd of ordinary
+kernel pages, shared with the client through XLITE-SHM. **The blend engine
+cannot address it at all**, so there is nothing to switch on with a threshold.
+
+What Phase 2 actually requires, in order:
+
+1. **A CMA-backed buffer that can still be handed to a client.** There is no
+   `DMABUF_HEAPS` in the kernel config, so today there is no path. Either
+   enable `DMABUF_HEAPS_CMA`, or allocate a DRM dumb buffer in lvdesk and
+   PRIME-export it - XLITE-SHM already passes an fd, so the client side needs
+   no protocol change.
+2. **CLUT + L8 in the driver.** `esp32s31_ppa_blend()` already works; add a
+   CLUT loader (256 ARGB8888 words through `PPA_BLEND0_CLUT_DATA` at PPA base
+   + 0x0, with `CLUT_CONF` at +0xC: bit 0 fifo mode, bits 1/3 resets, bits
+   6/7 power and clock) and set `blend0_rx_cm = 4` (L8) with
+   `blend_tx_cm = 2` (RGB565). Proven present on this silicon by devmem.
+3. **A size threshold in the shim**, mirroring the existing damage-copy
+   dispatch rule, with the CPU LUT below it.
+
+**Why it is not built yet.** Step 1 spends CMA, and CLAUDE.md records the
+failure mode: when the pool is exhausted by client buffers the driver logs
+"no scanout buffer ... scaling off" and the panel drops to 640x384. That is a
+visible, silent display regression, taken on for a win that only applies to
+LARGE 8-bit windows - and the only 8-bit client today is Doom at 320x200
+windowed, where the CPU expansion is ~2.2 ms of a ~37 ms frame (~6%).
+
+**Do it when there is a full-screen 8-bit client**, where the expansion is
+~13 ms of CPU per frame and the table above says the PPA would roughly halve
+it. Until then the threshold would gate a path that cannot run.
+
+## What the shim accepts today - the honest matrix
+
+Pixmap formats advertised: {1,1}, {8,8}, {16,16}, {24,32}. VISUALS, which is
+what decides the depth a client can render at natively, are only two:
+
+| client depth | window? | transport | expansion |
+|---|---|---|---|
+| 16bpp RGB565   | yes, native   | zero-copy | none needed |
+| 8bpp indexed   | yes, native   | zero-copy | CPU LUT (PPA when the above lands) |
+| 24/32bpp       | **no visual** | images accepted and converted per pixel | client converts internally |
+| 4bpp indexed   | no            | -         | - |
+
+So it is NOT yet "any depth". A 32bpp client works but converts in its own
+process, exactly as an 8-bit client did before this work - and the fix is the
+same shape: advertise a depth-24 TrueColor visual, teach `px_alloc` a 4-byte
+surface, and give PutImage and the SHM path a 32bpp arm. The SRM engine can
+already convert ARGB8888 and RGB888 to RGB565 (`sr_rx_cm` 0 and 1), and unlike
+L8 that path is implemented - so 24/32bpp is the cheaper of the two remaining
+depths to finish.
