@@ -2635,6 +2635,7 @@ static void term_raise_and_run(const char *cmd);
 static void ctl_line(char *buf)
 {
 	int idx, w, h;
+		int mx, my;			/* for the move command */
 
 	{
 		if (!strncmp(buf, "list", 4)) {
@@ -2678,6 +2679,20 @@ static void ctl_line(char *buf)
 				}
 				lv_obj_move_foreground(wins[idx].win);
 				win_set_focus(&wins[idx]);
+			}
+		} else if (sscanf(buf, "move %d %d %d", &idx, &mx, &my) == 3) {
+			/*
+			 * Move a window without a pointer.
+			 *
+			 * A drag is otherwise only reachable through real
+			 * mouse input, which a test harness cannot produce
+			 * reliably here, so the one interaction most likely to
+			 * disturb a client rendering into a shared buffer had
+			 * no way of being exercised. This makes it scriptable.
+			 */
+			if (idx >= 0 && idx < win_n && wins[idx].win) {
+				lv_obj_set_pos(wins[idx].win, mx, my);
+				lv_obj_update_layout(wins[idx].win);
 			}
 		} else if (sscanf(buf, "max %d", &idx) == 1) {
 			if (idx >= 0 && idx < win_n)
