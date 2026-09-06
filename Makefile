@@ -372,6 +372,8 @@ linux: toolchain | $(LINUX_OUT)
 		--enable CRAMFS_MTD \
 		--disable CRAMFS_BLOCKDEV \
 		--enable DRM_ESP32S31_PPA \
+		--enable DMABUF_HEAPS \
+		--enable DMABUF_HEAPS_CMA \
 		--disable FTRACE \
 		--disable ENABLE_DEFAULT_TRACERS \
 		--disable BLK_DEV_IO_TRACE \

@@ -1,0 +1,53 @@
+Hardware CLUT expansion on the PPA: 8-bit indexed -> RGB565, in the blend
+engine, with no CPU touching the pixels.
+
+WHY THESE ARE WHOLE FILES AND NOT A DIFF
+----------------------------------------
+linux-71-port/ is not a git repository and there is no pristine copy of it in
+the tree, so `git diff` produces nothing and there is no base to diff against.
+Storing the four modified files whole is recoverable; a patch that cannot be
+generated is not. Copy them back over:
+
+    linux-71-port/drivers/gpu/drm/espressif/esp32s31-ppa.c
+    linux-71-port/drivers/gpu/drm/espressif/esp32s31-ppa.h
+    linux-71-port/drivers/gpu/drm/espressif/esp32s31-lcd.c
+    linux-71-port/include/uapi/drm/esp32s31_drm.h
+
+WHAT IS IN THEM
+---------------
+* PPA CLUT registers, which Espressif's S31 documentation does not mention and
+  their driver leaves as "TODO: Support CLUT to support L4/L8 color mode":
+      0x000 BLEND0_CLUT_DATA (ARGB8888 FIFO port)   0x004 BLEND1_CLUT_DATA
+      0x00c CLUT_CONF: bit 0 apb_fifo_mask (0 = FIFO), 1 blend0_mem_rst,
+                       3 blend0_rdaddr_rst, 6 blend0_force_pu, 7 blend0_clk_ena
+  Verified on silicon before any of this was written: 256 entries pushed
+  through the FIFO and read back byte-exact.
+* Pixel-byte encodings from IDF's dma2d_types.h. They are NOT bytes-1:
+      0 = 0.5 B/px (L4)   1 = 1 B/px (L8)   3 = 2 B/px (RGB565)   5 = 4 B/px
+* esp32s31_ppa_clut_expand(): loads the CLUT, sets blend0_rx_cm = L8 (4) and
+  blend_tx_cm = RGB565 (2), points the foreground at the destination with a
+  fixed alpha of ZERO so it contributes nothing, and runs the blend. It is a
+  colour conversion wearing a blend's clothes, because that is the only shape
+  the hardware offers for an indexed input.
+* DRM_IOCTL_ESP32S31_PPA_CLUT, ioctl number 0x05.
+
+TWO TRAPS THAT COST TIME HERE, SO THEY ARE NOT REPEATED
+-------------------------------------------------------
+1. `make linux` builds linux-71-port, NOT the linux-esp32-s31 submodule. The
+   first version of this went into the submodule and silently was not built -
+   the symbol was simply absent from System.map. See memory/s31-wrong-kernel-tree.
+2. DRM_IOCTL_DEF_DRV uses a DESIGNATED INITIALISER indexed by the ioctl
+   number, so the table's source order is irrelevant and a duplicate number
+   silently loses. PPA_CLUT was first given 0x01, which is JPEG_REC; the
+   later entry won the slot, the new handler was never installed, and the call
+   landed in the JPEG code and returned EINVAL. Numbers in use: 0x00 PPA_COPY,
+   0x01 JPEG_REC, 0x02 JPEG_FRAME, 0x03 PPA_BLEND, 0x04 JPEG_THUMB,
+   0x05 PPA_CLUT.
+
+PROVEN
+------
+rootfs/cluttest.c allocates two GEM dumb buffers (the blend engine can only
+address that reserved region - a client's ordinary pages are invisible to it),
+fills one with every index, and checks the result against the palette:
+
+    CT PASS: 0 of 64000 pixels wrong
