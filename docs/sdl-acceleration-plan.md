@@ -234,3 +234,63 @@ are already defined and written):
 | 4bpp indexed   | 4     | BLEND `rx_cm=5` + CLUT | same |
 
 That is every depth an SDL application can ask for, in hardware.
+
+## Part 2 RESULT: 12.6 -> 27.2 fps, measured by prboom's own timedemo
+
+    12.6 fps  baseline (pixels crossed the socket, 16-bit)
+    13.3 fps  + window buffers shared with the client
+    16.2 fps  + Doom's native 8-bit mode (SDL still converting internally)
+    20.7 fps  + a REAL depth-8 PseudoColor visual (SDL stops converting)
+    27.2 fps  + zero-copy for that 8-bit window
+
+**2.16x the baseline**, same fixed 5026-gametic workload, everything from XIP,
+no X11 library on the SD card, no LD_PRELOAD, and prboom unmodified.
+
+### What is and is NOT hardware
+
+The expansion from palette index to RGB565 is a **CPU lookup loop** in
+`xshim_window_pixels()`. The PPA's CLUT is NOT wired up. The hardware has one
+- proven on silicon, 256 ARGB8888 entries - but the accel cost model argues
+against using it at this size: 128 KB sits at the measured crossover, and
+under load the PPA lost outright (3.77 ms against the CPU's 2.20 ms). It is
+the right engine for a FULL-SCREEN client, not for 320x200.
+
+### Six things had to be true at once
+
+Each was silently false, and each failure looked like something else:
+
+1. The shim must advertise the depth-8 visual and a `{8,8}` pixmap format.
+2. `XGetVisualInfo` returned one hardcoded 16-bit TrueColor entry and ignored
+   the template - so the visual existed and was invisible.
+3. `XMatchVisualInfo`, which is the call SDL actually uses, compared against
+   `DefaultVisual` alone. Both now share one visual table.
+4. `CreateWindow` discarded the depth byte, so `px_alloc` always chose 2 bytes
+   per pixel. Symptom: a perfectly formed, entirely BLUE picture, because an
+   index of 0-255 read as RGB565 is the blue channel and nothing else.
+5. `XCreateColormap` returned a constant without telling the server and
+   `XStoreColors` was a do-nothing stub, so the palette never left the client.
+   Symptom: perfect GREYSCALE - the shim's placeholder ramp.
+6. The palette must be per-SCREEN. SDL 1.2 opens TWO connections and sends
+   `XStoreColors` on the graphics one while the window lives on the other.
+
+Then two fast paths had to learn about byte depths: xlite's zero-copy
+`XPutImage` required `bits_per_pixel == 16` (so adopting 8-bit silently
+disabled window sharing - the two wins cancelled), and the shim's PutImage
+span path was gated on `bpp == 2`, dropping 8-bit clients into a 64,000-call
+per-pixel loop.
+
+### Sharing a CHILD window, and why it is restricted
+
+SDL draws into a child of the window it hands the window manager, so
+"top-level only" excluded exactly the clients the fast path was written for.
+A child is now shared, but ONLY when it is its parent's only child
+(`win_share_ok()`), because a direct write bypasses the server's clipping and
+a child with siblings could paint over whichever one overlaps it. xcalc's
+dozens of widget windows keep the socket path, which is right for them.
+
+**The hazard that remains, written down rather than hidden:** if the PARENT is
+resized its buffer is reallocated, and a mapping handed out earlier points at
+pages the server no longer composites - the window would freeze on its last
+frame. xlite drops the mapping on ConfigureNotify, which covers a child
+resized along with its parent. Nothing here resizes a parent without the
+child following.

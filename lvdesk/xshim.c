@@ -303,6 +303,41 @@ static struct res *res_find(uint32_t id)
 	return NULL;
 }
 
+/*
+ * May this CHILD window be handed a writable mapping of its parent's pixels?
+ *
+ * Only when it is the parent's ONLY child, and the parent is a top level.
+ * The restriction is not fussiness - a direct write bypasses the server's
+ * clipping entirely, so a child that shares a buffer with siblings could
+ * paint over whichever of them happens to overlap it, and nothing in the
+ * protocol would report it. One child cannot overlap anybody.
+ *
+ * This is exactly the shape SDL produces: it creates the window it hands the
+ * window manager, then ONE child of it to draw into. Toolkits that build a
+ * tree of widget windows - xcalc has dozens - get the socket path, which is
+ * correct for them anyway because they send small images rarely.
+ *
+ * Still not free of hazard, and the remaining one is written down rather than
+ * hidden: if the PARENT is resized its buffer is reallocated, and a mapping
+ * handed out before that points at pages the server no longer composites. The
+ * child's own resize brings a ConfigureNotify, which xlite uses to drop the
+ * mapping; a parent resized without the child following would freeze the
+ * window's contents. Nothing here does that today.
+ */
+static int win_share_ok(const struct res *w)
+{
+	const struct res *par = res_find(w->parent);
+	int i, kids = 0;
+
+	if (!par || par->type != R_WINDOW || par->buf != par)
+		return 0;		/* parent must own the buffer */
+	for (i = 0; i < MAXRES; i++)
+		if (res[i].type == R_WINDOW && res[i].parent == w->parent)
+			kids++;
+	return kids == 1;
+}
+
+
 static struct res *res_new(uint32_t id, int type)
 {
 	int i;
@@ -3921,7 +3956,10 @@ static void xshm_request(struct cli *c, const uint8_t *r, int len)
 			if (p && p->type == R_PIXMAP)
 				b = p;
 			else if (p && p->type == R_WINDOW && p->buf == p)
-				b = op_target(p);
+				b = op_target(p);	/* owns its pixels */
+			else if (p && p->type == R_WINDOW && p->buf &&
+				 win_share_ok(p))
+				b = op_target(p);	/* lone child */
 			if (!b || !px_share(b)) {
 				/*
 				 * Answer "not shareable" as an ordinary reply
@@ -3935,11 +3973,37 @@ static void xshm_request(struct cli *c, const uint8_t *r, int len)
 				send_reply(c, 0, d24, NULL, 0);
 				return;
 			}
-			put16(d24, (uint16_t)b->w);
-			put16(d24 + 2, (uint16_t)b->h);
-			put16(d24 + 4, (uint16_t)(b->w * b->bpp));
-			d24[6] = b->bpp;
-			put32(d24 + 8, (uint32_t)b->shm_len);
+			/*
+			 * Report the DRAWABLE's size but the BUFFER's stride,
+			 * plus the drawable's byte offset into that buffer.
+			 *
+			 * A child window does not own pixels - it is a clipped
+			 * view into its top-level's buffer at (ax, ay) - and
+			 * this used to refuse anything that was not a top
+			 * level, which is every window SDL draws into: SDL
+			 * creates its drawing window as a CHILD of the window
+			 * it hands the window manager. So the fast path was
+			 * declined for exactly the clients it was written for.
+			 *
+			 * Handing over the origin lets the client write into
+			 * its own rectangle of the shared buffer. It cannot
+			 * reach a sibling: the width and height above are the
+			 * WINDOW's, and xlite clamps every row to them.
+			 */
+			{
+				int ox = (p->type == R_WINDOW) ? p->ax : 0;
+				int oy = (p->type == R_WINDOW) ? p->ay : 0;
+				int vw = (p->type == R_WINDOW) ? p->w : b->w;
+				int vh = (p->type == R_WINDOW) ? p->h : b->h;
+
+				put16(d24, (uint16_t)vw);
+				put16(d24 + 2, (uint16_t)vh);
+				put16(d24 + 4, (uint16_t)(b->w * b->bpp));
+				d24[6] = b->bpp;
+				put32(d24 + 8, (uint32_t)b->shm_len);
+				put32(d24 + 12, (uint32_t)
+				      (((size_t)oy * b->w + ox) * b->bpp));
+			}
 			send_reply_fd(c, d24, b->shm_fd);
 			if (trace_on())
 				fprintf(stderr, "xshim: SHM %s 0x%x %dx%d "

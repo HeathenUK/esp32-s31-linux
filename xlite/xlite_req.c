@@ -2276,7 +2276,8 @@ static int xshm_major(Display *dpy)
 struct shm_cache {
 	Display *dpy;
 	Drawable d;
-	void *base;			/* NULL = known NOT shareable */
+	void *base;			/* the mapping, for munmap */
+	void *ptr;			/* this drawable's origin inside it */
 	size_t len;
 	int w, h, stride, bpp;
 	int used;
@@ -2325,7 +2326,7 @@ void *XliteShmMap(Display *dpy, Pixmap p, int *w, int *h, int *stride, int *bpp)
 	unsigned char hdr[32], *extra = NULL;
 	size_t nextra = 0, len;
 	uint32_t seq;
-	void *m;
+	void *m, *m2;
 	int major = xshm_major(dpy), fd;
 	struct shm_cache *e = shm_lookup(dpy, p);
 
@@ -2336,7 +2337,7 @@ void *XliteShmMap(Display *dpy, Pixmap p, int *w, int *h, int *stride, int *bpp)
 		if (h) *h = e->h;
 		if (stride) *stride = e->stride;
 		if (bpp) *bpp = e->bpp;
-		return e->base;
+		return e->ptr;
 	}
 	if (!major)
 		return NULL;
@@ -2381,16 +2382,30 @@ void *XliteShmMap(Display *dpy, Pixmap p, int *w, int *h, int *stride, int *bpp)
 	close(fd);		/* the mapping keeps it alive */
 	if (m == MAP_FAILED)
 		return NULL;
+	/*
+	 * The drawable's origin within the mapping. A child window is a view
+	 * into its top-level's buffer, so the pixels it owns start here, not
+	 * at the start of the shared pages.
+	 */
+	{
+		size_t off = (size_t)hdr[20] | ((size_t)hdr[21] << 8) |
+			     ((size_t)hdr[22] << 16) | ((size_t)hdr[23] << 24);
+
+		if (off >= len)
+			off = 0;
+		m2 = (char *)m + off;
+	}
 	e = shm_slot(dpy, p);
 	if (e) {
 		e->base = m;
+		e->ptr = m2;
 		e->len = len;
 		e->w = w ? *w : 0;
 		e->h = h ? *h : 0;
 		e->stride = stride ? *stride : 0;
 		e->bpp = bpp ? *bpp : 0;
 	}
-	return m;
+	return m2;
 }
 
 /* Tell the server which part of a shared pixmap changed. No reply: a round
