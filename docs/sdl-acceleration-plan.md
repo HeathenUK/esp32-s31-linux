@@ -185,3 +185,52 @@ in an average. What it removes is the STALLS - the 2-3 fps troughs against a
 of RAM per SDL client and 12x less SD paging.
 
 Desktop suite 12/12 green on the new layout.
+
+## Part 2 research: the S31 PPA HAS a 256-entry CLUT - PROVEN ON THE BOARD
+
+Espressif's S31 documentation lists no indexed colour mode and no CLUT, and
+their driver carries `// TODO: Support CLUT to support L4/L8 color mode`. The
+silicon has it anyway. Verified by `devmem` against the live chip:
+
+    PPA base 0x20345000 (from the DTS; /proc/iomem confirms)
+      0x20345000  BLEND0_CLUT_DATA   (ARGB8888 per entry, FIFO port)
+      0x20345004  BLEND1_CLUT_DATA
+      0x2034500C  CLUT_CONF
+    CLUT_CONF bits: 0 apb_fifo_mask (0 = FIFO mode)
+                    1 blend0_mem_rst      3 blend0_rdaddr_rst
+                    6 blend0_force_pu     7 blend0_clk_ena
+
+Wrote 0xC0 to CLUT_CONF (clk_ena | force_pu), pulsed the resets, pushed 256
+words through the FIFO, reset the read address and read them back:
+
+    entry   0 = 0xA5000000   (written 0xA5000000)
+    entry 255 = 0xA50000FF   (written 0xA50000FF)
+    entry 256 = garbage       - the RAM is exactly 256 deep
+
+**So a full 256-entry ARGB8888 palette RAM is present and works.** Our
+driver's register map already matches the P4's (`PPA_BLEND_COLOR_MODE 0x024`
+in `esp32s31-ppa.c` equals `DR_REG_PPA_BASE + 0x24`), so the P4 register
+documentation is authoritative for this chip.
+
+### The colour modes, and which engine can reach them
+
+    blend0_rx_cm (bg): 0 ARGB8888  1 RGB888  2 RGB565  4 L8  5 L4  8 YUV420  12 GRAY
+    blend1_rx_cm (fg): 0 ARGB8888  1 RGB888  2 RGB565  4 L8  5 L4  6 A8  7 A4
+    blend_tx_cm (out): 0 ARGB8888  1 RGB888  2 RGB565  8 YUV420  12 GRAY
+    sr_rx_cm/sr_tx_cm: 0 ARGB8888  1 RGB888  2 RGB565  8 YUV420  12 GRAY
+                       -- "others: Reserved". NO L8/L4 ON SRM.
+
+**Only BLEND can expand indexed colour.** That splits the work usefully,
+because SRM is already implemented in `esp32s31-ppa.c` while blend is only
+partly there (`PPA_BLEND_COLOR_MODE`, `_FIX_ALPHA`, `_TX_SIZE`, `_TRANS_MODE`
+are already defined and written):
+
+| client depth | X11 depth | engine | state |
+|---|---|---|---|
+| 32bpp ARGB8888 | 24/32 | SRM `rx_cm=0 tx_cm=2` | engine exists, needs colour-mode plumbing |
+| 24bpp RGB888   | 24    | SRM `rx_cm=1 tx_cm=2` | engine exists, needs colour-mode plumbing |
+| 16bpp RGB565   | 16    | none                  | native today |
+| 8bpp indexed   | 8     | BLEND `rx_cm=4` + CLUT | CLUT proven; blend path to finish |
+| 4bpp indexed   | 4     | BLEND `rx_cm=5` + CLUT | same |
+
+That is every depth an SDL application can ask for, in hardware.
