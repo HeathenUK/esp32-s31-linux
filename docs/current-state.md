@@ -5489,12 +5489,26 @@ asks for); `SDL_GetTicks` is not frozen; the event queue is not stuck.
 while xlite's stderr is not - so "it stopped at R_Init" needs a clean exit
 (SIGTERM, not SIGKILL) to flush before it means anything.
 
-That timing **retracts the earlier prboom conclusion**. prboom was judged to
-"render nothing at all" on the strength of all-zero PutImage frames observed
-over 12-45 s windows. If prboom loads on the same timescale, those frames were
-the blank window during loading, not a broken colour path. The verdict was
-drawn too early and should be re-tested with a 2+ minute window before prboom
-is dismissed.
+That timing made the earlier prboom verdict look premature, and it was
+retracted here on 2026-09-06. **The retraction was wrong; the original verdict
+stands.** Re-tested properly against the fixed libX11 running from XIP:
+
+  * ~5,600 PutImage requests in 90 s. The payloads are 65,280 + 62,720 bytes,
+    which is exactly 320x200x2 split into two bands - so prboom is fully in
+    its game loop at ~31 fps, long past loading. Loading was never the reason.
+  * EVERY frame is `nonzero 0/...`. In 8-bit mode those bytes are palette
+    INDICES, so a broken palette cannot explain it either: prboom's own screen
+    buffer is empty.
+  * The window is 322x222 (320x200 plus 2 px of chrome) - correct geometry.
+  * Focused the window and tapped Escape (`uinject click`, then `uinject key
+    1`). Doom's menu draws independently of the 3D view. 143 frames followed
+    and NOT ONE had content.
+
+So prboom 2.5.0 draws nothing at all, in either depth, at correct geometry,
+with SDL and the shim both proven good by sdl2probe and by the desktop's own
+12/12 suite. The fault is inside prboom. Do not re-open it by blaming the
+shim, and do not re-run the "maybe it was still loading" theory - it is
+closed by the frame arithmetic above.
 
 **Memory is the binding constraint here, as everywhere.** chocolate-doom's
 minimum zone is 4 MB (`MIN_RAM`) against ~3.4 MB MemAvailable. Running it
