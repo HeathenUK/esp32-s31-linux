@@ -5541,3 +5541,50 @@ minimum zone is 4 MB (`MIN_RAM`) against ~3.4 MB MemAvailable. Running it
 takes MemAvailable to ~1 MB with 484 kB swapped, and the board wedged twice
 during these runs (silent console, recovered only by `alive.py --reset`).
 Any Doom on this board needs a port whose heap fits, not just one that draws.
+
+## Doom performance: where the time actually goes (2026-09-06)
+
+prboom plays at **9 fps median** at 320x200 (samples 9, 9, 4, 7, 10, 9 - the
+spread is real, demo scenes differ in cost, so do not believe a single run).
+The machine is SATURATED, which is what makes shim work worth doing:
+
+    prboom   ~48% of a core
+    lvdesk    ~37% of a core     <- the shim + desktop
+    idle        3% of the machine
+
+lvdesk's own profiler (`LVDESK_PROF=1`) over a ~10 s window:
+
+    input=1959ms  timer=1663ms  refr=1205ms   (frames=153, px=6364k)
+
+so **client socket handling is the single biggest component**, ~20% of a
+core, and refresh is 7.9 ms per frame. `XSHIM_PROF=1` attributes the request
+side: PutImage (72) ~3.9 ms per band, two bands per frame, and the socket
+READ costs more than the handling (read=97ms vs handle=72ms over 32 passes).
+
+**The floor is memory bandwidth, measured by lvdesk at startup: `fb memset
+8732 us (88 MB/s), heap memset 8556 us (89 MB/s), fb read-modify-write
+13120 us`.** One 128 KB frame copy is ~1.45 ms at that rate, and Doom's
+pipeline does about five of them: prboom renders, SDL XPutImage copies into
+the socket, the kernel copies out, the shim blits into the window buffer,
+lvdesk composites to scanout.
+
+Ranked options, with what the numbers actually support:
+
+1. **Share WINDOW buffers, not just pixmaps** - the real prize. The
+   XLITE-SHM path exists and works, but the handler refuses anything that is
+   not `R_PIXMAP`, so every client that draws to a window (all SDL, all
+   Doom) pushes 128 KB per frame through af_unix instead. Removing that
+   takes ~6 ms/frame off lvdesk plus the client's write syscalls. Not a
+   one-line change: a window's pixels live in `d->buf` at an offset with
+   copy-on-write aliasing, so the reply must carry origin and stride, and
+   the mapping must be invalidated when the buffer is reallocated on resize.
+   Estimated worth ~20-25% more fps because it hands the freed CPU to Doom.
+2. **Cutting refresh cost** (7.9 ms/frame). Repaint is vblank-quantised at
+   42 Hz; at 9 fps we are nowhere near that cap, so this is composite and
+   commit overhead, not waiting.
+3. **NOT the round trip.** Caching the XLITE-SHM answer per drawable removed
+   ~18 blocking round trips a second and measured NOTHING (9/9/4 fps before,
+   7/10/9 after). Kept for a leak it also fixes. Do not re-measure it hoping
+   for frames.
+4. **Not prboom.** It is off-the-shelf and its ~48% is software rendering on
+   a 320 MHz core; that half of the budget is not ours to reclaim.
