@@ -5622,3 +5622,25 @@ card.** A leftover `/root/x11/usr/lib/` tree and a hand-deployed
 change from `/root` also invalidates any comparison against a baseline that
 runs from XIP, because SD costs RSS and pages ~4x slower. Verify with
 `grep -o '/[^ ]*libX11[^ ]*' /proc/<pid>/maps` - it must say `/usr/lib`.
+
+### Rejected: capping Doom's zone to reduce swapping
+
+`-mb 4` measured **15.4 fps** against 16.2 with the default zone, on the same
+8-bit timedemo. It did swap less (VmSwap 940 kB against 1276 kB) and was still
+slower - a smaller zone means lumps get reloaded from the WAD instead. Do not
+retry it; the pressure is real but this is not the lever.
+
+### The fps dips are swap, not scene complexity
+
+Measured in steady state at 320x200: **VmSwap 1276 kB** and **8 major faults a
+second**, with MemAvailable at 1344 kB. Every major fault is an SD read with a
+~2.0 ms floor. That is why frame rate swings between 20+ and 2-3 while the
+demo runs - bursts of faulting when new textures are needed, not the renderer.
+
+The fix that follows from it, and the one XIP move worth making here: **put
+libSDL 1.2 in XIP**. It is 366,360 bytes and costs **204 kB of RSS in every
+SDL client** today, paged off SD. In XIP it costs zero RSS and executes in
+place, which helps ANY SDL 1.2 application rather than one game. It does not
+fit yet - the rootfs XIP partition has 323,584 bytes free, so it is ~43 KB
+short and needs partition slack (and a partition move must reach all five
+homes; see the flash-layout note).
