@@ -49,8 +49,21 @@ nothing.
 unwind. Nothing here does that. If such a program appears, that library gets
 its tables back.
 
-**If more room is ever needed:** `BR2_PACKAGE_SDL_FBCON=n`. We are X11-only
-through the shim, so SDL's framebuffer video driver is dead code.
+**`BR2_PACKAGE_SDL_FBCON` STAYS ON - decided 2026-09-06, do not "reclaim" it.**
+It is tempting because we are X11-only through the shim, but it is not dead
+code: it is SDL's framebuffer video backend, and it is what lets an SDL
+application run on `/dev/fb0` with **lvdesk not running at all**. Being able
+to leave the desktop and still have a usable system is a requirement here.
+
+Note the name collides with something else: the KERNEL's `fbcon`
+(`CONFIG_FRAMEBUFFER_CONSOLE`) is the text console you get back when lvdesk
+exits and releases DRM master, and no SDL build option affects it. Both are
+wanted; only the second is affected by this file.
+
+The unwind tables alone cover the shortfall (52,792 saved against 42,776
+needed), so nothing else has to be given up. Expect SDL's fbcon path to be
+slow if used - `/dev/fb0` here is fbdev emulation, measured at ~83 ms per
+update in `docs/current-state.md` - but slow and available beats absent.
 
 **Do NOT strip unwind tables globally** via `BR2_TARGET_OPTIMIZATION`. C++
 packages need them, and this is a per-package decision.
