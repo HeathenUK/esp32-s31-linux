@@ -1,0 +1,41 @@
+esp32s31: DRM_ESP32S31_GEM_CREATE - let a caller ask for a CACHED GEM buffer
+
+The port tree is gitignored, so these are whole modified files rather than
+a diff. Copy them back over linux-71-port/ before building.
+
+  drivers/gpu/drm/espressif/esp32s31-lcd.c
+  include/uapi/drm/esp32s31_drm.h
+
+MODE_CREATE_DUMB has no way to express the CPU mapping and always gives
+write-combine. That is right for a scanout buffer the CPU only writes and
+wrong for a surface it also READS - an indexed game surface, or the
+expanded result a compositor reads every frame. This ioctl sets
+map_noncoherent via a .gem_create_object hook (the helper is handed only
+device and size, so the choice reaches it through a per-device flag held
+across the one call under gem_alloc_lock).
+
+The pitch is tight, matching MODE_CREATE_DUMB: every consumer indexes
+these buffers as w*h with no stride, so padding rows would put the
+hardware and the CPU on different pixels at any width not a multiple of
+four.
+
+STATUS: BUILT AND SHIPPED, BUT NOT SHOWN TO PAY. It was written to remove
+a write-combine penalty that turned out not to exist - at 320x200 a WC
+index plane measures within 0.05% of a cached one end to end
+(docs/sdl-acceleration-plan.md). It is kept because it is the only way to
+express the choice at all. lvdesk leaves it off by default; XSHIM_GEM_CACHED
+selects it (1 = index plane, 2 = expanded plane, 3 = both).
+
+WHAT WAS TRIED AND REVERTED, SAME DAY: gating the PPA CLUT ioctl's
+dma_sync_* calls on map_noncoherent, on the theory that a write-combine
+buffer has no cache lines and syncing it is a pointless 192 KB cache walk
+per frame. IT IS NOT POINTLESS. dma_alloc_wc on this SoC hands back CACHED
+memory - only the USERSPACE mapping is write-combine - so the syncs are
+load-bearing, and skipping them put horizontal bands of stale pixels
+through the Doom window, visible on the physical panel. The driver already
+said so in the scanout allocation's comment; the recorded knowledge was
+correct and was ignored. The comment in the ioctl now says not to try it
+again.
+
+That cache maintenance is real work the hardware path owes and the CPU
+path does not, and it is part of why the PPA only breaks even at 320x200.

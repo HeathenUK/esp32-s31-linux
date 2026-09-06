@@ -63,6 +63,45 @@
 #define PPA_MIN_PX	200000
 
 /*
+ * Both halves of the hardware path are runtime-selectable, because they are
+ * two separate questions and a compile-time constant answers them together.
+ *
+ *   XSHIM_PPA_MIN_PX=<n>   the pixel count at which a window is born in GEM
+ *   XSHIM_CLUT=cpu         expand on the CPU even when it IS in GEM
+ *
+ * GEM decides where the client's pixels LIVE (write-combine, uncached);
+ * XSHIM_CLUT decides who expands them. Measuring GEM+CPU against no-GEM+CPU
+ * isolates what the uncached mapping costs the client, which is the number
+ * the threshold above actually turns on. With one constant, the two arms
+ * could only ever be measured together.
+ */
+static size_t ppa_min_px(void)
+{
+	static size_t v;
+
+	if (!v) {
+		const char *e = getenv("XSHIM_PPA_MIN_PX");
+
+		v = e ? (size_t)strtoul(e, NULL, 0) : PPA_MIN_PX;
+		if (!v)
+			v = (size_t)-1;		/* 0 means "never", not "always" */
+	}
+	return v;
+}
+
+static int clut_hw_allowed(void)
+{
+	static int v;
+
+	if (!v) {
+		const char *e = getenv("XSHIM_CLUT");
+
+		v = (e && !strcmp(e, "cpu")) ? -1 : 1;
+	}
+	return v > 0;
+}
+
+/*
  * WHY THIS IS NOT 40000, WHICH IS WHAT THE BENCH SAID.
  *
  * rootfs/clutbench.c timed the expansion both ways and put the crossover
@@ -91,9 +130,20 @@
  */
 
 #define DRM_ESP32S31_PPA_CLUT	0x05
+#define DRM_ESP32S31_GEM_CREATE	0x06
+#define DRM_ESP32S31_GEM_CACHED	(1u << 0)
+
+struct drm_esp32s31_gem_create {
+	uint32_t w, h, bpp, flags;
+	uint32_t handle, pitch;
+	uint64_t size;
+};
 struct drm_esp32s31_ppa_clut {
 	uint32_t src_handle, dst_handle, w, h, clut[256];
 };
+#define DRM_IOCTL_ESP32S31_GEM_CREATE \
+	DRM_IOWR(DRM_COMMAND_BASE + DRM_ESP32S31_GEM_CREATE, \
+		 struct drm_esp32s31_gem_create)
 #define DRM_IOCTL_ESP32S31_PPA_CLUT \
 	DRM_IOW(DRM_COMMAND_BASE + DRM_ESP32S31_PPA_CLUT, \
 		struct drm_esp32s31_ppa_clut)
@@ -340,24 +390,75 @@ static void px_release(struct res *r);
  * expected case once CMA is tight: the pool is 4 MB and the scanout buffers
  * already have most of it.
  */
+/*
+ * Which of the two GEM buffers gets a CACHED mapping.
+ *
+ *   XSHIM_GEM_CACHED=0   both write-combine (what MODE_CREATE_DUMB gives)
+ *                    1   the 8-bit index plane only
+ *                    2   the 16-bit expanded plane only
+ *                    3   both
+ *
+ * They are separate questions. The index plane is written by the client and
+ * read by the expander; the expanded plane is written by the expander and read
+ * by the compositor every frame. Which of those reads hurts is a measurement,
+ * not a guess, so both ends are selectable.
+ */
+static unsigned gem_cached_mask(void)
+{
+	static int v = -1;
+
+	if (v < 0) {
+		const char *e = getenv("XSHIM_GEM_CACHED");
+
+		v = e ? (int)strtoul(e, NULL, 0) : 0;
+	}
+	return (unsigned)v;
+}
+
+/*
+ * Allocate one GEM buffer, cached or write-combine.
+ *
+ * Falls back to MODE_CREATE_DUMB when the driver has no GEM_CREATE ioctl, so
+ * the shim still runs against a kernel without it - just always write-combine.
+ */
+static int gem_one(int fd, int w, int h, int bpp, int cached,
+		   uint32_t *handle, uint64_t *len)
+{
+	struct drm_esp32s31_gem_create gc;
+	struct drm_mode_create_dumb cd;
+
+	memset(&gc, 0, sizeof gc);
+	gc.w = w; gc.h = h; gc.bpp = bpp;
+	gc.flags = cached ? DRM_ESP32S31_GEM_CACHED : 0;
+	if (ioctl(fd, DRM_IOCTL_ESP32S31_GEM_CREATE, &gc) == 0) {
+		*handle = gc.handle;
+		*len = gc.size;
+		return 1;
+	}
+	memset(&cd, 0, sizeof cd);
+	cd.width = w; cd.height = h; cd.bpp = bpp;
+	if (ioctl(fd, DRM_IOCTL_MODE_CREATE_DUMB, &cd) < 0)
+		return 0;
+	*handle = cd.handle;
+	*len = cd.size;
+	return 1;
+}
+
 static int win8_gem_alloc(struct res *r, int w, int h)
 {
-	struct drm_mode_create_dumb cs, cd;
+	struct drm_mode_create_dumb cs = { 0 }, cd = { 0 };
 	struct drm_mode_map_dumb ms, md;
 	struct drm_mode_destroy_dumb dd;
 	void *psrc, *pdst;
+	unsigned cm = gem_cached_mask();
 	int fd = kms_get_fd();
 
 	if (fd < 0)
 		return 0;
 
-	memset(&cs, 0, sizeof cs);
-	cs.width = w; cs.height = h; cs.bpp = 8;
-	if (ioctl(fd, DRM_IOCTL_MODE_CREATE_DUMB, &cs) < 0)
+	if (!gem_one(fd, w, h, 8, cm & 1, &cs.handle, &cs.size))
 		return 0;
-	memset(&cd, 0, sizeof cd);
-	cd.width = w; cd.height = h; cd.bpp = 16;
-	if (ioctl(fd, DRM_IOCTL_MODE_CREATE_DUMB, &cd) < 0)
+	if (!gem_one(fd, w, h, 16, cm & 2, &cd.handle, &cd.size))
 		goto drop_src;
 
 	memset(&ms, 0, sizeof ms); ms.handle = cs.handle;
@@ -378,8 +479,10 @@ static int win8_gem_alloc(struct res *r, int w, int h)
 	}
 
 	memset(psrc, 0, cs.size);
-	fprintf(stderr, "xshim: window 0x%x %dx%d is GEM-backed - palette "
-		"expansion runs on the PPA\n", r->id, w, h);
+	fprintf(stderr, "xshim: window 0x%x %dx%d is GEM-backed (index %s, "
+		"expanded %s) - palette expansion runs on the PPA\n",
+		r->id, w, h, (cm & 1) ? "cached" : "wc",
+		(cm & 2) ? "cached" : "wc");
 	r->px = psrc;
 	r->shadow = pdst;
 	r->gem_src = cs.handle;
@@ -653,7 +756,7 @@ static uint16_t *px_alloc(struct res *r, int w, int h)
 	 * just slower.
 	 */
 	if (r->bpp == 1 && r->type == R_WINDOW &&
-	    (size_t)w * h >= PPA_MIN_PX) {
+	    (size_t)w * h >= ppa_min_px()) {
 		if (win8_gem_alloc(r, w, h))
 			return r->px;
 		fprintf(stderr, "xshim: window %dx%d wanted the PPA but CMA "
@@ -5896,7 +5999,7 @@ const uint16_t *xshim_window_pixels(uint32_t id, int *w, int *h)
 		 * engine multiplies by it, and a zero alpha would expand every
 		 * index to black.
 		 */
-		if (r->gem_src && r->gem_dst) {
+		if (r->gem_src && r->gem_dst && clut_hw_allowed()) {
 			struct drm_esp32s31_ppa_clut a;
 			int fd = kms_get_fd(), k;
 			uint64_t t0 = xsp_on > 0 ? xsp_cpu_now() : 0;

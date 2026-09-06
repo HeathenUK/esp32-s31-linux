@@ -361,3 +361,56 @@ surface, and give PutImage and the SHM path a 32bpp arm. The SRM engine can
 already convert ARGB8888 and RGB888 to RGB565 (`sr_rx_cm` 0 and 1), and unlike
 L8 that path is implemented - so 24/32bpp is the cheaper of the two remaining
 depths to finish.
+
+## The hardware path, measured end to end - and why there is nothing to choose
+
+Asked which elements of the hardware path to enable to maximise performance,
+and whether moving a window into GEM buffers is a once-off call. Both halves
+were measured with `-timedemo demo1` (a fixed 5,026-gametic workload), a fresh
+boot per arm, two boots per arm, at Doom's 320x200.
+
+Two runtime knobs were added so the two questions could be asked separately -
+with one compile-time constant they could only ever be answered together:
+
+    XSHIM_PPA_MIN_PX=<n>   pixel count at which a window is born in GEM
+    XSHIM_CLUT=cpu         expand on the CPU even when the window IS in GEM
+
+| arm | index plane lives in | expander | realtics | fps |
+|---|---|---|---|---|
+| A | ordinary memory (memfd), cached | CPU LUT | 6489 / 6367 | 27.1 / 27.6 |
+| B | GEM, write-combine | CPU LUT | 6492 | 27.1 |
+| C | GEM, write-combine | **PPA** | 6447 | 27.3 |
+
+**The noise is bigger than the effect.** Two boots of arm A, byte-identical
+configuration, differ by 122 realtics - 1.9%. The largest gap between two
+different configurations is C against A's first boot, 42 realtics - 0.65%.
+Every arm sits inside the spread of a single arm repeated.
+
+So the answer to "which elements should we use" is **none of them matter at
+this window size**, and the answer to "is GEM a once-off call" is **it is not a
+call worth taking**. Neither the palette expansion nor the buffer's memory type
+is where a 320x200 frame goes.
+
+Two beliefs died here:
+
+* **Write-combine is not the penalty.** A against B is 3 realtics in 6,490 -
+  0.05%. The uncached mapping that GEM hands out was blamed for gating the
+  hardware CLUT off; it costs nothing measurable at this size. The earlier
+  reasoning - that moving Doom's render target to WC would hurt more than the
+  CLUT saves - was never measured end to end, only inferred.
+* **The PPA's 2.5x on the expansion buys 0.65% of the frame.** `clutbench`
+  timed the expansion honestly, and the expansion really is faster on the PPA.
+  It is simply too small a slice of a frame for that to reach the frame rate.
+  A component speedup is not a system speedup, and this is the second time on
+  this board that a microbenchmark has been right about its own scope and
+  useless as a prediction.
+
+`PPA_MIN_PX` therefore stays high, but for a **new and better reason**: not
+"the WC mapping costs more than the PPA saves" (false), but "nothing in this
+decision is measurable below a full-screen window". The threshold is a bet on
+the large-window case that the table in the previous section still supports and
+which remains unmeasured end to end.
+
+**What this does NOT say.** Every number here is 320x200. The expansion scales
+with pixels and the noise does not, so a full-screen 8-bit client - 800x480, 6x
+the pixels - is a different question and the one worth measuring next.
