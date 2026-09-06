@@ -255,17 +255,61 @@ int XMapRaised(Display *dpy, Window w)
  * Colormaps, for the 8-bit paletted path.
  *
  * The shim has one visual and it is 16-bit TrueColor, so there is no colormap
- * to create and nothing to install. Returning a non-zero handle rather than
- * the stub's 0 matters: a client that checks the result treats 0 as failure,
- * and SDL's 8-bit path would rather have a colormap it cannot use than none.
- * The pixels still go through the TrueColor path; this only stops the client
- * concluding the server is broken.
+ * A REAL colormap now, because there is a real palette behind it.
+ *
+ * This used to return a constant 1 and send nothing, on the reasoning that
+ * with one TrueColor visual there was nothing to create. That reasoning
+ * expired when the server grew a depth-8 PseudoColor visual: the colormap is
+ * where an indexed client's palette LIVES, and a colormap the server has
+ * never heard of cannot carry one. The visible result was Doom rendering in
+ * perfect greyscale - the shim's placeholder ramp - because every colour the
+ * game set was written to a handle that went nowhere.
  */
 XLITE_IMPL(XCreateColormap)
 Colormap XCreateColormap(Display *dpy, Window w, Visual *v, int alloc)
 {
-	(void)dpy; (void)w; (void)v; (void)alloc;
-	return (Colormap)1;
+	Colormap id = XAllocID(dpy);
+	REQ(dpy, 78, (uint8_t)(alloc ? 1 : 0), 4);
+
+	p32(r + 4, id);
+	p32(r + 8, w);
+	p32(r + 12, v ? v->visualid : 0);
+	xlite_send(x, r);
+	return id;
+}
+
+/*
+ * The palette itself: one COLORITEM per entry, 12 bytes each.
+ *
+ * Channels go on the wire as 16-bit, which is the protocol's width whatever
+ * the visual's bits-per-rgb, and the flags byte says which of the three to
+ * take (DoRed|DoGreen|DoBlue = 7). This was a generated do-nothing stub, so
+ * an 8-bit client set its colours into thin air.
+ */
+XLITE_IMPL(XStoreColors)
+int XStoreColors(Display *dpy, Colormap cmap, XColor *defs, int n)
+{
+	int i;
+
+	if (!defs || n <= 0)
+		return 1;
+	{
+		REQ(dpy, 89, 0, 2 + 3 * n);
+
+		p32(r + 4, cmap);
+		for (i = 0; i < n; i++) {
+			uint8_t *it = r + 8 + i * 12;
+
+			p32(it, (uint32_t)defs[i].pixel);
+			p16(it + 4, defs[i].red);
+			p16(it + 6, defs[i].green);
+			p16(it + 8, defs[i].blue);
+			it[10] = defs[i].flags ? defs[i].flags : 0x07;
+			it[11] = 0;
+		}
+		xlite_send(x, r);
+	}
+	return 1;
 }
 
 XLITE_IMPL(XSetWindowColormap)
@@ -2521,31 +2565,87 @@ static int ximg_destroy(XImage *im)
  * so it either matches or the caller has no alternative anyway, and answering
  * with it beats answering with nothing.
  */
+/*
+ * BOTH visuals, and the template is honoured.
+ *
+ * This used to return one hardcoded depth-16 TrueColor entry and ignore the
+ * mask and template completely. The server grew a depth-8 PseudoColor visual
+ * so that palette applications could render at their native depth - and it
+ * made no difference whatsoever, because a toolkit does not read the server's
+ * advertisement directly: it asks HERE. SDL enumerates visuals, found only
+ * the 16-bit one, concluded no 8-bit visual existed and quietly built a
+ * shadow surface, converting every frame itself. The server offering a visual
+ * that the client library hides is worse than not offering it, because
+ * everything looks like it works.
+ *
+ * VISUAL8_ID must match the id xshim advertises for its depth-8 visual.
+ */
+#define XLITE_VISUAL8_ID	0x22
+
 XLITE_IMPL(XGetVisualInfo)
 XVisualInfo *XGetVisualInfo(Display *dpy, long mask, XVisualInfo *tmpl,
 			    int *nitems)
 {
-	XVisualInfo *vi = calloc(1, sizeof(*vi));
+	static Visual v8;		/* the depth-8 PseudoColor visual */
+	XVisualInfo all[2];
+	XVisualInfo *out;
+	int n = 0, i;
 
-	(void)mask; (void)tmpl;
-	if (!vi) {
+	memset(all, 0, sizeof all);
+
+	all[0].visual = DefaultVisual(dpy, 0);
+	all[0].visualid = all[0].visual ? all[0].visual->visualid : 1;
+	all[0].screen = 0;
+	all[0].depth = 16;
+	all[0].class = TrueColor;
+	all[0].red_mask = 0xF800;
+	all[0].green_mask = 0x07E0;
+	all[0].blue_mask = 0x001F;
+	all[0].colormap_size = 32;
+	all[0].bits_per_rgb = 6;
+
+	v8.visualid = XLITE_VISUAL8_ID;
+	v8.class = PseudoColor;
+	v8.red_mask = v8.green_mask = v8.blue_mask = 0;
+	v8.bits_per_rgb = 8;
+	v8.map_entries = 256;
+	all[1].visual = &v8;
+	all[1].visualid = XLITE_VISUAL8_ID;
+	all[1].screen = 0;
+	all[1].depth = 8;
+	all[1].class = PseudoColor;
+	all[1].colormap_size = 256;
+	all[1].bits_per_rgb = 8;
+
+	out = calloc(2, sizeof(*out));
+	if (!out) {
 		if (nitems)
 			*nitems = 0;
 		return NULL;
 	}
-	vi->visual = DefaultVisual(dpy, 0);
-	vi->visualid = vi->visual ? vi->visual->visualid : 1;
-	vi->screen = 0;
-	vi->depth = 16;
-	vi->class = TrueColor;
-	vi->red_mask = 0xF800;
-	vi->green_mask = 0x07E0;
-	vi->blue_mask = 0x001F;
-	vi->colormap_size = 32;
-	vi->bits_per_rgb = 6;
+	for (i = 0; i < 2; i++) {
+		if (tmpl) {
+			if ((mask & VisualIDMask) &&
+			    tmpl->visualid != all[i].visualid)
+				continue;
+			if ((mask & VisualScreenMask) && tmpl->screen != 0)
+				continue;
+			if ((mask & VisualDepthMask) &&
+			    tmpl->depth != all[i].depth)
+				continue;
+			if ((mask & VisualClassMask) &&
+			    tmpl->class != all[i].class)
+				continue;
+		}
+		out[n++] = all[i];
+	}
 	if (nitems)
-		*nitems = 1;
-	return vi;
+		*nitems = n;
+	if (!n) {
+		free(out);
+		return NULL;
+	}
+	return out;
 }
 
 XLITE_IMPL(XVisualIDFromVisual)
@@ -2654,19 +2754,33 @@ int XPutImage(Display *dpy, Drawable d, GC gc, XImage *im, int sx, int sy,
 	 * ever enters the socket, and the whole transfer costs one memcpy per
 	 * row plus a single damage message.
 	 */
+	/*
+	 * Any byte-sized depth, not just 16.
+	 *
+	 * This used to require `bpp == 2 && bits_per_pixel == 16`, which meant
+	 * an 8-bit client silently LOST the shared path and went back to
+	 * pushing every frame through the socket. That is not hypothetical:
+	 * giving the shim a depth-8 PseudoColor visual - so Doom could render
+	 * at its native depth, worth +22% on its own - turned this condition
+	 * false and took the zero-copy transfer away in the same change. The
+	 * two wins silently cancelled.
+	 *
+	 * The server tells us its bytes-per-pixel; match the client's image to
+	 * it and the row copy is identical arithmetic at either size.
+	 */
 	base = XliteShmMap(dpy, d, &sw, &sh, &stride, &bpp);
-	if (base && bpp == 2 && im->bits_per_pixel == 16) {
+	if (base && bpp > 0 && im->bits_per_pixel == bpp * 8) {
 		for (y = 0; (unsigned)y < h && dy + y < sh; y++) {
 			const char *s = im->data +
 					(size_t)(sy + y) * im->bytes_per_line +
-					(size_t)sx * 2;
+					(size_t)sx * bpp;
 			char *o = (char *)base + (size_t)(dy + y) * stride +
-				  (size_t)dx * 2;
+				  (size_t)dx * bpp;
 			unsigned n = w;
 
 			if (dx + (int)n > sw)
 				n = sw - dx;
-			memcpy(o, s, (size_t)n * 2);
+			memcpy(o, s, (size_t)n * bpp);
 		}
 		XliteShmDamaged(dpy, d);
 		return 0;

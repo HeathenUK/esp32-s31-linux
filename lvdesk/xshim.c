@@ -56,6 +56,28 @@
 
 /* Our one visual: TrueColor RGB565, matching the panel. */
 #define VISUAL_ID	0x21
+#define VISUAL8_ID	0x22		/* depth 8, PseudoColor */
+
+/*
+ * The 256-entry palette of the depth-8 visual, in RGB565.
+ *
+ * ONE table, not one per client, and that is not a shortcut - it is what a
+ * single screen with a single installed colormap means. It also happens to be
+ * the only model that works: SDL 1.2 opens TWO connections to the server, a
+ * control one and a graphics one, creates its window on the first and sends
+ * XStoreColors on the SECOND. A per-client palette therefore stored the
+ * colours against a connection that owned no windows, and the window kept
+ * rendering through the placeholder ramp - Doom in perfect greyscale, with
+ * every colour it set landing in the wrong table.
+ */
+static uint16_t pal8[256];
+static void pal8_init(void)
+{
+	int i;
+
+	for (i = 0; i < 256; i++)		/* a grey ramp until a client sets one */
+		pal8[i] = (uint16_t)(((i >> 3) << 11) | ((i >> 2) << 5) | (i >> 3));
+}
 #define CMAP_ID		0x20
 #define ROOT_ID		0x100
 #define RES_BASE	0x00200000
@@ -77,6 +99,14 @@ struct res {
 	 * whole tree.
 	 */
 	uint16_t *px;			/* owner only */
+	/*
+	 * RGB565 expansion of an 8-bit (PseudoColor) window.
+	 * The desktop presents window pixels zero-copy as RGB565,
+	 * so an indexed window needs somewhere to be expanded to.
+	 * Allocated on first use, only for depth-8 windows.
+	 */
+	uint16_t *shadow;
+
 	/*
 	 * Coalesced Expose. paint_subtree() walks a window and every mapped
 	 * descendant, so a maximise - which reconfigures each widget in turn
@@ -141,6 +171,7 @@ struct res {
 
 struct cli {
 	int fd;
+
 	int up;				/* connection setup completed */
 	uint32_t seq;
 	uint8_t in[INBUF];
@@ -543,6 +574,8 @@ static void px_release(struct res *r)
 	} else {
 		mem_win -= n; n_win--;
 	}
+	free(r->shadow);
+	r->shadow = NULL;
 	if (r->shm_fd >= 0) {
 		munmap(r->px, r->shm_len);
 		close(r->shm_fd);
@@ -1610,7 +1643,7 @@ static uint32_t get32(const uint8_t *p)
  */
 static void send_setup(struct cli *c)
 {
-	uint8_t b[256], *p = b + 8;
+	uint8_t b[320], *p = b + 8;	/* grew for the depth-8 visual */
 	static const char vendor[] = "lvdesk-shim";
 	int vlen = sizeof(vendor) - 1, vpad = (4 - (vlen & 3)) & 3;
 	uint8_t *body = p;
@@ -1638,7 +1671,7 @@ static void send_setup(struct cli *c)
 	 */
 	put16(p, INBUF / 4);    p += 2;
 	*p++ = 1;				/* screens */
-	*p++ = 3;				/* pixmap formats */
+	*p++ = 4;				/* pixmap formats */
 	*p++ = 0;				/* LSB first */
 	*p++ = 0;				/* bitmap bit order */
 	*p++ = 32;				/* scanline unit */
@@ -1651,10 +1684,17 @@ static void send_setup(struct cli *c)
 	memset(p, 0, vpad);      p += vpad;
 
 	{					/* pixmap formats */
-		static const uint8_t f[3][2] = { {1, 1}, {16, 16}, {24, 32} };
+		/*
+		 * {8,8} is what makes an 8-bit client possible: a client
+		 * takes bits_per_pixel for a depth from THIS list, never from
+		 * a guess, so without the entry an 8-bit image is packed at
+		 * the wrong stride and nothing lines up.
+		 */
+		static const uint8_t f[4][2] = { {1, 1}, {8, 8}, {16, 16},
+						 {24, 32} };
 		int i;
 
-		for (i = 0; i < 3; i++) {
+		for (i = 0; i < 4; i++) {
 			*p++ = f[i][0]; *p++ = f[i][1]; *p++ = 32;
 			memset(p, 0, 5); p += 5;
 		}
@@ -1672,7 +1712,7 @@ static void send_setup(struct cli *c)
 	put16(p, 1);            p += 2;
 	put16(p, 1);            p += 2;
 	put32(p, VISUAL_ID);    p += 4;
-	*p++ = 0; *p++ = 0; *p++ = 16; *p++ = 2;   /* depths: 16 and 1 */
+	*p++ = 0; *p++ = 0; *p++ = 16; *p++ = 3;   /* depths: 16, 1 and 8 */
 
 	*p++ = 16; *p++ = 0; put16(p, 1); p += 2; put32(p, 0); p += 4;
 	put32(p, VISUAL_ID);    p += 4;		/* VISUALTYPE */
@@ -1685,6 +1725,27 @@ static void send_setup(struct cli *c)
 	put32(p, 0);            p += 4;
 
 	*p++ = 1; *p++ = 0; put16(p, 0); p += 2; put32(p, 0); p += 4;
+
+	/*
+	 * Depth 8, PseudoColor - the whole point of which is that the client
+	 * writes palette INDICES and the server owns the colours. Doom is a
+	 * palette engine; forcing it through a 16-bit visual makes it do a
+	 * lookup per pixel inside its column loops and move twice the bytes,
+	 * which measured 13.3 fps against 16.2 for the same demo.
+	 *
+	 * colormap_entries is 256 and the masks are zero: for an indexed
+	 * visual there are no channel masks, and a client that finds one
+	 * would try to compose pixels itself.
+	 */
+	*p++ = 8; *p++ = 0; put16(p, 1); p += 2; put32(p, 0); p += 4;
+	put32(p, VISUAL8_ID);   p += 4;
+	*p++ = 3;				/* PseudoColor */
+	*p++ = 8;				/* bits per rgb */
+	put16(p, 256);          p += 2;		/* colormap entries */
+	put32(p, 0);            p += 4;		/* no red mask   */
+	put32(p, 0);            p += 4;		/* no green mask */
+	put32(p, 0);            p += 4;		/* no blue mask  */
+	put32(p, 0);            p += 4;
 
 	b[0] = 1; b[1] = 0;
 	put16(b + 2, 11); put16(b + 4, 0);
@@ -4187,6 +4248,23 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		rr->bw = get16(r + 20);
 		rr->bg = 0xFFFF;
 		/*
+		 * The window's DEPTH, which was being thrown away.
+		 *
+		 * It is byte 1 of the request, and 0 means CopyFromParent.
+		 * Ignoring it left every window at depth 0, so px_alloc()'s
+		 * `depth <= 8 ? 1 : 2` always chose 2 and an 8-bit client
+		 * wrote palette indices into a 16-bit surface. The symptom is
+		 * unmistakable once seen: the image is perfectly formed and
+		 * entirely BLUE, because an index of 0-255 read as RGB565 is
+		 * 0x0000-0x00FF, which is the blue channel and nothing else.
+		 */
+		{
+			struct res *par = res_find(parent);
+
+			rr->depth = r[1] ? r[1]
+					 : (par && par->depth ? par->depth : 16);
+		}
+		/*
 		 * CWBackPixel is bit 1. This matters more than it looks: an
 		 * X client paints only what it considers foreground and
 		 * leaves the background to the server, so a window whose
@@ -4961,6 +5039,69 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		}
 		break;
 	}
+	case 78:					/* CreateColormap */
+	case 79:					/* FreeColormap */
+	case 81:					/* InstallColormap */
+	case 82:					/* UninstallColormap */
+		/*
+		 * Accepted and otherwise ignored. There is one visible
+		 * palette because there is one screen and no colour cells to
+		 * arbitrate, so creating, installing and freeing a colormap
+		 * are all no-ops - but they must SUCCEED. Answering an error
+		 * makes SDL abandon the 8-bit visual and fall back to a
+		 * 16-bit one, which is the slow path we are trying to leave.
+		 */
+		break;
+	case 89: {					/* StoreColors */
+		/*
+		 * The palette itself. Items are 12 bytes: a 32-bit pixel,
+		 * three 16-bit channels, then a do-red/green/blue mask.
+		 * Channels are 16-bit REGARDLESS of the visual's 8 bits per
+		 * rgb, so they are scaled down here, not assumed.
+		 */
+		int n = (len - 8) / 12, i;
+
+		for (i = 0; i < n; i++) {
+			const uint8_t *it = r + 8 + i * 12;
+			uint32_t pix = get32(it);
+			unsigned rr = get16(it + 4), gg = get16(it + 6);
+			unsigned bb = get16(it + 8);
+
+			if (pix > 255)
+				continue;	/* not our 256 entries */
+			pal8[pix] = (uint16_t)(((rr & 0xF800)) |
+						 ((gg & 0xFC00) >> 5) |
+						 ((bb & 0xF800) >> 11));
+		}
+		/*
+		 * Every expansion of every window this client owns is now
+		 * stale. Marking the buffers dirty is enough: the expansion
+		 * happens when the desktop next asks for pixels.
+		 */
+		for (i = 0; i < MAXRES; i++)
+			if (res[i].type == R_WINDOW &&
+			    res[i].owner == (int)(c - cli) && res[i].bpp == 1)
+				res[i].dirty = 1;
+		break;
+	}
+	case 91: {					/* QueryColors */
+		int n = (len - 8) / 4, i;
+		uint8_t *ext = calloc(n ? n : 1, 8);
+
+		for (i = 0; ext && i < n; i++) {
+			uint32_t pix = get32(r + 8 + i * 4) & 0xFF;
+			uint16_t v = pal8[pix];
+
+			put16(ext + i * 8 + 0, (uint16_t)((v & 0xF800)));
+			put16(ext + i * 8 + 2, (uint16_t)((v & 0x07E0) << 5));
+			put16(ext + i * 8 + 4, (uint16_t)((v & 0x001F) << 11));
+		}
+		memset(d24, 0, sizeof d24);
+		put16(d24, (uint16_t)n);
+		send_reply(c, 0, d24, ext, n * 8);
+		free(ext);
+		break;
+	}
 	case 45: {					/* OpenFont */
 		/*
 		 * We have exactly one set of glyphs, so the only thing that
@@ -5163,6 +5304,34 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 						     (q[0] >> 3));
 				}
 			}
+		} else if (op_target(d) && d->buf->bpp == 1 && depth <= 8) {
+			/*
+			 * The same run-per-row treatment for an INDEXED
+			 * destination, and for the same reason.
+			 *
+			 * Without this arm a depth-8 window fell through to
+			 * the per-pixel loop below: 64,000 px_set() calls for
+			 * one 320x200 frame, each a call plus a clip test plus
+			 * an alias check, out of code executing from 80 MHz
+			 * XIP flash. Indices are bytes and the destination is
+			 * bytes, so the row is a memcpy - which is the whole
+			 * point of an indexed visual and was being thrown away
+			 * at the last step.
+			 */
+			struct res *b = d->buf;
+
+			for (y = 0; y < ih; y++) {
+				const uint8_t *row = src + (size_t)y * pad;
+				int bx, by, bw, x0;
+
+				if (!span_clip(d, dx, dy + y, iw,
+					       &bx, &by, &bw))
+					continue;
+				x0 = bx - (dx + d->ax);
+				memcpy((uint8_t *)b->px +
+				       (size_t)by * b->w + bx,
+				       row + x0, (size_t)bw);
+			}
 		} else {
 			for (y = 0; y < ih; y++) {
 				const uint8_t *row = src + (size_t)y * pad;
@@ -5189,7 +5358,7 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		notify_draw(d);
 		break;
 	}
-	case 78: case 93: case 94: case 95: case 127:
+	case 93: case 94: case 95: case 127:
 		break;					/* accepted, nothing to do */
 
 	default:
@@ -5228,6 +5397,7 @@ int xshim_init(void (*on_window)(uint32_t, int, int),
 	win_cb = on_window;
 	draw_cb = on_draw;
 	close_cb = on_close;
+	pal8_init();
 	for (i = 0; i < MAXCLI; i++)
 		cli[i].fd = -1;
 
@@ -5426,6 +5596,38 @@ const uint16_t *xshim_window_pixels(uint32_t id, int *w, int *h)
 		return NULL;
 	*w = r->w;
 	*h = r->h;
+	/*
+	 * A depth-8 window holds palette INDICES, and the desktop presents
+	 * window pixels zero-copy as RGB565 - so an indexed window is expanded
+	 * here, into a shadow buffer, through the owning client's palette.
+	 *
+	 * This is the one place it can happen without the desktop knowing
+	 * anything about indexed colour, and it is deliberately the same
+	 * buffer the PPA's CLUT would fill: the hardware path replaces the
+	 * loop below and nothing else changes. (The S31's PPA has a 256-entry
+	 * CLUT and an L8 blend input - verified on silicon; see
+	 * docs/sdl-acceleration-plan.md.)
+	 *
+	 * Only on damage. A window that is not changing costs nothing.
+	 */
+	if (r->bpp == 1) {
+		const uint8_t *src = (const uint8_t *)r->px;
+		size_t n = (size_t)r->w * r->h, i;
+		const uint16_t *pal;
+
+		if (!r->shadow) {
+			r->shadow = malloc(n * 2);
+			if (!r->shadow)
+				return NULL;
+			r->dirty = 1;
+		} else if (!r->dirty) {
+			return r->shadow;
+		}
+		pal = pal8;
+		for (i = 0; i < n; i++)
+			r->shadow[i] = pal[src[i]];
+		return r->shadow;
+	}
 	return r->px;
 }
 

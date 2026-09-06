@@ -437,30 +437,39 @@ int XParseGeometry(const char *spec, int *x, int *y, unsigned *w, unsigned *h)
 }
 
 /*
- * Visual lookup. There is one visual on this server - the panel's RGB565
- * TrueColor - so a request either matches it or does not.
+ * Visual lookup, answered from the SAME table XGetVisualInfo reports.
+ *
+ * This used to compare against DefaultVisual() alone, with a comment saying
+ * there was only one visual on this server. That stopped being true when the
+ * shim gained a depth-8 PseudoColor visual, and this function is the one SDL
+ * actually calls to find it - so the new visual existed, was advertised at
+ * connection setup, was listed by XGetVisualInfo, and was STILL invisible,
+ * because the single lookup a toolkit uses said no. Delegating means there is
+ * one place that knows what visuals exist and it cannot drift again.
  */
 XLITE_IMPL(XMatchVisualInfo)
 Status XMatchVisualInfo(Display *dpy, int screen, int depth, int class,
 			XVisualInfo *vi)
 {
-	Visual *v = DefaultVisual(dpy, screen);
+	XVisualInfo tmpl, *got;
+	int n = 0;
 
-	if (!v || !vi)
+	if (!vi)
 		return 0;
-	if (depth != DefaultDepth(dpy, screen) || class != v->class)
+	memset(&tmpl, 0, sizeof tmpl);
+	tmpl.screen = screen;
+	tmpl.depth = depth;
+	tmpl.class = class;
+	got = XGetVisualInfo(dpy, VisualScreenMask | VisualDepthMask |
+				  VisualClassMask, &tmpl, &n);
+	if (!got)
 		return 0;
-	memset(vi, 0, sizeof(*vi));
-	vi->visual = v;
-	vi->visualid = v->visualid;
-	vi->screen = screen;
-	vi->depth = depth;
-	vi->class = v->class;
-	vi->red_mask = v->red_mask;
-	vi->green_mask = v->green_mask;
-	vi->blue_mask = v->blue_mask;
-	vi->colormap_size = v->map_entries;
-	vi->bits_per_rgb = v->bits_per_rgb;
+	if (n < 1) {
+		XFree(got);
+		return 0;
+	}
+	*vi = got[0];
+	XFree(got);
 	return 1;
 }
 
