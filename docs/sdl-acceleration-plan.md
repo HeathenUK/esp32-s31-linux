@@ -139,3 +139,49 @@ PPA 153 and CPU 102) but it moves bytes without transforming them.
 
 Gate the whole thing on the client asking for depth 8, so the RGB565 path that
 every current client uses is untouched.
+
+## Part 1: DONE, and done without touching SDL (2026-09-06)
+
+Shipped by reclaiming idle flash, not by recompiling. The custom
+`-fno-asynchronous-unwind-tables` build DID work (.eh_frame 45,148 -> 424) but
+was rejected: a bespoke libSDL is a maintenance burden and a deviation from
+off-the-shelf, for space that turned out to be free elsewhere.
+
+**Where the space came from.** `factory` is 2,031,616 bytes and the loader
+(`hello_world.bin`) is 1,755,264 - **276,352 bytes of genuinely idle flash**.
+Taking 128 KB of it costs nothing at runtime, unlike evicting something that
+executes.
+
+    factory  0x020000  0x1F0000 -> 0x1D0000   (loader keeps 145,280 spare)
+    xip2     0x210000  0x170000 -> off 0x1F0000, size 0x190000
+
+xip2's END stays at 0x380000, so **opensbi, linux and rootfs do not move** -
+which matters, because the opensbi address has five homes including a bare
+`li` in `core1_trampoline.S`. Only two files changed: `partitions.csv` and
+`XIP2_PARTITION_SIZE`. Every flash offset is derived from the CSV by the
+Makefile, and `S05xip` mounts `mtd:xip2` by NAME, so nothing else needed
+touching. The partition table is generated with `gen_esp32part.py` and
+flashed at **0x8000**.
+
+**And a rebalance.** `s31-bt` moved from image 1 to image 2, taking `libsbc`
+with it (verified: bluetoothd does not link libsbc, so it is s31-bt's alone).
+Both images are XIP flash, so moving a binary between them costs nothing.
+
+    image 1  6,365,184 of 6,422,528   57,344 free   <- now holds libSDL
+    image 2  1,556,480 of 1,638,400   81,920 free
+
+**Measured on the board.**
+
+    libSDL RSS per client   204 kB  ->  0 kB
+    prboom VmSwap         1,276 kB  ->  548 kB
+    major faults/second         8   ->  0.67      (12x fewer SD reads)
+    idle MemAvailable       ~4,200  ->  4,660 kB
+    timedemo                 16.2   ->  16.0 fps  (UNCHANGED - see below)
+
+**The average frame rate did not move, and that is expected.** 8 faults a
+second at a ~2.0 ms floor is ~2% of wall clock, so it was never going to show
+in an average. What it removes is the STALLS - the 2-3 fps troughs against a
+20+ fps peak. Do not quote this change as a frame-rate win; quote it as 204 kB
+of RAM per SDL client and 12x less SD paging.
+
+Desktop suite 12/12 green on the new layout.

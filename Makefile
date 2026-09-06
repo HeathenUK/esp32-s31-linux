@@ -413,7 +413,7 @@ coremark: rootfs
 # Keep this decimal because POSIX test(1) and truncate(1) do not accept the
 # partition table's 0x-prefixed value.
 ROOTFS_PARTITION_SIZE ?= 6422528
-XIP2_PARTITION_SIZE ?= 1507328
+XIP2_PARTITION_SIZE ?= 1638400
 # The XIP kernel must start on a 4-MiB Sv32 megapage boundary, so the linux
 # partition stays at 0x400000 and rootfs takes every byte the kernel does not
 # need. Keep this in step with bootloader/partitions.csv.
@@ -539,7 +539,7 @@ XIP_ROOTFS_IMG := $(BUILD_DIR)/rootfs-xip.cramfs
 # by measurement, not guesswork (see the note above about which binaries go in
 # which image, and why libXft belongs here).
 XIP_ROOTS ?= bin/busybox usr/sbin/wpa_supplicant usr/sbin/iw usr/bin/lvdesk \
-	usr/bin/s31-bt usr/bin/s31-coex \
+	usr/bin/s31-coex usr/lib/libSDL-1.2.so.0.11.4 \
 	usr/libexec/bluetooth/bluetoothd \
 	usr/bin/xfilesctl usr/bin/s31-open usr/bin/s31-thumb usr/bin/xfilesthumb usr/bin/s31-thumbs
 
@@ -812,7 +812,7 @@ XIP2_STAGE := $(BUILD_DIR)/xipstage2
 # weight, and coldplug is already backgrounded and nice'd - udevd's SD-backed
 # pages are clean and evictable once boot is over.
 XIP2_ROOTS ?= usr/bin/xcalc usr/bin/xclock usr/bin/xfiles \
-	usr/lib/libasound.so.2.0.0
+	usr/lib/libasound.so.2.0.0 usr/bin/s31-bt
 # libxkbfile and the xcb chain used to be pushed to the SD layer here, because
 # the STOCK libxkbfile is 120,488 bytes and drags libxcb (128,696), libXau
 # (9,476) and libXdmcp (17,672) behind it - 276 KB of flash for xclock's one
