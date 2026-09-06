@@ -134,4 +134,6 @@ void xlite_queue(struct xdpy *x, const unsigned char *ev);
 int xlite_read_more(struct xdpy *x, int block);
 int xlite_send(struct xdpy *x, const unsigned char *r);
 
+void xlite_shm_forget(Display *dpy, Drawable d);
+
 #endif /* XLITE_H */

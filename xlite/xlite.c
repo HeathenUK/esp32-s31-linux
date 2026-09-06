@@ -261,9 +261,22 @@ void xlite_queue(struct xdpy *x, const unsigned char *e)
 		}
 		next = (x->qtail + 1) % x->qcap;
 	}
-	if ((e[0] & 0x7F) == ConfigureNotify)
+	if ((e[0] & 0x7F) == ConfigureNotify) {
 		xlite_note("queued ConfigureNotify win 0x%lx %ux%u",
 			   (unsigned long)g32(e + 8), g16(e + 20), g16(e + 22));
+		/*
+		 * A resize may have reallocated the window's pixels on the
+		 * server, which makes any shared mapping we hold for it stale:
+		 * we would go on writing into pages nothing composites, and
+		 * the window would freeze on its last frame. Drop it here and
+		 * the next XPutImage maps the new buffer.
+		 *
+		 * This is the ONLY notification of a size change we get for a
+		 * resize the window manager initiated rather than the client,
+		 * so it has to be the hook.
+		 */
+		xlite_shm_forget((Display *)x, (Drawable)g32(e + 8));
+	}
 	decode(x, e, &x->q[x->qtail]);
 	x->qtail = next;
 	x->pub.qlen++;

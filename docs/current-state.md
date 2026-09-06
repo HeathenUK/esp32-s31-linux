@@ -5588,3 +5588,37 @@ Ranked options, with what the numbers actually support:
    for frames.
 4. **Not prboom.** It is off-the-shelf and its ~48% is software rendering on
    a 320 MHz core; that half of the budget is not ours to reclaim.
+
+## Doom frame rate: measured with prboom's own timedemo (2026-09-06)
+
+Use `prboom -timedemo demo1`, NOT an LD_PRELOAD frame counter. It is
+off-the-shelf, has zero instrument overhead, and prints
+"Timed 5026 gametics in N realtics = X frames per second" from inside the
+game. It runs a fixed 5026-gametic workload, so two runs are directly
+comparable. It takes ~5 MINUTES of wall clock at these frame rates - an
+earlier attempt was abandoned at 150 s and wrongly recorded as "printed
+nothing".
+
+    12.6 fps   baseline (pixels crossed the socket)
+    13.3 fps   + window buffers shared with the client   (+5.6%)
+    16.2 fps   + Doom's native 8-bit video mode          (+22%)
+
+**Sharing window buffers was worth far less than predicted.** The estimate
+here was 20-25%; it measured 5.6%. Removing 128 KB/frame from af_unix did cut
+lvdesk's CPU (37% -> 18-30% in spot checks) but Doom is CPU-bound in its own
+renderer, so the freed cycles did not become frames one-for-one. The change is
+still right - it is correct, it is what MIT-SHM exists to do - but do not
+quote a large number for it.
+
+**8-bit was the cheap win, and it is a config line.** `videomode "8"` in
+`/root/.prboom/prboom.cfg`. Doom renders palette indices natively; in 16-bit
+mode prboom does a palette lookup PER PIXEL inside its column loops and moves
+twice the bytes. In 8-bit it writes bytes straight into SDL's surface
+("SDL buffer, direct access") and SDL does one linear conversion per frame.
+
+**HARD RULE, learned twice in one session: no X11 library may live on the SD
+card.** A leftover `/root/x11/usr/lib/` tree and a hand-deployed
+`/root/doom/lib/libX11.so.6` both shadowed the XIP copies. Testing a shim
+change from `/root` also invalidates any comparison against a baseline that
+runs from XIP, because SD costs RSS and pages ~4x slower. Verify with
+`grep -o '/[^ ]*libX11[^ ]*' /proc/<pid>/maps` - it must say `/usr/lib`.

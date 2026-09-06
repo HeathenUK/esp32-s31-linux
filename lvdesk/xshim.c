@@ -3832,7 +3832,36 @@ static void xshm_request(struct cli *c, const uint8_t *r, int len)
 		struct res *p = res_find(get32(r + 4));
 
 		if (r[1] == 1) {
-			if (!p || p->type != R_PIXMAP || !px_share(p)) {
+			/*
+			 * Windows too, not just pixmaps - and this is where
+			 * the frames are.
+			 *
+			 * Every SDL client draws with XPutImage to a WINDOW,
+			 * so refusing windows meant Doom pushed 128 KB per
+			 * frame through af_unix: measured at ~3.9 ms per band
+			 * in the shim, with the socket READ costing more than
+			 * the drawing (97 ms vs 72 ms over 32 passes), on a
+			 * board whose memory bandwidth is 88 MB/s.
+			 *
+			 * Safe for a TOP-LEVEL window only, and the test is
+			 * exact: a top level gets `w->buf = w` with ax/ay 0
+			 * (line ~907), so it owns its buffer outright and the
+			 * client cannot reach anything else through it. A
+			 * CHILD gets `w->buf = p->buf` and an offset into its
+			 * parent's pixels, where a stray write would land in a
+			 * sibling - those keep the socket path.
+			 *
+			 * op_target() first: it breaks any copy-on-write alias
+			 * and guarantees px, so what we hand out is the
+			 * window's own private pixels.
+			 */
+			struct res *b = NULL;
+
+			if (p && p->type == R_PIXMAP)
+				b = p;
+			else if (p && p->type == R_WINDOW && p->buf == p)
+				b = op_target(p);
+			if (!b || !px_share(b)) {
 				/*
 				 * Answer "not shareable" as an ordinary reply
 				 * with no descriptor, NOT an error: a client
@@ -3845,17 +3874,18 @@ static void xshm_request(struct cli *c, const uint8_t *r, int len)
 				send_reply(c, 0, d24, NULL, 0);
 				return;
 			}
-			put16(d24, (uint16_t)p->w);
-			put16(d24 + 2, (uint16_t)p->h);
-			put16(d24 + 4, (uint16_t)(p->w * p->bpp));
-			d24[6] = p->bpp;
-			put32(d24 + 8, (uint32_t)p->shm_len);
-			send_reply_fd(c, d24, p->shm_fd);
+			put16(d24, (uint16_t)b->w);
+			put16(d24 + 2, (uint16_t)b->h);
+			put16(d24 + 4, (uint16_t)(b->w * b->bpp));
+			d24[6] = b->bpp;
+			put32(d24 + 8, (uint32_t)b->shm_len);
+			send_reply_fd(c, d24, b->shm_fd);
 			if (trace_on())
-				fprintf(stderr, "xshim: SHM pixmap 0x%x %dx%d "
-					"bpp %u -> fd %d (%zu bytes)\n", p->id,
-					p->w, p->h, p->bpp, p->shm_fd,
-					p->shm_len);
+				fprintf(stderr, "xshim: SHM %s 0x%x %dx%d "
+					"bpp %u -> fd %d (%zu bytes)\n",
+					p->type == R_WINDOW ? "window" : "pixmap",
+					b->id, b->w, b->h, b->bpp, b->shm_fd,
+					b->shm_len);
 	} else if (r[1] == 2 && p) {
 		if (trace_on()) {
 			size_t i, tot = (size_t)p->w * p->h, nz = 0;
@@ -5666,10 +5696,27 @@ static void client_drop(struct cli *c, int notify)
 			"xshim:   ^ that is the to-do list for this client; "
 			"XSHIM_TRACE=1 gives the full request log\n");
 	}
+	/*
+	 * Tell the desktop about EVERY top-level this client owned, mapped or
+	 * not.
+	 *
+	 * The mapped test used to be here, and it leaked a window on every
+	 * clean exit: a toolkit unmaps its window while shutting down - SDL
+	 * does, and so does Xt - so by the time the socket closes `mapped` is
+	 * already 0 and the notification was skipped. lvdesk then kept its
+	 * own window object and taskbar entry for a client that no longer
+	 * existed: a ghost that could still be raised, dragged and closed,
+	 * with no process behind it. prboom leaves one behind every time its
+	 * timedemo ends.
+	 *
+	 * Notifying unconditionally is safe: xwin_on_close() looks the id up
+	 * and does nothing if it is not there, so a window that was never
+	 * shown costs one failed search.
+	 */
 	if (notify && close_cb)
 		for (i = 0; i < MAXRES; i++)
 			if (res[i].type == R_WINDOW && res[i].owner == owner &&
-			    res[i].mapped && res[i].parent == ROOT_ID)
+			    res[i].parent == ROOT_ID)
 				close_cb(res[i].id);
 	for (i = 0; i < MAXRES; i++)
 		if (res[i].type != R_FREE && res[i].owner == owner)

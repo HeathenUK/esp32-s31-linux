@@ -86,20 +86,29 @@ int SDL_Flip(SDL_Surface *s)
 	spy_open();
 
 	if (s && s->pixels) {
-		/* count non-zero bytes BEFORE the flip - that is what Doom drew */
-		const unsigned char *p = s->pixels;
-		long bytes = (long)s->h * s->pitch, i, nz = 0;
-
-		for (i = 0; i < bytes; i++)
-			if (p[i]) nz++;
+		long bytes = (long)s->h * s->pitch;
+		int show = (n < 12 || (n % 20) == 0);
 
 		if (last_pixels && s->pixels != last_pixels)
 			moved++;
-		if (n < 12 || (n % 200) == 0)
+		if (show) {
+			/*
+			 * Count non-zero bytes ONLY when reporting. This scan
+			 * walks the whole framebuffer a byte at a time, and on
+			 * a board with 88 MB/s of memory bandwidth doing it on
+			 * every flip costs more than the frame does - it would
+			 * be measuring the instrument, not Doom.
+			 */
+			const unsigned char *p = s->pixels;
+			long i, nz = 0;
+
+			for (i = 0; i < bytes; i++)
+				if (p[i]) nz++;
 			fprintf(out, "SPY flip %-5d pixels=%p %s nonzero=%ld/%ld\n",
 				n, s->pixels,
 				(last_pixels && s->pixels != last_pixels) ? "MOVED" : "same ",
 				nz, bytes);
+		}
 		if (n == 400)
 			fprintf(out, "SPY  after %d flips, pixels moved %d times\n", n, moved);
 		last_pixels = s->pixels;
