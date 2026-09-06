@@ -39,6 +39,64 @@
 #include <poll.h>
 
 #include "xshim.h"
+#include "kms.h"
+#include <sys/ioctl.h>
+#include <drm/drm.h>
+#include <drm/drm_mode.h>
+
+/*
+ * Hardware palette expansion, measured rather than assumed.
+ *
+ * rootfs/clutbench.c times the identical expansion both ways on the same GEM
+ * buffers. The crossover sits between 16,000 and 64,000 pixels, and at Doom's
+ * 320x200 UNDER LOAD - the only condition that matters for a game - the PPA is
+ * 2.5x faster (2527 us against 6404 us), worth about 3.9 ms a frame:
+ *
+ *              px      quiet CPU/PPA     loaded CPU/PPA
+ *   160x100  16,000     422 / 1197        447 / 1090    cpu
+ *   320x200  64,000    3208 / 2587       6404 / 2527    PPA 2.5x
+ *   640x400 256,000        -            33166 / 8208    PPA 4.0x
+ *
+ * The threshold is placed between the two measured points, not at a round
+ * number chosen for looking tidy.
+ */
+#define PPA_MIN_PX	200000
+
+/*
+ * WHY THIS IS NOT 40000, WHICH IS WHAT THE BENCH SAID.
+ *
+ * rootfs/clutbench.c timed the expansion both ways and put the crossover
+ * between 16,000 and 64,000 pixels, with the PPA 2.5x ahead at Doom's
+ * 320x200 under load. End to end that was WRONG: the timedemo measured
+ * 25.3 fps against 27.2 for the CPU path. The bench was rigged without my
+ * noticing, in two ways that both favour the hardware:
+ *
+ *  1. Both arms used GEM buffers, and drm_gem_dma maps those WRITE-COMBINE.
+ *     The CPU arm was therefore reading indices from uncached memory, which
+ *     is not what the CPU path does in the shim - it uses ordinary cached
+ *     pages. The bench compared hardware against a hobbled CPU.
+ *  2. Handing the client a GEM buffer moves DOOM'S OWN drawing surface into
+ *     write-combine memory. Every pixel it renders now goes to uncached
+ *     memory, and that cost lands on the game, outside anything the bench
+ *     timed.
+ *
+ * So the threshold is set above anything reachable today (200,000 px is
+ * larger than 400x480), which keeps the hardware path built, tested and
+ * one constant away - without putting a client's render target in uncached
+ * memory to save an expansion that costs less than the penalty.
+ *
+ * To make hardware genuinely win, the index plane the CLIENT draws into has
+ * to stay cached while remaining PPA-addressable. That is a dma-buf with a
+ * cached mapping plus explicit sync, not a dumb buffer.
+ */
+
+#define DRM_ESP32S31_PPA_CLUT	0x05
+struct drm_esp32s31_ppa_clut {
+	uint32_t src_handle, dst_handle, w, h, clut[256];
+};
+#define DRM_IOCTL_ESP32S31_PPA_CLUT \
+	DRM_IOW(DRM_COMMAND_BASE + DRM_ESP32S31_PPA_CLUT, \
+		struct drm_esp32s31_ppa_clut)
 #include "xshim_font.h"
 
 #define MAXCLI		4
@@ -106,6 +164,15 @@ struct res {
 	 * Allocated on first use, only for depth-8 windows.
 	 */
 	uint16_t *shadow;
+	/*
+	 * GEM handles when this surface is hardware-expandable. The
+	 * blend engine can only address memory allocated through the
+	 * DRM device, so an 8-bit window big enough to be worth it is
+	 * a pair of dumb buffers - indices in, RGB565 out - instead of
+	 * an anonymous memfd.
+	 */
+	uint32_t gem_src, gem_dst;
+	size_t gem_src_len, gem_dst_len;
 
 	/*
 	 * Coalesced Expose. paint_subtree() walks a window and every mapped
@@ -261,6 +328,98 @@ static void out_push(struct cli *c, const void *p, size_t n);
 static void notify_draw(struct res *d);
 static int trace_on(void);
 static void px_release(struct res *r);
+/*
+ * Allocate an 8-bit surface as a pair of GEM buffers so the PPA can expand it.
+ *
+ * Two objects: the index plane the client draws into, and the RGB565 the
+ * desktop presents. Both must come from the DRM device - the blend engine
+ * refuses anything outside the region it was given, and a memfd of ordinary
+ * pages is invisible to it however well shared.
+ *
+ * Returns 0 and leaves the caller to fall back on failure, which is the
+ * expected case once CMA is tight: the pool is 4 MB and the scanout buffers
+ * already have most of it.
+ */
+static int win8_gem_alloc(struct res *r, int w, int h)
+{
+	struct drm_mode_create_dumb cs, cd;
+	struct drm_mode_map_dumb ms, md;
+	struct drm_mode_destroy_dumb dd;
+	void *psrc, *pdst;
+	int fd = kms_get_fd();
+
+	if (fd < 0)
+		return 0;
+
+	memset(&cs, 0, sizeof cs);
+	cs.width = w; cs.height = h; cs.bpp = 8;
+	if (ioctl(fd, DRM_IOCTL_MODE_CREATE_DUMB, &cs) < 0)
+		return 0;
+	memset(&cd, 0, sizeof cd);
+	cd.width = w; cd.height = h; cd.bpp = 16;
+	if (ioctl(fd, DRM_IOCTL_MODE_CREATE_DUMB, &cd) < 0)
+		goto drop_src;
+
+	memset(&ms, 0, sizeof ms); ms.handle = cs.handle;
+	memset(&md, 0, sizeof md); md.handle = cd.handle;
+	if (ioctl(fd, DRM_IOCTL_MODE_MAP_DUMB, &ms) < 0 ||
+	    ioctl(fd, DRM_IOCTL_MODE_MAP_DUMB, &md) < 0)
+		goto drop_both;
+
+	psrc = mmap(NULL, cs.size, PROT_READ | PROT_WRITE, MAP_SHARED, fd,
+		    ms.offset);
+	if (psrc == MAP_FAILED)
+		goto drop_both;
+	pdst = mmap(NULL, cd.size, PROT_READ | PROT_WRITE, MAP_SHARED, fd,
+		    md.offset);
+	if (pdst == MAP_FAILED) {
+		munmap(psrc, cs.size);
+		goto drop_both;
+	}
+
+	memset(psrc, 0, cs.size);
+	fprintf(stderr, "xshim: window 0x%x %dx%d is GEM-backed - palette "
+		"expansion runs on the PPA\n", r->id, w, h);
+	r->px = psrc;
+	r->shadow = pdst;
+	r->gem_src = cs.handle;
+	r->gem_dst = cd.handle;
+	r->gem_src_len = cs.size;
+	r->gem_dst_len = cd.size;
+	r->bpp = 1;
+	mem_win += cs.size; n_win++;
+	return 1;
+
+drop_both:
+	memset(&dd, 0, sizeof dd); dd.handle = cd.handle;
+	ioctl(fd, DRM_IOCTL_MODE_DESTROY_DUMB, &dd);
+drop_src:
+	memset(&dd, 0, sizeof dd); dd.handle = cs.handle;
+	ioctl(fd, DRM_IOCTL_MODE_DESTROY_DUMB, &dd);
+	return 0;
+}
+
+static void win8_gem_free(struct res *r)
+{
+	struct drm_mode_destroy_dumb dd;
+	int fd = kms_get_fd();
+
+	if (r->px && r->gem_src_len)
+		munmap(r->px, r->gem_src_len);
+	if (r->shadow && r->gem_dst_len)
+		munmap(r->shadow, r->gem_dst_len);
+	if (fd >= 0) {
+		memset(&dd, 0, sizeof dd); dd.handle = r->gem_src;
+		ioctl(fd, DRM_IOCTL_MODE_DESTROY_DUMB, &dd);
+		memset(&dd, 0, sizeof dd); dd.handle = r->gem_dst;
+		ioctl(fd, DRM_IOCTL_MODE_DESTROY_DUMB, &dd);
+	}
+	mem_win -= r->gem_src_len; n_win--;
+	r->px = NULL; r->shadow = NULL;
+	r->gem_src = r->gem_dst = 0;
+	r->gem_src_len = r->gem_dst_len = 0;
+}
+
 static int px_share(struct res *r);
 
 static unsigned long rf_calls, rf_steps;
@@ -487,6 +646,21 @@ static uint16_t *px_alloc(struct res *r, int w, int h)
 	n = (size_t)w * h * r->bpp;
 
 	/*
+	 * An indexed window large enough for the hardware to win gets GEM
+	 * buffers instead, so the PPA can expand it. Below the measured
+	 * crossover, or when CMA has nothing left, fall through to the
+	 * ordinary allocation and expand on the CPU - which stays correct,
+	 * just slower.
+	 */
+	if (r->bpp == 1 && r->type == R_WINDOW &&
+	    (size_t)w * h >= PPA_MIN_PX) {
+		if (win8_gem_alloc(r, w, h))
+			return r->px;
+		fprintf(stderr, "xshim: window %dx%d wanted the PPA but CMA "
+			"had nothing - expanding on the CPU\n", w, h);
+	}
+
+	/*
 	 * Big surfaces are born shareable. A client that loads pixels through
 	 * xlite-SHM asks for the memfd behind a drawable, and px_share() used
 	 * to answer by creating one and COPYING the surface into it: 733 KB
@@ -608,6 +782,14 @@ static void px_release(struct res *r)
 		mem_pix -= n; n_pix--;
 	} else {
 		mem_win -= n; n_win--;
+	}
+	if (r->gem_src || r->gem_dst) {
+		win8_gem_free(r);
+		if (r->shm_fd >= 0) {
+			close(r->shm_fd);
+			r->shm_fd = -1;
+		}
+		return;
 	}
 	free(r->shadow);
 	r->shadow = NULL;
@@ -5529,6 +5711,26 @@ static int px_share(struct res *r)
 
 	if (r->shm_fd >= 0)
 		return 1;
+	/*
+	 * A GEM surface is exported, not copied: PRIME hands out a dma-buf the
+	 * client can map, and XLITE-SHM already passes a descriptor, so the
+	 * protocol does not change.
+	 */
+	if (r->gem_src) {
+		struct drm_prime_handle ph;
+		int fd = kms_get_fd();
+
+		if (fd < 0)
+			return 0;
+		memset(&ph, 0, sizeof ph);
+		ph.handle = r->gem_src;
+		ph.flags = DRM_CLOEXEC | DRM_RDWR;
+		if (ioctl(fd, DRM_IOCTL_PRIME_HANDLE_TO_FD, &ph) < 0)
+			return 0;
+		r->shm_fd = ph.fd;
+		r->shm_len = r->gem_src_len;
+		return 1;
+	}
 	if (!n)
 		return 0;
 	alias_drop(r);			/* the pixels are about to move */
@@ -5688,8 +5890,76 @@ const uint16_t *xshim_window_pixels(uint32_t id, int *w, int *h)
 			return r->shadow;
 		}
 		pal = pal8;
-		for (i = 0; i < n; i++)
-			r->shadow[i] = pal[src[i]];
+		/*
+		 * Hardware when the surface was allocated for it. The palette
+		 * goes down as ARGB8888 with alpha forced opaque: the blend
+		 * engine multiplies by it, and a zero alpha would expand every
+		 * index to black.
+		 */
+		if (r->gem_src && r->gem_dst) {
+			struct drm_esp32s31_ppa_clut a;
+			int fd = kms_get_fd(), k;
+			uint64_t t0 = xsp_on > 0 ? xsp_cpu_now() : 0;
+
+			memset(&a, 0, sizeof a);
+			a.src_handle = r->gem_src;
+			a.dst_handle = r->gem_dst;
+			a.w = r->w;
+			a.h = r->h;
+			for (k = 0; k < 256; k++) {
+				unsigned v = pal8[k];
+
+				a.clut[k] = 0xFF000000u |
+					    ((v & 0xF800) << 8) |
+					    ((v & 0x07E0) << 5) |
+					    ((v & 0x001F) << 3);
+			}
+			if (fd >= 0 &&
+			    ioctl(fd, DRM_IOCTL_ESP32S31_PPA_CLUT, &a) == 0) {
+				if (t0) {
+					static uint64_t hacc;
+					static unsigned hcnt;
+
+					hacc += xsp_cpu_now() - t0;
+					if (++hcnt == 100) {
+						fprintf(stderr, "xshim: pal8 "
+							"expand %zu px HARDWARE,"
+							" %llu us/frame CPU\n", n,
+							(unsigned long long)
+							(hacc / 100 / 1000));
+						hacc = 0; hcnt = 0;
+					}
+				}
+				r->dirty = 0;
+				return r->shadow;
+			}
+			/* Hardware refused: fall through and do it ourselves. */
+		}
+		{
+			uint64_t t0 = xsp_on > 0 ? xsp_cpu_now() : 0;
+
+			for (i = 0; i < n; i++)
+				r->shadow[i] = pal[src[i]];
+			if (t0) {
+				static uint64_t acc;
+				static unsigned cnt;
+
+				acc += xsp_cpu_now() - t0;
+				if (++cnt == 100) {
+					fprintf(stderr, "xshim: pal8 expand "
+						"%zu px, %llu us/frame CPU\n",
+						n, (unsigned long long)
+						(acc / 100 / 1000));
+					acc = 0; cnt = 0;
+				}
+			}
+		}
+		/*
+		 * Cleared here and nowhere else. It was never cleared at all,
+		 * so the early-out above could not fire after the first frame
+		 * and a still window was re-expanded for ever.
+		 */
+		r->dirty = 0;
 		return r->shadow;
 	}
 	return r->px;

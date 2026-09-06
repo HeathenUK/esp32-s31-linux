@@ -18,6 +18,13 @@ struct kms_rect { int x1, y1, x2, y2; };	/* inclusive */
 int kms_open(const char *path);
 
 /*
+ * The DRM fd. The PPA can only address buffers allocated through it, so an
+ * 8-bit window that wants hardware palette expansion is a GEM object rather
+ * than an anonymous memfd.
+ */
+int kms_get_fd(void);
+
+/*
  * Hardware cursor plane.
  *
  * Moving the pointer as an LVGL object costs a full redraw cycle of everything

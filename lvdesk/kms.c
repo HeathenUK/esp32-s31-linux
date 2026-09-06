@@ -106,6 +106,9 @@ static void kms_release_console(void)
 	}
 }
 
+/* The PPA path needs GEM buffers, and those come from this fd. */
+int kms_get_fd(void) { return kms_fd; }
+
 int kms_open(const char *path)
 {
 	struct drm_mode_card_res res;
