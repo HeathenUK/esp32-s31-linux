@@ -5489,26 +5489,52 @@ asks for); `SDL_GetTicks` is not frozen; the event queue is not stuck.
 while xlite's stderr is not - so "it stopped at R_Init" needs a clean exit
 (SIGTERM, not SIGKILL) to flush before it means anything.
 
-That timing made the earlier prboom verdict look premature, and it was
-retracted here on 2026-09-06. **The retraction was wrong; the original verdict
-stands.** Re-tested properly against the fixed libX11 running from XIP:
+**RESOLVED 2026-09-06: the fault was OURS, not prboom's.** prboom now plays.
+Two earlier verdicts on this page were wrong - first "prboom renders nothing",
+then a retraction, then a re-confirmation of the original. All three blamed
+prboom. The bug was in xshim, and it was found by instrumenting rather than
+arguing:
 
-  * ~5,600 PutImage requests in 90 s. The payloads are 65,280 + 62,720 bytes,
-    which is exactly 320x200x2 split into two bands - so prboom is fully in
-    its game loop at ~31 fps, long past loading. Loading was never the reason.
-  * EVERY frame is `nonzero 0/...`. In 8-bit mode those bytes are palette
-    INDICES, so a broken palette cannot explain it either: prboom's own screen
-    buffer is empty.
-  * The window is 322x222 (320x200 plus 2 px of chrome) - correct geometry.
-  * Focused the window and tapped Escape (`uinject click`, then `uinject key
-    1`). Doom's menu draws independently of the 3D view. 143 frames followed
-    and NOT ONE had content.
+  * An LD_PRELOAD shim on SDL 1.2 (`rootfs/sdlspy.c`) showed
+    `SDL_SetVideoMode` returning a PERFECT surface - SWSURFACE, 320x200,
+    pitch 640, RGB565 masks f800/07e0/001f, `SDL_MUSTLOCK`=0 so prboom draws
+    straight into `screen->pixels`.
+  * The same shim showed `SDL_GetTicks` called EXACTLY ONCE in 100 s,
+    `SDL_Delay` never, `SDL_Flip` never, and - decisively - one
+    "PollEvent enter #0" with NO matching exit. prboom was wedged inside a
+    single `SDL_PollEvent` for ever. It never ran a tic, so it never drew.
+  * The frames on the wire were therefore not Doom's. SDL 1.2 dlopens libX11
+    and dlsyms every entry point, so its internal `XPutImage` is invisible to
+    LD_PRELOAD; those ~31 fps of all-zero frames were SDL's own
+    `X11_RefreshDisplay` re-blitting an untouched buffer. That is why the
+    window was black rather than merely empty, and why 8-bit mode showed zero
+    palette indices.
+  * `XSHIM_TRACE=1` named the engine: `~win 0x200002 -> 320x200+0+0
+    (mask 0040)` repeating. Mask 0x40 is CWStackMode - XRaiseWindow.
 
-So prboom 2.5.0 draws nothing at all, in either depth, at correct geometry,
-with SDL and the shim both proven good by sdl2probe and by the desktop's own
-12/12 suite. The fault is inside prboom. Do not re-open it by blaming the
-shim, and do not re-run the "maybe it was still loading" theory - it is
-closed by the frame arithmetic above.
+The loop: xshim's ConfigureWindow handler ended with `expose_window()`, which
+sends **MapNotify** before the Expose. MapNotify means "this window has just
+gone from unmapped to mapped", and nothing of the sort had happened - the
+window was already mapped and merely reconfigured. Toolkits re-apply their
+whole window state when they see one (refresh, re-grab, re-raise), and a
+raise is itself a ConfigureWindow, so our answer to the configure provoked
+the next configure. No client could escape it.
+
+The fix is one line: send Expose without the lie, `paint_subtree()` in place
+of `expose_window()`. prboom then plays the demo at 35% of a core, RSS
+2372 kB. Desktop suite 12/12 green.
+
+**The lesson worth keeping: three wrong verdicts came from reasoning about
+symptoms, and the answer came in one step from an LD_PRELOAD probe.** When a
+client "does not draw", instrument what it actually calls before blaming it -
+and remember that a library which dlsyms its X11 entry points cannot be
+interposed, so absence of an intercepted call is not absence of the call.
+
+**Memory after a Doom run is NOT leaked** (checked because it looked like it
+was): over two full cycles MemAvailable returned to 3384 kB and 3276 kB
+against a 3216 kB baseline, Shmem back to 4 kB, and the shim released the
+window. A one-off 1772 kB reading was a dirty arm - smoke's clients plus two
+Doom ports in sequence, with swap churn - not lost memory.
 
 **Memory is the binding constraint here, as everywhere.** chocolate-doom's
 minimum zone is 4 MB (`MIN_RAM`) against ~3.4 MB MemAvailable. Running it

@@ -4901,7 +4901,32 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		put16(d + 16, w->w); put16(d + 18, w->h);
 		send_event(c, 22, d, 28);		/* ConfigureNotify */
 		if (w->mapped) {
-			expose_window(c, w);
+			/*
+			 * Repaint and Expose - but NOT MapNotify.
+			 *
+			 * This used to call expose_window(), which sends a
+			 * MapNotify first. MapNotify means "this window has
+			 * just gone from unmapped to mapped", and nothing of
+			 * the sort happened: the window was already mapped and
+			 * the client merely reconfigured it. Toolkits re-apply
+			 * their whole window state when they see one - refresh
+			 * the surface, re-grab, re-raise - and a raise is
+			 * itself a ConfigureWindow, so the answer to the
+			 * configure caused the next configure.
+			 *
+			 * That closed a loop that no client could escape.
+			 * prboom (SDL 1.2) spins inside a single SDL_PollEvent
+			 * for ever: measured with an LD_PRELOAD shim, one
+			 * "PollEvent enter" and no matching exit in 100 s,
+			 * SDL_GetTicks called exactly ONCE, SDL_Flip never.
+			 * Doom therefore never runs a tic and never draws, and
+			 * the frames on the wire are SDL refreshing an
+			 * untouched buffer - which is why the window is black
+			 * rather than empty. The trace shows the engine:
+			 * "~win 0x200002 -> 320x200+0+0 (mask 0040)" repeating,
+			 * mask 0040 being CWStackMode, i.e. XRaiseWindow.
+			 */
+			paint_subtree(c, w);
 			notify_draw(w);
 		}
 		break;
