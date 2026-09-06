@@ -12,6 +12,9 @@
 #include <unistd.h>
 #include "xlite.h"
 
+/* Defined with the XLITE-SHM cache below; used by the free/destroy paths. */
+void xlite_shm_forget(Display *dpy, Drawable d);
+
 static void p16(unsigned char *p, unsigned v) { p[0] = v; p[1] = v >> 8; }
 static void p32(unsigned char *p, unsigned long v)
 {
@@ -290,7 +293,11 @@ int XUnmapWindow(Display *dpy, Window w) { return simple_win(dpy, 10, w); }
 XLITE_IMPL(XUnmapSubwindows)
 int XUnmapSubwindows(Display *dpy, Window w) { return simple_win(dpy, 11, w); }
 XLITE_IMPL(XDestroyWindow)
-int XDestroyWindow(Display *dpy, Window w) { return simple_win(dpy, 4, w); }
+int XDestroyWindow(Display *dpy, Window w)
+{
+	xlite_shm_forget(dpy, w);
+	return simple_win(dpy, 4, w);
+}
 XLITE_IMPL(XDestroySubwindows)
 int XDestroySubwindows(Display *dpy, Window w) { return simple_win(dpy, 5, w); }
 
@@ -658,10 +665,14 @@ Pixmap XCreatePixmap(Display *dpy, Drawable d, unsigned w, unsigned h,
 XLITE_IMPL(XFreePixmap)
 int XFreePixmap(Display *dpy, Pixmap p)
 {
+	/* Drop any shared mapping first: after this the id may be reused. */
+	xlite_shm_forget(dpy, p);
+	{
 	REQ(dpy, 54, 0, 2);
 	p32(r + 4, p);
 	xlite_send(x, r);
 	return 1;
+	}
 }
 
 /* --------------------------------------------------------------- drawing */
@@ -2200,6 +2211,70 @@ static int xshm_major(Display *dpy)
 	return major;
 }
 
+/*
+ * Cache the answer, because asking is not free.
+ *
+ * XPutImage calls XliteShmMap on EVERY call, and each call was a full
+ * request/reply round trip - the client blocks until the server answers. On
+ * this board a socket syscall costs 1.3-5.8 ms (see docs), so a client
+ * pushing frames pays two blocking round trips per frame purely to ask a
+ * question whose answer never changes. prboom at ~31 fps was making ~62 of
+ * them a second, every one of which was refused: the shared path only covers
+ * PIXMAPS, and SDL draws to a WINDOW.
+ *
+ * Both answers are worth keeping. A refusal is permanent for that drawable,
+ * and a success used to mmap afresh on every call - the same pages mapped
+ * again and again, never unmapped, which is a leak as well as a cost.
+ *
+ * Keyed on the drawable id and dropped when the drawable is freed, which is
+ * the only moment an id can come to mean something else.
+ */
+struct shm_cache {
+	Display *dpy;
+	Drawable d;
+	void *base;			/* NULL = known NOT shareable */
+	size_t len;
+	int w, h, stride, bpp;
+	int used;
+};
+static struct shm_cache shmc[16];
+
+static struct shm_cache *shm_lookup(Display *dpy, Drawable d)
+{
+	int i;
+
+	for (i = 0; i < (int)(sizeof shmc / sizeof shmc[0]); i++)
+		if (shmc[i].used && shmc[i].dpy == dpy && shmc[i].d == d)
+			return &shmc[i];
+	return NULL;
+}
+
+static struct shm_cache *shm_slot(Display *dpy, Drawable d)
+{
+	int i;
+
+	for (i = 0; i < (int)(sizeof shmc / sizeof shmc[0]); i++)
+		if (!shmc[i].used) {
+			shmc[i].used = 1;
+			shmc[i].dpy = dpy;
+			shmc[i].d = d;
+			return &shmc[i];
+		}
+	return NULL;			/* full: fall back to asking */
+}
+
+/* Called when a drawable goes away, so its id cannot be reused under us. */
+void xlite_shm_forget(Display *dpy, Drawable d)
+{
+	struct shm_cache *e = shm_lookup(dpy, d);
+
+	if (!e)
+		return;
+	if (e->base && e->len)
+		munmap(e->base, e->len);
+	memset(e, 0, sizeof *e);
+}
+
 void *XliteShmMap(Display *dpy, Pixmap p, int *w, int *h, int *stride, int *bpp)
 {
 	struct xdpy *x = (struct xdpy *)dpy;
@@ -2208,7 +2283,17 @@ void *XliteShmMap(Display *dpy, Pixmap p, int *w, int *h, int *stride, int *bpp)
 	uint32_t seq;
 	void *m;
 	int major = xshm_major(dpy), fd;
+	struct shm_cache *e = shm_lookup(dpy, p);
 
+	if (e) {				/* asked before; same answer */
+		if (!e->base)
+			return NULL;
+		if (w) *w = e->w;
+		if (h) *h = e->h;
+		if (stride) *stride = e->stride;
+		if (bpp) *bpp = e->bpp;
+		return e->base;
+	}
 	if (!major)
 		return NULL;
 	{
@@ -2222,8 +2307,13 @@ void *XliteShmMap(Display *dpy, Pixmap p, int *w, int *h, int *stride, int *bpp)
 	free(extra);
 	fd = x->shm_fd;
 	x->shm_fd = -1;
-	if (fd < 0)
-		return NULL;		/* server says this one is not shareable */
+	if (fd < 0) {
+		/* Not shareable, and that will not change. Remember it. */
+		e = shm_slot(dpy, p);
+		if (e)
+			e->base = NULL;
+		return NULL;
+	}
 	if (w) *w = hdr[8] | (hdr[9] << 8);
 	if (h) *h = hdr[10] | (hdr[11] << 8);
 	if (stride) *stride = hdr[12] | (hdr[13] << 8);
@@ -2232,7 +2322,18 @@ void *XliteShmMap(Display *dpy, Pixmap p, int *w, int *h, int *stride, int *bpp)
 	      ((size_t)hdr[18] << 16) | ((size_t)hdr[19] << 24);
 	m = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
 	close(fd);		/* the mapping keeps it alive */
-	return m == MAP_FAILED ? NULL : m;
+	if (m == MAP_FAILED)
+		return NULL;
+	e = shm_slot(dpy, p);
+	if (e) {
+		e->base = m;
+		e->len = len;
+		e->w = w ? *w : 0;
+		e->h = h ? *h : 0;
+		e->stride = stride ? *stride : 0;
+		e->bpp = bpp ? *bpp : 0;
+	}
+	return m;
 }
 
 /* Tell the server which part of a shared pixmap changed. No reply: a round
