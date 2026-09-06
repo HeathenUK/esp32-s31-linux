@@ -135,6 +135,5 @@ int xlite_read_more(struct xdpy *x, int block);
 int xlite_send(struct xdpy *x, const unsigned char *r);
 
 void xlite_shm_forget(Display *dpy, Drawable d);
-void xlite_shm_check_resize(Display *dpy, Drawable d, unsigned w, unsigned h);
 
 #endif /* XLITE_H */

@@ -2308,24 +2308,6 @@ static struct shm_cache *shm_slot(Display *dpy, Drawable d)
 	return NULL;			/* full: fall back to asking */
 }
 
-/*
- * A ConfigureNotify means the window MOVED or RESIZED, and only a resize can
- * invalidate the mapping - the pixels do not follow the window across the
- * screen. Dropping it on every configure made a DRAG pay an ioctl and an mmap
- * per motion event, on a machine where a socket round trip is milliseconds.
- * Compare the new size against the mapping we hold and keep it if it matches.
- */
-void xlite_shm_check_resize(Display *dpy, Drawable d, unsigned w, unsigned h)
-{
-	struct shm_cache *e = shm_lookup(dpy, d);
-
-	if (!e || !e->base)
-		return;
-	if ((unsigned)e->w == w && (unsigned)e->h == h)
-		return;			/* moved only - the pixels are fine */
-	xlite_shm_forget(dpy, d);
-}
-
 /* Called when a drawable goes away, so its id cannot be reused under us. */
 void xlite_shm_forget(Display *dpy, Drawable d)
 {
@@ -2439,34 +2421,25 @@ void XliteShmDamaged(Display *dpy, Pixmap p)
 		REQ(dpy, major, 2, 2);
 		p32(r + 4, p);
 		/*
-		 * FLUSH INSIDE THE LOCK. xlite_send() is what RELEASES the
-		 * output lock, so flushing after it runs unlocked - and a
-		 * flush racing another thread mid-request sends a torn one,
-		 * which is the exact hazard the lock exists for (see the
-		 * comment on xlite_out_lock). The bytes are already in the
-		 * buffer once p32() has run, so this is the correct point.
+		 * FLUSH, INSIDE THE LOCK.
+		 *
+		 * xlite_send() only releases the output lock - the bytes sit in
+		 * the request buffer until something else pushes them out, and
+		 * on the zero-copy path there IS nothing else: the client wrote
+		 * its pixels straight into the shared mapping, this Damaged
+		 * expects no reply, and no later request arrives to flush it.
+		 * The window then stays black for ever while the client renders
+		 * happily into memory nobody was told about, and the server
+		 * logs ZERO requests. It only bit above 65536 bytes, because
+		 * px_alloc() gives smaller surfaces a plain allocation and
+		 * XPutImage's wire path flushes as a side effect.
+		 *
+		 * Inside the lock: flushing after xlite_send() runs unlocked,
+		 * which is the torn-request hazard xlite_out_lock exists for.
 		 */
 		xlite_flush(x);
 		xlite_send(x, r);
 	}
-	/*
-	 * WHY FLUSH AT ALL. xlite_send() only releases the output lock - the bytes sit
-	 * in the request buffer until something else pushes them out, and on
-	 * the zero-copy path there IS nothing else: the client wrote its
-	 * pixels straight into the shared mapping, so this Damaged is the only
-	 * traffic the frame generates, it expects no reply, and nothing behind
-	 * it ever arrives to flush it.
-	 *
-	 * The result was a window that stayed black for ever while the client
-	 * rendered happily into memory nobody was told about, and the server
-	 * logged ZERO requests during rendering. It only showed up above
-	 * 65536 bytes, because px_alloc() gives smaller surfaces a plain
-	 * allocation, the share never happens, and XPutImage's wire path
-	 * flushes as a side effect - so 320x200 worked and 320x240 did not.
-	 *
-	 * One write per frame, replacing the ~128 KB of image data this path
-	 * exists to avoid sending.
-	 */
 }
 
 /*
@@ -2489,13 +2462,11 @@ XPixmapFormatValues *XListPixmapFormats(Display *dpy, int *count)
 {
 	/*
 	 * These MUST match what xshim sends in the connection setup, because
-	 * XCreateImage below derives bits_per_pixel from them. The server now
-	 * sends FOUR - {1,1}, {8,8}, {16,16}, {24,32} - since it grew a depth-8
-	 * PseudoColor visual; depth 8 was missing here, so the two halves of
-	 * the same stack disagreed about the size of an indexed pixel.
+	 * XCreateImage below derives bits_per_pixel from them: the server said
+	 * {1,1}, {16,16}, {24,32}, so saying anything else here makes the two
+	 * halves of the same stack disagree about the size of a pixel.
 	 */
-	static const struct { int d, b; } fmt[] = { {1, 1}, {8, 8}, {16, 16},
-						     {24, 32} };
+	static const struct { int d, b; } fmt[] = { {1, 1}, {16, 16}, {24, 32} };
 	XPixmapFormatValues *v;
 	unsigned i, n = sizeof(fmt) / sizeof(fmt[0]);
 
