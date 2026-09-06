@@ -110,11 +110,53 @@ def report(stage, lines, extra=""):
 
 
 def passive():
-    """Is it alive right now? Poke it, because idle is silent."""
-    text, err = read_for(1000000, 3.0, poke=b"\r\n")
-    if err:
-        print(err)
-        return 2
+    """Is it alive right now? Poke it, because idle is silent.
+
+    THE POKE IS A NONCE, NOT A NEWLINE.
+    =====================================================================
+    A bare newline at a shell prompt gets `# ` back - two printable
+    characters - and readable_lines() drops anything under four, so the
+    SHELL needle could never match the one reply a healthy idle board
+    actually sends. It appeared to work only because hart0's Wi-Fi
+    chatter supplied longer lines that matched an EARLIER stage.
+
+    So the moment a client was rendering and hart0 went quiet, a
+    perfectly healthy board reported STAGE SILENT. That false negative
+    cost most of a day on 2026-09-06: a black-window bug at 640x400 was
+    diagnosed as a capture-path wedge, then a GEM wedge, then a PPA
+    wedge, then a CMA wedge - four wrong causes, a kernel change and a
+    DTS revert - and the board was reachable by runsh.py the whole time.
+
+    Echoing a nonce fixes both halves. It cannot be forged by framing
+    garbage, so it can be matched against the RAW text without
+    reintroducing the false-SHELL problem the filter exists for; and a
+    shell that echoes it is provably executing commands, which is a
+    stronger statement than "something printed".
+
+    A busy board is SLOW, not dead: this waits longer and retries before
+    it will say SILENT.
+    """
+    nonce = "A%dZ" % (time.time_ns() % 100000000)
+    poke = ("\r\necho " + nonce + "\r\n").encode()
+
+    for attempt in (1, 2, 3):
+        text, err = read_for(1000000, 4.0, poke=poke)
+        if err:
+            print(err)
+            return 2
+        lines = readable_lines(text)
+        # The nonce comes back twice (echo of the typed line, then its
+        # output); either occurrence proves a live shell.
+        if nonce in text:
+            return report("SHELL", lines,
+                          "shell echoed the nonce %s (attempt %d)"
+                          % (nonce, attempt))
+        stage = furthest(text)
+        if stage:
+            return report(stage, lines,
+                          "poked the console and it answered (attempt %d)"
+                          % attempt)
+    text, err = read_for(1000000, 4.0, poke=poke)
     lines = readable_lines(text)
     stage = furthest(text)
     if stage:
@@ -126,7 +168,9 @@ def passive():
         return report(furthest(text2), lines2,
                       "answering at 115200 only: hart0 is up, Linux is not")
     print("STAGE SILENT")
-    print("  no answer to a poke at either baud.")
+    print("  no answer to a nonce echo at either baud, after 4 tries.")
+    print("  NOTE: a heavily loaded board is slow, not dead - if this")
+    print("  disagrees with runsh.py, believe runsh.py and fix this.")
     print("  That is a wedged or unpowered board, OR a board mid-boot -")
     print("  run with --reset to watch a boot from the beginning.")
     return 2

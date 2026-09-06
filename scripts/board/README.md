@@ -284,3 +284,41 @@ and hoping the two clicks fall inside the 400 ms double-click window. Three
 separate harness faults were diagnosed as desktop bugs that way, and a maximise
 that worked perfectly was reported broken for an hour. The control FIFO names
 the operation instead of approximating it.
+
+## The console has three writers - do not frame data on it
+
+hart0's ESP-IDF logging, hart1's kernel printk and our own script all write to
+the same serial line, and hart0 does not respect our line boundaries. Its
+Wi-Fi chatter lands in the MIDDLE of our output - seen directly as
+`ZZ MemTotI (31352) wifi:(phy)...` - so a base64 payload arrives with a hole in
+it and decodes to a traceback that reads like a bug in the tool.
+
+`screenshot-hw.py` therefore sends the JPEG over **Wi-Fi**: it captures to a
+file, starts `/root/s31-serve` (one file, one connection, sendfile, then it
+exits) and the host fetches it. Measured working at 640x400 with prboom
+rendering, which corrupted every time over serial. The console still carries
+the control chatter, which is small enough not to matter. Serial base64 remains
+as a fallback and prints a warning when it is used.
+
+## alive.py proves liveness with a nonce, and a busy board is slow, not dead
+
+It used to poke with a newline and look for a prompt, but `readable_lines()`
+drops lines under four printable characters and a prompt is `# `. It matched
+only because hart0's chatter supplied longer lines, so a board with a client
+rendering - hart0 quiet - reported `STAGE SILENT` while healthy. That one false
+negative produced four wrong root causes in a day.
+
+It now echoes a nonce and retries. **If it disagrees with `runsh.py`, believe
+`runsh.py`**, and treat the disagreement as a bug in alive.py. Validate any
+change to it on all four cases: loaded, idle, mid-boot, and no board at all.
+
+## conlog.py records the console read-only
+
+`conlog.py <out.log> [seconds]` listens and never sends, so it is neither a
+console runner nor a reset sequence. It exists because `dmesg` can only be read
+from a board that is still alive, which makes it useless for the one failure
+worth diagnosing. It prints `ALARM` on panic/BUG/hung-task/OOM patterns so it
+can drive Monitor. It holds the port, so fire the workload with `runsh` first
+(setsid, output to a file) and start recording after runsh exits. Note that a
+healthy idle board is also silent - have the board emit a heartbeat if you need
+to distinguish idle from dead.
