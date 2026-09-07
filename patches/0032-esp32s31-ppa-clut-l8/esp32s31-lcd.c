@@ -3225,6 +3225,10 @@ static void esp32s31_lcd_master_drop(struct drm_device *drm,
  * invisible to it, which is the whole reason this ioctl takes handles rather
  * than pointers.
  */
+/* Bounded so w*h and w*h*2 cannot overflow a 32-bit size_t, and so neither
+ * can overflow the hardware's size bitfields. */
+#define ESP32S31_PPA_CLUT_MAX_DIM	4096
+
 static int esp32s31_lcd_ppa_clut_ioctl(struct drm_device *drm, void *data,
 				       struct drm_file *file)
 {
@@ -3233,7 +3237,24 @@ static int esp32s31_lcd_ppa_clut_ioctl(struct drm_device *drm, void *data,
 	struct drm_gem_dma_object *src, *dst;
 	int ret;
 
-	if (!args->w || !args->h)
+	/*
+	 * BOUND w AND h BEFORE ANY ARITHMETIC.
+	 *
+	 * size_t is 32 bits here, so w*h overflows for values a caller can
+	 * simply pass: w = h = 0x10000 wraps the product to 0, which then
+	 * compares happily against the object size and passes every check
+	 * below - and esp32s31_ppa_in_range() overflows identically. The
+	 * hardware is then programmed by shifting w and h into the
+	 * PPA_BLEND_HB/VB bitfields, where an out-of-range value corrupts its
+	 * neighbours. This ioctl is DRM_RENDER_ALLOW, so any render client can
+	 * reach it.
+	 *
+	 * 4096 is far above anything this panel composites (800x480) and keeps
+	 * w*h*2 below 2^25, nowhere near the overflow.
+	 */
+	if (!args->w || !args->h ||
+	    args->w > ESP32S31_PPA_CLUT_MAX_DIM ||
+	    args->h > ESP32S31_PPA_CLUT_MAX_DIM)
 		return -EINVAL;
 
 	sobj = drm_gem_object_lookup(file, args->src_handle);
@@ -3247,9 +3268,33 @@ static int esp32s31_lcd_ppa_clut_ioctl(struct drm_device *drm, void *data,
 	src = to_drm_gem_dma_obj(sobj);
 	dst = to_drm_gem_dma_obj(dobj);
 
-	/* One byte per pixel in, two out. */
+	/*
+	 * Destination geometry. Zero means "tight, at the origin", which is
+	 * what callers built against the shorter struct get - DRM zero-fills
+	 * the appended fields for them.
+	 */
+	if (!args->dst_pic_w)
+		args->dst_pic_w = args->w;
+	if (!args->dst_pic_h)
+		args->dst_pic_h = args->h;
+	if (args->dst_pic_w > ESP32S31_PPA_CLUT_MAX_DIM ||
+	    args->dst_pic_h > ESP32S31_PPA_CLUT_MAX_DIM ||
+	    args->dst_x > ESP32S31_PPA_CLUT_MAX_DIM ||
+	    args->dst_y > ESP32S31_PPA_CLUT_MAX_DIM) {
+		ret = -EINVAL;
+		goto out;
+	}
+	/* The block must fit inside the picture. Checked with everything
+	 * already bounded above, so none of these sums can overflow. */
+	if (args->dst_x + args->w > args->dst_pic_w ||
+	    args->dst_y + args->h > args->dst_pic_h) {
+		ret = -EINVAL;
+		goto out;
+	}
+	/* One byte per pixel in; two out, across the WHOLE picture, because
+	 * the DMA steps rows by the picture stride. */
 	if ((size_t)args->w * args->h > sobj->size ||
-	    (size_t)args->w * args->h * 2 > dobj->size) {
+	    (size_t)args->dst_pic_w * args->dst_pic_h * 2 > dobj->size) {
 		ret = -EINVAL;
 		goto out;
 	}
@@ -3261,16 +3306,48 @@ static int esp32s31_lcd_ppa_clut_ioctl(struct drm_device *drm, void *data,
 	/* Indices out of the D-cache, and room for the result. */
 	dma_sync_single_for_device(drm->dev, src->dma_addr,
 				   (size_t)args->w * args->h, DMA_TO_DEVICE);
-	dma_sync_single_for_device(drm->dev, dst->dma_addr,
-				   (size_t)args->w * args->h * 2,
-				   DMA_FROM_DEVICE);
+	/*
+	 * SYNC ONLY THE ROWS THE DEVICE WRITES.
+	 *
+	 * Syncing the whole picture DMA_FROM_DEVICE invalidates the cache
+	 * across all of it, DISCARDING anything the CPU has written and not
+	 * yet flushed - which for a compositor means the chrome it just drew
+	 * into the framebuffer outside this window. rootfs/cluttest2 caught
+	 * exactly that: the block was pixel-perfect and 28,434 pixels around
+	 * it came back zeroed. It would have looked like a rendering bug
+	 * anywhere but here.
+	 *
+	 * Per row, so the margins either side of the block keep their
+	 * contents. 200 short syncs for a 320x200 window - the cost is real
+	 * but it is the price of not corrupting the rest of the screen.
+	 */
+	{
+		size_t row = (size_t)args->dst_pic_w * 2;
+		size_t off = (size_t)args->dst_y * row + (size_t)args->dst_x * 2;
+		u32 i;
+
+		for (i = 0; i < args->h; i++)
+			dma_sync_single_for_device(drm->dev,
+						   dst->dma_addr + off + i * row,
+						   (size_t)args->w * 2,
+						   DMA_FROM_DEVICE);
+	}
 
 	ret = esp32s31_ppa_clut_expand((u32)src->dma_addr, (u32)dst->dma_addr,
-				       args->w, args->h, args->clut);
-	if (!ret)
-		dma_sync_single_for_cpu(drm->dev, dst->dma_addr,
-					(size_t)args->w * args->h * 2,
-					DMA_FROM_DEVICE);
+				       args->w, args->h, args->clut,
+				       args->dst_x, args->dst_y,
+				       args->dst_pic_w, args->dst_pic_h);
+	if (!ret) {
+		size_t row = (size_t)args->dst_pic_w * 2;
+		size_t off = (size_t)args->dst_y * row + (size_t)args->dst_x * 2;
+		u32 i;
+
+		for (i = 0; i < args->h; i++)
+			dma_sync_single_for_cpu(drm->dev,
+						dst->dma_addr + off + i * row,
+						(size_t)args->w * 2,
+						DMA_FROM_DEVICE);
+	}
 out:
 	drm_gem_object_put(dobj);
 	drm_gem_object_put(sobj);

@@ -51,3 +51,63 @@ address that reserved region - a client's ordinary pages are invisible to it),
 fills one with every index, and checks the result against the palette:
 
     CT PASS: 0 of 64000 pixels wrong
+
+
+RED-TEAMED AND WIDENED, 2026-09-07
+----------------------------------
+The files above were applied unreviewed once, which is not good enough for
+something DRM_RENDER_ALLOW reachable. Reviewing them found five defects and
+one design limitation; all are fixed here.
+
+1. INTEGER OVERFLOW, userspace-triggerable. `(size_t)w * h` is 32-bit here, so
+   w = h = 0x10000 wraps the product to 0, passes every size check - including
+   esp32s31_ppa_in_range() - and is then shifted into the PPA_BLEND_HB/VB
+   bitfields where it corrupts the neighbours. Both dimensions are now bounded
+   by ESP32S31_PPA_CLUT_MAX_DIM (4096) before any arithmetic.
+
+2. UP TO ~400 ms OF STALL with ppa->lock held. The wait was
+   spin_rx_done, then wait_for_completion_timeout(200ms), then ANOTHER 200 ms
+   cpu_relax loop - on a single-core board, blocking the cursor plane and the
+   thumbnail path behind it. The expansion measures ~2.5 ms, so past a few
+   tens of ms it has failed and spinning only converts a dropped frame into a
+   freeze. Now one 50 ms wait plus a single re-read of the raw EOF bit (which
+   can legitimately race the completion). NOTE: the identical 200+200 ms wait
+   is STILL PRESENT in the copy and blend paths in esp32s31-ppa.c. Left alone
+   deliberately - they are the shipping cursor and thumbnail paths and this was
+   changed while measuring something else. Worth its own before/after.
+
+3. THE PALETTE WAS RE-UPLOADED EVERY CALL - 256 FIFO register writes per
+   frame for something that changes on a level load if at all. Cached now.
+
+4. COLD-START BUG IN THAT CACHE, found by review rather than by test:
+   clut_cache is zero-initialised and the hardware FIFO is undefined at boot,
+   so a first caller passing an all-zero palette would compare equal, skip the
+   upload and expand through whatever was in the FIFO. A clut_valid flag now
+   forces the first load. cluttest would never have caught it.
+
+5. THE CACHE SYNC DESTROYED THE REST OF THE FRAMEBUFFER. Syncing the whole
+   destination DMA_FROM_DEVICE invalidates that range, discarding anything the
+   CPU wrote and had not flushed - for a compositor, the chrome it just drew
+   around the window. rootfs/cluttest2 caught it: block pixel-perfect, 28,434
+   pixels around it zeroed. Now synced per row, over only the rows the device
+   writes.
+
+DESIGN: THE IOCTL COULD NOT TARGET A SUB-RECTANGLE. It expanded into a tight
+w*h buffer at the origin, which forces a compositor to blit that buffer into
+the framebuffer afterwards - the very copy the hardware path exists to avoid,
+measured at 40% of the compositor's per-frame cost. The 2D-DMA descriptor has
+always taken a block at (x,y) within a larger picture; only the struct could
+not say so. dst_x/dst_y/dst_pic_w/dst_pic_h are APPENDED, so DRM zero-fills
+them for callers built against the old struct and zero means "tight, at the
+origin" - the previous behaviour exactly.
+
+PROVEN, on silicon, all three at once:
+
+    cluttest   (old struct)      PASS 0 of 64000 pixels wrong
+    cluttest   (again, cached)   PASS 0 of 64000 pixels wrong
+    cluttest2  (block at 151,97 in 800x480, an ODD offset on purpose)
+                                 PASS 0 wrong in block, 0 spilled outside
+
+The spill check is the half that matters for a compositor: writing outside the
+window corrupts other windows, and that damage reads as a rendering bug
+somewhere else entirely.

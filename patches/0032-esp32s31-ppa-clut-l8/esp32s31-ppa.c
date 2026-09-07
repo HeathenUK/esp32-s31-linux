@@ -338,6 +338,15 @@ struct esp32s31_ppa {
 	void __iomem *ppa_memlp;
 	void __iomem *dma2d_memlp;
 
+	/*
+	 * Last palette pushed to the CLUT FIFO, so an unchanged one is not
+	 * re-uploaded. 256 register writes per frame otherwise, for something
+	 * that changes on a level load if at all. Guarded by ppa->lock, like
+	 * every other field touched during an operation.
+	 */
+	u32 clut_cache[256];
+	bool clut_valid;		/* has the FIFO ever been loaded? */
+
 	/* The JPEG codec: another engine hanging off the same 2D-DMA. */
 	void __iomem *jpeg;
 	void __iomem *jpeg_clkrst;
@@ -1366,7 +1375,12 @@ static void esp32s31_ppa_clut_load(struct esp32s31_ppa *ppa, const u32 *clut)
  * which is why the caller allocates them as GEM objects rather than ordinary
  * pages.
  */
-int esp32s31_ppa_clut_expand(u32 src, u32 dst, u32 w, u32 h, const u32 *clut)
+/* The 320x200 expansion measures ~2.5 ms; past a few tens of ms it has
+ * failed, and waiting longer only turns a dropped frame into a freeze. */
+#define PPA_CLUT_WAIT_MS	50
+
+int esp32s31_ppa_clut_expand(u32 src, u32 dst, u32 w, u32 h, const u32 *clut,
+			     u32 dst_x, u32 dst_y, u32 dst_pic_w, u32 dst_pic_h)
 {
 	struct esp32s31_ppa *ppa = esp32s31_ppa_instance;
 	void __iomem *bg, *fg;
@@ -1380,8 +1394,19 @@ int esp32s31_ppa_clut_expand(u32 src, u32 dst, u32 w, u32 h, const u32 *clut)
 		return -EINVAL;
 	if ((src | dst) & 3)
 		return -EINVAL;
+	/* Zero means "tight, at the origin" - what callers got before the
+	 * destination geometry existed. */
+	if (!dst_pic_w)
+		dst_pic_w = w;
+	if (!dst_pic_h)
+		dst_pic_h = h;
+	if (dst_x + w > dst_pic_w || dst_y + h > dst_pic_h)
+		return -EINVAL;
+	/* The destination window spans the whole picture, not just the block:
+	 * the DMA indexes rows by the picture stride. */
 	if (!esp32s31_ppa_in_range(ppa, src, (size_t)w * h) ||
-	    !esp32s31_ppa_in_range(ppa, dst, (size_t)w * h * 2))
+	    !esp32s31_ppa_in_range(ppa, dst,
+				   (size_t)dst_pic_w * dst_pic_h * 2))
 		return -ERANGE;
 
 	bg = ppa->dma2d + 0 * DMA2D_TX_CH_STRIDE;
@@ -1389,15 +1414,43 @@ int esp32s31_ppa_clut_expand(u32 src, u32 dst, u32 w, u32 h, const u32 *clut)
 
 	mutex_lock(&ppa->lock);
 
-	esp32s31_ppa_clut_load(ppa, clut);
+	/*
+	 * Only re-upload the palette when it actually changed.
+	 *
+	 * clut_load() pushes 256 entries through a FIFO - 256 register writes
+	 * - and a compositor calls this once per frame with a palette that
+	 * changes on a level load, if at all. Doom's timedemo sets it once and
+	 * never again across 5026 gametics.
+	 */
+	if (!ppa->clut_valid ||
+	    memcmp(ppa->clut_cache, clut, sizeof(ppa->clut_cache))) {
+		/*
+		 * clut_valid is NOT redundant with the memcmp. clut_cache is
+		 * zero-initialised and the hardware CLUT is undefined at boot,
+		 * so a first caller passing an all-zero palette would compare
+		 * equal, skip the upload, and expand through whatever was left
+		 * in the FIFO. Rare, silent, and it would look like a hardware
+		 * fault rather than a caching bug.
+		 */
+		esp32s31_ppa_clut_load(ppa, clut);
+		memcpy(ppa->clut_cache, clut, sizeof(ppa->clut_cache));
+		ppa->clut_valid = true;
+	}
 
 	/* Background is the index plane: ONE byte per pixel, not two. */
 	esp32s31_ppa_desc(ppa, DMA2D_DESC_BG, src, w, h, w, h, 0, 0,
 			     DMA2D_PBYTE_1B_PER_PIXEL);
-	esp32s31_ppa_desc(ppa, DMA2D_DESC_FG, dst, w, h, w, h, 0, 0,
-			     DMA2D_PBYTE_2B_PER_PIXEL);
-	esp32s31_ppa_desc(ppa, DMA2D_DESC_RX, dst, w, h, w, h, 0, 0,
-			     DMA2D_PBYTE_2B_PER_PIXEL);
+	/*
+	 * The foreground and the result BOTH address the destination, so both
+	 * describe the full picture with the block placed at (dst_x, dst_y).
+	 * Passing the block size as the picture size - which is all the old
+	 * ioctl could express - is what forced callers to expand into a
+	 * private buffer and blit it afterwards.
+	 */
+	esp32s31_ppa_desc(ppa, DMA2D_DESC_FG, dst, dst_pic_w, dst_pic_h, w, h,
+			     dst_x, dst_y, DMA2D_PBYTE_2B_PER_PIXEL);
+	esp32s31_ppa_desc(ppa, DMA2D_DESC_RX, dst, dst_pic_w, dst_pic_h, w, h,
+			     dst_x, dst_y, DMA2D_PBYTE_2B_PER_PIXEL);
 	wmb();	/* uncached SRAM: order the descriptors before the starts */
 
 	v = readl(ppa->ppa + PPA_BLEND_TRANS_MODE);
@@ -1479,17 +1532,31 @@ int esp32s31_ppa_clut_expand(u32 src, u32 dst, u32 w, u32 h, const u32 *clut)
 	 * memory/s31-ppa-completion-signal.
 	 */
 	if (!esp32s31_ppa_spin_rx_done(ppa) &&
-	    !wait_for_completion_timeout(&ppa->done, msecs_to_jiffies(200))) {
-		deadline = jiffies + msecs_to_jiffies(200);
-		ret = -ETIMEDOUT;
-		do {
-			if (readl(ppa->dma2d + DMA2D_IN_INT_RAW_CH0) &
-			    DMA2D_IN_SUC_EOF) {
-				ret = 0;
-				break;
-			}
-			cpu_relax();
-		} while (time_before(jiffies, deadline));
+	    !wait_for_completion_timeout(&ppa->done,
+					 msecs_to_jiffies(PPA_CLUT_WAIT_MS))) {
+		/*
+		 * ONE last look at the raw status, then give up.
+		 *
+		 * This waited 200 ms for the completion and then spun a
+		 * FURTHER 200 ms on cpu_relax() - up to ~400 ms of stall on a
+		 * SINGLE-CORE board with ppa->lock held, so the cursor plane
+		 * and the thumbnail path block behind it too. The expansion
+		 * itself measures ~2.5 ms at 320x200, so anything past a few
+		 * tens of ms is not slowness but failure, and spinning longer
+		 * only turns a dropped frame into a visible freeze.
+		 *
+		 * The single re-read stays: completion and the raw EOF bit can
+		 * race, so the interrupt may be missed on a transfer that
+		 * genuinely finished.
+		 *
+		 * NOTE: the identical 200+200 ms wait is still present in the
+		 * copy and blend paths in this file. Left alone deliberately -
+		 * they are in the shipping cursor and thumbnail paths and this
+		 * change was made while measuring something else. Worth fixing
+		 * separately, with its own before/after.
+		 */
+		ret = (readl(ppa->dma2d + DMA2D_IN_INT_RAW_CH0) &
+		       DMA2D_IN_SUC_EOF) ? 0 : -ETIMEDOUT;
 	}
 
 	mutex_unlock(&ppa->lock);
