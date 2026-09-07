@@ -1380,7 +1380,9 @@ static void esp32s31_ppa_clut_load(struct esp32s31_ppa *ppa, const u32 *clut)
 #define PPA_CLUT_WAIT_MS	50
 
 int esp32s31_ppa_clut_expand(u32 src, u32 dst, u32 w, u32 h, const u32 *clut,
-			     u32 dst_x, u32 dst_y, u32 dst_pic_w, u32 dst_pic_h)
+			     u32 dst_x, u32 dst_y, u32 dst_pic_w, u32 dst_pic_h,
+			     u32 src_x, u32 src_y, u32 src_pic_w,
+			     u32 src_pic_h)
 {
 	struct esp32s31_ppa *ppa = esp32s31_ppa_instance;
 	void __iomem *bg, *fg;
@@ -1400,11 +1402,18 @@ int esp32s31_ppa_clut_expand(u32 src, u32 dst, u32 w, u32 h, const u32 *clut,
 		dst_pic_w = w;
 	if (!dst_pic_h)
 		dst_pic_h = h;
-	if (dst_x + w > dst_pic_w || dst_y + h > dst_pic_h)
+	if (!src_pic_w)
+		src_pic_w = w;
+	if (!src_pic_h)
+		src_pic_h = h;
+	if (dst_x + w > dst_pic_w || dst_y + h > dst_pic_h ||
+	    src_x + w > src_pic_w || src_y + h > src_pic_h)
 		return -EINVAL;
 	/* The destination window spans the whole picture, not just the block:
 	 * the DMA indexes rows by the picture stride. */
-	if (!esp32s31_ppa_in_range(ppa, src, (size_t)w * h) ||
+	/* Both windows span their whole picture: the DMA steps rows by the
+	 * picture stride, not by the block width. */
+	if (!esp32s31_ppa_in_range(ppa, src, (size_t)src_pic_w * src_pic_h) ||
 	    !esp32s31_ppa_in_range(ppa, dst,
 				   (size_t)dst_pic_w * dst_pic_h * 2))
 		return -ERANGE;
@@ -1438,8 +1447,13 @@ int esp32s31_ppa_clut_expand(u32 src, u32 dst, u32 w, u32 h, const u32 *clut,
 	}
 
 	/* Background is the index plane: ONE byte per pixel, not two. */
-	esp32s31_ppa_desc(ppa, DMA2D_DESC_BG, src, w, h, w, h, 0, 0,
-			     DMA2D_PBYTE_1B_PER_PIXEL);
+	/*
+	 * The index plane, as a block at (src_x, src_y) inside its own
+	 * picture - so a partial repaint expands only the rows that changed
+	 * instead of the whole window.
+	 */
+	esp32s31_ppa_desc(ppa, DMA2D_DESC_BG, src, src_pic_w, src_pic_h, w, h,
+			     src_x, src_y, DMA2D_PBYTE_1B_PER_PIXEL);
 	/*
 	 * The foreground and the result BOTH address the destination, so both
 	 * describe the full picture with the block placed at (dst_x, dst_y).

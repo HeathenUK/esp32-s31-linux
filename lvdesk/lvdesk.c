@@ -73,6 +73,7 @@
 struct drm_esp32s31_ppa_clut {
 	uint32_t src_handle, dst_handle, w, h, clut[256];
 	uint32_t dst_x, dst_y, dst_pic_w, dst_pic_h;
+	uint32_t src_x, src_y, src_pic_w, src_pic_h;
 };
 #define DRM_IOCTL_ESP32S31_PPA_CLUT \
 	DRM_IOW(DRM_COMMAND_BASE + DRM_ESP32S31_PPA_CLUT, \
@@ -3945,26 +3946,93 @@ static int ppa_gem_expand(int i, const lv_area_t *coords,
 	uint32_t sgem = xshim_window_gem(xwins[i].id);
 	uint32_t dgem = kms_fb_handle();
 	int fd = kms_get_fd(), k;
+	int bw, bh, bsx, bsy, bdx, bdy;
 
-	if (!sgem || !dgem || fd < 0)
-		return 0;
-	/* Only when the flush covers the whole window - see the caller. */
-	if (area->x1 > coords->x1 || area->y1 > coords->y1 ||
-	    area->x2 < coords->x2 || area->y2 < coords->y2)
-		return 0;
-	if (coords->x1 < 0 || coords->y1 < 0 ||
-	    coords->x1 + sw > (int)kms_w || coords->y1 + sh > (int)kms_h)
-		return 0;
+	/*
+	 * SAY WHY, ONCE. Two rounds of guessing went into why this path never
+	 * engaged at 640x400 - each costing a build, a flash and a run - when
+	 * the function could simply have reported its own reason. A silent
+	 * fallback is right for the pixels and wrong for the engineer.
+	 */
+	{
+		static int said;
+		const char *why = NULL;
+
+		if (!sgem)
+			why = "window is not GEM-backed";
+		else if (!dgem)
+			why = "no framebuffer GEM handle";
+		else if (fd < 0)
+			why = "no DRM fd";
+		/*
+		 * NOT "does the whole window fit on the panel". It usually
+		 * does not: a 640x400 client at y=81 ends at 481 on a 480-line
+		 * panel, one row over, and rejecting that turned the hardware
+		 * path off for every frame of a 640x400 run. The block is
+		 * clipped to the panel below instead, which is what the
+		 * framebuffer bound actually requires.
+		 */
+		if (why) {
+			if (!said) {
+				said = 1;
+				fprintf(stderr, "lvdesk: PPACLUT declined: %s "
+					"(sgem=%u dgem=%u fd=%d win %d,%d %dx%d "
+					"panel %ux%u)\n", why, sgem, dgem, fd,
+					(int)coords->x1, (int)coords->y1,
+					sw, sh, kms_w, kms_h);
+			}
+			return 0;
+		}
+	}
+
+	/*
+	 * EXPAND THE INTERSECTION, not the whole window.
+	 *
+	 * This used to decline unless the flush covered the entire window,
+	 * which is true of a small window and false of a large one - LVGL
+	 * splits a big repaint into several rectangles. So the hardware path
+	 * turned itself off at exactly the size where it starts to win:
+	 * measured at 640x400, it never ran once in a whole timedemo, and the
+	 * "PPA arm" was silently the CPU arm.
+	 */
+	{
+		int x1 = area->x1 > coords->x1 ? area->x1 : coords->x1;
+		int y1 = area->y1 > coords->y1 ? area->y1 : coords->y1;
+		int x2 = area->x2 < coords->x2 ? area->x2 : coords->x2;
+		int y2 = area->y2 < coords->y2 ? area->y2 : coords->y2;
+
+		/* Clip to the panel: a window may legitimately hang off it. */
+		if (x1 < 0)
+			x1 = 0;
+		if (y1 < 0)
+			y1 = 0;
+		if (x2 > (int)kms_w - 1)
+			x2 = (int)kms_w - 1;
+		if (y2 > (int)kms_h - 1)
+			y2 = (int)kms_h - 1;
+		if (x2 < x1 || y2 < y1)
+			return 0;		/* nothing of ours in this flush */
+		bw = x2 - x1 + 1;
+		bh = y2 - y1 + 1;
+		bsx = x1 - coords->x1;
+		bsy = y1 - coords->y1;
+		bdx = x1;
+		bdy = y1;
+	}
 
 	memset(&a, 0, sizeof a);
 	a.src_handle = sgem;
 	a.dst_handle = dgem;
-	a.w = sw;
-	a.h = sh;
-	a.dst_x = coords->x1;
-	a.dst_y = coords->y1;
+	a.w = bw;
+	a.h = bh;
+	a.dst_x = bdx;
+	a.dst_y = bdy;
 	a.dst_pic_w = kms_w;
 	a.dst_pic_h = kms_h;
+	a.src_x = bsx;
+	a.src_y = bsy;
+	a.src_pic_w = sw;
+	a.src_pic_h = sh;
 	/* RGB565 palette -> the ARGB8888 the CLUT FIFO wants. */
 	for (k = 0; k < 256; k++) {
 		uint32_t v = pal[k];

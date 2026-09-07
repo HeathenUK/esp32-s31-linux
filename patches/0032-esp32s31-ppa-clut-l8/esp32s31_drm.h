@@ -170,6 +170,25 @@ struct drm_esp32s31_ppa_clut {
 	__u32 dst_y;
 	__u32 dst_pic_w;
 	__u32 dst_pic_h;
+	/*
+	 * Which part of the SOURCE to expand, appended for the same reason as
+	 * the destination rectangle and with the same zero-means-whole default.
+	 *
+	 * Without it the call can only expand an entire w*h plane, so a
+	 * compositor may only use it when a repaint covers the WHOLE window.
+	 * That is true of a small window and false of a large one - LVGL
+	 * splits a big repaint into several rectangles - so the hardware path
+	 * switched itself off at exactly the size where it starts to win.
+	 * Measured: at 640x400 the expansion never ran once.
+	 *
+	 * src_pic_w/h describe the whole index plane; src_x/y and w/h the
+	 * block within it. w/h are shared with the destination block, since a
+	 * CLUT expansion never scales.
+	 */
+	__u32 src_x;
+	__u32 src_y;
+	__u32 src_pic_w;
+	__u32 src_pic_h;
 };
 
 #define DRM_ESP32S31_PPA_COPY		0x00

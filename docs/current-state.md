@@ -5814,6 +5814,61 @@ that matter for wiring this up:
     once, re-upload only when the client's palette actually changes. That cost
     was inside the original PPA-vs-CPU comparison and nobody accounted for it.
 
+## PPA CLUT: correct everywhere, wins nowhere yet, and hangs at 640x400
+
+State at the end of 2026-09-07. Default OFF (XSHIM_PPACLUT=1 arms it).
+
+**Correct.** cluttest and cluttest2 pass on silicon - pixel-exact, including a
+block at an odd offset inside an 800x480 picture with nothing spilled outside.
+It renders a real client at BOTH sizes; at 640x400 the first frame comes up in
+correct colour, observed on the physical panel.
+
+**320x200: a 7.5% REGRESSION.** 27.2 fps against the CPU path's 29.4/29.9/29.0,
+both arms measured the same undisturbed way. Its overhead is per-ROW - 400
+dma_sync calls a frame at 640x400 - while the CPU's cost is per-PIXEL.
+
+**640x400: HANGS THE BOARD after the first frames.** The CPU arm completes a
+full 417 s timedemo at 12.1 fps; the PPA arm dies every time. No panic, zero
+console bytes, always recoverable by reset.
+
+### The likely mechanism, and where to start next time
+
+The first frame is CORRECT - the user watched it come up in colour - so this
+is not configuration, geometry or the palette. Something goes wrong on the
+SECOND and later operations.
+
+esp32s31_ppa_clut_expand() holds ppa->lock across its completion wait. If the
+engine does not return to a clean state after an operation, every later call
+burns the full timeout WITH THE LOCK HELD, and the cursor plane and the
+driver's own damage path contend for that same lock. The display pipeline
+stalls, the console starves, and the board looks dead while being alive -
+which is exactly the observed signature. The CPU arm is stable at 640x400
+because nothing else takes that lock.
+
+Start by instrumenting the ioctl's return value per call rather than guessing:
+if calls 2..N are returning -ETIMEDOUT, that is the answer, and the fix is
+engine reset/idle handling between operations, not anything in lvdesk.
+
+### Two bugs in lvdesk found on the way, both mine, both fixed
+
+* px_alloc gained a GEM path and the FREE path was not updated. It chooses
+  munmap-vs-free on `shm_fd >= 0`, and a GEM surface not yet SHARED has no fd,
+  so it fell through to free() on an mmap'd pointer. lvdesk vanished with no
+  segfault in dmesg and nothing in its own log; the client just reported
+  "connection to the X server was lost".
+* The hardware path was gated on the flush covering the WHOLE window, and then
+  on the whole window fitting on the panel. A 640x400 client at y=81 ends at
+  481 on a 480-line panel - one row over - so it declined every frame and the
+  "PPA arm" was silently the CPU arm. It now expands the intersection and
+  clips to the panel. **Two build-flash-test cycles were spent guessing at
+  this before adding a one-line "declined: <reason>" log.** Make the code say
+  why it took a fallback.
+
+  The user's suggestion was better still: to remove the factor rather than fix
+  it, MOVE THE WINDOW to the centre of the panel with `move <n> <x> <y>` on
+  the ctl fifo. Fix the clipping because it is right; centre the window when
+  measuring.
+
 ## SETTLED: 320x200 is 29.4 fps, and MY HARNESS was costing 26% of it
 
 Three undisturbed runs of the shipping build, nothing touching the board

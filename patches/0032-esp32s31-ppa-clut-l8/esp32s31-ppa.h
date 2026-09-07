@@ -11,7 +11,9 @@
 int esp32s31_ppa_scale(u32 src, u32 src_w, u32 src_h,
 		       u32 dst, u32 dst_w, u32 dst_h);
 int esp32s31_ppa_clut_expand(u32 src, u32 dst, u32 w, u32 h, const u32 *clut,
-			     u32 dst_x, u32 dst_y, u32 dst_pic_w, u32 dst_pic_h);
+			     u32 dst_x, u32 dst_y, u32 dst_pic_w, u32 dst_pic_h,
+			     u32 src_x, u32 src_y, u32 src_pic_w,
+			     u32 src_pic_h);
 int esp32s31_ppa_scale_rect(u32 src, u32 src_w, u32 src_h,
 			    u32 dst, u32 dst_w, u32 dst_h,
 			    u32 sx, u32 sy, u32 bw, u32 bh, u32 dx, u32 dy,
@@ -70,8 +72,11 @@ static inline int esp32s31_ppa_scale(u32 src, u32 src_w, u32 src_h,
 }
 
 static inline int esp32s31_ppa_clut_expand(u32 src, u32 dst, u32 w, u32 h,
-					   const u32 *clut, u32 dst_x, u32 dst_y,
-					   u32 dst_pic_w, u32 dst_pic_h)
+					   const u32 *clut, u32 dst_x,
+					   u32 dst_y, u32 dst_pic_w,
+					   u32 dst_pic_h, u32 src_x,
+					   u32 src_y, u32 src_pic_w,
+					   u32 src_pic_h)
 {
 	return -ENODEV;
 }
