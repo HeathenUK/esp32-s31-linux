@@ -86,10 +86,29 @@ def run(path, timeout=240, boot_wait=0, shell_wait=75.0):
     # host's patience, so a script that finishes normally is never disturbed
     # and only a genuine overrun is cut - and the marker says which happened,
     # rather than leaving silence to be interpreted.
-    guard = int(timeout) + 10
+    # The marker is spelled RS_TIME"K"ILL in the command so the literal
+    # RS_TIMEKILL appears ONLY in the board's output, never in the echoed
+    # command line - otherwise every normal run reports a timekill, which is
+    # how a safety net turns into noise everyone learns to ignore.
+    #
+    # FIRE BEFORE runsh GIVES UP, not after.
+    #
+    # This was timeout+10, which meant the board killed the script ten seconds
+    # AFTER runsh had already stopped listening - so the console was freed
+    # (the important half) but RS_TIMEKILL was never seen and the caller still
+    # got unexplained silence, which is the whole failure being fixed. Firing
+    # a few seconds early means the marker lands inside the window and the
+    # caller is TOLD what happened. Found by deliberately overrunning it.
+    guard = max(5, int(timeout) - 3)
+    #
+    # ANNOUNCE, THEN KILL. `kill && echo` loses a race: `wait` returns the
+    # instant the script dies and the main shell kills the watchdog before it
+    # reaches the echo, so the console frees up but the caller is told
+    # nothing - which is the exact failure this is meant to remove. `kill -0`
+    # first, so a script that finished normally is never announced.
     p.write(('sh /tmp/r.sh 2>&1 & __rp=$!; '
-             '( sleep %d; kill -9 $__rp 2>/dev/null && '
-             'echo RS_TIMEKILL ) & __rw=$!; '
+             '( sleep %d; kill -0 $__rp 2>/dev/null && '
+             '{ echo RS_TIME"K"ILL; kill -9 $__rp 2>/dev/null; } ) & __rw=$!; '
              'wait $__rp 2>/dev/null; kill $__rw 2>/dev/null; '
              'echo RS_DONE\n' % guard).encode())
     o, _ = until(lambda b: 'RS_DONE' in b.split('echo RS_DONE')[-1], timeout)

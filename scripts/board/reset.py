@@ -10,16 +10,32 @@ and poisoned four consecutive diagnoses.
 
 esptool already does it correctly. Use esptool.
 """
+import os
 import subprocess
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import console
 
 ESPTOOL = ('/Users/gadyke/.espressif/python_env/idf6.0_py3.12_env/bin/esptool')
 PORT = '/dev/cu.usbserial-130'
 
 
 def reset(port=PORT):
-    subprocess.run([ESPTOOL, '-p', port, '--after', 'hard-reset', 'chip-id'],
-                   capture_output=True, timeout=60)
+    """Take the port lock first.
+
+    esptool opens the tty as a subprocess and knows nothing about our flock, so
+    without this a reset can land in the middle of somebody else's measurement
+    - which is worse than a contending read, because it REBOOTS THE BOARD under
+    them and the run they were timing silently becomes a run of something else.
+    Taking the lock here makes that collision impossible rather than unlikely.
+    """
+    console.take_port_lock(what='reset.py (esptool hard-reset)')
+    try:
+        subprocess.run([ESPTOOL, '-p', port, '--after', 'hard-reset',
+                        'chip-id'], capture_output=True, timeout=60)
+    finally:
+        console.release_port_lock()
 
 
 if __name__ == '__main__':

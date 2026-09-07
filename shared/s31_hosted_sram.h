@@ -171,6 +171,31 @@ enum s31_hosted_coex_op {
 	S31_HOSTED_COEX_FLEX_PERIOD = 5,	/* arg: flexible period */
 	S31_HOSTED_COEX_WIFI_SET = 6,
 	S31_HOSTED_COEX_WIFI_CLEAR = 7,
+	/*
+	 * Not coexistence at all - it rides this message because this is the
+	 * one runtime channel Linux already has to hart0, and adding a whole
+	 * control type for two integers is not worth a protocol revision.
+	 *
+	 * arg: (tag << 8) | level, where level is an ESP_LOG_* value
+	 * (0 NONE, 1 ERROR, 2 WARN, 3 INFO, 4 DEBUG, 5 VERBOSE) and tag is
+	 * S31_HOSTED_LOGTAG_*. Tags are enumerated rather than sent as
+	 * strings so the payload stays fixed-size.
+	 *
+	 * WHY: hart0 logs at INFO and shares the 1 Mbps console with Linux.
+	 * The Wi-Fi block alone emits an ADDBA line per stream setup, and a
+	 * console recording of a Doom run came back containing NOTHING BUT
+	 * that chatter - the spam is loud enough to be the only thing in a
+	 * capture taken to diagnose a crash.
+	 */
+	S31_HOSTED_COEX_LOGLEVEL = 8,	/* arg: (tag << 8) | level */
+};
+
+enum s31_hosted_logtag {
+	S31_HOSTED_LOGTAG_ALL = 0,	/* the "*" default level */
+	S31_HOSTED_LOGTAG_WIFI = 1,	/* "wifi" - the ADDBA chatter */
+	S31_HOSTED_LOGTAG_COEX = 2,	/* "coexist" */
+	S31_HOSTED_LOGTAG_PM = 3,	/* "pm" */
+	S31_HOSTED_LOGTAG_HOSTED = 4,	/* our own transport */
 };
 
 struct s31_hosted_coex_msg {

@@ -400,6 +400,22 @@ void app_main(void)
      * command output by anything scripting the console.
      */
     esp_log_level_set("pm", ESP_LOG_WARN);
+    /*
+     * Quiet the Wi-Fi block by default. hart0 shares the 1 Mbps console with
+     * Linux, and this component emits a burst of ADDBA lines on every
+     * block-ack setup - a console recording taken to diagnose a crash during
+     * a Doom run came back containing NOTHING BUT that chatter.
+     *
+     * It is bursty rather than continuous (association and stream setup, not
+     * steady state), so this is about keeping captures readable, not about
+     * CPU. `s31-coex loglevel wifi 3` puts it back at runtime when Wi-Fi is
+     * actually what is being debugged - which is why the runtime op exists
+     * rather than this line alone.
+     *
+     * Note CONFIG_LOG_MAXIMUM_LEVEL=3, so DEBUG and VERBOSE are compiled out
+     * and no runtime call can raise past INFO.
+     */
+    esp_log_level_set("wifi", ESP_LOG_WARN);
 #endif
 
     prepare_linux_uart0();

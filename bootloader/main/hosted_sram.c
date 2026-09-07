@@ -372,6 +372,32 @@ static bool process_coex_control(const struct s31_hosted_control_msg *msg)
 	memcpy(&req, msg->data, sizeof(req));
 	resp.op = req.op;
 	resp.arg = req.arg;
+
+	/*
+	 * Log level first, and OUTSIDE the coexistence guard - it has nothing
+	 * to do with coex and must work on a build with coexistence compiled
+	 * out. It rides the coex message only because that is the runtime
+	 * channel Linux already has.
+	 */
+	if (req.op == S31_HOSTED_COEX_LOGLEVEL) {
+		static const char *const tags[] = {
+			"*", "wifi", "coexist", "pm", "s31-hosted",
+		};
+		unsigned tag = (req.arg >> 8) & 0xFF;
+		unsigned level = req.arg & 0xFF;
+
+		if (tag < sizeof(tags) / sizeof(tags[0]) &&
+		    level <= ESP_LOG_VERBOSE) {
+			esp_log_level_set(tags[tag], (esp_log_level_t)level);
+			resp.status = ESP_OK;
+			resp.result = level;
+		} else {
+			resp.status = ESP_ERR_INVALID_ARG;
+		}
+		memcpy(response.data, &resp, sizeof(resp));
+		(void)s31_hosted_sram_send_control(&response, sizeof(response));
+		return true;
+	}
 #if CONFIG_ESP_COEX_SW_COEXIST_ENABLE
 	switch (req.op) {
 	case S31_HOSTED_COEX_GET:
