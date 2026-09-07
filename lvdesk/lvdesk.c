@@ -60,7 +60,23 @@
 #include "src/misc/lv_area_private.h"
 #include "src/core/lv_obj_event_private.h"
 #include "src/drivers/lv_drivers.h"
+#include <drm/drm.h>
 #include "kms.h"
+
+/*
+ * DRM_IOCTL_ESP32S31_PPA_CLUT, as widened to take a destination rectangle.
+ * Declared here rather than including the driver's uapi header, which is not
+ * in this sysroot; the numbers and layout are checked against
+ * linux-71-port/include/uapi/drm/esp32s31_drm.h.
+ */
+#define DRM_ESP32S31_PPA_CLUT 0x05
+struct drm_esp32s31_ppa_clut {
+	uint32_t src_handle, dst_handle, w, h, clut[256];
+	uint32_t dst_x, dst_y, dst_pic_w, dst_pic_h;
+};
+#define DRM_IOCTL_ESP32S31_PPA_CLUT \
+	DRM_IOW(DRM_COMMAND_BASE + DRM_ESP32S31_PPA_CLUT, \
+		struct drm_esp32s31_ppa_clut)
 #include "xshim.h"
 #include "../xlite/xlite_wirekeys.h"
 #include "lvdesk_art.h"
@@ -3917,6 +3933,48 @@ static int xwin_direct_ok(int idx)
 	return 1;
 }
 
+/*
+ * XSHIM_PPACLUT=1 selects hardware expansion; lvdesk only follows what xshim
+ * decided, because the choice had to be made when the buffer was allocated.
+ */
+static int ppa_gem_expand(int i, const lv_area_t *coords,
+			  const lv_area_t *area, int sw, int sh,
+			  const uint16_t *pal)
+{
+	struct drm_esp32s31_ppa_clut a;
+	uint32_t sgem = xshim_window_gem(xwins[i].id);
+	uint32_t dgem = kms_fb_handle();
+	int fd = kms_get_fd(), k;
+
+	if (!sgem || !dgem || fd < 0)
+		return 0;
+	/* Only when the flush covers the whole window - see the caller. */
+	if (area->x1 > coords->x1 || area->y1 > coords->y1 ||
+	    area->x2 < coords->x2 || area->y2 < coords->y2)
+		return 0;
+	if (coords->x1 < 0 || coords->y1 < 0 ||
+	    coords->x1 + sw > (int)kms_w || coords->y1 + sh > (int)kms_h)
+		return 0;
+
+	memset(&a, 0, sizeof a);
+	a.src_handle = sgem;
+	a.dst_handle = dgem;
+	a.w = sw;
+	a.h = sh;
+	a.dst_x = coords->x1;
+	a.dst_y = coords->y1;
+	a.dst_pic_w = kms_w;
+	a.dst_pic_h = kms_h;
+	/* RGB565 palette -> the ARGB8888 the CLUT FIFO wants. */
+	for (k = 0; k < 256; k++) {
+		uint32_t v = pal[k];
+
+		a.clut[k] = 0xFF000000u | ((v & 0xF800) << 8) |
+			    ((v & 0x07E0) << 5) | ((v & 0x001F) << 3);
+	}
+	return ioctl(fd, DRM_IOCTL_ESP32S31_PPA_CLUT, &a) == 0;
+}
+
 static void xwin_blit_direct(const lv_area_t *area)
 {
 	int i;
@@ -3934,6 +3992,29 @@ static void xwin_blit_direct(const lv_area_t *area)
 		if (!src || !pal)
 			continue;
 		lv_obj_get_coords(xwins[i].img, &coords);
+
+		/*
+		 * HARDWARE EXPANSION, when the index plane is GEM.
+		 *
+		 * The PPA reads the indices and writes RGB565 straight into
+		 * the scanout buffer at the window's position - the whole
+		 * per-frame expansion, with the CPU touching no pixels. It is
+		 * only possible because both sides are in the reserved DMA
+		 * pool the blend engine can address, and because the ioctl now
+		 * takes a destination rectangle.
+		 *
+		 * Only for a FULL flush of the window: the ioctl expands the
+		 * whole w*h plane, so a partial rectangle would be wasted work
+		 * and, worse, would write outside the flush area LVGL asked
+		 * for. Partial flushes fall through to the CPU loop below.
+		 *
+		 * ANY failure falls through to the CPU too. That matters more
+		 * than it looks: a hardware path that silently drew nothing
+		 * would leave a black window, which is exactly the failure
+		 * that went unnoticed for a day here.
+		 */
+		if (ppa_gem_expand(i, &coords, area, sw, sh, pal))
+			continue;
 
 		/* Intersect with the flush rect AND with the panel. */
 		clip.x1 = coords.x1 > area->x1 ? coords.x1 : area->x1;

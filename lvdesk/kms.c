@@ -109,6 +109,9 @@ static void kms_release_console(void)
 /* The PPA path needs GEM buffers, and those come from this fd. */
 int kms_get_fd(void) { return kms_fd; }
 
+/* See kms.h: the PPA names its destination by GEM handle, not by pointer. */
+uint32_t kms_fb_handle(void) { return kms_handle; }
+
 int kms_open(const char *path)
 {
 	struct drm_mode_card_res res;

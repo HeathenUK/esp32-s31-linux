@@ -87,6 +87,14 @@ const uint8_t *xshim_window_indices(uint32_t id, int *w, int *h,
 				    int *stride, const uint16_t **pal);
 
 /*
+ * The GEM handle behind a window's index plane, or 0 if it is ordinary
+ * memory. Non-zero means the PPA can address it and the expansion can be done
+ * in hardware; zero means it must be done on the CPU. There is no way to ask
+ * the question from a pointer, which is why this exists.
+ */
+uint32_t xshim_window_gem(uint32_t id);
+
+/*
  * Resize a client's top-level from OUR side.
  *
  * The window manager lives in lvdesk, so maximising or snapping an X client is

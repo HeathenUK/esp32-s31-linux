@@ -25,6 +25,18 @@ int kms_open(const char *path);
 int kms_get_fd(void);
 
 /*
+ * The scanout buffer's GEM handle, or 0 before kms_open().
+ *
+ * The PPA can only address the reserved DMA pool its DT memory-region names
+ * (lcd_reserved, a 6 MB shared-dma-pool), so a hardware expansion has to name
+ * its destination by GEM handle - an mmap pointer means nothing to it. This is
+ * that handle for the framebuffer, letting the CLUT expansion write straight
+ * into the scanout at the window's position instead of into a private buffer
+ * something then has to blit.
+ */
+uint32_t kms_fb_handle(void);
+
+/*
  * Hardware cursor plane.
  *
  * Moving the pointer as an LVGL object costs a full redraw cycle of everything

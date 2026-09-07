@@ -38,6 +38,10 @@
 #include <unistd.h>
 #include <poll.h>
 
+#include <sys/ioctl.h>
+#include <drm/drm.h>
+#include <drm/drm_mode.h>
+#include "kms.h"
 #include "xshim.h"
 #include "xshim_font.h"
 
@@ -151,7 +155,18 @@ struct res {
 					 * has written since allocation or since a
 					 * whole-surface clear was punched out */
 	uint8_t bpp;			/* bytes per pixel in px: 1, 2 or 4 */
-	int shm_fd;			/* memfd backing px, or -1 */
+	int shm_fd;			/* memfd or dma-buf backing px, or -1 */
+	/*
+	 * GEM handle when the index plane lives in the reserved DMA pool.
+	 *
+	 * The PPA can only address lcd_reserved (see the DT memory-region on
+	 * both the lcd and ppa nodes); an ordinary memfd's pages are invisible
+	 * to it and esp32s31_ppa_in_range() refuses them. So a window that
+	 * wants hardware expansion has to be born in that pool, and is handed
+	 * to the client as a dma-buf rather than a memfd.
+	 */
+	uint32_t gem_src;
+	size_t gem_len;
 	size_t shm_len;
 	int line_width;
 	int owner;			/* index into cli[] */
@@ -480,6 +495,71 @@ static int drawable_ok(struct res *d)
  * Windows are excluded: lvdesk hands their buffer pointer straight to LVGL,
  * so they must always be backed.
  */
+/*
+ * XSHIM_PPACLUT=1: expand depth-8 windows on the PPA instead of the CPU.
+ *
+ * Default OFF. It changes where a client's pixels LIVE - the reserved DMA
+ * pool instead of anonymous memory - so it is not a drop-in, and the CPU path
+ * has to stay available to compare against in the same binary.
+ */
+static int ppaclut_on(void)
+{
+	static int v = -1;
+
+	if (v < 0)
+		v = getenv("XSHIM_PPACLUT") != NULL;
+	return v;
+}
+
+/*
+ * Allocate an index plane the PPA can actually reach.
+ *
+ * A dumb buffer comes from the device's DMA pool, which for this driver is
+ * the lcd_reserved shared-dma-pool - the only memory the blend engine can
+ * address. Returns 0 and leaves r untouched on any failure, so the caller
+ * falls back to a memfd and the CPU path.
+ */
+static int win8_gem_alloc(struct res *r, int w, int h)
+{
+	struct drm_mode_create_dumb cs;
+	struct drm_mode_map_dumb ms;
+	int fd = kms_get_fd();
+	void *m;
+
+	if (fd < 0)
+		return 0;
+	memset(&cs, 0, sizeof cs);
+	cs.width = w; cs.height = h; cs.bpp = 8;
+	if (ioctl(fd, DRM_IOCTL_MODE_CREATE_DUMB, &cs) < 0)
+		return 0;
+	memset(&ms, 0, sizeof ms);
+	ms.handle = cs.handle;
+	if (ioctl(fd, DRM_IOCTL_MODE_MAP_DUMB, &ms) < 0)
+		goto drop;
+	m = mmap(NULL, cs.size, PROT_READ | PROT_WRITE, MAP_SHARED, fd,
+		 ms.offset);
+	if (m == MAP_FAILED)
+		goto drop;
+	/*
+	 * CREATE_DUMB does not promise zeroed pages the way memfd does, and
+	 * every drawing path here relies on calloc semantics.
+	 */
+	memset(m, 0, cs.size);
+	r->px = m;
+	r->gem_src = cs.handle;
+	r->gem_len = cs.size;
+	return 1;
+drop:
+	{
+		struct drm_mode_destroy_dumb dd;
+
+		memset(&dd, 0, sizeof dd);
+		dd.handle = cs.handle;
+		ioctl(fd, DRM_IOCTL_MODE_DESTROY_DUMB, &dd);
+	}
+	return 0;
+}
+
 static uint16_t *px_alloc(struct res *r, int w, int h)
 {
 	size_t n;
@@ -505,6 +585,18 @@ static uint16_t *px_alloc(struct res *r, int w, int h)
 	 * committed as they are touched, exactly like calloc's. Small
 	 * surfaces keep calloc - an fd per icon-sized pixmap is not worth it.
 	 */
+	/*
+	 * A depth-8 window destined for hardware expansion is born in the
+	 * reserved pool. Only windows: a pixmap is never presented, so it
+	 * gains nothing and would just consume a scarce 6 MB pool.
+	 */
+	if (ppaclut_on() && r->bpp == 1 && r->type == R_WINDOW &&
+	    win8_gem_alloc(r, w, h)) {
+		r->hole = 1;
+		mem_win += n; n_win++;
+		return r->px;
+	}
+
 	if (n >= 65536) {
 		int fd = memfd_create("xshim-surface", 0);
 
@@ -618,6 +710,39 @@ static void px_release(struct res *r)
 	}
 	free(r->shadow);
 	r->shadow = NULL;
+	/*
+	 * GEM FIRST. This test used to be `shm_fd >= 0`, which decides between
+	 * munmap and free - and a GEM surface that has not been SHARED yet has
+	 * no fd, so it fell through to free() on an mmap'd pointer. That is
+	 * heap corruption, and it killed lvdesk with no segfault in dmesg and
+	 * nothing in its own log: the desktop simply was not there any more,
+	 * and the client reported "connection to the X server was lost".
+	 *
+	 * The handle also has to be destroyed, not just unmapped. It comes
+	 * from a 6 MB reserved pool that also holds the scanout buffer, so
+	 * leaking one per window would exhaust it in a handful of launches.
+	 */
+	if (r->gem_src) {
+		int fd = kms_get_fd();
+
+		munmap(r->px, r->gem_len);
+		if (r->shm_fd >= 0) {		/* the exported dma-buf */
+			close(r->shm_fd);
+			r->shm_fd = -1;
+			r->shm_len = 0;
+		}
+		if (fd >= 0) {
+			struct drm_mode_destroy_dumb dd;
+
+			memset(&dd, 0, sizeof dd);
+			dd.handle = r->gem_src;
+			ioctl(fd, DRM_IOCTL_MODE_DESTROY_DUMB, &dd);
+		}
+		r->gem_src = 0;
+		r->gem_len = 0;
+		r->px = NULL;
+		return;
+	}
 	if (r->shm_fd >= 0) {
 		munmap(r->px, r->shm_len);
 		close(r->shm_fd);
@@ -5679,6 +5804,26 @@ static int px_share(struct res *r)
 
 	if (r->shm_fd >= 0)
 		return 1;
+	/*
+	 * A GEM surface is EXPORTED, not copied: PRIME hands out a dma-buf the
+	 * client can map, and XLITE-SHM already passes a descriptor, so the
+	 * protocol does not change at all.
+	 */
+	if (r->gem_src) {
+		struct drm_prime_handle ph;
+		int dfd = kms_get_fd();
+
+		if (dfd < 0)
+			return 0;
+		memset(&ph, 0, sizeof ph);
+		ph.handle = r->gem_src;
+		ph.flags = DRM_CLOEXEC | DRM_RDWR;
+		if (ioctl(dfd, DRM_IOCTL_PRIME_HANDLE_TO_FD, &ph) < 0)
+			return 0;
+		r->shm_fd = ph.fd;
+		r->shm_len = r->gem_len;
+		return 1;
+	}
 	if (!n)
 		return 0;
 	alias_drop(r);			/* the pixels are about to move */
@@ -5810,6 +5955,13 @@ int xshim_window_take_damage(uint32_t id, int *x, int *y, int *w, int *h)
  * and already carries the clip rectangle. Keeping the flag out of here means
  * the shadow path stays byte-for-byte what it was, so the two can be compared.
  */
+uint32_t xshim_window_gem(uint32_t id)
+{
+	struct res *r = res_find(id);
+
+	return (r && r->type == R_WINDOW) ? r->gem_src : 0;
+}
+
 const uint8_t *xshim_window_indices(uint32_t id, int *w, int *h,
 				    int *stride, const uint16_t **pal)
 {
