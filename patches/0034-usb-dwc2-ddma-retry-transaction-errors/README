@@ -1,0 +1,50 @@
+usb: dwc2: retry transaction errors three times in the DDMA path
+
+The port tree is gitignored, so this is the whole modified file rather
+than a diff. Copy it back over
+linux-71-port/drivers/usb/dwc2/hcd_ddma.c before building.
+
+THE BUG. dwc2 has two host paths and they disagree about what a
+transaction error means.
+
+  non-DDMA (hcd_intr.c)   qtd->error_count is incremented and the URB is
+                          only failed at `error_count >= 3`, which is
+                          what USB 2.0 8.5.3.2 requires: the host retries
+                          a transaction error up to three times before
+                          telling software anything went wrong.
+
+  DDMA (hcd_ddma.c)       the FIRST XactErr set urb->status = -EPROTO and
+                          returned "failed", completing and unlinking the
+                          QTD.
+
+We run with desc_dma=Y, so we got the one-strike behaviour.
+
+WHY IT MATTERS HERE. usbhid treats -EPROTO as an I/O error and backs off
+exponentially before polling the endpoint again - 13 ms, 26 ms, 52 ms,
+doubling. The endpoint is simply not polled during that window, so every
+report generated in it is lost. On this board that showed up as a
+wireless keyboard that dropped whole sentences and eventually needed a
+physical replug, while a mouse on a DIFFERENT receiver was unaffected -
+which is what made it look like a keyboard fault rather than a host one.
+
+Measured before the fix, from one typing session:
+
+  usbhid: 8BitDo ... TRANSACTION ERROR status=-71 (1 so far) - endpoint now unpolled for 13 ms
+  dwc2 20300000.usb: XactErr
+  usbhid: ... (2 so far) - endpoint now unpolled for 26 ms
+  usbhid: ... (3 so far) - endpoint now unpolled for 52 ms
+
+and, at the evdev layer, 8 presses and 8 releases delivered for several
+sentences of typing. Press/release pairs were BALANCED, which is what
+ruled out lvdesk, X and the terminal: the keystrokes never reached the
+kernel at all.
+
+THE FIX. Count strikes in the DDMA path too, and only fail at three.
+Returning 0 leaves the QTD queued; a periodic endpoint is polled again
+next interval, and that IS the retry - nothing else has to re-arm it. A
+descriptor that comes back clean resets the count, so three errors spread
+over a day do not add up to a failure.
+
+This is not a workaround for a fault of ours. It makes the descriptor-DMA
+path obey the same rule the buffer-DMA path already obeys, and the same
+rule the spec states.

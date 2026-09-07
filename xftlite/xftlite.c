@@ -189,8 +189,21 @@ XftFont *XftFontOpenXlfd(Display *dpy, int screen, const char *xlfd)
 
 XftFont *XftFontOpenPattern(Display *dpy, FcPattern *pattern)
 {
-	(void)pattern;
-	return font_wrap(dpy, face_for(NULL));
+	XftFont *f = font_wrap(dpy, face_for(NULL));
+
+	/*
+	 * KEEP THE PATTERN. A caller checks the font it got against the one it
+	 * asked for by reading match->pattern - st does exactly this and prints
+	 * "font slant does not match" / "font weight does not match" when the
+	 * read fails, then marks the face bad and stops using it. Discarding
+	 * the pattern here made every font look wrong to it.
+	 *
+	 * Handing back the requested pattern is honest for this shim: there is
+	 * one face, so whatever was asked for is what the caller gets.
+	 */
+	if (f)
+		f->pattern = pattern;
+	return f;
 }
 
 FcPattern *XftFontMatch(Display *dpy, int screen, const FcPattern *pattern,
@@ -527,6 +540,77 @@ void XftDrawString8(XftDraw *draw, const XftColor *color, XftFont *pub,
 		    int x, int y, const FcChar8 *string, int len)
 {
 	draw_8bit(draw, color, pub, x, y, string, len);
+}
+
+/*
+ * The glyph-spec path, which is how st actually draws.
+ *
+ * st does not call XftDrawString at all: it resolves each cell to a glyph
+ * index with XftCharIndex, builds an XftGlyphFontSpec array, and hands the lot
+ * to XftDrawGlyphFontSpec in one call. Without these three symbols st cannot
+ * relocate, and without a real implementation of this one it maps and then
+ * draws nothing - which as a CONTROL is worse than useless, because a blank
+ * terminal looks exactly like the input fault we are trying to isolate.
+ *
+ * This shim has one 8-bit face, so a glyph index IS the character code (see
+ * XftCharIndex below). That makes each spec a one-character draw at its own
+ * position, which is exactly what the array describes.
+ */
+void XftDrawGlyphFontSpec(XftDraw *draw, const XftColor *color,
+			  const XftGlyphFontSpec *glyphs, int nglyphs)
+{
+	int i;
+
+	if (!draw || !color || !glyphs)
+		return;
+	{
+		/* Once per process: is the client drawing at all, and where? */
+		static int said;
+
+		if (!said) {
+			said = 1;
+			fprintf(stderr, "xftlite: GlyphFontSpec n=%d "
+				"drawable=0x%lx first=(%d,%d) glyph=%u "
+				"font=%p\n", nglyphs,
+				(unsigned long)XftDrawDrawable(draw),
+				glyphs[0].x, glyphs[0].y,
+				(unsigned)glyphs[0].glyph,
+				(void *)glyphs[0].font);
+			fflush(stderr);
+		}
+	}
+	for (i = 0; i < nglyphs; i++) {
+		unsigned char c = (unsigned char)(glyphs[i].glyph < 256 ?
+						  glyphs[i].glyph : '?');
+
+		if (!glyphs[i].font)
+			continue;
+		draw_8bit(draw, color, glyphs[i].font, glyphs[i].x, glyphs[i].y,
+			  &c, 1);
+	}
+}
+
+/*
+ * One face, 8-bit: the glyph index is the character. Returning 0 would tell st
+ * the character is absent and send it hunting through fallback fonts for every
+ * cell.
+ */
+FT_UInt XftCharIndex(Display *dpy, XftFont *pub, FcChar32 ucs4)
+{
+	(void)dpy; (void)pub;
+	return ucs4 < 256 ? (FT_UInt)ucs4 : (FT_UInt)'?';
+}
+
+/*
+ * An XLFD is not something this shim can honour - there is one face and one
+ * size. Report failure rather than a wrong pattern: st only uses this for a
+ * -fn argument in XLFD form, and falls back to its configured name.
+ */
+FcPattern *XftXlfdParse(const char *xlfd_orig, FcBool ignore_scalable,
+			FcBool complete)
+{
+	(void)xlfd_orig; (void)ignore_scalable; (void)complete;
+	return NULL;		/* NULL means "not an XLFD I can honour" */
 }
 
 void XftDrawString16(XftDraw *draw, const XftColor *color, XftFont *pub,

@@ -616,7 +616,8 @@ xip-rootfs: rootfs xip-image
 X11_REPLACEMENTS := libX11.so.6.4.0 libXt.so.6.0.0 libXaw7.so.7.0.0 \
 	libXmu.so.6.2.0 libICE.so.6.3.0 libSM.so.6.0.1 libXext.so.6.4.0 \
 	libXpm.so.4.11.0 libXrender.so.1.3.0 libXft.so.2.3.9 \
-	libfontconfig.so.1.16.0 libXcursor.so.1.0.2 libxkbfile.so.1.0.2
+	libfontconfig.so.1.16.0 libXcursor.so.1.0.2 libxkbfile.so.1.0.2 \
+	libfreetype.so.6.20.6
 
 x11-stage:
 	@echo "--- installing the X11 replacements into the overlay ---"
@@ -813,8 +814,15 @@ XIP2_STAGE := $(BUILD_DIR)/xipstage2
 # controller library: this kernel has no loadable modules, so libkmod was dead
 # weight, and coldplug is already backgrounded and nice'd - udevd's SD-backed
 # pages are clean and evictable once boot is over.
+# The freetype stub is here for st, the off-the-shelf terminal we use as an
+# input CONTROL. st links libfreetype.so.6 but calls not one FT_ function
+# (`nm -D --undefined-only st | grep ^FT_` is empty), so this is 4,764 bytes
+# against the real library's 660 kB. st itself stays out of XIP - adding it
+# pushed the image 8,192 bytes past its partition, and it runs perfectly well
+# from where it already lives.
 XIP2_ROOTS ?= usr/bin/xcalc usr/bin/xclock usr/bin/xfiles \
-	usr/lib/libasound.so.2.0.0 usr/bin/s31-bt
+	usr/lib/libasound.so.2.0.0 usr/bin/s31-bt \
+	usr/lib/libfreetype.so.6.20.6
 # libxkbfile and the xcb chain used to be pushed to the SD layer here, because
 # the STOCK libxkbfile is 120,488 bytes and drags libxcb (128,696), libXau
 # (9,476) and libXdmcp (17,672) behind it - 276 KB of flash for xclock's one

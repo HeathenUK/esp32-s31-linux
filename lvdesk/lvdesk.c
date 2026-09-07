@@ -923,10 +923,26 @@ static int kbd_poll(void)
 			 * merely skip this: it is the only notification that
 			 * anything was lost.
 			 */
-			if (in_dbg && (ev.type == EV_KEY || ev.type == EV_MSC))
-				printf("kbd fd%d type=%u code=%u val=%d\n",
-				       kbd_fds[i], ev.type, ev.code,
-				       ev.value), fflush(stdout);
+			if (in_dbg && (ev.type == EV_KEY || ev.type == EV_MSC)) {
+				/*
+				 * TWO clocks, because they answer different
+				 * questions. ev.time is when the KERNEL
+				 * timestamped the event; lv_tick_get() is when
+				 * WE got round to reading it. A dead window
+				 * that appears as a gap in ev.time happened
+				 * below us - the link stopped delivering. A
+				 * gap only in the read time is ours. Without
+				 * both, "keys stop for a few seconds" cannot
+				 * be attributed to a layer at all.
+				 */
+				printf("kbd fd%d type=%u code=%u val=%d "
+				       "kt=%lu.%03lu rd=%u\n",
+				       kbd_fds[i], ev.type, ev.code, ev.value,
+				       (unsigned long)ev.input_event_sec,
+				       (unsigned long)(ev.input_event_usec / 1000),
+				       (unsigned)lv_tick_get());
+				fflush(stdout);
+			}
 			if (ev.type == EV_SYN && ev.code == SYN_DROPPED) {
 				kbd_dropped++;
 				printf("lvdesk: INPUT LOST - evdev overflow on "

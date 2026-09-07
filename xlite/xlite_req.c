@@ -2421,18 +2421,25 @@ void XliteShmDamaged(Display *dpy, Pixmap p)
 		REQ(dpy, major, 2, 2);
 		p32(r + 4, p);
 		/*
-		 * FLUSH, INSIDE THE LOCK.
+		 * FLUSH, INSIDE THE LOCK - AND AT EVERY SIZE.
 		 *
-		 * xlite_send() only releases the output lock - the bytes sit in
-		 * the request buffer until something else pushes them out, and
-		 * on the zero-copy path there IS nothing else: the client wrote
-		 * its pixels straight into the shared mapping, this Damaged
-		 * expects no reply, and no later request arrives to flush it.
-		 * The window then stays black for ever while the client renders
-		 * happily into memory nobody was told about, and the server
-		 * logs ZERO requests. It only bit above 65536 bytes, because
-		 * px_alloc() gives smaller surfaces a plain allocation and
-		 * XPutImage's wire path flushes as a side effect.
+		 * xlite_send() only releases the output lock; the bytes sit in
+		 * the request buffer until something else pushes them out. On
+		 * the zero-copy path there IS nothing else: the client wrote
+		 * its pixels straight into the shared mapping and this Damaged
+		 * expects no reply, so no later request arrives to flush it.
+		 *
+		 * DO NOT gate this on surface size. px_alloc()'s 65536-byte
+		 * threshold only decides whether a surface is BORN shareable;
+		 * px_share() converts a smaller one on demand, so a 320x200
+		 * window gets zero-copy too and needs this just as much. That
+		 * mistake was made on 2026-09-06 while reverting: an
+		 * interactive run still painted, because SDL's event polling
+		 * generates other traffic that flushes the queue incidentally,
+		 * but a -timedemo runs flat out and generates none - so the
+		 * window went black at 320x200 with BOTH the CPU LUT and the
+		 * hardware CLUT, which is what proved it was the flush and not
+		 * the expander.
 		 *
 		 * Inside the lock: flushing after xlite_send() runs unlocked,
 		 * which is the torn-request hazard xlite_out_lock exists for.
@@ -2466,7 +2473,15 @@ XPixmapFormatValues *XListPixmapFormats(Display *dpy, int *count)
 	 * {1,1}, {16,16}, {24,32}, so saying anything else here makes the two
 	 * halves of the same stack disagree about the size of a pixel.
 	 */
-	static const struct { int d, b; } fmt[] = { {1, 1}, {16, 16}, {24, 32} };
+	/*
+	 * FIVE, matching what xshim sends in the connection setup: depth 1
+	 * bitmaps, depth 8 indexed, depth 16 RGB565, and 24/32 at four bytes.
+	 * A client derives bits_per_pixel for a depth from THIS list, so an
+	 * entry missing here makes the two halves of the same stack disagree
+	 * about the size of a pixel.
+	 */
+	static const struct { int d, b; } fmt[] = { {1, 1}, {8, 8}, {16, 16},
+						    {24, 32}, {32, 32} };
 	XPixmapFormatValues *v;
 	unsigned i, n = sizeof(fmt) / sizeof(fmt[0]);
 
@@ -2614,13 +2629,15 @@ static int ximg_destroy(XImage *im)
  * VISUAL8_ID must match the id xshim advertises for its depth-8 visual.
  */
 #define XLITE_VISUAL8_ID	0x22
+#define XLITE_VISUAL32_ID	0x23
 
 XLITE_IMPL(XGetVisualInfo)
 XVisualInfo *XGetVisualInfo(Display *dpy, long mask, XVisualInfo *tmpl,
 			    int *nitems)
 {
 	static Visual v8;		/* the depth-8 PseudoColor visual */
-	XVisualInfo all[2];
+	static Visual v32;		/* the depth-32 TrueColor visual */
+	XVisualInfo all[3];
 	XVisualInfo *out;
 	int n = 0, i;
 
@@ -2650,13 +2667,40 @@ XVisualInfo *XGetVisualInfo(Display *dpy, long mask, XVisualInfo *tmpl,
 	all[1].colormap_size = 256;
 	all[1].bits_per_rgb = 8;
 
-	out = calloc(2, sizeof(*out));
+	/*
+	 * Depth 32, TrueColor - ARGB8888, matching the server's setup.
+	 *
+	 * st asks for this one by name and does not check whether it got it:
+	 * XMatchVisualInfo(dpy, scr, 32, TrueColor, &vis) followed by
+	 * xw.vis = vis.visual. Without the entry, vis stays uninitialised and
+	 * st draws its whole terminal into a garbage visual - it runs, takes
+	 * input, and shows nothing.
+	 */
+	v32.visualid = XLITE_VISUAL32_ID;
+	v32.class = TrueColor;
+	v32.red_mask = 0x00FF0000;
+	v32.green_mask = 0x0000FF00;
+	v32.blue_mask = 0x000000FF;
+	v32.bits_per_rgb = 8;
+	v32.map_entries = 256;
+	all[2].visual = &v32;
+	all[2].visualid = XLITE_VISUAL32_ID;
+	all[2].screen = 0;
+	all[2].depth = 32;
+	all[2].class = TrueColor;
+	all[2].red_mask = 0x00FF0000;
+	all[2].green_mask = 0x0000FF00;
+	all[2].blue_mask = 0x000000FF;
+	all[2].colormap_size = 256;
+	all[2].bits_per_rgb = 8;
+
+	out = calloc(3, sizeof(*out));
 	if (!out) {
 		if (nitems)
 			*nitems = 0;
 		return NULL;
 	}
-	for (i = 0; i < 2; i++) {
+	for (i = 0; i < 3; i++) {
 		if (tmpl) {
 			if ((mask & VisualIDMask) &&
 			    tmpl->visualid != all[i].visualid)

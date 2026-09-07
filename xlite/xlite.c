@@ -738,6 +738,43 @@ int XCloseDisplay(Display *d)
 
 /* --------------------------------------------------------------- plumbing */
 
+/*
+ * Input-method registration.
+ *
+ * st asks to be told when an input method appears, and if none ever does it
+ * carries on with plain key events. Refusing the callback is the CORRECT
+ * answer here, not a degraded one: it puts st on exactly the path we want when
+ * using it as a control for input faults, with no IM between the server and
+ * the application.
+ */
+XLITE_IMPL(XRegisterIMInstantiateCallback)
+Bool XRegisterIMInstantiateCallback(Display *dpy, struct _XrmHashBucketRec *db,
+				    char *res_name, char *res_class,
+				    XIDProc cb, XPointer data)
+{
+	(void)dpy; (void)db; (void)res_name; (void)res_class;
+	(void)cb; (void)data;
+	return False;
+}
+
+XLITE_IMPL(XUnregisterIMInstantiateCallback)
+Bool XUnregisterIMInstantiateCallback(Display *dpy,
+				      struct _XrmHashBucketRec *db,
+				      char *res_name, char *res_class,
+				      XIDProc cb, XPointer data)
+{
+	(void)dpy; (void)db; (void)res_name; (void)res_class;
+	(void)cb; (void)data;
+	return False;
+}
+
+XLITE_IMPL(XSetIMValues)
+char *XSetIMValues(XIM im, ...)
+{
+	(void)im;
+	return NULL;		/* NULL means "all values set" */
+}
+
 XLITE_IMPL(XFlush)
 int XFlush(Display *d) { return xlite_flush(XD(d)); }
 

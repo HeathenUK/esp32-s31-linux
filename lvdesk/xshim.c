@@ -39,114 +39,6 @@
 #include <poll.h>
 
 #include "xshim.h"
-#include "kms.h"
-#include <sys/ioctl.h>
-#include <drm/drm.h>
-#include <drm/drm_mode.h>
-
-/*
- * Hardware palette expansion, measured rather than assumed.
- *
- * rootfs/clutbench.c times the identical expansion both ways on the same GEM
- * buffers. The crossover sits between 16,000 and 64,000 pixels, and at Doom's
- * 320x200 UNDER LOAD - the only condition that matters for a game - the PPA is
- * 2.5x faster (2527 us against 6404 us), worth about 3.9 ms a frame:
- *
- *              px      quiet CPU/PPA     loaded CPU/PPA
- *   160x100  16,000     422 / 1197        447 / 1090    cpu
- *   320x200  64,000    3208 / 2587       6404 / 2527    PPA 2.5x
- *   640x400 256,000        -            33166 / 8208    PPA 4.0x
- *
- * The threshold is placed between the two measured points, not at a round
- * number chosen for looking tidy.
- */
-#define PPA_MIN_PX	200000
-
-/*
- * Both halves of the hardware path are runtime-selectable, because they are
- * two separate questions and a compile-time constant answers them together.
- *
- *   XSHIM_PPA_MIN_PX=<n>   the pixel count at which a window is born in GEM
- *   XSHIM_CLUT=cpu         expand on the CPU even when it IS in GEM
- *
- * GEM decides where the client's pixels LIVE (write-combine, uncached);
- * XSHIM_CLUT decides who expands them. Measuring GEM+CPU against no-GEM+CPU
- * isolates what the uncached mapping costs the client, which is the number
- * the threshold above actually turns on. With one constant, the two arms
- * could only ever be measured together.
- */
-static size_t ppa_min_px(void)
-{
-	static size_t v;
-
-	if (!v) {
-		const char *e = getenv("XSHIM_PPA_MIN_PX");
-
-		v = e ? (size_t)strtoul(e, NULL, 0) : PPA_MIN_PX;
-		if (!v)
-			v = (size_t)-1;		/* 0 means "never", not "always" */
-	}
-	return v;
-}
-
-static int clut_hw_allowed(void)
-{
-	static int v;
-
-	if (!v) {
-		const char *e = getenv("XSHIM_CLUT");
-
-		v = (e && !strcmp(e, "cpu")) ? -1 : 1;
-	}
-	return v > 0;
-}
-
-/*
- * WHY THIS IS NOT 40000, WHICH IS WHAT THE BENCH SAID.
- *
- * rootfs/clutbench.c timed the expansion both ways and put the crossover
- * between 16,000 and 64,000 pixels, with the PPA 2.5x ahead at Doom's
- * 320x200 under load. End to end that was WRONG: the timedemo measured
- * 25.3 fps against 27.2 for the CPU path. The bench was rigged without my
- * noticing, in two ways that both favour the hardware:
- *
- *  1. Both arms used GEM buffers, and drm_gem_dma maps those WRITE-COMBINE.
- *     The CPU arm was therefore reading indices from uncached memory, which
- *     is not what the CPU path does in the shim - it uses ordinary cached
- *     pages. The bench compared hardware against a hobbled CPU.
- *  2. Handing the client a GEM buffer moves DOOM'S OWN drawing surface into
- *     write-combine memory. Every pixel it renders now goes to uncached
- *     memory, and that cost lands on the game, outside anything the bench
- *     timed.
- *
- * So the threshold is set above anything reachable today (200,000 px is
- * larger than 400x480), which keeps the hardware path built, tested and
- * one constant away - without putting a client's render target in uncached
- * memory to save an expansion that costs less than the penalty.
- *
- * To make hardware genuinely win, the index plane the CLIENT draws into has
- * to stay cached while remaining PPA-addressable. That is a dma-buf with a
- * cached mapping plus explicit sync, not a dumb buffer.
- */
-
-#define DRM_ESP32S31_PPA_CLUT	0x05
-#define DRM_ESP32S31_GEM_CREATE	0x06
-#define DRM_ESP32S31_GEM_CACHED	(1u << 0)
-
-struct drm_esp32s31_gem_create {
-	uint32_t w, h, bpp, flags;
-	uint32_t handle, pitch;
-	uint64_t size;
-};
-struct drm_esp32s31_ppa_clut {
-	uint32_t src_handle, dst_handle, w, h, clut[256];
-};
-#define DRM_IOCTL_ESP32S31_GEM_CREATE \
-	DRM_IOWR(DRM_COMMAND_BASE + DRM_ESP32S31_GEM_CREATE, \
-		 struct drm_esp32s31_gem_create)
-#define DRM_IOCTL_ESP32S31_PPA_CLUT \
-	DRM_IOW(DRM_COMMAND_BASE + DRM_ESP32S31_PPA_CLUT, \
-		struct drm_esp32s31_ppa_clut)
 #include "xshim_font.h"
 
 #define MAXCLI		4
@@ -165,6 +57,7 @@ struct drm_esp32s31_ppa_clut {
 /* Our one visual: TrueColor RGB565, matching the panel. */
 #define VISUAL_ID	0x21
 #define VISUAL8_ID	0x22		/* depth 8, PseudoColor */
+#define VISUAL32_ID	0x23		/* depth 32, TrueColor (ARGB8888) */
 
 /*
  * The 256-entry palette of the depth-8 visual, in RGB565.
@@ -214,15 +107,6 @@ struct res {
 	 * Allocated on first use, only for depth-8 windows.
 	 */
 	uint16_t *shadow;
-	/*
-	 * GEM handles when this surface is hardware-expandable. The
-	 * blend engine can only address memory allocated through the
-	 * DRM device, so an 8-bit window big enough to be worth it is
-	 * a pair of dumb buffers - indices in, RGB565 out - instead of
-	 * an anonymous memfd.
-	 */
-	uint32_t gem_src, gem_dst;
-	size_t gem_src_len, gem_dst_len;
 
 	/*
 	 * Coalesced Expose. paint_subtree() walks a window and every mapped
@@ -266,7 +150,7 @@ struct res {
 	uint8_t hole;			/* every pixel is known to be 0: nothing
 					 * has written since allocation or since a
 					 * whole-surface clear was punched out */
-	uint8_t bpp;			/* bytes per pixel in px: 1 or 2 */
+	uint8_t bpp;			/* bytes per pixel in px: 1, 2 or 4 */
 	int shm_fd;			/* memfd backing px, or -1 */
 	size_t shm_len;
 	int line_width;
@@ -378,151 +262,6 @@ static void out_push(struct cli *c, const void *p, size_t n);
 static void notify_draw(struct res *d);
 static int trace_on(void);
 static void px_release(struct res *r);
-/*
- * Allocate an 8-bit surface as a pair of GEM buffers so the PPA can expand it.
- *
- * Two objects: the index plane the client draws into, and the RGB565 the
- * desktop presents. Both must come from the DRM device - the blend engine
- * refuses anything outside the region it was given, and a memfd of ordinary
- * pages is invisible to it however well shared.
- *
- * Returns 0 and leaves the caller to fall back on failure, which is the
- * expected case once CMA is tight: the pool is 4 MB and the scanout buffers
- * already have most of it.
- */
-/*
- * Which of the two GEM buffers gets a CACHED mapping.
- *
- *   XSHIM_GEM_CACHED=0   both write-combine (what MODE_CREATE_DUMB gives)
- *                    1   the 8-bit index plane only
- *                    2   the 16-bit expanded plane only
- *                    3   both
- *
- * They are separate questions. The index plane is written by the client and
- * read by the expander; the expanded plane is written by the expander and read
- * by the compositor every frame. Which of those reads hurts is a measurement,
- * not a guess, so both ends are selectable.
- */
-static unsigned gem_cached_mask(void)
-{
-	static int v = -1;
-
-	if (v < 0) {
-		const char *e = getenv("XSHIM_GEM_CACHED");
-
-		v = e ? (int)strtoul(e, NULL, 0) : 0;
-	}
-	return (unsigned)v;
-}
-
-/*
- * Allocate one GEM buffer, cached or write-combine.
- *
- * Falls back to MODE_CREATE_DUMB when the driver has no GEM_CREATE ioctl, so
- * the shim still runs against a kernel without it - just always write-combine.
- */
-static int gem_one(int fd, int w, int h, int bpp, int cached,
-		   uint32_t *handle, uint64_t *len)
-{
-	struct drm_esp32s31_gem_create gc;
-	struct drm_mode_create_dumb cd;
-
-	memset(&gc, 0, sizeof gc);
-	gc.w = w; gc.h = h; gc.bpp = bpp;
-	gc.flags = cached ? DRM_ESP32S31_GEM_CACHED : 0;
-	if (ioctl(fd, DRM_IOCTL_ESP32S31_GEM_CREATE, &gc) == 0) {
-		*handle = gc.handle;
-		*len = gc.size;
-		return 1;
-	}
-	memset(&cd, 0, sizeof cd);
-	cd.width = w; cd.height = h; cd.bpp = bpp;
-	if (ioctl(fd, DRM_IOCTL_MODE_CREATE_DUMB, &cd) < 0)
-		return 0;
-	*handle = cd.handle;
-	*len = cd.size;
-	return 1;
-}
-
-static int win8_gem_alloc(struct res *r, int w, int h)
-{
-	struct drm_mode_create_dumb cs = { 0 }, cd = { 0 };
-	struct drm_mode_map_dumb ms, md;
-	struct drm_mode_destroy_dumb dd;
-	void *psrc, *pdst;
-	unsigned cm = gem_cached_mask();
-	int fd = kms_get_fd();
-
-	if (fd < 0)
-		return 0;
-
-	if (!gem_one(fd, w, h, 8, cm & 1, &cs.handle, &cs.size))
-		return 0;
-	if (!gem_one(fd, w, h, 16, cm & 2, &cd.handle, &cd.size))
-		goto drop_src;
-
-	memset(&ms, 0, sizeof ms); ms.handle = cs.handle;
-	memset(&md, 0, sizeof md); md.handle = cd.handle;
-	if (ioctl(fd, DRM_IOCTL_MODE_MAP_DUMB, &ms) < 0 ||
-	    ioctl(fd, DRM_IOCTL_MODE_MAP_DUMB, &md) < 0)
-		goto drop_both;
-
-	psrc = mmap(NULL, cs.size, PROT_READ | PROT_WRITE, MAP_SHARED, fd,
-		    ms.offset);
-	if (psrc == MAP_FAILED)
-		goto drop_both;
-	pdst = mmap(NULL, cd.size, PROT_READ | PROT_WRITE, MAP_SHARED, fd,
-		    md.offset);
-	if (pdst == MAP_FAILED) {
-		munmap(psrc, cs.size);
-		goto drop_both;
-	}
-
-	memset(psrc, 0, cs.size);
-	fprintf(stderr, "xshim: window 0x%x %dx%d is GEM-backed (index %s, "
-		"expanded %s) - palette expansion runs on the PPA\n",
-		r->id, w, h, (cm & 1) ? "cached" : "wc",
-		(cm & 2) ? "cached" : "wc");
-	r->px = psrc;
-	r->shadow = pdst;
-	r->gem_src = cs.handle;
-	r->gem_dst = cd.handle;
-	r->gem_src_len = cs.size;
-	r->gem_dst_len = cd.size;
-	r->bpp = 1;
-	mem_win += cs.size; n_win++;
-	return 1;
-
-drop_both:
-	memset(&dd, 0, sizeof dd); dd.handle = cd.handle;
-	ioctl(fd, DRM_IOCTL_MODE_DESTROY_DUMB, &dd);
-drop_src:
-	memset(&dd, 0, sizeof dd); dd.handle = cs.handle;
-	ioctl(fd, DRM_IOCTL_MODE_DESTROY_DUMB, &dd);
-	return 0;
-}
-
-static void win8_gem_free(struct res *r)
-{
-	struct drm_mode_destroy_dumb dd;
-	int fd = kms_get_fd();
-
-	if (r->px && r->gem_src_len)
-		munmap(r->px, r->gem_src_len);
-	if (r->shadow && r->gem_dst_len)
-		munmap(r->shadow, r->gem_dst_len);
-	if (fd >= 0) {
-		memset(&dd, 0, sizeof dd); dd.handle = r->gem_src;
-		ioctl(fd, DRM_IOCTL_MODE_DESTROY_DUMB, &dd);
-		memset(&dd, 0, sizeof dd); dd.handle = r->gem_dst;
-		ioctl(fd, DRM_IOCTL_MODE_DESTROY_DUMB, &dd);
-	}
-	mem_win -= r->gem_src_len; n_win--;
-	r->px = NULL; r->shadow = NULL;
-	r->gem_src = r->gem_dst = 0;
-	r->gem_src_len = r->gem_dst_len = 0;
-}
-
 static int px_share(struct res *r);
 
 static unsigned long rf_calls, rf_steps;
@@ -745,23 +484,14 @@ static uint16_t *px_alloc(struct res *r, int w, int h)
 {
 	size_t n;
 
-	r->bpp = (r->depth && r->depth <= 8) ? 1 : 2;
-	n = (size_t)w * h * r->bpp;
-
 	/*
-	 * An indexed window large enough for the hardware to win gets GEM
-	 * buffers instead, so the PPA can expand it. Below the measured
-	 * crossover, or when CMA has nothing left, fall through to the
-	 * ordinary allocation and expand on the CPU - which stays correct,
-	 * just slower.
+	 * 1, 2 or 4 bytes. Depth 32 (and 24, which clients pad to 32) is an
+	 * ARGB8888 surface: the client writes whole pixels and the shim
+	 * converts to the panel's RGB565 when it presents, exactly as the
+	 * depth-8 path converts through the palette.
 	 */
-	if (r->bpp == 1 && r->type == R_WINDOW &&
-	    (size_t)w * h >= ppa_min_px()) {
-		if (win8_gem_alloc(r, w, h))
-			return r->px;
-		fprintf(stderr, "xshim: window %dx%d wanted the PPA but CMA "
-			"had nothing - expanding on the CPU\n", w, h);
-	}
+	r->bpp = (r->depth && r->depth <= 8) ? 1 : (r->depth > 16 ? 4 : 2);
+	n = (size_t)w * h * r->bpp;
 
 	/*
 	 * Big surfaces are born shareable. A client that loads pixels through
@@ -886,14 +616,6 @@ static void px_release(struct res *r)
 	} else {
 		mem_win -= n; n_win--;
 	}
-	if (r->gem_src || r->gem_dst) {
-		win8_gem_free(r);
-		if (r->shm_fd >= 0) {
-			close(r->shm_fd);
-			r->shm_fd = -1;
-		}
-		return;
-	}
 	free(r->shadow);
 	r->shadow = NULL;
 	if (r->shm_fd >= 0) {
@@ -998,7 +720,7 @@ void xshim_mem_report(void)
  */
 static int gcclip_on, gcclip_x0, gcclip_y0, gcclip_x1, gcclip_y1;
 
-static void px_set(struct res *d, int x, int y, uint16_t c)
+static void px_set(struct res *d, int x, int y, uint32_t c)
 {
 	struct res *b = d->buf;
 	int ax, ay;
@@ -1018,14 +740,23 @@ static void px_set(struct res *d, int x, int y, uint16_t c)
 		return;
 	b->dirty = 1;
 	b->hole = 0;
+	/*
+	 * The colour is a PIXEL VALUE in the drawable's own visual, so its
+	 * width follows the surface: an index at depth 8, RGB565 at 16, and
+	 * ARGB8888 at 32. Narrowing everything to uint16_t - which this did -
+	 * makes a depth-32 client's pixels unrepresentable, so st drew its
+	 * whole terminal in colours that could not be stored.
+	 */
 	if (b->bpp == 1)
 		((uint8_t *)b->px)[(size_t)ay * b->w + ax] = (uint8_t)c;
+	else if (b->bpp == 4)
+		((uint32_t *)b->px)[(size_t)ay * b->w + ax] = c;
 	else
-		b->px[(size_t)ay * b->w + ax] = c;
+		b->px[(size_t)ay * b->w + ax] = (uint16_t)c;
 }
 
 /* Read one pixel, with the same clip rules px_set() writes under. */
-static uint16_t px_get(struct res *d, int x, int y)
+static uint32_t px_get(struct res *d, int x, int y)
 {
 	struct res *b = d->buf;
 	int ax = x + d->ax, ay = y + d->ay;
@@ -1036,6 +767,8 @@ static uint16_t px_get(struct res *d, int x, int y)
 		return 0;
 	if (b->bpp == 1)
 		return ((const uint8_t *)b->px)[(size_t)ay * b->w + ax];
+	if (b->bpp == 4)
+		return ((const uint32_t *)b->px)[(size_t)ay * b->w + ax];
 	return b->px[(size_t)ay * b->w + ax];
 }
 
@@ -1104,7 +837,7 @@ static int span_clip(struct res *d, int x, int y, int w, int *bx, int *by,
 	return 1;
 }
 
-static void px_hspan(struct res *d, int x, int y, int w, uint16_t c);
+static void px_hspan(struct res *d, int x, int y, int w, uint32_t c);
 
 /*
  * Arcs, for the clients that draw with them (xeyes, oclock). X measures
@@ -1222,7 +955,7 @@ static struct res *op_target(struct res *d)
 	return op_target_ex(d, 0);
 }
 
-static void px_hspan(struct res *d, int x, int y, int w, uint16_t c)
+static void px_hspan(struct res *d, int x, int y, int w, uint32_t c)
 {
 	struct res *b = d->buf;
 	int bx, by, bw, i;
@@ -1232,11 +965,16 @@ static void px_hspan(struct res *d, int x, int y, int w, uint16_t c)
 	if (b->bpp == 1) {
 		memset((uint8_t *)b->px + (size_t)by * b->w + bx,
 		       (uint8_t)c, (size_t)bw);
+	} else if (b->bpp == 4) {
+		uint32_t *row = (uint32_t *)b->px + (size_t)by * b->w + bx;
+
+		for (i = 0; i < bw; i++)
+			row[i] = c;
 	} else {
 		uint16_t *row = b->px + (size_t)by * b->w + bx;
 
 		for (i = 0; i < bw; i++)
-			row[i] = c;
+			row[i] = (uint16_t)c;
 	}
 }
 
@@ -1928,6 +1666,55 @@ static int color_lookup(const uint8_t *nm, int n, uint16_t *ro, uint16_t *go,
 			*bo = cnames[i].b * 0x101;
 			return 1;
 		}
+	/*
+	 * grayN / greyN, the numeric family from rgb.txt: N is a PERCENTAGE,
+	 * 0 to 100, not a byte. st asks for gray50 and gray90 for its cursor
+	 * and reverse video, and resolving those to black gave a black cursor
+	 * on a black cell. Parsing the number covers all 101 of them in a few
+	 * lines instead of adding rows to the table one complaint at a time.
+	 */
+	if (!strncmp(buf, "gray", 4) || !strncmp(buf, "grey", 4)) {
+		const char *d = buf + 4;
+		int pct = 0, ndig = 0;
+
+		while (*d >= '0' && *d <= '9' && ndig < 3) {
+			pct = pct * 10 + (*d++ - '0');
+			ndig++;
+		}
+		if (ndig && !*d && pct <= 100) {
+			int v = (pct * 255 + 50) / 100;
+
+			*ro = *go = *bo = (uint16_t)(v * 0x101);
+			return 1;
+		}
+	}
+	/*
+	 * The numbered brightness variants - blue2, cyan3, magenta3 and the
+	 * rest of them. rgb.txt gives every colour four, scaling the
+	 * full-intensity version by 255, 238, 205 and 139. st uses them for
+	 * its ANSI palette, so without this its bright colours were black.
+	 *
+	 * Same reasoning as grayN above: parse the family, do not grow the
+	 * table one bug report at a time.
+	 */
+	if (j > 1 && buf[j - 1] >= '1' && buf[j - 1] <= '4') {
+		static const uint8_t level[4] = { 255, 238, 205, 139 };
+		int lv = buf[j - 1] - '1';
+		char base[64];
+
+		memcpy(base, buf, (size_t)j - 1);
+		base[j - 1] = 0;
+		for (i = 0; i < (int)(sizeof(cnames) / sizeof(cnames[0])); i++)
+			if (!strcmp(base, cnames[i].name)) {
+				*ro = (uint16_t)(cnames[i].r * level[lv] / 255)
+				      * 0x101;
+				*go = (uint16_t)(cnames[i].g * level[lv] / 255)
+				      * 0x101;
+				*bo = (uint16_t)(cnames[i].b * level[lv] / 255)
+				      * 0x101;
+				return 1;
+			}
+	}
 	fprintf(stderr, "xshim: unknown colour name '%s' - add it to cnames[] "
 		"(using black)\n", buf);
 	*ro = *go = *bo = 0;
@@ -1963,7 +1750,7 @@ static uint32_t get32(const uint8_t *p)
  */
 static void send_setup(struct cli *c)
 {
-	uint8_t b[320], *p = b + 8;	/* grew for the depth-8 visual */
+	uint8_t b[384], *p = b + 8;	/* depth-8 and depth-32 visuals */
 	static const char vendor[] = "lvdesk-shim";
 	int vlen = sizeof(vendor) - 1, vpad = (4 - (vlen & 3)) & 3;
 	uint8_t *body = p;
@@ -1991,7 +1778,7 @@ static void send_setup(struct cli *c)
 	 */
 	put16(p, INBUF / 4);    p += 2;
 	*p++ = 1;				/* screens */
-	*p++ = 4;				/* pixmap formats */
+	*p++ = 5;				/* pixmap formats */
 	*p++ = 0;				/* LSB first */
 	*p++ = 0;				/* bitmap bit order */
 	*p++ = 32;				/* scanline unit */
@@ -2010,11 +1797,11 @@ static void send_setup(struct cli *c)
 		 * a guess, so without the entry an 8-bit image is packed at
 		 * the wrong stride and nothing lines up.
 		 */
-		static const uint8_t f[4][2] = { {1, 1}, {8, 8}, {16, 16},
-						 {24, 32} };
+		static const uint8_t f[5][2] = { {1, 1}, {8, 8}, {16, 16},
+						 {24, 32}, {32, 32} };
 		int i;
 
-		for (i = 0; i < 4; i++) {
+		for (i = 0; i < 5; i++) {
 			*p++ = f[i][0]; *p++ = f[i][1]; *p++ = 32;
 			memset(p, 0, 5); p += 5;
 		}
@@ -2032,7 +1819,7 @@ static void send_setup(struct cli *c)
 	put16(p, 1);            p += 2;
 	put16(p, 1);            p += 2;
 	put32(p, VISUAL_ID);    p += 4;
-	*p++ = 0; *p++ = 0; *p++ = 16; *p++ = 3;   /* depths: 16, 1 and 8 */
+	*p++ = 0; *p++ = 0; *p++ = 16; *p++ = 4; /* depths: 16, 1, 8, 32 */
 
 	*p++ = 16; *p++ = 0; put16(p, 1); p += 2; put32(p, 0); p += 4;
 	put32(p, VISUAL_ID);    p += 4;		/* VISUALTYPE */
@@ -2065,6 +1852,30 @@ static void send_setup(struct cli *c)
 	put32(p, 0);            p += 4;		/* no red mask   */
 	put32(p, 0);            p += 4;		/* no green mask */
 	put32(p, 0);            p += 4;		/* no blue mask  */
+	put32(p, 0);            p += 4;
+
+	/*
+	 * Depth 32, TrueColor - ARGB8888.
+	 *
+	 * st asks for exactly this, unconditionally, and does NOT check the
+	 * result: `XMatchVisualInfo(dpy, scr, 32, TrueColor, &vis)` then
+	 * `xw.vis = vis.visual`. With no depth-32 visual the match fails, vis
+	 * is left uninitialised, and st builds its window and backing pixmap
+	 * on a garbage visual - it runs, accepts input and draws nothing at
+	 * all, which is exactly what it did here.
+	 *
+	 * The masks are the ordinary ARGB layout. Alpha is advertised only by
+	 * the depth being 32 while the masks cover 24 bits, which is how every
+	 * server does it.
+	 */
+	*p++ = 32; *p++ = 0; put16(p, 1); p += 2; put32(p, 0); p += 4;
+	put32(p, VISUAL32_ID);  p += 4;
+	*p++ = 4;				/* TrueColor */
+	*p++ = 8;				/* bits per rgb */
+	put16(p, 0);            p += 2;		/* colormap entries */
+	put32(p, 0x00FF0000);   p += 4;		/* red   */
+	put32(p, 0x0000FF00);   p += 4;		/* green */
+	put32(p, 0x000000FF);   p += 4;		/* blue  */
 	put32(p, 0);            p += 4;
 
 	b[0] = 1; b[1] = 0;
@@ -4290,12 +4101,20 @@ static void xshm_request(struct cli *c, const uint8_t *r, int len)
 				      (((size_t)oy * b->w + ox) * b->bpp));
 			}
 			send_reply_fd(c, d24, b->shm_fd);
-			if (trace_on())
-				fprintf(stderr, "xshim: SHM %s 0x%x %dx%d "
-					"bpp %u -> fd %d (%zu bytes)\n",
-					p->type == R_WINDOW ? "window" : "pixmap",
-					b->id, b->w, b->h, b->bpp, b->shm_fd,
-					b->shm_len);
+			/*
+			 * Unconditional: a share is granted once per drawable,
+			 * never per frame, so this cannot flood the console -
+			 * and "did this client get zero-copy?" is the first
+			 * question asked of every measurement here. It used to
+			 * be answerable only with XSHIM_TRACE=1, which on this
+			 * build walks every pixel per damage and kills the
+			 * client it is meant to observe.
+			 */
+			fprintf(stderr, "xshim: ZEROCOPY %s 0x%x %dx%d bpp %u "
+				"-> fd %d (%zu bytes)\n",
+				p->type == R_WINDOW ? "window" : "pixmap",
+				b->id, b->w, b->h, b->bpp, b->shm_fd,
+				b->shm_len);
 	} else if (r[1] == 2 && p) {
 		if (trace_on()) {
 			size_t i, tot = (size_t)p->w * p->h, nz = 0;
@@ -5004,7 +4823,7 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		int sx = gets16(r + 16), sy = gets16(r + 18);
 		int dx = gets16(r + 20), dy = gets16(r + 22);
 		int w = get16(r + 24), h = get16(r + 26);
-		static uint16_t row[XSHIM_W];
+		static uint32_t row[XSHIM_W];	/* up to 4 bytes a pixel */
 		int j, i;
 
 		if (!drawable_ok(src) || !drawable_ok(dst)) {
@@ -5018,8 +4837,22 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 				dst->id, dst->w, dst->h, dx, dy, w, h);
 		if (w > XSHIM_W)
 			w = XSHIM_W;
-		if (src->buf && src->buf->px && dst->buf &&
-		    src->buf->bpp == 2 && dst->buf->bpp == 2 && op_target(dst)) {
+		/*
+		 * ANY matching pixel size, not just two bytes.
+		 *
+		 * This used to require bpp == 2 at both ends, so a depth-32
+		 * client fell through to the px_get/px_set fallback - and
+		 * those work in uint16_t, so a 32bpp pixel cannot survive the
+		 * round trip. st double-buffers into a depth-32 pixmap and
+		 * blits it to its window, which meant its entire terminal was
+		 * drawn correctly and then thrown away: a window that ran,
+		 * accepted input and showed nothing.
+		 *
+		 * The body below is byte-oriented now, so 1, 2 and 4 bytes per
+		 * pixel all take the fast path and none of them lose data.
+		 */
+		if (src->buf && src->buf->px && dst->buf && op_target(dst) &&
+		    src->buf->bpp == dst->buf->bpp && src->buf->bpp) {
 			/*
 			 * Whole rows at a time. The old loop paid two calls
 			 * and ~12 branches per pixel; a blit is the second
@@ -5029,6 +4862,9 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 			 * what makes overlap safe in both directions.
 			 */
 			struct res *sb = src->buf, *db = dst->buf;
+
+			unsigned bp = src->buf->bpp;
+			uint8_t *rowb = (uint8_t *)row;
 
 			for (j = 0; j < h; j++) {
 				int rx0 = sx + src->ax;
@@ -5042,28 +4878,33 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 				if (i1 > w) i1 = w;
 				if (ry < src->cy0 || ry >= src->cy1 ||
 				    i0 >= i1) {
-					memset(row, 0, (size_t)w * 2);
+					memset(rowb, 0, (size_t)w * bp);
 				} else {
 					if (i0 > 0)
-						memset(row, 0, (size_t)i0 * 2);
-					memcpy(row + i0,
-					       sb->px + (size_t)ry * sb->w +
-					       rx0 + i0,
-					       (size_t)(i1 - i0) * 2);
+						memset(rowb, 0,
+						       (size_t)i0 * bp);
+					memcpy(rowb + (size_t)i0 * bp,
+					       (const uint8_t *)sb->px +
+					       ((size_t)ry * sb->w + rx0 + i0) *
+					       bp,
+					       (size_t)(i1 - i0) * bp);
 					if (i1 < w)
-						memset(row + i1, 0,
-						       (size_t)(w - i1) * 2);
+						memset(rowb + (size_t)i1 * bp,
+						       0,
+						       (size_t)(w - i1) * bp);
 				}
 				{
 					int bx, by, bw;
 
 					if (span_clip(dst, dx, dy + j, w,
 						      &bx, &by, &bw))
-						memcpy(db->px +
-						       (size_t)by * db->w + bx,
-						       row + (bx - (dx +
-							      dst->ax)),
-						       (size_t)bw * 2);
+						memcpy((uint8_t *)db->px +
+						       ((size_t)by * db->w + bx)
+						       * bp,
+						       rowb +
+						       (size_t)(bx - (dx +
+							dst->ax)) * bp,
+						       (size_t)bw * bp);
 				}
 			}
 			damage_add(dst, dx, dy, w, h);
@@ -5814,26 +5655,6 @@ static int px_share(struct res *r)
 
 	if (r->shm_fd >= 0)
 		return 1;
-	/*
-	 * A GEM surface is exported, not copied: PRIME hands out a dma-buf the
-	 * client can map, and XLITE-SHM already passes a descriptor, so the
-	 * protocol does not change.
-	 */
-	if (r->gem_src) {
-		struct drm_prime_handle ph;
-		int fd = kms_get_fd();
-
-		if (fd < 0)
-			return 0;
-		memset(&ph, 0, sizeof ph);
-		ph.handle = r->gem_src;
-		ph.flags = DRM_CLOEXEC | DRM_RDWR;
-		if (ioctl(fd, DRM_IOCTL_PRIME_HANDLE_TO_FD, &ph) < 0)
-			return 0;
-		r->shm_fd = ph.fd;
-		r->shm_len = r->gem_src_len;
-		return 1;
-	}
 	if (!n)
 		return 0;
 	alias_drop(r);			/* the pixels are about to move */
@@ -5979,6 +5800,38 @@ const uint16_t *xshim_window_pixels(uint32_t id, int *w, int *h)
 	 *
 	 * Only on damage. A window that is not changing costs nothing.
 	 */
+	/*
+	 * A depth-32 window holds ARGB8888. The desktop presents RGB565, so
+	 * this converts into the same shadow buffer the palette path uses -
+	 * one place, one rule: whatever the client's pixel format, what comes
+	 * out of here is what the compositor can blit.
+	 *
+	 * Alpha is DROPPED, not blended. There is no compositing manager here
+	 * and the window is opaque on screen; honouring alpha would mean
+	 * reading the desktop underneath every frame.
+	 */
+	if (r->bpp == 4) {
+		const uint32_t *src = (const uint32_t *)r->px;
+		size_t n = (size_t)r->w * r->h, i;
+
+		if (!r->shadow) {
+			r->shadow = malloc(n * 2);
+			if (!r->shadow)
+				return NULL;
+			r->dirty = 1;
+		} else if (!r->dirty) {
+			return r->shadow;
+		}
+		for (i = 0; i < n; i++) {
+			uint32_t px = src[i];
+
+			r->shadow[i] = (uint16_t)(((px & 0x00F80000) >> 8) |
+						  ((px & 0x0000FC00) >> 5) |
+						  ((px & 0x000000F8) >> 3));
+		}
+		r->dirty = 0;
+		return r->shadow;
+	}
 	if (r->bpp == 1) {
 		const uint8_t *src = (const uint8_t *)r->px;
 		size_t n = (size_t)r->w * r->h, i;
@@ -5993,76 +5846,8 @@ const uint16_t *xshim_window_pixels(uint32_t id, int *w, int *h)
 			return r->shadow;
 		}
 		pal = pal8;
-		/*
-		 * Hardware when the surface was allocated for it. The palette
-		 * goes down as ARGB8888 with alpha forced opaque: the blend
-		 * engine multiplies by it, and a zero alpha would expand every
-		 * index to black.
-		 */
-		if (r->gem_src && r->gem_dst && clut_hw_allowed()) {
-			struct drm_esp32s31_ppa_clut a;
-			int fd = kms_get_fd(), k;
-			uint64_t t0 = xsp_on > 0 ? xsp_cpu_now() : 0;
-
-			memset(&a, 0, sizeof a);
-			a.src_handle = r->gem_src;
-			a.dst_handle = r->gem_dst;
-			a.w = r->w;
-			a.h = r->h;
-			for (k = 0; k < 256; k++) {
-				unsigned v = pal8[k];
-
-				a.clut[k] = 0xFF000000u |
-					    ((v & 0xF800) << 8) |
-					    ((v & 0x07E0) << 5) |
-					    ((v & 0x001F) << 3);
-			}
-			if (fd >= 0 &&
-			    ioctl(fd, DRM_IOCTL_ESP32S31_PPA_CLUT, &a) == 0) {
-				if (t0) {
-					static uint64_t hacc;
-					static unsigned hcnt;
-
-					hacc += xsp_cpu_now() - t0;
-					if (++hcnt == 100) {
-						fprintf(stderr, "xshim: pal8 "
-							"expand %zu px HARDWARE,"
-							" %llu us/frame CPU\n", n,
-							(unsigned long long)
-							(hacc / 100 / 1000));
-						hacc = 0; hcnt = 0;
-					}
-				}
-				r->dirty = 0;
-				return r->shadow;
-			}
-			/* Hardware refused: fall through and do it ourselves. */
-		}
-		{
-			uint64_t t0 = xsp_on > 0 ? xsp_cpu_now() : 0;
-
-			for (i = 0; i < n; i++)
-				r->shadow[i] = pal[src[i]];
-			if (t0) {
-				static uint64_t acc;
-				static unsigned cnt;
-
-				acc += xsp_cpu_now() - t0;
-				if (++cnt == 100) {
-					fprintf(stderr, "xshim: pal8 expand "
-						"%zu px, %llu us/frame CPU\n",
-						n, (unsigned long long)
-						(acc / 100 / 1000));
-					acc = 0; cnt = 0;
-				}
-			}
-		}
-		/*
-		 * Cleared here and nowhere else. It was never cleared at all,
-		 * so the early-out above could not fire after the first frame
-		 * and a still window was re-expanded for ever.
-		 */
-		r->dirty = 0;
+		for (i = 0; i < n; i++)
+			r->shadow[i] = pal[src[i]];
 		return r->shadow;
 	}
 	return r->px;

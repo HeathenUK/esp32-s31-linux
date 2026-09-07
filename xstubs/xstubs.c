@@ -597,11 +597,23 @@ int XpmReadFileToPixmap(Display *dpy, Drawable d, char *file,
 typedef unsigned char FcChar8;
 typedef unsigned int FcChar32;
 typedef int FcBool;
+typedef int FcResult;
+#define FcResultMatch		0
+#define FcResultNoMatch		1
 
 struct fc_pattern {
 	char name[64];
 	double size;
 	int nchars;
+	/*
+	 * st asks for these back after setting them - pixelsize to lay out its
+	 * grid, and the boolean hints when it builds a fallback pattern. A
+	 * getter that always failed made it fall back to a zero cell size and
+	 * divide by it, so these are stored rather than discarded.
+	 */
+	int slant, weight, spacing, pixelsize_set;
+	double pixelsize;
+	int antialias, hinting, autohint, minspace, embolden;
 };
 
 static void *fc_alloc(void)
@@ -654,6 +666,158 @@ FcBool FcPatternAddCharSet(void *pat, const char *object, const void *cs)
 }
 
 void FcPatternDestroy(void *pat) { free(pat); }
+
+/*
+ * The rest of the fontconfig surface st needs.
+ *
+ * st is the off-the-shelf terminal we use as a CONTROL: it has its own pty and
+ * its own X input handling, so if a fault reproduces in st it is not ours.
+ * Without these fifteen symbols it cannot even relocate, and the control does
+ * not exist. They are stubs with memory - enough that st computes a sane cell
+ * size and draws - not a fontconfig implementation.
+ */
+FcBool FcPatternAddInteger(void *pat, const char *object, int i)
+{
+	struct fc_pattern *p = pat;
+
+	if (!p || !object)
+		return 1;
+	if (!strcmp(object, "slant"))		p->slant = i;
+	else if (!strcmp(object, "weight"))	p->weight = i;
+	else if (!strcmp(object, "spacing"))	p->spacing = i;
+	else if (!strcmp(object, "pixelsize")) {
+		p->pixelsize = i;
+		p->pixelsize_set = 1;
+	}
+	return 1;
+}
+
+FcBool FcPatternAddBool(void *pat, const char *object, FcBool b)
+{
+	struct fc_pattern *p = pat;
+
+	if (!p || !object)
+		return 1;
+	if (!strcmp(object, "antialias"))	p->antialias = b;
+	else if (!strcmp(object, "hinting"))	p->hinting = b;
+	else if (!strcmp(object, "autohint"))	p->autohint = b;
+	else if (!strcmp(object, "minspace"))	p->minspace = b;
+	else if (!strcmp(object, "embolden"))	p->embolden = b;
+	return 1;
+}
+
+FcResult FcPatternGetInteger(const void *pat, const char *object, int n,
+			     int *out)
+{
+	const struct fc_pattern *p = pat;
+
+	(void)n;
+	if (!p || !object || !out)
+		return FcResultNoMatch;
+	if (!strcmp(object, "slant"))		*out = p->slant;
+	else if (!strcmp(object, "weight"))	*out = p->weight;
+	else if (!strcmp(object, "spacing"))	*out = p->spacing;
+	else if (!strcmp(object, "pixelsize"))	*out = (int)(p->pixelsize ?
+							     p->pixelsize :
+							     p->size);
+	else return FcResultNoMatch;
+	return FcResultMatch;
+}
+
+FcResult FcPatternGetDouble(const void *pat, const char *object, int n,
+			    double *out)
+{
+	const struct fc_pattern *p = pat;
+
+	(void)n;
+	if (!p || !object || !out)
+		return FcResultNoMatch;
+	if (!strcmp(object, "size"))		*out = p->size;
+	else if (!strcmp(object, "pixelsize"))	*out = p->pixelsize ?
+							p->pixelsize : p->size;
+	else return FcResultNoMatch;
+	return FcResultMatch;
+}
+
+FcBool FcPatternDel(void *pat, const char *object)
+{
+	struct fc_pattern *p = pat;
+
+	if (!p || !object)
+		return 0;
+	if (!strcmp(object, "pixelsize")) {
+		p->pixelsize = 0;
+		p->pixelsize_set = 0;
+	} else if (!strcmp(object, "size")) {
+		p->size = 0;
+	}
+	return 1;
+}
+
+void *FcPatternDuplicate(const void *pat)
+{
+	struct fc_pattern *q = fc_alloc();
+
+	if (q && pat)
+		memcpy(q, pat, sizeof(*q));
+	return q;
+}
+
+/*
+ * A font set of exactly one: whatever was asked for. st walks the set looking
+ * for a face that covers a character; with one entry it always picks that one,
+ * which is what the single face this shim has would give anyway.
+ */
+struct fc_fontset {
+	int nfont;
+	int sfont;
+	void **fonts;
+};
+
+static void *fc_fontset_of(const void *pat)
+{
+	struct fc_fontset *fs = calloc(1, sizeof(*fs));
+
+	if (!fs)
+		return NULL;
+	fs->fonts = calloc(1, sizeof(void *));
+	if (!fs->fonts) { free(fs); return NULL; }
+	fs->fonts[0] = FcPatternDuplicate(pat);
+	fs->nfont = fs->sfont = 1;
+	return fs;
+}
+
+void FcFontSetDestroy(void *set)
+{
+	struct fc_fontset *fs = set;
+	int i;
+
+	if (!fs)
+		return;
+	for (i = 0; i < fs->nfont; i++)
+		free(fs->fonts[i]);
+	free(fs->fonts);
+	free(fs);
+}
+
+void *FcFontSetMatch(void *config, void **sets, int nsets, void *pat,
+		     FcResult *result)
+{
+	(void)config; (void)sets; (void)nsets;
+	if (result)
+		*result = FcResultMatch;
+	return FcPatternDuplicate(pat);
+}
+
+void *FcFontSort(void *config, void *pat, FcBool trim, void *csp,
+		 FcResult *result)
+{
+	(void)config; (void)trim; (void)csp;
+	if (result)
+		*result = FcResultMatch;
+	return fc_fontset_of(pat);
+}
+
 
 FcBool FcConfigSubstitute(void *config, void *pat, int kind)
 {
