@@ -5814,7 +5814,59 @@ that matter for wiring this up:
     once, re-upload only when the client's palette actually changes. That cost
     was inside the original PPA-vs-CPU comparison and nobody accounted for it.
 
-## PPA CLUT: correct everywhere, wins nowhere yet, and hangs at 640x400
+## PPA CLUT: correct, stable, and at PARITY by 640x400 - but it cannot win
+
+    resolution   CPU                  PPA     proof
+    320x200      29.4 / 29.9 / 29.0   27.2    PPA 7.5% WORSE
+    640x400      12.1                 12.2    dead even, ppa_expansions=5000
+
+All undisturbed runs, nothing touching the board inside the timed window.
+
+**THE HANG WAS NOT THE PPA - retracted.** With the window placed fully
+on-panel the hardware path ran 5,000 expansions across a full 416 s timedemo
+without incident. The earlier crashes happened while the PPA was DECLINING
+every frame, so the "PPA arm" was the CPU path running on GEM-backed
+(write-combine) buffers. That is the real suspect and a different bug. The
+ppa->lock theory written here earlier was wrong.
+
+**The scaling prediction held.** PPA overhead is per-ROW, CPU cost is
+per-PIXEL, so quadrupling the pixels closed a 7.5% deficit to parity, and it
+would presumably start winning above 640x400.
+
+**But parity is the ceiling, and the reason matters more than the number.** At
+640x400 the compositor moves 768 kB a frame - 9.3 MB/s at 12 fps against a
+13.6 MB/s PSRAM copy ceiling - so the system is BANDWIDTH bound, and the PPA
+moves exactly the same bytes as the CPU. Offloading the processor cannot help
+when the bus is the constraint.
+
+**So no expander can win at high resolution.** CPU, PPA or anything else, they
+all move the same bytes. The only lever that changes the byte COUNT is
+rendering at a small size and scaling up in hardware (the PPA's SRM engine,
+already proven in the thumbnail path). That is the one worth trying for
+"Doom at higher resolutions"; further work on the expander is bounded by a
+ceiling it cannot cross.
+
+### Not viable: writing the framebuffer through the uncached alias
+
+The idea was to kill DIRTYFB's cache writeback by writing expanded pixels to
+the uncached PSRAM alias. Two things, and the FIRST one nearly went into this
+file as a wrong "impossible":
+
+* The alias EXISTS - esp32s31-axi-gdma.c:35 defines ESP32S31_PSRAM_DIRECT_BASE
+  0xc0000000, "Cached and direct (uncached) views of the 16-MiB MSPI PSRAM
+  window". esp32s31-lcd.c's comment "PSRAM has no uncached alias" is at best
+  imprecise: an address alias that bypasses cache in the memory controller is
+  a different question from whether a PAGE can be marked uncached without
+  Svpbmt, which it cannot. Both statements are true of different things.
+* It still fails, on PERFORMANCE grounds: the alias is unbuffered, not
+  write-combine. The GDMA driver uses it for descriptors and recovery writes -
+  tiny. Pushing 512 kB of pixels a frame through an unbuffered path would
+  almost certainly cost more than cached writes plus one cache-clean pass,
+  which is what DIRTYFB already does. Closed unless a microbenchmark says
+  otherwise; do not reopen it on argument alone.
+
+## SUPERSEDED: PPA CLUT: correct everywhere, wins nowhere yet, and hangs at 640x400
+
 
 State at the end of 2026-09-07. Default OFF (XSHIM_PPACLUT=1 arms it).
 
