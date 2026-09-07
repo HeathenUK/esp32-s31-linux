@@ -3683,9 +3683,52 @@ static void xwin_on_window(uint32_t id, int w, int h)
 	 * client landed exactly under the first and looked like it had failed
 	 * to appear at all.
 	 */
-	win = make_window(title ? title : "X client",
-			  150 + xwin_n * 26, 60 + xwin_n * 26,
-			  pw + 2, ph + HDR_H + 2);
+	{
+		int fw = pw + 2, fh = ph + HDR_H + 2;
+		int wx = 150 + xwin_n * 26, wy = 60 + xwin_n * 26;
+		const char *pos = getenv("LVDESK_WINPOS");
+		int px_, py_;
+
+		/*
+		 * NEVER OPEN A WINDOW OFF THE PANEL.
+		 *
+		 * The cascade above is fine for a 320x200 client and wrong for
+		 * anything large: a 640x400 one landed at y=81 and ended at
+		 * 481 on a 480-line panel, one row over the edge. That is a
+		 * placement bug in its own right - a window manager should not
+		 * open a window where part of it cannot be seen - and it also
+		 * silently disabled the hardware expansion, which declines a
+		 * window that is not wholly on screen.
+		 *
+		 * Clamp the frame into the panel; if it is simply bigger than
+		 * the panel, centre the overflow rather than pinning a corner,
+		 * so the middle of the client is the part you can see.
+		 */
+		if (fw <= (int)kms_w)
+			wx = wx + fw > (int)kms_w ? (int)kms_w - fw : wx;
+		else
+			wx = ((int)kms_w - fw) / 2;
+		if (fh <= (int)kms_h)
+			wy = wy + fh > (int)kms_h ? (int)kms_h - fh : wy;
+		else
+			wy = ((int)kms_h - fh) / 2;
+		if (wx < 0)
+			wx = 0;
+		if (wy < 0)
+			wy = 0;
+
+		/*
+		 * LVDESK_WINPOS=x,y pins the next window instead. For
+		 * measurement: comparing two arms is only honest if the client
+		 * is in the same place both times, and "launch it, then move
+		 * it" is a race as well as a faff.
+		 */
+		if (pos && sscanf(pos, "%d,%d", &px_, &py_) == 2) {
+			wx = px_;
+			wy = py_;
+		}
+		win = make_window(title ? title : "X client", wx, wy, fw, fh);
+	}
 	if (!win)
 		return;
 	rec = win_find(win);
