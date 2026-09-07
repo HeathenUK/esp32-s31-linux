@@ -5644,3 +5644,129 @@ place, which helps ANY SDL 1.2 application rather than one game. It does not
 fit yet - the rootfs XIP partition has 323,584 bytes free, so it is ~43 KB
 short and needs partition slack (and a partition move must reach all five
 homes; see the flash-layout note).
+
+## Descriptor DMA and split transactions: proven mutually exclusive
+
+Settled 2026-09-07, after our own implementation attempt failed and two
+independent research passes over the vendor sources. This closes the question
+of whether `host_full_speed` is a workaround for a bug of ours or a hardware
+fact. **It is a hardware fact.**
+
+### What this silicon actually is
+
+Read from the core, not assumed (`devmem 0x2030_0040`..`0x2030_0050`):
+
+    GSNPSID = 0x4F54430A    core revision 4.30a  (host DDMA needs >= 2.90a)
+    GHWCFG1 = 0x00000000
+    GHWCFG2 = 0x239FFED2    point2point=0 -> MULTI-POINT: hub and split support
+                            architecture=2 (internal DMA), 16 host channels
+    GHWCFG3 = 0x038046E8
+    GHWCFG4 = 0xDE11AA30    bit30 DescDMA=1, bit31 DescDMA_dyn=1
+
+`GHWCFG2` matches Espressif's own documented reset value for the part, field for
+field, in the register header they ship for it
+(`components/soc/esp32s31/register/soc/usb_otghs_struct.h`, in the build
+container's IDF), which annotates bit 5 as:
+
+    1'b0: Multi-point application  (hub and split support)
+
+So **both** capabilities are synthesised in. Neither is missing. The split
+engine is real: the same header documents all 16 `HCSPLT` registers as R/W and
+ships two Synopsys STAR-fix disable bits for *host split* errata - nobody
+ships errata workarounds for a state machine that does not exist. We also drive
+splits successfully every time we force high speed; they work, they are merely
+ruinous (below).
+
+### Why the combination cannot work
+
+Synopsys asserts it, twice, in commits their own engineers signed:
+
+  09d7fc7c6831 "usb: dwc2: Disable descriptor dma mode by default"
+  Acked-by: Paul Zimmerman <paulz@synopsys.com>
+    "Even though the IP supports Descriptor DMA mode, it does not support
+     SPLIT transactions in this mode."
+
+  fbb9e22b15ad "usb: dwc2: host: enable descriptor dma for fs devices"
+  Acked-by: John Youn <johnyoun@synopsys.com>   (the dwc2 maintainer)
+    "As descriptor dma mode does not support split transfers, it can't be
+     enabled for high speed devices."
+
+That second commit is the ORIGIN of `dma_desc_fs_enable` - the very mechanism
+this port uses. Our `host_full_speed` trick is not a local invention; it is the
+upstream design intent, institutionalised.
+
+The refusal in `hcd_ddma.c:317` ("SPLIT Transfers are not supported in
+Descriptor DMA mode.") is not a Linux deduction either: it arrived verbatim
+from Synopsys' out-of-tree `dwc_otg` driver in the original 2013 import by
+Paul Zimmerman of Synopsys, and the vendor gate for host DDMA tests
+`hwcfg4.desc_dma`, core revision and `op_mode` - it does NOT consult
+`point2point`. An unconditional refusal is the tell: were it only single-point
+cores that could not do it, the vendor would have tested for that.
+
+**The structural reason** (analysis, not a quoted spec - the databook is
+NDA-only and no public quotation of it on this point exists). The host QTD is
+two quadlets and its status word encodes only `n_bytes, qtd_offset, a_qtd, sup,
+ioc, eol, sts, a`, where the whole 2-bit `sts` field defines just `PKTERR`.
+There is nowhere to encode SSPLIT-versus-CSPLIT phase, and no status code for
+NYET - which is exactly the response a complete-split must be retried on. The
+periodic frame list executes one descriptor per microframe, which cannot
+express "one SSPLIT here, then CSPLITs across the next N microframes for the
+same transaction". `HCSPLT` still exists per channel, but nothing in the
+descriptor model sequences it.
+
+That predicts precisely the symptom we measured in patches/0027: the
+start-split goes out and the core then produces NOTHING - no ACK, NYET,
+XactErr, halt or completion interrupt, ever - while the descriptor stays Active
+until the URB times out at -110. A software complete-split fallback never
+engages because there is no event to engage on.
+
+### Nobody, anywhere, runs this combination
+
+  Raspberry Pi (vendor dwc_otg)  DDMA compiled OFF; all split work is the
+                                 software FIQ, in buffer DMA
+  U-Boot                         no descriptor DMA at all; splits done by hand
+                                 against HFNUM/HCSPLT
+  NetBSD                         carries the Linux comment verbatim
+  every in-tree dwc2 platform    params.c defaults host DDMA false and not one
+                                 of the ~20 dwc2_set_*_params() overrides it
+  ESP-IDF                        Scatter/Gather unconditionally in host mode,
+                                 and ZERO split code on any target - it declares
+                                 "no FS/LS devices when a hub is attached to an
+                                 HS host" a limitation instead
+  ESP32-P4 (sibling silicon)     OTG_SINGLE_POINT=1: splits removed from the IP
+                                 entirely rather than combined with DescDMA
+
+Our core is the *maximal* configuration for this question - multi-point,
+DescDMA, dynamic DescDMA, 16 channels, revision 4.30a - and it still hangs.
+A modern core, every capability present, and the combination is still dead.
+
+### What it costs to avoid it
+
+Re-measured 2026-09-07 on one boot, both HID receivers genuinely attached,
+lvdesk running:
+
+                                          CoreMark   dwc2 irq/s
+    DDMA, full speed (shipping default)      1005.9      ~0
+    no DDMA, high speed, SOF scheduling       418.7    7,608
+
+**58% of the machine.** The earlier table in this file recorded 981.9 vs 599.0
+(39%); the good arm has improved with the task-switching work while the bad arm
+got worse, so the gap has widened. To reproduce the bad arm at all you now need
+BOTH `desc_dma=0` AND `sof_irq=1`, plus `auto_speed=0 host_full_speed=0`:
+without `sof_irq` there is no software scheduling and without `desc_dma=0` the
+receivers do not enumerate at all.
+
+### Consequence
+
+There is no "turn descriptor DMA off" escape from anything - it costs 58% of
+the CPU. That is why the transaction-error retry had to be fixed *inside* the
+DDMA path (patches/0034): with splits unavailable in that mode and DDMA
+mandatory for acceptable performance, its one-strike error handling was the
+only thing between a routine bus hiccup and usbhid's exponential backoff, and
+there was no fallback path to fall back to.
+
+Caveat, stated plainly: the primary source is NDA. The chain here is vendor
+*software* plus vendor *acks* on commit messages, plus our own measurement -
+not a databook quotation. As far as either research pass could find, our
+"SSPLIT out, no interrupt ever, descriptor Active until -110" is the first
+published empirical characterisation of what the hardware actually does.
