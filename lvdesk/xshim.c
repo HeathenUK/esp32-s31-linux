@@ -498,9 +498,25 @@ static int drawable_ok(struct res *d)
 /*
  * XSHIM_PPACLUT=1: expand depth-8 windows on the PPA instead of the CPU.
  *
- * Default OFF. It changes where a client's pixels LIVE - the reserved DMA
- * pool instead of anonymous memory - so it is not a drop-in, and the CPU path
- * has to stay available to compare against in the same binary.
+ * DEFAULT OFF, and measured. Undisturbed timedemos, both arms the same way:
+ *
+ *     320x200   CPU 29.4 / 29.9 / 29.0 fps    PPA 27.2      PPA 7.5% WORSE
+ *     640x400   CPU 12.1 fps                  PPA 12.2      parity
+ *
+ * It is correct (cluttest, cluttest2 - pixel-exact, no spill) and stable
+ * (5,000 expansions across a full 416 s run), and it scales the way the
+ * arithmetic says it should: its overhead is per-ROW, the CPU's is per-PIXEL,
+ * so 4x the pixels closes a 7.5% deficit to parity.
+ *
+ * But parity is its ceiling, and the reason is the point: at 640x400 the
+ * compositor moves 768 kB a frame - 9.3 MB/s at 12 fps against a 13.6 MB/s
+ * PSRAM copy ceiling - so the BUS is the constraint, and the PPA moves exactly
+ * the same bytes as the CPU. Offloading the processor cannot help there. No
+ * expander wins at high resolution; only moving fewer bytes does, which means
+ * rendering small and upscaling on the SRM engine.
+ *
+ * Kept, off, because it is correct and because the arms must live in one
+ * binary to be comparable. Do not enable it expecting frames.
  */
 static int ppaclut_on(void)
 {
