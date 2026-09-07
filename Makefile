@@ -435,7 +435,14 @@ LINUX_PARTITION_SIZE ?= 6160384
 SERIAL_PORT ?= $(firstword $(wildcard /dev/cu.usbserial-* /dev/ttyUSB0))
 ESPTOOL ?= $(firstword $(wildcard $(HOME)/.espressif/python_env/idf6*/bin/esptool) esptool)
 ESPTOOL_BAUD ?= 2000000
-ESPFLASH = $(ESPTOOL) -p $(SERIAL_PORT) -b $(ESPTOOL_BAUD) write-flash
+# Every flash goes through the port lock. esptool knows nothing about the
+# flock that scripts/board/ uses, and a flash landing inside a measurement is
+# the worst collision available - it reboots the board AND rewrites its flash,
+# so the run being timed silently becomes a run of something else. --wait
+# queues rather than failing: better to start late than to corrupt a
+# measurement or make the user re-run a build.
+WITHLOCK = python3 $(CURDIR)/scripts/board/withlock.py --wait 900 --
+ESPFLASH = $(WITHLOCK) $(ESPTOOL) -p $(SERIAL_PORT) -b $(ESPTOOL_BAUD) write-flash
 
 # Where a flashable artifact actually is. Builds run in a container and the
 # build tree is a Docker volume, so on the host $(BUILD_DIR) is empty and the
@@ -944,7 +951,7 @@ flash-imager:
 # not - it leaves the reset non-deterministic, which shows up later as
 # intermittent silence on the console and gets misread as a boot failure.
 reset:
-	@$(ESPTOOL) -p $(SERIAL_PORT) --after hard-reset chip-id >/dev/null 2>&1 || true
+	@$(WITHLOCK) $(ESPTOOL) -p $(SERIAL_PORT) --after hard-reset chip-id >/dev/null 2>&1 || true
 	@echo "reset $(SERIAL_PORT)"
 
 flash-bootloader:

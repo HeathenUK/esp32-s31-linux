@@ -81,12 +81,16 @@ def take_port_lock(what='', block=0.0):
                 fh.seek(0)
                 holder = fh.read().strip() or '(unknown)'
                 fh.close()
+                # Deliberately does NOT contain the literal NO_SHELL. That
+                # token is a VERDICT about the board, and tooling greps for
+                # it; putting it inside an explanation makes a busy port look
+                # like a dead board to exactly the callers this is protecting.
                 raise PortBusy(
                     'SERIAL PORT BUSY - held by %s.\n'
                     '  This is NOT a dead board. Two readers on one tty steal\n'
-                    "  each other's bytes, so any probe run now will report\n"
-                    '  NO_SHELL whatever the board is doing. Wait for the\n'
-                    '  holder to finish, or stop it, then retry.' % holder)
+                    "  each other's bytes, so any probe run now reports a\n"
+                    '  no-shell verdict whatever the board is doing. Wait for\n'
+                    '  the holder to finish, or stop it, then retry.' % holder)
             time.sleep(0.25)
     fh.seek(0)
     fh.truncate()

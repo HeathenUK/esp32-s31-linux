@@ -126,6 +126,12 @@ def run(path, timeout=240, boot_wait=0, shell_wait=75.0):
 
 
 if __name__ == '__main__':
+  try:
     print(run(sys.argv[1],
               int(sys.argv[2]) if len(sys.argv) > 2 else 240,
               int(sys.argv[3]) if len(sys.argv) > 3 else 0))
+  except console.PortBusy as e:
+    # Expected condition, not a crash - a traceback here buries the one line
+    # that says what to do, and its noise is what callers end up grepping.
+    print(str(e), file=sys.stderr)
+    sys.exit(3)
