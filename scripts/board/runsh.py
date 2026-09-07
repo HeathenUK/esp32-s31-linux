@@ -31,7 +31,7 @@ PORT, BAUD = '/dev/cu.usbserial-130', 1000000
 def run(path, timeout=240, boot_wait=0, shell_wait=75.0):
     if boot_wait:
         time.sleep(boot_wait)
-    p = serial.Serial(PORT, BAUD, timeout=0.05)
+    p = console.open_port(timeout=0.05, what='runsh.py')
 
     def until(pred, limit, prod=None, every=2.0):
         """Read until pred(buffer) holds. `prod` pokes a board that is silent
@@ -74,9 +74,35 @@ def run(path, timeout=240, boot_wait=0, shell_wait=75.0):
     if not got:
         p.close(); return 'UPLOAD_FAILED'
 
-    p.write(b'sh /tmp/r.sh 2>&1; echo RS_DONE\n')
+    # BOARD-SIDE WATCHDOG. The script must not outlive this call.
+    #
+    # runsh gives up after `timeout`, but the board's login shell keeps running
+    # whatever was started - so the console stays occupied and every later tool
+    # reports NO_SHELL, which is indistinguishable from a dead board. That has
+    # happened repeatedly (a 1.45 MB copy, a `find /` over the SD card) and
+    # each time it was diagnosed as a wedged board.
+    #
+    # So the board kills it too. The watchdog is given a little longer than the
+    # host's patience, so a script that finishes normally is never disturbed
+    # and only a genuine overrun is cut - and the marker says which happened,
+    # rather than leaving silence to be interpreted.
+    guard = int(timeout) + 10
+    p.write(('sh /tmp/r.sh 2>&1 & __rp=$!; '
+             '( sleep %d; kill -9 $__rp 2>/dev/null && '
+             'echo RS_TIMEKILL ) & __rw=$!; '
+             'wait $__rp 2>/dev/null; kill $__rw 2>/dev/null; '
+             'echo RS_DONE\n' % guard).encode())
     o, _ = until(lambda b: 'RS_DONE' in b.split('echo RS_DONE')[-1], timeout)
     p.close()
+    if 'RS_TIMEKILL' in o:
+        # Say it out loud. A script the board had to kill has half-applied
+        # whatever it was doing, and the caller must not treat the output as a
+        # complete result - nor go looking for a hardware fault.
+        o += ('\n[runsh] THE BOARD KILLED THIS SCRIPT at %d s - it outran its\n'
+              '        window. The board is FINE; the script was too slow.\n'
+              '        Its effects are HALF-APPLIED. Split it up, or move the\n'
+              '        slow part to setsid with output to a file on the card.\n'
+              % guard)
     return o
 
 

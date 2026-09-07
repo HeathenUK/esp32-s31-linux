@@ -22,11 +22,96 @@ The three things:
 `rstrip().endswith('# ')` can never be true - rstrip removes the trailing space
 it then tests for. Match on '#'.
 """
+import atexit
+import errno
+import fcntl
+import os
 import time
 
 import serial
 
 PORT, BAUD = '/dev/cu.usbserial-130', 1000000
+
+# ---------------------------------------------------------------- port lock
+#
+# ONE PROCESS AT A TIME OWNS THE SERIAL PORT.
+#
+# Two readers on one tty steal each other's bytes, so a probe that runs while
+# another tool holds the port CANNOT succeed - and every tool here reports that
+# failure as NO_SHELL or STAGE SILENT, which is indistinguishable from a dead
+# board. On 2026-09-07 a liveness check was run against a board that a
+# background A/B job was already driving; it reported the board dead, and the
+# board was fine. That is not a bug in the probe, it is a missing lock.
+#
+# Advisory flock, so it costs nothing and disappears if a process is killed.
+# The holder writes its pid and argv into the file, so the error can say WHO
+# has the port rather than just refusing.
+LOCKFILE = os.environ.get('S31_PORT_LOCK', '/tmp/s31-serial-port.lock')
+
+
+class PortBusy(RuntimeError):
+    """Raised instead of letting a caller misread contention as a dead board."""
+
+
+_lock_fh = None
+
+
+def take_port_lock(what='', block=0.0):
+    """Claim the serial port. Raises PortBusy with the holder's identity.
+
+    block=N waits up to N seconds for the holder to finish, which is what a
+    queued measurement wants; the default fails immediately, which is what an
+    interactive probe wants - waiting silently is how a wedged tool looks like
+    a wedged board.
+    """
+    global _lock_fh
+
+    if _lock_fh is not None:              # already ours, re-entrant
+        return
+    fh = open(LOCKFILE, 'a+')
+    deadline = time.time() + block
+    while True:
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except OSError as e:
+            if e.errno not in (errno.EACCES, errno.EAGAIN):
+                raise
+            if time.time() >= deadline:
+                fh.seek(0)
+                holder = fh.read().strip() or '(unknown)'
+                fh.close()
+                raise PortBusy(
+                    'SERIAL PORT BUSY - held by %s.\n'
+                    '  This is NOT a dead board. Two readers on one tty steal\n'
+                    "  each other's bytes, so any probe run now will report\n"
+                    '  NO_SHELL whatever the board is doing. Wait for the\n'
+                    '  holder to finish, or stop it, then retry.' % holder)
+            time.sleep(0.25)
+    fh.seek(0)
+    fh.truncate()
+    fh.write('pid %d: %s' % (os.getpid(), what or ' '.join(os.sys.argv)))
+    fh.flush()
+    _lock_fh = fh
+    atexit.register(release_port_lock)
+
+
+def release_port_lock():
+    global _lock_fh
+
+    if _lock_fh is not None:
+        try:
+            fcntl.flock(_lock_fh, fcntl.LOCK_UN)
+            _lock_fh.close()
+        except Exception:
+            pass
+        _lock_fh = None
+
+
+def open_port(timeout=0.05, what='', block=0.0):
+    """serial.Serial(), but only if nothing else is driving the board."""
+    take_port_lock(what=what, block=block)
+    return serial.Serial(PORT, BAUD, timeout=timeout)
 
 # How long to wait for the *first* byte before calling the board dead.
 #
@@ -104,7 +189,7 @@ def wait_for_shell(p, cap=HARD_CAP, user='root'):
 
 def open_shell(cap=HARD_CAP):
     """Open the console and return (port, banner) with a shell ready."""
-    p = serial.Serial(PORT, BAUD, timeout=0.05)
+    p = open_port(timeout=0.05, what='console.shell()')
     try:
         return p, wait_for_shell(p, cap)
     except NoShell:

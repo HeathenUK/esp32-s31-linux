@@ -27,7 +27,7 @@ def deploy(path, dest, timeout=300, shell_wait=75.0):
     else:                                     # take a plain file and do the work
         data = base64.b64encode(gzip.compress(raw)).decode()
 
-    p = serial.Serial(PORT, BAUD, timeout=0.05)
+    p = console.open_port(timeout=0.05, what='deploy_bin.py')
 
     def until(pred, limit, prod=None, every=2.0):
         t, last, o = time.time(), 0.0, ''

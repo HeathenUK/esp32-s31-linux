@@ -39,6 +39,8 @@ import time
 
 import serial
 
+import console
+
 PORT = os.environ.get("S31_PORT", "/dev/cu.usbserial-130")
 
 # Ordered: the furthest match wins, so a later stage implies the earlier ones.
@@ -70,6 +72,7 @@ def furthest(text):
 
 def read_for(baud, secs, poke=None):
     try:
+        console.take_port_lock(what='alive.py')
         s = serial.Serial(PORT, baud, timeout=0.2)
     except serial.SerialException as e:
         return "", "PORT_ERROR: %s" % e

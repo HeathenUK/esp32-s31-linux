@@ -29,7 +29,7 @@ import time
 
 import serial
 
-from console import PORT, BAUD
+from console import PORT, BAUD, open_port
 
 # What is worth interrupting a run for. Deliberately broad: a missed panic
 # costs the whole diagnosis, a false positive costs one line of output.
@@ -50,7 +50,7 @@ def main() -> int:
     secs = float(sys.argv[2]) if len(sys.argv) > 2 else 600.0
 
     try:
-        ser = serial.Serial(PORT, BAUD, timeout=0.5)
+        ser = open_port(timeout=0.5, what='conlog.py (recording)')
     except Exception as e:                          # noqa: BLE001
         print(f"conlog: cannot open {PORT}: {e}", file=sys.stderr)
         return 1

@@ -67,6 +67,36 @@ ways the console lies:
 emitting bytes (alive, still booting) or silent (off, held in reset, or in
 download mode). Read it instead of re-running blind.
 
+## The board is almost never wedged. You are holding the console.
+
+Three failures look identical - every tool reports `NO_SHELL` or `STAGE
+SILENT` - and only one of them is the board's fault. Before diagnosing
+hardware, rule out the first two, because on 2026-09-07 they accounted for
+most of a day's "wedges":
+
+1. **Another tool has the port.** Two readers on one tty steal each other's
+   bytes, so a probe run while a background job is driving the board CANNOT
+   succeed. `console.py` now takes an **advisory flock** (`take_port_lock`)
+   and every tool goes through `console.open_port()`, so this reports
+   `SERIAL PORT BUSY - held by pid N: <what>` and says "This is NOT a dead
+   board". **If you see that, stop the holder - do not reset anything.**
+   Never run a board tool while a background measurement is in flight.
+2. **Your script outlived its runsh window.** runsh gives up, the board's
+   login shell keeps running the script, and the console stays occupied.
+   `runsh.py` now installs a **board-side watchdog** that kills the script at
+   `timeout + 10 s` and prints `RS_TIMEKILL`, which runsh turns into "THE
+   BOARD KILLED THIS SCRIPT - the board is FINE; its effects are
+   HALF-APPLIED." A 1.45 MB copy and a `find /` over the SD card both did
+   this. **Anything slow goes `setsid` with output to a file on the card**,
+   and you collect the file afterwards - never inline in a runsh script.
+3. **The board really died.** Only now is this worth believing. Record it:
+   `conlog.py <out.log> <secs>` listens read-only and prints `ALARM` on
+   panic/BUG/hung-task/OOM. Fire the workload with runsh FIRST (setsid, output
+   to a file), let runsh exit, then record - conlog holds the port too.
+   **`dmesg` is useless here by construction**: you can only read it from a
+   board that is still alive, so the one failure worth diagnosing is the one
+   that erases its own evidence.
+
 **Do not re-derive the screenshot path.** The scanout address is allocated, not
 fixed, and `/dev/fb0` is fbdev emulation rather than what Xorg actually paints.
 `screenshot.py` handles both - and the **geometry is not always 800x480**. If
