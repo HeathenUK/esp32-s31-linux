@@ -5685,6 +5685,29 @@ that shadow into kms_map - the same pixels paid for twice, 448 kB a frame at
 320x200. Expanding once, at the window's position, from the FLUSH callback is
 192 kB. `LVDESK_DIRECTEXP=1`.
 
+### SETTLED 2026-09-07: direct expansion is 40% cheaper per frame, and DEFAULT
+
+Everything below this heading is the record of getting the MEASUREMENT wrong
+three times; the answer itself is here. With scripts/board/perframe.sh, three
+alternating samples per arm, one binary, arm proven on every sample:
+
+    arm      lvdesk ticks/frame        frames in 60 s   implied fps
+    shadow   2.806 2.991 2.828 (2.875)  1000 800 1000      15.6
+    direct   1.750 1.721 1.724 (1.732)  1000 1400 1400     21.1
+
+**40% off the compositor's per-frame cost, ~35% more frames.** Spreads +-3%
+and +-0.8%, non-overlapping. prboom's own per-frame cost is unchanged within
+noise (3.06 vs 2.57, overlapping) - the cross-check that matters, since Doom's
+work per frame CANNOT depend on how the compositor draws. Confirmed
+independently by the timedemo at 21.7 fps against perframe's implied 21.1,
+painting 3 of 3.
+
+**WHY %CPU COULD NEVER HAVE SEEN THIS.** At 0% idle, %CPU is a SHARE of a
+saturated machine, not a cost: both arms burn ~100% and differ only in what
+they produce. The %CPU A/B reported "37-39 vs 38-43, overlapping" for a change
+worth 40%. On a saturated board, measure work per unit of OUTPUT, never
+per unit of time.
+
 **Measured with a CPU probe, not the timedemo.** The FIRST two pairs read:
 
     shadow 43%, 43%    direct 29%, 30%     (lvdesk RSS 330 kB -> 200 kB)

@@ -3796,8 +3796,24 @@ static int directexp_on(void)
 {
 	static int v = -1;
 
+	/*
+	 * DEFAULT ON since 2026-09-07, measured with scripts/board/perframe.sh,
+	 * three alternating samples per arm on one binary:
+	 *
+	 *     shadow   lvdesk 2.806 2.991 2.828 ticks/frame   ~15.6 fps
+	 *     direct   lvdesk 1.750 1.721 1.724 ticks/frame   ~21.1 fps
+	 *
+	 * 40% off the compositor's per-frame cost and ~35% more frames, with
+	 * prboom's own per-frame cost unchanged within noise - which is the
+	 * cross-check that the number is real, since Doom's work per frame
+	 * cannot depend on how the compositor draws.
+	 *
+	 * LVDESK_SHADOWEXP=1 restores the old path for comparison. It stays
+	 * because the arms must come from ONE binary: comparing separate
+	 * builds is what produced a day of confounded results.
+	 */
 	if (v < 0)
-		v = getenv("LVDESK_DIRECTEXP") != NULL;
+		v = getenv("LVDESK_SHADOWEXP") == NULL;
 	return v;
 }
 
@@ -6072,8 +6088,26 @@ static void kms_flush_cb(lv_display_t *d, const lv_area_t *area, uint8_t *px)
 			(int)(lv_area_get_width(area) * lv_area_get_height(area) / 1000));
 		fflush(stderr);
 	}
-	if (lv_display_flush_is_last(d))
+	if (lv_display_flush_is_last(d)) {
 		frames_flushed++;
+		/*
+		 * THE frame counter, for ticks-per-frame comparisons.
+		 *
+		 * It must tick once per REFRESH and be identical on both the
+		 * shadow and direct paths, or the two arms get divided by
+		 * different units. The first attempt counted iterations of
+		 * xwin_blit_direct(), which runs once per FLUSH RECTANGLE -
+		 * so a frame with two rects counted twice, and the direct arm
+		 * appeared to make prboom 26% more expensive per frame, which
+		 * is impossible. Caught only because that number was absurd.
+		 *
+		 * flush_is_last is above the expansion entirely, so it cannot
+		 * favour either arm.
+		 */
+		if (frames_flushed % 200 == 0)
+			fprintf(stderr, "lvdesk: FRAMES %llu\n",
+				(unsigned long long)frames_flushed);
+	}
 	if (!direct_render) {
 		int32_t w = lv_area_get_width(area);
 		int32_t h = lv_area_get_height(area);
