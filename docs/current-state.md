@@ -5814,6 +5814,37 @@ that matter for wiring this up:
     once, re-upload only when the client's palette actually changes. That cost
     was inside the original PPA-vs-CPU comparison and nobody accounted for it.
 
+## The 640x400 "board died" events: OPEN, and none of the suspects survived
+
+Four hypotheses tested and killed on 2026-09-07. Recording them so the next
+attempt does not re-run them:
+
+    the PPA CLUT              NO - 5,000 expansions, full 416 s timedemo, clean
+    GEM buffers + CPU expander NO - responsive through four probes at 640x400
+    GEM buffers + screenshot   NO - worked (54,223 byte capture, board alive)
+    plain 640x400              NO - two full 417 s timedemos
+
+What is actually known: an INTERMITTENT failure at 640x400, correlated with
+some concurrent activity (a screenshot in one instance, a ctl `move` in
+another), producing NO panic, NO console output at all, and recovering cleanly
+on reset. It has never been caught with the console recording.
+
+**A caution about how this was investigated, because it wasted time twice.**
+A screenshot killed the board once immediately after that hypothesis was
+formed, and it was written up as "reproduced, first try". It then failed to
+reproduce twice. One occurrence that matches a guess is not confirmation of
+the guess - and on an intermittent fault, a single trial can confirm anything.
+
+**The next attempt should not reason about it at all.** Run 640x400 in a loop
+with concurrent screenshots under `conlog.py` recording read-only, and wait
+for it to fire. dmesg cannot help - it can only be read from a board that is
+still alive, which is exactly what this failure removes. That is what conlog
+was written for, and it has still never been pointed at this.
+
+XSHIM_GEMONLY=1 exists as a reproducer harness for the GEM-plus-CPU-expander
+combination. It did not reproduce anything, but it isolates a real
+configuration and costs nothing to keep.
+
 ## PPA CLUT: correct, stable, and at PARITY by 640x400 - but it cannot win
 
     resolution   CPU                  PPA     proof

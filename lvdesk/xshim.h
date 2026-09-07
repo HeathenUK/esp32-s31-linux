@@ -94,6 +94,10 @@ const uint8_t *xshim_window_indices(uint32_t id, int *w, int *h,
  */
 uint32_t xshim_window_gem(uint32_t id);
 
+/* XSHIM_GEMONLY=1: GEM-backed surfaces, CPU expansion. A reproducer for the
+ * 640x400 death, not a mode anyone should run. See xshim.c. */
+int xshim_gemonly(void);
+
 /*
  * Resize a client's top-level from OUR side.
  *

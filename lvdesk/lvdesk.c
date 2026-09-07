@@ -3992,6 +3992,16 @@ static int ppa_gem_expand(int i, const lv_area_t *coords,
 	int bw, bh, bsx, bsy, bdx, bdy;
 
 	/*
+	 * XSHIM_GEMONLY=1 forces the CPU expander onto GEM-backed buffers.
+	 * That is the exact combination every "board died at 640x400" event
+	 * ran in: the PPA armed (so the surface was GEM), the expansion
+	 * declining (the window sat a row off the panel), and the CPU doing
+	 * the work on write-combine memory. A reproducer, not a mode.
+	 */
+	if (xshim_gemonly())
+		return 0;
+
+	/*
 	 * SAY WHY, ONCE. Two rounds of guessing went into why this path never
 	 * engaged at 640x400 - each costing a build, a flash and a run - when
 	 * the function could simply have reported its own reason. A silent

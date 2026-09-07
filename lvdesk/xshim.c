@@ -523,7 +523,33 @@ static int ppaclut_on(void)
 	static int v = -1;
 
 	if (v < 0)
-		v = getenv("XSHIM_PPACLUT") != NULL;
+		v = getenv("XSHIM_PPACLUT") != NULL ||
+		    getenv("XSHIM_GEMONLY") != NULL;
+	return v;
+}
+
+/*
+ * XSHIM_GEMONLY=1: put the index plane in the reserved pool exactly as the
+ * hardware path does, but expand it on the CPU anyway.
+ *
+ * This is not useful, it is a REPRODUCER. Every "the board died at 640x400"
+ * event was this combination: the PPA was armed, so the client's surface was
+ * GEM-backed, but the expansion declined (the window sat one row off the
+ * panel) and fell back to the CPU. So the crash was never the PPA - it ran
+ * 5,000 expansions across a full timedemo once the placement was fixed - it
+ * was the CPU reading and the client WRITING a write-combine buffer.
+ *
+ * drm_gem_dma maps these write-combine, and the driver's own notes warn that
+ * handing a client a GEM buffer moves DOOM'S OWN drawing surface into
+ * uncached memory, at the game's expense. At 320x200 that measured within
+ * 0.05%; at 640x400 it is four times the traffic. This isolates it.
+ */
+int xshim_gemonly(void)
+{
+	static int v = -1;
+
+	if (v < 0)
+		v = getenv("XSHIM_GEMONLY") != NULL;
 	return v;
 }
 
