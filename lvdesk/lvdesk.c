@@ -3446,6 +3446,7 @@ static lv_obj_t *make_window(const char *title, int x, int y, int w, int h)
 #define MAXXWIN 4
 
 static void xwin_cover_cb(lv_event_t *e);
+static int wordexp_on(void);
 static int directexp_on(void);
 
 static struct xwin {
@@ -3817,6 +3818,37 @@ static int directexp_on(void)
 	return v;
 }
 
+/*
+ * LVDESK_WORDEXP=1: pack two pixels into one 32-bit store in the expander.
+ *
+ * ON by default. Re-measured with perframe.sh, three alternating samples per
+ * arm in ONE binary:
+ *
+ *     word    lvdesk 1.668 1.499 1.714 (1.627)   frames 1400 1600 1400
+ *     scalar  lvdesk 1.721 1.738 1.689 (1.716)   frames 1400 1200 1400
+ *
+ * ~5% cheaper. **SUGGESTIVE, NOT PROVEN**, and the honest limits are:
+ * two of three word samples beat scalar's range and the third lands inside
+ * it; the word arm's own spread is +-6.6%, the same size as the effect; and
+ * the frame counter is quantised at 200, so "more frames" is +-14% resolution
+ * and is weak evidence, not strong. Enabled because the direction is
+ * consistent across three independent measures and the arithmetic is
+ * semantically identical - not because three samples settled it.
+ *
+ * It was "rejected" earlier the same day as 7 points worse. That was wrong in
+ * every part: measured as %CPU (which cannot see throughput on a saturated
+ * board), against two lucky samples, with the arms as SEPARATE binaries.
+ * LVDESK_SCALAREXP=1 restores the one-pixel-at-a-time loop.
+ */
+static int wordexp_on(void)
+{
+	static int v = -1;
+
+	if (v < 0)
+		v = getenv("LVDESK_SCALAREXP") == NULL;
+	return v;
+}
+
 static void xwin_cover_cb(lv_event_t *e)
 {
 	lv_cover_check_info_t *info = lv_event_get_param(e);
@@ -3961,8 +3993,29 @@ static void xwin_blit_direct(const lv_area_t *area)
 			 * 5+ alternating samples - two agreeing samples have
 			 * now produced three wrong conclusions in one day.
 			 */
-			for (k = 0; k < n; k++)
-				dp[k] = pal[sp[k]];
+			if (wordexp_on()) {
+				/*
+				 * Two pixels per 32-bit store. Peel a leading
+				 * odd pixel first: dp is uint16_t*, so dp&3 is
+				 * 0 or 2, and one pixel of peel makes it
+				 * 4-aligned. Little-endian: first pixel is the
+				 * low half.
+				 */
+				k = 0;
+				if ((((uintptr_t)dp) & 3u) && n > 0) {
+					dp[0] = pal[sp[0]];
+					k = 1;
+				}
+				for (; k + 1 < n; k += 2)
+					*(uint32_t *)(dp + k) =
+						(uint32_t)pal[sp[k]] |
+						((uint32_t)pal[sp[k + 1]] << 16);
+				for (; k < n; k++)
+					dp[k] = pal[sp[k]];
+			} else {
+				for (k = 0; k < n; k++)
+					dp[k] = pal[sp[k]];
+			}
 		}
 	}
 }
