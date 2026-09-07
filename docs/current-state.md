@@ -5678,6 +5678,55 @@ three other things:
    across a demo. Anonymous memory, not file-backed text. Also why `-mb 4` was
    rejected: less swap, more WAD lump reloads, net slower.
 
+## Direct expansion into the scanout buffer: lvdesk 43% -> 29% (2026-09-07)
+
+The shadow path expanded depth-8 indices into r->shadow and LVGL then blitted
+that shadow into kms_map - the same pixels paid for twice, 448 kB a frame at
+320x200. Expanding once, at the window's position, from the FLUSH callback is
+192 kB. `LVDESK_DIRECTEXP=1`.
+
+**Measured with a CPU probe, not the timedemo**, and that choice is the point:
+
+    arm      lvdesk %CPU   lvdesk RSS   expand lines
+    shadow      43%          328 kB          6
+    shadow      43%          332 kB          6
+    direct      29%          200 kB          0
+    direct      30%          200 kB          0
+
+A 13-point effect against 1 point of run-to-run variance. The RSS fall of
+~130 kB is an INDEPENDENT confirmation: the shadow is 320x200x2 = 128,000
+bytes, so two unrelated instruments agree it is gone.
+
+**Why the timedemo could not see this, and why that wasted an hour.** prboom
+itself is 38-49% of the machine, so a 13-point saving in lvdesk is diluted,
+and the timedemo's own run-to-run spread is +-20% (18.6 / 20.2 / 18.6 / 20.9 /
+22.3 fps on the shadow arm; 23.8 / 21.4 / one DNF on the direct arm - the
+bands OVERLAP). Trying to resolve a 13-point component effect through a
+20-point whole-system band needs many runs and still ends ambiguous. Measure
+the component the change touches. fps is the acceptance test, not the probe.
+
+**Do not compare arms built from different binaries.** The five shadow fps
+figures above came from five different builds during a day of edits; comparing
+the direct arm against them was comparing across confounds. The toggle exists
+so both arms come from ONE binary, alternating, fresh boot each.
+
+### Rejected: two pixels per 32-bit store
+
+    plain loop        lvdesk 29%, 30%
+    word-at-a-time    lvdesk 37%, and the second round wedged the board
+
+7 points worse. It removes one store per two pixels but adds a shift, an OR
+and an alignment-peel branch per row, which on an in-order hart is a wash at
+best. The code and the numbers are in xwin_blit_direct(); do not retry without
+a reason to expect a different answer.
+
+### Still opt-in, deliberately
+
+`xwin_direct_ok()` declines the fast path when another client's rectangle
+intersects, because painting after everything means anything stacked on top
+would be overwritten - a popover over a client would still be clobbered. That,
+plus one unexplained DNF on a direct arm, is why this is not the default yet.
+
 ## Palette expansion: which engines can and cannot do it (2026-09-07)
 
 Answered from the CORRECT vendor tree - `/opt/esp-idf` IN THE BUILD CONTAINER,
