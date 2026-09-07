@@ -68,6 +68,25 @@ const uint16_t *xshim_window_pixels(uint32_t id, int *w, int *h);
 int xshim_window_take_damage(uint32_t id, int *x, int *y, int *w, int *h);
 
 /*
+ * The RAW depth-8 plane and its palette, for expanding straight into the
+ * framebuffer instead of into a shadow.
+ *
+ * xshim_window_pixels() expands into r->shadow and the compositor then blits
+ * that shadow into the scanout buffer - the same pixels paid for twice. Per
+ * frame at 320x200 that is 448 kB (expand: read 64 kB, write 128 kB; blit:
+ * read 128 kB, write 128 kB) against a PSRAM copy ceiling measured at
+ * 13.6 MB/s, which at ~27 fps is 89% of the bus. Expanding once, directly at
+ * the window's position on screen, is 192 kB - a 57% cut.
+ *
+ * Returns NULL unless the window really is depth-8 with a live buffer, so the
+ * caller must keep the shadow path for everything else. `stride` is in
+ * INDICES (bytes), which is not always w: a child window shares its parent's
+ * buffer and its rows step by the parent's width.
+ */
+const uint8_t *xshim_window_indices(uint32_t id, int *w, int *h,
+				    int *stride, const uint16_t **pal);
+
+/*
  * Resize a client's top-level from OUR side.
  *
  * The window manager lives in lvdesk, so maximising or snapping an X client is

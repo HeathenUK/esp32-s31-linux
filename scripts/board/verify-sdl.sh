@@ -52,6 +52,11 @@ if grep -q 'pal = pal8;' lvdesk/xshim.c; then
 fi
 R() { python3 scripts/board/runsh.py "$1" "${2:-30}" 2>&1 | grep '^ZZ '; }
 
+cat > "$D/vs_showenv.sh" <<'SH'
+# READ ONLY. Never writes /etc/lvdesk.env - see the else branch below.
+echo "ZZ env: $(tr '\n' ' ' < /etc/lvdesk.env 2>/dev/null || echo '(none)')"
+SH
+
 cat > "$D/vs_ping.sh" <<'SH'
 echo "ZZ ALIVE up=$(cut -d. -f1 /proc/uptime)s"
 SH
@@ -77,7 +82,20 @@ SH
 		say "FAIL: env not applied"; exit 1; }
 	say "arm: XSHIM_PPA_MIN_PX=$XSHIM_PPA_MIN_PX (confirmed on the board)"
 else
-	R "$D/vs_env.sh" 40 >/dev/null 2>&1 || true
+	# DO NOT touch /etc/lvdesk.env here.
+	#
+	# This used to re-run $D/vs_env.sh - a leftover script from a PREVIOUS
+	# invocation whose entire job is to overwrite that file. So a run with
+	# no XSHIM_PPA_MIN_PX silently clobbered whatever arm the caller had
+	# set up, and then measured something else. On 2026-09-07 that wiped
+	# LVDESK_DIRECTEXP=1 and produced a 22.3 fps "direct expansion" result
+	# that was really the shadow path - caught only because the EXPAND
+	# counter showed 25 lines when the direct path emits none.
+	#
+	# An arm the harness did not set is an arm the harness must not
+	# destroy. Report what is there instead.
+	E=$(R "$D/vs_showenv.sh" 30)
+	[ -n "$E" ] && say "arm: ${E#ZZ }"
 fi
 python3 scripts/board/reset.py >/dev/null 2>&1
 DEADLINE=$(( $(date +%s) + BOOT_BUDGET ))

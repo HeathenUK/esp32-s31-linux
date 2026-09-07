@@ -48,6 +48,17 @@
 #include <unistd.h>
 
 #include "lvgl.h"
+/*
+ * Private LVGL headers, for the direct-expansion draw path only.
+ *
+ * lv_area_intersect()/lv_area_is_in() and lv_cover_check_info_t are not in the
+ * public API in this version, but writing into the draw layer is exactly the
+ * kind of thing they exist for and the alternative is re-implementing
+ * rectangle clipping by hand - which is how you get an off-by-one that shears
+ * the image and looks like a bug in the client.
+ */
+#include "src/misc/lv_area_private.h"
+#include "src/core/lv_obj_event_private.h"
 #include "src/drivers/lv_drivers.h"
 #include "kms.h"
 #include "xshim.h"
@@ -3434,6 +3445,9 @@ static lv_obj_t *make_window(const char *title, int x, int y, int w, int h)
  */
 #define MAXXWIN 4
 
+static void xwin_cover_cb(lv_event_t *e);
+static int directexp_on(void);
+
 static struct xwin {
 	uint32_t id;
 	lv_obj_t *win;
@@ -3716,7 +3730,18 @@ static void xwin_on_window(uint32_t id, int w, int h)
 	x->dsc.data = (const uint8_t *)px;
 	x->dsc.data_size = (uint32_t)pw * ph * 2;
 	x->img = lv_image_create(content);
-	lv_image_set_src(x->img, &x->dsc);
+	if (directexp_on()) {
+		/*
+		 * No src: the widget draws nothing and xwin_draw_cb owns the
+		 * rectangle. The descriptor above is still filled in, because
+		 * the resize path compares against it to notice a client that
+		 * moved its buffer.
+		 */
+		lv_obj_add_event_cb(x->img, xwin_cover_cb,
+				    LV_EVENT_COVER_CHECK, x);
+	} else {
+		lv_image_set_src(x->img, &x->dsc);
+	}
 	lv_obj_set_pos(x->img, 0, 0);
 	/*
 	 * An lv_image is not clickable by default, and its size comes from the
@@ -3738,6 +3763,175 @@ static void xwin_on_window(uint32_t id, int w, int h)
 	lv_obj_add_event_cb(x->img, xwin_ptr_cb, LV_EVENT_PRESSING, x);
 }
 
+
+/*
+ * DIRECT EXPANSION - expand the client's palette indices straight into the
+ * scanout buffer, instead of into a shadow that LVGL then blits.
+ *
+ * WHY. Per frame at 320x200 the shadow path moves 448 kB: the expander reads
+ * 64 kB of indices and writes 128 kB of RGB565, then LVGL's image draw reads
+ * that 128 kB back and writes 128 kB into kms_map. Doing it once, at the
+ * window's position, is 192 kB - a 57% cut. It matters because this board is
+ * bandwidth-bound, not cycle-bound: 448 kB at ~27 fps is 12.1 MB/s against a
+ * PSRAM copy ceiling measured at 13.6 MB/s, i.e. 89% of the bus.
+ *
+ * WHY IT IS SAFE TO WRITE INTO THE LAYER. The display renders in
+ * LV_DISPLAY_RENDER_MODE_DIRECT, so the layer's draw buffer IS kms_map. This
+ * runs from LV_EVENT_DRAW_MAIN, which means LVGL has already established the
+ * z-order and the clip rectangle for this object - so an overlapping window,
+ * a popover or a partially off-screen frame all clip correctly, for free.
+ * Doing the same write from outside the draw pass would race the compositor.
+ *
+ * The image's src is set to NULL so the widget itself draws nothing (see
+ * lv_image.c: "Do not need to draw image when src is NULL"), and a
+ * COVER_CHECK handler reports the area covered so LVGL skips painting the
+ * parent's background underneath - without that the fill underneath would
+ * cost the 128 kB this exists to save.
+ *
+ * Runtime-selectable, because every useful comparison on this board is an
+ * `echo x >` rather than a rebuild, and because the shadow path must stay
+ * available to compare against.
+ */
+static int directexp_on(void)
+{
+	static int v = -1;
+
+	if (v < 0)
+		v = getenv("LVDESK_DIRECTEXP") != NULL;
+	return v;
+}
+
+static void xwin_cover_cb(lv_event_t *e)
+{
+	lv_cover_check_info_t *info = lv_event_get_param(e);
+	struct xwin *x = lv_event_get_user_data(e);
+	lv_area_t coords;
+
+	if (!info || info->res == LV_COVER_RES_MASKED)
+		return;
+	lv_obj_get_coords(x->img, &coords);
+	/*
+	 * Only claim the area we will actually fill. Claiming more would let
+	 * LVGL skip a background it still needs to paint, leaving whatever was
+	 * on screen before showing through.
+	 */
+	if (lv_area_is_in(info->area, &coords, 0))
+		info->res = LV_COVER_RES_COVER;
+}
+
+/*
+ * Expand every direct-path window into the scanout buffer, clipped to one
+ * flush rectangle.
+ *
+ * WHY HERE AND NOT IN LV_EVENT_DRAW_MAIN, which is where this was first
+ * written and which WEDGED THE BOARD.
+ *
+ * DRAW_MAIN fires when LVGL CREATES draw tasks, not when it renders them.
+ * Pixels written there are painted over by the tasks that run afterwards, and
+ * `layer->_clip_area` is explicitly documented as unusable at that point
+ * ("during drawing the layer's clip area shouldn't be used as it might be
+ * already changed for other draw tasks", lv_draw_private.h). Worse, if the
+ * event hands back a transformed SUB-layer - a small heap buffer with a small
+ * buf_area - screen-coordinate arithmetic against it writes far outside the
+ * allocation. That is heap corruption, and it is what took the board down on
+ * 2026-09-07.
+ *
+ * The flush callback has none of those problems: it runs once per refresh
+ * after every draw task has completed, the area is given to us, and in direct
+ * render mode the destination IS kms_map, which we own.
+ *
+ * LIMITATION, deliberate and gated: this paints after everything, so anything
+ * stacked ON TOP of a client - another window, a popover - would be
+ * overwritten. xwin_direct_ok() therefore declines the fast path whenever
+ * another client's rectangle intersects this one. That is why this is a
+ * measurement toggle and not yet the default.
+ */
+static int xwin_direct_ok(int idx)
+{
+	lv_area_t a, b;
+	int j;
+
+	if (!xwins[idx].img || !lv_obj_is_valid(xwins[idx].img))
+		return 0;
+	if (lv_obj_has_flag(xwins[idx].img, LV_OBJ_FLAG_HIDDEN))
+		return 0;
+	lv_obj_get_coords(xwins[idx].img, &a);
+	for (j = 0; j < xwin_n; j++) {
+		if (j == idx || !xwins[j].img || !lv_obj_is_valid(xwins[j].img))
+			continue;
+		if (lv_obj_has_flag(xwins[j].img, LV_OBJ_FLAG_HIDDEN))
+			continue;
+		lv_obj_get_coords(xwins[j].img, &b);
+		if (b.x1 <= a.x2 && b.x2 >= a.x1 &&
+		    b.y1 <= a.y2 && b.y2 >= a.y1)
+			return 0;
+	}
+	return 1;
+}
+
+static void xwin_blit_direct(const lv_area_t *area)
+{
+	int i;
+
+	for (i = 0; i < xwin_n; i++) {
+		const uint16_t *pal;
+		const uint8_t *src;
+		lv_area_t coords, clip;
+		int sw, sh, sstride, y;
+
+		if (!xwin_direct_ok(i))
+			continue;
+		src = xshim_window_indices(xwins[i].id, &sw, &sh, &sstride,
+					   &pal);
+		if (!src || !pal)
+			continue;
+		lv_obj_get_coords(xwins[i].img, &coords);
+
+		/* Intersect with the flush rect AND with the panel. */
+		clip.x1 = coords.x1 > area->x1 ? coords.x1 : area->x1;
+		clip.y1 = coords.y1 > area->y1 ? coords.y1 : area->y1;
+		clip.x2 = coords.x2 < area->x2 ? coords.x2 : area->x2;
+		clip.y2 = coords.y2 < area->y2 ? coords.y2 : area->y2;
+		if (clip.x1 < 0)
+			clip.x1 = 0;
+		if (clip.y1 < 0)
+			clip.y1 = 0;
+		if (clip.x2 > (int32_t)kms_w - 1)
+			clip.x2 = (int32_t)kms_w - 1;
+		if (clip.y2 > (int32_t)kms_h - 1)
+			clip.y2 = (int32_t)kms_h - 1;
+		if (clip.x2 < clip.x1 || clip.y2 < clip.y1)
+			continue;
+
+		for (y = clip.y1; y <= clip.y2; y++) {
+			int sy = y - coords.y1;
+			int sx = clip.x1 - coords.x1;
+			const uint8_t *sp;
+			uint16_t *dp;
+			int n, k;
+
+			/*
+			 * Clamp against the SOURCE as well as the screen. The
+			 * object's size and the buffer's size can disagree for
+			 * a frame while a client resizes, and reading past the
+			 * plane is how a resize turns into a crash.
+			 */
+			if (sy < 0 || sy >= sh || sx < 0 || sx >= sw)
+				continue;
+			n = clip.x2 - clip.x1 + 1;
+			if (sx + n > sw)
+				n = sw - sx;
+			if (n <= 0)
+				continue;
+			sp = src + (size_t)sy * sstride + sx;
+			dp = (uint16_t *)(kms_map + (size_t)y * kms_pitch) +
+			     clip.x1;
+			for (k = 0; k < n; k++)
+				dp[k] = pal[sp[k]];
+		}
+	}
+}
+
 static void xwin_on_draw(uint32_t id)
 {
 	int i, w, h;
@@ -3752,7 +3946,39 @@ static void xwin_on_draw(uint32_t id)
 			 * two separate investigations looking for work that
 			 * does not happen.
 			 */
-			const uint16_t *px = xshim_window_pixels(id, &w, &h);
+			const uint16_t *px;
+			int direct = directexp_on();
+
+			/*
+			 * DO NOT expand here on the direct path. Calling
+			 * xshim_window_pixels() would run the very palette
+			 * loop this exists to avoid, into a shadow nothing
+			 * then reads - paying the full cost for nothing and
+			 * making the two arms measure the same thing.
+			 *
+			 * Geometry still has to be tracked, so ask for the
+			 * INDEX plane instead: it is a plain accessor with no
+			 * pixel work in it.
+			 */
+			if (direct) {
+				const uint16_t *pal;
+				int sstride;
+
+				px = NULL;
+				if (xshim_window_indices(id, &w, &h, &sstride,
+							 &pal) &&
+				    ((int)xwins[i].dsc.header.w != w ||
+				     (int)xwins[i].dsc.header.h != h)) {
+					xwins[i].dsc.header.w = w;
+					xwins[i].dsc.header.h = h;
+					lv_obj_set_size(xwins[i].img, w, h);
+					lv_obj_set_size(xwins[i].win,
+							w + xwin_chrome_w,
+							h + xwin_chrome_h);
+				}
+			} else {
+				px = xshim_window_pixels(id, &w, &h);
+			}
 
 			/*
 			 * The client may have resized itself, which moves the
@@ -3789,7 +4015,7 @@ static void xwin_on_draw(uint32_t id)
 				 * useful comparison on this board is an
 				 * `echo x >` and not a rebuild.
 				 */
-				if (!fulldmg && px &&
+				if (!fulldmg && (px || direct) &&
 				    xshim_window_take_damage(id, &dx, &dy,
 							     &dw, &dh)) {
 					lv_area_t a;
@@ -5842,6 +6068,14 @@ static void kms_flush_cb(lv_display_t *d, const lv_area_t *area, uint8_t *px)
 			dst += kms_pitch;
 		}
 	}
+
+	/*
+	 * After LVGL, before the damage goes to the driver: the frame is
+	 * complete, so our pixels land on top of the chrome rather than under
+	 * it, and they are inside the rectangle we are about to report dirty.
+	 */
+	if (directexp_on())
+		xwin_blit_direct(area);
 
 	{
 		struct kms_rect r = { area->x1, area->y1, area->x2, area->y2 };

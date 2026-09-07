@@ -5802,6 +5802,34 @@ int xshim_window_take_damage(uint32_t id, int *x, int *y, int *w, int *h)
 	return 1;
 }
 
+/*
+ * The raw depth-8 plane, for the direct-expansion path. See xshim.h.
+ *
+ * This deliberately does NOT touch r->dirty or the shadow: the caller expands
+ * on LVGL's own draw pass, which happens exactly when the pixels are needed
+ * and already carries the clip rectangle. Keeping the flag out of here means
+ * the shadow path stays byte-for-byte what it was, so the two can be compared.
+ */
+const uint8_t *xshim_window_indices(uint32_t id, int *w, int *h,
+				    int *stride, const uint16_t **pal)
+{
+	struct res *r = res_find(id);
+
+	if (!r || r->type != R_WINDOW || !r->px || r->bpp != 1)
+		return NULL;
+	*w = r->w;
+	*h = r->h;
+	/*
+	 * A lone child shares its parent's buffer, so a row steps by the
+	 * BUFFER's width, not the window's. Getting this wrong shears the
+	 * image by a few pixels a row - which looks like a rendering bug in
+	 * the game rather than an arithmetic one here.
+	 */
+	*stride = r->buf ? r->buf->w : r->w;
+	*pal = pal8;
+	return (const uint8_t *)r->px;
+}
+
 const uint16_t *xshim_window_pixels(uint32_t id, int *w, int *h)
 {
 	struct res *r = res_find(id);
