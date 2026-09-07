@@ -3927,7 +3927,7 @@ static void xwin_blit_direct(const lv_area_t *area)
 			dp = (uint16_t *)(kms_map + (size_t)y * kms_pitch) +
 			     clip.x1;
 			/*
-			 * REJECTED, 2026-09-07: two pixels per 32-bit store.
+			 * UNTESTED, not rejected (corrected 2026-09-07).
 			 *
 			 * The idea was that the 512-byte palette stays in
 			 * cache so the loop is store-bound, and halving the
@@ -3935,15 +3935,15 @@ static void xwin_blit_direct(const lv_area_t *area)
 			 * lvdesk-CPU probe, against 29% and 30% for this plain
 			 * loop on the identical binary and arm:
 			 *
-			 *     word-at-a-time   lvdesk 37%   (and the second
-			 *                      round wedged the board)
+			 *     word-at-a-time   lvdesk 37%
 			 *
-			 * 7 points WORSE, against a baseline whose two samples
-			 * differed by one. It saves one store per two pixels
-			 * but adds a shift and an OR, which on an in-order
-			 * hart is a wash at best - and the alignment peel adds
-			 * a branch to every row. Do not retry without a
-			 * reason to expect a different answer.
+			 * That looked like 7 points worse. It was not: the
+			 * plain loop below later measured 37%, 38% and 39% on
+			 * the same binary, so 37% is inside ITS OWN spread and
+			 * the comparison was against two lucky samples. The
+			 * idea is untested, not refuted. If retried, measure
+			 * 5+ alternating samples - two agreeing samples have
+			 * now produced three wrong conclusions in one day.
 			 */
 			for (k = 0; k < n; k++)
 				dp[k] = pal[sp[k]];

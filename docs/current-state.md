@@ -5685,17 +5685,34 @@ that shadow into kms_map - the same pixels paid for twice, 448 kB a frame at
 320x200. Expanding once, at the window's position, from the FLUSH callback is
 192 kB. `LVDESK_DIRECTEXP=1`.
 
-**Measured with a CPU probe, not the timedemo**, and that choice is the point:
+**Measured with a CPU probe, not the timedemo.** The FIRST two pairs read:
 
-    arm      lvdesk %CPU   lvdesk RSS   expand lines
-    shadow      43%          328 kB          6
-    shadow      43%          332 kB          6
-    direct      29%          200 kB          0
-    direct      30%          200 kB          0
+    shadow 43%, 43%    direct 29%, 30%     (lvdesk RSS 330 kB -> 200 kB)
 
-A 13-point effect against 1 point of run-to-run variance. The RSS fall of
-~130 kB is an INDEPENDENT confirmation: the shadow is 320x200x2 = 128,000
-bytes, so two unrelated instruments agree it is gone.
+and were reported as a 13-point win against 1 point of variance. **THAT WAS
+WRONG.** Repeating it properly - five samples, alternating arms, same binary,
+arm proven on every one - gives:
+
+    arm      lvdesk %CPU   prboom %CPU   expand lines
+    direct      37%           53%             0
+    direct      38%           53%             0
+    direct      39%           53%             0
+    shadow      38%           40%             4
+    shadow      43%           47%             5
+
+**37-39% against 38-43% - overlapping bands, ~2 points apart.** The 29/30 pair
+were outliers and a whole ranked plan was built on them. Third time in one day
+that two tight early samples were mistaken for a low-variance metric; the rule
+is 5+ repeats with the spread, and it applies to CPU exactly as it does to fps.
+
+What DOES survive, and is the better way to read this metric: with 0% idle,
+freeing compositor time shows up as the CLIENT absorbing it. prboom is 53% on
+all three direct runs against 40% and 47% on shadow, and total useful work is
+90-92% against 78-90%. A real but modest win, not a large one.
+
+The RSS fall of ~130 kB (330 -> 200 kB) is solid and independently meaningful:
+the shadow is 320x200x2 = 128,000 bytes, so it really is gone. On a 15.4 MB
+board that is worth having whatever the frame rate does.
 
 **Why the timedemo could not see this, and why that wasted an hour.** prboom
 itself is 38-49% of the machine, so a 13-point saving in lvdesk is diluted,
@@ -5710,12 +5727,17 @@ figures above came from five different builds during a day of edits; comparing
 the direct arm against them was comparing across confounds. The toggle exists
 so both arms come from ONE binary, alternating, fresh boot each.
 
-### Rejected: two pixels per 32-bit store
+### NOT rejected after all: two pixels per 32-bit store
 
-    plain loop        lvdesk 29%, 30%
+    plain loop        lvdesk 29%, 30%   ... and later 37%, 38%, 39%
     word-at-a-time    lvdesk 37%, and the second round wedged the board
 
-7 points worse. It removes one store per two pixels but adds a shift, an OR
+It was rejected as "7 points worse" against the 29/30 pair. Once the plain
+loop itself measured 37-39% on the same binary, that 37% sits INSIDE its own
+spread and the rejection evaporates. The change is UNTESTED, not refuted -
+re-measure it properly (5+ alternating samples) before believing either way.
+The wedge on its second round is also unattributed: direct arms wedged and
+DNF'd on the plain loop too. It removes one store per two pixels but adds a shift, an OR
 and an alignment-peel branch per row, which on an in-order hart is a wash at
 best. The code and the numbers are in xwin_blit_direct(); do not retry without
 a reason to expect a different answer.
