@@ -3972,7 +3972,40 @@ static int ppa_gem_expand(int i, const lv_area_t *coords,
 		a.clut[k] = 0xFF000000u | ((v & 0xF800) << 8) |
 			    ((v & 0x07E0) << 5) | ((v & 0x001F) << 3);
 	}
-	return ioctl(fd, DRM_IOCTL_ESP32S31_PPA_CLUT, &a) == 0;
+	if (ioctl(fd, DRM_IOCTL_ESP32S31_PPA_CLUT, &a) < 0) {
+		/*
+		 * Say so ONCE. A silent fallback to the CPU loop is correct
+		 * behaviour - better a slow window than a black one - but it
+		 * makes "the PPA is armed" and "the PPA did the work" two
+		 * different things, and only the second one means anything in
+		 * a measurement.
+		 */
+		static int said;
+
+		if (!said) {
+			said = 1;
+			fprintf(stderr, "lvdesk: PPA CLUT failed (%s) - "
+				"falling back to the CPU expander\n",
+				strerror(errno));
+		}
+		return 0;
+	}
+	/*
+	 * POSITIVE EVIDENCE, one line per 200 hardware expansions.
+	 *
+	 * Without it, a run with XSHIM_PPACLUT=1 that quietly fell back to the
+	 * CPU is indistinguishable from one that used the hardware - and the
+	 * fps would be attributed to the wrong path. That is exactly the trap
+	 * the EXPAND counter was added for on the shadow path.
+	 */
+	{
+		static unsigned long nppa;
+
+		if (++nppa % 200 == 0)
+			fprintf(stderr, "lvdesk: PPACLUT %lu expansions\n",
+				nppa);
+	}
+	return 1;
 }
 
 static void xwin_blit_direct(const lv_area_t *area)

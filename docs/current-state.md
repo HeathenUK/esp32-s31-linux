@@ -5814,6 +5814,45 @@ that matter for wiring this up:
     once, re-upload only when the client's palette actually changes. That cost
     was inside the original PPA-vs-CPU comparison and nobody accounted for it.
 
+## SETTLED: 320x200 is 29.4 fps, and MY HARNESS was costing 26% of it
+
+Three undisturbed runs of the shipping build, nothing touching the board
+inside the timed window:
+
+    29.4  29.9  29.0 fps   (mean 29.4, spread +-1.5%)
+    painting verified on a SEPARATE untimed run
+    zero-copy + direct expansion + word-at-a-time, CPU CLUT
+
+**Every fps figure taken with verify-sdl.sh earlier that day is depressed by
+about 26%.** The same build that measures 29.4 undisturbed measured 21.7
+through the harness, and that 21.7 was reported, committed and written into
+this file as "the first honest, painting-verified number". It was not.
+
+**The cause: verify-sdl.sh screenshots during the run, and screenshotting uses
+the hardware JPEG encoder, which sits on the SAME 2D-DMA as the PPA and
+serialises on the same driver lock.** On the CPU arm a capture is merely
+expensive; on the PPA arm it blocks the very expansion being timed. The user
+saw it directly - "it slowed right down in the middle there" - which is how
+this was found. Not by me.
+
+**RULE: never take a screenshot inside a timed window on this board.** Prove
+painting on a separate, untimed run of the same binary. The pixel gate exists
+to stop false positives from black windows; used inside the measurement it
+manufactures false NEGATIVES instead, and it cost most of a day.
+
+### The PPA CLUT at 320x200: correct, and a regression
+
+    CPU  29.4 29.9 29.0 fps
+    PPA  27.2 fps
+
+~7.5% slower, and this time both arms were measured the same way. The hardware
+path is proven pixel-exact (cluttest, cluttest2) and does render a real client
+- the first time that has ever been true here - but it does not pay at this
+size. The mechanism is understood: its overhead is per-ROW (200 dma_sync calls
+a frame for the cache maintenance that stops it corrupting the rest of the
+framebuffer) while the CPU's cost is per-PIXEL. That is also why it should be
+re-tested at 640x400, where four times the pixels only doubles the row count.
+
 ## The "27 fps at 320x200" baseline was measured on a BLACK window (2026-09-07)
 
 **Retracted. There has never been a committed configuration that both renders
