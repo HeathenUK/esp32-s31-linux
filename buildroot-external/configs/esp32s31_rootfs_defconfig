@@ -397,6 +397,17 @@ BR2_PACKAGE_SDL_X11=y
 # correct (rootfs/sdltest.c reports driver=x11, bpp=16, R/G/B f800/07e0/001f,
 # MapRGB(255,0,0)=f800, and paints visible colour bands through the shim).
 # BR2_PACKAGE_PRBOOM=y
-BR2_PACKAGE_SDL2_X11=y
-BR2_PACKAGE_CHOCOLATE_DOOM=y
+# SDL2 AND CHOCOLATE-DOOM ARE OFF (2026-09-07). chocolate-doom is the only
+# thing that ever pulled SDL2 in, and it was abandoned - it spins without
+# drawing (see current-state.md). SDL2 is 1,158,068 bytes in the target and a
+# further 1.45 MB was sitting in /root/doom/lib on the card, for a library no
+# shipped binary links: prboom's NEEDED list is SDL 1.2, SDL_mixer, SDL_net,
+# libpng16 and libc. On a 15.4 MB board that is not a rounding error.
+#
+# SDL 1.2 above stays. If SDL2 is ever wanted again, re-enable both symbols
+# together and check the GENERATED .config - Buildroot silently ignores
+# defconfig symbols it does not recognise, so an edit here proves nothing.
+# BR2_PACKAGE_SDL2=y
+# BR2_PACKAGE_SDL2_X11=y
+# BR2_PACKAGE_CHOCOLATE_DOOM=y
 BR2_PACKAGE_DOOM_WAD=y

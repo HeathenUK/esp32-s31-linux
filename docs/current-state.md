@@ -5678,6 +5678,48 @@ three other things:
    across a demo. Anonymous memory, not file-backed text. Also why `-mb 4` was
    rejected: less swap, more WAD lump reloads, net slower.
 
+## Palette expansion: which engines can and cannot do it (2026-09-07)
+
+Answered from the CORRECT vendor tree - `/opt/esp-idf` IN THE BUILD CONTAINER,
+v6.1-dev, the only one with an `esp32s31` soc target. The host's
+`~/esp/esp-idf` is v5.5 and has no S31 at all; its nearest sibling is the P4,
+which shares PPA/LCD_CAM/dwc2 and therefore gives plausible WRONG answers.
+
+**LCD_CAM has no scanout palette.** 26 registers, zero hits for lut/palette/
+clut. The only colour conversion is `LCDCAM_LCD_RGB_YUV_REG`, and the `CONV_*`
+fields are on the CAM (input) side. So an 8-bit indexed surface can never be
+scanned out directly - the expansion can be made cheaper or moved off the CPU,
+but it cannot be deleted.
+
+**DMA2D has no CLUT either.** The S31 does have a 2D-DMA block (`dma2d_reg.h`),
+which on this family does colour-space conversion and feeds the PPA - but zero
+hits for lut/palette/clut. It is not an alternative expander.
+
+**The PPA is the only engine with a CLUT**, and it has more than we used:
+
+    PPA_BLEND0_CLUT_DATA_REG    background layer
+    PPA_BLEND1_CLUT_DATA_REG    foreground layer
+    PPA_SRM_CLUT_DATA_REG       the SCALER has its own CLUT
+    PPA_CLUT_CONF_REG / PPA_CLUT_CNT_REG
+
+Three things the S31 HAL (`esp_hal_ppa/esp32s31/include/hal/ppa_ll.h`) tells us
+that matter for wiring this up:
+
+  * **No SRM CLUT accessor exists.** `ppa_ll_*clut*` covers only blend bg/fg.
+    `PPA_SRM_CLUT_DATA_REG` is in the register map with nothing driving it -
+    the same "register present, HAL silent" shape as the dwc2 split case, so
+    treat SRM+CLUT as unproven until measured on silicon, not as available.
+  * **`case PPA_BLEND_COLOR_MODE_L8:` is COMMENTED OUT in three places**
+    (ppa_ll.h:716, 750, 800). Espressif deliberately left indexed blend input
+    unwired. We proved on silicon that it works anyway (afbc276) - the docs and
+    the HAL are both wrong, and that remains the case in v6.1-dev.
+  * **The CLUT is memory-mapped**, at BLEND0 offset 0x400 and BLEND1 0x800,
+    with `ppa_ll_configure_clut_access_mode()` choosing FIFO or memory. Our
+    driver pushes all 256 entries through the FIFO on EVERY ioctl - 256
+    register writes per frame for a palette that changes almost never. Upload
+    once, re-upload only when the client's palette actually changes. That cost
+    was inside the original PPA-vs-CPU comparison and nobody accounted for it.
+
 ## The "27 fps at 320x200" baseline was measured on a BLACK window (2026-09-07)
 
 **Retracted. There has never been a committed configuration that both renders

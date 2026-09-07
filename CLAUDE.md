@@ -86,6 +86,13 @@ whole afternoons:
   the host architecture (arm64 here); an emulated amd64 build is ~10x slower.
   **Never run two builds against the same output volume** - the tree ends up
   unbuildable and the only honest fix is a full rebuild.
+- **Vendor sources**: the S31-capable ESP-IDF is **`/opt/esp-idf` INSIDE the
+  build container**, v6.1-dev, and is the only tree here with an `esp32s31` soc
+  target - read it with `./docker/build.sh 'ls /opt/esp-idf/components/soc/esp32s31'`.
+  **`~/esp/esp-idf` on the host is v5.5 and has no esp32s31 directory at all.**
+  Its nearest sibling is the P4, which shares the PPA, LCD_CAM and dwc2 blocks,
+  so a P4 header reads like a real S31 answer and is not one. An
+  `idf6.0_py3.12_env` under `~/.espressif` is a tool env, not a source tree.
 - **Flash**: IDF's esptool **5.3.1** at `-b 2000000` on `/dev/cu.usbserial-130`
   (`~/.espressif/python_env/idf6.0_py3.12_env/bin/esptool`). Homebrew's 5.2.0
   has no S31 stub and fails in confusing ways. Build output lives in a Docker
