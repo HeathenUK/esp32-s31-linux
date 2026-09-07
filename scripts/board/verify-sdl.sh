@@ -4,9 +4,22 @@
 # FOUR CLAIMS, EACH FROM EVIDENCE THE SHIM PRINTS UNCONDITIONALLY:
 #
 #   1. zero-copy      "xshim: ZEROCOPY window ..."   (a window, not a cursor)
-#   2. hardware CLUT  "xshim: CLUT ... HARDWARE (PPA)"
+#   2. CPU LUT        proven BY CONSTRUCTION, not by a log line - see below
 #   3. it painted     several screenshots taken DURING the run
 #   4. it was fast    prboom's fps, cross-checked against /proc/uptime
+#
+# CLAIM 2 CHANGED ON 2026-09-07, AND THIS IS THE POINT OF THIS EDIT.
+# This script used to REQUIRE "xshim: CLUT ... HARDWARE (PPA)" to pass. That
+# string was deleted from xshim.c by the 2026-09-06 rollback, along with every
+# other PPA CLUT line - `grep -i ppa lvdesk/xshim.c` now finds only comments.
+# So the harness demanded evidence the agreed baseline CANNOT produce, and
+# scored a correct board FAIL. A gate that cannot pass is not a gate.
+#
+# The baseline is zero-copy + a CPU LUT. The CPU LUT needs no log line because
+# xshim_window_pixels() contains exactly one depth-8 path - `pal = pal8;` and a
+# scalar loop - and no alternative for the binary to have taken. Construction
+# is stronger evidence than a printf, so this now VERIFIES THE SOURCE instead
+# of grepping for a string, and fails if a PPA path ever reappears unannounced.
 #
 # Every one of those was previously answered by inference, and on 2026-09-06
 # that produced four wrong conclusions in a row: a busy board read as dead, a
@@ -25,8 +38,18 @@ cd "$(dirname "$0")/../.."
 W=${1:-320}; H=${2:-200}; MODE=${3:-}
 D=${CLAUDE_JOB_DIR:-/tmp}/tmp; mkdir -p "$D"
 BOOT_BUDGET=75          # lvdesk is up ~40 s after reset
-RUN_BUDGET=300          # the direct run measures 187 s; this is ample
+RUN_BUDGET=440          # a painting run is ~270-400 s at 19-21 fps; 360 cut one off mid-demo
 say() { printf '%s\n' "$*"; }
+
+# --- claim 2, checked before a single byte is flashed ----------------------
+CLUT_PATH=unknown
+if grep -q 'pal = pal8;' lvdesk/xshim.c; then
+	if grep -inE '^[^*/]*\bppa_[a-z_]+\(' lvdesk/xshim.c | grep -q .; then
+		CLUT_PATH="MIXED - a PPA call is back in xshim.c"
+	else
+		CLUT_PATH="CPU (scalar pal8 loop, no PPA path in the source)"
+	fi
+fi
 R() { python3 scripts/board/runsh.py "$1" "${2:-30}" 2>&1 | grep '^ZZ '; }
 
 cat > "$D/vs_ping.sh" <<'SH'
@@ -103,16 +126,35 @@ cat > "$D/vs_probe.sh" <<'SH'
 sed 's/^/ZZ /' /tmp/vs
 SH
 
+cat > "$D/vs_quiet.sh" <<'SH'
+# Deliberately minimal: NO grep over the growing lvdesk log, NO screenshot.
+# Every byte here lands on the machine being timed.
+{ echo "doom=$(ps | grep -c '[p]rboom')"
+  grep -h "frames per second" /root/doom/vs.log 2>/dev/null
+  echo "u1=$(cut -d. -f1 /proc/uptime)"
+} > /tmp/vq 2>&1
+sed 's/^/ZZ /' /tmp/vq
+SH
+
 # --- watch it run, screenshotting as it goes -------------------------------
+SHOTS_NEEDED=3          # enough to prove painting at three points in the demo
+QUIET=0
 SHOTS=0; GOOD=0; BLANK=0; ZC_SEEN=0; HW_SEEN=0; CPU_SEEN=0; LASTGOOD=""; FPSLINE=""; U1=""; GONE=0
 RUN_END=$(( $(date +%s) + RUN_BUDGET ))
 i=0
 while [ "$(date +%s)" -lt "$RUN_END" ]; do
 	i=$((i + 1))
-	sleep 25
+	# Once painting is PROVEN, stop touching the board: long sleeps, no
+	# screenshots, and the cheapest possible liveness poll.
+	if [ "$GOOD" -ge "$SHOTS_NEEDED" ]; then
+		[ "$QUIET" = 0 ] && { say "  --- $GOOD good shots: going QUIET so the fps is not ours ---"; QUIET=1; }
+		sleep 45
+	else
+		sleep 25
+	fi
 	S="$D/verify_${W}x${H}_$i.jpg"; rm -f "$S"
-	python3 scripts/board/screenshot-hw.py "$S" >/dev/null 2>&1
-	if [ -f "$S" ]; then
+	[ "$QUIET" = 0 ] && python3 scripts/board/screenshot-hw.py "$S" >/dev/null 2>&1
+	if [ "$QUIET" = 0 ] && [ -f "$S" ]; then
 		SZ=$(wc -c < "$S" | tr -d ' ')
 		SHOTS=$((SHOTS + 1))
 		# CALIBRATED ON MEASURED FRAMES, not a round number:
@@ -142,10 +184,14 @@ while [ "$(date +%s)" -lt "$RUN_END" ]; do
 				exit 1
 			fi
 		fi
-	else
+	elif [ "$QUIET" = 0 ]; then
 		say "  shot $i: capture failed"
 	fi
-	OUT=$(R "$D/vs_probe.sh" 40)
+	if [ "$QUIET" = 1 ]; then
+		OUT=$(R "$D/vs_quiet.sh" 40)
+	else
+		OUT=$(R "$D/vs_probe.sh" 40)
+	fi
 	# STICKY EVIDENCE. A share is logged ONCE, early; a probe late in the
 	# run will not see it again, and an empty probe (busy board, console
 	# contention) must not be read as "no". Once seen, it stays seen -
@@ -155,7 +201,7 @@ while [ "$(date +%s)" -lt "$RUN_END" ]; do
 	echo "$OUT" | grep -q "HARDWARE (PPA)" && HW_SEEN=1
 	echo "$OUT" | grep -q "CPU (software loop)" && CPU_SEEN=1
 	[ -n "$OUT" ] && LASTGOOD="$OUT"
-	F=$(echo "$OUT" | sed -n 's/^ZZ \(Timed .*\)$/\1/p'); [ -n "$F" ] && FPSLINE="$F"
+	F=$(echo "$OUT" | sed -n 's/^ZZ \(Timed .*\)$/\1/p' | tail -1); [ -n "$F" ] && FPSLINE="$F"
 	V=$(echo "$OUT" | sed -n 's/^ZZ u1=//p'); [ -n "$V" ] && U1="$V"
 	echo "$OUT" | grep -q "ZZ doom=0" && GONE=1
 	[ -n "$FPSLINE" ] && break
@@ -180,27 +226,51 @@ if [ "$PROBED" = 0 ]; then
 	say "  hardware CLUT (PPA)    : UNKNOWN - the board never answered a probe"
 else
 	say "  zero-copy window share : $([ "$ZC" -gt 0 ] && echo YES || echo NO)"
-	say "  hardware CLUT (PPA)    : $([ "$HW" -gt 0 ] && echo YES || echo "NO (CPU LUT: $([ "$CPU" -gt 0 ] && echo yes || echo unseen))")"
 fi
+say "  CLUT expansion path    : $CLUT_PATH"
+[ "$HW" -gt 0 ] && say "  !! a HARDWARE (PPA) line appeared - the source and the board disagree"
 say "  screenshots painting   : $GOOD of $SHOTS"
 PASS=1
 [ "$ZC" -gt 0 ] || PASS=0
-[ "$HW" -gt 0 ] || PASS=0
+case "$CLUT_PATH" in "CPU "*) ;; *) PASS=0 ;; esac
 [ "$GOOD" -ge 2 ] || PASS=0
+# FAIL CLOSED. Twice now this block has printed PASS for a run that missed
+# the threshold, because an arithmetic error on an empty or multi-line value
+# aborted the command that was supposed to set PASS=0 and execution simply
+# carried on. A gate whose failure mode is "pass" is worse than no gate.
+#
+# So: every value is squeezed to ONE integer (or empty) before it is allowed
+# near $(( )), and the fps threshold is evaluated with plain string-free
+# integer tests whose outcome cannot depend on a parse succeeding.
+num() { printf '%s' "$1" | tr -dc '0-9\n' | awk 'NF{print; exit}'; }
+
 if [ -n "$FPSLINE" ]; then
+	FPSLINE=$(printf '%s\n' "$FPSLINE" | tail -1)
 	say "  timedemo               : $FPSLINE"
-	RT=$(echo "$FPSLINE" | sed -n 's/.*in \([0-9]*\) realtics.*/\1/p')
-	FPS=$(echo "$FPSLINE" | sed -n 's/.*= \([0-9]*\)\..*/\1/p')
-	if [ -n "$RT" ] && [ -n "$U1" ]; then
-		TICK=$((RT / 35)); WALL=$((U1 - U0))
+	RT=$(num "$(printf '%s' "$FPSLINE" | sed -n 's/.*in \([0-9]*\) realtics.*/\1/p')")
+	FPS=$(num "$(printf '%s' "$FPSLINE" | sed -n 's/.*= \([0-9]*\)\..*/\1/p')")
+	A=$(num "$U0"); B=$(num "$U1")
+	if [ -n "$RT" ] && [ -n "$A" ] && [ -n "$B" ] && [ "$B" -gt "$A" ]; then
+		TICK=$(( RT / 35 ))
+		WALL=$(( B - A ))
 		say "  clock cross-check      : realtics=${TICK}s vs monotonic=${WALL}s"
-		DIFF=$((TICK - WALL)); [ $DIFF -lt 0 ] && DIFF=$((-DIFF))
-		if [ "$WALL" -gt 0 ] && [ $DIFF -gt $((WALL / 4 + 20)) ]; then
+		DIFF=$(( TICK - WALL )); [ "$DIFF" -lt 0 ] && DIFF=$(( -DIFF ))
+		if [ "$DIFF" -gt $(( WALL / 4 + 20 )) ]; then
 			say "  !! REJECTED: the clock moved during the run"
 			PASS=0
 		fi
+	else
+		say "  clock cross-check      : SKIPPED (u0=${U0:-?} u1=${U1:-?})"
 	fi
-	[ -n "$FPS" ] && [ "$FPS" -lt 26 ] && { say "  !! fps below the 26 threshold"; PASS=0; }
+	if [ -z "$FPS" ]; then
+		say "  !! no fps could be parsed from that line - FAILING"
+		PASS=0
+	elif [ "$FPS" -lt 26 ]; then
+		say "  !! ${FPS} fps is BELOW the 26 threshold - REGRESSION"
+		PASS=0
+	else
+		say "  fps gate               : ${FPS} >= 26 OK"
+	fi
 elif [ -n "$TD" ]; then
 	say "  timedemo               : DID NOT FINISH in ${RUN_BUDGET}s"
 	PASS=0

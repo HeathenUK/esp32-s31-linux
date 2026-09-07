@@ -5640,10 +5640,116 @@ demo runs - bursts of faulting when new textures are needed, not the renderer.
 The fix that follows from it, and the one XIP move worth making here: **put
 libSDL 1.2 in XIP**. It is 366,360 bytes and costs **204 kB of RSS in every
 SDL client** today, paged off SD. In XIP it costs zero RSS and executes in
-place, which helps ANY SDL 1.2 application rather than one game. It does not
-fit yet - the rootfs XIP partition has 323,584 bytes free, so it is ~43 KB
-short and needs partition slack (and a partition move must reach all five
-homes; see the flash-layout note).
+place, which helps ANY SDL 1.2 application rather than one game.
+
+**DONE, 2026-09-06 (483489f).** This paragraph used to end "it does not fit yet
+- ~43 KB short". That is no longer true: 483489f reclaimed idle factory space
+and `libSDL-1.2.so.0.11.4` is in `XIP_ROOTS` (Makefile), verified on the board
+at `/mnt/xip/usr/lib/`. **Read the Makefile, not this prose, for what is in
+XIP** - the stale sentence was quoted as current on 2026-09-07 and retracted.
+
+### What still pages off the card during Doom, and why (2026-09-07)
+
+Faulting during a timedemo measures ~1.4-1.9 major faults/s, which is LOW - the
+healthy 27 fps steady state above records 8/s. It is not zero, and the residue
+is NOT the X11 shim: xlite/xtlite/xftlite/xstubs are all in XIP, and a search
+of the running system finds no stock libxcb, libXau or libXdmcp at all. It is
+three other things:
+
+1. **prboom itself**, on SD by deliberate choice - putting the game in XIP
+   would cheat the measurement.
+2. **`/root/doom/lib` SHADOWS XIP.** Doom runs with
+   `LD_LIBRARY_PATH=/root/doom/lib`, searched FIRST, and that directory holds
+   real copies. prboom's `NEEDED` resolves as:
+
+       libSDL-1.2.so.0        XIP   (absent from /root/doom/lib)
+       libc.so                XIP
+       libSDL_mixer-1.2.so.0  SD     54,392 bytes
+       libSDL_net-1.2.so.0    SD     13,412 bytes
+       libpng16.so.16         SD    177,472 bytes
+
+   So **245 kB of library text pages off the card on every run**. Staging those
+   three into `XIP_ROOTS` is the outstanding lever. (`libSDL2-2.0.so.0`,
+   1.45 MB, also sits there from the SDL2 experiments and is NOT in `NEEDED` -
+   dead weight, never loaded.) Same trap as the hand-deployed
+   `/root/doom/lib/libX11.so.6` recorded above: a private lib directory
+   silently beats XIP, and nothing warns you.
+3. **Zone heap swap**, which XIP cannot touch - `VmSwap` grows 352 -> 1088 kB
+   across a demo. Anonymous memory, not file-backed text. Also why `-mb 4` was
+   rejected: less swap, more WAD lump reloads, net slower.
+
+## The "27 fps at 320x200" baseline was measured on a BLACK window (2026-09-07)
+
+**Retracted. There has never been a committed configuration that both renders
+320x200 and reaches 26 fps.** Every >=26 fps number on record was taken by a
+harness that polled `running=1` and took NO screenshot, and the trees that
+produced them are now proven not to paint:
+
+    arms.log  15:20  27.1 / 27.3 / 27.6   GEM/PPA working tree, no screenshots
+    sdl3.log  17:52  26.7                 8a2cc69, no screenshots
+    td_shot_* 20:36  PAINTING             no fps was ever captured
+
+The two halves of the claim were never satisfied by the same run.
+
+### Why a black window is FASTER, and why that fooled everything
+
+`xshim_window_pixels()` expands depth-8 indices into an RGB565 shadow, gated on
+`dirty`. The XLITE-SHM Damaged handler set `dirty` on the drawable it was
+given - but SDL creates a top-level and ONE child to draw into, the child
+shares the parent's pixels (`w->buf = p->buf`), and the desktop asks for pixels
+by the TOP-LEVEL id. So damage marked a res nobody reads. Once the expander
+cleared `dirty`, the early-out fired for ever: no expansion ran again, the
+window stayed black, and **Doom got the whole machine and reported ~27 fps**.
+
+Both commits that "worked" (`8a2cc69`, `3b136e3`) contain exactly that: a
+`dirty = 0` with no buffer-owner marking. Built and flashed on 2026-09-07, both
+render black at 320x200. The fix needs BOTH halves:
+
+  * `r->dirty = 0;` at the end of the depth-8 path - dropped by 48a5305 when it
+    stripped the PPA block out of that function (the line sat directly after
+    it). Without it every repaint re-expands 64,000 px; lvdesk hits 38-48%.
+  * `p->buf->dirty = 1;` in the Damaged handler - mark the res that OWNS the
+    pixels, since that is the one whose shadow an expansion fills.
+
+Restoring only the first turns the screen black, which is what exposed the
+second. That is also why 3b136e3's revert looked safe: the missing clear was
+masking a mismarked flag.
+
+### The honest baseline, painting-verified
+
+    18.6, 20.2, 18.6, 20.9 fps   plus one run over a 360 s budget
+    lvdesk 48%   prboom 45%   0% idle   (busybox top, under load)
+    ~27 expansions/s, i.e. ONE per rendered frame (counter in xshim.c)
+
+**It is memory-bandwidth bound, not CPU bound.** Per frame lvdesk moves
+448 kB - expand (read 64 kB indices, write 128 kB shadow) plus the LVGL blit
+(read 128 kB, write 128 kB). At 27 fps that is 12.1 MB/s against the 13.6 MB/s
+PSRAM copy ceiling, ~89% of it. 27 fps would need ~16 MB/s, which is ABOVE the
+ceiling - the arithmetic alone says the old number could not have been real.
+
+### What this invalidates
+
+* **The hardware PPA CLUT rejection.** 25.3 fps (PPA) against 27.2 (CPU) was
+  very likely a painting arm against a black one, i.e. work against no work.
+  The PPA is now the leading lever again, since the expansion is the cost.
+  Re-test with the painting gate armed; watch the documented trap that a GEM
+  buffer puts DOOM'S OWN surface in write-combine memory.
+* **Any measurement in this file taken without a screenshot.** Treat an fps
+  from a harness with no pixel gate as unproven.
+
+### Ranked levers from here
+
+1. **Expand straight into the framebuffer, deleting the shadow** - 448 kB ->
+   192 kB per frame, a 57% cut in lvdesk's traffic. No kernel, no hardware.
+   Needs clipping/occlusion handled so an overlapped window cannot overpaint.
+2. **PPA CLUT** (patches/0032) - removes the expansion from the CPU entirely.
+3. **Word-at-a-time expansion** - two pixels per 32-bit store, ~10% of it.
+4. **Check LCD_CAM for a scanout palette.** If the controller can scan out
+   8-bit indexed, the expansion disappears rather than gets cheaper. Cheap to
+   check and it would obsolete 1-3.
+
+Do not chase idle daemons: s31-bt and friends measure 1%, and USB is 326
+interrupts in 481 s.
 
 ## Descriptor DMA and split transactions: proven mutually exclusive
 

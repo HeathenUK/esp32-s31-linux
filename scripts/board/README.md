@@ -322,3 +322,72 @@ can drive Monitor. It holds the port, so fire the workload with `runsh` first
 (setsid, output to a file) and start recording after runsh exits. Note that a
 healthy idle board is also silent - have the board emit a heartbeat if you need
 to distinguish idle from dead.
+
+## board-ok.sh - one line of truth after any flash or reset
+
+    scripts/board/board-ok.sh [budget_seconds]     # default 75
+
+Exit 0 = executing commands AND the screen has content; 1 = executing but the
+screen is blank; 2 = never executed a command inside the budget.
+
+It exists because "no answer" was repeatedly reported as a dead board when it
+only meant *probed too early*. esptool resets on completion and boot to lvdesk
+is ~40 s, during which the panel is legitimately black - so on 2026-09-06 a
+board was called dead to a user who was looking at a screen that was black for
+that reason. Neither observation meant anything was wrong.
+
+The order is the whole point: **wait for the board to execute a command, then
+look at the screen, then say one line.** Never report board state without all
+three. `BOARD DEAD` says explicitly that the budget is not the boot window.
+
+## verify-sdl.sh - prove an SDL client got the fast path AND drew
+
+    scripts/board/verify-sdl.sh <w> <h> [--timedemo]
+
+Four claims, each from evidence rather than inference, because inference here
+produced four wrong conclusions in a row: a busy board read as dead, a
+`tail -2` that hid the very line being looked for, a trace mode that killed the
+client it was tracing, and an fps measured across an ntpd clock step.
+
+1. **zero-copy** - `xshim: ZEROCOPY window` in the lvdesk log.
+2. **CPU LUT** - checked in the SOURCE, not the log. `xshim_window_pixels()`
+   has one depth-8 path (`pal = pal8;` and a scalar loop) and no PPA path, so
+   construction proves it and no printf is needed. It also fails if a PPA call
+   reappears in `xshim.c`, so the gate cannot silently drift.
+3. **it painted** - screenshots taken DURING the run, gated at 28000 bytes.
+4. **it was fast** - prboom's own fps, cross-checked against `/proc/uptime`.
+
+Three traps it now avoids, each of which cost a run:
+
+- **Sticky evidence.** A share is logged once, early. A probe late in the run
+  will not see it again, and a busy board answering nothing is not a negative.
+  Once seen, it stays seen - treating a failed probe as `NO` produced a bogus
+  "zero-copy: NO" on a run whose own log had four shares in it.
+- **The pixel gate is calibrated on measured frames**, not a round number:
+  ~15.8 kB bare desktop, ~19.2 kB window present but BLACK, ~36.1 kB gameplay,
+  ~47.4 kB title screen. It was set to 40000 from the title screen alone and
+  aborted a run that was rendering gameplay perfectly. 28000 separates black
+  from drawing with margin on both sides.
+- **A gate that cannot pass is not a gate.** It used to REQUIRE
+  `CLUT ... HARDWARE (PPA)`, a string the 2026-09-06 rollback deleted from
+  `xshim.c`. It therefore demanded evidence the agreed baseline is incapable of
+  producing and scored a healthy board FAIL. Whenever a harness fails, check
+  that its evidence strings still exist in the source before believing it.
+
+It bails after two consecutive black shots with no good one, because timing a
+window that is drawing nothing yields a number that means nothing, and waiting
+out a five-minute timedemo to discover that is the waste it exists to prevent.
+
+## keyview - what a real X client actually receives
+
+`rootfs/keyview.c`, built by `rootfs/build-keyview.sh`. xev is not on this
+board, and the question that matters when keys go missing is whether the loss
+is BELOW X (keyboard, receiver, HID, evdev, lvdesk's reader) or ABOVE it (our
+terminal widget). keyview is the dumbest possible client - one window, select
+KeyPress/KeyRelease, print every event - so it cannot be blamed for missing
+anything. If a key is absent here it never reached an X client at all.
+
+The GAP column is the millisecond delta by the SERVER's clock, which separates
+two different faults: bursty loss shows normal gaps with keys simply absent, a
+stall shows one huge gap. It also warns on unmatched press/release, since a
+lost release is what makes a key repeat for ever.

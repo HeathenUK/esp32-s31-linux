@@ -4126,6 +4126,30 @@ static void xshm_request(struct cli *c, const uint8_t *r, int len)
 			fprintf(stderr, "xshim: SHM damaged 0x%x %zu/%zu "
 				"non-zero\n", p->id, nz, tot);
 		}
+		/*
+		 * MARK THE BUFFER OWNER, NOT THE DRAWABLE.
+		 *
+		 * SDL creates a top-level and ONE child to draw into, and the
+		 * child shares the parent's pixels (w->buf = p->buf), so the
+		 * Damaged request names the CHILD while the desktop asks for
+		 * pixels - and xshim_window_pixels() tests and clears dirty -
+		 * by the TOP-LEVEL id. Marking only `p` therefore set the flag
+		 * on a res nobody reads, and the expansion's early-out could
+		 * never be re-armed.
+		 *
+		 * That defect was invisible for as long as the depth-8 path
+		 * forgot to clear dirty at all: the flag sat at 1 from window
+		 * creation, so every repaint re-expanded 64,000 pixels and the
+		 * picture stayed correct by accident, at 18.6 fps instead of
+		 * 27. Restoring the clear alone turned the window BLACK, which
+		 * is what exposed this. Both halves are needed.
+		 *
+		 * `buf` is the general answer, not a special case for SDL: it
+		 * is by definition "who owns the pixels we draw into", so it
+		 * is the res whose shadow an expansion actually fills.
+		 */
+		if (p->buf)
+			p->buf->dirty = 1;
 		p->dirty = 1;
 		p->hole = 0;
 		notify_draw(p);
@@ -5846,8 +5870,60 @@ const uint16_t *xshim_window_pixels(uint32_t id, int *w, int *h)
 			return r->shadow;
 		}
 		pal = pal8;
+		/*
+		 * EXPANSIONS PER FRAME, printed once every 200 expansions.
+		 *
+		 * lvdesk measures 48% of the CPU with a zero-copy 320x200
+		 * client, where the docs record 18-30% after the buffer share
+		 * landed. Each expansion moves ~192 kB of PSRAM (64 kB read,
+		 * 128 kB written) and the blit that follows moves another
+		 * 256 kB, against a copy ceiling measured at 13.6 MB/s - so
+		 * "how many times per frame does this run" decides the frame
+		 * rate, and nothing else in this function matters until it is
+		 * known. One line per 200 expansions is ~1/s at these rates.
+		 */
+		{
+			static unsigned long nexp;
+			static uint64_t t0;
+			struct timespec ts;
+			uint64_t now;
+
+			clock_gettime(CLOCK_MONOTONIC, &ts);
+			now = (uint64_t)ts.tv_sec * 1000ull +
+			      (uint64_t)ts.tv_nsec / 1000000ull;
+			if (!t0)
+				t0 = now;
+			if (++nexp % 200 == 0) {
+				uint64_t ms = now - t0;
+
+				fprintf(stderr, "xshim: EXPAND %lu total, "
+					"200 in %llu ms = %llu/s\n", nexp,
+					(unsigned long long)ms,
+					(unsigned long long)
+					(ms ? 200000ull / ms : 0));
+				t0 = now;
+			}
+		}
 		for (i = 0; i < n; i++)
 			r->shadow[i] = pal[src[i]];
+		/*
+		 * CLEAR IT. Without this the early-out above can never fire and
+		 * all 64,000 pixels are re-expanded on EVERY repaint pass, not
+		 * just the ones carrying new client damage - and repaints are
+		 * vblank-quantised at 42 Hz while Doom renders at ~27, so most
+		 * passes have nothing new in them. Measured: Doom fell from
+		 * 27.2 to 18.6 fps with lvdesk at 38% of the CPU.
+		 *
+		 * The line was lost on 2026-09-07 in 48a5305, which stripped
+		 * the PPA block out of this function; `r->dirty = 0;` sat
+		 * directly after that block and went with it. The depth-32 path
+		 * added by the SAME commit kept its own, which is why the loss
+		 * was asymmetric and survived review.
+		 *
+		 * Safe because the XLITE-SHM Damaged handler re-arms dirty on
+		 * every client damage - see `p->dirty = 1;` there.
+		 */
+		r->dirty = 0;
 		return r->shadow;
 	}
 	return r->px;
