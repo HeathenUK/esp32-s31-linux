@@ -6394,12 +6394,35 @@ static uint32_t flush_calls;
  */
 static int lvp_on = -1;
 static uint64_t lvp_expand, lvp_dirty, lvp_flush, lvp_n;
+/* Real-clock time in LVGL's refresh and timer handler, for the same frames. */
+static uint64_t lvp_refr, lvp_lvtimer;
+/*
+ * Call COUNTS, because neither call site runs once per frame. Dividing their
+ * totals by the frame count produced 44.7 ms of LVGL time inside a 31.8 ms
+ * frame - an impossible answer that came from the divisor, not the machine.
+ * Totals and counts are reported raw so the reader divides by the right thing.
+ */
+static uint64_t lvp_n_refr, lvp_n_lvtimer;
 
+/*
+ * CPU time, not wall clock.
+ *
+ * This was CLOCK_MONOTONIC, and on a saturated single core that is a trap:
+ * prboom holds the CPU ~54% of the time, so every stage timer also counted the
+ * intervals when lvdesk was descheduled. It showed up as LVGL accounting for
+ * 99.2 s of a 98 s window - 101%, which is impossible and was the giveaway.
+ *
+ * A/B comparisons taken under identical load are still valid with wall clock
+ * (the inflation cancels), which is why the GDMA result stands. What is NOT
+ * valid is reading an absolute "this stage is N% of the frame" off it. Thread
+ * CPU time gives that directly and is comparable with the per-process shares
+ * from /proc/<pid>/stat.
+ */
 static uint64_t lvp_now(void)
 {
 	struct timespec ts;
 
-	clock_gettime(CLOCK_MONOTONIC, &ts);
+	clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts);
 	return (uint64_t)ts.tv_sec * 1000000000ull + ts.tv_nsec;
 }
 
@@ -6503,6 +6526,30 @@ static void kms_flush_cb(lv_display_t *d, const lv_area_t *area, uint8_t *px)
 				(unsigned long long)(lvp_flush / lvp_n / 1000),
 				(unsigned long long)(lvp_expand / lvp_n / 1000),
 				(unsigned long long)(lvp_dirty / lvp_n / 1000));
+		if (lv_display_flush_is_last(d) && lvp_n % 200 == 0) {
+			uint64_t lvtot = lvp_refr + lvp_lvtimer;
+
+			/*
+			 * Totals over the window, with call counts, and the
+			 * comparison that matters: all of LVGL's refresh time
+			 * against the flush callback nested inside it. If the
+			 * flush is most of it, LVGL's own walk is cheap and
+			 * there is nothing to win by bypassing it.
+			 */
+			fprintf(stderr, "lvdesk: LVPROF window: frames %llu, "
+				"lv_refr %llu ms/%llu calls, lv_timer %llu ms/"
+				"%llu calls, LVGL total %llu ms, flush %llu ms "
+				"=> flush is %llu%% of LVGL\n",
+				(unsigned long long)lvp_n,
+				(unsigned long long)(lvp_refr / 1000000),
+				(unsigned long long)lvp_n_refr,
+				(unsigned long long)(lvp_lvtimer / 1000000),
+				(unsigned long long)lvp_n_lvtimer,
+				(unsigned long long)(lvtot / 1000000),
+				(unsigned long long)(lvp_flush / 1000000),
+				(unsigned long long)(lvtot ?
+					lvp_flush * 100 / lvtot : 0));
+		}
 	}
 }
 
@@ -7773,10 +7820,24 @@ int main(void)
 
 			frame_due = since >= FRAME_MS;
 			if (frame_due) {
+				/*
+				 * The SECOND lv_timer_handler call site, and it
+				 * flushes too. Leaving it out of LVPROF made
+				 * the flush total exceed the refresh that
+				 * contains it by ~1.1 ms/frame, which reads as
+				 * hidden LVGL overhead and is really just an
+				 * uninstrumented caller.
+				 */
+				uint64_t lv_c = lvp_on > 0 ? lvp_now() : 0;
+
 				last_frame_ms = nowms;
 				PROF_START(t0);
 				next = lv_timer_handler();
 				PROF_ADD(prof_timer, t0);
+				if (lvp_on > 0) {
+					lvp_lvtimer += lvp_now() - lv_c;
+					lvp_n_lvtimer++;
+				}
 			} else {
 				next = FRAME_MS - since;
 			}
@@ -8010,11 +8071,36 @@ int main(void)
 		 * than the panel refreshes, so this cannot outrun the hardware.
 		 */
 		if (frame_due) {
+			/*
+			 * LVPROF times these on the SAME real clock as the
+			 * flush callback. prof_timer/prof_refr above are in
+			 * LVGL ticks, which lag real time, and comparing the
+			 * two instruments made `flush` look larger than the
+			 * `refr` that contains it - an impossibility that is
+			 * purely an artefact of two clock domains. Subtracting
+			 * the flush total from these gives LVGL's own
+			 * per-frame overhead for a window whose pixels we
+			 * supply ourselves, which is the number that decides
+			 * whether the walk is worth bypassing.
+			 */
+			uint64_t lv_a = lvp_on > 0 ? lvp_now() : 0;
+
 			{ PROF_START(t0); lv_timer_handler(); PROF_ADD_MAX(prof_timer, prof_max_timer, t0); }
+			if (lvp_on > 0) {
+				uint64_t lv_b = lvp_now();
+
+				lvp_lvtimer += lv_b - lv_a;
+				lvp_n_lvtimer++;
+				lv_a = lv_b;
+			}
 			{
 				PROF_START(t0);
 				lv_refr_now(NULL);
 				PROF_ADD_MAX(prof_refr, prof_max_refr, t0);
+			}
+			if (lvp_on > 0) {
+				lvp_refr += lvp_now() - lv_a;
+				lvp_n_refr++;
 			}
 		}
 		prof_loops++;

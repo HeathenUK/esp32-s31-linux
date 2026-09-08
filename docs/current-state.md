@@ -190,6 +190,59 @@ whether the walk can be skipped for a window whose pixels we supply ourselves.
 That needs a lighter instrument than LVGL's profiler, which distorts the
 measurement by ~2x.
 
+## CORRECTION: LVPROF was wall clock, and the ranking changes (2026-09-08)
+
+Every LVPROF figure taken earlier today was **wall clock** (`CLOCK_MONOTONIC`),
+and on a saturated single core that is a trap: prboom holds the CPU ~54% of the
+time, so each stage timer also counted the intervals when lvdesk was
+descheduled.
+
+The giveaway was an impossible number. Instrumenting both `lv_timer_handler()`
+call sites (there are two - one at the poll-timeout computation, one in the
+frame path, and missing the first made the flush total exceed the refresh that
+contains it) gave **LVGL 99.2 s of a 98 s window - 101%**. A signed, unclamped
+print is what surfaced it; clamping at zero would have hidden it.
+
+`lvp_now()` now uses `CLOCK_THREAD_CPUTIME_ID`.
+
+**What survives:** A/B comparisons taken under identical load are still valid on
+wall clock, because the inflation cancels. The GDMA result is unaffected - it
+compared two arms under the same conditions and was independently corroborated
+by composited-frame counts. **What does not survive** is any absolute "this
+stage is N% of the frame" read off the old numbers, including my own claim that
+DIRTYFB was 33% of the frame.
+
+### The corrected attribution, in CPU time
+
+2000 frames, ~91 s window, `gdma_copy=N`:
+
+| stage | CPU ms/frame | approx share of machine |
+|---|---|---|
+| palette expansion | 3.75 | ~8% |
+| DIRTYFB | 3.40 | ~7.5% |
+| flush total | 7.58 | ~17% |
+| LVGL outside our flush | 2.30 | ~5% |
+| lvdesk outside LVGL (xshim + event loop) | - | **~20%** |
+
+LVGL total 19.7 s against lvdesk's ~38.5 s of CPU; our flush is 76% of LVGL.
+
+Three conclusions change:
+
+- **The expansion, not DIRTYFB, is the largest single thing we control.** In
+  wall clock DIRTYFB looked bigger (7.7 vs 5.1 ms); in CPU time it is smaller
+  (3.40 vs 3.75). The difference is that DIRTYFB spends ~4.3 ms/frame WAITING -
+  wall time that is not CPU, during which prboom runs.
+- **The LVGL object walk is ~5% of the machine, not 12%.** Still real, but it is
+  now the smallest of the candidates rather than tied for the largest. The
+  earlier 12% came from LVGL's own tick-based profiler, which lags real time.
+- **The largest remaining bucket is lvdesk outside LVGL entirely, ~20%** -
+  xshim protocol handling and the event loop. That is where to look next, and
+  it is the one bucket nobody has attacked.
+
+Note also that flushed area is already minimal: measured 63,826 px/frame over
+one rectangle per frame, against a 320x200 window of 64,000. LVGL invalidates
+exactly the right region; there is no area waste to reclaim.
+
 ## Baseline after 2026-09-08, and what the frame is made of
 
 Verified on a freshly built and flashed image, `gdma_copy=N` compiled in,
