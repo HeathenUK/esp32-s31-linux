@@ -532,6 +532,37 @@ painting *into the driver's permanent buffer*, never the driver pointing at
 lvdesk's - and the cursor then needs its own 64x64 backing store, because it
 loses the plane framebuffer as a clean restore source. It is not worth 2%.
 
+## Every fps number here is a COLD run, and cold costs ~5% (2026-09-08)
+
+Two timedemos back to back in ONE boot, nothing else changed:
+
+	run 1 (cold)   29.1 fps
+	run 2 (warm)   30.6 fps
+
+**+5.2% from warm-up alone.** prboom's binary and the ~4 MB WAD live on the SD
+card (deliberately - Doom in XIP would be cheating), so first-touch paging and
+WAD reads land inside the timed window. Its libraries are NOT the cause: SDL
+and the X11 replacements are all in /usr/lib, which is the XIP overlay at zero
+RSS.
+
+**The method here was self-defeating.** This file says "Fresh boot per arm" AND
+"Discard warm-up", and every arm measured on 2026-09-08 followed the first
+while ignoring the second - which guarantees that every single measurement is a
+cold run 1. The correct sequence is: fresh boot, one throwaway run, then the
+measured run. It doubles the cost of an arm to ~6 minutes and it is worth it.
+
+Consequences for what is written above:
+
+- Absolute fps figures are all understated by roughly 5%. The copy-based
+  MIT-SHM baseline is ~30.6 warm, not the 29.4 recorded cold.
+- Part of the 31.3-32.6 "noise band" was probably warm-up variance rather than
+  randomness. Some differences dismissed as inside the band may have been real,
+  and some accepted may not have been. Distrust any single-run comparison of
+  1-2% taken today.
+- A/B arms compared cold against cold carry the same handicap, so the GDMA
+  result and the MIT-SHM adopt/copy/off comparison are unaffected - those were
+  measured like against like.
+
 ## ADOPTION WAS A BUG: it flickered, and the +7%/+11% was not real (2026-09-08)
 
 The MIT-SHM entry below describes ADOPTING the client's segment as the window's
