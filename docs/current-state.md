@@ -5814,6 +5814,78 @@ that matter for wiring this up:
     once, re-upload only when the client's palette actually changes. That cost
     was inside the original PPA-vs-CPU comparison and nobody accounted for it.
 
+## RESEARCH: the biggest remaining win is a full-frame copy SDL is forced into
+
+Traced 2026-09-08, from prboom down through SDL 1.2 to the shim. It benefits
+EVERY SDL 1.2 client, not just Doom, and any other MIT-SHM toolkit.
+
+### The copy, and why it exists
+
+Per frame at 320x200, in 8-bit mode:
+
+    Doom -> SDL surface        free ("SDL buffer, direct access")
+    SDL calls XPutImage        -
+    xlite memcpy -> window     64 kB read + 64 kB write   <-- THIS
+    lvdesk expands -> scanout  64 kB read + 128 kB write
+
+xlite/xlite_req.c's XPutImage does a `memcpy` per row into the window's shared
+buffer. It exists because SDL is on its NON-shared path, and it is on that path
+because of a kernel config line:
+
+    # CONFIG_SYSVIPC is not set
+
+SDL 1.2's try_mitshm() does `shmget(IPC_PRIVATE, ...)`, which fails with no
+SysV IPC, sets shm_error, and clears use_mitshm. SDL then mallocs its own
+buffer, wraps it in XCreateImage, and pushes frames with XPutImage forever.
+Advertising MIT-SHM in the shim alone would change NOTHING - SDL never gets as
+far as asking.
+
+Note the shim currently answers QueryExtension for RENDER and XLITE-SHM only.
+XLITE-SHM is ours and SDL cannot know about it, which is why the zero-copy we
+do have still costs one copy: the server shares the window buffer, and xlite
+copies SDL's frame into it.
+
+### What it is worth
+
+    320x200   removes 128 kB of ~320 kB per frame   (~40% of pixel traffic)
+    640x400   removes 512 kB of ~1.28 MB per frame
+
+640x400 is the interesting one, because that is where the system is BANDWIDTH
+bound (768 kB/frame of compositor traffic against a 13.6 MB/s ceiling). A 40%
+cut in total traffic there should convert almost directly into frames, where
+nothing else has: neither expander can win because both move the same bytes,
+but this removes bytes.
+
+### The route, and its one unusual step
+
+  1. Enable CONFIG_SYSVIPC. The linux partition has 237,567 bytes free and
+     SysV IPC is small; measure the growth before committing to it.
+  2. Implement the MIT-SHM client API in xlite - XShmQueryExtension,
+     XShmAttach, XShmCreateImage, XShmPutImage, XShmDetach. SDL probes for
+     these symbols (SDL_X11_HAVE_SHM) and takes the fast path if present.
+  3. Server side: on ShmAttach, shmat() the client's segment; on the first
+     full-window ShmPutImage, ADOPT that segment as the window's pixel
+     storage instead of copying into a server-allocated one.
+
+Step 3 is not what a normal X server does - MIT-SHM's usual win is avoiding
+the SOCKET, and the server still copies. We already avoid the socket, so
+copying again would buy nothing; adoption is what makes it zero-copy. It is
+legitimate here because we own both halves, and it is exactly what XLITE-SHM
+already does in the opposite direction (server allocates, client maps).
+
+### Risks to check before building it
+
+* SDL sets `screen->pixels = shminfo.shmaddr` BEFORE XShmCreateImage, so the
+  segment it renders into is the one it allocated. Adoption has to happen on
+  the SERVER side; xlite cannot substitute a different pointer after the fact.
+* A client may resize; the adopted segment then has the wrong size and the
+  window must fall back to a server buffer cleanly.
+* CONFIG_SYSVIPC costs kernel image space and a little slab. Measure both.
+* Doom updates the whole screen every frame, so it gains the copy only. Apps
+  that update SMALL rectangles (terminals, GUIs) gain far more, because
+  XShmPutImage carries a rect and the current path copies whatever SDL hands
+  over.
+
 ## The 640x400 "board died" events: OPEN, and none of the suspects survived
 
 Four hypotheses tested and killed on 2026-09-07. Recording them so the next
