@@ -6611,11 +6611,22 @@ static uint64_t prof_max_input, prof_max_timer, prof_max_refr;
 static uint64_t prof_term, prof_kbd, prof_mouse, prof_wifi, prof_wait4, prof_curs, prof_xs;
 static uint32_t prof_loops, prof_refrs;
 
+/*
+ * CPU time, not wall clock - see the note on lvp_now(). On a saturated single
+ * core, wall clock counts the intervals when prboom is running and lvdesk is
+ * descheduled, which inflated every phase here and made the shares unusable as
+ * an attribution.
+ *
+ * One consequence is deliberate: `wait` is the poll() block, which is off-CPU
+ * by definition, so it now reads ~0. That is correct - waiting is not a cost to
+ * the machine, and the whole point of this line is to say where lvdesk's CPU
+ * actually goes.
+ */
 static uint64_t prof_ns(void)
 {
 	struct timespec t;
 
-	clock_gettime(CLOCK_MONOTONIC, &t);
+	clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t);
 	return (uint64_t)t.tv_sec * 1000000000ull + t.tv_nsec;
 }
 

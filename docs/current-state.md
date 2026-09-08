@@ -190,6 +190,64 @@ whether the walk can be skipped for a window whose pixels we supply ourselves.
 That needs a lighter instrument than LVGL's profiler, which distorts the
 measurement by ~2x.
 
+## xshim is ~14% of the machine, and most of it is syscall entry (2026-09-08)
+
+The largest remaining bucket, measured in CPU time (`XSHIM_PROF=1` and
+`LVDESK_PROF=1`, both switched off `CLOCK_MONOTONIC` for the reason in the
+entry below). Per ~1 s window, 111 poll passes:
+
+| | ms/s | of xshim |
+|---|---|---|
+| read | 42.8 | 30% |
+| handle | 51.6 | 36% |
+| write | 34.9 | 24% |
+| poll | 13.2 | 9% |
+| **total** | **142.5** | **~14% of the machine** |
+
+**~64% of it is socket syscall entry** (read + write + poll = 90.9 ms/s), at
+~350-385 us per call for a 40-byte request. That is the board's known
+structural syscall cost - see [[s31-socket-syscalls-cost-ms]], where
+`.text..fast` on the net spine measured exactly zero improvement - and it is
+not something xshim can fix.
+
+Nor is the request count: it is **one request per pass** (111 passes, 111
+requests), because SDL sends `ShmPutImage` and then `GetInputFocus` separately.
+Draining harder before returning to poll would not help; the second request has
+genuinely not arrived yet. The `GetInputFocus` is SDL's per-frame XSync and is
+what forces a reply, hence the write syscalls.
+
+### The one number that is ours
+
+`ShmPutImage` handling is **44 ms/s over 55 calls - 800 us each**, and with
+MIT-SHM adoption that request should do almost nothing: no copy, just mark the
+buffer dirty and notify. The cost is `xwin_on_draw()` calling
+`lv_obj_invalidate_area()`, which walks the parent chain and merges into the
+display's invalid-area list. It already invalidates the exact damage rectangle,
+not the whole window, so there is no waste to trim there.
+
+**This is LVGL cost accounted to xshim.** It means LVGL's true share is the
+2.30 ms/frame of refresh in the entry below PLUS this invalidation - the two
+buckets were never separate.
+
+### The lever this suggests
+
+Bypass LVGL entirely for a window whose pixels we supply: accumulate damage in
+lvdesk, expand directly, and call `kms_dirty_rects()` ourselves, never telling
+LVGL. That would save the invalidation AND the refresh walk - together roughly
+3.1 ms/frame, ~7% of the machine - and it is entirely in code we own, with no
+buffer lifetime or cursor hazard.
+
+It needs a correct fallback for the frames where something else is damaged or
+overlaps the window (menus, chrome, the popover, a drag), which is exactly the
+work LVGL is doing for us today. Not started.
+
+**Unresolved, and it matters before building this:** how many `ShmPutImage`
+arrive per COMPOSITED frame. `xsp_dump()` rate-limits to >= 1 s but reports
+whatever window it actually spanned, so 55 calls cannot be turned into a rate
+without knowing that span. If the client is outrunning the compositor, some of
+this invalidation is being done for frames that are never displayed, and the
+cheap fix is to coalesce rather than to bypass.
+
 ## CORRECTION: LVPROF was wall clock, and the ranking changes (2026-09-08)
 
 Every LVPROF figure taken earlier today was **wall clock** (`CLOCK_MONOTONIC`),

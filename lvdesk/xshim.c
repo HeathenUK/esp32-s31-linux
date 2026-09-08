@@ -2186,11 +2186,17 @@ static uint64_t xsp_cpu_now(void)
 }
 static int xsp_on = -1;
 
+/*
+ * CPU time. This was CLOCK_MONOTONIC, which on a saturated single core also
+ * counts the time the CLIENT is running while we are descheduled - and for a
+ * request that requires a round trip, that is most of it. It is why `handle`
+ * read 1901 us wall against 667 us of actual CPU.
+ */
 static uint64_t xsp_now(void)
 {
 	struct timespec t;
 
-	clock_gettime(CLOCK_MONOTONIC, &t);
+	clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t);
 	return (uint64_t)t.tv_sec * 1000000000ull + t.tv_nsec;
 }
 
