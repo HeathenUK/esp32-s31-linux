@@ -118,6 +118,78 @@ reclaimable here.
 
 ---
 
+## Where lvdesk's other 15% goes: LVGL's draw walk and SDL's per-frame XSync (2026-09-08)
+
+lvdesk is 42.3% of the machine during a 320x200 timedemo but its flush path is
+only ~27%, so ~15 points were unaccounted. `LVDESK_PROF=1` and `XSHIM_PROF=1`
+already existed and answer it; no new instrumentation was needed.
+
+**Read the report's phases as RATIOS, not seconds.** The `prof:` line claims a
+5000-tick window, but its phases sum to ~13.7 s of wall time - LVGL's tick lags
+real time badly here, so the window is ~3x longer than it says. Ratios within a
+window are still sound.
+
+One clean window (260 frames, profiler off), busy = input + timer + refr =
+8134 ms, with `wait` 5252 ms being off-CPU:
+
+| | ms | of lvdesk busy | ~ of machine |
+|---|---|---|---|
+| flush path (LVPROF) | 3601 | 44% | ~19% |
+| LVGL non-flush | 2277 (8.8 ms/frame) | 28% | ~12% |
+| xshim protocol | 2256 | 28% | ~12% |
+
+`term`, `kbd`, `mouse`, `wifi`, `waitpid` and `cursor_ioctl` all read **0 ms**.
+The input cost is entirely xshim.
+
+### xshim: two socket syscalls a frame, and SDL's XSync
+
+`xsp` over ~1 s windows: 22 poll passes, and per pass **read 1233 us, write
+1856 us**, handle 1901 us wall but only **667 us CPU**. The top requests are
+`R3/maj202` x11 (MIT-SHM ShmPutImage) and `43/maj0` x11 (**GetInputFocus**).
+
+So SDL issues one **GetInputFocus round trip per frame** - its XSync - and each
+frame therefore costs a read plus a reply write. That ~3.1 ms per pass is the
+board's known structural socket cost (1.3-5.8 ms/syscall, and `.text..fast` on
+the net spine previously measured ZERO against it). `handle` being 3x its own
+CPU time is the client running while we are off-CPU, exactly as the comment
+above `xsp_op_cpu` warns - do not read it as our cost.
+
+**Little of this looks recoverable.** The round trip is SDL's behaviour and we
+do not patch SDL; replies are already batched through `out_flush`, and with one
+reply per frame there is nothing left to coalesce.
+
+### LVGL: ~4 object redraws a frame, and it is NOT a duplicate fill
+
+Two tempting explanations were tested and are both **wrong**:
+
+- *"LVGL blits the window image and we overwrite it."* No. With
+  `directexp_on()` (the default) `lv_image_set_src()` is never called - the
+  widget has no source and draws nothing; `xwin_draw_cb` owns the rectangle.
+- *"LVGL fills the container background under the window."* No. The
+  `LV_EVENT_COVER_CHECK` handler `xwin_cover_cb()` correctly returns
+  `LV_COVER_RES_COVER` for the image area, so LVGL skips what is beneath it.
+
+Wiring LVGL's own profiler (`LV_USE_PROFILER 1` - the hooks in
+`lvdesk/lv_prof_hooks.h` and `LV_PROFILER_INCLUDE` were already in place and
+merely switched off) gives the shape, though **it inflates what it measures:
+`refr` went 2372 ms to 5517 ms with it on, so trust only the proportions**:
+
+	refr_invalid_areas  8635 ms  n=398
+	├─ call_flush_cb    5893 ms  n=398     (ours)
+	└─ refr_area        2666 ms  n=398     (LVGL's own drawing)
+	   └─ refr_configured_layer 2536
+	      └─ refr_obj_and_children 2148  n=1194  (3 per frame)
+	         └─ lv_obj_redraw     1737  n=1602  (4 per frame)
+	EVENT_DRAW_POST      661 ms  n=2786          (7 per frame)
+
+So LVGL redraws ~4 objects and fires ~7 draw events per frame. It is the object
+walk and the chrome, not a pixel fill of the window area.
+
+**Open, and the concrete next step:** identify which 4 objects those are and
+whether the walk can be skipped for a window whose pixels we supply ourselves.
+That needs a lighter instrument than LVGL's profiler, which distorts the
+measurement by ~2x.
+
 ## The palette expansion is memory-bound, and MIT-SHM forecloses the PPA (2026-09-08)
 
 The expansion is the largest per-frame cost left that we control: ~5.0 ms of a
