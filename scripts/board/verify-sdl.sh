@@ -111,6 +111,11 @@ done
 say "board: executing commands"
 
 # --- the clock must be steady before any stopwatch starts ------------------
+# Stage the clock gate. It used to be tested for and never shipped, so the
+# `if [ -r ... ]` below silently skipped it on every run - and a timedemo fired
+# before NTP steps the clock reports 0.0 fps, which reads as a total
+# regression rather than as a harness fault.
+cp "$(dirname "$0")/clocksettle.sh" "$D/clocksettle.sh" 2>/dev/null || true
 if [ -r "$D/clocksettle.sh" ]; then
 	C=$(R "$D/clocksettle.sh" 120)
 	echo "$C" | grep -q "clock settled" || { say "FAIL: clock never settled"; exit 1; }

@@ -118,6 +118,77 @@ reclaimable here.
 
 ---
 
+## MIT-SHM: real, standard, and worth +7% to Doom (2026-09-08)
+
+xshim speaks **MIT-SHM 1.2** (major opcode 202), alongside the private
+XLITE-SHM (201). The two run in opposite directions and that is the whole
+point:
+
+- **XLITE-SHM is server-to-client.** lvdesk allocates a GEM dumb buffer,
+  exports it with `PRIME_HANDLE_TO_FD`, the client mmaps it. Zero-copy, but a
+  private dialect - only a client linked against our xlite knows the request
+  exists, so an off-the-shelf binary never asks and silently gets the slow
+  path.
+- **MIT-SHM is client-to-server.** The client allocates and tells us where it
+  is. Standard since 1991, and SDL 1.2 already probes for it by dlsym'ing five
+  symbols out of `SDL_x11sym.h`. Nothing about SDL changes; it just stops being
+  told no.
+
+### The numbers (320x200 prboom timedemo, fresh boot per arm)
+
+| arm | fps |
+|---|---|
+| MIT-SHM adopted | 31.8, 31.3, 31.8, 31.6 |
+| same build, `XLITE_NOMITSHM=1` | 29.7, 29.4 |
+
+**+7%**, outside the run-to-run spread. What it removes per frame at 320x200 is
+a 64,000-byte `XPutImage` into the socket, the server's read back out, and the
+memcpy into the window buffer - about 1.9 MB/s at 30 fps against the 13.6 MB/s
+PSRAM copy ceiling. The palette expansion remains; it now reads the client's
+pixels where they already are instead of a copy of them.
+
+### Two things that cost time to find
+
+- **Adoption keys off the BUFFER, not the drawable.** The first test was
+  `d->buf == d` - "the window owns its own pixels" - and it declined every
+  single frame. SDL draws into a **child** of the window it asked the WM for,
+  and a child here is a clipped view into its top-level's buffer. The correct
+  test is that the image exactly fills the buffer this drawable draws into, at
+  its origin (`ax == 0 && ay == 0 && w == buf->w && h == buf->h`). That is a
+  property of X's window model, not of SDL.
+- **A read-only segment is never adopted.** An adopted segment becomes the
+  window's pixels, so every server-side drawing path - a background fill, an
+  Expose repaint, CopyArea - writes through that mapping. Under `SHM_RDONLY`
+  that write is a SIGSEGV that takes the desktop down. We attach the way the
+  client asked and only adopt writable memory; a read-only segment is copied
+  out of.
+
+### 1.2, and why it changes nothing for Doom
+
+`ShmAttachFd` (6) and `ShmCreateSegment` (7) are implemented and tested
+(`rootfs/shmfdtest.c` speaks the wire protocol directly, because the sysroot's
+`XShm.h` predates the fd API and there is no C prototype to bind to). Receiving
+an fd meant replacing `read()` with `recvmsg()` in the request path - a plain
+read silently DISCARDS the SCM_RIGHTS ancillary data, and the request then
+arrives looking perfectly well formed with no fd behind it.
+
+**It does not move Doom's fps** (31.6 with 1.2, inside the band above): SDL 1.2
+predates MIT-SHM 1.2 by decades and only ever calls `XShmAttach`. The win is
+entirely in ops 0-3. 1.2 is there so the extension is honest and so fd-passing
+clients work.
+
+The version number is a **contract, not a label**: 1.2 is *defined* as the
+version that has ops 6 and 7, and xcb clients test `minor >= 2` and then call
+`shm_create_segment` without asking anything else. An earlier version of this
+work advertised 1.2 while implementing 0-3, which would have hung such a client
+on a reply that never came. Unimplemented minor ops now return
+`BadImplementation` rather than silence, for the same reason.
+
+`CONFIG_SYSVIPC=y` is required and costs 20,496 bytes of kernel (xipImage
+5,922,817 -> 5,943,313). It is enabled by the **Makefile's** kconfig-tweak
+list, not the defconfig - the defconfig lives in the gitignored port tree and
+the Makefile overrides it anyway.
+
 ## Off-the-shelf X11 apps run in lvdesk, with no X server (2026-08-29)
 
 `xclock` - the real Buildroot binary, unmodified - runs as an lvdesk window

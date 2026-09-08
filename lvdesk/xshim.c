@@ -32,6 +32,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
+#include <sys/shm.h>
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -167,6 +168,13 @@ struct res {
 	 */
 	uint32_t gem_src;
 	size_t gem_len;
+	/*
+	 * The pixels belong to a CLIENT's MIT-SHM segment, not to us. Never
+	 * free() or munmap() them here - the segment is released when the
+	 * client detaches, and shmseg_drop() hands the window a buffer of its
+	 * own first.
+	 */
+	uint8_t px_adopted;
 	size_t shm_len;
 	int line_width;
 	int owner;			/* index into cli[] */
@@ -187,6 +195,18 @@ struct res {
 
 struct cli {
 	int fd;
+	/*
+	 * File descriptors the client has passed us with SCM_RIGHTS, in
+	 * arrival order, waiting to be claimed by the request they belong to.
+	 *
+	 * They have to be queued rather than read on demand because the
+	 * ancillary data rides on whatever recvmsg() happened to return - the
+	 * kernel delivers the fd with the byte stream, not with the request -
+	 * so an fd can and does arrive in the same read as several earlier
+	 * requests. MIT-SHM 1.2 defines them as consumed in order.
+	 */
+	int rfd[8];
+	int nrfd;
 
 	int up;				/* connection setup completed */
 	uint32_t seq;
@@ -281,6 +301,7 @@ static int px_share(struct res *r);
 
 static unsigned long rf_calls, rf_steps;
 static unsigned long nreplies, nreqs;
+static unsigned long nshmput;	/* MIT-SHM ShmPutImage requests served */
 
 /*
  * A one-entry-per-bucket index over the resource table.
@@ -745,6 +766,20 @@ static void px_release(struct res *r)
 
 	if (!r->px)
 		return;
+	/*
+	 * ADOPTED PIXELS ARE NOT OURS - and were never charged to mem_win
+	 * when adopted, so crediting them back here would walk the counters
+	 * negative one window at a time. shmseg_drop() replaces the pointer
+	 * before the segment goes away; freeing it here would be a double
+	 * free of somebody else's allocation.
+	 */
+	if (r->px_adopted) {
+		free(r->shadow);
+		r->shadow = NULL;
+		r->px = NULL;
+		r->px_adopted = 0;
+		return;
+	}
 	if (r->type == R_PIXMAP) {
 		mem_pix -= n; n_pix--;
 	} else {
@@ -805,6 +840,7 @@ void xshim_mem_report(void)
 		"%lu requests, %lu replies (%lu%% are round trips)\n",
 		rf_calls, rf_steps, rf_calls ? rf_steps / rf_calls : 0,
 		nreqs, nreplies, nreqs ? nreplies * 100 / nreqs : 0);
+	fprintf(stderr, "xshim: %lu MIT-SHM ShmPutImage\n", nshmput);
 	size_t d1 = 0, empty = 0;
 
 	fprintf(stderr, "xshim: %d window buffers %zu kB, %d pixmaps %zu kB, "
@@ -2060,7 +2096,8 @@ static void send_setup(struct cli *c)
  * the shared-pixmap path: the client ends up with the SAME pages the shim
  * draws into, so bulk pixel traffic stops being protocol at all.
  */
-static void send_reply_fd(struct cli *c, const uint8_t *d24, int fd)
+static void send_reply_fd_detail(struct cli *c, uint8_t detail,
+				 const uint8_t *d24, int fd)
 {
 	out_flush(c);	/* the fd rides THIS reply; keep the stream ordered */
 	uint8_t h[32];
@@ -2075,6 +2112,7 @@ static void send_reply_fd(struct cli *c, const uint8_t *d24, int fd)
 	nreplies++;
 	memset(h, 0, sizeof(h));
 	h[0] = 1;
+	h[1] = detail;
 	put16(h + 2, c->seq);
 	memcpy(h + 8, d24, 24);
 
@@ -2093,6 +2131,16 @@ static void send_reply_fd(struct cli *c, const uint8_t *d24, int fd)
 	memcpy(CMSG_DATA(cm), &fd, sizeof(fd));
 	if (sendmsg(c->fd, &m, 0) < 0)
 		perror("xshim: sendmsg");
+}
+
+/*
+ * The detail byte carries meaning in some replies and not others. XLITE-SHM's
+ * GetPixmapFd does not use it; MIT-SHM's ShmCreateSegment puts its `nfd` count
+ * there. Keep the old spelling for the callers that mean zero.
+ */
+static void send_reply_fd(struct cli *c, const uint8_t *d24, int fd)
+{
+	send_reply_fd_detail(c, 0, d24, fd);
 }
 
 /*
@@ -2472,6 +2520,31 @@ static void expose_window(struct cli *c, struct res *w)
  * ===================================================================== */
 
 #define XSHM_MAJOR		201
+/*
+ * MIT-SHM, the REAL one, because that is the only shared-memory extension an
+ * off-the-shelf client knows how to ask for.
+ *
+ * XLITE-SHM (above) is ours, so only our own libX11 uses it - and SDL never
+ * learns the window's pixels are shareable. It renders into a buffer it
+ * malloc'd and pushes whole frames through XPutImage, which xlite then has to
+ * memcpy into the window buffer: 64 kB in and 64 kB out per frame at 320x200,
+ * four times that at 640x400. MIT-SHM lets the CLIENT own the memory and tell
+ * us where it is, so nothing copies at all.
+ */
+#define MITSHM_MAJOR		202
+#define MITSHM_ERROR		144
+
+/* Segments a client has attached. Small: a client has one or two. */
+#define MAXSHMSEG 8
+static struct shmseg {
+	uint32_t id;		/* the client's shmseg XID */
+	int shmid;		/* SysV id it passed */
+	void *addr;		/* our attachment */
+	size_t len;
+	int owner;		/* which client, so a disconnect can clean up */
+	int ro;			/* it asked for read-only; never adopt one */
+	int is_fd;		/* mmap of a passed fd, not a SysV shmat */
+} shmsegs[MAXSHMSEG];
 #define RENDER_MAJOR	140		/* our major opcode for RENDER */
 #define RENDER_ERROR	160		/* first of its five error codes */
 
@@ -4168,6 +4241,411 @@ static int render_request(struct cli *c, const uint8_t *r, int len)
  * There is no reply to Damaged: the point of this path is that pixels move
  * without round trips, and a round trip per update would put one straight back.
  */
+/*
+ * MIT-SHM, server side. Four requests matter:
+ *
+ *   0 ShmQueryVersion  - version, and "yes, shared pixmaps are a thing"
+ *   1 ShmAttach        - the client hands us a SysV shmid; we attach it
+ *   2 ShmDetach        - and let it go
+ *   3 ShmPutImage      - pixels are already in that segment; use them
+ *
+ * THE POINT IS ShmPutImage NOT COPYING. A normal X server copies out of the
+ * client's segment into its own drawable, and MIT-SHM's win is only that the
+ * pixels never crossed the socket. We already avoid the socket (XLITE-SHM), so
+ * copying here would buy exactly nothing.
+ *
+ * Instead, when a client puts a full-window image from a segment big enough to
+ * BE the window, we ADOPT the segment as the window's pixel storage. After
+ * that the client renders straight into what the compositor reads, and a frame
+ * costs one damage message. That is not what a normal X server does; it is
+ * available to us because we own both halves, and it mirrors XLITE-SHM, which
+ * does the same thing in the other direction.
+ */
+static struct shmseg *shmseg_find(uint32_t id)
+{
+	int i;
+
+	for (i = 0; i < MAXSHMSEG; i++)
+		if (shmsegs[i].addr && shmsegs[i].id == id)
+			return &shmsegs[i];
+	return NULL;
+}
+
+static void shmseg_drop(struct shmseg *sg)
+{
+	int i;
+
+	if (!sg || !sg->addr)
+		return;
+	/*
+	 * A window may have ADOPTED this memory. Hand it back a buffer of its
+	 * own before the pages go, or the compositor reads freed address
+	 * space - which is a use-after-free that would show up as garbage on
+	 * the panel long after the client exited.
+	 */
+	for (i = 0; i < MAXRES; i++) {
+		struct res *w = &res[i];
+
+		if (w->type == R_WINDOW && w->px_adopted &&
+		    (void *)w->px == sg->addr) {
+			size_t n = (size_t)w->w * w->h * (w->bpp ? w->bpp : 2);
+
+			w->px = calloc(n, 1);
+			w->px_adopted = 0;
+			if (!w->px)
+				w->w = w->h = 0;	/* nothing to draw */
+		}
+	}
+	/*
+	 * Unmap it the way it was mapped. shmdt() on an mmap'd pointer fails
+	 * with EINVAL and leaks the mapping; munmap() on a SysV attachment
+	 * unmaps someone else's idea of that address.
+	 */
+	if (sg->is_fd)
+		munmap(sg->addr, sg->len);
+	else
+		shmdt(sg->addr);
+	memset(sg, 0, sizeof(*sg));
+}
+
+static void mitshm_request(struct cli *c, const uint8_t *r, int len)
+{
+	uint8_t d24[24];
+	uint8_t op = r[1];
+
+	(void)len;
+	memset(d24, 0, sizeof d24);
+
+	switch (op) {
+	case 0: {				/* ShmQueryVersion */
+		/*
+		 * 1.2, which is the version that has ShmAttachFd (6) and
+		 * ShmCreateSegment (7). The minor version is a CONTRACT, not a
+		 * label - xcb clients test `minor >= 2` and then call
+		 * shm_create_segment without asking anything else - so this
+		 * number and the op table below have to agree.
+		 *
+		 * We still do not implement ShmGetImage (4) or ShmCreatePixmap
+		 * (5): 5 is gated behind the sharedPixmaps flag we return as
+		 * 0, and 4 is a read-back path nothing here uses. Both answer
+		 * with BadImplementation rather than silence.
+		 */
+		put16(d24 + 0, 1);		/* major */
+		put16(d24 + 2, 2);		/* minor */
+		put16(d24 + 4, 0);		/* uid */
+		put16(d24 + 6, 0);		/* gid */
+		d24[8] = 2;			/* ZPixmap format */
+		/*
+		 * sharedPixmaps = 0. We do not implement ShmCreatePixmap, and
+		 * claiming it would invite a client to try. SDL only needs
+		 * ShmPutImage.
+		 */
+		send_reply(c, 0, d24, NULL, 0);	/* detail = sharedPixmaps */
+		break;
+	}
+	case 1: {				/* ShmAttach */
+		uint32_t seg = get32(r + 4);
+		int shmid = (int)get32(r + 8);
+		int i, ro;
+		void *a;
+
+		for (i = 0; i < MAXSHMSEG; i++)
+			if (!shmsegs[i].addr)
+				break;
+		if (i == MAXSHMSEG) {
+			send_error(c, X_BAD_ALLOC, seg, MITSHM_MAJOR);
+			break;
+		}
+		/*
+		 * Attach the way the client asked. This is not a detail: an
+		 * ADOPTED segment becomes the window's pixels, and every
+		 * server-side drawing path - a background fill, an Expose
+		 * repaint, CopyArea - then writes through this mapping. Under
+		 * SHM_RDONLY that write is a SIGSEGV that takes the whole
+		 * desktop down, so a read-only segment is never adopted
+		 * (below) and only ever copied out of.
+		 */
+		ro = r[12] ? 1 : 0;
+		a = shmat(shmid, NULL, ro ? SHM_RDONLY : 0);
+		if (a == (void *)-1) {
+			fprintf(stderr, "xshim: ShmAttach shmid %d: %s\n",
+				shmid, strerror(errno));
+			send_error(c, X_BAD_VALUE, seg, MITSHM_MAJOR);
+			break;
+		}
+		{
+			struct shmid_ds ds;
+
+			shmsegs[i].len = shmctl(shmid, IPC_STAT, &ds) == 0 ?
+					 ds.shm_segsz : 0;
+		}
+		shmsegs[i].id = seg;
+		shmsegs[i].shmid = shmid;
+		shmsegs[i].addr = a;
+		shmsegs[i].ro = ro;
+		shmsegs[i].owner = (int)(c - cli);
+		fprintf(stderr, "xshim: MIT-SHM attach seg 0x%x shmid %d "
+			"(%zu bytes)\n", seg, shmid, shmsegs[i].len);
+		break;
+	}
+	case 2:					/* ShmDetach */
+		shmseg_drop(shmseg_find(get32(r + 4)));
+		break;
+	case 3: {				/* ShmPutImage */
+		uint32_t did = get32(r + 4);
+		struct res *d = res_find(did);
+		/*
+		 * xShmPutImageReq, verbatim from shmproto.h - gc at 8,
+		 * geometry from 12, then depth/format/sendEvent/pad at 28,
+		 * shmseg at 32 and offset at 36. Do not "tidy" these; a stock
+		 * libXext writes exactly this and nothing negotiates it.
+		 */
+		uint16_t tw = get16(r + 12), th = get16(r + 14);
+		uint16_t sx = get16(r + 16), sy = get16(r + 18);
+		uint16_t sw = get16(r + 20), sh = get16(r + 22);
+		int16_t dx = (int16_t)get16(r + 24), dy = (int16_t)get16(r + 26);
+		uint32_t seg = get32(r + 32);
+		uint32_t off = get32(r + 36);
+		struct shmseg *sg = shmseg_find(seg);
+		struct res *db;
+		int bpp, sstride;
+		size_t need;
+
+		if (!d || !sg) {
+			static int once;
+
+			if (!once++)
+				fprintf(stderr, "xshim: ShmPutImage drawable "
+					"0x%x %s, seg 0x%x %s\n", did,
+					d ? "ok" : "NOT FOUND", seg,
+					sg ? "ok" : "NOT FOUND");
+			break;
+		}
+		nshmput++;
+		db = d->buf ? d->buf : d;
+		bpp = db->bpp ? db->bpp : 2;
+		/*
+		 * Rows in a ZPixmap are padded to the scanline pad we
+		 * advertise in the connection setup - 32 bits - exactly as the
+		 * ordinary PutImage path computes it. It happens to be a no-op
+		 * at 320 and 640 wide, which is precisely why getting it wrong
+		 * here would sit undetected until some client picked an odd
+		 * width and sheared.
+		 */
+		sstride = ((int)tw * bpp + 3) & ~3;
+		need = (size_t)sstride * th;
+		if (off + need > sg->len)
+			break;			/* would read off the end */
+
+		/*
+		 * ADOPT, when the incoming image exactly fills the BUFFER this
+		 * drawable draws into. The buffer is the thing the compositor
+		 * presents, so that is the thing worth pointing at the
+		 * client's memory.
+		 *
+		 * Note it is the buffer, not the drawable. Requiring the
+		 * drawable to own its own pixels sounds like the same test and
+		 * is not: SDL draws into a CHILD of the window it asked the
+		 * window manager for, and a child is a clipped view into its
+		 * top-level's buffer here. Every other term matched and this
+		 * one silently declined every frame - so the test is that our
+		 * origin in that buffer is (0,0) and we fill it.
+		 */
+		if (d->type == R_WINDOW && db && off == 0 && !sg->ro &&
+		    sstride == db->w * bpp &&	/* rows are packed */
+		    d->ax == 0 && d->ay == 0 &&
+		    d->w == db->w && d->h == db->h &&
+		    tw == db->w && th == db->h && sx == 0 && sy == 0 &&
+		    sw == db->w && sh == db->h && dx == 0 && dy == 0) {
+			if (!db->px_adopted) {
+				px_release(db);
+				db->px = (uint16_t *)sg->addr;
+				db->px_adopted = 1;
+				db->shm_fd = -1;
+				fprintf(stderr, "xshim: MIT-SHM buffer 0x%x "
+					"%dx%d adopted seg 0x%x for drawable "
+					"0x%x - no copy per frame\n",
+					db->id, db->w, db->h, seg, did);
+			}
+		} else if (d->buf && d->buf->px) {
+			/* Partial or mismatched: copy the rectangle. */
+			static int said;
+
+			if (!said++)
+				fprintf(stderr, "xshim: MIT-SHM 0x%x NOT "
+					"adopted: type=%d owner=%s off=%u ro=%d "
+					"stride=%d/%d img=%dx%d win=%dx%d "
+					"buf=%dx%d at=%d,%d "
+					"src=%d,%d %dx%d dst=%d,%d\n",
+					did, d->type,
+					d->buf == d ? "self" : "other", off,
+					sg->ro, sstride, db->w * bpp, tw, th,
+					d->w, d->h, db->w, db->h, d->ax, d->ay,
+					sx, sy, sw, sh, dx, dy);
+			const uint8_t *src = (const uint8_t *)sg->addr + off;
+			int y;
+
+			for (y = 0; y < sh; y++) {
+				int ty = dy + y;
+				const uint8_t *sp;
+				uint8_t *dp;
+
+				if (ty < 0 || ty >= d->buf->h)
+					continue;
+				sp = src + (size_t)(sy + y) * sstride +
+				     (size_t)sx * bpp;
+				dp = (uint8_t *)d->buf->px +
+				     (size_t)ty * d->buf->w * bpp +
+				     (size_t)dx * bpp;
+				memcpy(dp, sp, (size_t)sw * bpp);
+			}
+		}
+		d->dirty = 1;
+		if (d->buf)
+			d->buf->dirty = 1;
+		d->hole = 0;
+		notify_draw(d);
+		break;
+	}
+	case 6: {				/* ShmAttachFd (1.2) */
+		/*
+		 * xShmAttachFdReq: shmseg at 4, readOnly at 8. The fd itself
+		 * is NOT in the request - it came over SCM_RIGHTS and is
+		 * waiting in the client's queue.
+		 */
+		uint32_t seg = get32(r + 4);
+		int ro = r[8] ? 1 : 0;
+		int fd, i;
+		void *a;
+		off_t len;
+
+		if (c->nrfd < 1) {
+			fprintf(stderr, "xshim: ShmAttachFd with no fd\n");
+			send_error(c, X_BAD_VALUE, seg, MITSHM_MAJOR);
+			break;
+		}
+		fd = c->rfd[0];			/* consumed in order */
+		memmove(c->rfd, c->rfd + 1, --c->nrfd * sizeof c->rfd[0]);
+
+		for (i = 0; i < MAXSHMSEG; i++)
+			if (!shmsegs[i].addr)
+				break;
+		if (i == MAXSHMSEG) {
+			close(fd);
+			send_error(c, X_BAD_ALLOC, seg, MITSHM_MAJOR);
+			break;
+		}
+		/*
+		 * The client does not tell us how big it is, so ask the fd.
+		 * A zero-length or unseekable fd would otherwise become a
+		 * zero-length mapping that every later bounds check passes by
+		 * refusing to draw.
+		 */
+		len = lseek(fd, 0, SEEK_END);
+		if (len <= 0) {
+			fprintf(stderr, "xshim: ShmAttachFd fd has no size\n");
+			close(fd);
+			send_error(c, X_BAD_VALUE, seg, MITSHM_MAJOR);
+			break;
+		}
+		a = mmap(NULL, (size_t)len, ro ? PROT_READ :
+			 (PROT_READ | PROT_WRITE), MAP_SHARED, fd, 0);
+		close(fd);			/* the mapping holds the file */
+		if (a == MAP_FAILED) {
+			fprintf(stderr, "xshim: ShmAttachFd mmap: %s\n",
+				strerror(errno));
+			send_error(c, X_BAD_ALLOC, seg, MITSHM_MAJOR);
+			break;
+		}
+		shmsegs[i].id = seg;
+		shmsegs[i].shmid = -1;
+		shmsegs[i].addr = a;
+		shmsegs[i].len = (size_t)len;
+		shmsegs[i].ro = ro;
+		shmsegs[i].is_fd = 1;
+		shmsegs[i].owner = (int)(c - cli);
+		fprintf(stderr, "xshim: MIT-SHM attachfd seg 0x%x "
+			"(%zu bytes%s)\n", seg, shmsegs[i].len,
+			ro ? ", read-only" : "");
+		break;
+	}
+	case 7: {				/* ShmCreateSegment (1.2) */
+		/*
+		 * The server allocates and hands BACK an fd. memfd is the
+		 * right primitive: it is anonymous, it needs no filesystem
+		 * (this root is a read-only overlay), and its lifetime is the
+		 * descriptor's - so a client that dies never strands a named
+		 * object the way SysV shm does.
+		 */
+		uint32_t seg = get32(r + 4);
+		uint32_t size = get32(r + 8);
+		int ro = r[12] ? 1 : 0;
+		uint8_t d24[24];
+		int fd, i;
+		void *a;
+
+		memset(d24, 0, sizeof d24);
+		for (i = 0; i < MAXSHMSEG; i++)
+			if (!shmsegs[i].addr)
+				break;
+		/*
+		 * Cap it. This is a request to allocate on a board with 15.4
+		 * MB of RAM, made by a client that picked the number - an
+		 * unbounded one is a denial of service with a single request.
+		 */
+		if (i == MAXSHMSEG || !size || size > 8u * 1024 * 1024) {
+			send_error(c, X_BAD_ALLOC, seg, MITSHM_MAJOR);
+			break;
+		}
+		fd = memfd_create("xshim-shm", 0);
+		if (fd < 0 || ftruncate(fd, (off_t)size) < 0) {
+			fprintf(stderr, "xshim: ShmCreateSegment %u: %s\n",
+				size, strerror(errno));
+			if (fd >= 0)
+				close(fd);
+			send_error(c, X_BAD_ALLOC, seg, MITSHM_MAJOR);
+			break;
+		}
+		a = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+		if (a == MAP_FAILED) {
+			close(fd);
+			send_error(c, X_BAD_ALLOC, seg, MITSHM_MAJOR);
+			break;
+		}
+		shmsegs[i].id = seg;
+		shmsegs[i].shmid = -1;
+		shmsegs[i].addr = a;
+		shmsegs[i].len = size;
+		shmsegs[i].ro = ro;
+		shmsegs[i].is_fd = 1;
+		shmsegs[i].owner = (int)(c - cli);
+		fprintf(stderr, "xshim: MIT-SHM createsegment seg 0x%x "
+			"(%u bytes)\n", seg, size);
+		/*
+		 * nfd = 1 rides in the reply's detail byte, and the fd itself
+		 * goes as ancillary data on this very reply - which is why
+		 * send_reply_fd() flushes the output buffer first.
+		 */
+		send_reply_fd_detail(c, 1, d24, fd);
+		close(fd);
+		break;
+	}
+	default:
+		/*
+		 * Say so. A silently dropped request is the worst answer here:
+		 * ShmCreateSegment (7) and ShmGetImage (4) both expect a
+		 * REPLY, so ignoring one hangs the client on a read that will
+		 * never complete, and it hangs there looking like our
+		 * compositor has died rather than like a request we declined.
+		 * An error unwinds it in the client's own error handler.
+		 */
+		fprintf(stderr, "xshim: MIT-SHM minor op %u not implemented\n",
+			op);
+		send_error(c, X_BAD_IMPLEMENTATION, 0, MITSHM_MAJOR);
+		break;
+	}
+}
+
 static void xshm_request(struct cli *c, const uint8_t *r, int len)
 {
 	uint8_t d24[24];
@@ -4376,6 +4854,10 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		 * request is answered "not implemented" while the client waits
 		 * for a reply that never comes.
 		 */
+		if (op == MITSHM_MAJOR) {
+			mitshm_request(c, r, len);
+			return;
+		}
 		if (op == XSHM_MAJOR) {
 			xshm_request(c, r, len);
 			return;
@@ -4417,6 +4899,20 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 			d24[1] = XSHM_MAJOR;
 			d24[2] = 0;
 			d24[3] = 0;
+		}
+		/*
+		 * MIT-SHM. SDL probes for this by name and takes a completely
+		 * different, copy-free path when it is present - see
+		 * try_mitshm() in SDL's SDL_x11image.c. Answering it is what
+		 * removes a full-frame memcpy from every SDL client.
+		 */
+		if (n == 7 && !memcmp(r + 8, "MIT-SHM", 7)) {
+			d24[0] = 1;
+			d24[1] = MITSHM_MAJOR;
+			d24[2] = 0;		/* no events: we never
+						 * ShmCompletion, and nothing
+						 * asks us to */
+			d24[3] = MITSHM_ERROR;
 		}
 		send_reply(c, 0, d24, NULL, 0);
 		break;
@@ -6443,6 +6939,17 @@ static void client_drop(struct cli *c, int notify)
 	for (i = 0; i < MAXRES; i++)
 		if (res[i].type != R_FREE && res[i].owner == owner)
 			res_free(res[i].id);
+	/*
+	 * MIT-SHM segments this client attached. ShmDetach is the polite exit
+	 * and SDL does send it, but a client that crashes or is killed does
+	 * not - and each one then leaks a shmat mapping and one of the eight
+	 * slots, so the ninth client to start would silently get no shared
+	 * memory at all. Order matters: res_free() above has already handed
+	 * back any adopted window buffer, so this only unmaps.
+	 */
+	for (i = 0; i < MAXSHMSEG; i++)
+		if (shmsegs[i].addr && shmsegs[i].owner == owner)
+			shmseg_drop(&shmsegs[i]);
 	render_drop_client(owner);
 }
 
@@ -6471,7 +6978,50 @@ static void client_data(struct cli *c)
 		xsp_on = getenv("XSHIM_PROF") != NULL;
 	if (xsp_on)
 		t0 = xsp_now();
-	n = read(c->fd, c->in + c->n, sizeof(c->in) - c->n);
+	{
+		/*
+		 * recvmsg, not read: a client passing an fd (ShmAttachFd,
+		 * ShmCreateSegment) sends it as ancillary data alongside the
+		 * request bytes, and a plain read() silently DISCARDS it -
+		 * the request then arrives looking perfectly well formed with
+		 * no fd behind it.
+		 */
+		struct msghdr m;
+		struct iovec io;
+		union {
+			struct cmsghdr align;
+			char buf[CMSG_SPACE(sizeof(int) * 8)];
+		} cm;
+		struct cmsghdr *cs;
+
+		io.iov_base = c->in + c->n;
+		io.iov_len = sizeof(c->in) - c->n;
+		memset(&m, 0, sizeof m);
+		m.msg_iov = &io;
+		m.msg_iovlen = 1;
+		m.msg_control = cm.buf;
+		m.msg_controllen = sizeof cm.buf;
+		n = recvmsg(c->fd, &m, 0);
+		for (cs = CMSG_FIRSTHDR(&m); cs; cs = CMSG_NXTHDR(&m, cs)) {
+			int k, cnt;
+
+			if (cs->cmsg_level != SOL_SOCKET ||
+			    cs->cmsg_type != SCM_RIGHTS)
+				continue;
+			cnt = (cs->cmsg_len - CMSG_LEN(0)) / sizeof(int);
+			for (k = 0; k < cnt; k++) {
+				int got;
+
+				memcpy(&got, CMSG_DATA(cs) + k * sizeof(int),
+				       sizeof got);
+				if (c->nrfd < (int)(sizeof(c->rfd) /
+						    sizeof(c->rfd[0])))
+					c->rfd[c->nrfd++] = got;
+				else
+					close(got);	/* never leak one */
+			}
+		}
+	}
 	if (xsp_on) {
 		uint64_t t1 = xsp_now();
 

@@ -86,6 +86,7 @@ struct xdpy {
 	 */
 	XID next_id, id_base, id_mask;
 
+
 	unsigned char *in;		/* bytes read but not yet consumed */
 	size_t inlen, incap;
 	char *out;			/* request buffer; pub.buffer points here */
@@ -137,3 +138,6 @@ int xlite_send(struct xdpy *x, const unsigned char *r);
 void xlite_shm_forget(Display *dpy, Drawable d);
 
 #endif /* XLITE_H */
+
+/* An XID from this display's range. See xlite.c. */
+XID xlite_alloc_id(Display *d);

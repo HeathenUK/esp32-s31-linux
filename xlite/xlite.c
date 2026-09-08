@@ -492,6 +492,14 @@ static XID alloc_id(Display *d)
 	return x->id_base | ((x->next_id++) & x->id_mask);
 }
 
+/* Same allocator, reachable from xlite_req.c - MIT-SHM needs an XID for each
+ * segment it attaches, and the shm code lives over there with the rest of the
+ * shared-memory machinery. */
+XID xlite_alloc_id(Display *d)
+{
+	return alloc_id(d);
+}
+
 XLITE_IMPL(XOpenDisplay)
 Display *XOpenDisplay(const char *name)
 {

@@ -396,7 +396,8 @@ linux: toolchain | $(LINUX_OUT)
 		--disable PREEMPT_VOLUNTARY \
 		--enable PREEMPT_NONE \
 		--enable DRM_FBDEV_EMULATION \
-		--disable IPV6
+		--disable IPV6 \
+		--enable SYSVIPC
 	$(MAKE) -C $(LINUX_DIR) O=$(LINUX_OUT) ARCH=riscv CROSS_COMPILE="$(CROSS_COMPILE)" olddefconfig
 	$(MAKE) -C $(LINUX_DIR) O=$(LINUX_OUT) ARCH=riscv CROSS_COMPILE="$(CROSS_COMPILE)" \
 		KCFLAGS="-march=$(S31_SAFE_ISA) $(S31_COMMON_FLAGS)" -j$(JOBS) $(LINUX_TARGET) dtbs

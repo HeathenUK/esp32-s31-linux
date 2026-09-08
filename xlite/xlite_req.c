@@ -2240,6 +2240,172 @@ XStandardColormap *XAllocStandardColormap(void)
  * Falls back silently: XliteShmMap() returns NULL against a server that does
  * not advertise the extension, and every caller keeps its drawing path.
  */
+/*
+ * MIT-SHM, client side.
+ *
+ * XLITE-SHM (below) is ours, so only we ever use it - which means an
+ * off-the-shelf client never learns that a window's pixels are shareable. SDL
+ * renders into a buffer it malloc'd and pushes whole frames through
+ * XPutImage, and XPutImage then memcpys them into the window: 64 kB in and
+ * 64 kB out per frame at 320x200, four times that at 640x400. That copy is
+ * pure overhead and it exists only because SDL could not ask.
+ *
+ * MIT-SHM is the extension it DOES know how to ask for. SDL probes for these
+ * five symbols by dlsym (SDL_x11sym.h), and takes its copy-free path if they
+ * are all present. Nothing about SDL changes; it simply stops being lied to.
+ *
+ * The struct layout is fixed by the real XShm.h - SDL was compiled against it
+ * and hands us a pointer - so it must match exactly:
+ *
+ *     ShmSeg shmseg;  int shmid;  char *shmaddr;  Bool readOnly;
+ */
+typedef unsigned long XliteShmSeg;
+typedef struct {
+	XliteShmSeg shmseg;
+	int shmid;
+	char *shmaddr;
+	int readOnly;
+} XliteShmSegmentInfo;
+
+static int mitshm_major(Display *dpy)
+{
+	static int major = -1;
+	int ev, er;
+
+	if (major < 0) {
+		/* XLITE_NOMITSHM forces clients back onto XPutImage, so the
+		 * two paths can be compared on one board without relinking. */
+		if (getenv("XLITE_NOMITSHM") ||
+		    !XQueryExtension(dpy, "MIT-SHM", &major, &ev, &er))
+			major = 0;
+	}
+	return major;
+}
+
+XLITE_IMPL(XShmQueryExtension)
+Bool XShmQueryExtension(Display *dpy)
+{
+	return mitshm_major(dpy) ? True : False;
+}
+
+XLITE_IMPL(XShmAttach)
+Status XShmAttach(Display *dpy, XliteShmSegmentInfo *si)
+{
+	int major = mitshm_major(dpy);
+
+	if (!major || !si)
+		return 0;
+	si->shmseg = xlite_alloc_id(dpy);
+	{
+		REQ(dpy, major, 1, 4);		/* ShmAttach */
+
+		if (!r)
+			return 0;
+		p32(r + 4, (uint32_t)si->shmseg);
+		p32(r + 8, (uint32_t)si->shmid);
+		r[12] = si->readOnly ? 1 : 0;
+		xlite_send(x, r);
+	}
+	/*
+	 * Flush and sync. The server must have attached before the client
+	 * puts anything, and SDL's try_mitshm() decides whether the path
+	 * works from the X error handler firing during its XSync - so an
+	 * attach that is still sitting in the output buffer reads as success
+	 * and the first ShmPutImage then fails against an unknown segment.
+	 */
+	XSync(dpy, False);
+	return 1;
+}
+
+XLITE_IMPL(XShmDetach)
+Status XShmDetach(Display *dpy, XliteShmSegmentInfo *si)
+{
+	int major = mitshm_major(dpy);
+
+	if (!major || !si)
+		return 0;
+	{
+		REQ(dpy, major, 2, 2);		/* ShmDetach */
+
+		if (!r)
+			return 0;
+		p32(r + 4, (uint32_t)si->shmseg);
+		xlite_send(x, r);
+	}
+	XFlush(dpy);
+	return 1;
+}
+
+XLITE_IMPL(XShmCreateImage)
+XImage *XShmCreateImage(Display *dpy, Visual *vis, unsigned int depth,
+			int format, char *data, XliteShmSegmentInfo *si,
+			unsigned int width, unsigned int height)
+{
+	XImage *im;
+
+	(void)si;
+	/*
+	 * A plain XImage over the client's own memory. XCreateImage already
+	 * fills in the depth-appropriate masks and bits_per_pixel from the
+	 * server's format list, and the shared segment differs only in who
+	 * allocated it.
+	 */
+	im = XCreateImage(dpy, vis, depth, format, 0, data,
+			  width, height, 32, 0);
+	/*
+	 * Real Xlib hangs the segment info off the image here, and
+	 * XShmPutImage reads it back from there - it has no shminfo argument
+	 * of its own. Anything that copies the image without obdata would
+	 * lose the association, which is exactly why Xlib puts it on the
+	 * object rather than in a side table.
+	 */
+	if (im)
+		im->obdata = (XPointer)si;
+	return im;
+}
+
+XLITE_IMPL(XShmPutImage)
+Status XShmPutImage(Display *dpy, Drawable d, GC gc, XImage *im,
+		    int src_x, int src_y, int dst_x, int dst_y,
+		    unsigned int w, unsigned int h, Bool send_event)
+{
+	int major = mitshm_major(dpy);
+	XliteShmSegmentInfo *si;
+
+	(void)gc; (void)send_event;
+	if (!major || !im)
+		return 0;
+	si = (XliteShmSegmentInfo *)im->obdata;
+	if (!si)
+		return 0;		/* not a shared image after all */
+	{
+		REQ(dpy, major, 3, 10);		/* ShmPutImage */
+
+		if (!r)
+			return 0;
+		/* xShmPutImageReq (shmproto.h) - the offsets are the ABI. */
+		p32(r + 4, (uint32_t)d);
+		p32(r + 8, (uint32_t)XGContextFromGC(gc));
+		p16(r + 12, im->width);		/* totalWidth  */
+		p16(r + 14, im->height);	/* totalHeight */
+		p16(r + 16, src_x);
+		p16(r + 18, src_y);
+		p16(r + 20, w);			/* srcWidth  */
+		p16(r + 22, h);			/* srcHeight */
+		p16(r + 24, dst_x);
+		p16(r + 26, dst_y);
+		r[28] = (uint8_t)im->depth;
+		r[29] = (uint8_t)(im->format == XYPixmap ? 1 : 2);
+		r[30] = 0;			/* sendEvent: no completion */
+		r[31] = 0;
+		p32(r + 32, (uint32_t)si->shmseg);
+		p32(r + 36, 0);			/* offset into the segment */
+		xlite_send(x, r);
+	}
+	XFlush(dpy);
+	return 1;
+}
+
 static int xshm_major(Display *dpy)
 {
 	static int major = -1;
