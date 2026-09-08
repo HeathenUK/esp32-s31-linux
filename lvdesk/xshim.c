@@ -136,6 +136,13 @@ struct res {
 	 */
 	uint8_t dmg_valid;
 	int dmg_x0, dmg_y0, dmg_x1, dmg_y1;
+	/*
+	 * One hash per row of this buffer, from the last image put into it.
+	 * A client that hands us a whole window every frame (SDL does) tells
+	 * us nothing about what actually changed; this recovers it.
+	 */
+	uint32_t *rowhash;
+	int rowhash_h;
 	int ax, ay;			/* our origin within that buffer */
 	int cx0, cy0, cx1, cy1;		/* clip, in that buffer's coords */
 	/*
@@ -301,7 +308,22 @@ static int px_share(struct res *r);
 
 static unsigned long rf_calls, rf_steps;
 static unsigned long nreplies, nreqs;
-static unsigned long nshmput;	/* MIT-SHM ShmPutImage requests served */
+/*
+ * XSHIM_NOROWDMG=1 falls back to copying and damaging the whole rectangle,
+ * so the two can be compared on one boot without a reflash.
+ */
+static int rowdmg_on(void)
+{
+	static int v = -1;
+
+	if (v < 0)
+		v = getenv("XSHIM_NOROWDMG") == NULL;
+	return v;
+}
+
+static unsigned long nshmput;
+/* Frames whose every row hashed identical - nothing presented at all. */
+static unsigned long nrow_skip;	/* MIT-SHM ShmPutImage requests served */
 
 /*
  * A one-entry-per-bucket index over the resource table.
@@ -787,6 +809,9 @@ static void px_release(struct res *r)
 	}
 	free(r->shadow);
 	r->shadow = NULL;
+	free(r->rowhash);
+	r->rowhash = NULL;
+	r->rowhash_h = 0;
 	/*
 	 * GEM FIRST. This test used to be `shm_fd >= 0`, which decides between
 	 * munmap and free - and a GEM surface that has not been SHARED yet has
@@ -840,7 +865,8 @@ void xshim_mem_report(void)
 		"%lu requests, %lu replies (%lu%% are round trips)\n",
 		rf_calls, rf_steps, rf_calls ? rf_steps / rf_calls : 0,
 		nreqs, nreplies, nreqs ? nreplies * 100 / nreqs : 0);
-	fprintf(stderr, "xshim: %lu MIT-SHM ShmPutImage\n", nshmput);
+	fprintf(stderr, "xshim: %lu MIT-SHM ShmPutImage, %lu identical "
+		"(no rows changed)\n", nshmput, nrow_skip);
 	size_t d1 = 0, empty = 0;
 
 	fprintf(stderr, "xshim: %d window buffers %zu kB, %d pixmaps %zu kB, "
@@ -4473,21 +4499,128 @@ static void mitshm_request(struct cli *c, const uint8_t *r, int len)
 		 */
 		if (d->buf && d->buf->px) {
 			const uint8_t *src = (const uint8_t *)sg->addr + off;
-			int y;
+			struct res *b = d->buf;
+			int y, cy0 = -1, cy1 = -1;
+
+			/*
+			 * COPY AND HASH IN ONE PASS, and damage only the rows
+			 * that actually changed.
+			 *
+			 * SDL hands us the whole window every frame regardless
+			 * of what moved, so without this the desktop expands
+			 * and then copies 200 rows when perhaps 168 of them
+			 * differ. Doom's status bar is the bottom sixth and is
+			 * static most of the time; a terminal with a blinking
+			 * cursor is static almost everywhere.
+			 *
+			 * Comparing source against destination would be the
+			 * obvious way and is the WRONG one: it reads the
+			 * destination too, and on a path that is memory-bound
+			 * at ~38 MB/s that extra 64 kB of reads costs more
+			 * than the rows it saves. Hashing costs ALU on words
+			 * we are already loading to copy, and ALU is close to
+			 * free while we are waiting on memory.
+			 *
+			 * 32-bit FNV-1a, and the width is the whole point.
+			 * The first version used the 64-bit constants, which
+			 * this 32-bit core has to synthesise from several
+			 * multiplies and adds - 16,000 times a frame. It cost
+			 * more than it saved: 29.7 fps against 30.5. A 32-bit
+			 * multiply is one instruction.
+			 *
+			 * A collision leaves one row stale until it next
+			 * changes. At 2^-32 per row and ~6000 rows/s that is
+			 * one event per several days, which is the right trade
+			 * for one native multiply per four bytes.
+			 */
+			if (!rowdmg_on()) {
+				b->rowhash_h = 0;
+			} else if (b->rowhash_h != b->h) {
+				free(b->rowhash);
+				b->rowhash = calloc((size_t)(b->h > 0 ? b->h : 1),
+						    sizeof *b->rowhash);
+				b->rowhash_h = b->rowhash ? b->h : 0;
+			}
 
 			for (y = 0; y < sh; y++) {
 				int ty = dy + y;
 				const uint8_t *sp;
 				uint8_t *dp;
+				size_t n, k;
+				uint32_t hv = 2166136261u;
+				int changed = 1;
 
-				if (ty < 0 || ty >= d->buf->h)
+				if (ty < 0 || ty >= b->h)
 					continue;
 				sp = src + (size_t)(sy + y) * sstride +
 				     (size_t)sx * bpp;
-				dp = (uint8_t *)d->buf->px +
-				     (size_t)ty * d->buf->w * bpp +
+				dp = (uint8_t *)b->px +
+				     (size_t)ty * b->w * bpp +
 				     (size_t)dx * bpp;
-				memcpy(dp, sp, (size_t)sw * bpp);
+				n = (size_t)sw * bpp;
+
+				if (!b->rowhash || !rowdmg_on()) {
+					memcpy(dp, sp, n);
+					if (cy0 < 0)
+						cy0 = y;
+					cy1 = y;
+					continue;
+				}
+				/*
+				 * Word at a time where alignment allows, so
+				 * the hash costs one multiply per 4 bytes
+				 * rather than per byte.
+				 */
+				if ((((uintptr_t)sp | (uintptr_t)dp) & 3u) == 0) {
+					const uint32_t *s4 = (const uint32_t *)sp;
+					uint32_t *d4 = (uint32_t *)dp;
+					size_t w = n / 4;
+
+					for (k = 0; k < w; k++) {
+						uint32_t v = s4[k];
+
+						hv = (hv ^ v) * 16777619u;
+						d4[k] = v;
+					}
+					for (k = w * 4; k < n; k++) {
+						hv = (hv ^ sp[k]) * 16777619u;
+						dp[k] = sp[k];
+					}
+				} else {
+					for (k = 0; k < n; k++) {
+						hv = (hv ^ sp[k]) * 16777619u;
+						dp[k] = sp[k];
+					}
+				}
+				changed = b->rowhash[ty] != hv;
+				b->rowhash[ty] = hv;
+				if (changed) {
+					if (cy0 < 0)
+						cy0 = y;
+					cy1 = y;
+				}
+			}
+			/*
+			 * Damage in DRAWABLE coordinates - damage_add()
+			 * translates to the buffer owner itself. Nothing
+			 * changed means nothing to report, and the desktop
+			 * then does no expansion and no scanout copy at all.
+			 */
+			if (cy0 >= 0) {
+				damage_add(d, dx, dy + cy0, sw,
+					   cy1 - cy0 + 1);
+			} else {
+				/*
+				 * Not one row differs, so there is nothing to
+				 * show. Return WITHOUT marking dirty or
+				 * notifying: the desktop's fallback for "no
+				 * damage recorded" is to invalidate the whole
+				 * window, so reporting an empty change here
+				 * would trigger a full repaint - precisely the
+				 * opposite of the point.
+				 */
+				nrow_skip++;
+				break;
 			}
 		}
 		d->dirty = 1;

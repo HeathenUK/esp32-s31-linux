@@ -532,6 +532,52 @@ painting *into the driver's permanent buffer*, never the driver pointing at
 lvdesk's - and the cursor then needs its own 64x64 backing store, because it
 loses the plane framebuffer as a clean restore source. It is not worth 2%.
 
+## Per-row change detection: neutral for Doom, 23% off a static client (2026-09-08)
+
+SDL hands us the whole window every frame regardless of what moved, so the
+desktop was expanding and copying 200 rows when far fewer differed. xshim now
+**copies and hashes in one pass** and damages only the rows that changed.
+
+**Why hashing rather than comparing.** Comparing source against destination is
+the obvious approach and is wrong here: it reads the destination too, and on a
+path that is memory-bound at ~38 MB/s that extra 64 kB of reads costs more than
+the rows it saves. Hashing costs ALU on words already being loaded for the
+copy.
+
+**The width of the hash mattered more than the idea.** The first version used
+64-bit FNV-1a, which this 32-bit core synthesises from several multiplies -
+16,000 times a frame - and it LOST: 29.7 fps against a 30.5 baseline. With
+32-bit FNV-1a (one native multiply per word) it is neutral. "ALU is free while
+waiting on memory" is only true if the ALU op is actually one instruction.
+
+| | fps (warm, matched arms, one binary) |
+|---|---|
+| rowdmg on | 30.0 |
+| rowdmg off | 29.7 |
+
+Neutral for Doom, and that is expected: a 3D view changes nearly every row of
+every frame, so there is almost nothing to skip.
+
+**The win is elsewhere, and it is real.** Doom's title screen - SDL still
+pushing frames, pixels barely changing - lvdesk CPU over a 25 s window:
+
+| | lvdesk ticks / total | share of machine |
+|---|---|---|
+| rowdmg on | 102 / 1768 | **5.8%** |
+| rowdmg off | 133 / 1799 | 7.4% |
+
+**23% less compositor CPU on a near-static client.** That is the case this is
+for: a terminal moving one character cell, a clock ticking, any client that
+redraws itself wholesale while changing little.
+
+An all-identical frame now returns without marking dirty or notifying at all.
+That detail is load-bearing: the desktop's fallback for "no damage recorded" is
+to invalidate the WHOLE window, so reporting an empty change would have forced
+a full repaint - strictly worse than before the change.
+
+`XSHIM_NOROWDMG=1` disables it at runtime, so the comparison never needs a
+reflash.
+
 ## The 11% is not recoverable, and PPA CLUT loses to the CPU (2026-09-08)
 
 After adoption was removed as illegal (below), the question was whether the
