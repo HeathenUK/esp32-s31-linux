@@ -190,6 +190,48 @@ whether the walk can be skipped for a window whose pixels we supply ourselves.
 That needs a lighter instrument than LVGL's profiler, which distorts the
 measurement by ~2x.
 
+## Baseline after 2026-09-08, and what the frame is made of
+
+Verified on a freshly built and flashed image, `gdma_copy=N` compiled in,
+clock-settled, board otherwise untouched during the run:
+
+	Timed 5026 gametics in 5455 realtics = 32.2 frames per second
+	LVPROF 3800 frames: flush 12961 us, expand 4912 us, DIRTYFB 7830 us
+
+**320x200 prboom: 29.4 -> 32.2 fps across the day (+9.5%)**, from MIT-SHM
+(+7%) and turning off the GDMA damage-copy path (DIRTYFB 10.5 -> 7.8 ms).
+
+Where the machine goes during that run - the accounting now closes to within a
+point:
+
+| | share of machine |
+|---|---|
+| prboom | 53.7% |
+| lvdesk: flush path | ~19% |
+| lvdesk: LVGL non-flush (object walk) | ~12% |
+| lvdesk: xshim protocol | ~12% |
+| everything else | 3.9% |
+
+The two candidates worth attacking next are **the same size**, and the cheaper
+one is not the one that looks impressive:
+
+- **LVGL's object walk, 8.8 ms/frame (~12%).** ~4 `lv_obj_redraw` and ~7 draw
+  events per frame, for a window whose pixels we supply ourselves. A duplicate
+  image blit and a background fill under the window were both ruled out by
+  measurement. No structural risk - it is code we own, with no buffer
+  lifetime, no cursor invariant and no `-ENXIO`.
+- **The DIRTYFB copy, 4-6.5 ms/frame (~10%).** Real driver surgery; see
+  docs/scanout-direct-plan.md.
+
+xshim's ~12% is largely not ours: two socket syscalls per frame at the board's
+known structural cost, driven by SDL issuing a `GetInputFocus` round trip every
+frame as its XSync. Replies are already batched.
+
+**These two plans interact.** The scanout plan's Stage 1 sidesteps the cursor
+problem by falling back to lvdesk's LVGL cursor - which adds work to the very
+LVGL path that is costing 12%. Understand the walk before committing to that
+staging.
+
 ## The palette expansion is memory-bound, and MIT-SHM forecloses the PPA (2026-09-08)
 
 The expansion is the largest per-frame cost left that we control: ~5.0 ms of a
