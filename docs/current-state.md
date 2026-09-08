@@ -532,6 +532,46 @@ painting *into the driver's permanent buffer*, never the driver pointing at
 lvdesk's - and the cursor then needs its own 64x64 backing store, because it
 loses the plane framebuffer as a clean restore source. It is not worth 2%.
 
+## ADOPTION WAS A BUG: it flickered, and the +7%/+11% was not real (2026-09-08)
+
+The MIT-SHM entry below describes ADOPTING the client's segment as the window's
+pixel storage. **That has been removed.** It is not a legal implementation of
+ShmPutImage and it produced visible flicker.
+
+**Why it is illegal.** The protocol's contract is that the server CONSUMES the
+segment while handling the request. That is precisely why a client may pass
+`send_event=False` and reuse its buffer as soon as the request is processed,
+which is what SDL does. Adoption pointed the window at the client's live
+buffer, so prboom rendered its next frame into pixels we had not drawn yet.
+
+**Why every instrument missed it.** Frame rate cannot see a torn frame. CPU
+accounting cannot. A still screenshot structurally cannot - it catches one
+instant and says nothing about the one either side - so every "painting
+verified" capture passed, repeatedly. It took a person watching the panel.
+Doom draws the weapon sprite LAST, so a mid-render read yields a complete
+scene with the shotgun missing: the sprite flickers while the walls do not.
+**A still image is not evidence about a race. Record motion, or have someone
+watch.**
+
+**The measured cost of correctness**, same binary, same board:
+
+| arm | fps | flicker |
+|---|---|---|
+| MIT-SHM, adopted | 31.7 | **yes** |
+| MIT-SHM, copying (now) | 29.4 | no |
+| MIT-SHM off entirely | 28.6 | no |
+
+So MIT-SHM done legally is worth **~3%**, not the 7-11% recorded below. The
+larger figure was substantially buying a broken frame. I predicted before
+measuring that "most of the win survives the copy" on the grounds that the
+socket transfer was the expensive part; that was wrong by a factor of three -
+the win was the zero copy, not the absent socket traffic.
+
+The extension itself stays: it is correct, standard, and the right thing for
+any client to find. Only the adoption is gone. The `px_adopted` machinery in
+`px_release()` and `shmseg_drop()` is deliberately left in place - it now never
+triggers, but it documents the hazard and would catch a re-introduction.
+
 ## MIT-SHM: real, standard, and worth +7% to Doom (2026-09-08)
 
 xshim speaks **MIT-SHM 1.2** (major opcode 202), alongside the private

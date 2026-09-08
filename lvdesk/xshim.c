@@ -4444,50 +4444,34 @@ static void mitshm_request(struct cli *c, const uint8_t *r, int len)
 			break;			/* would read off the end */
 
 		/*
-		 * ADOPT, when the incoming image exactly fills the BUFFER this
-		 * drawable draws into. The buffer is the thing the compositor
-		 * presents, so that is the thing worth pointing at the
-		 * client's memory.
+		 * COPY. Always. Do not adopt the client's segment.
 		 *
-		 * Note it is the buffer, not the drawable. Requiring the
-		 * drawable to own its own pixels sounds like the same test and
-		 * is not: SDL draws into a CHILD of the window it asked the
-		 * window manager for, and a child is a clipped view into its
-		 * top-level's buffer here. Every other term matched and this
-		 * one silently declined every frame - so the test is that our
-		 * origin in that buffer is (0,0) and we fill it.
+		 * Pointing the window's pixels at the segment removed a
+		 * 64 kB copy per frame and was worth ~11% - and it is not a
+		 * legal implementation of this request. The protocol's
+		 * contract is that the server CONSUMES the segment while
+		 * handling ShmPutImage: that is exactly why a client may pass
+		 * send_event=False and reuse its buffer the moment the request
+		 * is processed, as SDL does. Adopting left prboom rendering
+		 * its next frame into the pixels we had not drawn yet.
+		 *
+		 * The symptom is worth recording because no instrument here
+		 * could see it. Frame rate cannot. CPU accounting cannot. A
+		 * still screenshot structurally cannot - it catches one
+		 * instant and says nothing about the one either side, so every
+		 * "painting verified" capture passed. It took a person
+		 * watching the panel: Doom draws the weapon sprite LAST, so a
+		 * mid-render read yields a complete scene with the shotgun
+		 * missing, and the sprite flickers.
+		 *
+		 * The copy is not where the win came from anyway. Without
+		 * MIT-SHM, SDL pushes 64,000 bytes through the SOCKET every
+		 * frame, and a socket syscall costs ~350 us on this board
+		 * (docs/current-state.md). With MIT-SHM the pixels never touch
+		 * the socket and this is a plain memcpy out of shared memory,
+		 * which keeps most of the benefit and all of the correctness.
 		 */
-		if (d->type == R_WINDOW && db && off == 0 && !sg->ro &&
-		    sstride == db->w * bpp &&	/* rows are packed */
-		    d->ax == 0 && d->ay == 0 &&
-		    d->w == db->w && d->h == db->h &&
-		    tw == db->w && th == db->h && sx == 0 && sy == 0 &&
-		    sw == db->w && sh == db->h && dx == 0 && dy == 0) {
-			if (!db->px_adopted) {
-				px_release(db);
-				db->px = (uint16_t *)sg->addr;
-				db->px_adopted = 1;
-				db->shm_fd = -1;
-				fprintf(stderr, "xshim: MIT-SHM buffer 0x%x "
-					"%dx%d adopted seg 0x%x for drawable "
-					"0x%x - no copy per frame\n",
-					db->id, db->w, db->h, seg, did);
-			}
-		} else if (d->buf && d->buf->px) {
-			/* Partial or mismatched: copy the rectangle. */
-			static int said;
-
-			if (!said++)
-				fprintf(stderr, "xshim: MIT-SHM 0x%x NOT "
-					"adopted: type=%d owner=%s off=%u ro=%d "
-					"stride=%d/%d img=%dx%d win=%dx%d "
-					"buf=%dx%d at=%d,%d "
-					"src=%d,%d %dx%d dst=%d,%d\n",
-					did, d->type,
-					d->buf == d ? "self" : "other", off,
-					sg->ro, sstride, db->w * bpp, tw, th,
-					d->w, d->h, db->w, db->h, d->ax, d->ay,
-					sx, sy, sw, sh, dx, dy);
+		if (d->buf && d->buf->px) {
 			const uint8_t *src = (const uint8_t *)sg->addr + off;
 			int y;
 
