@@ -4223,10 +4223,30 @@ static void xwin_blit_direct(const lv_area_t *area)
 			 * That looked like 7 points worse. It was not: the
 			 * plain loop below later measured 37%, 38% and 39% on
 			 * the same binary, so 37% is inside ITS OWN spread and
-			 * the comparison was against two lucky samples. The
-			 * idea is untested, not refuted. If retried, measure
-			 * 5+ alternating samples - two agreeing samples have
-			 * now produced three wrong conclusions in one day.
+			 * the comparison was against two lucky samples.
+			 *
+			 * SETTLED 2026-09-08: it makes no difference. Six
+			 * alternating arms, LVPROF expand us/frame (a far
+			 * tighter instrument than the CPU probe - it is stable
+			 * to +/-2%):
+			 *
+			 *     word    5100, 4933, 4791   mean 4941
+			 *     scalar  4952, 5037, 5054   mean 5014
+			 *
+			 * 1.5%, with the ranges almost entirely overlapping.
+			 * A standalone micro-benchmark (rootfs/expbench.c) had
+			 * suggested scalar was 7-10% BETTER; that did not
+			 * reproduce here either - a third instance of two
+			 * agreeing samples pointing the wrong way.
+			 *
+			 * The reason neither wins: the expansion is
+			 * MEMORY-BOUND, not arithmetic-bound. 192,000 bytes a
+			 * frame (64k read, 128k written) in ~5 ms is ~38 MB/s,
+			 * and expbench measures the same loop at the same
+			 * speed into a plain heap buffer as into the KMS dumb
+			 * buffer - so the store width and the destination's
+			 * cacheability are both irrelevant. Do not retry
+			 * either.
 			 */
 			if (wordexp_on()) {
 				/*

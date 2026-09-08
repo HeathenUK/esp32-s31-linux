@@ -118,6 +118,62 @@ reclaimable here.
 
 ---
 
+## The palette expansion is memory-bound, and MIT-SHM forecloses the PPA (2026-09-08)
+
+The expansion is the largest per-frame cost left that we control: ~5.0 ms of a
+31.8 ms frame, after the GDMA fix below took DIRTYFB to 7.8 ms.
+
+**It is memory-bound, and there is no CPU-side win left.** 192,000 bytes a frame
+(64k read, 128k written) in ~5 ms is ~38 MB/s. `rootfs/expbench.c` runs the
+identical loop standalone:
+
+| destination | store width | ns/px |
+|---|---|---|
+| heap | word (2 px/store) | 119 |
+| heap | halfword | 111 |
+| KMS dumb buffer | word | 118 |
+| KMS dumb buffer | halfword | 101 |
+
+Two things follow. The destination barely matters, so **`kms_map` being cached
+is not a cost** - an uncached or write-combined mapping has nothing to win, and
+that idea is closed. And expbench's text is demand-paged into RAM rather than
+executed from XIP flash like lvdesk's, yet it is *slower* per pixel than lvdesk
+(80 ns/px) doing the same work - so **lvdesk's XIP instruction fetch is not the
+cost either**, and that idea is closed too.
+
+Word-vs-halfword was then settled properly on the real system, six alternating
+arms: word 4941 us/frame mean, scalar 5014 - 1.5%, ranges overlapping. expbench
+had suggested scalar was 7-10% better and it did not reproduce. Full numbers in
+the comment above the loop in lvdesk.c.
+
+### MIT-SHM and PPA CLUT are mutually exclusive
+
+The remaining way past a memory-bound loop is to not use the CPU - the PPA CLUT
+path. It declines, and says why:
+
+	PPACLUT declined: window is not GEM-backed (sgem=0 dgem=1 fd=5 ...)
+
+MIT-SHM adoption points the window's pixels at the client's **SysV segment**,
+which is not in the reserved DMA pool the blend engine can address. So a window
+can have the zero-copy client buffer (+7%) or hardware expansion, never both.
+
+The mechanism that would give both is MIT-SHM 1.2's **ShmCreateSegment** backed
+by a GEM buffer from the reserved pool: the server allocates, the client renders
+straight into DMA-addressable memory, and the PPA expands it with the CPU
+touching nothing. We implement that request - but **SDL 1.2 never calls it**. It
+only ever calls XShmAttach, where the client has already allocated. So this is
+real and correct and does nothing for Doom; it would pay off for a client that
+speaks 1.2.
+
+### Correction: lvdesk DOES use the hardware cursor plane
+
+The `defer_copy` comment in esp32s31-lcd.c says lvdesk "draws its pointer in
+LVGL and never uses the DRM cursor plane, so cursor_moves and cursor fb_changes
+both read 0". **That is stale.** This build logs `lvdesk: hardware cursor
+plane`, and `kms_cursor_init()` succeeds. Any scheme that removes the private
+compositing buffer must therefore still give the cursor a backing store of its
+own - it would lose the plane framebuffer as a clean restore source.
+
 ## Where a Doom frame actually goes, and the GDMA copy (2026-09-08)
 
 Three ideas in a row had been argued from tables and two were wrong, so the
