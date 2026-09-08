@@ -118,6 +118,80 @@ reclaimable here.
 
 ---
 
+## Two display-path levers, both measured, both dead (2026-09-08)
+
+Doom sits at ~31.6 fps at 320x200 (see MIT-SHM, below). Two plausible-looking
+causes were measured and both are inside the noise. Recorded here so neither is
+argued for a third time.
+
+### Panel refresh rate is NOT a lever
+
+The panel runs at 59 Hz because `pclk_khz` defaults to 25623 in
+`esp32s31-lcd.c`, not at the 42 Hz the panel advertises. Scanout DMA therefore
+reads the whole 768,000-byte buffer 59 times a second - 45.3 MB/s, continuous,
+against a CPU copy ceiling of 13.6 MB/s. It looked like the display was eating
+the machine's memory bandwidth.
+
+| refresh | scanout DMA | fps |
+|---|---|---|
+| 59/60 Hz | 45.3 MB/s | 31.3, 31.6, 31.8, 31.8, 32.0 |
+| 50 Hz | 38.4 MB/s | 31.3 |
+| 42 Hz | 32.3 MB/s | 32.6 |
+| 35 Hz | 26.9 MB/s | 32.5 |
+
+**A 1.7x swing in scanout bandwidth moves fps less than the spread within one
+setting.** Display-DMA contention is not a constraint, and the wider conclusion
+matters more than the knob: this workload is limited by CPU *cycles*, not by
+memory bandwidth. Any idea whose mechanism is "move fewer bytes per second"
+should be priced against this result before it is built.
+
+`pclk_khz` is writable at runtime (0644) and takes effect on the next modeset,
+so restarting lvdesk is enough to change it - no rebuild, no reboot.
+
+### The per-frame damage copy is NOT a lever either
+
+lvdesk paints into its own buffer; the DMA reads a private buffer at
+0x50800000 (the driver prints `from private buffer`), so every DIRTYFB copies
+the damaged region between the two. Doom's damage at 320x200 is 128,000 bytes,
+which sits right on the driver's own CPU/PPA crossover, and the loaded table
+above `ppa_min_bytes` puts a copy that size at 6.96 ms (PPA) to 11.98 ms (CPU).
+Against a 31.6 ms frame that is 25-35% - so removing the copy looked like the
+biggest win available.
+
+Forcing the dispatch each way with `ppa_min_bytes` (0 = always PPA, huge =
+always CPU) says otherwise:
+
+| `ppa_min_bytes` | path | fps |
+|---|---|---|
+| 131072 (default) | CPU memcpy | 31.7 |
+| 0 | PPA | 32.3 |
+
+**~2%, inside the noise.** A 5 ms/frame difference would have shown as ~16% and
+did not, so the copy is not costing anything like the table suggests. The
+mistake was applying numbers measured under *continuous pointer motion* to a
+fullscreen game where the pointer never moves.
+
+### Do NOT restructure the buffers to remove the copy
+
+It would gain a couple of percent at most, and the indirection is load-bearing
+for reasons unrelated to performance:
+
+- **Retargeting the free-running cyclic DMA fails with `-ENXIO`.** The DMA can
+  never be moved, so the buffer it points at must outlive every client. Point
+  it at lvdesk's framebuffer and an lvdesk restart leaves the DMA reading freed
+  memory.
+- **Console/lvdesk switching depends on it.** fbcon and lvdesk are independent
+  sources copying into one permanent target, so switching is "whoever damages,
+  wins" with no modeset and no retarget.
+- `esp32s31_lcd_composite()` returns true unconditionally to keep the hardware
+  cursor at ~0.3 ms/move instead of X's 19 ms software fallback, and lvdesk
+  really does use that cursor plane.
+
+If this is ever revisited, the shape that preserves all of the above is lvdesk
+painting *into the driver's permanent buffer*, never the driver pointing at
+lvdesk's - and the cursor then needs its own 64x64 backing store, because it
+loses the plane framebuffer as a clean restore source. It is not worth 2%.
+
 ## MIT-SHM: real, standard, and worth +7% to Doom (2026-09-08)
 
 xshim speaks **MIT-SHM 1.2** (major opcode 202), alongside the private
