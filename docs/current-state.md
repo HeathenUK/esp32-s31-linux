@@ -532,6 +532,41 @@ painting *into the driver's permanent buffer*, never the driver pointing at
 lvdesk's - and the cursor then needs its own 64x64 backing store, because it
 loses the plane framebuffer as a clean restore source. It is not worth 2%.
 
+## icache autoload: the documented recipe is a no-op (2026-09-08)
+
+The S31's instruction-cache autoload (hardware prefetcher) is off on both
+harts, and with the kernel executing XIP from 80 MHz flash it is the only lever
+that reaches the syscall entry path (~350 us a call, ~9% of the machine). It
+was attempted properly and the result is negative but useful.
+
+`cache_ll_l1_enable_icache(1, true)` was added to
+`prepare_core1_cached_psram()` in the bootloader, at the hart1 icache handover
+- the documented place. It builds, and **the board boots normally**, which is
+itself worth knowing: the feature that killed the hart twice from S-mode is
+harmless here. But `CACHE_L1_ICACHE1_AUTOLOAD_CTRL_REG` still reads 0x2, ENA
+clear. **It did nothing.**
+
+The reason is a pattern this project already knows: the S31 HAL exposes
+`cache_ll_l1_is_icache_autoload_enabled()` and **no setter**. Autoload is a
+flag passed when the cache is ENABLED, and by that point the icache is already
+on, so the ROM call is a no-op. A getter with no setter means the block depends
+on its reset default.
+
+Enabling it for real needs either a disable/re-enable of the icache with the
+flag - while running from flash through that very cache, so the code would have
+to execute from RAM - or a direct write of the ENA bit plus the section
+registers at 0x100/0x104. The direct write is precisely what killed the hart
+from Linux; from the loader with hart1 in reset it is untested. Not attempted.
+
+**A trap worth recording:** the loader's `ESP_LOGI` output does not appear in a
+`conlog.py` capture at all (the loader logs at a different baud), so a missing
+log line is not evidence that loader code did not run. The register read is the
+evidence. Rolled back with `images/hello_world.PRE-AUTOLOAD.bin`.
+
+Also: the HOST `make bootloader` picks up a v5.5 IDF with no esp32s31 target
+and fails. The loader must be built with
+`./docker/build.sh 'cd /src && make bootloader'`.
+
 ## Per-row change detection: neutral for Doom, 23% off a static client (2026-09-08)
 
 SDL hands us the whole window every frame regardless of what moved, so the
