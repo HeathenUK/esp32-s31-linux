@@ -1,0 +1,23 @@
+The 6.12 kernel tree that USED to be here has been removed. Deliberately.
+
+The board runs 7.1.10 and `make linux` builds ../linux-71-port/. This
+submodule was the old 6.12 port, referenced by nothing in the build - and it
+was a trap rather than a resource:
+
+  * PPA CLUT work was once written into THIS tree instead of linux-71-port/.
+    It compiled nowhere, the symbol was simply absent from System.map, and the
+    ioctl returned EINVAL with no clue why. See memory/s31-wrong-kernel-tree.
+  * When it was removed on 2026-09-08 it still held 15 modified files,
+    including drivers/gpu/drm/espressif/esp32s31-ppa.{c,h} - the stranded
+    remains of exactly that mistake, sitting here for over a week.
+
+The stranded diff is kept at ../patches/attic/0000-stranded-in-the-6.12-submodule.patch
+purely as a record. It is superseded: the live esp32s31-ppa.c is 136 kB
+against the stranded 58 kB and contains that work plus everything since.
+
+Two identically-named kernel trees, one of which is silently not built, is a
+mistake waiting to be repeated. Now there are no sources here to edit by
+accident. If 6.12 is ever needed again it is in this repo's git history:
+
+    git log --all -- .gitmodules      # the URL and branch
+    https://github.com/GrieferPig/linux-esp32-s31.git  v6.12-esp32-s31

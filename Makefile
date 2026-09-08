@@ -32,10 +32,21 @@ S31_USER_FLAGS := -march=$(S31_USER_ISA) $(S31_COMMON_FLAGS)
 
 BUILD_DIR := $(CURDIR)/build
 OPENSBI_DIR := $(CURDIR)/opensbi-esp32-s31
-# The 7.1 port is the kernel this board runs.  linux-esp32-s31/ is the old 6.12
-# tree, kept only for reference; building it against the shared output volume
-# silently relinks 6.12 objects into a 7.1-named image.
+# The 7.1 port is the kernel this board runs, and the ONLY kernel tree here.
+#
+# linux-esp32-s31/ was the old 6.12 submodule. It was REMOVED on 2026-09-08:
+# nothing built from it, but work was once written into it by mistake, compiled
+# nowhere, and left the symbol absent from System.map with no clue why (see
+# memory/s31-wrong-kernel-tree). It still held the stranded remains of that
+# when it was deleted. Building it against the shared output volume would also
+# silently relink 6.12 objects into a 7.1-named image.
+#
+# The guard below fails the build if it ever reappears, because a second
+# kernel tree that is silently not built is a trap, not a resource.
 LINUX_DIR := $(CURDIR)/linux-71-port
+ifneq ($(wildcard $(CURDIR)/linux-esp32-s31/Makefile),)
+$(error linux-esp32-s31/ has a kernel Makefile again. That is the OLD 6.12 tree, deleted deliberately - see linux-esp32-s31/README. The board runs 7.1.10 and make linux builds linux-71-port/. Remove it before building)
+endif
 BUILDROOT_DIR := $(CURDIR)/buildroot
 BUILDROOT_EXTERNAL := $(CURDIR)/buildroot-external
 
