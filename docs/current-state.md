@@ -532,6 +532,52 @@ painting *into the driver's permanent buffer*, never the driver pointing at
 lvdesk's - and the cursor then needs its own 64x64 backing store, because it
 loses the plane framebuffer as a clean restore source. It is not worth 2%.
 
+## The 11% is not recoverable, and PPA CLUT loses to the CPU (2026-09-08)
+
+After adoption was removed as illegal (below), the question was whether the
+~11% could be regained without the flicker. It cannot, and the reasoning is
+worth keeping because it closes several ideas at once.
+
+**The copy is irreducible.** SDL is single-buffered, so a coherent snapshot
+requires copying at the request boundary - and the index buffer has to stay
+valid regardless, or LVGL's own repaints (expose, chrome, a window move) would
+present stale pixels. Every scheme that removes the copy either reads the
+segment late (the flicker) or writes kms_map outside the compositing cycle
+(z-order: we would paint over a menu or popover, and nothing would repair it,
+because LVGL would have no record the area was dirty). Both were tried on
+2026-09-08 and both failed exactly that way.
+
+**But the copy is the cheap half** - ~1.7 ms/frame against the expansion's
+3.75 ms - and copying restores something adoption had removed: control over
+WHERE the pixels land. Into a GEM buffer in the reserved pool, the PPA's CLUT
+can reach them, which adoption had foreclosed by pointing the window at a SysV
+segment the blend engine cannot address. `ppa_gem_expand()` also runs INSIDE the
+flush callback, so LVGL's clipping and z-order still apply and it falls back to
+the CPU on any failure - it is not a bypass around the compositor.
+
+It still loses. Matched arms, fresh boot each, throwaway run then measured run:
+
+| arm | fps (warm) |
+|---|---|
+| PPA CLUT on | 29.6 |
+| PPA CLUT off | **30.5** |
+
+**3% worse.** This confirms the earlier decision to default `ppaclut_on()` off,
+now under the current pipeline and with warm-up discarded. The likely mechanism
+is that the copy must land in reserved-pool memory and the DMA needs a cache
+flush after it, so the copy gets more expensive faster than the expansion gets
+cheaper - on top of the PPA's fixed per-operation cost, which this project has
+measured at several hundred microseconds against an expansion of only 3.75 ms.
+Consistent with [[s31-offload-not-purchasable]]: below ~128 KB the wake-up
+costs more than the work.
+
+30.5 here reproduces the 30.6 warm figure from the two-run experiment, so the
+warm-up method is giving repeatable numbers.
+
+**Current position: ~30.5 fps warm, flicker-free, MIT-SHM copying, PPA CLUT
+off.** Do not re-propose adoption, request-time expansion into kms_map, or PPA
+CLUT for this workload without new information.
+
 ## Every fps number here is a COLD run, and cold costs ~5% (2026-09-08)
 
 Two timedemos back to back in ONE boot, nothing else changed:
