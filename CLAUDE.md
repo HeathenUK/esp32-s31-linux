@@ -1,6 +1,8 @@
 # Working on this board
 
-Linux 6.12 on an ESP32-S31-Korvo-1 V1.1: dual hart (hart0 runs ESP-IDF and owns
+Linux 7.1.10 on an ESP32-S31-Korvo-1 V1.1 (the tree is `linux-71-port/`, and
+`make linux` builds THAT, not the `linux-esp32-s31` submodule): dual hart
+(hart0 runs ESP-IDF and owns
 the radios and audio, hart1 runs Linux), **15.4 MB of usable RAM**, kernel
 executing XIP from 80 MHz flash, rootfs on microSD.
 
