@@ -6359,8 +6359,38 @@ static int rect_log;
 static uint64_t flushed_px;
 static uint32_t flush_calls;
 
+/*
+ * LVPROF=1: where does lvdesk's share of the machine actually go?
+ *
+ * Measured on 2026-09-08 that lvdesk is 42% of all cycles during a Doom
+ * timedemo and that 60% of ITS time is system, not user - so the pixel loops
+ * are not obviously the cost and guessing which stage is would be the fourth
+ * guess in a row. Counters accumulated per stage and printed every 200 frames,
+ * never a print per frame: at ~1 ms of synchronous console per line that would
+ * be the measurement rather than the thing measured.
+ *
+ * clock_gettime is a handful of calls per flush. Gated on the environment so a
+ * normal boot pays nothing for it.
+ */
+static int lvp_on = -1;
+static uint64_t lvp_expand, lvp_dirty, lvp_flush, lvp_n;
+
+static uint64_t lvp_now(void)
+{
+	struct timespec ts;
+
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (uint64_t)ts.tv_sec * 1000000000ull + ts.tv_nsec;
+}
+
 static void kms_flush_cb(lv_display_t *d, const lv_area_t *area, uint8_t *px)
 {
+	uint64_t lvp_t0 = 0;
+
+	if (lvp_on < 0)
+		lvp_on = getenv("LVPROF") != NULL;
+	if (lvp_on)
+		lvp_t0 = lvp_now();
 	/*
 	 * Area asked for, counted client-side. The driver's flush_bytes has a
 	 * different granularity (it can fall back to a full-surface copy when
@@ -6415,8 +6445,13 @@ static void kms_flush_cb(lv_display_t *d, const lv_area_t *area, uint8_t *px)
 	 * complete, so our pixels land on top of the chrome rather than under
 	 * it, and they are inside the rectangle we are about to report dirty.
 	 */
-	if (directexp_on())
+	if (directexp_on()) {
+		uint64_t a = lvp_on ? lvp_now() : 0;
+
 		xwin_blit_direct(area);
+		if (lvp_on)
+			lvp_expand += lvp_now() - a;
+	}
 
 	{
 		struct kms_rect r = { area->x1, area->y1, area->x2, area->y2 };
@@ -6425,10 +6460,30 @@ static void kms_flush_cb(lv_display_t *d, const lv_area_t *area, uint8_t *px)
 	}
 
 	if (lv_display_flush_is_last(d)) {
+		uint64_t a = lvp_on ? lvp_now() : 0;
+
 		kms_dirty_rects(dmg, dmg_n);
 		dmg_n = 0;
+		if (lvp_on)
+			lvp_dirty += lvp_now() - a;
 	}
 	lv_display_flush_ready(d);
+
+	if (lvp_on) {
+		lvp_flush += lvp_now() - lvp_t0;
+		if (lv_display_flush_is_last(d) && ++lvp_n % 200 == 0)
+			fprintf(stderr, "lvdesk: LVPROF %llu frames: "
+				"flush %llu ms, of which expand %llu ms, "
+				"DIRTYFB %llu ms  (per frame: flush %llu us, "
+				"expand %llu us, DIRTYFB %llu us)\n",
+				(unsigned long long)lvp_n,
+				(unsigned long long)(lvp_flush / 1000000),
+				(unsigned long long)(lvp_expand / 1000000),
+				(unsigned long long)(lvp_dirty / 1000000),
+				(unsigned long long)(lvp_flush / lvp_n / 1000),
+				(unsigned long long)(lvp_expand / lvp_n / 1000),
+				(unsigned long long)(lvp_dirty / lvp_n / 1000));
+	}
 }
 
 

@@ -118,6 +118,65 @@ reclaimable here.
 
 ---
 
+## Where a Doom frame actually goes, and the GDMA copy (2026-09-08)
+
+Three ideas in a row had been argued from tables and two were wrong, so the
+frame was finally measured instead of reasoned about.
+
+**The cycle split**, sampled either side of a timedemo with no console traffic
+in between (14,031 ticks, **0.12% idle** - the board is saturated):
+
+| | share |
+|---|---|
+| prboom | 53.7% |
+| lvdesk | **42.3%** |
+| everything else | 3.9% |
+
+lvdesk is 42% of the machine, and ~60% of *its* time is system, not user - so
+its cost is not obviously in our pixel loops.
+
+**The frame**, from `LVPROF=1` in lvdesk (brackets the DIRTYFB ioctl, which is a
+synchronous commit, so the ioctl time is the driver-side cost). 31.8 ms frame:
+
+| stage | per frame | of frame |
+|---|---|---|
+| DIRTYFB ioctl | 10.5 ms | 33% |
+| palette expansion | 5.1 ms | 16% |
+| flush total | 15.8 ms | 50% |
+
+### GDMA was the slowest engine, and it pre-empted the other two
+
+`esp32s31_lcd_copy_one()` tries `esp32s31_lcd_gdma_rows()` first for every
+unscaled copy and returns on success - so GDMA handled all of them at every
+size and the measured CPU/PPA crossover below it never applied.
+
+| engine | DIRTYFB/frame | composited frames | Doom fps |
+|---|---|---|---|
+| GDMA (was default) | 10.6 ms | 3600 | 31.0 |
+| CPU memcpy | 7.9 ms | 4000 | - |
+| PPA | 7.8 ms | 4200 | 31.7 |
+
+`gdma_copy` now defaults **off** (patches/0035). Confirmed on a fresh boot with
+the new default: DIRTYFB 7.79 ms, flush 13.09 ms, 32.1 fps, painting verified
+by hardware screenshot. **DIRTYFB is down 27% and the display composites ~11%
+more frames.** Doom's own fps gains only ~2% because lvdesk spends part of what
+it saved compositing the extra frames, and because at 31.0-32.6 the fps band is
+wider than the effect.
+
+The cost is almost certainly the completion wait, not the transfer - the same
+shape as the `defer_copy` finding in the same file, where a kworker round trip
+cost 7.4 ms charged to the client's ioctl and so looked like fixed per-commit
+overhead.
+
+### Correction to the entry below
+
+The entry below says the damage copy is "NOT a lever" on the strength of a
+`ppa_min_bytes` A/B that moved ~2%. **That test was invalid**: the threshold it
+changed sits *after* the GDMA short-circuit, so neither arm was reached and the
+run measured nothing. The copy path is worth ~2.8 ms of a 31.8 ms frame.
+
+The refresh-rate result below stands - it was a real sweep of a real knob.
+
 ## Two display-path levers, both measured, both dead (2026-09-08)
 
 Doom sits at ~31.6 fps at 320x200 (see MIT-SHM, below). Two plausible-looking

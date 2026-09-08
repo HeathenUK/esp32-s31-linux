@@ -1,0 +1,60 @@
+drm/esp32s31-lcd: stop using GDMA for the damage copy - it is the slowest
+of the three engines, and it was pre-empting the other two
+
+The port tree is gitignored, so this is the whole modified file rather
+than a diff. Copy it back over
+linux-71-port/drivers/gpu/drm/espressif/esp32s31-lcd.c before building.
+
+The change is one word: `static bool gdma_copy = true;` becomes
+`static bool gdma_copy;`. The comment above it carries the numbers.
+
+WHAT WAS WRONG. esp32s31_lcd_copy_one() dispatches like this:
+
+	if (!scaled && esp32s31_lcd_gdma_rows(...))
+		return;
+	... CPU below ppa_min_bytes ...
+	... PPA above ...
+
+GDMA is tried FIRST for every unscaled copy and returns on success, so it
+handled all of them at every size and the carefully measured CPU/PPA
+crossover below it never applied to an unscaled surface at all.
+
+HOW IT WAS FOUND. lvdesk was measured at 42% of all cycles during a
+320x200 prboom timedemo (prboom 53.7%, everything else 3.9%, 0.12% idle),
+with ~60% of lvdesk's own time in the kernel rather than in its pixel
+loops. Timing the stages from userspace (lvdesk LVPROF=1, which brackets
+the DIRTYFB ioctl - a synchronous commit, so the ioctl time IS the
+driver-side cost) put a 31.8 ms frame at:
+
+	DIRTYFB      10.5 ms    33% of the frame
+	expansion     5.1 ms    16%
+	flush total  15.8 ms    50%
+
+THE MEASUREMENT. Forcing each engine with the existing module parameters,
+per frame:
+
+	engine        DIRTYFB    composited frames    Doom fps
+	GDMA          10.6 ms          3600             31.0
+	CPU memcpy     7.9 ms          4000               -
+	PPA            7.8 ms          4200             31.7
+
+Reproduced across two independent runs (10.51/7.76, then 10.61/7.80), and
+confirmed a third time on a fresh boot with the new default compiled in:
+7.79 ms, flush 13.09 ms, 32.1 fps. Painting verified by hardware
+screenshot on a separate untimed run.
+
+CPU and PPA are within 2% of each other at Doom's damage size (128,000
+bytes, just under the 131072 crossover), so simply removing GDMA captures
+the win without forcing PPA everywhere - which would be wrong for small
+rectangles, where the table above ppa_min_bytes has the CPU at 0.03 ms
+against the engine's 0.43 ms for 32x32.
+
+WHY GDMA IS SLOWER. Almost certainly the completion wait rather than the
+transfer, which is the same shape as the defer_copy finding in the same
+file: a kworker round trip cost 7.4 ms and was charged to the client's
+ioctl, so it "appears as fixed per-commit overhead rather than as pixel
+cost, which is exactly how it hid". This path already carries a 50 ms
+bound for a stall that once spun for five seconds.
+
+CAVEAT. Measured on one workload. gdma_copy stays a parameter; set
+gdma_copy=Y to put it back.
