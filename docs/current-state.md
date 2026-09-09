@@ -532,6 +532,58 @@ painting *into the driver's permanent buffer*, never the driver pointing at
 lvdesk's - and the cursor then needs its own 64x64 backing store, because it
 loses the plane framebuffer as a clean restore source. It is not worth 2%.
 
+## Three cheap changes in our own code: +7% (2026-09-09)
+
+Warm, fresh boot per arm, throwaway run then measured run, all three behind
+runtime toggles on one binary:
+
+| arm | fps |
+|---|---|
+| all three ON | **32.2** |
+| all three OFF | 30.1 |
+
+**+7.0%**, the largest single measured gain so far, and none of it touches
+off-the-shelf software.
+
+**1. xlite's XShmPutImage no longer flushes** (`XLITE_SHMFLUSH=1` restores it).
+Real Xlib/libXext does not flush there. SDL calls XSync immediately after, which
+appends a 4-byte GetInputFocus to the SAME output buffer - so without the flush
+both requests leave in one write and the server wakes ONCE per frame instead of
+twice. Safe because XSync, `xlite_wait_event()` and `pump_ex()` all flush before
+blocking, so nothing can strand the buffer.
+
+**2. xshim takes the caller's ready set** (`XSHIM_NOPOLLPASS=1` restores the old
+path). lvdesk's main loop already polls every fd it owns; `xshim_poll()` then
+built its own pollfd array and polled the same descriptors again with timeout 0,
+which cannot learn anything - no time has passed. The listen fd stays in the
+marked set, or new clients would silently never connect.
+
+**3. word8 expansion** (`LVDESK_NOWORD8=1` restores the old loops). Eight pixels
+from two 32-bit source loads: 46/46/47 ns/px against 49/50/51, ~8% off the
+expansion. NOT the 3x that the latency-bound theory predicted - breaking the
+dependency chain measured *slower* - just fewer source loads and a shorter loop.
+
+### .text..fast for the af_unix path
+
+Added on the evidence in the entry below (syscall entry is 1.6 us; the af_unix
+path is ~118 us/op): `af_unix.o`, `sock.o`, `skbuff.o`, `datagram.o`,
+`socket.o`, `iov_iter.o`, `select.o`.
+
+**A pattern trap, caught only by the System.map check.** `*net/unix/af_unix.o`
+matched NOTHING, while `*net/core/sock.o` and `*sched/fair.o` match fine. The
+bare `*af_unix.o` works. Four of the five objects moved on the first build and
+af_unix - the important one - silently did not; the symbol addresses are the
+only way to see it:
+
+	__text_fast_start   c0838370
+	__text_fast_end     c0890070
+	unix_stream_sendmsg c0874970   (inside - after the fix)
+	                    c039ede8   (outside - before it)
+
+Always verify placement against `__text_fast_start`/`__text_fast_end` in
+System.map. This is the second time the `.text..fast` mechanism has silently
+no-opped.
+
 ## Three diagnostics, and two standing conclusions were wrong (2026-09-09)
 
 Run to settle claims from the eight-lens sweep before building anything.

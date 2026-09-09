@@ -30,6 +30,8 @@ void xshim_mem_report(void);
 
 /* Service any ready clients. Non-blocking. */
 void xshim_poll(void);
+/* Service only the descriptors the caller already found readable. */
+void xshim_poll_ready(const int *ready, int nready);
 void xshim_flush(void);
 
 /*

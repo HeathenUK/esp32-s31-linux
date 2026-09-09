@@ -3900,6 +3900,16 @@ static int directexp_on(void)
  * board), against two lucky samples, with the arms as SEPARATE binaries.
  * LVDESK_SCALAREXP=1 restores the one-pixel-at-a-time loop.
  */
+/* LVDESK_NOWORD8=1 falls back to the older loops for comparison. */
+static int word8_on(void)
+{
+	static int v = -1;
+
+	if (v < 0)
+		v = getenv("LVDESK_NOWORD8") == NULL;
+	return v;
+}
+
 static int wordexp_on(void)
 {
 	static int v = -1;
@@ -4248,7 +4258,38 @@ static void xwin_blit_direct(const lv_area_t *area)
 			 * cacheability are both irrelevant. Do not retry
 			 * either.
 			 */
-			if (wordexp_on()) {
+			if (word8_on() && n >= 8 &&
+			    ((((uintptr_t)sp | (uintptr_t)dp) & 3u) == 0)) {
+				/*
+				 * Eight pixels from two 32-bit source loads.
+				 * Measured with rootfs/expbench.c, three
+				 * alternating reps: 46/46/47 ns/px against
+				 * 49/50/51 for the plain loop, ~8% off the
+				 * expansion.
+				 *
+				 * Note what this is NOT: breaking the
+				 * lbu->lhu dependency chain measured SLOWER
+				 * (60-66 ns/px), so the loop is not stalling
+				 * on load serialisation and this is not the
+				 * 3x that theory predicted. It is fewer source
+				 * loads and a shorter loop, nothing more.
+				 */
+				for (k = 0; k + 7 < n; k += 8) {
+					uint32_t a4 = *(const uint32_t *)(sp + k);
+					uint32_t b4 = *(const uint32_t *)(sp + k + 4);
+
+					dp[k]     = pal[a4 & 0xff];
+					dp[k + 1] = pal[(a4 >> 8) & 0xff];
+					dp[k + 2] = pal[(a4 >> 16) & 0xff];
+					dp[k + 3] = pal[(a4 >> 24) & 0xff];
+					dp[k + 4] = pal[b4 & 0xff];
+					dp[k + 5] = pal[(b4 >> 8) & 0xff];
+					dp[k + 6] = pal[(b4 >> 16) & 0xff];
+					dp[k + 7] = pal[(b4 >> 24) & 0xff];
+				}
+				for (; k < n; k++)
+					dp[k] = pal[sp[k]];
+			} else if (wordexp_on()) {
 				/*
 				 * Two pixels per 32-bit store. Peel a leading
 				 * odd pixel first: dp is uint16_t*, so dp&3 is
@@ -8013,14 +8054,25 @@ int main(void)
 			if (rd_mouse) { PROF_START(a); busy |= mouse_poll();  PROF_ADD(prof_mouse, a); }
 			if (rd_wifi)  { PROF_START(a); busy |= wifi_ev_poll(); PROF_ADD(prof_wifi, a); }
 			if (rd_bt)    busy |= bt_ev_poll();
-			for (int xi = 0; xi < n_x; xi++)
-				if (fds[i_x + xi].revents & RD_MASK) {
+			{
+				/*
+				 * Hand xshim the descriptors we already found
+				 * readable. It used to poll them all over
+				 * again with timeout 0, which cannot learn
+				 * anything this loop did not just learn.
+				 */
+				int rdy[NFDS], nrdy = 0, xi;
+
+				for (xi = 0; xi < n_x; xi++)
+					if (fds[i_x + xi].revents & RD_MASK)
+						rdy[nrdy++] = fds[i_x + xi].fd;
+				if (nrdy) {
 					PROF_START(a);
-					xshim_poll();
+					xshim_poll_ready(rdy, nrdy);
 					PROF_ADD(prof_xs, a);
 					busy = 1;
-					break;
 				}
+			}
 			/*
 			 * Only reap when a child has actually exited. waitpid()
 			 * on every loop was 83 ms per window to learn nothing.

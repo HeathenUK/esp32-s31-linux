@@ -2402,7 +2402,31 @@ Status XShmPutImage(Display *dpy, Drawable d, GC gc, XImage *im,
 		p32(r + 36, 0);			/* offset into the segment */
 		xlite_send(x, r);
 	}
-	XFlush(dpy);
+	/*
+	 * DO NOT FLUSH HERE. Real Xlib/libXext does not, and the flush is what
+	 * splits one frame into two server wakeups.
+	 *
+	 * SDL calls XShmPutImage and then XSync in the same function. XSync
+	 * appends a 4-byte GetInputFocus to the SAME output buffer, so without
+	 * a flush both requests leave in one write and the server wakes once,
+	 * reads both, and replies. With the flush, the 40-byte put goes on its
+	 * own: the server wakes out of poll(), recvmsgs, handles a request
+	 * that produces no output, and goes back to poll() - then wakes again
+	 * for the 4 bytes. Measured server-side at ~119 us of poll and ~386 us
+	 * of recvmsg per pass, that second pass is ~2.8% of the machine.
+	 *
+	 * Safe because every path that could strand the buffer flushes first:
+	 * XSync, xlite_wait_event() and pump_ex() all flush before blocking.
+	 * XLITE_SHMFLUSH=1 restores the old behaviour for comparison.
+	 */
+	{
+		static int always = -1;
+
+		if (always < 0)
+			always = getenv("XLITE_SHMFLUSH") != NULL;
+		if (always)
+			XFlush(dpy);
+	}
 	return 1;
 }
 

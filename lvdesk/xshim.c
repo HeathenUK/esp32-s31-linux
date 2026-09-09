@@ -7282,10 +7282,29 @@ void xshim_flush(void)
 			out_flush(&cli[i]);
 }
 
-void xshim_poll(void)
+/*
+ * `ready` is the set of our descriptors the CALLER has already found readable.
+ *
+ * lvdesk's main loop polls every fd it owns, ours included, and then called
+ * xshim_poll(), which built its own pollfd array and polled the same
+ * descriptors a second time with timeout 0. The second poll cannot learn
+ * anything the first did not - no time has passed - and XSHIM_PROF measured it
+ * at 13.2 ms/s, ~1.3% of the machine, for nothing. Pass the answer in instead.
+ *
+ * ready == NULL keeps the old self-polling behaviour, which the standalone
+ * build and any other caller still need, and XSHIM_NOPOLLPASS=1 forces it for
+ * comparison on one binary.
+ */
+void xshim_poll_ready(const int *ready, int nready)
 {
 	struct pollfd p[MAXCLI + 1];
 	int map[MAXCLI + 1], n = 0, i;
+	static int nopass = -1;
+
+	if (nopass < 0)
+		nopass = getenv("XSHIM_NOPOLLPASS") != NULL;
+	if (nopass)
+		ready = NULL;
 
 	if (lfd < 0)
 		return;
@@ -7295,10 +7314,32 @@ void xshim_poll(void)
 			p[n].fd = cli[i].fd; p[n].events = POLLIN;
 			map[n] = i; n++;
 		}
-	{
-		uint64_t tp = 0;
-		int pr;
+	if (ready) {
+		int j, k, any = 0;
 
+		/*
+		 * Mark from the caller's list rather than polling. The listen
+		 * fd is in this array too, so a new client still connects -
+		 * missing that would make new clients silently never appear.
+		 */
+		for (j = 0; j < n; j++) {
+			p[j].revents = 0;
+			for (k = 0; k < nready; k++)
+				if (ready[k] == p[j].fd) {
+					p[j].revents = POLLIN;
+					any = 1;
+					break;
+				}
+		}
+		if (!any) {
+			expose_flush();
+			return;
+		}
+	} else {
+	uint64_t tp = 0;
+	int pr;
+
+	{
 		if (xsp_on > 0)
 			tp = xsp_now();
 		pr = poll(p, n, 0);
@@ -7318,6 +7359,7 @@ void xshim_poll(void)
 			expose_flush();
 			return;
 		}
+	}
 	}
 	for (i = 0; i < n; i++) {
 		if (!(p[i].revents & (POLLIN | POLLERR | POLLHUP)))
@@ -7348,6 +7390,11 @@ void xshim_poll(void)
 		}
 	}
 	expose_flush();
+}
+
+void xshim_poll(void)
+{
+	xshim_poll_ready(NULL, 0);
 }
 
 #ifdef XSHIM_STANDALONE
