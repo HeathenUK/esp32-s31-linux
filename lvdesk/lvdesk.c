@@ -3710,17 +3710,20 @@ static int fs_enabled(void)
 	static int v = -1;
 
 	/*
-	 * Direct-scanout fullscreen is OFF by default. Entering a reduced
-	 * video mode currently takes the board down within ~30 s (cause not
-	 * yet found - the SETCRTC to a small mode, or the driver's per-mode
-	 * PPA re-placement). Windowed play, grabs and mouse-look do not need
-	 * it, so it stays behind LVDESK_FULLSCREEN=1 until the crash is
-	 * understood. When off, a client's VidMode switch is acknowledged
-	 * (SDL still gets its mode list) but the desktop keeps compositing
-	 * and the window stays windowed.
+	 * Direct-scanout fullscreen: a client's VidMode switch reprograms the
+	 * panel to a reduced mode, the driver PPA-scales that window to fill
+	 * the screen, and the desktop composites nothing else. prboom
+	 * -fullscreen at 320x200 -> 760x475 with black bars, verified on the
+	 * board with the tick=periodic kernel.
+	 *
+	 * The "fullscreen crashes the board" this was gated for was the
+	 * NO_HZ_IDLE tickless-idle hang wearing a mask (plus stale kernels
+	 * during that debugging); it does not crash on the periodic kernel.
+	 * ON by default now; LVDESK_NOFULLSCREEN=1 forces windowed, which
+	 * still acknowledges the VidMode switch so SDL gets its mode list.
 	 */
 	if (v < 0)
-		v = getenv("LVDESK_FULLSCREEN") != NULL;
+		v = getenv("LVDESK_NOFULLSCREEN") == NULL;
 	return v;
 }
 
