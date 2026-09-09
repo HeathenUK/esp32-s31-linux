@@ -18,10 +18,27 @@
  *    plugin is referenced from asound.conf, and having it parse the file that
  *    names it invites a recursion that fails in confusing ways.
  *
- *  - The descriptor the application polls is ours, an eventfd, not the
- *    slave's. Reopening the slave changes its descriptors, and an application
- *    that polled the old ones would wait for ever on a device that no longer
- *    exists. Ours never changes, and the write below blocks instead.
+ *  - The descriptor NUMBER the application polls is ours and never changes;
+ *    what sits behind it is the current slave's descriptor, dup2()ed into
+ *    place each time the sink is reopened. Reopening the slave would
+ *    otherwise change the descriptor, and an application that polled the
+ *    old one would wait for ever on a device that no longer exists.
+ *
+ *    The first version left a permanently signalled eventfd there, on the
+ *    theory that "the blocking write to the slave provides the pacing". It
+ *    does not. alsa-lib's blocking write sleeps in poll() only while the
+ *    plugin's OWN ring is full, and a descriptor that is always ready turns
+ *    that sleep into a spin: poll, pointer (a delay ioctl on the sink),
+ *    still full, poll again - for the whole of every period. Measured with
+ *    prboom over 10 s: 20,153 context switches and ~20 s of accounted CPU
+ *    through the plugin against 707 and 0.77 s straight to plughw. The
+ *    slave's writei never blocked, because its buffer (200 ms) was bigger
+ *    than the application's ring, so nothing ever slept. Doom ran at 15 fps
+ *    with sound and 32 without, and the whole gap was this spin.
+ *
+ *    The slave's ring is therefore sized to mirror the application's, and
+ *    its avail_min is chosen so that the sink says "writable" exactly when
+ *    the plugin's ring has a period free. Then the poll really sleeps.
  */
 #define _GNU_SOURCE
 #include <errno.h>
@@ -29,6 +46,9 @@
 #include <alsa/pcm_external.h>
 #include <sys/eventfd.h>
 #include <sys/stat.h>
+#include <poll.h>
+#include <stdlib.h>
+#include <unistd.h>
 #include <stdint.h>
 
 #define SINK_FILE	"/run/s31-sink"
@@ -39,7 +59,7 @@ struct route {
 	snd_pcm_t *slave;
 	char sink[64];
 	time_t seen;
-	int efd;
+	int pfd;		/* what the application polls; see the header */
 	snd_pcm_uframes_t transferred;
 };
 
@@ -60,6 +80,8 @@ static void sink_read(struct route *r, char *out, size_t n)
 	}
 	fclose(f);
 }
+
+static int xrun(struct route *r);
 
 static void slave_close(struct route *r)
 {
@@ -119,14 +141,14 @@ static int slave_open(struct route *r)
 		snd_pcm_hw_params_t *hw;
 		snd_pcm_sw_params_t *sw;
 		unsigned rate = r->io.rate;
-		snd_pcm_uframes_t buf, per;
+		snd_pcm_uframes_t buf, per, want_buf, want_per, amin;
 		int dir = 0;
+		struct pollfd pfd;
 
-		if (!rate) {
+		if (!rate || !r->io.buffer_size || !r->io.period_size) {
 			err = -EINVAL;
 			goto done;
 		}
-		buf = (snd_pcm_uframes_t)rate / 5;	/* 200 ms, or as much as fits */
 		snd_pcm_hw_params_alloca(&hw);
 		if ((err = snd_pcm_hw_params_any(r->slave, hw)) < 0 ||
 		    (err = snd_pcm_hw_params_set_access(r->slave, hw,
@@ -136,25 +158,68 @@ static int slave_open(struct route *r)
 		    (err = snd_pcm_hw_params_set_channels(r->slave, hw,
 				r->io.channels)) < 0 ||
 		    (err = snd_pcm_hw_params_set_rate_near(r->slave, hw,
-				&rate, &dir)) < 0 ||
-		    (err = snd_pcm_hw_params_set_buffer_size_near(r->slave, hw,
+				&rate, &dir)) < 0)
+			goto done;
+		/*
+		 * Mirror the application's ring, in the sink's rate. The
+		 * application can never be more than its own ring ahead of what
+		 * has played (the pointer below reports played frames, not
+		 * handed-on ones), so a bigger sink buffer buys no headroom at
+		 * all - it only makes "sink writable" and "ring writable" two
+		 * different questions, which is the spin described at the top.
+		 */
+		want_buf = (snd_pcm_uframes_t)((uint64_t)r->io.buffer_size * rate / r->io.rate);
+		want_per = (snd_pcm_uframes_t)((uint64_t)r->io.period_size * rate / r->io.rate);
+		buf = want_buf;
+		if ((err = snd_pcm_hw_params_set_buffer_size_near(r->slave, hw,
 				&buf)) < 0)
 			goto done;
-		per = buf / 4;			/* four periods, like set_params */
+		per = want_per;
 		dir = 0;
 		if ((err = snd_pcm_hw_params_set_period_size_near(r->slave, hw,
 				&per, &dir)) < 0 ||
 		    (err = snd_pcm_hw_params(r->slave, hw)) < 0)
 			goto done;
-		/* Start once the buffer is full and wake per period. */
+		/*
+		 * Wake the application only when its OWN ring has a period free.
+		 * If the sink holds more than the ring (it clamped upwards, or
+		 * the rates rounded that way), plain "a period free in the sink"
+		 * would fire while the ring is still full and the write loop
+		 * would spin on it. The sink has (buf - queued) free; the ring
+		 * has a period free once queued <= want_buf - want_per; so ask
+		 * for buf - want_buf + want_per, never less than one period.
+		 *
+		 * The sink also auto-starts only when full, which with mirrored
+		 * rings is when the application's ring is full - and start()
+		 * below starts it explicitly for applications that start
+		 * earlier than that (SDL uses a threshold of one frame).
+		 */
+		amin = per;
+		if (buf > want_buf && buf - want_buf + want_per > amin)
+			amin = buf - want_buf + want_per;
+		if (amin > buf)
+			amin = buf;
 		snd_pcm_sw_params_alloca(&sw);
 		if ((err = snd_pcm_sw_params_current(r->slave, sw)) < 0 ||
 		    (err = snd_pcm_sw_params_set_start_threshold(r->slave, sw,
 				buf)) < 0 ||
 		    (err = snd_pcm_sw_params_set_avail_min(r->slave, sw,
-				per)) < 0 ||
+				amin)) < 0 ||
 		    (err = snd_pcm_sw_params(r->slave, sw)) < 0)
 			goto done;
+		/* Put the sink's descriptor behind the number the app polls. */
+		if (snd_pcm_poll_descriptors(r->slave, &pfd, 1) == 1 &&
+		    dup2(pfd.fd, r->pfd) < 0) {
+			err = -errno;
+			goto done;
+		}
+		if (getenv("S31ROUTE_DEBUG"))
+			fprintf(stderr, "s31route: %s app %u Hz ring %lu/%lu -> sink %u Hz %lu/%lu avail_min %lu\n",
+				r->sink, r->io.rate,
+				(unsigned long)r->io.buffer_size,
+				(unsigned long)r->io.period_size, rate,
+				(unsigned long)buf, (unsigned long)per,
+				(unsigned long)amin);
 	}
 done:
 	if (err < 0) {
@@ -190,7 +255,26 @@ static int route_start(snd_pcm_ioplug_t *io)
 	struct route *r = io->private_data;
 
 	sink_follow(r);
-	return r->slave ? 0 : -ENODEV;
+	if (!r->slave)
+		return -ENODEV;
+	if (snd_pcm_state(r->slave) == SND_PCM_STATE_PREPARED)
+		snd_pcm_start(r->slave);
+	return 0;
+}
+
+/* Translate the sink's readiness; the descriptor is its, by dup2. */
+static int route_poll_revents(snd_pcm_ioplug_t *io, struct pollfd *pfds,
+			      unsigned int nfds, unsigned short *revents)
+{
+	struct route *r = io->private_data;
+
+	if (!r->slave || snd_pcm_poll_descriptors_revents(r->slave, pfds, nfds,
+							  revents) < 0)
+		*revents = pfds[0].revents;
+	if ((*revents & POLLERR) && r->slave &&
+	    snd_pcm_state(r->slave) == SND_PCM_STATE_XRUN)
+		xrun(r);
+	return 0;
 }
 
 static int route_stop(snd_pcm_ioplug_t *io)
@@ -213,6 +297,26 @@ static int route_prepare(snd_pcm_ioplug_t *io)
 	return 0;
 }
 
+/*
+ * The sink ran dry. Report it as OUR underrun, as -EPIPE, which is the one
+ * error every ALSA application knows how to recover from: snd_pcm_recover()
+ * prepares and carries on, and prepare() below re-prepares the sink.
+ *
+ * The first version quietly re-prepared the sink and wrote again. That
+ * left the sink PREPARED with less than a buffer queued, so it did not
+ * restart, so its descriptor stayed "writable" while our ring stayed full,
+ * and the application spun; and an underrun noticed from poll() instead
+ * surfaced as POLLERR, which alsa-lib turns into -EIO when the plugin's own
+ * state is not XRUN - and SDL calls -EIO unrecoverable and gives up sound
+ * for the rest of the run ("ALSA write failed (unrecoverable): I/O error",
+ * in 1 of 3 launches).
+ */
+static int xrun(struct route *r)
+{
+	snd_pcm_ioplug_set_state(&r->io, SND_PCM_STATE_XRUN);
+	return -EPIPE;
+}
+
 static snd_pcm_sframes_t route_pointer(snd_pcm_ioplug_t *io)
 {
 	struct route *r = io->private_data;
@@ -227,8 +331,14 @@ static snd_pcm_sframes_t route_pointer(snd_pcm_ioplug_t *io)
 	 * frame we wrote.
 	 */
 	snd_pcm_sframes_t delay = 0;
+	int err;
 
-	if (!r->slave || snd_pcm_delay(r->slave, &delay) < 0 || delay < 0)
+	if (!r->slave)
+		return -ENODEV;
+	err = snd_pcm_delay(r->slave, &delay);
+	if (err == -EPIPE || snd_pcm_state(r->slave) == SND_PCM_STATE_XRUN)
+		return xrun(r);
+	if (err < 0 || delay < 0)
 		delay = 0;
 	if ((snd_pcm_uframes_t)delay > r->transferred)
 		delay = (snd_pcm_sframes_t)r->transferred;
@@ -250,10 +360,8 @@ static snd_pcm_sframes_t route_transfer(snd_pcm_ioplug_t *io,
 		return -ENODEV;
 	buf = (const char *)areas->addr + (areas->first + areas->step * offset) / 8;
 	n = snd_pcm_writei(r->slave, buf, size);
-	if (n == -EPIPE) {
-		snd_pcm_prepare(r->slave);
-		n = snd_pcm_writei(r->slave, buf, size);
-	}
+	if (n == -EPIPE)
+		return xrun(r);
 	if (n == -ENODEV || n == -EIO) {
 		/* the sink went away mid-stream; try to pick it up again */
 		slave_close(r);
@@ -273,8 +381,8 @@ static int route_close(snd_pcm_ioplug_t *io)
 	struct route *r = io->private_data;
 
 	slave_close(r);
-	if (r->efd >= 0)
-		close(r->efd);
+	if (r->pfd >= 0)
+		close(r->pfd);
 	free(r);
 	return 0;
 }
@@ -285,6 +393,7 @@ static const snd_pcm_ioplug_callback_t route_cb = {
 	.prepare	= route_prepare,
 	.pointer	= route_pointer,
 	.transfer	= route_transfer,
+	.poll_revents	= route_poll_revents,
 	.close		= route_close,
 };
 
@@ -335,19 +444,19 @@ SND_PCM_PLUGIN_DEFINE_FUNC(s31route)
 	r = calloc(1, sizeof(*r));
 	if (!r)
 		return -ENOMEM;
-	r->efd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
-	if (r->efd < 0) {
+	/*
+	 * Until a sink is open there is nothing to wait for: a signalled
+	 * eventfd holds the number, so a write goes straight through and
+	 * reports -ENODEV rather than sleeping on nothing. slave_open()
+	 * dup2()s the sink's descriptor over it.
+	 */
+	r->pfd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+	if (r->pfd < 0) {
 		free(r);
 		return -errno;
 	}
-	/*
-	 * Left permanently signalled. The application's poll then always
-	 * says "you may write", and the blocking write to the slave provides
-	 * the pacing - which is the same pacing it would have had writing to
-	 * the device directly.
-	 */
-	if (write(r->efd, &one, sizeof(one)) < 0) {
-		close(r->efd);
+	if (write(r->pfd, &one, sizeof(one)) < 0) {
+		close(r->pfd);
 		free(r);
 		return -errno;
 	}
@@ -358,12 +467,12 @@ SND_PCM_PLUGIN_DEFINE_FUNC(s31route)
 	r->io.mmap_rw	= 0;
 	r->io.callback	= &route_cb;
 	r->io.private_data = r;
-	r->io.poll_fd	= r->efd;
-	r->io.poll_events = POLLIN;
+	r->io.poll_fd	= r->pfd;
+	r->io.poll_events = POLLOUT;
 
 	err = snd_pcm_ioplug_create(&r->io, name, stream, mode);
 	if (err < 0) {
-		close(r->efd);
+		close(r->pfd);
 		free(r);
 		return err;
 	}

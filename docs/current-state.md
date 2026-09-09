@@ -7134,3 +7134,63 @@ Caveat, stated plainly: the primary source is NDA. The chain here is vendor
 not a databook quotation. As far as either research pass could find, our
 "SSPLIT out, no interrupt ever, descriptor Active until -110" is the first
 published empirical characterisation of what the hardware actually does.
+
+## Sound cost 53% of Doom, and it was our plugin spinning (2026-09-09)
+
+Doom at 320x200 ran at 32.2 fps without sound and **15.1 fps** with it, on
+the loopback sink. The audio thread accounted for 2.1x the game thread's CPU.
+Bypassing s31route (`AUDIODEV=plughw:1,0`) priced the plugin directly, per
+10 s of attract mode:
+
+| path | audio thread CPU (ticks) | context switches |
+|---|---|---|
+| old s31route -> loopback | 2002 | 20,153 |
+| plughw:1,0, no plugin | 77 | 707 |
+| new s31route -> loopback | ~140 | ~1,200 |
+
+**Cause.** The plugin's poll descriptor was an eventfd left permanently
+signalled, on the theory that the blocking write to the sink provides the
+pacing. It never did: the sink buffer (200 ms) was larger than the
+application's ring (2 x 1024 frames at 22050 Hz for prboom), so the sink
+never filled and the write never blocked. Whenever the application's ring
+was full, alsa-lib's write loop went poll (instant), pointer (a delay ioctl
+on the sink), still full, poll again - a hot spin for the whole of every
+period. Through the loopback it was worse still: the sink's start threshold
+was its own full buffer, the ring could never fill it, so the sink **never
+started** and the thread spun for the entire run with silence coming out.
+The loopback's `pcm0p/sub0/status` read "PREPARED" throughout; nobody
+noticed because the Bluetooth leg was not being listened to.
+
+**Fix, all in `rootfs/s31route.c`:**
+
+- The number the application polls is stable (ours), but the file behind it
+  is the sink's own descriptor, `dup2()`ed into place on every sink
+  (re)open. So the wait really sleeps, and a sink switch does not strand a
+  poller on a closed descriptor.
+- The sink's ring mirrors the application's (buffer and period, scaled to
+  the sink's rate), because the application can never be more than its own
+  ring ahead of what has played, so a bigger sink buffer buys no headroom -
+  it only makes "sink writable" and "ring writable" different questions.
+- `avail_min` on the sink is derived so the wake fires exactly when the
+  application's ring has a period free, even when the sink clamps its
+  buffer upwards.
+- `start()` starts the sink explicitly; SDL's start threshold is one frame.
+- A sink underrun is reported as **our** XRUN and `-EPIPE`. The old code
+  re-prepared quietly, which left the sink PREPARED with less than a buffer
+  queued and never restarting; and an underrun first seen from poll()
+  surfaced as POLLERR, which alsa-lib maps to `-EIO` when the plugin's own
+  state is not XRUN. SDL calls `-EIO` unrecoverable and drops sound for the
+  rest of the run: "ALSA write failed (unrecoverable): I/O error", 1 launch
+  in 3.
+
+**Result.** 320x200 timedemo with sound, loopback sink: **27.1 fps cold,
+25.8 warm** (two runs), 2-6 underruns per demo, against 15.1 before. The
+remaining gap to 32.2 is the audio thread's real work (prboom's mixer plus
+one write per 46 ms period) at roughly 10% of the machine.
+
+`rootfs/xrunstorm` forces ~360 underrun recoveries a minute on either sink
+with the machine otherwise idle; neither sink hangs under it. The warm-run
+hang (below) needs the saturated game.
+
+`S31ROUTE_DEBUG=1` prints the negotiated rings. The plugin is in
+`XIP_ROOTS`; a rebuilt copy on the card is shadowed by the flash copy.

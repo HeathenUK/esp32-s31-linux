@@ -304,6 +304,22 @@ SLAB_TWEAKS :=
 else
 SLAB_TWEAKS := --disable SLUB_TINY --enable SLUB_DEBUG
 endif
+# `make linux LOCKUP=1` builds a kernel that says something when it locks up.
+#
+# The shipping kernel has no soft-lockup detector, no hung-task detector, no
+# SysRq, and - being single-hart TINY_RCU - no RCU stall detector either, so a
+# hang prints nothing whatever its cause. This turns all three on and makes
+# each of them panic, because a panic is the one thing guaranteed to reach the
+# console. Not for shipping: the watchdog thread costs a wake-up every 4 s.
+LOCKUP ?= 0
+ifeq ($(LOCKUP),0)
+LOCKUP_TWEAKS :=
+else
+LOCKUP_TWEAKS := --enable SOFTLOCKUP_DETECTOR --enable BOOTPARAM_SOFTLOCKUP_PANIC \
+	--enable DETECT_HUNG_TASK --set-val DEFAULT_HUNG_TASK_TIMEOUT 20 \
+	--enable BOOTPARAM_HUNG_TASK_PANIC \
+	--enable MAGIC_SYSRQ --enable MAGIC_SYSRQ_SERIAL
+endif
 LINUX_TARGET ?= xipImage
 
 # An oversized kernel is fatal, because it silently runs past its partition into
@@ -389,6 +405,7 @@ linux: toolchain | $(LINUX_OUT)
 		--disable ENABLE_DEFAULT_TRACERS \
 		--disable BLK_DEV_IO_TRACE \
 		$(PROF_TWEAKS) \
+		$(LOCKUP_TWEAKS) \
 		--disable BPF_SYSCALL \
 		--disable BPF_JIT \
 		--disable PREEMPT_LAZY \
@@ -397,8 +414,7 @@ linux: toolchain | $(LINUX_OUT)
 		--enable PREEMPT_NONE \
 		--enable DRM_FBDEV_EMULATION \
 		--disable IPV6 \
-		--enable SYSVIPC \
-		--enable FUTEX
+		--enable SYSVIPC
 	$(MAKE) -C $(LINUX_DIR) O=$(LINUX_OUT) ARCH=riscv CROSS_COMPILE="$(CROSS_COMPILE)" olddefconfig
 	$(MAKE) -C $(LINUX_DIR) O=$(LINUX_OUT) ARCH=riscv CROSS_COMPILE="$(CROSS_COMPILE)" \
 		KCFLAGS="-march=$(S31_SAFE_ISA) $(S31_COMMON_FLAGS)" -j$(JOBS) $(LINUX_TARGET) dtbs
