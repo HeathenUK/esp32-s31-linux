@@ -325,6 +325,7 @@ static int input_rescan_due(uint32_t scan_at)
 	return lv_tick_get() - scan_at > 2000;
 }
 static int shift, mod_ctrl, mod_alt, mod_caps;
+static int fs_active, fs_w, fs_h;	/* fullscreen (direct scanout) state */
 static int caps_led_seen;	/* the kernel drives the Caps Lock LED */
 
 /*
@@ -1092,7 +1093,13 @@ static int kbd_poll(void)
 			 * is not told and carries on; the protocol allows it.
 			 */
 			if (ev.code == KEY_LEFTMETA || ev.code == KEY_RIGHTMETA) {
-				xshim_ungrab_all();
+				/*
+				 * Only in windowed mode: in fullscreen there is
+				 * no desktop to return to, so dropping the grab
+				 * would just silently kill mouse-look. Ignore it.
+				 */
+				if (!fs_active)
+					xshim_ungrab_all();
 				continue;
 			}
 			kbd_key(ev.code);
@@ -3523,7 +3530,7 @@ static int32_t ptr_x, ptr_y;	/* pointer state, defined below */
  * covering it is scanned out directly, scaled by the driver, and LVGL is
  * not presented at all until the mode comes back.
  */
-static int fs_active, fs_w, fs_h;
+/* fs_active/fs_w/fs_h declared earlier (before kbd_poll needs fs_active) */
 static uint32_t fs_win;
 
 /*

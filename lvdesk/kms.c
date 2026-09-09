@@ -434,14 +434,27 @@ static int cur_hidden, cur_lx, cur_ly;
  */
 int kms_cursor_show(int on)
 {
+	struct drm_mode_cursor arg;
+
 	if (!cur_ok)
 		return -1;
 	if (on == !cur_hidden)
 		return 0;
 	cur_hidden = !on;
-	if (on)
-		return kms_cursor_move(cur_lx, cur_ly);
-	return kms_cursor_move(-KMS_CURSOR_DIM, -KMS_CURSOR_DIM);
+	/*
+	 * Issue the move DIRECTLY, not through kms_cursor_move(): that one
+	 * remembers the position and returns without an ioctl while hidden,
+	 * so routing the hide through it did nothing and the cursor stayed on
+	 * screen. Park off-panel to hide (the driver clamps the cursor rect
+	 * to the panel and paints nothing when it collapses); restore to the
+	 * remembered position to show. Legacy MOVE ioctl, no atomic commit.
+	 */
+	memset(&arg, 0, sizeof(arg));
+	arg.flags = DRM_MODE_CURSOR_MOVE;
+	arg.crtc_id = crtc_id;
+	arg.x = on ? cur_lx : (int)kms_w;
+	arg.y = on ? cur_ly : (int)kms_h;
+	return ioctl(kms_fd, DRM_IOCTL_MODE_CURSOR, &arg);
 }
 
 int kms_cursor_move(int x, int y)
