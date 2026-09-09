@@ -129,6 +129,16 @@ int xlite_send(struct xdpy *x, const unsigned char *r)
  * gets its `type` and `serial` so the toolkit can discard it cleanly rather
  * than act on a stale union.
  */
+/* XLITE_TRACE_INPUT=1: narrate the event and reply machinery on stderr. */
+static int xlite_tr(void)
+{
+	static int v = -1;
+
+	if (v < 0)
+		v = getenv("XLITE_TRACE_INPUT") != NULL;
+	return v;
+}
+
 static void decode(struct xdpy *x, const unsigned char *e, XEvent *ev)
 {
 	int type = e[0] & 0x7F;
@@ -155,6 +165,16 @@ static void decode(struct xdpy *x, const unsigned char *e, XEvent *ev)
 		ev->xbutton.time = g32(e + 4);
 		ev->xbutton.root = g32(e + 8);
 		ev->xbutton.window = g32(e + 12);
+		if (type == KeyPress || type == KeyRelease) {
+			static int tr = -1;	/* XLITE_TRACE_INPUT */
+
+			if (tr < 0)
+				tr = getenv("XLITE_TRACE_INPUT") != NULL;
+			if (tr)
+				fprintf(stderr, "xlite: key %s kc=%u win=0x%lx\n",
+					type == KeyPress ? "press" : "release",
+					e[1], (unsigned long)g32(e + 12));
+		}
 		ev->xbutton.subwindow = g32(e + 16);
 		ev->xbutton.x_root = (short)g16(e + 20);
 		ev->xbutton.y_root = (short)g16(e + 22);
@@ -449,6 +469,9 @@ static int pump_ex(struct xdpy *x, uint32_t want, unsigned char *hdr,
 		if (!block)
 			return 0;	/* the caller must not be made to wait */
 		xlite_flush(x);		/* never block holding unsent requests */
+		if (xlite_tr())
+			fprintf(stderr, "xlite: blocking read (want reply seq %u, "
+				"qlen %d)\n", want & 0xFFFF, x->pub.qlen);
 		if (!xlite_read_more(x, 1))
 			return 0;
 	}
@@ -811,7 +834,11 @@ int XEventsQueued(Display *d, int mode)
 	struct xdpy *x = XD(d);
 
 	if (x->qhead != x->qtail)
+	{
+		if (xlite_tr())
+			fprintf(stderr, "xlite: XEventsQueued -> %d\n", x->pub.qlen);
 		return x->pub.qlen;
+	}
 	if (mode == QueuedAlready)
 		return 0;
 	/*
@@ -897,6 +924,9 @@ static int xlite_wait_event(struct xdpy *x, XEvent *ev, int dequeue_it)
 				{ x->wake[0], POLLIN, 0 },
 			};
 
+			if (xlite_tr())
+				fprintf(stderr, "xlite: wait_event poll (peek=%d qlen %d)\n",
+					!dequeue_it, x->pub.qlen);
 			poll(pfd, x->wake[0] >= 0 ? 2 : 1, 1000);
 			if (pfd[1].revents & POLLIN) {
 				char b[16];
@@ -962,32 +992,119 @@ static long ev_mask_for(int type)
  * first non-match. The loss is bounded to a masked wait, and the only event
  * SDL can lose that way is an Expose it repaints on the next frame anyway.
  */
+/*
+ * Take the first queued event that `pred` accepts, leaving the others where
+ * they are. XMaskEvent and XCheckTypedEvent used to dequeue and DROP every
+ * event they were not looking for: SDL waits in XMaskEvent for the motion a
+ * warp generates, and every key typed while it waited vanished - which is
+ * why a grabbed game went deaf to its keyboard.
+ */
+static int queue_take(struct xdpy *x, int (*pred)(const XEvent *, long),
+		      long arg, XEvent *out)
+{
+	int i, idx = x->qhead, n = x->pub.qlen;
+
+	for (i = 0; i < n; i++, idx = (idx + 1) % x->qcap) {
+		int j;
+
+		if (!pred(&x->q[idx], arg))
+			continue;
+		*out = x->q[idx];
+		for (j = idx;; j = (j + 1) % x->qcap) {
+			int nx = (j + 1) % x->qcap;
+
+			if (nx == x->qtail)
+				break;
+			x->q[j] = x->q[nx];
+		}
+		x->qtail = (x->qtail + x->qcap - 1) % x->qcap;
+		x->pub.qlen--;
+		if (!x->pub.qlen)
+			x->qhead = x->qtail = 0;
+		return 1;
+	}
+	return 0;
+}
+
+static int pred_mask(const XEvent *e, long mask)
+{
+	return (ev_mask_for(e->type) & mask) != 0;
+}
+
+static int pred_type(const XEvent *e, long type)
+{
+	return e->type == (int)type;
+}
+
+/* Blocking: read until an event `pred` accepts is queued, then take it. */
+static int take_wait(struct xdpy *x, int (*pred)(const XEvent *, long),
+		     long arg, XEvent *ev)
+{
+	for (;;) {
+		int got;
+
+		xlite_out_acquire();
+		got = queue_take(x, pred, arg, ev);
+		if (!got) {
+			xlite_flush(x);
+			while (xlite_read_more(x, 0))
+				pump_ex(x, 0, NULL, NULL, NULL, 0);
+			got = queue_take(x, pred, arg, ev);
+		}
+		xlite_out_release();
+		if (got)
+			return 0;
+		{
+			struct pollfd pfd[2] = {
+				{ x->fd, POLLIN, 0 },
+				{ x->wake[0], POLLIN, 0 },
+			};
+
+			poll(pfd, x->wake[0] >= 0 ? 2 : 1, 1000);
+			if (pfd[1].revents & POLLIN) {
+				char b[16];
+
+				read(x->wake[0], b, sizeof(b));
+			}
+		}
+	}
+}
+
+/* Non-blocking: whatever has arrived, take a match if there is one. */
+static Bool take_check(struct xdpy *x, int (*pred)(const XEvent *, long),
+		       long arg, XEvent *ev)
+{
+	int got;
+
+	xlite_out_acquire();
+	got = queue_take(x, pred, arg, ev);
+	if (!got) {
+		xlite_flush(x);
+		while (xlite_read_more(x, 0))
+			pump_ex(x, 0, NULL, NULL, NULL, 0);
+		got = queue_take(x, pred, arg, ev);
+	}
+	xlite_out_release();
+	return got ? True : False;
+}
+
 XLITE_IMPL(XMaskEvent)
 int XMaskEvent(Display *d, long mask, XEvent *ev)
 {
-	int guard;
+	return take_wait(XD(d), pred_mask, mask, ev);
+}
 
-	for (guard = 0; guard < 100000; guard++) {
-		if (xlite_wait_event(XD(d), ev, 1) != 0)
-			return 0;
-		if (ev_mask_for(ev->type) & mask)
-			return 0;
-	}
-	return 0;
+XLITE_IMPL(XCheckMaskEvent)
+Bool XCheckMaskEvent(Display *d, long mask, XEvent *ev)
+{
+	return take_check(XD(d), pred_mask, mask, ev);
 }
 
 /* Non-blocking, and non-destructive when it does not match. */
 XLITE_IMPL(XCheckTypedEvent)
 Bool XCheckTypedEvent(Display *d, int type, XEvent *ev)
 {
-	if (!XPending(d))
-		return False;
-	if (xlite_wait_event(XD(d), ev, 0) != 0)	/* peek */
-		return False;
-	if (ev->type != type)
-		return False;
-	xlite_wait_event(XD(d), ev, 1);			/* consume */
-	return True;
+	return take_check(XD(d), pred_type, type, ev);
 }
 
 XLITE_IMPL(XSetErrorHandler)

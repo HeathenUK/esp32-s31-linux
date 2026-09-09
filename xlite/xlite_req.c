@@ -2115,10 +2115,24 @@ Cursor XCreateFontCursor(Display *dpy, unsigned shape)
 XLITE_IMPL(XFreeCursor)
 int XFreeCursor(Display *dpy, Cursor c) { (void)dpy; (void)c; return 1; }
 
+/* XLITE_TRACE_INPUT=1: say what the client asks of the pointer, on stderr. */
+static int input_trace(void)
+{
+	static int v = -1;
+
+	if (v < 0)
+		v = getenv("XLITE_TRACE_INPUT") != NULL;
+	return v;
+}
+
 XLITE_IMPL(XDefineCursor)
 int XDefineCursor(Display *dpy, Window w, Cursor c)
 {
 	XSetWindowAttributes a;
+
+	if (input_trace())
+		fprintf(stderr, "xlite: XDefineCursor(0x%lx, 0x%lx)\n",
+			(unsigned long)w, (unsigned long)c);
 
 	memset(&a, 0, sizeof(a));
 	a.cursor = c;
@@ -2158,6 +2172,7 @@ Cursor XCreatePixmapCursor(Display *dpy, Pixmap source, Pixmap mask,
 }
 
 /* ----------------------------------------------------- grabs and warps */
+
 /*
  * Pointer and keyboard grabs, and the warp SDL needs for relative motion.
  *
@@ -2192,6 +2207,10 @@ int XGrabPointer(Display *dpy, Window w, Bool owner_events,
 			return GrabNotViewable;
 	}
 	free(extra);
+	if (input_trace())
+		fprintf(stderr, "xlite: XGrabPointer(0x%lx owner=%d confine=0x%lx "
+			"cursor=0x%lx) -> %d\n", (unsigned long)w, owner_events,
+			(unsigned long)confine_to, (unsigned long)cursor, hdr[1]);
 	return hdr[1];				/* status */
 }
 
@@ -2199,6 +2218,8 @@ XLITE_IMPL(XUngrabPointer)
 int XUngrabPointer(Display *dpy, Time t)
 {
 	REQ(dpy, 27, 0, 2);
+	if (input_trace())
+		fprintf(stderr, "xlite: XUngrabPointer()\n");
 	p32(r + 4, t);
 	xlite_send(x, r);
 	return 1;
@@ -2246,6 +2267,13 @@ int XWarpPointer(Display *dpy, Window src, Window dst, int sx, int sy,
 	p16(r + 12, sx); p16(r + 14, sy);
 	p16(r + 16, sw); p16(r + 18, sh);
 	p16(r + 20, dx); p16(r + 22, dy);
+	if (input_trace()) {
+		static unsigned n;
+
+		if (n++ % 50 == 0)
+			fprintf(stderr, "xlite: XWarpPointer #%u -> 0x%lx %d,%d\n",
+				n, (unsigned long)dst, dx, dy);
+	}
 	xlite_send(x, r);
 	return 1;
 }
@@ -2277,6 +2305,101 @@ int XChangePointerControl(Display *dpy, Bool do_accel, Bool do_thresh,
 /* No screensaver exists to reset. */
 XLITE_IMPL(XResetScreenSaver)
 int XResetScreenSaver(Display *dpy) { (void)dpy; return 1; }
+
+/* ------------------------------------------------- Xext bookkeeping */
+/*
+ * The per-display registry libXext keeps for extension client code. SDL's
+ * bundled XF86VidMode client (its own copy of Xxf86vm, compiled into
+ * libSDL) is written against it: XextAddDisplay() asks the server for the
+ * extension's opcodes and remembers them per display, and everything else
+ * is find/remove. Until now libXext's copies were stubs returning NULL, so
+ * XF86VidModeQueryExtension() said "absent" and SDL_FULLSCREEN could only
+ * mean a window the size of the panel. SDL resolves these from libX11 first,
+ * so they live here. The hooks (close_display and friends) are accepted and
+ * not called; nothing here needs them.
+ */
+#include <X11/extensions/extutil.h>
+
+XLITE_IMPL(XextCreateExtension)
+XExtensionInfo *XextCreateExtension(void)
+{
+	return calloc(1, sizeof(XExtensionInfo));
+}
+
+XLITE_IMPL(XextDestroyExtension)
+void XextDestroyExtension(XExtensionInfo *info)
+{
+	if (!info)
+		return;
+	while (info->head) {
+		XExtDisplayInfo *d = info->head;
+
+		info->head = d->next;
+		free(d);
+	}
+	free(info);
+}
+
+XLITE_IMPL(XextFindDisplay)
+XExtDisplayInfo *XextFindDisplay(XExtensionInfo *info, Display *dpy)
+{
+	XExtDisplayInfo *d;
+
+	if (!info)
+		return NULL;
+	if (info->cur && info->cur->display == dpy)
+		return info->cur;
+	for (d = info->head; d; d = d->next)
+		if (d->display == dpy) {
+			info->cur = d;
+			return d;
+		}
+	return NULL;
+}
+
+XLITE_IMPL(XextAddDisplay)
+XExtDisplayInfo *XextAddDisplay(XExtensionInfo *info, Display *dpy,
+				const char *name, XExtensionHooks *hooks,
+				int nevents, XPointer data)
+{
+	XExtDisplayInfo *d;
+
+	(void)hooks; (void)nevents;
+	if (!info)
+		return NULL;
+	d = calloc(1, sizeof(*d));
+	if (!d)
+		return NULL;
+	d->display = dpy;
+	d->data = data;
+	d->codes = XInitExtension(dpy, name);	/* NULL: not present */
+	d->next = info->head;
+	info->head = d;
+	info->cur = d;
+	info->ndisplays++;
+	return d;
+}
+
+XLITE_IMPL(XextRemoveDisplay)
+int XextRemoveDisplay(XExtensionInfo *info, Display *dpy)
+{
+	XExtDisplayInfo **pp;
+
+	if (!info)
+		return 0;
+	for (pp = &info->head; *pp; pp = &(*pp)->next)
+		if ((*pp)->display == dpy) {
+			XExtDisplayInfo *d = *pp;
+
+			*pp = d->next;
+			if (info->cur == d)
+				info->cur = NULL;
+			info->ndisplays--;
+			free(d);
+			return 1;
+		}
+	return 0;
+}
 
 /*
  * No fontsets. XSupportsLocale() already returns False, so the toolkit takes

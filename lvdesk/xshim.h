@@ -101,6 +101,18 @@ void xshim_on_warp(void (*cb)(uint32_t top, int x, int y));
 int xshim_cursor_hidden(uint32_t top, int x, int y);
 
 /*
+ * XFree86-VidMode: a client switched the screen to w x h (the panel's own
+ * size means "back to normal"). This is how SDL 1.2 asks for fullscreen at a
+ * game's resolution: it picks the smallest mode that fits, switches, and
+ * sizes an override-redirect window to it at 0,0. The desktop then shows
+ * that window scaled to the panel and composites nothing else.
+ */
+void xshim_on_mode(void (*cb)(int w, int h));
+
+/* The mapped top-level that covers (0,0)-(w,h) in root coordinates, or 0. */
+uint32_t xshim_mode_window(int w, int h);
+
+/*
  * Disconnect the client owning this window and release its resources, without
  * calling on_close - for a close the consumer initiated itself. X clients exit
  * when their connection drops, which is what makes this a working close button

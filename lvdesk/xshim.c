@@ -303,6 +303,20 @@ static void (*draw_cb)(uint32_t id);
 static void (*close_cb)(uint32_t id);
 static void (*title_cb)(uint32_t id);
 static void (*warp_cb)(uint32_t top, int x, int y);
+static void (*mode_cb)(int w, int h);
+
+/*
+ * XFree86-VidMode. The list is what a client may switch to; the panel is the
+ * first entry and the current mode until someone switches. A switch is
+ * remembered with its client so that the client going away puts the panel
+ * back, the way a real server restores the mode when its client exits.
+ */
+static const struct { uint16_t w, h; } vm_modes[] = {
+	{ XSHIM_W, XSHIM_H }, { 640, 480 }, { 640, 400 }, { 640, 384 },
+	{ 512, 384 }, { 480, 300 }, { 400, 240 }, { 320, 240 }, { 320, 200 },
+};
+static int vm_cur;			/* index into vm_modes */
+static int vm_cli = -1;			/* who switched away from the panel */
 
 /* One pointer, one keyboard, so at most one grab of each. */
 static uint32_t grab_win, grab_confine, grab_cursor;
@@ -320,6 +334,7 @@ static int kgrab_cli = -1;
 static struct res *top_of(struct res *r);
 struct cli;
 static void out_flush(struct cli *c);
+static void vidmode_request(struct cli *c, const uint8_t *r, int len);
 static void out_push(struct cli *c, const void *p, size_t n);
 static void notify_draw(struct res *d);
 static int trace_on(void);
@@ -2637,6 +2652,8 @@ static void expose_window(struct cli *c, struct res *w)
  * us where it is, so nothing copies at all.
  */
 #define MITSHM_MAJOR		202
+#define VIDMODE_MAJOR	203
+#define VIDMODE_ERROR	170
 #define MITSHM_ERROR		144
 
 /* Segments a client has attached. Small: a client has one or two. */
@@ -5058,6 +5075,10 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 			xshm_request(c, r, len);
 			return;
 		}
+		if (op == VIDMODE_MAJOR) {
+			vidmode_request(c, r, len);
+			return;
+		}
 		if (c->nunimpl[op & 127]++ == 0) {
 			fprintf(stderr, "xshim: extension request, major "
 				"opcode %u minor %u - not implemented\n", op,
@@ -5102,6 +5123,12 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		 * try_mitshm() in SDL's SDL_x11image.c. Answering it is what
 		 * removes a full-frame memcpy from every SDL client.
 		 */
+		if (n == 24 && !memcmp(r + 8, "XFree86-VidModeExtension", 24)) {
+			d24[0] = 1;
+			d24[1] = VIDMODE_MAJOR;
+			d24[2] = 0;
+			d24[3] = VIDMODE_ERROR;
+		}
 		if (n == 7 && !memcmp(r + 8, "MIT-SHM", 7)) {
 			d24[0] = 1;
 			d24[1] = MITSHM_MAJOR;
@@ -6016,14 +6043,14 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		grab_owner_ev = r[1];
 		grab_confine = get32(r + 12);
 		grab_cursor = get32(r + 16);
-		if (trace_on())
-			fprintf(stderr, "xshim: pointer grabbed by 0x%x\n",
-				w->id);
+		fprintf(stderr, "xshim: pointer grabbed by 0x%x\n", w->id);
 		send_reply(c, 0 /* Success */, d24, NULL, 0);
 		break;
 	}
 	case 27:					/* UngrabPointer */
 		if (grab_cli == cur_owner) {
+			fprintf(stderr, "xshim: pointer released by 0x%x\n",
+				grab_win);
 			grab_win = 0;
 			grab_cli = -1;
 		}
@@ -6071,6 +6098,15 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		if (!dst->buf)
 			break;
 		warp_cb(dst->buf->id, dst->ax + dx, dst->ay + dy);
+		/*
+		 * A warp generates MotionNotify, and SDL relies on it: after
+		 * recentring the pointer it blocks in XMaskEvent for exactly
+		 * that event. Without it the game froze in that wait and every
+		 * key typed afterwards was thrown away by the wait's own
+		 * discard loop.
+		 */
+		xshim_pointer(dst->buf->id, dst->ax + dx, dst->ay + dy, 0, 0);
+		out_flush(c);
 		break;
 	}
 	case 12: {					/* ConfigureWindow */
@@ -6574,6 +6610,124 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 	}
 }
 
+/* ------------------------------------------------- XFree86-VidMode */
+/*
+ * Wire layout per xf86vmstr.h, protocol 2.x. A mode record is 48 bytes:
+ * dotclock, h{display,syncstart,syncend,total} as CARD16, hskew as CARD32,
+ * v{display,syncstart,syncend,total}, pad, flags, three reserved words,
+ * privsize. The timings are made up - nothing here has a CRT - but they are
+ * consistent, so a client that computes a refresh rate gets 60 Hz.
+ */
+static void vm_mode_record(uint8_t *m, int i)
+{
+	unsigned w = vm_modes[i].w, h = vm_modes[i].h;
+	unsigned ht = w + 24, vt = h + 8;
+
+	memset(m, 0, 48);
+	put32(m + 0, ht * vt * 60 / 1000);	/* dotclock, kHz */
+	put16(m + 4, w);
+	put16(m + 6, w + 8);
+	put16(m + 8, w + 16);
+	put16(m + 10, ht);
+	put32(m + 12, 0);			/* hskew */
+	put16(m + 16, h);
+	put16(m + 18, h + 2);
+	put16(m + 20, h + 4);
+	put16(m + 22, vt);
+	put32(m + 28, 0);			/* flags */
+	put32(m + 44, 0);			/* privsize */
+}
+
+static void vm_switch(int idx, int owner)
+{
+	if (idx == vm_cur)
+		return;
+	vm_cur = idx;
+	vm_cli = idx ? owner : -1;
+	fprintf(stderr, "xshim: video mode %ux%u (client %d)\n",
+		vm_modes[idx].w, vm_modes[idx].h, owner);
+	if (mode_cb)
+		mode_cb(vm_modes[idx].w, vm_modes[idx].h);
+}
+
+static void vidmode_request(struct cli *c, const uint8_t *r, int len)
+{
+	uint8_t minor = r[1];
+	uint8_t d24[24];
+	static uint8_t modes[sizeof(vm_modes) / sizeof(vm_modes[0]) * 48];
+	int i, n = (int)(sizeof(vm_modes) / sizeof(vm_modes[0]));
+
+	memset(d24, 0, sizeof d24);
+	switch (minor) {
+	case 0:						/* QueryVersion */
+		put16(d24 + 0, 2);
+		put16(d24 + 2, 2);
+		send_reply(c, 0, d24, NULL, 0);
+		break;
+	case 1: {					/* GetModeLine */
+		uint8_t m[48], extra[20];
+
+		vm_mode_record(m, vm_cur);
+		/* dotclock @8, then the CARD16 timings packed as the reply wants */
+		memcpy(d24 + 0, m + 0, 4);		/* dotclock */
+		memcpy(d24 + 4, m + 4, 8);		/* hdisplay..htotal */
+		put16(d24 + 12, 0);			/* hskew (CARD16 here) */
+		memcpy(d24 + 14, m + 16, 8);		/* vdisplay..vtotal */
+		put16(d24 + 22, 0);			/* pad */
+		memset(extra, 0, sizeof extra);		/* flags, reserved, privsize */
+		send_reply(c, 0, d24, extra, sizeof extra);
+		break;
+	}
+	case 6:						/* GetAllModeLines */
+		for (i = 0; i < n; i++)
+			vm_mode_record(modes + i * 48, i);
+		put32(d24 + 0, n);
+		send_reply(c, 0, d24, modes, n * 48);
+		break;
+	case 10: {					/* SwitchToMode */
+		unsigned w = get16(r + 12), h = get16(r + 22);
+
+		for (i = 0; i < n; i++)
+			if (vm_modes[i].w == w && vm_modes[i].h == h)
+				break;
+		if (i == n) {
+			send_error(c, X_BAD_VALUE, w << 16 | h, VIDMODE_MAJOR);
+			break;
+		}
+		vm_switch(i, cur_owner);
+		break;
+	}
+	case 9:						/* ValidateModeLine */
+		put32(d24 + 0, 0);			/* MODE_OK */
+		send_reply(c, 0, d24, NULL, 0);
+		break;
+	case 11:					/* GetViewPort */
+		send_reply(c, 0, d24, NULL, 0);		/* 0,0 */
+		break;
+	case 16:					/* GetGamma */
+		put32(d24 + 0, 10000);			/* 1.0 in the client's units */
+		put32(d24 + 4, 10000);
+		put32(d24 + 8, 10000);
+		send_reply(c, 0, d24, NULL, 0);
+		break;
+	case 19:					/* GetGammaRampSize: none */
+		send_reply(c, 0, d24, NULL, 0);
+		break;
+	case 4:						/* GetMonitor: nothing known */
+		send_reply(c, 0, d24, NULL, 0);
+		break;
+	case 3: case 5: case 12: case 14: case 15:	/* SwitchMode, Lock, */
+		break;			/* SetViewPort, SetClientVersion, SetGamma */
+	default:
+		if (c->nunimpl[VIDMODE_MAJOR & 127]++ == 0)
+			fprintf(stderr, "xshim: VidMode minor %u not implemented\n",
+				minor);
+		send_error(c, X_BAD_IMPLEMENTATION, 0, VIDMODE_MAJOR);
+		break;
+	}
+	(void)len;
+}
+
 /* ------------------------------------------------------------------- API */
 
 int xshim_init(void (*on_window)(uint32_t, int, int),
@@ -7011,6 +7165,14 @@ static struct res *hit_test(struct res *w, int *x, int *y)
  * nothing on the containers around it, so without this every click lands on a
  * window that never asked for one and is dropped.
  */
+static uint32_t xshim_now_ms(void)
+{
+	struct timespec ts;
+
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (uint32_t)(ts.tv_sec * 1000u + ts.tv_nsec / 1000000u);
+}
+
 static void send_device_event(struct cli *c, uint8_t type, uint8_t detail,
 			      struct res *w, int x, int y, uint32_t sel,
 			      uint16_t state)
@@ -7037,7 +7199,13 @@ static void send_device_event(struct cli *c, uint8_t type, uint8_t detail,
 	if (trace_on())
 		fprintf(stderr, "xshim:   -> 0x%x\n", w->id);
 	memset(d, 0, sizeof(d));
-	put32(d + 0, 0);			/* time: CurrentTime */
+	/*
+	 * A real server time, not 0. SDL's autorepeat filter treats a
+	 * KeyRelease followed by a KeyPress of the same key "within 2 ms"
+	 * as a repeat and swallows both; with every event stamped 0, three
+	 * Enters were one Enter. Milliseconds of CLOCK_MONOTONIC.
+	 */
+	put32(d + 0, xshim_now_ms());
 	put32(d + 4, ROOT_ID);
 	put32(d + 8, w->id);			/* event window */
 	put32(d + 12, child);
@@ -7085,7 +7253,7 @@ void xshim_pointer(uint32_t id, int x, int y, int button, int act)
 	if (grab_win) {
 		struct res *g = res_find(grab_win);
 
-		if (g && g->type == R_WINDOW && g->buf == top) {
+		if (g && g->type == R_WINDOW && top_of(g) == top) {
 			if (grab_owner_ev && x >= 0 && y >= 0 &&
 			    x < top->w && y < top->h)
 				w = hit_test(top, &x, &y);
@@ -7202,7 +7370,7 @@ void xshim_key(uint32_t id, int sym, int press, unsigned int mods)
 	if (kgrab_win) {
 		struct res *g = res_find(kgrab_win);
 
-		if (g && g->type == R_WINDOW && g->buf == top) {
+		if (g && g->type == R_WINDOW && top_of(g) == top) {
 			w = g;
 			x = y = 0;
 		}
@@ -7249,6 +7417,8 @@ static void client_drop(struct cli *c, int notify)
 		kgrab_win = 0;
 		kgrab_cli = -1;
 	}
+	if (vm_cli == owner)
+		vm_switch(0, -1);
 
 	if (c->fd >= 0) {
 		close(c->fd);
@@ -7360,6 +7530,29 @@ void xshim_focus(uint32_t id)
 	}
 }
 
+void xshim_on_mode(void (*cb)(int w, int h))
+{
+	mode_cb = cb;
+}
+
+uint32_t xshim_mode_window(int w, int h)
+{
+	int i;
+	uint32_t best = 0;
+
+	/* The last one created wins: res[] fills in creation order. */
+	for (i = 0; i < MAXRES; i++) {
+		struct res *t = &res[i];
+
+		if (t->type != R_WINDOW || t->parent != ROOT_ID || !t->mapped)
+			continue;
+		if (t->x <= 0 && t->y <= 0 && t->x + t->w >= w &&
+		    t->y + t->h >= h)
+			best = t->id;
+	}
+	return best;
+}
+
 void xshim_on_warp(void (*cb)(uint32_t top, int x, int y))
 {
 	warp_cb = cb;
@@ -7373,9 +7566,8 @@ uint32_t xshim_grab_top(void)
 		g = res_find(grab_win);
 	else if (kgrab_win)
 		g = res_find(kgrab_win);
-	if (!g || g->type != R_WINDOW || !g->buf)
-		return 0;
-	return g->buf->id;
+	g = top_of(g);
+	return g ? g->id : 0;
 }
 
 void xshim_ungrab_all(void)
@@ -7393,8 +7585,7 @@ int xshim_cursor_hidden(uint32_t top_id, int x, int y)
 
 	if (!top || top->type != R_WINDOW)
 		return 0;
-	if (grab_win && grab_cursor && res_find(grab_win) &&
-	    res_find(grab_win)->buf == top)
+	if (grab_win && grab_cursor && top_of(res_find(grab_win)) == top)
 		cid = grab_cursor;
 	else {
 		w = hit_test(top, &x, &y);

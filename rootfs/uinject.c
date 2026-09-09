@@ -337,6 +337,37 @@ int main(int argc, char **argv)
 			emit(kbd_fd, EV_KEY, KEY_LEFTALT, 0); syn(kbd_fd);
 			msleep(400);
 		}
+	} else if (!strcmp(what, "move")) {
+		/*
+		 * Relative motion and nothing else - no click, no homing - for
+		 * a grabbed pointer, where the client wants deltas and a click
+		 * would fire a gun. In steps, as a mouse would send them.
+		 */
+		int dx = argc > 2 ? atoi(argv[2]) : 0;
+		int dy = argc > 3 ? atoi(argv[3]) : 0;
+		int step = argc > 4 ? atoi(argv[4]) : 8;
+
+		while (dx || dy) {
+			int sx = dx > step ? step : dx < -step ? -step : dx;
+			int sy = dy > step ? step : dy < -step ? -step : dy;
+
+			if (sx) emit(mouse_fd, EV_REL, REL_X, sx);
+			if (sy) emit(mouse_fd, EV_REL, REL_Y, sy);
+			syn(mouse_fd);
+			dx -= sx;
+			dy -= sy;
+			msleep(8);
+		}
+		msleep(300);
+	} else if (!strcmp(what, "hold")) {
+		/* Hold a key for N ms: walking needs more than a tap. */
+		int k = argc > 2 ? atoi(argv[2]) : KEY_UP;
+		int ms = argc > 3 ? atoi(argv[3]) : 500;
+
+		emit(kbd_fd, EV_KEY, k, 1); syn(kbd_fd);
+		msleep(ms);
+		emit(kbd_fd, EV_KEY, k, 0); syn(kbd_fd);
+		msleep(200);
 	} else if (!strcmp(what, "dragto")) {
 		/* dragto x1 y1 x2 y2 - press at the first point, drag, release. */
 		move_to_precise(argc > 2 ? atoi(argv[2]) : 0,

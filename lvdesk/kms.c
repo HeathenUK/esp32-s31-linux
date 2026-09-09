@@ -43,6 +43,7 @@ uint8_t *kms_map;
 uint32_t kms_w, kms_h, kms_pitch, kms_size;
 
 static uint32_t crtc_id, conn_id;
+static struct drm_mode_modeinfo native_mode;	/* what kms_open() set */
 static uint32_t cur_handle;
 static int cur_ok;
 static int cur_w, cur_h;
@@ -284,6 +285,7 @@ int kms_open(const char *path)
 	if (ioctl(kms_fd, DRM_IOCTL_MODE_SETCRTC, &crtc) < 0) {
 		perror("kms: SETCRTC"); return -1;
 	}
+	native_mode = mode;
 
 	free(conn_ids); free(crtc_ids); free(modes);
 	printf("kms: %ux%u pitch %u (%u bytes) on crtc %u connector %u\n",
@@ -460,4 +462,165 @@ int kms_cursor_move(int x, int y)
 	arg.x = x;
 	arg.y = y;
 	return ioctl(kms_fd, DRM_IOCTL_MODE_CURSOR, &arg);
+}
+
+/* ------------------------------------------------------- fullscreen */
+/*
+ * A second framebuffer at a client's video mode, scanned out in place of
+ * the desktop's. The driver treats any CRTC mode smaller than the panel as
+ * "scale this to fill the panel" and does that with the PPA, centred, in
+ * whole sixteenths - so a 320x200 game lands at 760x475 with thin black
+ * bars, and the desktop copies nothing per frame: it expands the client's
+ * pixels straight into this buffer and marks them dirty.
+ */
+static uint32_t fs_fb_id, fs_handle;
+static size_t fs_size;
+uint8_t *kms_fs_map;
+uint32_t kms_fs_pitch, kms_fs_w, kms_fs_h;
+
+static void kms_fs_free(void)
+{
+	struct drm_mode_destroy_dumb dreq;
+
+	if (kms_fs_map && kms_fs_map != MAP_FAILED)
+		munmap(kms_fs_map, fs_size);
+	kms_fs_map = NULL;
+	if (fs_fb_id)
+		ioctl(kms_fd, DRM_IOCTL_MODE_RMFB, &fs_fb_id);
+	fs_fb_id = 0;
+	if (fs_handle) {
+		memset(&dreq, 0, sizeof(dreq));
+		dreq.handle = fs_handle;
+		ioctl(kms_fd, DRM_IOCTL_MODE_DESTROY_DUMB, &dreq);
+	}
+	fs_handle = 0;
+	kms_fs_w = kms_fs_h = 0;
+}
+
+static int kms_setcrtc(uint32_t fb_id, const struct drm_mode_modeinfo *m)
+{
+	struct drm_mode_crtc crtc;
+
+	memset(&crtc, 0, sizeof(crtc));
+	crtc.crtc_id = crtc_id;
+	crtc.fb_id = fb_id;
+	crtc.set_connectors_ptr = (uint64_t)(uintptr_t)&conn_id;
+	crtc.count_connectors = 1;
+	crtc.mode = *m;
+	crtc.mode_valid = 1;
+	return ioctl(kms_fd, DRM_IOCTL_MODE_SETCRTC, &crtc);
+}
+
+int kms_fs_enter(int w, int h)
+{
+	struct drm_mode_create_dumb creq;
+	struct drm_mode_map_dumb mreq;
+	struct drm_mode_fb_cmd fb;
+	struct drm_mode_modeinfo m;
+
+	if (kms_fd < 0 || w <= 0 || h <= 0)
+		return -1;
+	if (kms_fs_map && (int)kms_fs_w == w && (int)kms_fs_h == h)
+		return 0;
+	kms_fs_free();
+	memset(&creq, 0, sizeof(creq));
+	creq.width = w;
+	creq.height = h;
+	creq.bpp = 16;
+	if (ioctl(kms_fd, DRM_IOCTL_MODE_CREATE_DUMB, &creq) < 0) {
+		perror("kms: fs CREATE_DUMB");
+		return -1;
+	}
+	fs_handle = creq.handle;
+	kms_fs_pitch = creq.pitch;
+	fs_size = creq.size;
+	memset(&fb, 0, sizeof(fb));
+	fb.width = w;
+	fb.height = h;
+	fb.pitch = kms_fs_pitch;
+	fb.bpp = 16;
+	fb.depth = 16;
+	fb.handle = fs_handle;
+	if (ioctl(kms_fd, DRM_IOCTL_MODE_ADDFB, &fb) < 0) {
+		perror("kms: fs ADDFB");
+		kms_fs_free();
+		return -1;
+	}
+	fs_fb_id = fb.fb_id;
+	memset(&mreq, 0, sizeof(mreq));
+	mreq.handle = fs_handle;
+	if (ioctl(kms_fd, DRM_IOCTL_MODE_MAP_DUMB, &mreq) < 0) {
+		perror("kms: fs MAP_DUMB");
+		kms_fs_free();
+		return -1;
+	}
+	kms_fs_map = mmap(NULL, fs_size, PROT_READ | PROT_WRITE, MAP_SHARED,
+			  kms_fd, mreq.offset);
+	if (kms_fs_map == MAP_FAILED) {
+		perror("kms: fs mmap");
+		kms_fs_free();
+		return -1;
+	}
+	memset(kms_fs_map, 0, fs_size);
+	/*
+	 * Timings are nominal: the driver drives the panel at its own and
+	 * reads only the size from this. They just have to be a legal mode.
+	 */
+	memset(&m, 0, sizeof(m));
+	m.hdisplay = w;
+	m.hsync_start = w + 8;
+	m.hsync_end = w + 16;
+	m.htotal = w + 24;
+	m.vdisplay = h;
+	m.vsync_start = h + 2;
+	m.vsync_end = h + 4;
+	m.vtotal = h + 8;
+	m.clock = (uint32_t)m.htotal * m.vtotal * 60 / 1000;
+	m.vrefresh = 60;
+	m.type = DRM_MODE_TYPE_USERDEF;
+	snprintf(m.name, sizeof(m.name), "%dx%d", w, h);
+	if (kms_setcrtc(fs_fb_id, &m) < 0) {
+		perror("kms: fs SETCRTC");
+		kms_fs_free();
+		if (kms_setcrtc(kms_fb_id, &native_mode) < 0)
+			perror("kms: SETCRTC (restore)");
+		return -1;
+	}
+	kms_fs_w = w;
+	kms_fs_h = h;
+	printf("kms: fullscreen %dx%d, fb %u pitch %u\n", w, h, fs_fb_id,
+	       kms_fs_pitch);
+	return 0;
+}
+
+void kms_fs_leave(void)
+{
+	if (!kms_fs_map)
+		return;
+	if (kms_setcrtc(kms_fb_id, &native_mode) < 0)
+		perror("kms: SETCRTC (leave fullscreen)");
+	kms_fs_free();
+	printf("kms: fullscreen off\n");
+}
+
+int kms_fs_dirty(int x1, int y1, int x2, int y2)
+{
+	struct drm_clip_rect clip;
+	struct drm_mode_fb_dirty_cmd d;
+
+	if (!fs_fb_id)
+		return -1;
+	if (x1 < 0) x1 = 0;
+	if (y1 < 0) y1 = 0;
+	if (x2 >= (int)kms_fs_w) x2 = kms_fs_w - 1;
+	if (y2 >= (int)kms_fs_h) y2 = kms_fs_h - 1;
+	if (x1 > x2 || y1 > y2)
+		return 0;
+	clip.x1 = x1; clip.y1 = y1;
+	clip.x2 = x2 + 1; clip.y2 = y2 + 1;
+	memset(&d, 0, sizeof(d));
+	d.fb_id = fs_fb_id;
+	d.num_clips = 1;
+	d.clips_ptr = (uint64_t)(uintptr_t)&clip;
+	return ioctl(kms_fd, DRM_IOCTL_MODE_DIRTYFB, &d);
 }

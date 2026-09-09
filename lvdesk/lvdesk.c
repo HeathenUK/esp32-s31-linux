@@ -3518,6 +3518,13 @@ static int win_is_xclient(lv_obj_t *win)
  * maximised XFiles.
  */
 static int32_t ptr_x, ptr_y;	/* pointer state, defined below */
+/*
+ * A client's video mode is on the panel (XFree86-VidMode): the top-level
+ * covering it is scanned out directly, scaled by the driver, and LVGL is
+ * not presented at all until the mode comes back.
+ */
+static int fs_active, fs_w, fs_h;
+static uint32_t fs_win;
 
 /*
  * Send a button the LVGL indev does not carry straight to the client under the
@@ -3698,15 +3705,131 @@ static void xwin_on_title(uint32_t id)
  * mouse is grabbed and hidden, to recentre it, and reads the next motion as
  * a delta from the centre. No event is synthesised for the warp itself.
  */
+static int fs_enabled(void)
+{
+	static int v = -1;
+
+	/*
+	 * Direct-scanout fullscreen is OFF by default. Entering a reduced
+	 * video mode currently takes the board down within ~30 s (cause not
+	 * yet found - the SETCRTC to a small mode, or the driver's per-mode
+	 * PPA re-placement). Windowed play, grabs and mouse-look do not need
+	 * it, so it stays behind LVDESK_FULLSCREEN=1 until the crash is
+	 * understood. When off, a client's VidMode switch is acknowledged
+	 * (SDL still gets its mode list) but the desktop keeps compositing
+	 * and the window stays windowed.
+	 */
+	if (v < 0)
+		v = getenv("LVDESK_FULLSCREEN") != NULL;
+	return v;
+}
+
+static void xwin_on_mode(int w, int h)
+{
+	if (!fs_enabled())
+		return;
+	if (w == (int)kms_w && h == (int)kms_h) {
+		if (fs_active) {
+			kms_fs_leave();
+			fs_active = 0;
+			fs_win = 0;
+			lv_obj_invalidate(lv_screen_active());
+			printf("lvdesk: fullscreen off\n");
+			fflush(stdout);
+		}
+		return;
+	}
+	if (kms_fs_enter(w, h) < 0) {
+		fs_active = 0;
+		return;
+	}
+	fs_active = 1;
+	fs_w = w;
+	fs_h = h;
+	fs_win = 0;			/* resolved on the first draw */
+	printf("lvdesk: fullscreen %dx%d\n", w, h);
+	fflush(stdout);
+}
+
+/*
+ * Present the fullscreen window: its pixels go straight into the mode's
+ * framebuffer (an 8-bit window is expanded through its palette, a 16-bit
+ * one copied) and only the damaged rows are handed to the driver.
+ */
+static void fs_present(uint32_t id)
+{
+	const uint16_t *pal, *px = NULL;
+	const uint8_t *src;
+	int sw, sh, sstride, dx, dy, dw, dh, y;
+
+	src = xshim_window_indices(id, &sw, &sh, &sstride, &pal);
+	if (!src || !pal) {
+		px = xshim_window_pixels(id, &sw, &sh);
+		if (!px)
+			return;
+		sstride = sw;
+	}
+	if (!xshim_window_take_damage(id, &dx, &dy, &dw, &dh)) {
+		dx = dy = 0;
+		dw = sw;
+		dh = sh;
+	}
+	if (dx + dw > fs_w) dw = fs_w - dx;
+	if (dy + dh > fs_h) dh = fs_h - dy;
+	if (dx + dw > sw) dw = sw - dx;
+	if (dy + dh > sh) dh = sh - dy;
+	if (dw <= 0 || dh <= 0)
+		return;
+	for (y = dy; y < dy + dh; y++) {
+		uint16_t *dp = (uint16_t *)(kms_fs_map + (size_t)y * kms_fs_pitch)
+			       + dx;
+		int k = 0;
+
+		if (px) {
+			memcpy(dp, px + (size_t)y * sstride + dx, (size_t)dw * 2);
+			continue;
+		}
+		{
+			const uint8_t *sp = src + (size_t)y * sstride + dx;
+
+			if (((((uintptr_t)sp | (uintptr_t)dp) & 3u) == 0)) {
+				for (; k + 7 < dw; k += 8) {
+					uint32_t a4 = *(const uint32_t *)(sp + k);
+					uint32_t b4 = *(const uint32_t *)(sp + k + 4);
+
+					dp[k]     = pal[a4 & 0xff];
+					dp[k + 1] = pal[(a4 >> 8) & 0xff];
+					dp[k + 2] = pal[(a4 >> 16) & 0xff];
+					dp[k + 3] = pal[(a4 >> 24) & 0xff];
+					dp[k + 4] = pal[b4 & 0xff];
+					dp[k + 5] = pal[(b4 >> 8) & 0xff];
+					dp[k + 6] = pal[(b4 >> 16) & 0xff];
+					dp[k + 7] = pal[(b4 >> 24) & 0xff];
+				}
+			}
+			for (; k < dw; k++)
+				dp[k] = pal[sp[k]];
+		}
+	}
+	kms_fs_dirty(dx, dy, dx + dw - 1, dy + dh - 1);
+}
+
 static void xwin_on_warp(uint32_t top, int x, int y)
 {
 	int32_t w = lv_display_get_horizontal_resolution(NULL);
 	int32_t h = lv_display_get_vertical_resolution(NULL);
 	int i;
 
+	if (fs_active) {
+		w = fs_w;
+		h = fs_h;
+	}
 	if (!top) {
 		ptr_x += x;
 		ptr_y += y;
+	} else if (fs_active && top == fs_win) {
+		ptr_x = x;
+		ptr_y = y;
 	} else {
 		for (i = 0; i < xwin_n; i++)
 			if (xwins[i].id == top && xwins[i].img) {
@@ -3813,6 +3936,14 @@ static void xwin_on_window(uint32_t id, int w, int h)
 	rec = win_find(win);
 	if (rec) {
 		rec->xid = id;
+		/*
+		 * make_window() focused the frame before it had an X id, so
+		 * the FocusIn went nowhere. A newly opened client that is the
+		 * focused window - the usual case - would otherwise never hear
+		 * it, and SDL defers a game's grab until it does.
+		 */
+		if (win_focus == rec)
+			xshim_focus(id);
 		/*
 		 * A client that declared itself fixed-size gets no maximise
 		 * button and no resize grip. Offering the operation and then
@@ -4398,6 +4529,15 @@ static void xwin_blit_direct(const lv_area_t *area)
 static void xwin_on_draw(uint32_t id)
 {
 	int i, w, h;
+
+	if (fs_active) {
+		if (!fs_win)
+			fs_win = xshim_mode_window(fs_w, fs_h);
+		if (id == fs_win) {
+			fs_present(id);
+			return;
+		}
+	}
 
 	for (i = 0; i < xwin_n; i++)
 		if (xwins[i].id == id) {
@@ -6550,6 +6690,11 @@ static void kms_flush_cb(lv_display_t *d, const lv_area_t *area, uint8_t *px)
 {
 	uint64_t lvp_t0 = 0;
 
+	if (fs_active) {		/* the mode's buffer is on the panel */
+		lv_display_flush_ready(d);
+		return;
+	}
+
 	if (lvp_on < 0)
 		lvp_on = getenv("LVPROF") != NULL;
 	if (lvp_on)
@@ -7012,6 +7157,11 @@ static int mouse_poll(void)
 	int32_t h = lv_display_get_vertical_resolution(NULL);
 	int i;
 	int rdx = 0, rdy = 0;			/* delta to accelerate */
+
+	if (fs_active) {		/* the pointer lives in the mode */
+		w = fs_w;
+		h = fs_h;
+	}
 	int vdx = 0, vdy = 0;			/* verbatim: synthetic devices */
 	uint32_t ev_ms = 0;			/* timestamp of the last motion */
 	static float carry_x, carry_y;		/* sub-pixel remainder */
@@ -7254,7 +7404,12 @@ static int mouse_poll(void)
 			lv_area_t a;
 			int i, have = 0;
 
-			for (i = 0; i < xwin_n; i++)
+			if (fs_active && g == fs_win) {
+				a.x1 = 0; a.y1 = 0;
+				a.x2 = fs_w - 1; a.y2 = fs_h - 1;
+				have = 1;
+			}
+			for (i = 0; i < xwin_n && !have; i++)
 				if (xwins[i].id == g && xwins[i].img) {
 					lv_obj_get_coords(xwins[i].img, &a);
 					have = 1;
@@ -7352,6 +7507,8 @@ static int mouse_poll(void)
 				break;
 			}
 		}
+		if (fs_active)
+			hide = 1;
 		if (hide != hidden) {
 			uint32_t t0 = lv_tick_get();
 
@@ -7996,6 +8153,7 @@ int main(void)
 	setenv("XFILESEARCHPATH", "/usr/share/X11/app-defaults/%N", 1);
 	xshim_on_title(xwin_on_title);
 	xshim_on_warp(xwin_on_warp);
+	xshim_on_mode(xwin_on_mode);
 	if (xshim_init(xwin_on_window, xwin_on_draw, xwin_on_close) < 0)
 		fprintf(stderr, "lvdesk: no X shim (socket in use?)\n");
 

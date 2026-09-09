@@ -55,4 +55,11 @@ int kms_cursor_show(int on);
 int kms_dirty(int x1, int y1, int x2, int y2);	/* inclusive coordinates */
 int kms_dirty_rects(const struct kms_rect *r, int n);
 
+/* A client's video mode scanned out directly; see kms.c. */
+extern uint8_t *kms_fs_map;
+extern uint32_t kms_fs_pitch, kms_fs_w, kms_fs_h;
+int kms_fs_enter(int w, int h);
+void kms_fs_leave(void);
+int kms_fs_dirty(int x1, int y1, int x2, int y2);	/* inclusive */
+
 #endif

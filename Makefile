@@ -328,6 +328,19 @@ LOCKUP_TWEAKS := --enable SOFTLOCKUP_DETECTOR --enable BOOTPARAM_SOFTLOCKUP_PANI
 	--enable BOOTPARAM_HUNG_TASK_PANIC \
 	--enable MAGIC_SYSRQ --enable MAGIC_SYSRQ_SERIAL
 endif
+# `make linux TICK=periodic` keeps the scheduler tick running through idle.
+#
+# Seven silent, total deaths in one day on the shipping kernel (no ping, no
+# console, nothing printed) against none on any kernel that carried the
+# soft-lockup detector - whose only material difference is a periodic timer
+# wake-up. A lost wake-up in tickless idle is the mechanism that fits; this
+# is the direct test, and if it holds, the fix, at ~100 idle wake-ups/s.
+TICK ?= nohz
+ifeq ($(TICK),periodic)
+TICK_TWEAKS := --disable NO_HZ_IDLE --disable NO_HZ_COMMON --disable NO_HZ --enable HZ_PERIODIC
+else
+TICK_TWEAKS :=
+endif
 LINUX_TARGET ?= xipImage
 
 # An oversized kernel is fatal, because it silently runs past its partition into
@@ -414,6 +427,7 @@ linux: toolchain | $(LINUX_OUT)
 		--disable BLK_DEV_IO_TRACE \
 		$(PROF_TWEAKS) \
 		$(LOCKUP_TWEAKS) \
+		$(TICK_TWEAKS) \
 		--disable BPF_SYSCALL \
 		--disable BPF_JIT \
 		--disable PREEMPT_LAZY \
