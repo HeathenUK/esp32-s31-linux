@@ -6101,12 +6101,15 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		/*
 		 * A warp generates MotionNotify, and SDL relies on it: after
 		 * recentring the pointer it blocks in XMaskEvent for exactly
-		 * that event. Without it the game froze in that wait and every
-		 * key typed afterwards was thrown away by the wait's own
-		 * discard loop.
+		 * that event. TEST TOGGLE XSHIM_WARPMOTION: this synth is
+		 * suspected of a warp/motion feedback loop that wedges the
+		 * board under sustained relative motion.
 		 */
-		xshim_pointer(dst->buf->id, dst->ax + dx, dst->ay + dy, 0, 0);
-		out_flush(c);
+		if (getenv("XSHIM_WARPMOTION")) {
+			xshim_pointer(dst->buf->id, dst->ax + dx,
+				      dst->ay + dy, 0, 0);
+			out_flush(c);
+		}
 		break;
 	}
 	case 12: {					/* ConfigureWindow */
@@ -7205,7 +7208,7 @@ static void send_device_event(struct cli *c, uint8_t type, uint8_t detail,
 	 * as a repeat and swallows both; with every event stamped 0, three
 	 * Enters were one Enter. Milliseconds of CLOCK_MONOTONIC.
 	 */
-	put32(d + 0, xshim_now_ms());
+	put32(d + 0, getenv("XSHIM_EVTIME") ? xshim_now_ms() : 0);
 	put32(d + 4, ROOT_ID);
 	put32(d + 8, w->id);			/* event window */
 	put32(d + 12, child);

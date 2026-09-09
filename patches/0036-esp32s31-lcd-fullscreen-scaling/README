@@ -1,0 +1,27 @@
+drm/esp32s31-lcd: mode-driven upscaling for VidMode fullscreen, and gate the
+scaled copy on OUTPUT size so a fullscreen game uses the PPA, not the CPU
+
+The port tree is gitignored, so this is the whole modified file rather than a
+diff. Copy it back over
+linux-71-port/drivers/gpu/drm/espressif/esp32s31-lcd.c before building.
+
+This snapshot is CUMULATIVE and supersedes 0035 (gdma_copy off is included).
+
+Two changes on top of 0035:
+
+1. esp32s31_lcd_place_mode(): any CRTC mode smaller than the panel is scaled
+   up to fill it (largest whole-sixteenths factor, centred, black bars),
+   computed in .enable from the adjusted mode - not only from the render=
+   module param at boot. This is what makes a compositor's VidMode switch
+   (SDL 1.2 -fullscreen at 320x200) get PPA upscaling: lvdesk sets a small
+   mode with SETCRTC and the driver scales that framebuffer to the panel.
+
+2. esp32s31_lcd_copy_one(): the scaled path chose CPU vs PPA on the SOURCE
+   rectangle. A 320x200 frame is 128 KB, just under ppa_min_bytes, so a
+   fullscreen game was CPU-scaled to 760x475 EVERY frame - 22 fps where the
+   PPA does 30, because CPU scaling costs one write per OUTPUT pixel and the
+   output is 722 KB. Now the scaled path gates on output bytes; a small
+   damage rect still scales on the CPU where the PPA's setup would not pay.
+
+   Measured, fullscreen 320x200 -> 760x475 timedemo: 22.1 -> 29.8 fps, so
+   fullscreen matches windowed instead of trailing it.
