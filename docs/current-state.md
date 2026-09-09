@@ -532,6 +532,28 @@ painting *into the driver's permanent buffer*, never the driver pointing at
 lvdesk's - and the cursor then needs its own 64x64 backing store, because it
 loses the plane framebuffer as a clean restore source. It is not worth 2%.
 
+## Dragging still works, and UINJECT_SETTLE nearly said otherwise (2026-09-09)
+
+Verified after the +7% changes below: an X client window drags correctly -
+moved from 151,81 to 250,240 with its title bar, chrome, z-order over the
+Terminal, taskbar entry and content all intact, client still running.
+
+It took four wrong attempts to establish that, all from one mistake:
+`UINJECT_SETTLE=3`. lvdesk rescans input devices about every 2 s, uinject
+creates a fresh uinput device per run, and the settle exists to outlast that
+rescan - the 2600 ms default is correct. Three milliseconds means lvdesk has
+not adopted the device and **every injected event goes nowhere**.
+
+What that produced is worth recording, because none of it looked like a harness
+fault: windows that would not drag, and twice a frame whose title bar was
+missing - which reads exactly like a rendering regression in the changes just
+made. It was a half-processed state in innocent code.
+
+**The check that would have caught it in one step:** drag the *Terminal*, a
+pure lvdesk window with no X client in it. If that does not move, the injection
+is not landing and nothing downstream means anything. It did not move either,
+with every change disabled, which was the tell.
+
 ## Three cheap changes in our own code: +7% (2026-09-09)
 
 Warm, fresh boot per arm, throwaway run then measured run, all three behind
