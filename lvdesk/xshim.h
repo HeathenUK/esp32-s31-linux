@@ -58,6 +58,13 @@ void xshim_key(uint32_t id, int sym, int press, unsigned int mods);
 const char *xshim_window_title(uint32_t id);
 
 /*
+ * Be told when a window's title changes. lvdesk used to read the title once,
+ * when it built the frame - and SDL sets the caption AFTER creating and
+ * mapping the window, so every SDL frame was born "X client" and stayed so.
+ */
+void xshim_on_title(void (*cb)(uint32_t id));
+
+/*
  * Disconnect the client owning this window and release its resources, without
  * calling on_close - for a close the consumer initiated itself. X clients exit
  * when their connection drops, which is what makes this a working close button

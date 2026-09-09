@@ -154,7 +154,11 @@ building it; if under ~15%, do not.
 
 ## Features (several are also performance)
 
-### 1. Window titles - found the actual bug
+### 1. Window titles - DONE (2026-09-09)
+
+xshim now fires an on-title callback when WM_NAME changes and lvdesk updates
+the header label and the taskbar button; "prboom 2.5.0" appears in both.
+The diagnosis below was right.
 
 Not an unimplemented function. `xlite` sends WM_NAME correctly, `xshim` stores
 it in `w->title` - and **lvdesk reads the title exactly once, when it creates

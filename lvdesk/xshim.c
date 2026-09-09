@@ -289,6 +289,7 @@ static int lfd = -1;
 static void (*win_cb)(uint32_t id, int w, int h);
 static void (*draw_cb)(uint32_t id);
 static void (*close_cb)(uint32_t id);
+static void (*title_cb)(uint32_t id);
 
 /* ------------------------------------------------------------- resources */
 
@@ -6159,9 +6160,13 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		if (w && w->type == R_WINDOW && prop == 39 && r[16] == 8) {
 			if (nch > sizeof(w->title) - 1)
 				nch = sizeof(w->title) - 1;
-			if (24 + nch <= (uint32_t)len) {
+			if (24 + nch <= (uint32_t)len &&
+			    (nch != strlen(w->title) ||
+			     memcmp(w->title, r + 24, nch))) {
 				memcpy(w->title, r + 24, nch);
 				w->title[nch] = 0;
+				if (title_cb)
+					title_cb(w->id);
 			}
 		}
 		/*
@@ -7082,6 +7087,11 @@ void xshim_window_close(uint32_t id)
 
 	if (r && r->type == R_WINDOW)
 		client_drop(&cli[r->owner], 0);
+}
+
+void xshim_on_title(void (*cb)(uint32_t id))
+{
+	title_cb = cb;
 }
 
 const char *xshim_window_title(uint32_t id)

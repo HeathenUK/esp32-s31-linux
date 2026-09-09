@@ -2427,6 +2427,7 @@ struct winrec {
 	lv_obj_t *hdr;
 	lv_obj_t *tbtn;			/* its task bar button */
 	lv_obj_t *tlabel;
+	lv_obj_t *hlabel;		/* the title in the header */
 	int32_t rx, ry, rw, rh;		/* geometry to restore from maximise */
 	int maximised;
 	int minimised;
@@ -3384,7 +3385,7 @@ static lv_obj_t *make_window(const char *title, int x, int y, int w, int h)
 
 	lv_obj_set_size(win, w, h);
 	lv_obj_set_pos(win, x, y);
-	lv_win_add_title(win, title);
+	rec->hlabel = lv_win_add_title(win, title);
 	hdr = lv_win_get_header(win);
 	rec->hdr = hdr;
 	/* lv_win's default header is enormous on a 480 px tall screen */
@@ -3645,6 +3646,29 @@ static void xwin_ptr_cb(lv_event_t *e)
 }
 
 /* The client exited or its connection died: take its window with it. */
+/*
+ * The client renamed its window. SDL does this after mapping, so this is
+ * how "Doom" reaches the title bar and the taskbar at all.
+ */
+static void xwin_on_title(uint32_t id)
+{
+	const char *title = xshim_window_title(id);
+	int i;
+
+	if (!title)
+		return;
+	for (i = 0; i < xwin_n; i++)
+		if (xwins[i].id == id) {
+			struct winrec *w = win_find(xwins[i].win);
+
+			if (w && w->hlabel)
+				lv_label_set_text(w->hlabel, title);
+			if (w && w->tlabel)
+				lv_label_set_text(w->tlabel, title);
+			return;
+		}
+}
+
 static void xwin_on_close(uint32_t id)
 {
 	int i;
@@ -7812,6 +7836,7 @@ int main(void)
 	 * broken display server rather than a missing environment variable.
 	 */
 	setenv("XFILESEARCHPATH", "/usr/share/X11/app-defaults/%N", 1);
+	xshim_on_title(xwin_on_title);
 	if (xshim_init(xwin_on_window, xwin_on_draw, xwin_on_close) < 0)
 		fprintf(stderr, "lvdesk: no X shim (socket in use?)\n");
 
