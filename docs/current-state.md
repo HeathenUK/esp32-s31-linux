@@ -7235,3 +7235,39 @@ this session was console silence alone, which is not evidence on this
 board. Rate: rare; cause: unknown; instruments to reach for if it recurs:
 `make linux LOCKUP=1`, and the three-way liveness check in
 `scripts/board/` usage (ping over Wi-Fi, runsh at 60 s and 90 s, conlog).
+
+## The hart0 loader measured: 1.75 MB of a 1.90 MB partition (2026-09-09)
+
+Asked whether the `factory` partition hides a megabyte for a flash-alone
+audio stack. It does not. `images/hello_world.bin` is 1,755,408 bytes in a
+0x1D0000 (1,900,544) partition: **145 KB of slack**. Segment table: 0x54b04
++ 0x13313c of DROM/IROM (flash-resident code and rodata, ~1.53 MB), ~0x24c00
+of DRAM/IRAM.
+
+Per-archive (`esp_idf_size --archives bootloader/build/hello_world.map`,
+flash bytes):
+
+| archive | flash | what |
+|---|---|---|
+| libbredr_app.a | 253 KB | BT classic controller (A2DP source runs on this) |
+| libnet80211.a | 205 KB | Wi-Fi MAC |
+| libble_app.a | 206 KB | BLE controller |
+| libesp_hosted_slave.a | 134 KB | the hosted transport (72 KB of it rodata) |
+| libesp_stdio.a | 127 KB | stdio, 126 KB of it rodata |
+| libtfpsacrypto.a | 124 KB | PSA crypto |
+| libwpa_supplicant.a | 122 KB | on-chip supplicant |
+| libmbedtls.a (x2) + libmbedx509.a | 94 KB | TLS |
+| libpp.a | 58 KB | Wi-Fi PHY-side |
+| everything else | ~200 KB | |
+
+Built `COMPILER_OPTIMIZATION_PERF` (-O2), assertions on, log level INFO.
+
+**Where a megabyte could come from, unmeasured:** the TLS + PSA + supplicant
+chain is ~340 KB and is there for `ESP_WIFI_ENTERPRISE_SUPPORT`,
+`ESP_WIFI_MBEDTLS_TLS_CLIENT`, `SOFTAP_SUPPORT` and SAE-PK, none of which
+this board uses (WPA2-PSK to one AP). `-Os` is typically 10-15% on IDF.
+That is perhaps 500 KB, not a megabyte, and each of those is a loader
+rebuild that must be verified against A2DP and Wi-Fi throughput before it
+is believed. The reserved size of the partition is the ceiling either way;
+moving the boundary touches `partitions.csv`, the `*_PARTITION_SIZE` vars,
+`bootloader/main/main.c` twice and the trampoline.
