@@ -532,6 +532,74 @@ painting *into the driver's permanent buffer*, never the driver pointing at
 lvdesk's - and the cursor then needs its own 64x64 backing store, because it
 loses the plane framebuffer as a clean restore source. It is not worth 2%.
 
+## Three diagnostics, and two standing conclusions were wrong (2026-09-09)
+
+Run to settle claims from the eight-lens sweep before building anything.
+
+### 1. The kernel's Zbb paths are compiled out - CONFIRMED
+
+`CONFIG_RISCV_ISA_ZBB` and `CONFIG_RISCV_ALTERNATIVE` are **absent from the
+generated .config entirely** - not "# not set", absent, meaning the symbols are
+never offered because `RISCV_ALTERNATIVE depends on !XIP_KERNEL` and we set
+`CONFIG_XIP_KERNEL=y`. `CONFIG_RISCV_ISA_ZBA=y` is present, since it is not
+gated the same way.
+
+So the kernel's zbb ffs/fls/strlen/memchr paths are all off while `-march`
+advertises zbb and the DT declares it. Also confirmed: `# CONFIG_FUTEX is not
+set` (musl's blocking primitives busy-spin) and `CONFIG_CC_OPTIMIZE_FOR_SIZE=y`.
+
+### 2. The expansion is NOT latency-bound - the sweep's biggest claim is REFUTED
+
+The claim was that the loop stalls on a serial `lbu -> sh1add -> lhu -> sh`
+chain at ~18.75 cycles/pixel, with up to 3x available. `rootfs/expbench.c` now
+has arms with identical traffic and different dependency structure. Three
+alternating reps:
+
+| arm | ns/px |
+|---|---|
+| `dep` - today's loop | 49, 50, 51 |
+| `nodep` - chain broken, same loads and stores | 66, 60, 60 |
+| `word` - 4 indices per lw | 51, 51, 46 |
+| `word8` - 8 per two lw | **46, 46, 47** |
+
+**Breaking the dependency chain makes it SLOWER.** The loop is not stalling on
+load serialisation. The only real finding is `word8` at ~8% off the expansion -
+3.75 ms to ~3.45 ms, ~0.9% of the machine. Worth taking, but it is not the 3x
+the sweep hoped for.
+
+### 3. Syscall ENTRY is cheap; af_unix is not. And there is no vDSO.
+
+`rootfs/syscal.c` and `rootfs/sockbench.c`, on a 93%-idle board:
+
+| operation | cost |
+|---|---|
+| bare `getpid()` | **1.6 us** |
+| `write(/dev/null, 1)` | 3.2 us |
+| `clock_gettime(MONOTONIC)` | **8.1 us** |
+| `clock_gettime(THREAD_CPUTIME_ID)` | **16.5 us** |
+| af_unix `write`+`read` pair, one process, no switch | **237 us** |
+
+Two conclusions change.
+
+**(a) The "structural syscall cost" verdict was right about the number and
+wrong about the mechanism.** Syscall entry is 1.6 us. The af_unix path is ~118
+us per operation - 74x a trivial write - with no context switch and no wakeup
+involved. So the cost is af_unix/sock/skbuff/scm CODE, not kernel entry, and
+that is attackable: `.text..fast` on those objects, or a shared-memory ring
+that bypasses them. The earlier ".text..fast on the net spine measured ZERO"
+result was for the entry spine, which is not where the time is.
+
+**(b) There is no vDSO on this board.** Every `clock_gettime` is a real
+syscall. `XSHIM_PROF` brackets each request with two `THREAD_CPUTIME` reads, so
+**33 us of every measured 386 us per-request figure is the instrument**, ~8.5%.
+`LVPROF` takes ~6 timestamps per frame, ~100 us/frame, ~0.3% - tolerable, but
+every per-call number in this file is inflated and the smaller ones are mostly
+instrument.
+
+Batch-vs-per-call on the same work confirms the bias: 237 us (one MONOTONIC
+bracket over 2000 pairs) against 332 us (per-call THREAD_CPUTIME), a 40%
+overstatement.
+
 ## icache autoload: the documented recipe is a no-op (2026-09-08)
 
 The S31's instruction-cache autoload (hardware prefetcher) is off on both

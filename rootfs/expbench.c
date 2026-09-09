@@ -70,6 +70,148 @@ static void expand(uint16_t *dst, unsigned dst_pitch, const uint8_t *src,
 	}
 }
 
+/*
+ * IS THE EXPANSION LATENCY-BOUND OR BANDWIDTH-BOUND?
+ *
+ * docs/current-state.md calls it memory-bound at ~51 MB/s. But ShmPutImage's
+ * copy+hash moves 128 kB at ~160 MB/s in the SAME frame, on the same core,
+ * through the same PSRAM. Both cannot be bandwidth-limited.
+ *
+ * The suspicion is the dependent chain: lbu index -> sh1add into the LUT ->
+ * lhu entry -> sh store. On an in-order core, iteration k+1's lbu cannot issue
+ * until k's chain retires, so nothing is ever in flight to cover a miss.
+ *
+ * These arms separate the two. All of them read the same source bytes and
+ * write the same destination bytes, so the TRAFFIC is identical; only the
+ * dependency structure differs.
+ *
+ *   dep     the real loop - LUT address depends on the loaded byte
+ *   nodep   same loads and stores, but the LUT index comes from the counter,
+ *           so the second load does not wait on the first. If this is much
+ *           faster, the chain is the cost and traffic is not.
+ *   word    one lw fetches four indices, four independent LUT lookups
+ *   word4   as word, plus 4x unrolled stores
+ *
+ * `sink` keeps the source loads live in the nodep arm so the compiler cannot
+ * delete the stream we are trying to pay for.
+ */
+static volatile uint32_t sink;
+
+static void arm_dep(uint16_t *dst, unsigned pitch, const uint8_t *src,
+		    const uint16_t *pal)
+{
+	int y, k;
+
+	for (y = 0; y < H; y++) {
+		const uint8_t *sp = src + (size_t)y * W;
+		uint16_t *dp = (uint16_t *)((uint8_t *)dst + (size_t)y * pitch);
+
+		for (k = 0; k < W; k++)
+			dp[k] = pal[sp[k]];
+	}
+}
+
+static void arm_nodep(uint16_t *dst, unsigned pitch, const uint8_t *src,
+		      const uint16_t *pal)
+{
+	uint32_t acc = 0;
+	int y, k;
+
+	for (y = 0; y < H; y++) {
+		const uint8_t *sp = src + (size_t)y * W;
+		uint16_t *dp = (uint16_t *)((uint8_t *)dst + (size_t)y * pitch);
+
+		for (k = 0; k < W; k++) {
+			acc += sp[k];		/* same load, not an address */
+			dp[k] = pal[k & 0xff];	/* LUT load independent of it */
+		}
+	}
+	sink = acc;
+}
+
+static void arm_word(uint16_t *dst, unsigned pitch, const uint8_t *src,
+		     const uint16_t *pal)
+{
+	int y, k;
+
+	for (y = 0; y < H; y++) {
+		const uint8_t *sp = src + (size_t)y * W;
+		uint16_t *dp = (uint16_t *)((uint8_t *)dst + (size_t)y * pitch);
+
+		for (k = 0; k + 3 < W; k += 4) {
+			uint32_t v = *(const uint32_t *)(sp + k);
+
+			dp[k]     = pal[v & 0xff];
+			dp[k + 1] = pal[(v >> 8) & 0xff];
+			dp[k + 2] = pal[(v >> 16) & 0xff];
+			dp[k + 3] = pal[(v >> 24) & 0xff];
+		}
+		for (; k < W; k++)
+			dp[k] = pal[sp[k]];
+	}
+}
+
+static void arm_word8(uint16_t *dst, unsigned pitch, const uint8_t *src,
+		      const uint16_t *pal)
+{
+	int y, k;
+
+	for (y = 0; y < H; y++) {
+		const uint8_t *sp = src + (size_t)y * W;
+		uint16_t *dp = (uint16_t *)((uint8_t *)dst + (size_t)y * pitch);
+
+		for (k = 0; k + 7 < W; k += 8) {
+			uint32_t a = *(const uint32_t *)(sp + k);
+			uint32_t b = *(const uint32_t *)(sp + k + 4);
+
+			dp[k]     = pal[a & 0xff];
+			dp[k + 1] = pal[(a >> 8) & 0xff];
+			dp[k + 2] = pal[(a >> 16) & 0xff];
+			dp[k + 3] = pal[(a >> 24) & 0xff];
+			dp[k + 4] = pal[b & 0xff];
+			dp[k + 5] = pal[(b >> 8) & 0xff];
+			dp[k + 6] = pal[(b >> 16) & 0xff];
+			dp[k + 7] = pal[(b >> 24) & 0xff];
+		}
+		for (; k < W; k++)
+			dp[k] = pal[sp[k]];
+	}
+}
+
+static void run_arms(uint16_t *dst, unsigned pitch, const uint8_t *src,
+		     const uint16_t *pal)
+{
+	struct { const char *n; void (*f)(uint16_t *, unsigned,
+					  const uint8_t *, const uint16_t *); }
+	arms[] = {
+		{ "dep   (today's loop)", arm_dep },
+		{ "nodep (chain broken)", arm_nodep },
+		{ "word  (4/lw)        ", arm_word },
+		{ "word8 (8/2lw)       ", arm_word8 },
+	};
+	int a, r;
+
+	printf("\n--- dependency arms: identical traffic, different chains ---\n");
+	/* Alternate the arms so drift cannot favour whichever ran first. */
+	for (r = 0; r < 3; r++) {
+		for (a = 0; a < 4; a++) {
+			uint64_t t0, t1;
+			int i;
+
+			arms[a].f(dst, pitch, src, pal);	/* warm */
+			t0 = now_ns();
+			for (i = 0; i < REPS; i++)
+				arms[a].f(dst, pitch, src, pal);
+			t1 = now_ns();
+			printf("  rep%d %s  %6llu us/frame  %5llu ns/px\n",
+			       r, arms[a].n,
+			       (unsigned long long)((t1 - t0) / REPS / 1000),
+			       (unsigned long long)((t1 - t0) / REPS / (W * H)));
+			fflush(stdout);
+		}
+	}
+}
+
 static void run(const char *name, uint16_t *dst, unsigned pitch,
 		const uint8_t *src, const uint16_t *pal, int wordwise)
 {
@@ -102,6 +244,7 @@ int main(void)
 
 	run("heap dst", ram, PANEL_W * 2, src, pal, 1);
 	run("heap dst", ram, PANEL_W * 2, src, pal, 0);
+	run_arms(ram, PANEL_W * 2, src, pal);
 
 	/* The real destination: a KMS dumb buffer, mapped exactly as lvdesk does. */
 	fd = open("/dev/dri/card0", O_RDWR);
