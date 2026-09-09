@@ -760,6 +760,14 @@ static void term_write(const char *buf, int n)
  */
 static void kbd_key(int code)
 {
+	/* A keyboard grab takes every key, focus or no focus. */
+	if (!pw_ta && xshim_grab_top()) {
+		int sym = xkey_sym(code);
+
+		if (sym)
+			xshim_key(xshim_grab_top(), sym, 1, xkey_mods());
+		return;
+	}
 	/*
 	 * While the passphrase prompt is up it owns the keyboard - otherwise
 	 * the characters would be typed into the window behind it, which is
@@ -1063,13 +1071,28 @@ static int kbd_poll(void)
 				 * key is still held. Nothing else here wants
 				 * them.
 				 */
-				if (!pw_ta && win_focus_xid()) {
-					int sym = xkey_sym(ev.code);
+				{
+					uint32_t t = xshim_grab_top();
 
-					if (sym)
-						xshim_key(win_focus_xid(), sym,
-							  0, xkey_mods());
+					if (!t)
+						t = win_focus_xid();
+					if (!pw_ta && t) {
+						int sym = xkey_sym(ev.code);
+
+						if (sym)
+							xshim_key(t, sym, 0,
+								  xkey_mods());
+					}
 				}
+				continue;
+			}
+			/*
+			 * The desktop's own key. A grabbed pointer has no other
+			 * way back: this drops the grab server-side. The client
+			 * is not told and carries on; the protocol allows it.
+			 */
+			if (ev.code == KEY_LEFTMETA || ev.code == KEY_RIGHTMETA) {
+				xshim_ungrab_all();
 				continue;
 			}
 			kbd_key(ev.code);
@@ -2524,6 +2547,7 @@ static void win_set_focus(struct winrec *w)
 	if (w)
 		lv_obj_set_style_bg_color(w->hdr,
 					  lv_color_hex(COL_HDR_FOCUS), 0);
+	xshim_focus(w ? w->xid : 0);
 	mru_touch(w);
 }
 
@@ -3667,6 +3691,37 @@ static void xwin_on_title(uint32_t id)
 				lv_label_set_text(w->tlabel, title);
 			return;
 		}
+}
+
+/*
+ * A client warped the pointer. SDL does this after every motion while the
+ * mouse is grabbed and hidden, to recentre it, and reads the next motion as
+ * a delta from the centre. No event is synthesised for the warp itself.
+ */
+static void xwin_on_warp(uint32_t top, int x, int y)
+{
+	int32_t w = lv_display_get_horizontal_resolution(NULL);
+	int32_t h = lv_display_get_vertical_resolution(NULL);
+	int i;
+
+	if (!top) {
+		ptr_x += x;
+		ptr_y += y;
+	} else {
+		for (i = 0; i < xwin_n; i++)
+			if (xwins[i].id == top && xwins[i].img) {
+				lv_area_t a;
+
+				lv_obj_get_coords(xwins[i].img, &a);
+				ptr_x = a.x1 + x;
+				ptr_y = a.y1 + y;
+				break;
+			}
+	}
+	if (ptr_x < 0) ptr_x = 0;
+	if (ptr_y < 0) ptr_y = 0;
+	if (ptr_x > w - 1) ptr_x = w - 1;
+	if (ptr_y > h - 1) ptr_y = h - 1;
 }
 
 static void xwin_on_close(uint32_t id)
@@ -7182,6 +7237,73 @@ static int mouse_poll(void)
 	 * atomic state, so a redundant one is not free even though nothing
 	 * moved.
 	 */
+	/*
+	 * A grab owns the pointer. Everything goes to the grabbing top-level
+	 * in its coordinates, the pointer is confined to it (confine_to), and
+	 * motion is reported whether or not a button is down - which is what
+	 * mouse look needs and what the LVGL path, which only sees PRESSING,
+	 * cannot provide. LVGL is told the button is up meanwhile, so the
+	 * desktop's own widgets do not react to a game's clicks.
+	 */
+	{
+		uint32_t g = xshim_grab_top();
+		static uint32_t g_last;
+		static int g_pressed, g_x, g_y;
+
+		if (g) {
+			lv_area_t a;
+			int i, have = 0;
+
+			for (i = 0; i < xwin_n; i++)
+				if (xwins[i].id == g && xwins[i].img) {
+					lv_obj_get_coords(xwins[i].img, &a);
+					have = 1;
+					break;
+				}
+			if (have) {
+				int rx, ry;
+
+				if (ptr_x < a.x1) ptr_x = a.x1;
+				if (ptr_x > a.x2) ptr_x = a.x2;
+				if (ptr_y < a.y1) ptr_y = a.y1;
+				if (ptr_y > a.y2) ptr_y = a.y2;
+				rx = ptr_x - a.x1;
+				ry = ptr_y - a.y1;
+				if (g != g_last) {
+					g_x = g_y = -1;
+					g_pressed = 0;
+				}
+				if (rx != g_x || ry != g_y) {
+					xshim_pointer(g, rx, ry, 0, 0);
+					g_x = rx;
+					g_y = ry;
+				}
+				if (!!ptr_pressed != g_pressed) {
+					g_pressed = !!ptr_pressed;
+					xshim_pointer(g, rx, ry, 1,
+						      g_pressed ? 1 : 2);
+				}
+				if (btn_extra) {
+					xshim_pointer(g, rx, ry, btn_extra,
+						      btn_extra_act);
+					btn_extra = 0;
+				}
+				if (wheel) {
+					int b = wheel > 0 ? 4 : 5;
+					int n = wheel < 0 ? -wheel : wheel;
+
+					while (n-- > 0) {
+						xshim_pointer(g, rx, ry, b, 1);
+						xshim_pointer(g, rx, ry, b, 2);
+					}
+					wheel = 0;
+				}
+			}
+			g_last = g;
+		} else {
+			g_last = 0;
+		}
+	}
 	if (hw_cursor) {
 		uint32_t nowms = lv_tick_get();
 
@@ -7204,6 +7326,42 @@ static int mouse_poll(void)
 			{ PROF_START(cx); kms_cursor_move(ptr_x, ptr_y); PROF_ADD(prof_curs, cx); }
 		}
 		cursor_pending = (ptr_x != last_cx || ptr_y != last_cy);
+	}
+	/*
+	 * A client that defined an invisible cursor for the window under the
+	 * pointer (or for its grab) gets no pointer drawn over it.
+	 */
+	if (hw_cursor) {
+		static int hidden;
+		uint32_t g = xshim_grab_top();
+		int hide = 0, i;
+
+		for (i = 0; i < xwin_n; i++) {
+			lv_area_t a;
+
+			if (!xwins[i].img || !xwins[i].win ||
+			    lv_obj_has_flag(xwins[i].win, LV_OBJ_FLAG_HIDDEN))
+				continue;
+			lv_obj_get_coords(xwins[i].img, &a);
+			if (g ? xwins[i].id == g
+			      : (ptr_x >= a.x1 && ptr_x <= a.x2 &&
+				 ptr_y >= a.y1 && ptr_y <= a.y2)) {
+				hide = xshim_cursor_hidden(xwins[i].id,
+							   ptr_x - a.x1,
+							   ptr_y - a.y1);
+				break;
+			}
+		}
+		if (hide != hidden) {
+			uint32_t t0 = lv_tick_get();
+
+			kms_cursor_show(!hide);
+			hidden = hide;
+			printf("lvdesk: pointer %s (%u ms)\n",
+			       hide ? "hidden" : "shown",
+			       (unsigned)(lv_tick_get() - t0));
+			fflush(stdout);
+		}
 	}
 
 	/*
@@ -7317,8 +7475,8 @@ static void mouse_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
 	}
 	data->point.x = ptr_x;
 	data->point.y = ptr_y;
-	data->state = ptr_pressed ? LV_INDEV_STATE_PRESSED
-				  : LV_INDEV_STATE_RELEASED;
+	data->state = (ptr_pressed && !xshim_grab_top())
+		      ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
 }
 
 static void mouse_init(void)
@@ -7837,6 +7995,7 @@ int main(void)
 	 */
 	setenv("XFILESEARCHPATH", "/usr/share/X11/app-defaults/%N", 1);
 	xshim_on_title(xwin_on_title);
+	xshim_on_warp(xwin_on_warp);
 	if (xshim_init(xwin_on_window, xwin_on_draw, xwin_on_close) < 0)
 		fprintf(stderr, "lvdesk: no X shim (socket in use?)\n");
 

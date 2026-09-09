@@ -2129,6 +2129,156 @@ XLITE_IMPL(XUndefineCursor)
 int XUndefineCursor(Display *dpy, Window w) { return XDefineCursor(dpy, w, None); }
 
 /*
+ * A cursor made from a 1-bit source and mask (core CreateCursor, opcode 93).
+ * SDL builds its "invisible" cursor this way - a 1x1 pixmap with an all-zero
+ * mask - and installs it with XDefineCursor to hide the pointer over a game.
+ * The shim looks at the mask: all zero means nothing is ever drawn, and the
+ * desktop hides its own pointer while that cursor is the one in force.
+ */
+XLITE_IMPL(XCreatePixmapCursor)
+Cursor XCreatePixmapCursor(Display *dpy, Pixmap source, Pixmap mask,
+			   XColor *fg, XColor *bg, unsigned int hx, unsigned int hy)
+{
+	Cursor cid = XAllocID(dpy);
+
+	REQ(dpy, 93, 0, 8);
+	p32(r + 4, cid);
+	p32(r + 8, source);
+	p32(r + 12, mask);
+	p16(r + 16, fg ? fg->red : 0);
+	p16(r + 18, fg ? fg->green : 0);
+	p16(r + 20, fg ? fg->blue : 0);
+	p16(r + 22, bg ? bg->red : 0xffff);
+	p16(r + 24, bg ? bg->green : 0xffff);
+	p16(r + 26, bg ? bg->blue : 0xffff);
+	p16(r + 28, hx);
+	p16(r + 30, hy);
+	xlite_send(x, r);
+	return cid;
+}
+
+/* ----------------------------------------------------- grabs and warps */
+/*
+ * Pointer and keyboard grabs, and the warp SDL needs for relative motion.
+ *
+ * SDL 1.2 recentres the pointer with XWarpPointer after every MotionNotify
+ * while the mouse is grabbed and hidden, and takes the delta from where it
+ * lands. With these as no-ops Doom's view turned until the pointer reached
+ * the window edge and stopped, and SDL_WM_GrabInput() looped for ever on a
+ * grab that never reported success. The shim confines and routes; lvdesk
+ * moves its own pointer.
+ */
+XLITE_IMPL(XGrabPointer)
+int XGrabPointer(Display *dpy, Window w, Bool owner_events,
+		 unsigned int event_mask, int pointer_mode, int keyboard_mode,
+		 Window confine_to, Cursor cursor, Time t)
+{
+	unsigned char hdr[32], *extra = NULL;
+	size_t nextra = 0;
+	uint32_t seq;
+
+	{
+		REQ(dpy, 26, owner_events ? 1 : 0, 6);
+		p32(r + 4, w);
+		p16(r + 8, event_mask);
+		r[10] = pointer_mode;
+		r[11] = keyboard_mode;
+		p32(r + 12, confine_to);
+		p32(r + 16, cursor);
+		p32(r + 20, t);
+		seq = x->pub.request;
+		xlite_send(x, r);
+		if (!xlite_reply(x, seq, hdr, &extra, &nextra))
+			return GrabNotViewable;
+	}
+	free(extra);
+	return hdr[1];				/* status */
+}
+
+XLITE_IMPL(XUngrabPointer)
+int XUngrabPointer(Display *dpy, Time t)
+{
+	REQ(dpy, 27, 0, 2);
+	p32(r + 4, t);
+	xlite_send(x, r);
+	return 1;
+}
+
+XLITE_IMPL(XGrabKeyboard)
+int XGrabKeyboard(Display *dpy, Window w, Bool owner_events,
+		  int pointer_mode, int keyboard_mode, Time t)
+{
+	unsigned char hdr[32], *extra = NULL;
+	size_t nextra = 0;
+	uint32_t seq;
+
+	{
+		REQ(dpy, 31, owner_events ? 1 : 0, 4);
+		p32(r + 4, w);
+		p32(r + 8, t);
+		r[12] = pointer_mode;
+		r[13] = keyboard_mode;
+		seq = x->pub.request;
+		xlite_send(x, r);
+		if (!xlite_reply(x, seq, hdr, &extra, &nextra))
+			return GrabNotViewable;
+	}
+	free(extra);
+	return hdr[1];
+}
+
+XLITE_IMPL(XUngrabKeyboard)
+int XUngrabKeyboard(Display *dpy, Time t)
+{
+	REQ(dpy, 32, 0, 2);
+	p32(r + 4, t);
+	xlite_send(x, r);
+	return 1;
+}
+
+XLITE_IMPL(XWarpPointer)
+int XWarpPointer(Display *dpy, Window src, Window dst, int sx, int sy,
+		 unsigned int sw, unsigned int sh, int dx, int dy)
+{
+	REQ(dpy, 41, 0, 6);
+	p32(r + 4, src);
+	p32(r + 8, dst);
+	p16(r + 12, sx); p16(r + 14, sy);
+	p16(r + 16, sw); p16(r + 18, sh);
+	p16(r + 20, dx); p16(r + 22, dy);
+	xlite_send(x, r);
+	return 1;
+}
+
+/*
+ * Acceleration is the desktop's business (lvdesk has its own curve), so the
+ * answer is a fixed, sane default and a change is accepted and ignored. SDL
+ * asks so it can turn acceleration off while it reads raw mickeys.
+ */
+XLITE_IMPL(XGetPointerControl)
+int XGetPointerControl(Display *dpy, int *num, int *den, int *thresh)
+{
+	(void)dpy;
+	if (num) *num = 2;
+	if (den) *den = 1;
+	if (thresh) *thresh = 4;
+	return 1;
+}
+
+XLITE_IMPL(XChangePointerControl)
+int XChangePointerControl(Display *dpy, Bool do_accel, Bool do_thresh,
+			  int num, int den, int thresh)
+{
+	(void)dpy; (void)do_accel; (void)do_thresh; (void)num; (void)den;
+	(void)thresh;
+	return 1;
+}
+
+/* No screensaver exists to reset. */
+XLITE_IMPL(XResetScreenSaver)
+int XResetScreenSaver(Display *dpy) { (void)dpy; return 1; }
+
+/*
  * No fontsets. XSupportsLocale() already returns False, so the toolkit takes
  * its single-font path; returning NULL here is the answer that matches.
  */

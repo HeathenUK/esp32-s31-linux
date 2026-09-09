@@ -65,6 +65,42 @@ const char *xshim_window_title(uint32_t id);
 void xshim_on_title(void (*cb)(uint32_t id));
 
 /*
+ * Pointer and keyboard grabs. While a client holds one, every pointer event
+ * belongs to it wherever the pointer is, and every key does too: the desktop
+ * asks which top-level holds the grab and routes there instead of to the
+ * window under the pointer or the focused one. It also confines the pointer
+ * to that top-level, which is what XGrabPointer's confine_to asks for.
+ *
+ * xshim_ungrab_all() is the desktop's escape hatch (a hotkey): the grab is
+ * dropped server-side and the client is none the wiser, which the protocol
+ * permits.
+ */
+uint32_t xshim_grab_top(void);
+
+/*
+ * The desktop gave keyboard focus to this top-level (0: to none of them).
+ * FocusIn/FocusOut follow. SDL, for one, will not grab the mouse or hide the
+ * cursor for a window it believes is unfocused, and it believes that until
+ * a FocusIn arrives - none ever did, so Doom never grabbed.
+ */
+void xshim_focus(uint32_t id);
+void xshim_ungrab_all(void);
+
+/*
+ * A client moved the pointer (XWarpPointer). top == 0 means "by dx,dy from
+ * where it is"; otherwise x,y are relative to that top-level. No event is
+ * synthesised: the next real motion reports from the new position, which is
+ * exactly what SDL's relative-motion recentring expects.
+ */
+void xshim_on_warp(void (*cb)(uint32_t top, int x, int y));
+
+/*
+ * Is the cursor in force at (x,y) inside this top-level an invisible one?
+ * Clients hide the pointer by defining a cursor with an all-zero mask.
+ */
+int xshim_cursor_hidden(uint32_t top, int x, int y);
+
+/*
  * Disconnect the client owning this window and release its resources, without
  * calling on_close - for a close the consumer initiated itself. X clients exit
  * when their connection drops, which is what makes this a working close button

@@ -420,12 +420,40 @@ int kms_cursor_init(const void *argb8888, int w, int h)
 	return 0;
 }
 
+static int cur_hidden, cur_lx, cur_ly;
+
+/*
+ * Show or hide the pointer. A client hides it by defining an invisible
+ * cursor (SDL over a game). Hidden means PARKED off the panel, not detached:
+ * detaching goes through the universal-plane path - an atomic commit that
+ * waits for a flip only this process can issue, and lvdesk sat in that ioctl
+ * for 48 s the first time a game hid the pointer. A move is the legacy
+ * cursor ioctl, which paints and returns.
+ */
+int kms_cursor_show(int on)
+{
+	if (!cur_ok)
+		return -1;
+	if (on == !cur_hidden)
+		return 0;
+	cur_hidden = !on;
+	if (on)
+		return kms_cursor_move(cur_lx, cur_ly);
+	return kms_cursor_move(-KMS_CURSOR_DIM, -KMS_CURSOR_DIM);
+}
+
 int kms_cursor_move(int x, int y)
 {
 	struct drm_mode_cursor arg;
 
 	if (!cur_ok)
 		return -1;
+	if (x >= 0 && y >= 0) {
+		cur_lx = x;
+		cur_ly = y;
+		if (cur_hidden)
+			return 0;	/* remembered; applied when shown */
+	}
 	memset(&arg, 0, sizeof(arg));
 	arg.flags = DRM_MODE_CURSOR_MOVE;
 	arg.crtc_id = crtc_id;

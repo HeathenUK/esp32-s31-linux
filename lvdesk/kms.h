@@ -51,6 +51,7 @@ uint32_t kms_fb_handle(void);
  */
 int kms_cursor_init(const void *argb8888, int w, int h);
 int kms_cursor_move(int x, int y);
+int kms_cursor_show(int on);
 int kms_dirty(int x1, int y1, int x2, int y2);	/* inclusive coordinates */
 int kms_dirty_rects(const struct kms_rect *r, int n);
 

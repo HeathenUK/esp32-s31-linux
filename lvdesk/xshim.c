@@ -198,6 +198,8 @@ struct res {
 	 */
 	uint32_t alias;
 	char title[32];			/* WM_NAME, windows only */
+	uint32_t cursor;		/* windows: CWCursor, 0 = inherit */
+	uint8_t cur_hidden;		/* cursors: mask all zero, draws nothing */
 };
 
 struct cli {
@@ -235,6 +237,16 @@ struct cli {
 	 */
 	uint8_t out[16384];
 	size_t outn;
+	/*
+	 * What the socket would not take. Writes are non-blocking now: a
+	 * client that has stopped reading - SDL blocked in XSync while ITS
+	 * request pipe to us is full - used to block the whole desktop in
+	 * write(), and with both sides waiting on the other nothing moved for
+	 * 56 s (lvdesk's "input starved" line). Spill here, retry every pass,
+	 * and give up on a client that lets it grow past PEND_MAX.
+	 */
+	uint8_t *pend;
+	size_t pendn, pendcap;
 	/*
 	 * The last few requests, for when something goes wrong. An X client
 	 * that fails does so several requests after the one that broke it, so
@@ -290,6 +302,13 @@ static void (*win_cb)(uint32_t id, int w, int h);
 static void (*draw_cb)(uint32_t id);
 static void (*close_cb)(uint32_t id);
 static void (*title_cb)(uint32_t id);
+static void (*warp_cb)(uint32_t top, int x, int y);
+
+/* One pointer, one keyboard, so at most one grab of each. */
+static uint32_t grab_win, grab_confine, grab_cursor;
+static int grab_cli = -1, grab_owner_ev;
+static uint32_t kgrab_win;
+static int kgrab_cli = -1;
 
 /* ------------------------------------------------------------- resources */
 
@@ -2312,21 +2331,66 @@ static void xsp_dump(void)
 	xsp_read = xsp_handle = xsp_write = xsp_poll = xsp_calls = 0;
 }
 
-static void out_flush(struct cli *c)
+#define PEND_MAX	(2u << 20)
+
+/* Queue bytes the socket refused; they go out on a later pass. */
+static void pend_add(struct cli *c, const uint8_t *p, size_t n)
+{
+	if (c->pendn + n > c->pendcap) {
+		size_t cap = c->pendcap ? c->pendcap : 65536;
+		uint8_t *np;
+
+		while (cap < c->pendn + n)
+			cap *= 2;
+		np = realloc(c->pend, cap);
+		if (!np)
+			return;			/* dropped; the client is doomed */
+		c->pend = np;
+		c->pendcap = cap;
+	}
+	memcpy(c->pend + c->pendn, p, n);
+	c->pendn += n;
+}
+
+/* Send as much of [p, p+n) as the socket takes now; return what went. */
+static size_t out_try(struct cli *c, const uint8_t *p, size_t n)
 {
 	size_t off = 0;
 
-	while (off < c->outn) {
+	while (off < n) {
 		ssize_t w;
 		uint64_t tw = xsp_on > 0 ? xsp_now() : 0;
 
-		w = write(c->fd, c->out + off, c->outn - off);
+		w = send(c->fd, p + off, n - off, MSG_DONTWAIT | MSG_NOSIGNAL);
 		if (tw)
 			xsp_write += xsp_now() - tw;
 		if (w <= 0)
-			break;		/* client_data will see the error */
+			break;		/* EAGAIN, or an error client_data sees */
 		off += (size_t)w;
 	}
+	return off;
+}
+
+static void out_flush(struct cli *c)
+{
+	size_t went;
+
+	if (c->pendn) {
+		went = out_try(c, c->pend, c->pendn);
+		if (went < c->pendn) {
+			memmove(c->pend, c->pend + went, c->pendn - went);
+			c->pendn -= went;
+			if (c->outn) {
+				pend_add(c, c->out, c->outn);
+				c->outn = 0;
+			}
+			return;
+		}
+		c->pendn = 0;
+	}
+	went = out_try(c, c->out, c->outn);
+	if (went < c->outn)
+		pend_add(c, c->out + went, c->outn - went);
 	c->outn = 0;
 }
 
@@ -2335,7 +2399,15 @@ static void out_push(struct cli *c, const void *p, size_t n)
 	if (c->outn + n > sizeof(c->out))
 		out_flush(c);
 	if (n > sizeof(c->out)) {	/* larger than the buffer: direct */
-		write(c->fd, p, n);
+		out_flush(c);
+		if (c->pendn)
+			pend_add(c, p, n);
+		else {
+			size_t went = out_try(c, p, n);
+
+			if (went < n)
+				pend_add(c, (const uint8_t *)p + went, n - went);
+		}
 		return;
 	}
 	memcpy(c->out + c->outn, p, n);
@@ -5255,6 +5327,7 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 				continue;
 			if (bit == 1) rr->bg = get32(v);
 			if (bit == 3) rr->border_pixel = get32(v);
+			if (bit == 14) rr->cursor = get32(v);
 			if (bit == 11) rr->event_mask = get32(v);
 			v += 4;
 		}
@@ -5911,6 +5984,8 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 			 * visible, and is then painted over. That is exactly
 			 * how xfiles presents its file list.
 			 */
+			if (bit == 14)
+				w->cursor = get32(v);
 			if (bit == 0) {
 				w->bg_pixmap = get32(v);
 							fprintf(stderr, "xshim: win 0x%x background "
@@ -5922,6 +5997,80 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 			if (bit == 11) w->event_mask = get32(v);
 			v += 4;
 		}
+		break;
+	}
+	case 26: {					/* GrabPointer */
+		struct res *w = res_find(get32(r + 4));
+
+		if (!w || w->type != R_WINDOW) {
+			send_error(c, X_BAD_WINDOW, get32(r + 4), op);
+			break;
+		}
+		memset(d24, 0, sizeof d24);
+		if (grab_cli >= 0 && grab_cli != cur_owner) {
+			send_reply(c, 1 /* AlreadyGrabbed */, d24, NULL, 0);
+			break;
+		}
+		grab_win = w->id;
+		grab_cli = cur_owner;
+		grab_owner_ev = r[1];
+		grab_confine = get32(r + 12);
+		grab_cursor = get32(r + 16);
+		if (trace_on())
+			fprintf(stderr, "xshim: pointer grabbed by 0x%x\n",
+				w->id);
+		send_reply(c, 0 /* Success */, d24, NULL, 0);
+		break;
+	}
+	case 27:					/* UngrabPointer */
+		if (grab_cli == cur_owner) {
+			grab_win = 0;
+			grab_cli = -1;
+		}
+		break;
+	case 31: {					/* GrabKeyboard */
+		struct res *w = res_find(get32(r + 4));
+
+		if (!w || w->type != R_WINDOW) {
+			send_error(c, X_BAD_WINDOW, get32(r + 4), op);
+			break;
+		}
+		memset(d24, 0, sizeof d24);
+		if (kgrab_cli >= 0 && kgrab_cli != cur_owner) {
+			send_reply(c, 1, d24, NULL, 0);
+			break;
+		}
+		kgrab_win = w->id;
+		kgrab_cli = cur_owner;
+		send_reply(c, 0, d24, NULL, 0);
+		break;
+	}
+	case 32:					/* UngrabKeyboard */
+		if (kgrab_cli == cur_owner) {
+			kgrab_win = 0;
+			kgrab_cli = -1;
+		}
+		break;
+	case 41: {					/* WarpPointer */
+		/*
+		 * dst == None: move by (dst_x, dst_y). Otherwise land at
+		 * (dst_x, dst_y) inside dst, which the desktop resolves
+		 * through dst's origin in its top-level. The src rectangle
+		 * (warp only if the pointer is inside it) is not honoured:
+		 * nothing here uses it.
+		 */
+		struct res *dst = res_find(get32(r + 8));
+		int dx = gets16(r + 20), dy = gets16(r + 22);
+
+		if (!warp_cb)
+			break;
+		if (!dst || dst->type != R_WINDOW) {
+			warp_cb(0, dx, dy);
+			break;
+		}
+		if (!dst->buf)
+			break;
+		warp_cb(dst->buf->id, dst->ax + dx, dst->ay + dy);
 		break;
 	}
 	case 12: {					/* ConfigureWindow */
@@ -6363,8 +6512,42 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		notify_draw(d);
 		break;
 	}
-	case 93: case 94: case 95: case 127:
-		break;					/* accepted, nothing to do */
+	case 93: {					/* CreateCursor */
+		/*
+		 * Cursor SHAPES are not drawn - lvdesk draws its own pointer -
+		 * but a cursor whose mask is all zero draws nothing at all,
+		 * and that is how a client hides the pointer (SDL_ShowCursor
+		 * off is a 1x1 cursor with an empty mask). Remember which
+		 * ones are invisible; the desktop asks before drawing.
+		 */
+		struct res *rr = res_new(get32(r + 4), R_CURSOR);
+		struct res *mk = res_find(get32(r + 12));
+
+		if (!rr)
+			break;
+		rr->cur_hidden = 0;
+		if (mk && mk->type == R_PIXMAP && mk->px) {
+			size_t n = (size_t)mk->w * mk->h * mk->bpp, i;
+			const uint8_t *b = (const uint8_t *)mk->px;
+
+			for (i = 0; i < n && !b[i]; i++)
+				;
+			rr->cur_hidden = i == n;
+		}
+		break;
+	}
+	case 94:					/* CreateGlyphCursor */
+		res_new(get32(r + 4), R_CURSOR);	/* visible */
+		break;
+	case 95: {					/* FreeCursor */
+		struct res *rr = res_find(get32(r + 4));
+
+		if (rr && rr->type == R_CURSOR)
+			rr->type = R_FREE;
+		break;
+	}
+	case 127:
+		break;					/* NoOperation */
 
 	default:
 		/*
@@ -6783,6 +6966,7 @@ const uint16_t *xshim_window_pixels(uint32_t id, int *w, int *h)
 #define EV_ENTER	(1u << 4)
 #define EV_LEAVE	(1u << 5)
 #define EV_MOTION	(1u << 6)
+#define EV_FOCUS	(1u << 21)
 
 /*
  * The deepest mapped child containing (x, y), which is where a pointer event
@@ -6891,7 +7075,29 @@ void xshim_pointer(uint32_t id, int x, int y, int button, int act)
 	ptr_root_x = top->x + x;
 	ptr_root_y = top->y + y;
 
-	w = hit_test(top, &x, &y);
+	/*
+	 * A grab owns the pointer. Events go to the grab window in its own
+	 * coordinates wherever the pointer is - outside it too, which is why
+	 * the value can be negative. owner_events (SDL sets it) lets the
+	 * grabbing client's OTHER windows take events that fall on them.
+	 */
+	w = NULL;
+	if (grab_win) {
+		struct res *g = res_find(grab_win);
+
+		if (g && g->type == R_WINDOW && g->buf == top) {
+			if (grab_owner_ev && x >= 0 && y >= 0 &&
+			    x < top->w && y < top->h)
+				w = hit_test(top, &x, &y);
+			else {
+				x -= g->ax;
+				y -= g->ay;
+				w = g;
+			}
+		}
+	}
+	if (!w)
+		w = hit_test(top, &x, &y);
 	if (trace_on())
 		fprintf(stderr, "xshim: ptr act=%d -> win 0x%x mask=%08x "
 			"at %d,%d\n", act, w->id, w->event_mask, x, y);
@@ -6993,6 +7199,14 @@ void xshim_key(uint32_t id, int sym, int press, unsigned int mods)
 		x = ptr_last_x;
 		y = ptr_last_y;
 	}
+	if (kgrab_win) {
+		struct res *g = res_find(kgrab_win);
+
+		if (g && g->type == R_WINDOW && g->buf == top) {
+			w = g;
+			x = y = 0;
+		}
+	}
 	if (!w || w->type != R_WINDOW)
 		w = top;
 	send_device_event(c, press ? 2 : 3, (uint8_t)sym, w, x, y,
@@ -7021,6 +7235,20 @@ int xshim_fds(int *out, int max)
 static void client_drop(struct cli *c, int notify)
 {
 	int owner = (int)(c - cli), i;
+
+	free(c->pend);
+	c->pend = NULL;
+	c->pendn = c->pendcap = 0;
+	c->outn = 0;
+
+	if (grab_cli == owner) {
+		grab_win = 0;
+		grab_cli = -1;
+	}
+	if (kgrab_cli == owner) {
+		kgrab_win = 0;
+		kgrab_cli = -1;
+	}
 
 	if (c->fd >= 0) {
 		close(c->fd);
@@ -7092,6 +7320,93 @@ void xshim_window_close(uint32_t id)
 void xshim_on_title(void (*cb)(uint32_t id))
 {
 	title_cb = cb;
+}
+
+/* FocusIn (9) / FocusOut (10) to whoever in this top-level selected them. */
+static void send_focus(struct res *top, int in)
+{
+	int i;
+
+	for (i = 0; i < MAXRES; i++) {
+		struct res *w = &res[i];
+		uint8_t d[28];
+
+		if (w->type != R_WINDOW || w->buf != top ||
+		    !(w->event_mask & EV_FOCUS) || w->owner < 0 ||
+		    cli[w->owner].fd < 0)
+			continue;
+		memset(d, 0, sizeof(d));
+		put32(d + 0, w->id);
+		d[4] = 0;			/* mode: NotifyNormal */
+		/* detail: NotifyNonlinear, the honest answer between top-levels */
+		send_event_d(&cli[w->owner], in ? 9 : 10, 3, d, 28);
+		out_flush(&cli[w->owner]);
+	}
+}
+
+void xshim_focus(uint32_t id)
+{
+	static uint32_t focused;
+	struct res *t;
+
+	if (id == focused)
+		return;
+	if (focused && (t = res_find(focused)) && t->type == R_WINDOW)
+		send_focus(t, 0);
+	focused = 0;
+	if (id && (t = res_find(id)) && t->type == R_WINDOW) {
+		send_focus(t, 1);
+		focused = id;
+	}
+}
+
+void xshim_on_warp(void (*cb)(uint32_t top, int x, int y))
+{
+	warp_cb = cb;
+}
+
+uint32_t xshim_grab_top(void)
+{
+	struct res *g = NULL;
+
+	if (grab_win)
+		g = res_find(grab_win);
+	else if (kgrab_win)
+		g = res_find(kgrab_win);
+	if (!g || g->type != R_WINDOW || !g->buf)
+		return 0;
+	return g->buf->id;
+}
+
+void xshim_ungrab_all(void)
+{
+	if (grab_win || kgrab_win)
+		fprintf(stderr, "xshim: grabs released by the desktop\n");
+	grab_win = kgrab_win = 0;
+	grab_cli = kgrab_cli = -1;
+}
+
+int xshim_cursor_hidden(uint32_t top_id, int x, int y)
+{
+	struct res *top = res_find(top_id), *w, *cur = NULL;
+	uint32_t cid = 0;
+
+	if (!top || top->type != R_WINDOW)
+		return 0;
+	if (grab_win && grab_cursor && res_find(grab_win) &&
+	    res_find(grab_win)->buf == top)
+		cid = grab_cursor;
+	else {
+		w = hit_test(top, &x, &y);
+		/* None means "inherit from the parent", like the server. */
+		while (w && w->type == R_WINDOW && !w->cursor)
+			w = res_find(w->parent);
+		if (w && w->type == R_WINDOW)
+			cid = w->cursor;
+	}
+	if (cid)
+		cur = res_find(cid);
+	return cur && cur->type == R_CURSOR && cur->cur_hidden;
 }
 
 const char *xshim_window_title(uint32_t id)
@@ -7287,9 +7602,19 @@ void xshim_flush(void)
 {
 	int i;
 
-	for (i = 0; i < MAXCLI; i++)
-		if (cli[i].fd >= 0 && cli[i].outn)
-			out_flush(&cli[i]);
+	for (i = 0; i < MAXCLI; i++) {
+		struct cli *c = &cli[i];
+
+		if (c->fd < 0)
+			continue;
+		if (c->outn || c->pendn)
+			out_flush(c);
+		if (c->pendn > PEND_MAX) {
+			fprintf(stderr, "xshim: client %d has not read %zu "
+				"bytes of events - dropping it\n", i, c->pendn);
+			client_drop(c, 1);
+		}
+	}
 }
 
 /*
