@@ -250,6 +250,18 @@ for kernel work; the rootfs only needs rebuilding when userspace changes.
   containerised image build, and read the `--- flashing <path> / built <date>`
   line the flash targets now print. Two full flashes were wasted on 2026-09-05
   before the board's library sizes gave it away.
+  - **`sync-images` used to skip the kernel.** It copied the cramfs images and
+    nothing else, so `make linux` left `build/xipImage` in the volume and
+    `flash-linux` wrote the stale `images/xipImage` - and `flash-linux` was the
+    one flash target with no `built <date>` line, so nothing gave it away. A
+    whole day on 2026-09-09 was spent "fixing" a hang with diagnostic kernels
+    that never reached the board; `uname` said `#172` while the build was
+    `#179`. Fixed three ways: `sync-images` now copies `xipImage`,
+    `System.map` and `fw_payload.bin` too; `flash-linux` prints the `built`
+    line; and `flash-linux` runs `check-kernel-fresh`, which **aborts** if
+    `build/xipImage` is newer than `images/xipImage`. **Confirm a kernel flash
+    by `uname -a`** - the `#N` build number and date are the only proof the
+    board runs what you flashed.
 - **Stopping `bluetoothd` can wedge the board, and a stock daemon spinning in
   `strlen` usually means corrupt *data*, not corrupt code.** BlueZ serialises
   its device store on SIGTERM, so if a record in `/var/lib/bluetooth` has gone
