@@ -95,6 +95,7 @@ static int slave_open(struct route *r)
 {
 	char name[80];
 	snd_pcm_t *old = r->slave, *pcm = NULL;
+	const char *step = "open";
 	int err;
 
 	/*
@@ -153,6 +154,7 @@ static int slave_open(struct route *r)
 			err = -EINVAL;
 			goto done;
 		}
+		step = "hw_params";
 		snd_pcm_hw_params_alloca(&hw);
 		if ((err = snd_pcm_hw_params_any(pcm, hw)) < 0 ||
 		    (err = snd_pcm_hw_params_set_access(pcm, hw,
@@ -203,6 +205,7 @@ static int slave_open(struct route *r)
 			amin = buf - want_buf + want_per;
 		if (amin > buf)
 			amin = buf;
+		step = "sw_params";
 		snd_pcm_sw_params_alloca(&sw);
 		if ((err = snd_pcm_sw_params_current(pcm, sw)) < 0 ||
 		    (err = snd_pcm_sw_params_set_start_threshold(pcm, sw,
@@ -212,6 +215,7 @@ static int slave_open(struct route *r)
 		    (err = snd_pcm_sw_params(pcm, sw)) < 0)
 			goto done;
 		/* Put the sink's descriptor behind the number the app polls. */
+		step = "dup2";
 		if (snd_pcm_poll_descriptors(pcm, &pfd, 1) == 1 &&
 		    dup2(pfd.fd, r->pfd) < 0) {
 			err = -errno;
@@ -228,7 +232,7 @@ static int slave_open(struct route *r)
 done:
 	if (err < 0) {
 		if (getenv("S31ROUTE_DEBUG"))
-			fprintf(stderr, "s31route: open %s: %s\n", name,
+			fprintf(stderr, "s31route: %s %s: %s\n", step, name,
 				snd_strerror(err));
 		if (pcm)
 			snd_pcm_close(pcm);

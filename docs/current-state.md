@@ -7194,3 +7194,44 @@ hang (below) needs the saturated game.
 
 `S31ROUTE_DEBUG=1` prints the negotiated rings. The plugin is in
 `XIP_ROOTS`; a rebuilt copy on the card is shadowed by the flash copy.
+
+## Sink switching under a running Doom, and the warm hang tally (2026-09-09)
+
+**Switching works, both ways, mid-game, without restarting prboom.** Verified
+from the shipped config: speaker -> BT -> speaker -> BT -> speaker, every
+reopen logged by the plugin, codec RUNNING at the end. Two things had to
+change:
+
+- `s31route` opens the new sink BEFORE closing the old one. A switch whose
+  open fails leaves the stream where it was; the old order returned -ENODEV
+  and SDL took that as the end of sound.
+- `/etc/asound.conf` names the rate converter: `defaults.pcm.rate_converter
+  "linear"`. The codec cannot run at 22050 Hz, so every codec open goes
+  through plug's rate converter; the loopback takes 22050 natively and never
+  does. Left unconfigured, alsa-lib probes for a "speexrate" module that is
+  not on this target before settling on the builtin, and in prboom's process
+  the SECOND codec open of a run then failed inside `snd_pcm_rate_open` with
+  "No matching format in rate plugin" / -ENOENT. It never failed in any probe
+  outside prboom: linked (`switchprobe`), dlopen'd the SDL way
+  (`switchprobe_dl`), chdir'd, SDL's exact 2048/1024 ring, two cards in one
+  process (`opendual`). Naming the converter takes the direct path.
+
+**Trap: `/etc` is on the card.** `make xip-fast` repacks the XIP images from
+the overlay, but `/etc/asound.conf` is on the ext4 root, so the pinned
+converter did not reach the board until the file was deployed on its own.
+The first "verified from the shipped config" run failed for exactly that
+reason.
+
+**The warm hang, honestly.** One three-way-confirmed hang (no ping, no
+console at 60 s and again at 90 s, zero console bytes) in 25 timedemo runs
+with the new plugin, on the shipping kernel. Eighteen further runs on three
+diagnostic kernels (soft-lockup detector, SysRq only, both, with and without
+hart0 logging) never hung, and neither did 700+ forced underrun recoveries a
+minute on either sink with the machine idle. The kernels differ by a few KB
+of XIP layout, so a bisection there was chasing a layout-sensitive
+heisenbug with no mechanism, and it was stopped. The earlier "reproducible
+speaker-path hang" was the OLD spinning plugin, and the earlier "warm hang"
+this session was console silence alone, which is not evidence on this
+board. Rate: rare; cause: unknown; instruments to reach for if it recurs:
+`make linux LOCKUP=1`, and the three-way liveness check in
+`scripts/board/` usage (ping over Wi-Fi, runsh at 60 s and 90 s, conlog).

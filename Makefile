@@ -311,9 +311,17 @@ endif
 # hang prints nothing whatever its cause. This turns all three on and makes
 # each of them panic, because a panic is the one thing guaranteed to reach the
 # console. Not for shipping: the watchdog thread costs a wake-up every 4 s.
+#
+# LOCKUP=2 is the soft-lockup detector alone (a periodic wake, no SysRq) and
+# LOCKUP=3 is SysRq alone (no periodic wake): the two halves, for telling a
+# hang that a periodic wake-up prevents from one that a code layout hides.
 LOCKUP ?= 0
 ifeq ($(LOCKUP),0)
 LOCKUP_TWEAKS :=
+else ifeq ($(LOCKUP),2)
+LOCKUP_TWEAKS := --enable SOFTLOCKUP_DETECTOR --enable BOOTPARAM_SOFTLOCKUP_PANIC
+else ifeq ($(LOCKUP),3)
+LOCKUP_TWEAKS := --enable MAGIC_SYSRQ --enable MAGIC_SYSRQ_SERIAL
 else
 LOCKUP_TWEAKS := --enable SOFTLOCKUP_DETECTOR --enable BOOTPARAM_SOFTLOCKUP_PANIC \
 	--enable DETECT_HUNG_TASK --set-val DEFAULT_HUNG_TASK_TIMEOUT 20 \
