@@ -24,6 +24,7 @@
  *    exists. Ours never changes, and the write below blocks instead.
  */
 #define _GNU_SOURCE
+#include <errno.h>
 #include <alsa/asoundlib.h>
 #include <alsa/pcm_external.h>
 #include <sys/eventfd.h>
@@ -90,9 +91,72 @@ static int slave_open(struct route *r)
 		r->slave = NULL;
 		return err;
 	}
-	err = snd_pcm_set_params(r->slave, r->io.format,
-				 SND_PCM_ACCESS_RW_INTERLEAVED,
-				 r->io.channels, r->io.rate, 1, 200000);
+	/*
+	 * Negotiate explicitly, with the *_near variants, which CLAMP to what
+	 * the sink can do instead of failing.
+	 *
+	 * The first version called snd_pcm_set_params() with a fixed 200 ms,
+	 * and that broke every SDL application's sound: the codec (hw:0,0)
+	 * reports BUFFER_SIZE [256..4096] and PERIOD_SIZE [128..1023], so at
+	 * 44100 Hz a 200 ms request (8820 frames) fails with "Unable to get
+	 * period size", and SDL - which had already opened the device - went
+	 * on to write into a PCM that was never configured. prboom ran
+	 * -nosound because of it, written off as a missing backend.
+	 *
+	 * A retry ladder (200/100/50/25 ms) fixed the open but settled on
+	 * 50 ms, because 100 ms overshoots 4096 by 314 frames - and the codec
+	 * underran permanently at 50 ms (XRUN in 40 of 40 samples). Asking
+	 * the sink for its maximum through plug: does not help either: plug
+	 * can convert, so it reports a range far wider than the hardware's.
+	 *
+	 * set_buffer_size_near(200 ms) asks the question the right way round:
+	 * the sink answers with the most it can hold - 4096 frames, ~93 ms,
+	 * nearly double the headroom - and there is nothing to retry and no
+	 * spurious error to print. The loopback sink has room for the full
+	 * 200 ms and gets it, exactly as before.
+	 */
+	{
+		snd_pcm_hw_params_t *hw;
+		snd_pcm_sw_params_t *sw;
+		unsigned rate = r->io.rate;
+		snd_pcm_uframes_t buf, per;
+		int dir = 0;
+
+		if (!rate) {
+			err = -EINVAL;
+			goto done;
+		}
+		buf = (snd_pcm_uframes_t)rate / 5;	/* 200 ms, or as much as fits */
+		snd_pcm_hw_params_alloca(&hw);
+		if ((err = snd_pcm_hw_params_any(r->slave, hw)) < 0 ||
+		    (err = snd_pcm_hw_params_set_access(r->slave, hw,
+				SND_PCM_ACCESS_RW_INTERLEAVED)) < 0 ||
+		    (err = snd_pcm_hw_params_set_format(r->slave, hw,
+				r->io.format)) < 0 ||
+		    (err = snd_pcm_hw_params_set_channels(r->slave, hw,
+				r->io.channels)) < 0 ||
+		    (err = snd_pcm_hw_params_set_rate_near(r->slave, hw,
+				&rate, &dir)) < 0 ||
+		    (err = snd_pcm_hw_params_set_buffer_size_near(r->slave, hw,
+				&buf)) < 0)
+			goto done;
+		per = buf / 4;			/* four periods, like set_params */
+		dir = 0;
+		if ((err = snd_pcm_hw_params_set_period_size_near(r->slave, hw,
+				&per, &dir)) < 0 ||
+		    (err = snd_pcm_hw_params(r->slave, hw)) < 0)
+			goto done;
+		/* Start once the buffer is full and wake per period. */
+		snd_pcm_sw_params_alloca(&sw);
+		if ((err = snd_pcm_sw_params_current(r->slave, sw)) < 0 ||
+		    (err = snd_pcm_sw_params_set_start_threshold(r->slave, sw,
+				buf)) < 0 ||
+		    (err = snd_pcm_sw_params_set_avail_min(r->slave, sw,
+				per)) < 0 ||
+		    (err = snd_pcm_sw_params(r->slave, sw)) < 0)
+			goto done;
+	}
+done:
 	if (err < 0) {
 		slave_close(r);
 		return err;

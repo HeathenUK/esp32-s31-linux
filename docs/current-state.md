@@ -532,6 +532,35 @@ painting *into the driver's permanent buffer*, never the driver pointing at
 lvdesk's - and the cursor then needs its own 64x64 backing store, because it
 loses the plane framebuffer as a clean restore source. It is not worth 2%.
 
+## Doom has sound: a latency bug in s31route, not a missing backend (2026-09-09)
+
+prboom ran `-nosound` and it was assumed SDL 1.2 lacked an ALSA backend. Two
+wrong turns first: `strings` shows no `snd_pcm_*` in libSDL because ALSA is
+**dlopen'd** (`SDL_AUDIO_DRIVER_ALSA_DYNAMIC`), and a "board wedge" during
+testing was hart0's Wi-Fi burst flooding the console. Neither was real.
+
+The fault: `s31route` (`default -> plug -> s31route -> sink`) opened its sink
+with a fixed `snd_pcm_set_params(..., 200000)`. The loopback accepts 200 ms,
+so Bluetooth worked. The codec is BUFFER_SIZE max 4096 = 93 ms at 44.1 kHz,
+so the speaker path failed "Unable to get period size" and SDL wrote into an
+unconfigured PCM (ENODEV). A retry ladder got the open to succeed at 50 ms -
+and the codec underran permanently (XRUN 40/40): SDL's audio thread shares a
+mutex with the game and `CONFIG_FUTEX` was off, so musl spun.
+
+Fix, both in our own code/config:
+- s31route negotiates with `snd_pcm_hw_params_set_buffer_size_near(200 ms)`,
+  which clamps to the sink's maximum instead of failing. Speaker gets 4096
+  frames, loopback still gets 8820 (200 ms). No error lines, no ladder.
+  Querying the max through `plug:` does NOT work - plug reports a converter's
+  range, not the hardware's. Measured: 38 RUNNING / 1 XRUN in 40 samples.
+- `CONFIG_FUTEX=y` via the Makefile kconfig-tweak list.
+- The plugin is in `XIP_ROOTS` now. It had been living only in
+  `/mnt/sd-usr-lib`, a third overlay layer from a Sep 4 deploy, so a rebuilt
+  copy in the overlay never reached the board. `/usr/lib` is
+  `overlay(/mnt/xip : /mnt/xip2 : /mnt/sd-usr-lib)` - check all three.
+
+Verified by instrument only. **Listen to it.**
+
 ## Dragging still works, and UINJECT_SETTLE nearly said otherwise (2026-09-09)
 
 Verified after the +7% changes below: an X client window drags correctly -

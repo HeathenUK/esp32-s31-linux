@@ -164,15 +164,25 @@ never updated. Fix: `xshim` notifies on WM_NAME change the way it notifies on
 draw; lvdesk updates the label and the taskbar entry. Hours, and "Doom" appears
 in the title bar and taskbar.
 
-### 2. Sound for Doom
+### 2. Sound for Doom - DONE, and the diagnosis was wrong twice before it was right
 
-prboom runs `-nosound` because it has to. SDL 1.2 here has three audio
-backends: OSS (`/dev/dsp`), dummy, disk. **No ALSA.** The kernel has
-`CONFIG_SND=y` and the ES8389 codec but no OSS emulation
-(`CONFIG_SND_PCM_OSS` absent). Enable it and `/dev/dsp` appears, SDL finds it,
-and Doom plays through the speaker - and through our own A2DP daemon to
-Bluetooth. Kernel config only. Verify by ear, per the standing rule; the
-instruments have called noise "working" before.
+First claim: "SDL has no ALSA backend, enable OSS emulation". Wrong - SDL
+loads ALSA dynamically (`SDL_AUDIO_DRIVER_ALSA_DYNAMIC "libasound.so.2"`), so
+`strings` on the .so never shows `snd_pcm_*` and I read their absence as
+absence of the backend. Our audio stack was fine throughout.
+
+The real fault was in **s31route, our own routing plugin**, and it was
+specific: `slave_open()` asked its sink for a fixed 200 ms of latency. The
+loopback (Bluetooth path) has room for that, so A2DP worked and nobody
+noticed. The codec caps at 4096 frames - 93 ms at 44.1 kHz - so the speaker
+path failed to configure and every SDL app at 44.1 kHz got a dead PCM. That
+is why prboom ran `-nosound`.
+
+Fixed by negotiating with `set_*_near` (clamps instead of failing) plus
+`CONFIG_FUTEX` (SDL's audio thread was spinning on a mutex musl could not
+block on). Speaker: buffer 4096, 38 RUNNING / 1 XRUN in 40 samples, from
+40/40 XRUN. Loopback: still exactly 200 ms. Plugin now ships in the XIP image
+via XIP_ROOTS rather than a stale copy on the card.
 
 ### 3. Mouse look - pointer grab and warp
 

@@ -397,7 +397,8 @@ linux: toolchain | $(LINUX_OUT)
 		--enable PREEMPT_NONE \
 		--enable DRM_FBDEV_EMULATION \
 		--disable IPV6 \
-		--enable SYSVIPC
+		--enable SYSVIPC \
+		--enable FUTEX
 	$(MAKE) -C $(LINUX_DIR) O=$(LINUX_OUT) ARCH=riscv CROSS_COMPILE="$(CROSS_COMPILE)" olddefconfig
 	$(MAKE) -C $(LINUX_DIR) O=$(LINUX_OUT) ARCH=riscv CROSS_COMPILE="$(CROSS_COMPILE)" \
 		KCFLAGS="-march=$(S31_SAFE_ISA) $(S31_COMMON_FLAGS)" -j$(JOBS) $(LINUX_TARGET) dtbs
@@ -560,6 +561,7 @@ XIP_ROOTFS_IMG := $(BUILD_DIR)/rootfs-xip.cramfs
 # by measurement, not guesswork (see the note above about which binaries go in
 # which image, and why libXft belongs here).
 XIP_ROOTS ?= bin/busybox usr/sbin/wpa_supplicant usr/sbin/iw usr/bin/lvdesk \
+	usr/lib/alsa-lib/libasound_module_pcm_s31route.so \
 	usr/bin/s31-coex usr/lib/libSDL-1.2.so.0.11.4 \
 	usr/libexec/bluetooth/bluetoothd \
 	usr/bin/xfilesctl usr/bin/s31-open usr/bin/s31-thumb usr/bin/xfilesthumb usr/bin/s31-thumbs
