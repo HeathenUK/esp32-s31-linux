@@ -94,9 +94,15 @@ static void slave_close(struct route *r)
 static int slave_open(struct route *r)
 {
 	char name[80];
+	snd_pcm_t *old = r->slave, *pcm = NULL;
 	int err;
 
-	slave_close(r);
+	/*
+	 * Open the new sink BEFORE closing the old one. A switch to a sink
+	 * that will not open (busy, unplugged, asking for what it cannot do)
+	 * then leaves the stream where it was instead of returning -ENODEV
+	 * to an application that treats that as the end of sound.
+	 */
 	/*
 	 * Through "plug", so the sink is free to want a different rate or
 	 * format from the one the application negotiated with us. The
@@ -108,11 +114,9 @@ static int slave_open(struct route *r)
 	 * "Unknown parameter 1" and leaves the sink unopenable.
 	 */
 	snprintf(name, sizeof(name), "plug:'%s'", r->sink);
-	err = snd_pcm_open(&r->slave, name, SND_PCM_STREAM_PLAYBACK, 0);
-	if (err < 0) {
-		r->slave = NULL;
-		return err;
-	}
+	err = snd_pcm_open(&pcm, name, SND_PCM_STREAM_PLAYBACK, 0);
+	if (err < 0)
+		goto done;
 	/*
 	 * Negotiate explicitly, with the *_near variants, which CLAMP to what
 	 * the sink can do instead of failing.
@@ -150,14 +154,14 @@ static int slave_open(struct route *r)
 			goto done;
 		}
 		snd_pcm_hw_params_alloca(&hw);
-		if ((err = snd_pcm_hw_params_any(r->slave, hw)) < 0 ||
-		    (err = snd_pcm_hw_params_set_access(r->slave, hw,
+		if ((err = snd_pcm_hw_params_any(pcm, hw)) < 0 ||
+		    (err = snd_pcm_hw_params_set_access(pcm, hw,
 				SND_PCM_ACCESS_RW_INTERLEAVED)) < 0 ||
-		    (err = snd_pcm_hw_params_set_format(r->slave, hw,
+		    (err = snd_pcm_hw_params_set_format(pcm, hw,
 				r->io.format)) < 0 ||
-		    (err = snd_pcm_hw_params_set_channels(r->slave, hw,
+		    (err = snd_pcm_hw_params_set_channels(pcm, hw,
 				r->io.channels)) < 0 ||
-		    (err = snd_pcm_hw_params_set_rate_near(r->slave, hw,
+		    (err = snd_pcm_hw_params_set_rate_near(pcm, hw,
 				&rate, &dir)) < 0)
 			goto done;
 		/*
@@ -171,14 +175,14 @@ static int slave_open(struct route *r)
 		want_buf = (snd_pcm_uframes_t)((uint64_t)r->io.buffer_size * rate / r->io.rate);
 		want_per = (snd_pcm_uframes_t)((uint64_t)r->io.period_size * rate / r->io.rate);
 		buf = want_buf;
-		if ((err = snd_pcm_hw_params_set_buffer_size_near(r->slave, hw,
+		if ((err = snd_pcm_hw_params_set_buffer_size_near(pcm, hw,
 				&buf)) < 0)
 			goto done;
 		per = want_per;
 		dir = 0;
-		if ((err = snd_pcm_hw_params_set_period_size_near(r->slave, hw,
+		if ((err = snd_pcm_hw_params_set_period_size_near(pcm, hw,
 				&per, &dir)) < 0 ||
-		    (err = snd_pcm_hw_params(r->slave, hw)) < 0)
+		    (err = snd_pcm_hw_params(pcm, hw)) < 0)
 			goto done;
 		/*
 		 * Wake the application only when its OWN ring has a period free.
@@ -200,15 +204,15 @@ static int slave_open(struct route *r)
 		if (amin > buf)
 			amin = buf;
 		snd_pcm_sw_params_alloca(&sw);
-		if ((err = snd_pcm_sw_params_current(r->slave, sw)) < 0 ||
-		    (err = snd_pcm_sw_params_set_start_threshold(r->slave, sw,
+		if ((err = snd_pcm_sw_params_current(pcm, sw)) < 0 ||
+		    (err = snd_pcm_sw_params_set_start_threshold(pcm, sw,
 				buf)) < 0 ||
-		    (err = snd_pcm_sw_params_set_avail_min(r->slave, sw,
+		    (err = snd_pcm_sw_params_set_avail_min(pcm, sw,
 				amin)) < 0 ||
-		    (err = snd_pcm_sw_params(r->slave, sw)) < 0)
+		    (err = snd_pcm_sw_params(pcm, sw)) < 0)
 			goto done;
 		/* Put the sink's descriptor behind the number the app polls. */
-		if (snd_pcm_poll_descriptors(r->slave, &pfd, 1) == 1 &&
+		if (snd_pcm_poll_descriptors(pcm, &pfd, 1) == 1 &&
 		    dup2(pfd.fd, r->pfd) < 0) {
 			err = -errno;
 			goto done;
@@ -223,9 +227,16 @@ static int slave_open(struct route *r)
 	}
 done:
 	if (err < 0) {
-		slave_close(r);
+		if (getenv("S31ROUTE_DEBUG"))
+			fprintf(stderr, "s31route: open %s: %s\n", name,
+				snd_strerror(err));
+		if (pcm)
+			snd_pcm_close(pcm);
 		return err;
 	}
+	r->slave = pcm;
+	if (old)
+		snd_pcm_close(old);
 	return 0;
 }
 
