@@ -563,13 +563,32 @@ from two 32-bit source loads: 46/46/47 ns/px against 49/50/51, ~8% off the
 expansion. NOT the 3x that the latency-bound theory predicted - breaking the
 dependency chain measured *slower* - just fewer source loads and a shorter loop.
 
-### .text..fast for the af_unix path
+### .text..fast for the af_unix path: TRIED, measured ZERO, REVERTED
 
-Added on the evidence in the entry below (syscall entry is 1.6 us; the af_unix
-path is ~118 us/op): `af_unix.o`, `sock.o`, `skbuff.o`, `datagram.o`,
-`socket.o`, `iov_iter.o`, `select.o`.
+The reasoning was the best-supported thing on the list: syscall entry is 1.6 us
+while an af_unix write+read pair is ~118 us/op with no context switch in it, so
+the time is in af_unix/sock/skbuff CODE executed 110+ times a second from
+80 MHz flash. Moved `af_unix.o`, `sock.o`, `skbuff.o`, `datagram.o`,
+`socket.o`, `iov_iter.o` and `select.o` into `.text..fast`.
 
-**A pattern trap, caught only by the System.map check.** `*net/unix/af_unix.o`
+**32.2 fps with it, 32.2 fps without.** No change at all, for 12,184 bytes of
+image and the same again in RAM on a board where memory is the binding
+constraint. Reverted, with a tombstone in the linker script.
+
+The negative is worth more than the change would have been: **the af_unix cost
+is not instruction fetch.** It is data-side - skbuff allocation, the sock lock,
+the scm and iov machinery - and `.text..fast` cannot reach any of it. Attacking
+that bucket means attacking the work or the transport (a shared-memory ring),
+not where the code lives.
+
+Verified the change was genuinely live before believing the null: running
+kernel `#166 Wed Sep 9 04:50:25 UTC`, matching the build in which
+`unix_stream_sendmsg` sat at 0xc0874970, inside
+`__text_fast_start`..`__text_fast_end`.
+
+**The pattern trap, which nearly made this a false negative.**
+
+`*net/unix/af_unix.o`
 matched NOTHING, while `*net/core/sock.o` and `*sched/fair.o` match fine. The
 bare `*af_unix.o` works. Four of the five objects moved on the first build and
 af_unix - the important one - silently did not; the symbol addresses are the
