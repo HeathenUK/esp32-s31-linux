@@ -328,14 +328,22 @@ LOCKUP_TWEAKS := --enable SOFTLOCKUP_DETECTOR --enable BOOTPARAM_SOFTLOCKUP_PANI
 	--enable BOOTPARAM_HUNG_TASK_PANIC \
 	--enable MAGIC_SYSRQ --enable MAGIC_SYSRQ_SERIAL
 endif
-# `make linux TICK=periodic` keeps the scheduler tick running through idle.
+# The scheduler tick runs through idle (HZ_PERIODIC), on purpose - this is
+# the fix for a silent, total hang, not a tuning choice.
 #
-# Seven silent, total deaths in one day on the shipping kernel (no ping, no
-# console, nothing printed) against none on any kernel that carried the
-# soft-lockup detector - whose only material difference is a periodic timer
-# wake-up. A lost wake-up in tickless idle is the mechanism that fits; this
-# is the direct test, and if it holds, the fix, at ~100 idle wake-ups/s.
-TICK ?= nohz
+# NO_HZ_IDLE (tickless idle) was turned on 2026-08-20 alongside HIGH_RES_TIMERS
+# (commit d913bda) for the timer-resolution win. On this SoC's RISC-V timer,
+# tickless idle loses a wake-up under interactive load: hart1 sleeps in WFI and
+# never returns, which takes the hosted link to hart0 with it, so the board
+# dies with nothing on the console and no ping - a heisenbug that vanishes
+# under any instrument that keeps a periodic wake (the soft-lockup detector
+# masked it all through debugging). Doom with mouse-look died within a minute
+# on NO_HZ; HZ_PERIODIC survived 5/5 back-to-back motion hammers plus normal
+# play. HIGH_RES_TIMERS is independent and stays on, so the 2026-08-20
+# resolution win (4 ms -> ~1.5 ms sleeps) is kept in full. The cost is ~100
+# idle wake-ups/s. `make linux TICK=nohz` restores tickless idle for anyone
+# who fixes the timer driver and wants to A/B it.
+TICK ?= periodic
 ifeq ($(TICK),periodic)
 TICK_TWEAKS := --disable NO_HZ_IDLE --disable NO_HZ_COMMON --disable NO_HZ --enable HZ_PERIODIC
 else
@@ -524,7 +532,13 @@ sayflash = @f="$(call flashfile,$(1))"; \
 # the flash targets look when the build directory is not visible on the host.
 sync-images:
 	@echo "--- copying build artefacts out of the container volume ---"
-	./docker/build.sh 'for f in rootfs-xip.cramfs rootfs-xip2.cramfs rootfs.squashfs; do if [ -f /src/build/$$f ]; then cp -v /src/build/$$f /src/images/$$f; fi; done'
+	@# EVERY flashable artefact, the kernel included. It was omitted here for
+	@# a long time, so `make linux` left build/xipImage in the volume and the
+	@# flash silently wrote the stale images/xipImage - a whole day of "the
+	@# fix does nothing" on 2026-09-09 was a diagnostic kernel that never
+	@# reached the board. flash-linux now refuses to flash a kernel older
+	@# than the build (see check-kernel-fresh), but the fix is to copy it.
+	./docker/build.sh 'for f in rootfs-xip.cramfs rootfs-xip2.cramfs rootfs.squashfs xipImage System.map fw_payload.bin; do if [ -f /src/build/$$f ]; then cp -v /src/build/$$f /src/images/$$f; fi; done'
 BUILDROOT_MAKE = $(MAKE) -C $(BUILDROOT_DIR) O=$(BUILDROOT_OUT) \
 	BR2_EXTERNAL=$(BUILDROOT_EXTERNAL) BR2_DL_DIR=$(BUILDROOT_DL_DIR)
 
@@ -965,10 +979,21 @@ fullclean: clean
 	rm -rf $(TOOLCHAIN_DIR)
 
 flash-opensbi:
+	$(call sayflash,$(FW_PAYLOAD))
 	$(ESPFLASH) $(OPENSBI_OFFSET) $(call flashfile,$(FW_PAYLOAD))
 
-flash-linux:
+flash-linux: check-kernel-fresh
+	$(call sayflash,$(XIP_IMAGE))
 	$(ESPFLASH) $(LINUX_OFFSET) $(call flashfile,$(XIP_IMAGE))
+
+# Refuse to flash a stale kernel. If build/xipImage (in the container volume)
+# is newer than images/xipImage (what actually gets flashed), someone ran
+# `make linux` and forgot `make sync-images`, and the flash would put an old
+# kernel on the board while reporting success. Compare mtimes and stop.
+# A saved variant deliberately copied over images/xipImage is newer than the
+# build, so this never false-alarms on that workflow.
+check-kernel-fresh:
+	@bt=$$(./docker/build.sh 'stat -c %Y /src/build/xipImage 2>/dev/null' 2>/dev/null | tr -dc 0-9); 	it=$$(stat -f %m "$(CURDIR)/images/xipImage" 2>/dev/null || stat -c %Y "$(CURDIR)/images/xipImage" 2>/dev/null); 	if [ -n "$$bt" ] && [ -n "$$it" ] && [ "$$bt" -gt "$$it" ]; then 		echo "ERROR: build/xipImage is newer than images/xipImage."; 		echo "       You built a kernel but did not copy it out - run 'make sync-images'."; 		echo "       (build $$(date -r /dev/stdin '+%H:%M' 2>/dev/null; echo) newer; refusing to flash a stale kernel.)"; 		exit 1; 	fi
 
 # The flash `rootfs` partition holds the userspace XIP image, NOT the squashfs.
 # Flashing the squashfs here would silently destroy the XIP image and take the

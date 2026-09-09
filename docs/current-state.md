@@ -7271,3 +7271,36 @@ rebuild that must be verified against A2DP and Wi-Fi throughput before it
 is believed. The reserved size of the partition is the ceiling either way;
 moving the boundary touches `partitions.csv`, the `*_PARTITION_SIZE` vars,
 `bootloader/main/main.c` twice and the trampoline.
+
+## The stale-kernel trap, and the silent tickless-idle hang (2026-09-09)
+
+**Tooling bug, now fixed.** `make sync-images` copied the cramfs images but
+NOT `xipImage`, and `flash-linux` alone among the flash targets printed no
+`built` line. So `make linux` followed by `flash-linux` wrote whatever stale
+kernel was in `images/` and said "Hash of data verified". Much of a day's
+hang debugging was invalid because the diagnostic kernels never ran - `uname`
+read `#172` (10:58) while the build was `#179` (19:42). Fixes: `sync-images`
+copies `xipImage`/`System.map`/`fw_payload.bin`; `flash-linux` prints the
+`built` line; and it now runs `check-kernel-fresh`, which aborts the flash if
+`build/xipImage` is newer than `images/xipImage`. **Always confirm a kernel
+flash with `uname -a` (the `#N` build number).**
+
+**The hang itself.** Doom with mouse-look dies intermittently under
+interactive input: silent, total (no console byte, no ping), because hart1
+sleeps in WFI and never wakes, taking the hosted link to hart0 with it. It is
+a lost timer wake-up in **tickless idle**, enabled 2026-08-20 (commit d913bda)
+with `NO_HZ_IDLE` alongside `HIGH_RES_TIMERS`. The high-res timers were the
+real win of that commit (4 ms -> 1.5 ms sleeps); `NO_HZ_IDLE` was bundled in
+and is what breaks. It is a heisenbug: any periodic wake hides it, so the
+soft-lockup detector and a console recorder both make it vanish, and it prints
+nothing.
+
+`make linux TICK=periodic` (now the DEFAULT) disables `NO_HZ_IDLE` and keeps
+`HIGH_RES_TIMERS`, so the resolution win is retained and the tick runs through
+idle at HZ_100 (~100 wake-ups/s). Death rate on the confirmed periodic kernel
+(uname #179): survived 7 of 8 game+look+walk cycles and 5 of 5 motion hammers,
+against roughly one death every two runs on the tickless kernel. So periodic
+tick greatly reduces but has not been proven to eliminate the hang - the one
+cycle-8 death may be a second, rarer path or the same one at lower odds.
+`TICK=nohz` restores tickless idle for anyone who fixes the RISC-V timer
+driver's next-event programming and wants to A/B it.
