@@ -7692,3 +7692,44 @@ s31-filter-build-output-case-insensitively: an unstripped libasound from a
 per-package rebuild pushed xip2 45 KB over; the uppercase ERROR was
 filtered out; the board ran the old xip2. br-rebuild/br-reconfigure now
 run target-finalize. Both images rebuilt, flashed, sizes verified on flash.
+
+## X11 clients were blank; four causes, three fixed, xfiles still open (2026-09-10/11)
+
+Found while moving xcalc to the SD layer: xcalc, xclock, xfiles and st all
+showed blank windows. Bisected with historical lvdesk and libX11 binaries
+(server and client swapped independently) and with runtime switches:
+
+1. **lvdesk direct expansion** (default since 09-07, tested only with
+   Doom): it nulls every window's LVGL image and then expands only depth-8
+   indices, so 16- and 32-bit windows were never painted. Now per window:
+   direct only when the window holds indices; every other depth takes the
+   image path. xcalc renders. Doom's path is unchanged (23.8 fps windowed,
+   fresh boot).
+2. **xfiles "could not find XRender visual format"**: since the depth-32
+   visual was added for st (09-07), xfiles takes it, and neither xlite's
+   screen tables nor xshim's QueryPictFormats described it. Both do now;
+   libXrender resolves visuals by walking the client's screen table and
+   matching by pointer, so xlite's depth-32 Visual is the same object
+   XGetVisualInfo hands out. xfiles starts.
+3. **st never drew**: it forked its shell after MapNotify and then waited
+   for a VisibilityNotify that xshim never sent. Sent on map now for
+   clients with VisibilityChangeMask. st renders.
+4. **32-bit pixels were truncated to 16** on every core colour path
+   (window background, GC fg/bg, border, text), painting a 32-bit
+   client's sheet black. All widened; PutImage into 32-bit targets keeps
+   ARGB; RENDER's per-pixel blend and Composite source read handle 32-bit
+   buffers; xlite's XInitImage is real (it returned failure).
+
+**Still open: xfiles draws its two folder icons as dot patterns on a black
+sheet with no labels.** Its background is a pixmap (CWBackPixmap) filled
+via a 1x1 RENDER picture; the icons arrive by CopyArea from 32-bit
+pixmaps; labels are PolyText8. The traced detail run to see those values
+was cut short: **three of five xfiles launches tonight ended in board
+silence**, and the one recorded at loglevel 8 logged
+`esp32s31-ppa: jpeg decode error 0x00008000` from xfiles' hardware
+thumbnail path. That is the first concrete lead on a silent death: a DMA
+engine on a bad input. Not proven; next step is xfiles with thumbnails
+disabled, recorded.
+
+xclock's face uses CreateSolidFill + Trapezoids, documented as not
+implemented in xshim's RENDER; its blank face is that, not a regression.

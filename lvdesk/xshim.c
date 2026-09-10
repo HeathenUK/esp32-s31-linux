@@ -1337,7 +1337,7 @@ static int is_descendant(struct res *w, struct res *of)
  * specifies, and it costs nothing here because the common case is a pixmap the
  * size of the window.
  */
-static uint16_t win_bg_at(struct res *d, int x, int y)
+static uint32_t win_bg_at(struct res *d, int x, int y)
 {
 	struct res *p = d->bg_pixmap ? res_find(d->bg_pixmap) : NULL;
 
@@ -1345,7 +1345,7 @@ static uint16_t win_bg_at(struct res *d, int x, int y)
 	if (p && p->type == R_PIXMAP && drawable_ok(p) && p->w > 0 && p->h > 0)
 		return px_get(p, ((x % p->w) + p->w) % p->w,
 			      ((y % p->h) + p->h) % p->h);
-	return (uint16_t)d->bg;
+	return d->bg;
 }
 
 static void win_fill(struct res *d, int x, int y, int w, int h)
@@ -1407,7 +1407,14 @@ static void win_fill(struct res *d, int x, int y, int w, int h)
 		if (!op_target(d))
 			return;
 		for (j = y; j < y + h; j++)
-			px_hspan(d, x, j, w, (uint16_t)d->bg);
+			px_hspan(d, x, j, w, d->bg);	/* raw: px_hspan
+							 * writes it in the
+							 * buffer's own
+							 * width - a 32-bit
+							 * client's pixel
+							 * truncated to 16
+							 * painted xfiles'
+							 * sheet black */
 		return;
 	}
 	for (i = 0; i < MAXRES && nob < (int)(sizeof(ob) / sizeof(ob[0])); i++) {
@@ -1477,7 +1484,7 @@ static void win_fill(struct res *d, int x, int y, int w, int h)
 						       win_bg_at(d, k, j));
 				else
 					px_hspan(d, cur, j, end - cur,
-						 (uint16_t)d->bg);
+						 d->bg);
 			}
 			if (sp[i][1] > cur)
 				cur = sp[i][1];
@@ -1488,7 +1495,7 @@ static void win_fill(struct res *d, int x, int y, int w, int h)
 					px_set(d, k, j, win_bg_at(d, k, j));
 			else
 				px_hspan(d, cur, j, x + w - cur,
-					 (uint16_t)d->bg);
+					 d->bg);
 		}
 	}
 }
@@ -1517,7 +1524,7 @@ static void draw_border(struct res *w)
 	{
 		int bw = w->bw, x0 = w->x, y0 = w->y;
 		int tw = w->w + 2 * bw, th = w->h + 2 * bw;
-		uint16_t c = (uint16_t)w->border_pixel;
+		uint32_t c = w->border_pixel;
 
 		for (j = 0; j < bw; j++) {		/* top and bottom */
 			px_hspan(p, x0, y0 + j, tw, c);
@@ -1833,7 +1840,7 @@ static void draw_glyph(struct res *d, int x, int y, uint8_t ch, uint16_t c,
 }
 
 static int draw_string(struct res *d, int x, int y, const uint8_t *str, int n,
-		       uint16_t c, const struct xfont *f)
+		       uint32_t c, const struct xfont *f)
 {
 	int i, adv = 0;
 
@@ -2607,6 +2614,21 @@ static void expose_window(struct cli *c, struct res *w)
 	memset(d, 0, sizeof(d));
 	put32(d, w->id); put32(d + 4, w->id);
 	send_event(c, 19, d, 28);		/* MapNotify */
+	/*
+	 * VisibilityNotify, Unobscured, for a client that asked for it. st
+	 * refuses to draw at all until one arrives (WIN_VISIBLE is set only
+	 * in its visibility handler), so without this it forked its shell
+	 * after MapNotify and then sat on a blank window forever - which read
+	 * as a pixel-path bug and cost an evening (2026-09-10). There is no
+	 * stacking here that would ever obscure a window partially, so
+	 * Unobscured on map is also the truth.
+	 */
+	if (w->event_mask & (1u << 16)) {		/* VisibilityChangeMask */
+		memset(d, 0, sizeof(d));
+		put32(d, w->id);
+		d[4] = 0;				/* VisibilityUnobscured */
+		send_event(c, 15, d, 28);
+	}
 	paint_subtree(c, w);
 }
 
@@ -2845,6 +2867,66 @@ static void blend_px(struct res *d, int x, int y, int r8, int g8, int b8,
 			*q = (uint8_t)(*q + (((r8 - *q) * cov) >> 8));
 		return;
 	}
+	if (b->bpp == 4) {
+		/*
+		 * ARGB8888 target - the depth-32 visual that st and xfiles
+		 * pick. Same operator table as the RGB565 path below, on 8-bit
+		 * channels, alpha written opaque. A separate block so the
+		 * 16-bit path, the per-pixel hot path for every other client,
+		 * is untouched.
+		 */
+		uint32_t *q = &((uint32_t *)b->px)[(size_t)ay * b->w + ax];
+
+		switch (op) {
+		case PICT_OP_DST:
+		case PICT_OP_OVER_REVERSE:
+			return;
+		case PICT_OP_CLEAR:
+		case PICT_OP_OUT:
+			*q = 0;
+			return;
+		default:
+			break;
+		}
+		if (cov <= 0)
+			return;
+		if (op == PICT_OP_SRC || op == PICT_OP_IN ||
+		    ((op == PICT_OP_OVER || op == PICT_OP_ATOP) && cov >= 255)) {
+			*q = 0xFF000000u | ((uint32_t)r8 << 16) |
+			     ((uint32_t)g8 << 8) | (uint32_t)b8;
+			return;
+		}
+		dr = (*q >> 16) & 0xFF;
+		dg = (*q >> 8) & 0xFF;
+		db = *q & 0xFF;
+		switch (op) {
+		case PICT_OP_IN_REVERSE:
+		case PICT_OP_ATOP_REVERSE:
+			dr = dr * cov / 255;
+			dg = dg * cov / 255;
+			db = db * cov / 255;
+			break;
+		case PICT_OP_OUT_REVERSE:
+		case PICT_OP_XOR:
+			dr = dr * (255 - cov) / 255;
+			dg = dg * (255 - cov) / 255;
+			db = db * (255 - cov) / 255;
+			break;
+		case PICT_OP_ADD:
+			dr += r8 * cov / 255; if (dr > 255) dr = 255;
+			dg += g8 * cov / 255; if (dg > 255) dg = 255;
+			db += b8 * cov / 255; if (db > 255) db = 255;
+			break;
+		default:
+			dr += ((r8 - dr) * cov) >> 8;
+			dg += ((g8 - dg) * cov) >> 8;
+			db += ((b8 - db) * cov) >> 8;
+			break;
+		}
+		*q = 0xFF000000u | ((uint32_t)dr << 16) | ((uint32_t)dg << 8) |
+		     (uint32_t)db;
+		return;
+	}
 	p = &b->px[(size_t)ay * b->w + ax];
 
 	/*
@@ -2955,9 +3037,12 @@ static void render_fill(struct res *d, struct pict *dp, int x, int y,
 	 * span write; anything else keeps the per-pixel path.
 	 */
 	if ((op == PICT_OP_SRC || (op == PICT_OP_OVER && a8 >= 255)) &&
-	    d->buf && d->buf->bpp == 2 && op_target(d)) {
-		uint16_t c = (uint16_t)(((r8 & 0xF8) << 8) |
-					((g8 & 0xFC) << 3) | (b8 >> 3));
+	    d->buf && (d->buf->bpp == 2 || d->buf->bpp == 4) && op_target(d)) {
+		uint32_t c = d->buf->bpp == 4 ?
+			0xFF000000u | ((uint32_t)r8 << 16) |
+				((uint32_t)g8 << 8) | (uint32_t)b8 :
+			(uint32_t)(((r8 & 0xF8) << 8) | ((g8 & 0xFC) << 3) |
+				   (b8 >> 3));
 
 		for (j = y0; j < y1; j++)
 			px_hspan(d, x0, j, x1 - x0, c);
@@ -3768,16 +3853,33 @@ static void render_composite(struct cli *c, const uint8_t *r)
 						res_find(sp->drawable);
 					int px = sx + (i - dx);
 					int py = sy + (j - dy);
-					uint16_t v;
+					uint32_t v;
 
 					if (!drawable_ok(ss) || px < 0 ||
 					    py < 0 || px >= ss->w ||
 					    py >= ss->h)
 						continue;
 					v = px_get(ss, px, py);
-					sr = (v >> 11) << 3;
-					sg = ((v >> 5) & 0x3F) << 2;
-					sb = (v & 0x1F) << 3;
+					if (ss->buf && ss->buf->bpp == 4) {
+						/*
+						 * ARGB8888 source (a pixmap
+						 * made for the depth-32
+						 * visual): its own alpha
+						 * scales the coverage, as
+						 * Over requires.
+						 */
+						sr = (v >> 16) & 0xFF;
+						sg = (v >> 8) & 0xFF;
+						sb = v & 0xFF;
+						cov = cov * ((v >> 24) & 0xFF) /
+						      255;
+						if (!cov)
+							continue;
+					} else {
+						sr = (v >> 11) << 3;
+						sg = ((v >> 5) & 0x3F) << 2;
+						sb = (v & 0x1F) << 3;
+					}
 				}
 				blend_px(d, i, j, sr, sg, sb, cov, op);
 			}
@@ -3956,15 +4058,15 @@ static int render_request(struct cli *c, const uint8_t *r, int len)
 		return 1;
 	}
 	case 1: {					/* QueryPictFormats */
-		uint8_t d24[24], ext[4 * 28 + 8 + 8 + 8 + 4];
+		uint8_t d24[24], ext[4 * 28 + 8 + (8 + 8) * 2 + 4];
 		uint8_t *p = ext;
 
 		memset(d24, 0, sizeof(d24));
 		memset(ext, 0, sizeof(ext));
 		put32(d24 + 0, 4);			/* numFormats */
 		put32(d24 + 4, 1);			/* numScreens */
-		put32(d24 + 8, 1);			/* numDepths */
-		put32(d24 + 12, 1);			/* numVisuals */
+		put32(d24 + 8, 2);			/* numDepths */
+		put32(d24 + 12, 2);			/* numVisuals */
 		put32(d24 + 16, 1);			/* numSubpixel */
 
 		put_format(p, PF_RGB565, 16, 11, 0x1F, 5, 0x3F, 0, 0x1F, 0, 0);
@@ -3977,11 +4079,26 @@ static int render_request(struct cli *c, const uint8_t *r, int len)
 		put_format(p, PF_A1, 1, 0, 0, 0, 0, 0, 0, 0, 0x01);
 		p += 28;
 
-		put32(p, 1); put32(p + 4, PF_RGB565);	/* screen: 1 depth */
+		/*
+		 * Both visuals the setup advertises, each bound to its format.
+		 * The depth-32 entry was missing after the depth-32 visual was
+		 * added for st (2026-09-07): xfiles asks XMatchVisualInfo for
+		 * 32/TrueColor, got it, then XRenderFindVisualFormat() found
+		 * no format for it and the client exited - "could not find
+		 * XRender visual format" - where before it had fallen back to
+		 * the default visual. The client library's screen tables must
+		 * carry the same visual (xlite), or libXrender cannot resolve
+		 * the id it is told here.
+		 */
+		put32(p, 2); put32(p + 4, PF_RGB565);	/* screen: 2 depths */
 		p += 8;
 		p[0] = 16; p[1] = 0; put16(p + 2, 1); put32(p + 4, 0);
 		p += 8;					/* depth 16, 1 visual */
 		put32(p, VISUAL_ID); put32(p + 4, PF_RGB565);
+		p += 8;
+		p[0] = 32; p[1] = 0; put16(p + 2, 1); put32(p + 4, 0);
+		p += 8;					/* depth 32, 1 visual */
+		put32(p, VISUAL32_ID); put32(p + 4, PF_ARGB32);
 		p += 8;
 		put32(p, 0);				/* SubPixelUnknown */
 		p += 4;
@@ -5555,7 +5672,7 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 				fprintf(stderr, "xshim: PolyText8 0x%x '%.*s' "
 					"fg=%04x bg=%04x at %d,%d\n", d->id, m,
 					p + 2, g->fg, g->bg, x, y);
-			x += draw_string(d, x, y, p + 2, m, (uint16_t)g->fg,
+			x += draw_string(d, x, y, p + 2, m, g->fg,
 					 f);
 			p += 2 + m;
 		}
@@ -5587,13 +5704,13 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 
 			for (j = y - f->ascent; j < y + f->descent; j++)
 				for (i = x; i < x + wid; i++)
-					px_set(d, i, j, (uint16_t)g->bg);
+					px_set(d, i, j, g->bg);
 		}
 		if (trace_on())
 			fprintf(stderr, "xshim: ImageText8 0x%x '%.*s' fg=%04x "
 				"bg=%04x at %d,%d\n", d->id, n, r + 16, g->fg,
 				g->bg, x, y);
-		draw_string(d, x, y, r + 16, n, (uint16_t)g->fg, font_of(g));
+		draw_string(d, x, y, r + 16, n, g->fg, font_of(g));
 		notify_draw(d);
 		break;
 	}
@@ -6529,10 +6646,39 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 			for (y = 0; y < ih; y++) {
 				const uint8_t *row = src + (size_t)y * pad;
 
-				for (x = 0; x < iw; x++) {
-					uint16_t v;
+				int tb = d->buf ? d->buf->bpp : 2;
 
-					if (depth <= 8) {
+				for (x = 0; x < iw; x++) {
+					uint32_t v;
+
+					if (tb == 4) {
+						/*
+						 * A 32-bit target keeps
+						 * ARGB8888. The alpha byte is
+						 * real only for a depth-32
+						 * image; a depth-24 one has
+						 * padding there, and a
+						 * Composite would read 0 as
+						 * "invisible".
+						 */
+						if (depth <= 8)
+							v = 0xFF000000u |
+							    (row[x] * 0x010101u);
+						else if (depth <= 16) {
+							unsigned s16 = row[x * 2] |
+								(row[x * 2 + 1] << 8);
+							v = 0xFF000000u |
+							  (((s16 >> 11) << 3) << 16) |
+							  ((((s16 >> 5) & 0x3F) << 2) << 8) |
+							  ((s16 & 0x1F) << 3);
+						} else {
+							const uint8_t *q = row + x * 4;
+							v = ((uint32_t)(depth >= 32 ?
+								q[3] : 0xFF) << 24) |
+							    ((uint32_t)q[2] << 16) |
+							    ((uint32_t)q[1] << 8) | q[0];
+						}
+					} else if (depth <= 8) {
 						v = row[x];
 					} else if (depth <= 16) {
 						v = (uint16_t)(row[x * 2] |

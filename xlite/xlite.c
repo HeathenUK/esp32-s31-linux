@@ -689,14 +689,33 @@ Display *XOpenDisplay(const char *name)
 	x->screen.backing_store = p[36];
 	x->screen.save_unders = p[37];
 	x->screen.root_depth = p[38];
-	x->screen.ndepths = 1;
+	/*
+	 * Two depths in the screen table, because libXrender resolves the
+	 * visual ids in the server's QueryPictFormats reply by walking
+	 * exactly this table (_XRenderFindVisual) and then matches by Visual
+	 * POINTER. The depth-32 visual XGetVisualInfo hands out must
+	 * therefore be this same object, or XRenderFindVisualFormat() fails
+	 * for it - which is what killed xfiles after the depth-32 visual was
+	 * added for st (2026-09-07).
+	 */
+	x->screen.ndepths = 2;
 	x->screen.display = &x->pub;
-	x->screen.depths = &x->depth;
+	x->screen.depths = x->depths;
 
 	x->visual.visualid = g32(p + 32);
-	x->depth.depth = x->screen.root_depth;
-	x->depth.nvisuals = 1;
-	x->depth.visuals = &x->visual;
+	x->depths[0].depth = x->screen.root_depth;
+	x->depths[0].nvisuals = 1;
+	x->depths[0].visuals = &x->visual;
+	x->visual32.visualid = 0x23;		/* XLITE_VISUAL32_ID */
+	x->visual32.class = TrueColor;
+	x->visual32.red_mask = 0x00FF0000;
+	x->visual32.green_mask = 0x0000FF00;
+	x->visual32.blue_mask = 0x000000FF;
+	x->visual32.bits_per_rgb = 8;
+	x->visual32.map_entries = 256;
+	x->depths[1].depth = 32;
+	x->depths[1].nvisuals = 1;
+	x->depths[1].visuals = &x->visual32;
 	{
 		const unsigned char *v = p + 40 + 8;	/* first VISUALTYPE */
 

@@ -110,8 +110,9 @@ struct xdpy {
 
 	char name[64];
 	Screen screen;
-	Visual visual;
-	Depth depth;
+	Visual visual;		/* depth 16, the root visual */
+	Visual visual32;	/* depth 32 TrueColor, shared with XGetVisualInfo */
+	Depth depths[2];	/* [0] depth 16, [1] depth 32 */
 	ScreenFormat formats[3];
 };
 

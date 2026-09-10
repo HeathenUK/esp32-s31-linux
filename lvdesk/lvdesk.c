@@ -4575,7 +4575,24 @@ static void xwin_on_draw(uint32_t id)
 			 * does not happen.
 			 */
 			const uint16_t *px;
-			int direct = directexp_on();
+			const uint16_t *dpal;
+			int dstride, dw0, dh0;
+			/*
+			 * Direct expansion is for INDEXED windows only: it
+			 * expands palette indices straight into kms_map from
+			 * the draw pass, and the LVGL image has no source so
+			 * the widget itself paints nothing. Deciding that per
+			 * process instead of per window (2026-09-07 to 09-10)
+			 * left every 16- and 32-bit client - xcalc, xclock,
+			 * xfiles, st - with a blank window: nothing expanded
+			 * them, and nothing else drew them. Doom's depth-8
+			 * path is unchanged; every other depth takes the
+			 * image path, which xshim_window_pixels() already
+			 * feeds as RGB565 whatever the client's format.
+			 */
+			int direct = directexp_on() &&
+				     xshim_window_indices(id, &dw0, &dh0,
+							  &dstride, &dpal) != NULL;
 
 			/*
 			 * DO NOT expand here on the direct path. Calling
@@ -4615,7 +4632,8 @@ static void xwin_on_draw(uint32_t id)
 			 */
 			if (px && ((int)xwins[i].dsc.header.w != w ||
 				   (int)xwins[i].dsc.header.h != h ||
-				   xwins[i].dsc.data != (const uint8_t *)px)) {
+				   xwins[i].dsc.data != (const uint8_t *)px ||
+				   lv_image_get_src(xwins[i].img) == NULL)) {
 				xwins[i].dsc.header.w = w;
 				xwins[i].dsc.header.h = h;
 				xwins[i].dsc.header.stride = w * 2;

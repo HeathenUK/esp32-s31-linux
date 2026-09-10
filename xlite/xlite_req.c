@@ -3099,7 +3099,7 @@ XVisualInfo *XGetVisualInfo(Display *dpy, long mask, XVisualInfo *tmpl,
 			    int *nitems)
 {
 	static Visual v8;		/* the depth-8 PseudoColor visual */
-	static Visual v32;		/* the depth-32 TrueColor visual */
+	Visual *v32p = &XD(dpy)->visual32;	/* the screen table's object */
 	XVisualInfo all[3];
 	XVisualInfo *out;
 	int n = 0, i;
@@ -3139,14 +3139,7 @@ XVisualInfo *XGetVisualInfo(Display *dpy, long mask, XVisualInfo *tmpl,
 	 * st draws its whole terminal into a garbage visual - it runs, takes
 	 * input, and shows nothing.
 	 */
-	v32.visualid = XLITE_VISUAL32_ID;
-	v32.class = TrueColor;
-	v32.red_mask = 0x00FF0000;
-	v32.green_mask = 0x0000FF00;
-	v32.blue_mask = 0x000000FF;
-	v32.bits_per_rgb = 8;
-	v32.map_entries = 256;
-	all[2].visual = &v32;
+	all[2].visual = v32p;
 	all[2].visualid = XLITE_VISUAL32_ID;
 	all[2].screen = 0;
 	all[2].depth = 32;
@@ -3275,6 +3268,35 @@ XImage *XCreateImage(Display *dpy, Visual *vis, unsigned int depth, int format,
 	im->green_mask = 0x07E0;
 	im->blue_mask = 0x001F;
 	return im;
+}
+
+/*
+ * A client-built XImage (xfiles fills the struct itself for its icons and
+ * thumbnails, then calls this). Real Xlib validates the fields and installs
+ * the accessor functions; here the accessors are real functions, so what
+ * matters is the derived geometry the caller may have left at zero.
+ * Returned 0 from a stub until 2026-09-10, so every such image was treated
+ * as unusable and xfiles drew its icons from garbage.
+ */
+XLITE_IMPL(XInitImage)
+Status XInitImage(XImage *im)
+{
+	if (!im || im->width <= 0 || im->height <= 0 || im->depth <= 0)
+		return 0;
+	if (!im->bits_per_pixel)
+		im->bits_per_pixel = im->depth <= 8 ? 8 :
+				     im->depth <= 16 ? 16 : 32;
+	if (!im->bitmap_pad)
+		im->bitmap_pad = 32;
+	if (!im->bitmap_unit)
+		im->bitmap_unit = 32;
+	if (!im->bytes_per_line)
+		im->bytes_per_line = (int)(((im->width * im->bits_per_pixel +
+					     im->bitmap_pad - 1) /
+					    im->bitmap_pad) *
+					   (im->bitmap_pad / 8));
+	im->f.destroy_image = ximg_destroy;
+	return 1;
 }
 
 
