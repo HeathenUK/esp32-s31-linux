@@ -7540,10 +7540,20 @@ void xshim_on_mode(void (*cb)(int w, int h))
 
 uint32_t xshim_mode_window(int w, int h)
 {
-	int i;
-	uint32_t best = 0;
+	int i, fbig = 0;
+	uint32_t fits = 0, covering = 0, fallback = 0;
 
-	/* The last one created wins: res[] fills in creation order. */
+	/*
+	 * Which window is the fullscreen one? The client that switched the
+	 * mode owns it - wherever it put it. The first rule here was "a
+	 * mapped top-level at 0,0 covering the mode", and that is only
+	 * SDL's habit at some sizes: `prboom -width 320 -height 240` left
+	 * its 320x240 window at 151,81, nothing matched, nothing was ever
+	 * presented, and the game ran blind behind a frozen title screen
+	 * (2026-09-10). The covering rule stays as the fallback for a client
+	 * that switches the mode from a different connection.
+	 * The last one created wins: res[] fills in creation order.
+	 */
 	for (i = 0; i < MAXRES; i++) {
 		struct res *t = &res[i];
 
@@ -7551,9 +7561,25 @@ uint32_t xshim_mode_window(int w, int h)
 			continue;
 		if (t->x <= 0 && t->y <= 0 && t->x + t->w >= w &&
 		    t->y + t->h >= h)
-			best = t->id;
+			covering = t->id;
+		if (vm_cli >= 0 && t->owner == vm_cli) {
+			if (t->w >= w && t->h >= h)
+				fits = t->id;
+			if (t->w * t->h >= fbig) {
+				fbig = t->w * t->h;
+				fallback = t->id;
+			}
+		}
 	}
-	return best;
+	if (fits)
+		return fits;
+	if (covering)
+		return covering;
+	if (fallback)
+		fprintf(stderr, "xshim: mode %dx%d: no window of client %d "
+			"fits it; presenting its largest, 0x%x\n",
+			w, h, vm_cli, fallback);
+	return fallback;
 }
 
 void xshim_on_warp(void (*cb)(uint32_t top, int x, int y))
