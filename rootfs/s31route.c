@@ -60,6 +60,7 @@ struct route {
 	char sink[64];
 	time_t seen;
 	int pfd;		/* what the application polls; see the header */
+	unsigned follow_ctr;	/* throttle the /run/s31-sink stat() */
 	snd_pcm_uframes_t transferred;
 };
 
@@ -250,6 +251,16 @@ static void sink_follow(struct route *r)
 	char want[64];
 	struct stat st;
 
+	/*
+	 * Called from every transfer (~86/s at a 256-frame period). A stat()
+	 * per transfer is pure overhead when the sink almost never changes;
+	 * check roughly twice a second instead. A switch is picked up within
+	 * ~0.5 s, which is imperceptible for a speaker/Bluetooth swap. The
+	 * slave is always opened immediately when there is none (below), so
+	 * startup is not delayed.
+	 */
+	if (r->slave && r->follow_ctr++ % 16)
+		return;
 	if (stat(SINK_FILE, &st) < 0) {
 		if (!r->slave)
 			slave_open(r);
@@ -335,21 +346,31 @@ static int xrun(struct route *r)
 static snd_pcm_sframes_t route_pointer(snd_pcm_ioplug_t *io)
 {
 	struct route *r = io->private_data;
-
-	/*
-	 * What the hardware has actually PLAYED, not what we have handed on.
-	 * Frames written to the slave are still sitting in its buffer, and
-	 * reporting them as played overstates progress by a whole buffer:
-	 * the application believes it is further behind than it is, and
-	 * anything synchronising to the audio clock drifts by that much.
-	 * snd_pcm_delay() is how much is still queued ahead of the last
-	 * frame we wrote.
-	 */
 	snd_pcm_sframes_t delay = 0;
 	int err;
 
 	if (!r->slave)
 		return -ENODEV;
+	/*
+	 * Report handed-on frames, not truly-played frames.
+	 *
+	 * Querying the slave's real position with snd_pcm_delay() on every
+	 * pointer call was the single biggest CPU cost of sound. On the codec
+	 * it is a hardware ioctl, called ~400 times a second, and a slow
+	 * pointer also made alsa-lib's avail loop spin (9,000+ pointer calls
+	 * in a 24 s run against ~1,300 without). Removing it took fullscreen
+	 * Doom with speaker sound from 10.3 to 19.1 fps - to parity with the
+	 * Bluetooth loopback, whose software delay was cheap all along.
+	 *
+	 * Pacing does not depend on this: the blocking writei() to the slave
+	 * provides it, exactly as a direct hw: open would. The cost is that
+	 * the reported position overstates playback by up to one buffer
+	 * (~46 ms), invisible to a game. An application that synchronises
+	 * video to the audio clock can restore the exact query with
+	 * S31ROUTE_ACCURATE_DELAY=1.
+	 */
+	if (!getenv("S31ROUTE_ACCURATE_DELAY"))
+		return (snd_pcm_sframes_t)(r->transferred % io->buffer_size);
 	err = snd_pcm_delay(r->slave, &delay);
 	if (err == -EPIPE || snd_pcm_state(r->slave) == SND_PCM_STATE_XRUN)
 		return xrun(r);

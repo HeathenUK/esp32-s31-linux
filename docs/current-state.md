@@ -7342,3 +7342,45 @@ the GDMA cyclic ring (dynamic `nperiods`, `AHB_DESC_MAX` 4095/period) would
 take it, but it would not change play. Making s31route over-request a bigger
 codec buffer than the app asked for is the only way it would matter, and that
 just adds audio latency - wrong for a game. Left as is.
+
+## Sound's real cost was a per-pointer codec ioctl (2026-09-10)
+
+Asked to minimise the CPU cost of sound at any resolution, windowed or full
+screen. Measured it per-thread first: during a timedemo the audio thread cost
+about as much as the render thread, and it was NOT recovery churn (2-5
+recovers in 10 s). Isolated it by sink:
+
+| audio thread, 10 s window | ticks (utime/stime) |
+|---|---|
+| null sink (no pacing, misleading) | 369/31 |
+| direct plughw:0,0 (no s31route) | ~102/47 |
+| s31route -> codec, OLD | ~228/165 |
+
+The `stime` in the s31route path was the tell. `route_pointer()` called
+`snd_pcm_delay(slave)` on EVERY invocation - a hardware ioctl to the codec,
+~400 times a second - and a slow pointer made alsa-lib's avail loop spin
+(9,000+ pointer calls in 24 s vs ~1,300 without). On the codec those ioctls
+are dear; on the Bluetooth loopback (snd-aloop, software) they were cheap,
+which is why the speaker path was the outlier at half the loopback's fps.
+
+**Fix (rootfs/s31route.c):** report handed-on frames (`transferred %
+buffer_size`), not truly-played frames. Pacing still comes from the blocking
+`writei()` to the slave, exactly as a direct hw: open. The position overstates
+playback by up to one buffer (~46 ms), invisible to a game;
+`S31ROUTE_ACCURATE_DELAY=1` restores the exact query for anything that
+synchronises video to the audio clock.
+
+**Result:**
+- Fullscreen Doom, speaker sound: **10.3 -> 19.1 fps** - parity with the
+  loopback (19.5).
+- Windowed speaker audio thread: 388 -> 320 ticks/10 s (stime 157 -> 95).
+- Sink switching still works: speaker -> BT -> speaker mid-play, clean.
+- Also throttled the `/run/s31-sink` stat() to ~1 in 16 transfers (it ran
+  every transfer); switch latency stays under a second.
+
+**Still on the table:** s31route's ioplug indirection is ~320 vs the direct
+path's ~150 - roughly 17% of a core purely for the forwarding layer's extra
+copy and per-period callback dispatch. That is the price of mid-stream sink
+switching in an ioplug; removing it needs a lighter data path (pass the app's
+buffer straight to the slave without s31route's own ring), which is a redesign,
+not a tweak. Left for later.
