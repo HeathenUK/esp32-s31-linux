@@ -7572,7 +7572,10 @@ the engine runs, the completion collected by the next lock holder or before
 the cursor is painted. Knobs: ppa_policy, ppa_async, ppa_min_bytes (fixed
 mode), ppa_table (learned table; write to reset).
 
-**Measured** (fresh boot per arm, 320x200 windowed, speaker sound):
+**Measured** (fresh boot per arm, 320x200, speaker sound. CORRECTION: the Doom
+rows were FULLSCREEN, not windowed - prboom defaults to fullscreen and no
+`-window` was passed; see docs/frame-path-plan.md step 5 for the windowed
+pair, 23.9 -> 24.0 fps with the compositor 5% cheaper):
 
 | | fixed | adaptive + async |
 |---|---|---|

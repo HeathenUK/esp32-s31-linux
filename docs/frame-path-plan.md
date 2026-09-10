@@ -88,7 +88,7 @@ Event delivery stays on the socket initially; only requests/replies move.
 **Risk.** High: the event path was made solid only yesterday. Measure the
 grab/mouselook/menu checks (docs, 2026-09-09) after any change.
 
-## 5. Direct present when the window is unoccluded — TODO
+## 5. Direct present when the window is unoccluded — ALREADY DONE (2026-09-07)
 
 **Why.** The windowed path copies every frame three times; lvdesk is ~30%
 of the core during a game. When LVGL can prove nothing overlaps the window,
@@ -101,6 +101,23 @@ path the moment the test fails. Measure lvdesk ticks and fps, and the
 z-order cases that killed adoption: a menu or popover over the game.
 
 **Decides.** Ships if >= 5% lvdesk CPU with the overlap cases pixel-correct.
+
+**Result.** It exists: lvdesk's `directexp_on()` expands the client's
+indices straight into kms_map from LV_EVENT_DRAW_MAIN, with LVGL's own
+z-order and clip, default on since 2026-09-07 (40% off the compositor's
+per-frame cost then). The "three copies" read of the lvdesk sample was
+wrong by one: the 7% in kms_flush_cb IS that expand. The frame path is
+expand -> driver op; nothing left to remove here short of scanning out the
+draw buffer itself (tearing, and a driver policy change) - not pursued.
+
+**Correction to today's Doom labels.** prboom defaults to fullscreen
+(memory: s31-prboom-defaults-fullscreen); every Doom run today without
+`-window` was fullscreen, including the adaptive-dispatch A/B in
+docs/current-state.md. Those numbers stand as FULLSCREEN results. Truly
+windowed, fresh boot, `-window`: fixed 23.9 fps / lvdesk 7662 ticks;
+adaptive+async 24.0 / 7271 - same fps, compositor 5% cheaper, and the
+learned table sends the 128,000-byte frame copy to the PPA (0.6 ms CPU vs
+3.0), the very op the 131,072 constant sent to the CPU.
 
 ## 6. .text..fast for the DRM commit path — TODO
 
