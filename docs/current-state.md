@@ -7304,3 +7304,41 @@ tick greatly reduces but has not been proven to eliminate the hang - the one
 cycle-8 death may be a second, rarer path or the same one at lower odds.
 `TICK=nohz` restores tickless idle for anyone who fixes the RISC-V timer
 driver's next-event programming and wants to A/B it.
+
+## Fullscreen PPA-CLUT and codec buffer: both dead ends, and why (2026-09-10)
+
+Asked to fold the palette expand into the PPA for fullscreen, and to grow the
+codec buffer. Red-teamed both against the hardware first; neither is worth
+building.
+
+**PPA CLUT does not help fullscreen, for the reason it did not help windowed.**
+The intuition was that the huge final frame (760x475) should favour hardware.
+It does not, because the CLUT runs at the INPUT resolution, not the output:
+
+- The CLUT lives on the PPA **blend** engine (L8 -> RGB565, no scaling); the
+  scale lives on the **SRM** engine (RGB565 -> RGB565 only - `PPA_SRM_CM_*`
+  defines RGB565 and nothing indexed). They are two separate operations. There
+  is no single op that expands an index AND scales, so the CLUT cannot ride
+  the scale we already pay for.
+- So the choice is: (a) CPU-expand the 320x200 frame (cheap, ~64k px, the same
+  work windowed does at 30 fps) then PPA-scale to 760x475; or (b) PPA-blend-
+  expand the 320x200 frame then PPA-scale. (b) replaces a cheap CPU pass with
+  an EXTRA PPA op at 320x200, and the PPA loses to the CPU below ~128 KB
+  (per-op setup, the offload-not-purchasable rule). Measured windowed:
+  PPA-CLUT 29.6 vs CPU 30.5.
+- The scale (the only part that touches the 722 KB output) is ALREADY on the
+  PPA after patches/0036. So fullscreen at 29 fps against windowed 30 is at its
+  ceiling: expensive part on hardware, cheap part on CPU, ~1 fps of unavoidable
+  PPA-op overhead. Nothing on the table here.
+
+**Growing the codec buffer changes nothing for a game.** The I2S buffer max is
+`ESP32S31_I2S_BUFFER_BYTES` = 16384 (93 ms at 44100), but s31route sizes the
+codec ring to MIRROR the application's ring (`want_buf = io.buffer_size * rate
+/ io.rate`), and prboom's SDL ring (~2048 frames, ~46 ms) fits already - the
+16 KB ceiling is not the limiter. The uncapped-timedemo underruns come from
+the game feeding audio in bursts faster than realtime, not from a small
+ceiling; capped play never underruns. Bumping the #define is a one-liner and
+the GDMA cyclic ring (dynamic `nperiods`, `AHB_DESC_MAX` 4095/period) would
+take it, but it would not change play. Making s31route over-request a bigger
+codec buffer than the app asked for is the only way it would matter, and that
+just adds audio latency - wrong for a game. Left as is.
