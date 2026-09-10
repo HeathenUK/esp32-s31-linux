@@ -56,7 +56,7 @@ failed) and the major-fault count did not move: 863 against 825 on the
 fresh-boot baseline; 15.4 vs 15.1 fps is noise. Whatever those faults are,
 they are not Quake's code pages. Tool kept; lever dead.
 
-## 3. PPA CLUT expansion under the new dispatcher — TODO
+## 3. PPA CLUT expansion under the new dispatcher — DEAD (loses again)
 
 **Why.** The hardware palette expand lost by 3% when the engine op was
 synchronous. With ppa_async and per-bucket costing it may flip; for
@@ -66,6 +66,15 @@ fullscreen a chained expand-then-scale would mean no CPU touches a pixel.
 boot, Doom windowed and fullscreen, against the 23.7 / 22.2 baselines.
 
 **Decides.** Default flips if both arms win by more than the noise (~2%).
+
+**Result.** Fresh boot, lvdesk restarted with XSHIM_PPACLUT=1 (verified in
+its environment), Doom windowed: 22.8 fps, lvdesk 6667 ticks, against
+23.7 / 6383 with the CPU expand. 4% worse on both, the same verdict as
+2026-09-08 (29.6 vs 30.5). Async dispatch does not rescue it: the expand is
+a blend-engine op at 320x200 where the reserved-pool copy plus flush still
+outweighs a cache-resident CPU expand. The fullscreen arm was not run - the
+existing code has no chained expand-then-scale path, so it would measure
+the same expand. That chain remains a possible build, not a measurement.
 
 ## 4. Shared-memory X transport between xlite and xshim — DEAD (see 1)
 
