@@ -38,3 +38,7 @@ xlite/stubs.c
 rootfs/*.bin
 .xref-work/
 sdlquake/
+rootfs/sdlquake
+rootfs/sdlquake.*
+rootfs/ioctlprof.so
+rootfs/lvdesk.syms
