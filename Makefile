@@ -1008,13 +1008,21 @@ bootloader:
 # Rebuild ONE Buildroot package in place: make br-rebuild-alsa-lib. The
 # narrowest target that reaches a library change; a full rootfs rebuild is
 # ruinous here. Follow with xip-fast and sync-images.
+# Both finish with target-finalize: a per-package rebuild leaves the
+# package's files in target/ UNSTRIPPED (stripping is a finalize step), the
+# XIP stager copies what it finds, and on 2026-09-10 an unstripped
+# libasound (1.24 MB against 943 KB) pushed the xip2 image 45 KB past its
+# partition - the build refused it all afternoon, hidden behind an output
+# filter, and the board ran the old image.
 br-rebuild-%: | $(BUILDROOT_OUT)
 	$(BUILDROOT_MAKE) $*-rebuild
+	$(BUILDROOT_MAKE) target-finalize
 
 # CFLAGS and configure options are baked in at configure time, so a flag
 # change needs this one, not -rebuild (which silently builds the old flags).
 br-reconfigure-%: | $(BUILDROOT_OUT)
 	$(BUILDROOT_MAKE) $*-reconfigure
+	$(BUILDROOT_MAKE) target-finalize
 
 buildroot-menuconfig: | $(BUILDROOT_OUT)
 	$(BUILDROOT_MAKE) esp32s31_rootfs_defconfig

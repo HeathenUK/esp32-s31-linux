@@ -7654,3 +7654,41 @@ What remains real: yesterday's single three-way-confirmed hang instance
 (memory s31-after-compaction-reorient). Everything since is unrecorded.
 The SD filesystem now reports 4 ext4 errors (inode 19 lookups) from the
 hard resets and needs an fsck.
+
+
+## Card fsck, XIP audit, and two more traps (2026-09-10, late)
+
+**fsck.** The card had ext4 errors from the day's hard resets. The live
+root cannot be remounted read-only (every service holds it) and e2fsck
+refuses a mounted device, so the pre-pivot init now checks the card when
+its superblock is flagged: ro,noload mount, copy e2fsck/tune2fs and libs
+to a tmpfs, unmount, run e2fsck -p from RAM under a 48 MB zram swap (it
+was OOM-killed at 7 MB without one: 31M inodes of bitmaps). Verified on
+the console: rc=1, then `clean`, mount count 1, no ext4 errors. ~50 s,
+only when flagged. **The real problem is a 111 GB, 31M-inode filesystem
+on a 15 MB machine** - at the next re-image make it a few GB with a small
+inode count and e2fsck becomes trivial. Also seen during the check:
+`dw_mmc data error: mintsts=0x200 ... Unexpected data interrupt latency`
+- the SD controller port throwing data errors under sustained reads;
+noted, not chased.
+
+**XIP audit.** Overlays: /usr/lib, /usr/bin, /lib, /bin, /usr/sbin,
+/usr/libexec are xip1:xip2:SD (SD lowest, by design). Objects running
+processes actually map from the SD layer: udevd, dbus-daemon, libkmod,
+libexpat, libpcre2, libblkid, hwdb.bin - boot-time daemons, small. prboom's
+libSDL_mixer (54 KB) and libSDL_net (12 KB) are SD-only; libSDL itself is
+an XIP root. xip2 now has 65,536 bytes free, 1 KB short of both - drop
+xcalc (43 KB) from XIP2_ROOTS to fit them: the user's call. The SD also
+carries ~200 binaries and ~230 libraries from earlier eras (dbus, bluealsa,
+foot, evilwm, cairo, libdecor, fontconfig...), unused, only a re-image
+removes them cleanly. Removed by hand from the card, per the hard rule:
+libICE, libSM, libfontenc, libpciaccess from /usr/lib; /root/x11; a stale
+libX11.so.6 in /root/doom/lib. Removed today's test binaries from /root.
+Note: the SD tools scripts pointed at /root/libasound_module_pcm_s31route.so
+- gone now; measure against the shipped plugin.
+
+**Trap: xip2 refused all afternoon.** See memory
+s31-filter-build-output-case-insensitively: an unstripped libasound from a
+per-package rebuild pushed xip2 45 KB over; the uppercase ERROR was
+filtered out; the board ran the old xip2. br-rebuild/br-reconfigure now
+run target-finalize. Both images rebuilt, flashed, sizes verified on flash.
