@@ -3861,6 +3861,21 @@ static void xwin_on_close(uint32_t id)
 {
 	int i;
 
+	/*
+	 * A fullscreen client that dies without restoring the video mode
+	 * (kill -9, a crash, any exit that skips SDL's mode restore) would
+	 * leave the desktop scanning out a stale fullscreen buffer with no one
+	 * drawing into it - a frozen screen and no way back. Leave fullscreen
+	 * here too, so a dead fullscreen app drops straight to the desktop.
+	 */
+	if (fs_active && id == fs_win) {
+		kms_fs_leave();
+		fs_active = 0;
+		fs_win = 0;
+		lv_obj_invalidate(lv_screen_active());
+		printf("lvdesk: fullscreen off (client gone)\n");
+		fflush(stdout);
+	}
 	for (i = 0; i < xwin_n; i++)
 		if (xwins[i].id == id) {
 			struct winrec *w = win_find(xwins[i].win);
