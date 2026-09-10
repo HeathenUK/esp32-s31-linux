@@ -934,7 +934,11 @@ XIP2_STAGE := $(BUILD_DIR)/xipstage2
 # against the real library's 660 kB. st itself stays out of XIP - adding it
 # pushed the image 8,192 bytes past its partition, and it runs perfectly well
 # from where it already lives.
-XIP2_ROOTS ?= usr/bin/xcalc usr/bin/xclock usr/bin/xfiles \
+# xcalc left flash for prboom's libSDL_mixer and libSDL_net (2026-09-10):
+# the game stays on the SD by choice, its libraries do not - libSDL itself
+# is an XIP root. xcalc still runs, from the SD layer of the overlay.
+XIP2_ROOTS ?= usr/lib/libSDL_mixer-1.2.so.0.12.1 usr/lib/libSDL_net-1.2.so.0.8.1 \
+	usr/bin/xclock usr/bin/xfiles \
 	usr/lib/libasound.so.2.0.0 usr/bin/s31-bt \
 	usr/lib/libfreetype.so.6.20.6
 # libxkbfile and the xcb chain used to be pushed to the SD layer here, because
