@@ -7630,3 +7630,27 @@ user watched a frozen panel. Use the driver's ppa_table op count as the
 user was looking at it - the frozen black screen with a cursor was the SoC
 stopped, not the game), all at larger fullscreen sizes, i.e. under load.
 Tally for the day is ~15. It is the dominant problem now.
+
+## CORRECTION: the day's "board deaths" were mostly not (2026-09-10, evening)
+
+Retracting the tally above. Zero deaths were captured on the console; ~15
+were declared from NO_SHELL + a failed ping. Validated this evening:
+
+- conlog is at the right baud: a KERN_EMERG line written to /dev/kmsg was
+  captured verbatim. But the console loglevel is **1** - only EMERG reaches
+  the serial port - and something resets it to 1 at runtime. No OOM kill,
+  Oops, RCU stall or hung-task report could ever have appeared. Set 8
+  immediately before any capture. No MAGIC_SYSRQ, no lockup detector in the
+  shipping kernel (`/proc/sysrq-trigger` absent).
+- At least the two "deaths" at 640x480 coincided with screenshot-hw holding
+  the port while waiting for damage on a black screen; every other tool
+  then reported "not one byte", and reset.py followed - which is what ended
+  the user's session while they watched a static panel.
+- With the console recorded at loglevel 8: 640x480 fullscreen launched 5/5
+  clean (presenting 100-250 driver ops per 3 s), 640x400 4/4, Quake demo1
+  4/4. Nothing printed.
+
+What remains real: yesterday's single three-way-confirmed hang instance
+(memory s31-after-compaction-reorient). Everything since is unrecorded.
+The SD filesystem now reports 4 ext4 errors (inode 19 lookups) from the
+hard resets and needs an fsck.
