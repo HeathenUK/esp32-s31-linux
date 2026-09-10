@@ -7545,3 +7545,53 @@ Where a real Quake win would come from, if wanted: (1) XIP for the binary
 expand landing straight in the scanout - which is the adoption idea already
 rejected for z-order reasons and would need a real design; (3) more free RAM
 in general. Nothing cheap is left.
+
+## Adaptive CPU/PPA dispatch: the crossover is learned, not fixed (2026-09-10)
+
+Asked whether the fixed 128 KB CPU/PPA crossover could be smarter, then to
+build it. Both done; kernel #183 ships it on by default. Files in
+`patches/0037-esp32s31-adaptive-ppa-dispatch/` (cumulative), README there
+has the mechanism.
+
+**Why a constant was wrong.** The knee moves with the workload, in both
+directions: a memory-bound renderer (Quake) stretches the engine's DMA and
+its wait, so at 128 KB the PPA cost the compositor 27% MORE CPU; under Doom
+the same bucket is 30x cheaper on the engine (CPU scale 17 ms vs 0.6 ms of
+PPA CPU at 512 KB output). And the desktop's most common size, a 320x200
+window update at 128,000 bytes, sat 1% under the constant.
+
+**What it does.** Per (scaled, size bucket): EMA of the CPU cost of each
+engine - the PPA's with its sleep subtracted (esp32s31_ppa_last_cost) - and
+of wall time; bootstrap 3 ops each; prefer the cheaper with 15% hysteresis;
+explore the loser 1 in 32, backing off to 1 in 512 when it is >4x behind
+(one probe in 32 was 158 wasted 17 ms scales per Doom demo); latency guard
+to the CPU when the engine's wall time exceeds 4x the CPU's. Plus two
+structural changes: the source-row cache flush moved onto the engine path
+(the CPU copy paid it for nothing), and ppa_async: the commit returns while
+the engine runs, the completion collected by the next lock holder or before
+the cursor is painted. Knobs: ppa_policy, ppa_async, ppa_min_bytes (fixed
+mode), ppa_table (learned table; write to reset).
+
+**Measured** (fresh boot per arm, 320x200 windowed, speaker sound):
+
+| | fixed | adaptive + async |
+|---|---|---|
+| Doom timedemo | 22.2 fps, lvdesk 6541 | **23.7 fps, lvdesk 6383** |
+| Quake demo1 | 14.8 fps, lvdesk 2094 | **15.1 fps, lvdesk 2033** |
+
+Same-boot Doom sweep: fixed 22.1, adaptive 23.9, adaptive+async 24.5,
+fixed+async 22.6. Async takes the PPA op's wall time inside the commit from
+~6 ms to ~0.3 ms. The learned table under Doom: 4 KB rects to the CPU
+(156 vs 322 us), 128 KB+ to the engine.
+
+**What the learner measures and what it cannot.** It minimises the
+driver's own CPU per op, which is the right first-order target, and it
+sees contention through the wall-time guard. It cannot see the DMA slowing
+*other* tasks' memory traffic - the Quake +27% was partly that - so a
+system-level metric (game fps) remains the final arbiter, and it agreed.
+
+**Caveats.** Async: a client may rewrite its source before the engine has
+read it (a torn frame), and the op holds no fb reference; fine for lvdesk's
+own dumb buffer, revisit before another client uses it. The small-rect
+desktop-drag workload was not measured: uinject motion from a script did
+not reach the desktop (lvdesk 0 ticks); the Doom table covers the regime.

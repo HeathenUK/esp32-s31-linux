@@ -1,0 +1,49 @@
+drm/esp32s31: adaptive CPU-vs-PPA dispatch, learned per size bucket from the
+actual workload, and an asynchronous PPA path
+
+The port tree is gitignored, so these are the whole modified files rather
+than a diff. Copy them back over
+linux-71-port/drivers/gpu/drm/espressif/{esp32s31-lcd.c,esp32s31-ppa.c,esp32s31-ppa.h}
+before building. CUMULATIVE: supersedes 0036 (and 0035, 0032 for these files).
+
+WHY
+The CPU/PPA crossover was a constant (ppa_min_bytes, 128 KB), measured on an
+idle desktop and under pointer motion. It is not a constant: under Quake,
+forcing the engine at exactly that size cost the compositor 27% MORE CPU,
+because the DMA contends with the renderer for PSRAM and the driver waited
+for it. Under Doom the same bucket is 30x cheaper on the engine. Which side
+of the knee an op falls depends on what the rest of the SoC is doing.
+
+WHAT
+esp32s31-lcd.c
+  ppa_policy (default 1): per (scaled, ilog2 size) bucket, an EMA (1/8) of
+  the CPU time each engine costs - CPU path: the whole op; PPA path: setup +
+  spin + wake, with the sleep subtracted - and of wall time. Bootstrap 3 ops
+  each, then prefer the cheaper with 15% hysteresis, explore the loser 1 in
+  32 (1 in 512 when it is >4x behind), and a latency guard to the CPU when
+  the engine's wall time exceeds 4x the CPU's. ppa_policy=0 is the old fixed
+  threshold. /sys/module/esp32s31_lcd/parameters/ppa_table shows the learned
+  table; writing to it resets.
+  The source-row cache flush moved into the engine path: the CPU copy paid
+  it for nothing.
+  ppa_async (default 1): the commit returns while the engine runs.
+esp32s31-ppa.c/.h
+  esp32s31_ppa_srm split into start/finish. esp32s31_ppa_scale_rect_async()
+  returns with the op in flight; any later lock holder drains it
+  (esp32s31_ppa_drain) and esp32s31_ppa_wait_idle() does so explicitly
+  before the CPU paints the cursor over the scanout. esp32s31_ppa_last_cost()
+  reports CPU and slept nanoseconds of the last op.
+
+MEASURED (fresh boot per arm, 320x200 windowed, speaker sound)
+                    fixed        adaptive+async
+  Doom timedemo     22.2 fps     23.7 fps      lvdesk 6541 -> 6383 ticks
+  Quake demo1       14.8 fps     15.1 fps      lvdesk 2094 -> 2033 ticks
+Same-boot Doom sweep: fixed 22.1, adaptive 23.9, adaptive+async 24.5,
+fixed+async 22.6. Async takes the PPA op's wall time in the commit from
+~6 ms to ~0.3 ms.
+
+CAVEATS
+Async: the client may rewrite the source before the engine finishes reading
+it (a torn frame, not corruption), and the op holds no fb reference. Fine
+for a compositor that owns its dumb buffer; revisit before any other client
+uses the path.
