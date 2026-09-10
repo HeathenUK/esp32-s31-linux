@@ -8,7 +8,7 @@ The HZ check was declined and is not on this list.
 
 Status legend: TODO / MEASURING / BUILDING / DONE (result) / DEAD (why).
 
-## 1. Count syscalls per frame between SDL and xshim — MEASURING
+## 1. Count syscalls per frame between SDL and xshim — DONE (2.2/frame; transport DEAD)
 
 **Why.** Socket syscalls cost 1-6 ms each on this board (structural: generic
 entry, see "Socket syscalls cost ms"). SDL 1.2's SHM update path is an
@@ -24,7 +24,20 @@ varargs). Preload into prboom for a timedemo; divide counts by frames.
 **Decides.** Step 4. Threshold: >= 3 socket syscalls per frame makes the
 transport worth a day; <= 2 kills it.
 
-## 2. Lock the game's text pages — TODO
+**Result.** 2.2 per frame on the X socket: one write (3.1 ms) and one
+recvmsg (13.9 ms) per frame - but on a single core that wall time is lvdesk
+running the frame after the write wakes it, not syscall overhead, and the
+XSync semantics require the wait. Step 4 is DEAD.
+
+**Side find: 345 SYNC_PTR ioctls/s on the codec fd** (~4% of the core).
+Cause: sound/core/pcm_native.c allows the PCM status/control mmap only on
+x86/PPC/Alpha; every other arch falls back to the ioctl by upstream design.
+Building alsa-lib with __USE_TIME_BITS64 made it request the 64-bit-time
+offsets; the kernel refused those too (ENXIO, mmap-logged). Reverted.
+Negotiating the sink period first to halve plug's chunking did not change
+the sizes and caused 29 underruns; reverted. DEAD - it is kernel policy.
+
+## 2. Lock the game's text pages — DEAD (faults are not text)
 
 **Why.** Quake takes 1,000-1,450 major faults per demo at ~1 MB free: its
 own code pages evicted and refetched from the SD at a 2.5 ms floor, ~5% of
@@ -38,6 +51,11 @@ Quake, and confirm Doom is unchanged.
 **Decides.** Ships as a launcher option if >= 3% on Quake with no Doom
 regression.
 
+**Result.** rootfs/locktext.c locked 1,456 KB (binary + libraries, nothing
+failed) and the major-fault count did not move: 863 against 825 on the
+fresh-boot baseline; 15.4 vs 15.1 fps is noise. Whatever those faults are,
+they are not Quake's code pages. Tool kept; lever dead.
+
 ## 3. PPA CLUT expansion under the new dispatcher — TODO
 
 **Why.** The hardware palette expand lost by 3% when the engine op was
@@ -49,7 +67,7 @@ boot, Doom windowed and fullscreen, against the 23.7 / 22.2 baselines.
 
 **Decides.** Default flips if both arms win by more than the noise (~2%).
 
-## 4. Shared-memory X transport between xlite and xshim — TODO (gated on 1)
+## 4. Shared-memory X transport between xlite and xshim — DEAD (see 1)
 
 **Why.** Both ends are ours. A ring in shared memory with one futex/eventfd
 wake per frame replaces N socket syscalls per frame.

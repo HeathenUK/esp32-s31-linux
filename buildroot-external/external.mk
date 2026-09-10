@@ -1,10 +1,10 @@
 include $(sort $(wildcard $(BR2_EXTERNAL_ESP32_S31_PATH)/package/*/*.mk))
 
-# alsa-lib on musl/rv32: its uapi header picks the 64-bit-time PCM mmap
-# offsets and struct layouts only under glibc's __USE_TIME_BITS64. musl has
-# 64-bit time_t but never defines that macro, so alsa-lib asked the kernel
-# for the OLD status/control mmap - which a 32-bit kernel refuses outright
-# (sound/core/pcm_native.c: !IS_ENABLED(CONFIG_64BIT) -> -ENXIO) - and fell
-# back to a SYNC_PTR ioctl on every position read: 345 ioctls/s under Doom,
-# ~4% of the core. A build flag, not a patch; the header is written for it.
-ALSA_LIB_CFLAGS += -D__USE_TIME_BITS64
+# alsa-lib on musl/rv32 falls back to a SYNC_PTR ioctl for every PCM position
+# read (345/s under Doom, ~4% of the core) because the kernel refuses the
+# status/control mmap: sound/core/pcm_native.c allows it only on x86, PPC and
+# Alpha ("coherent mmap"). Not fixable from userspace - defining
+# __USE_TIME_BITS64 here made alsa-lib ask for the 64-bit-time offsets and
+# the kernel refused those identically (ENXIO, measured 2026-09-10). Left
+# stock. The reducible part is the COUNT, which s31route's period
+# negotiation controls.
