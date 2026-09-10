@@ -7490,3 +7490,58 @@ was in use during the demo. The first run died silently mid-demo with 20
 audio underruns beforehand (starvation while paging); the second, recorded
 with conlog, completed with nothing on the console - so the death is another
 instance of the intermittent hang, not a Quake fault. Tally for the day: 5.
+
+## Quake performance: where the 15 fps goes, and what is and is not a lever (2026-09-10)
+
+Measured, timedemo demo1, 320x200, speaker sound unless stated. Same-boot
+pairs where noted; Quake's own fps line, cross-checked against wall clock.
+
+| arm | fps | notes |
+|---|---|---|
+| windowed, sound | 12.9 / 13.6 / 13.7 / 14.8 | four runs, memory state varies |
+| windowed, -nosound | 16.0 / 16.4 | sound costs ~2.5 fps |
+| windowed, no -fsingle-precision-constant | 16.4 (nosound) | flag makes no difference; kept |
+| windowed, ppa_min_bytes 65536 | 13.3 | WORSE, see below |
+| **fullscreen (VidMode -> PPA scale), sound** | **15.1** | +10% over windowed, same boot |
+| -O3 -funroll-loops | died twice | text 450 -> 626 KB; abandoned |
+
+**Not paging into swap.** pswpin/pswpout were 0 during every demo: the 8 MB
+heap is lazily committed and what Quake touches fits. zram is therefore not
+a lever here. What it DOES do is 1,000-1,450 major faults per demo - file-
+backed text and library pages evicted and refetched from SD at ~1 MB free,
+~2.5-4 ms each, so 5-7% of the demo. A binary in XIP flash would remove
+most of that (zero RSS, never paged) - the "cheating" option, left to the
+user.
+
+**Quake itself is ~65% of the core; lvdesk is ~30% just presenting the
+window.** A ptrace PC sample of lvdesk during the demo (`pcsample`, resolved
+against `LVDESK_SYMS` with the PIE base 0x10000 added): 14.5% of wall time
+inside the DIRTYFB ioctl from `kms_dirty_rects` - the driver copying the
+128,000-byte damage to the scanout on the CPU at PSRAM bandwidth (~10 ms) -
+plus ~8% in `kms_flush_cb` (LVGL's own copy into the dumb buffer) and ~2%
+in the MIT-SHM palette expand. Three copies of every frame.
+
+**Pushing the copy to the PPA is worse, measured.** ppa_min_bytes 65536
+(runtime knob) made lvdesk cost 27% MORE (2060 -> 2626 ticks) and slowed
+Quake too (u/s 4242/1102 -> 5134/1439): the driver waits for the engine and
+the DMA stream contends with the renderer for PSRAM. The 128 KB cutoff was
+measured right the first time (see "Offload isn't purchasable"); this
+confirms it from the other side. Fullscreen wins its 10% because the PPA
+*scale* replaces the CPU copy with hardware that had to run anyway.
+
+**Sound: 11025 Hz, resampled 4x.** snd_sdl.c asks for 11025 Hz / 512
+samples with no rate option, so plug: resamples to the codec's 44100. The
+~2.5 fps is the mixer plus that resampler; the s31route path itself is now
+free (above). Not reducible from outside.
+
+**The real ceiling is the board.** Nine silent deaths today, almost all
+under Quake's memory pressure (~300 kB-1 MB free), none with a console
+record (conlog saw nothing on the runs it covered). The tickless hang and
+memory starvation are now indistinguishable without a death captured on the
+console; that is the next thing worth instrumenting, not Quake.
+
+Where a real Quake win would come from, if wanted: (1) XIP for the binary
+(5-7%, user's call); (2) fewer copies per frame in the windowed path - the
+expand landing straight in the scanout - which is the adoption idea already
+rejected for z-order reasons and would need a real design; (3) more free RAM
+in general. Nothing cheap is left.
