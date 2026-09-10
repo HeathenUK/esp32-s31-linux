@@ -7450,3 +7450,43 @@ all three times); dropped.
 gave the answer instead. The intermittent tickless-era hang hit three times
 during this work (one straight after a ptrace sample), so the periodic kernel
 has not eliminated it - tally, not a diagnosis.
+
+## Quake runs: sdlquake 1.0.9 (SDL 1.2), unmodified, 14.8 fps with sound (2026-09-10)
+
+Asked whether an SDL 1.2 Quake would just work on the shim. It does.
+
+**Which port.** TyrQuake 0.71 is SDL2 (SDL_CreateWindow) - not usable. The
+SDL 1.2 Quake is id's GPL source in Sam Lantinga's port, `sdlquake-1.0.9`
+(libsdl.org/projects/quake). Data: the freely distributable shareware
+`quake106.zip` from gamers.org; `resource.1` inside is an LHA archive
+(`7zz x` or `unar`), giving `ID1/PAK0.PAK` (18.7 MB) -> `/root/quake/id1/`.
+
+**Build.** `rootfs/build-sdlquake.sh` (source unpacked to `sdlquake/`,
+gitignored). Its 1999 autoconf cannot be told about RISC-V, so the script
+compiles the Makefile.am source list directly. Flags only: `-std=gnu89`
+(GCC 14 is C23 by default and `false`/`true` are keywords), `-fcommon`,
+`-Did386=0`, `-fsingle-precision-constant`. 450 KB stripped; an unstripped
+`.dbg` copy is kept for resolving kernel fault PCs.
+
+**One board-side fix.** `UDP_Init` does `gethostbyname(hostname)` and
+dereferences the result unchecked (`net_udp.c:69`, fault address 0x10 =
+`h_addr_list`). The kernel's "unhandled signal 11 ... in sdlquake[2edc0,...]"
+line plus addr2line on the .dbg copy named it in one step. The hostname must
+resolve: `127.0.1.1 <hostname>` in `/etc/hosts` (SD ext4, survives reboot).
+Not a patch.
+
+**Result.** `./sdlquake -winsize 320 200 +timedemo demo1`, windowed on lvdesk,
+sound via s31route to the speaker:
+
+    969 frames  65.7 seconds  14.8 fps    (0 underruns, board fine)
+
+Screenshot verified: correct 8-bit palette, status bar, window title,
+taskbar entry - the same xshim/xlite paths Doom uses.
+
+**Memory is the limit, as expected.** sys_sdl.c mallocs a fixed 8 MB heap
+(no `-mem`/`-heapsize` in this port; only `-zone`), lazily committed. With
+the desktop up MemAvailable fell to ~1.1 MB and ~9 MB of the 64 MB SD swap
+was in use during the demo. The first run died silently mid-demo with 20
+audio underruns beforehand (starvation while paging); the second, recorded
+with conlog, completed with nothing on the console - so the death is another
+instance of the intermittent hang, not a Quake fault. Tally for the day: 5.
