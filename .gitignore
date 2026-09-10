@@ -37,3 +37,4 @@ linux-71-port/
 xlite/stubs.c
 rootfs/*.bin
 .xref-work/
+sdlquake/
