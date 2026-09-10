@@ -260,11 +260,18 @@ USB_HS ?= 0
 # full/low-speed devices behind a high-speed hub work, because descriptor
 # DMA refuses split transactions (hcd_ddma.c). Costs the 8 kHz SOF.
 USB_BUFDMA ?= 0
-CMDLINE_NOW = $$(sed -n 's/^CONFIG_CMDLINE=\"\(.*\)\"/\1/p' $(LINUX_OUT)/.config | sed 's/ earlycon//g; s/ dwc2.host_full_speed=0//g; s/ dwc2.desc_dma=0//g; s/ snd_aloop.index=1//g')
+CMDLINE_NOW = $$(sed -n 's/^CONFIG_CMDLINE=\"\(.*\)\"/\1/p' $(LINUX_OUT)/.config | sed 's/ earlycon//g; s/ dwc2.host_full_speed=0//g; s/ dwc2.desc_dma=0//g; s/ snd_aloop.index=1//g; s/ profile=6//g')
 # The ALSA loopback must not steal card 0 from the Korvo codec: it would
 # silently redirect every app's default output into the loopback and leave
 # the volume mixer attached to a card with no controls.
 CMDLINE_ADD := snd_aloop.index=1
+# PROF=1 must land here, not only in PROF_CMDLINE_TWEAK: the EARLYCON_TWEAK
+# below re-sets CMDLINE from CMDLINE_NOW + CMDLINE_ADD after it, and on
+# 2026-09-10 that silently dropped profile=6 - kernel #184 had PROFILING
+# compiled in and no /proc/profile, because the param never reached it.
+ifeq ($(PROF),1)
+CMDLINE_ADD += profile=6
+endif
 ifeq ($(EARLYCON),1)
 CMDLINE_ADD += earlycon
 endif

@@ -119,7 +119,7 @@ adaptive+async 24.0 / 7271 - same fps, compositor 5% cheaper, and the
 learned table sends the 128,000-byte frame copy to the PPA (0.6 ms CPU vs
 3.0), the very op the 131,072 constant sent to the CPU.
 
-## 6. .text..fast for the DRM commit path — TODO
+## 6. .text..fast for the DRM commit path — DEAD (under 1% of wall)
 
 **Why.** Kernel code runs from flash at ~6x the cost of RAM; the input path
 gained 3.8% this way. DIRTYFB runs 25 times a second.
@@ -130,6 +130,29 @@ lvdesk ticks. Note the IRQ-spine attempt did not boot; stay away from entry
 and timer code.
 
 **Decides.** Ships if measurable and the image still fits the partition.
+
+**Result.** Profiled (PROF=1 kernel #185, `profile=6`, 60 s of windowed
+Doom, 1,438 kernel-mode ticks = 5.8 s, i.e. kernel mode is ~10% of wall).
+Flat: snd_pcm_stream_lock_irq 3.6%, esp32s31_cache_range 3.0%, ioctl
+entry 2.5%, esp32s31_lcd_cursor_paint 2.5%, memset 2.3%, the X socket
+reads 1.9%, snd_pcm_sync_ptr 1.7%, esp32s31_lcd_pipe_update 1.4%,
+drm_atomic_check_only 0.8%, commit_planes 0.6%. The whole DRM commit path
+is ~9% of kernel time, under 1% of wall; a 6x speedup from RAM buys ~0.75%
+and costs RAM. Not taken. (The hot-text plan's "largely spent" stands.)
+
+**Trap fixed on the way.** `make linux PROF=1` built a kernel with
+PROFILING and no /proc/profile: the EARLYCON_TWEAK re-set CMDLINE after
+PROF_CMDLINE_TWEAK and dropped `profile=6`. It is now part of CMDLINE_ADD.
+
+## Summary (end of 2026-09-10)
+
+Six steps, six measurements, no new fps: 1 and 4 dead (the two syscalls a
+frame are the server's work), 2 dead (the faults are not text), 3 dead
+(PPA CLUT loses 4%), 5 already existed since the 7th, 6 dead (kernel mode
+is 10% of wall and flat). The frame path is expand -> driver op with the
+adaptive dispatcher choosing the engine, and the game is the cost. What
+would still move the number is memory (XIP for the binary, the user's
+call) and the native codec rate (the audio-driver rule, the user's call).
 
 ## Not on this list
 
