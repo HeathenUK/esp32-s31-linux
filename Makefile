@@ -781,6 +781,40 @@ xip-image:
 	  '        [ -b /dev/mmcblk0 ] && break' \
 	  '        $$B sleep 1; i=$$(($$i + 1))' \
 	  'done' \
+	  '# Check the card before mounting it read-write, but ONLY when its' \
+	  '# superblock is flagged with errors: this board is hard-reset all' \
+	  '# day, a plain unclean journal is replayed by the mount, and a full' \
+	  '# e2fsck of the 111 GB card takes over a minute. e2fsck refuses a' \
+	  '# mounted device (even read-only, off the root), so the tools are' \
+	  '# copied from a read-only, noload mount into RAM, the card is' \
+	  '# unmounted, and the check runs from there. -p fixes only what is' \
+	  '# safe unattended; the rc is printed for the console log.' \
+	  'if [ -b /dev/mmcblk0 ] && $$B mount -t ext4 -o ro,noload /dev/mmcblk0 /mnt/sd; then' \
+	  '        $$B mount -t tmpfs tmpfs /tmp' \
+	  '        for f in sbin/e2fsck sbin/tune2fs lib/libblkid.so.1 lib/libuuid.so.1 \' \
+	  '                 usr/lib/libext2fs.so.2 usr/lib/libcom_err.so.2 usr/lib/libe2p.so.2; do' \
+	  '                $$B cp /mnt/sd/$$f /tmp/ 2>/dev/null' \
+	  '        done' \
+	  '        $$B umount /mnt/sd' \
+	  '        if LD_LIBRARY_PATH=/tmp /tmp/tune2fs -l /dev/mmcblk0 2>/dev/null | $$B grep -q "state:.*errors"; then' \
+	  '                $$B echo "root: card flagged with errors, running e2fsck -p"' \
+	  '                # e2fsck of a 111 GB, 31M-inode card wants ~12 MB of' \
+	  '                # bitmaps and was OOM-killed at 7 MB here. The live' \
+	  '                # system survives the same check only because the SD' \
+	  '                # swap is on. Pre-pivot the card is unmounted, so give' \
+	  '                # it compressed swap in RAM instead: the bitmaps are' \
+	  '                # almost all zeros and cost next to nothing in zram.' \
+	  '                if [ -e /sys/block/zram0/disksize ]; then' \
+	  '                        $$B echo 48M > /sys/block/zram0/disksize' \
+	  '                        $$B mkswap /dev/zram0 >/dev/null 2>&1 && $$B swapon /dev/zram0' \
+	  '                fi' \
+	  '                LD_LIBRARY_PATH=/tmp /tmp/e2fsck -p /dev/mmcblk0' \
+	  '                $$B echo "root: e2fsck rc=$$?"' \
+	  '                $$B swapoff /dev/zram0 2>/dev/null' \
+	  '                $$B echo 1 > /sys/block/zram0/reset 2>/dev/null' \
+	  '        fi' \
+	  '        $$B umount /tmp' \
+	  'fi' \
 	  'if [ -b /dev/mmcblk0 ] && $$B mount -t ext4 /dev/mmcblk0 /mnt/sd; then' \
 	  '        $$B echo "root: microSD after $${i}s"' \
 	  '        for d in proc sys dev; do' \
