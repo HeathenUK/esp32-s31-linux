@@ -201,7 +201,26 @@ static int slave_open(struct route *r)
 		 * below starts it explicitly for applications that start
 		 * earlier than that (SDL uses a threshold of one frame).
 		 */
-		amin = per;
+		/*
+		 * Wake once per APPLICATION period, not once per sink period.
+		 *
+		 * This used to be `amin = per`, the sink's own period - and the
+		 * sink's period is not the application's: prboom writes 1024
+		 * frames at a time, but set_period_size_near() through plug:
+		 * settles the codec on 256. With avail_min 256, alsa-lib's
+		 * blocking write of 1024 frames became FOUR rounds of
+		 * poll + wake + SYNC_PTR ioctl + convert-one-period + SYNC_PTR,
+		 * where a direct plughw: open (avail_min = its 1024 period)
+		 * does one. Measured: 2.4x the context switches and the audio
+		 * thread at 31% of the core against 15% straight to plughw,
+		 * with the extra all in ioctls (a ptrace PC sample put 28% of
+		 * the thread's wall time inside SYNC_PTR).
+		 *
+		 * The application's period is the natural unit: it wakes when
+		 * its whole write fits, exactly as it would on the raw device,
+		 * with the same 2-period latency and the same underrun margin.
+		 */
+		amin = want_per;
 		if (buf > want_buf && buf - want_buf + want_per > amin)
 			amin = buf - want_buf + want_per;
 		if (amin > buf)

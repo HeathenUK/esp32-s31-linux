@@ -7384,3 +7384,69 @@ copy and per-period callback dispatch. That is the price of mid-stream sink
 switching in an ioplug; removing it needs a lighter data path (pass the app's
 buffer straight to the slave without s31route's own ring), which is a redesign,
 not a tweak. Left for later.
+
+## Sound now costs what a raw codec open costs: s31route's wake threshold (2026-09-10)
+
+Goal: fullscreen Doom with sound solidly above 20 fps. After the pointer fix
+above it was 19.1 (no-sound 29), and the audio thread still cost 31% of the
+core against 15% for SDL opened straight on plughw:0,0. Found by measuring,
+not reasoning:
+
+1. Per-thread ticks by sink (10 s windows, same boot): direct 104/43,
+   s31route 228/165, and s31route had 2.4x the context switches.
+2. A ptrace PC sample of the audio thread (`rootfs/pcsample <tid>` works on
+   a thread id; resolve offsets with `riscv32-esp-linux-musl-nm -n` against the
+   UNSTRIPPED binaries in the Buildroot build dir): 28% of wall time inside
+   the SYNC_PTR ioctl called from libasound's hw layer, ~10% in the linear
+   resampler + copies, ~6% in prboom's mixer, the rest asleep.
+3. The codec's real hw_params: **44100 Hz, in every path.** The I2S DAI mask
+   is 8000/16000/44100/48000/96000, so a 22050 open goes through plug: and is
+   resampled ("linear", per asound.conf). s31route's "sink 22050 Hz" debug
+   line is plug's view, not the hardware's.
+
+**The mechanism.** s31route set the sink's `avail_min` to the SINK's period
+(256 frames, what set_period_size_near settled on through plug), not the
+application's (1024, what prboom writes). alsa-lib's blocking write of 1024
+frames therefore ran FOUR rounds of poll + wake + SYNC_PTR + convert one
+period + SYNC_PTR, where a direct open (avail_min = its own 1024 period) runs
+one. Syscalls cost milliseconds here (see "socket syscalls cost ms"), so the
+extra rounds were the whole gap.
+
+**Fix (rootfs/s31route.c):** `amin = want_per` - wake once per application
+period. Same 2-period latency and underrun margin as the raw device.
+
+| audio thread, 10 s | utime/stime | ctx switches |
+|---|---|---|
+| direct plughw:0,0 | 104/43 | 1383 |
+| s31route, before | 228/165 | 3314 |
+| s31route, after | **102/40** | **1347** |
+
+Fresh boot per arm, speaker sound, timedemo demo1:
+
+| | before today | pointer fix | + wake threshold |
+|---|---|---|---|
+| fullscreen 320x200 | 10.3 | 19.1 | **22.2** (repeats 21.7, 22.4) |
+| windowed 320x200 | 15.1 | - | **23.4** |
+| no sound, fullscreen | 29 | | |
+
+Sink switching verified mid-play with the shipped XIP copy (speaker -> BT
+loopback -> speaker). Both sinks now negotiate avail_min 1024.
+
+**What is left of the sound cost (~7 fps of 29):** the audio thread is now
+the same 15% as a raw open: ~6% mixer (prboom, untouchable), ~8-10% the
+22050->44100 linear resampler and its copies, and the rest I2S DMA
+interrupts and memory contention. The resampler is the only lever, worth
+~1.5-2 fps, and it needs 22050 in the I2S DAI's rate mask
+(`ESP32S31_I2S_RATES`, sound/soc/espressif/esp32s31-i2s.c - the MCLK is
+computed as 256 x rate from a fractional divider, so the controller can do
+it; the es8389 coefficient table has no 22050 row and would need checking on
+silicon). NOT done: the standing rule is no changes to the audio drivers.
+Setting Doom's own `snd_samplerate 44100` to skip the resampler was tried as
+a config-only experiment and prboom 2.5.0 ignored the key (opened at 22050
+all three times); dropped.
+
+**Tooling notes.** `rootfs/ioctlprof.so` prints garbage on this rv32 target
+(64-bit varargs in its dump) - do not trust its table until fixed; pcsample
+gave the answer instead. The intermittent tickless-era hang hit three times
+during this work (one straight after a ptrace sample), so the periodic kernel
+has not eliminated it - tally, not a diagnosis.
