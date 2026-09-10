@@ -7598,3 +7598,35 @@ read it (a torn frame), and the op holds no fb reference; fine for lvdesk's
 own dumb buffer, revisit before another client uses it. The small-rect
 desktop-drag workload was not measured: uinject motion from a script did
 not reach the desktop (lvdesk 0 ticks); the Doom table covers the regime.
+
+## Fullscreen at sizes other than 320x200 was broken; fixed, matrix partly run (2026-09-10)
+
+`prboom -width 320 -height 240` (fullscreen by prboom's DEFAULT - see
+memory s31-prboom-defaults-fullscreen) froze at the title screen: the mode
+switched, the game rendered, and lvdesk never presented a frame.
+xshim_mode_window() accepted only a mapped top-level at 0,0 covering the
+mode; SDL had left the 320x240 window at 151,81. 320x200 happened to
+satisfy the rule and was the only size tested - that was the mistake.
+Fix: the mode-owning client's window that fits the mode wins (commit
+f4ae9ac). Lean check (driver ops in a 3 s window, fullscreen off and
+800x480 scanout restored after kill):
+
+| size | mode -> panel | presenting | note |
+|---|---|---|---|
+| 320x200 | 320x200 -> 760x475 | yes (34 ops/3 s) | |
+| 320x240 | 320x240 -> 640x480 | yes (42) | the user's case |
+| 400x300 | 480x300 -> 720x450 | 0 ops in window | SDL picked a listed 480x300 mode; title screen static in the window - inconclusive, not failed |
+| 512x384 | 512x384 -> 640x480 | 2 ops/3 s | works, ~3x the pixels, slow; 2 underruns |
+| 640x400 | - | board died | |
+| 640x480 | - | not run | |
+
+**Testing trap:** screenshot-hw waits for damage, so on a black
+non-presenting screen it sits through its whole timeout - the matrix
+stalled for minutes on exactly the failure it was looking for while the
+user watched a frozen panel. Use the driver's ppa_table op count as the
+"is anything presented" signal; take a screenshot only once it is nonzero.
+
+**The hang:** the board died three more times during this (once while the
+user was looking at it - the frozen black screen with a cursor was the SoC
+stopped, not the game), all at larger fullscreen sizes, i.e. under load.
+Tally for the day is ~15. It is the dominant problem now.
