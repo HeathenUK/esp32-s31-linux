@@ -15,6 +15,8 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
+#include <sys/mman.h>
+#include <errno.h>
 #include <unistd.h>
 #include <time.h>
 
@@ -49,6 +51,9 @@ static void tally_req(unsigned long req, unsigned long us)
 	}
 }
 static volatile sig_atomic_t dump_now;
+#define NMM 24
+static struct { int fd; unsigned long off, len; long res; int err; } mm[NMM];
+static int nmm;
 
 static void tally(int c, int fd)
 {
@@ -78,6 +83,8 @@ static void dump(void)
 				fprintf(f, " %s=%lu/%luus", names[c], cnt[c][fd], ns_lo[c][fd]);
 		fprintf(f, "\n");
 	}
+	for (c = 0; c < nmm; c++)
+		fprintf(f, "mmap fd %d off 0x%lx len %lu -> %s%d\n", mm[c].fd, mm[c].off, mm[c].len, mm[c].res == -1 ? "FAILED errno " : "ok ", mm[c].res == -1 ? mm[c].err : 0);
 	for (c = 0; c < NREQ; c++)
 		if (req_cnt[c])
 			fprintf(f, "ioctl 0x%lx: %lu calls %lu us\n", req_code[c], req_cnt[c], req_us[c]);
@@ -108,3 +115,17 @@ ssize_t recvmsg(int fd, struct msghdr *m, int fl) { unsigned long t = now_us(); 
 ssize_t sendmsg(int fd, const struct msghdr *m, int fl) { REAL(sendmsg); tally(C_SENDMSG, fd); maybe_dump(); return real_sendmsg(fd, m, fl); }
 int poll(struct pollfd *p, nfds_t n, int t) { unsigned long t0 = now_us(); int r; REAL(poll); tally(C_POLL, n == 1 ? p[0].fd : -1); maybe_dump(); r = real_poll(p, n, t); tally_time(C_POLL, n == 1 ? p[0].fd : -1, now_us() - t0); return r; }
 int ioctl(int fd, int req, ...) { va_list ap; void *a; unsigned long t = now_us(), d; int r; REAL(ioctl); va_start(ap, req); a = va_arg(ap, void *); va_end(ap); tally(C_IOCTL, fd); maybe_dump(); r = real_ioctl(fd, req, a); d = now_us() - t; tally_time(C_IOCTL, fd, d); tally_req((unsigned long)req, d); return r; }
+
+void *mmap(void *a, size_t len, int prot, int flags, int fd, off_t off)
+{
+	static void *(*real)(void *, size_t, int, int, int, off_t);
+	void *r;
+	if (!real) real = dlsym(RTLD_NEXT, "mmap");
+	r = real(a, len, prot, flags, fd, off);
+	if (fd >= 0 && nmm < NMM) {
+		mm[nmm].fd = fd; mm[nmm].off = (unsigned long)off; mm[nmm].len = len;
+		mm[nmm].res = r == MAP_FAILED ? -1 : 0; mm[nmm].err = r == MAP_FAILED ? errno : 0;
+		nmm++;
+	}
+	return r;
+}
