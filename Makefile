@@ -964,6 +964,17 @@ bootloader:
 # docs/sd-imager.md documents. `make imager` printed "Nothing to be done" and
 # was easy to read as a no-op rather than a missing rule.
 
+# Rebuild ONE Buildroot package in place: make br-rebuild-alsa-lib. The
+# narrowest target that reaches a library change; a full rootfs rebuild is
+# ruinous here. Follow with xip-fast and sync-images.
+br-rebuild-%: | $(BUILDROOT_OUT)
+	$(BUILDROOT_MAKE) $*-rebuild
+
+# CFLAGS and configure options are baked in at configure time, so a flag
+# change needs this one, not -rebuild (which silently builds the old flags).
+br-reconfigure-%: | $(BUILDROOT_OUT)
+	$(BUILDROOT_MAKE) $*-reconfigure
+
 buildroot-menuconfig: | $(BUILDROOT_OUT)
 	$(BUILDROOT_MAKE) esp32s31_rootfs_defconfig
 	$(BUILDROOT_MAKE) menuconfig
