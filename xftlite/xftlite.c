@@ -683,20 +683,44 @@ void XftTextRender32(Display *dpy, int op, Picture src, XftFont *pub,
 	}
 	if (!f)
 		return;
+	static unsigned gc_depth;
 	if (!gc || gc_for != d) {
+		Window root;
+		int gx, gy;
+		unsigned gw, gh, gb, gdepth = 0;
+
 		if (gc)
 			XFreeGC(dpy, gc);
 		gc = XCreateGC(dpy, d, 0, NULL);
 		gc_for = d;
+		/*
+		 * The target's depth decides the pixel format. This used to
+		 * XAllocColor() on the DEFAULT colormap, which answers in the
+		 * default visual's RGB565 - so text into a depth-32 drawable
+		 * (xfiles' labels) was drawn with 0x0000ffff, cyan. The
+		 * picture xfiles renders into is its own, not an XftDraw's,
+		 * so there is no draw to borrow a colormap from; the depth is
+		 * the truth, and it costs one round trip per drawable, cached
+		 * with the GC.
+		 */
+		if (XGetGeometry(dpy, d, &root, &gx, &gy, &gw, &gh, &gb,
+				 &gdepth))
+			gc_depth = gdepth;
+		else
+			gc_depth = 0;
 	}
 	if (XRliteColorOfPicture(dpy, src, &col)) {
-		XColor c;
+		unsigned long pixel;
 
-		memset(&c, 0, sizeof(c));
-		c.red = col.red; c.green = col.green; c.blue = col.blue;
-		if (XAllocColor(dpy, DefaultColormap(dpy, DefaultScreen(dpy)),
-				&c))
-			XSetForeground(dpy, gc, c.pixel);
+		if (gc_depth > 16)
+			pixel = 0xFF000000ul |
+				((unsigned long)(col.red >> 8) << 16) |
+				((unsigned long)(col.green >> 8) << 8) |
+				(col.blue >> 8);
+		else
+			pixel = ((col.red >> 11) << 11) |
+				((col.green >> 10) << 5) | (col.blue >> 11);
+		XSetForeground(dpy, gc, pixel);
 	}
 	if (f->fid)
 		XSetFont(dpy, gc, f->fid);

@@ -318,6 +318,32 @@ static const struct { uint16_t w, h; } vm_modes[] = {
 static int vm_cur;			/* index into vm_modes */
 static int vm_cli = -1;			/* who switched away from the panel */
 
+/*
+ * Colormaps were never tracked - every AllocColor answered with an RGB565
+ * pixel. A client on the depth-32 visual then draws with 16-bit pixel
+ * values in 32-bit drawables (xfiles' labels: fg=0xffff). Remember which
+ * visual each colormap was made for and answer in that visual's format.
+ */
+#define MAXCMAP 32
+static struct { uint32_t id, visual; } cmaps[MAXCMAP];
+static uint32_t cmap_visual(uint32_t cmap)
+{
+	int i;
+
+	for (i = 0; i < MAXCMAP; i++)
+		if (cmaps[i].id == cmap)
+			return cmaps[i].visual;
+	return 0;
+}
+static uint32_t pixel_for(uint32_t cmap, unsigned r16, unsigned g16,
+			  unsigned b16)
+{
+	if (cmap_visual(cmap) == VISUAL32_ID)
+		return 0xFF000000u | ((r16 >> 8) << 16) | ((g16 >> 8) << 8) |
+		       (b16 >> 8);
+	return ((r16 >> 11) << 11) | ((g16 >> 10) << 5) | (b16 >> 11);
+}
+
 /* One pointer, one keyboard, so at most one grab of each. */
 static uint32_t grab_win, grab_confine, grab_cursor;
 static int grab_cli = -1, grab_owner_ev;
@@ -3021,6 +3047,10 @@ static void pict_clip(struct pict *pi, int *x0, int *y0, int *x1, int *y1)
 static void render_fill(struct res *d, struct pict *dp, int x, int y,
 			int w, int h, int r8, int g8, int b8, int a8, int op)
 {
+	if (trace_on())
+		fprintf(stderr, "xshim:   fill op=%d %d,%d %dx%d rgba %02x%02x%02x/%02x -> 0x%x bpp %d\n",
+			op, x, y, w, h, r8, g8, b8, a8, d->id,
+			d->buf ? d->buf->bpp : -1);
 	int x0 = x, y0 = y, x1 = x + w, y1 = y + h, i, j;
 
 	pict_clip(dp, &x0, &y0, &x1, &y1);
@@ -3974,6 +4004,15 @@ static void render_composite(struct cli *c, const uint8_t *r)
 					wrote++;
 					continue;
 				}
+				if (s->buf->bpp == 4) {
+					uint32_t a = ((const uint32_t *)
+						      s->buf->px)[o];
+					blend_px(d, i, j, (a >> 16) & 0xFF,
+						 (a >> 8) & 0xFF, a & 0xFF,
+						 255, PICT_OP_SRC);
+					wrote++;
+					continue;
+				}
 				v = s->buf->px[o];
 			}
 			blend_px(d, i, j, (v >> 11) << 3, ((v >> 5) & 0x3F) << 2,
@@ -4366,6 +4405,26 @@ static int render_request(struct cli *c, const uint8_t *r, int len)
 						       (size_t)y * b->w + x0,
 						       (uint8_t)cr,
 						       (size_t)(x1 - x0));
+				} else if (b->bpp == 4) {
+					/*
+					 * ARGB8888 target. The 16-bit loop
+					 * below wrote `col` as halfwords at
+					 * a halfword stride into these
+					 * buffers, which painted xfiles'
+					 * sheet black (2026-09-11).
+					 */
+					uint32_t c32 = 0xFF000000u |
+						((uint32_t)cr << 16) |
+						((uint32_t)cg << 8) |
+						(uint32_t)cb;
+					for (y = y0; y < y1; y++) {
+						uint32_t *q = (uint32_t *)b->px +
+							(size_t)y * b->w + x0;
+						int nn = x1 - x0, k;
+
+						for (k = 0; k < nn; k++)
+							q[k] = c32;
+					}
 				} else for (y = y0; y < y1; y++) {
 					uint16_t *q = b->px +
 						(size_t)y * b->w + x0;
@@ -5360,11 +5419,31 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 	case 49:					/* ListFonts: none */
 		send_reply(c, 0, d24, NULL, 0);
 		break;
-	case 14:					/* GetGeometry */
+	case 14: {					/* GetGeometry */
+		/*
+		 * Was a stub: root, panel size, depth 16 for every drawable.
+		 * xftlite now asks the target's depth to pick a pixel format,
+		 * and a depth-32 pixmap answered "16" drew its text as RGB565
+		 * (xfiles' labels, 2026-09-11). Real geometry and depth.
+		 */
+		struct res *g = res_find(get32(r + 4));
+		unsigned depth = 16;
+
 		put32(d24, ROOT_ID);
-		put16(d24 + 8, XSHIM_W); put16(d24 + 10, XSHIM_H);
-		send_reply(c, 16, d24, NULL, 0);
+		if (g && (g->type == R_WINDOW || g->type == R_PIXMAP)) {
+			put16(d24 + 4, (uint16_t)g->x);
+			put16(d24 + 6, (uint16_t)g->y);
+			put16(d24 + 8, (uint16_t)g->w);
+			put16(d24 + 10, (uint16_t)g->h);
+			put16(d24 + 12, (uint16_t)g->bw);
+			if (g->depth)
+				depth = g->depth;
+		} else {
+			put16(d24 + 8, XSHIM_W); put16(d24 + 10, XSHIM_H);
+		}
+		send_reply(c, (uint8_t)depth, d24, NULL, 0);
 		break;
+	}
 	case 15:					/* QueryTree */
 		put32(d24, ROOT_ID);
 		send_reply(c, 0, d24, NULL, 0);
@@ -5376,7 +5455,7 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		if (12 + n > len)
 			n = len - 12;
 		color_lookup(r + 12, n, &cr, &cg, &cb);
-		put32(d24, rgb565(cr, cg, cb));
+		put32(d24, pixel_for(get32(r + 4), cr, cg, cb));
 		put16(d24 + 4, cr); put16(d24 + 6, cg); put16(d24 + 8, cb);
 		put16(d24 + 10, cr); put16(d24 + 12, cg); put16(d24 + 14, cb);
 		send_reply(c, 0, d24, NULL, 0);
@@ -5398,7 +5477,11 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		uint16_t rr = get16(r + 8), gg = get16(r + 10), bb = get16(r + 12);
 
 		put16(d24, rr); put16(d24 + 2, gg); put16(d24 + 4, bb);
-		put32(d24 + 8, ((rr >> 11) << 11) | ((gg >> 10) << 5) | (bb >> 11));
+		put32(d24 + 8, pixel_for(get32(r + 4), rr, gg, bb));
+		if (trace_on())
+			fprintf(stderr, "xshim:   alloccolor cmap 0x%x (visual 0x%x) %04x/%04x/%04x -> pixel %08x\n",
+				get32(r + 4), cmap_visual(get32(r + 4)), rr, gg, bb,
+				pixel_for(get32(r + 4), rr, gg, bb));
 		send_reply(c, 0, d24, NULL, 0);
 		break;
 	}
@@ -5497,8 +5580,8 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		struct res *rr = res_new(id, R_PIXMAP);
 
 		if (trace_on())
-			fprintf(stderr, "xshim:   pixmap 0x%x %dx%d\n",
-				id, get16(r + 12), get16(r + 14));
+			fprintf(stderr, "xshim:   pixmap 0x%x %dx%d depth %u\n",
+				id, get16(r + 12), get16(r + 14), r[1]);
 
 		rr->w = w; rr->h = h;
 		/*
@@ -6345,7 +6428,21 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		}
 		break;
 	}
-	case 78:					/* CreateColormap */
+	case 78: {					/* CreateColormap */
+		uint32_t id = get32(r + 4), vis = get32(r + 12);
+		int i;
+
+		for (i = 0; i < MAXCMAP; i++)
+			if (!cmaps[i].id || cmaps[i].id == id) {
+				cmaps[i].id = id;
+				cmaps[i].visual = vis;
+				break;
+			}
+		if (trace_on())
+			fprintf(stderr, "xshim:   colormap 0x%x visual 0x%x\n",
+				id, vis);
+		break;
+	}
 	case 79:					/* FreeColormap */
 	case 81:					/* InstallColormap */
 	case 82:					/* UninstallColormap */

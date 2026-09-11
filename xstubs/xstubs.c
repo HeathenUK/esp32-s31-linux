@@ -214,7 +214,8 @@ struct xpm_col { char key[8]; unsigned long pixel; int none; };
  */
 #define XPM_CACHE 128
 
-static struct { char name[40]; unsigned long pixel; int ok; } xpm_cache[XPM_CACHE];
+static struct { char name[40]; unsigned long pixel; int ok; 	int depth;
+} xpm_cache[XPM_CACHE];
 static int xpm_ncache;
 
 /* Bits and shift of a visual's channel mask. */
@@ -232,7 +233,8 @@ static void mask_bits(unsigned long m, int *shift, int *bits)
  * components packed into the visual's masks. Asking anyway costs two
  * synchronous round trips per colour, and an icon set is hundreds of colours.
  */
-static int xpm_direct(Display *dpy, const char *name, unsigned long *pixel)
+static int xpm_direct(Display *dpy, const char *name, unsigned long *pixel,
+		      int depth)
 {
 	Visual *v = DefaultVisual(dpy, DefaultScreen(dpy));
 	unsigned r = 0, g = 0, b = 0;
@@ -251,6 +253,11 @@ static int xpm_direct(Display *dpy, const char *name, unsigned long *pixel)
 	} else {
 		return 0;
 	}
+	if (depth > 16) {		/* the depth-32 visual: ARGB8888 */
+		*pixel = 0xFF000000ul | ((unsigned long)r << 16) |
+			 ((unsigned long)g << 8) | b;
+		return 1;
+	}
 	mask_bits(v->red_mask, &rs, &rb);
 	mask_bits(v->green_mask, &gs, &gb);
 	mask_bits(v->blue_mask, &bs, &bb);
@@ -261,15 +268,16 @@ static int xpm_direct(Display *dpy, const char *name, unsigned long *pixel)
 }
 
 static int xpm_color(Display *dpy, Colormap cmap, const char *name,
-		     unsigned long *pixel)
+		     unsigned long *pixel, int depth)
 {
 	XColor col;
 	int i;
 
-	if (xpm_direct(dpy, name, pixel))
+	if (xpm_direct(dpy, name, pixel, depth))
 		return 1;
 	for (i = 0; i < xpm_ncache; i++)
-		if (!strcmp(xpm_cache[i].name, name)) {
+		if (xpm_cache[i].depth == depth &&
+		    !strcmp(xpm_cache[i].name, name)) {
 			*pixel = xpm_cache[i].pixel;
 			return xpm_cache[i].ok;
 		}
@@ -280,6 +288,7 @@ static int xpm_color(Display *dpy, Colormap cmap, const char *name,
 		snprintf(xpm_cache[xpm_ncache].name,
 			 sizeof(xpm_cache[xpm_ncache].name), "%s", name);
 		xpm_cache[xpm_ncache].pixel = *pixel;
+		xpm_cache[xpm_ncache].depth = depth;
 		xpm_cache[xpm_ncache].ok = i;
 		xpm_ncache++;
 	}
@@ -311,11 +320,13 @@ static char *xpm_next(char **pp, char *end)
  * array, others read a file.
  */
 static int xpm_build(Display *dpy, Drawable d, char **lines, int nlines,
-		     Pixmap *pix_ret, Pixmap *mask_ret)
+		     Pixmap *pix_ret, Pixmap *mask_ret, int depth,
+		     Colormap cmap_in)
 {
 	struct xpm_col cols[XPM_MAXCOL];
 	int w = 0, h = 0, nc = 0, cpp = 1, i, y, ncols = 0;
-	Colormap cmap = DefaultColormap(dpy, DefaultScreen(dpy));
+	Colormap cmap = cmap_in ? cmap_in :
+			DefaultColormap(dpy, DefaultScreen(dpy));
 	Pixmap pm;
 	GC gc;
 
@@ -362,14 +373,15 @@ static int xpm_build(Display *dpy, Drawable d, char **lines, int nlines,
 				       e < name + sizeof(name) - 1)
 					*e++ = *k++;
 				*e = 0;
-				if (xpm_color(dpy, cmap, name, &px))
+				if (xpm_color(dpy, cmap, name, &px,
+					      depth > 0 ? depth : 16))
 					cols[i].pixel = px;
 			}
 		}
 		ncols++;
 	}
 
-	pm = XCreatePixmap(dpy, d, w, h,
+	pm = XCreatePixmap(dpy, d, w, h, depth > 0 ? depth :
 			   DefaultDepth(dpy, DefaultScreen(dpy)));
 	if (!pm) {
 		fprintf(stderr, "xstubs: XPM %dx%d: XCreatePixmap failed\n",
@@ -407,7 +419,7 @@ static int xpm_build(Display *dpy, Drawable d, char **lines, int nlines,
 		int sw, sh, stride, bpp;
 		void *base = XliteShmMap(dpy, pm, &sw, &sh, &stride, &bpp);
 
-		if (base && bpp == 2 && sw >= w && sh >= h) {
+		if (base && (bpp == 2 || bpp == 4) && sw >= w && sh >= h) {
 			int yy, x, ci;
 
 			for (yy = 0; yy < h; yy++) {
@@ -426,7 +438,11 @@ static int xpm_build(Display *dpy, Drawable d, char **lines, int nlines,
 							break;
 					if (ci == ncols || cols[ci].none)
 						continue;
-					out[x] = (uint16_t)cols[ci].pixel;
+					if (bpp == 4)
+						((uint32_t *)out)[x] =
+							(uint32_t)cols[ci].pixel;
+					else
+						out[x] = (uint16_t)cols[ci].pixel;
 				}
 			}
 			XliteShmDamaged(dpy, pm);
@@ -529,8 +545,19 @@ int XpmCreatePixmapFromData(Display *dpy, Drawable d, char **data,
 			    Pixmap *pix_ret, Pixmap *mask_ret,
 			    void *attributes)
 {
-	(void)attributes;
-	return xpm_build(dpy, d, data, 0, pix_ret, mask_ret);
+	/*
+	 * The leading fields of XpmAttributes, which is all that is read:
+	 * XpmVisual 1<<0, XpmColormap 1<<1, XpmDepth 1<<2. xfiles passes its
+	 * depth-32 visual, colormap and depth; ignoring them built every icon
+	 * at the default depth 16 and the client composed it as 32-bit - a
+	 * dot grid (2026-09-11).
+	 */
+	struct { unsigned long valuemask; void *visual; Colormap colormap;
+		 unsigned int depth; } *a = attributes;
+	int depth = (a && (a->valuemask & 4)) ? (int)a->depth : 0;
+	Colormap cm = (a && (a->valuemask & 2)) ? a->colormap : 0;
+
+	return xpm_build(dpy, d, data, 0, pix_ret, mask_ret, depth, cm);
 }
 
 int XpmReadFileToPixmap(Display *dpy, Drawable d, char *file,
@@ -565,7 +592,7 @@ int XpmReadFileToPixmap(Display *dpy, Drawable d, char *file,
 			break;
 		lines[n++] = l;
 	}
-	rc = xpm_build(dpy, d, lines, n, pix_ret, mask_ret);
+	rc = xpm_build(dpy, d, lines, n, pix_ret, mask_ret, 0, 0);
 	free(buf);
 	return rc;
 }
