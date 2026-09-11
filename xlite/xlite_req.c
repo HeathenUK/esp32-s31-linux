@@ -1729,6 +1729,36 @@ Status XQueryTree(Display *dpy, Window w, Window *root, Window *parent,
 	return 1;
 }
 
+/*
+ * Withdraw and iconify both reduce to "unmap it" here - there is no window
+ * manager to tell. SDL2's X11_HideWindow calls XWithdrawWindow and then
+ * waits for the UnmapNotify, so a stub that unmapped nothing hung every
+ * SDL2 exit after the timedemo line (2026-09-11).
+ */
+XLITE_IMPL(XWithdrawWindow)
+Status XWithdrawWindow(Display *dpy, Window w, int screen)
+{
+	(void)screen;
+	XUnmapWindow(dpy, w);
+	XFlush(dpy);
+	return 1;
+}
+
+XLITE_IMPL(XIconifyWindow)
+Status XIconifyWindow(Display *dpy, Window w, int screen)
+{
+	(void)screen;
+	XUnmapWindow(dpy, w);
+	XFlush(dpy);
+	return 1;
+}
+
+XLITE_IMPL(XDisplayString)
+char *XDisplayString(Display *dpy)
+{
+	return dpy->display_name ? dpy->display_name : (char *)":0";
+}
+
 XLITE_IMPL(XGetGeometry)
 Status XGetGeometry(Display *dpy, Drawable d, Window *root, int *px, int *py,
 		    unsigned *w, unsigned *h, unsigned *bw, unsigned *depth)

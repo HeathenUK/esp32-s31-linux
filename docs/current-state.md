@@ -8042,3 +8042,57 @@ And the dips are NOT the paging: correlating the fps intervals with the
 fault samples, slow intervals (<15 fps) carried 3.2 faults per sample
 against 2.7 for fast ones, and half the slow intervals had zero faults.
 The dips are the scenes.
+
+## SDL2 in XIP, BlueZ on the card, and chocolate-doom plays (2026-09-11)
+
+**The swap.** bluetoothd and glib (2.4 MB) left the rootfs XIP image;
+libSDL2 (1.13 MB), libpng16, libz, xcalc and libdbus came in. Both images
+fit with 823 KB and 188 KB spare. Nothing stale: every moved or added file
+on the board was checksummed against the Buildroot target tree (bluetoothd
+b7d1d1d8, glib 992a885f, dbus 81247213, SDL2 f058c952, ...), bluetoothd and
+s31-bt run, and the old bisection copies of libX11 under /root were deleted.
+bluetoothd is control plane only - HID and A2DP data never pass through it
+once connected - so nothing about latency changed; a headset button or a
+reconnect now costs a few 4 KB faults off the card.
+
+**chocolate-doom 3.1.1 (SDL2 2.32.10) starts, draws and exits.** Three shim
+faults stood between it and that:
+1. xshim dropped the oversized _NET_WM_ICON ChangeProperty (65,568 bytes)
+   without advancing the client's sequence number, so every reply after it
+   was one behind what the client waited for - the "spins in recvmsg in
+   R_Init" of 09-06 was a client waiting forever for reply N while reply
+   N-1 arrived. Discarded requests count now.
+2. XIfEvent / XCheckIfEvent / XWindowEvent were stubs; implemented on the
+   existing predicate-take machinery. XSetInputFocus, XTranslateCoordinates,
+   XQueryTree, XDisplayString added.
+3. XWithdrawWindow was a stub: SDL2's X11_HideWindow withdraws and then
+   waits for the UnmapNotify, so every SDL2 exit hung after its last line.
+   Withdraw and iconify unmap now. _NET_WM_NAME is honoured as the title
+   (SDL2 never sets WM_NAME), so the bar says "Chocolate Doom".
+
+**Is it on the fast path?** Zero-copy: yes - `ZEROCOPY window 0x200002
+320x200 bpp 2` - SDL2's XPutImage lands straight in the shared window
+pages. MIT-SHM: not used, and that is the better outcome, since our
+XPutImage path has no copy at all where ShmPutImage has one. CLUT: no,
+and it cannot be: SDL2 has no 8-bit window path, so the palette expansion
+that the PPA does for prboom happens inside SDL2 on the CPU.
+
+**Why it is slower than prboom, measured.** Timedemo demo1 (doom1.wad,
+5026 tics), windowed 320x200, no sound: prboom 22-23 fps, chocolate-doom
+**10.7 fps**. A PC-sample profile of chocolate's main thread in normal
+play: 26% in a blocking syscall (its tic loop sleeps), ~30% inside SDL2's
+own converters and copies - Blit1to4 (8->32, chocolate's own blit into an
+ARGB surface), Blit_RGB888_RGB565 (SDL2 converting the texture into our
+16-bit window), SDL_FillRect (RenderClear), memcpy (UpdateTexture) - and
+15% in Doom's renderer. So the difference from prboom is chocolate-doom's
+render pipeline: 8-bit frame -> ARGB surface -> texture -> integer-
+upscaled render-target texture -> window, with SDL2's software renderer
+doing every step on the CPU. That is the port's design and SDL2's API,
+neither of which we touch. Also why it "looks higher-res": the upscaled
+texture is drawn with linear filtering when the window is not 1:1.
+
+What is ours to do: (a) hand SDL2 a 32-bit window
+(SDL_VIDEO_X11_VISUALID=0x23) so its last conversion becomes a memcpy,
+and do the 32->16 in the PPA on our side (measurement in progress);
+(b) the fullscreen PPA scale path taking XRGB8888 input so a 32-bit
+fullscreen client is converted and scaled in one hardware pass.
