@@ -7731,5 +7731,7 @@ thumbnail path. That is the first concrete lead on a silent death: a DMA
 engine on a bad input. Not proven; next step is xfiles with thumbnails
 disabled, recorded.
 
-xclock's face uses CreateSolidFill + Trapezoids, documented as not
-implemented in xshim's RENDER; its blank face is that, not a regression.
+CORRECTION: xclock's face draws through xshim's Trapezoids handler (case
+10) and RENDERS on the fixed build - face, ticks and hands verified in a
+screenshot. It was the same regression as xcalc (cause 1) and is fixed.
+The earlier claim that a blank face was expected was wrong and unchecked.
