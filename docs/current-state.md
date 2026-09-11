@@ -8106,3 +8106,37 @@ SDL2 client through init, play and a clean exit with one harmless stub
 left (XGetDefault, NULL). It is not a faster Doom and cannot be on this
 board; prboom on SDL 1.2 stays the Doom. SDL2 in XIP is what TyrQuake
 needs, which is the next port worth an afternoon.
+
+## TyrQuake 0.71 on SDL2: builds, runs, and cannot fit (2026-09-11)
+
+Built unmodified through its own Makefile (`rootfs/build-tyrquake.sh`:
+SDL2 video/input/sound, C11 because GCC 14 defaults to C23 and the source
+uses `false` as an enumerator, no host include paths). It starts, draws
+into a zero-copy window and its only stub call is XGetDefault. Two things
+needed the right switches: `-sndspeed 22050`, because at 44.1/48 kHz
+SDL2's period size (2048 frames) is refused by the I2S sink and s31route
+answers ENODEV ("ALSA write failed (unrecoverable): No such device"); and
+the heap.
+
+**The heap is the verdict.** TyrQuake's default is 256 MB; `-mem` sets it.
+Measured on demo1 (the shareware pak):
+
+| -mem | result |
+|---|---|
+| 6 | `Cache_TryAlloc: 241872 is greater than free hunk`, exit at load |
+| 7 | plays ~15 s, then SIGSEGV in COM_LoadStackFile (hunk exhausted) |
+| 8 | `Hunk_AllocName_Raw: failed on 171200 bytes` at level load |
+| 10 | runs - and swaps the board flat: 9,845 major faults, 16 MB of swap in use, load 6.3, the console could not upload a 60-byte script; killed after 8 min without finishing the demo |
+
+sdlquake's 8 MB heap is enough for the same demo because its hunk layout
+is the 1996 one; TyrQuake's surface cache (950 KB), filter buffers and
+cache padding need 10 MB, and 10 MB of touched heap on a 15 MB board with
+a desktop is swap. So the premise - "TyrQuake takes -mem, so it can stop
+Quake swapping" - is false in the other direction: it needs more, not
+less. `-nosound` also crashes it upstream (S_ClearOverflow dereferences a
+never-allocated table). Kept: the build script and rootfs/tyr-quake for
+the record; NOT in the menu. sdlquake remains the Quake.
+
+Tooling note: `freetrace.so` now also traces exit() callers - a silent
+exit(1) resolved to Sys_Error in one run, and its message had been in the
+log all along, above the block-buffered stdout lines that print at exit.
