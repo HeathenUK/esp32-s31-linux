@@ -633,7 +633,7 @@ XIP_ROOTFS_IMG := $(BUILD_DIR)/rootfs-xip.cramfs
 XIP_ROOTS ?= bin/busybox usr/sbin/wpa_supplicant usr/sbin/iw usr/bin/lvdesk \
 	usr/lib/alsa-lib/libasound_module_pcm_s31route.so \
 	usr/bin/s31-coex usr/lib/libSDL-1.2.so.0.11.4 \
-	usr/lib/libSDL2-2.0.so.0.3200.10 \
+	usr/lib/libSDL2-2.0.so.0.3200.10 usr/lib/libXrandr.so.2.2.0 \
 	usr/lib/libpng16.so.16.58.0 usr/lib/libz.so.1.3.2 usr/bin/xcalc \
 	usr/lib/libdbus-1.so.3.32.4 \
 	usr/bin/xfilesctl usr/bin/s31-open usr/bin/s31-thumb usr/bin/xfilesthumb usr/bin/s31-thumbs
@@ -710,7 +710,7 @@ X11_REPLACEMENTS := libX11.so.6.4.0 libXt.so.6.0.0 libXaw7.so.7.0.0 \
 	libXmu.so.6.2.0 libICE.so.6.3.0 libSM.so.6.0.1 libXext.so.6.4.0 \
 	libXpm.so.4.11.0 libXrender.so.1.3.0 libXft.so.2.3.9 \
 	libfontconfig.so.1.16.0 libXcursor.so.1.0.2 libxkbfile.so.1.0.2 \
-	libfreetype.so.6.20.6
+	libfreetype.so.6.20.6 libXrandr.so.2.2.0
 
 x11-stage:
 	@echo "--- installing the X11 replacements into the overlay ---"

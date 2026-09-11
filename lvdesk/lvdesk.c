@@ -449,6 +449,20 @@ static int xkey_sym(int code)
 	case KEY_F10:		return XLW_F1 + 9;
 	case KEY_F11:		return XLW_F1 + 10;
 	case KEY_F12:		return XLW_F1 + 11;
+	/*
+	 * Modifiers are keys in their own right. Without these they fell
+	 * through to keymap[], which holds 0 for them, so xkey_sym() returned
+	 * 0 - the value every caller reads as "no key here".
+	 */
+	case KEY_LEFTSHIFT:	return XLW_SHIFT_L;
+	case KEY_RIGHTSHIFT:	return XLW_SHIFT_R;
+	case KEY_LEFTCTRL:	return XLW_CONTROL_L;
+	case KEY_RIGHTCTRL:	return XLW_CONTROL_R;
+	case KEY_CAPSLOCK:	return XLW_CAPS_LOCK;
+	case KEY_LEFTALT:	return XLW_ALT_L;
+	case KEY_RIGHTALT:	return XLW_ALT_R;
+	case KEY_LEFTMETA:	return XLW_SUPER_L;
+	case KEY_RIGHTMETA:	return XLW_SUPER_R;
 	}
 	if (code < 0 || code >= KEY_CNT)
 		return 0;
@@ -1024,17 +1038,28 @@ static int kbd_poll(void)
 			}
 			if (ev.type != EV_KEY)
 				continue;
+			/*
+			 * Track the modifier, then fall through and deliver it
+			 * like any other key. These used to `continue`, which
+			 * updated the desktop's idea of the modifier and threw
+			 * the event away - so no X client ever saw a Shift,
+			 * Ctrl or Alt press. A client reading the modifier MASK
+			 * carried on another key was unaffected, which is why
+			 * this survived: it only breaks clients that bind the
+			 * modifier itself, and the first one to try was Doom
+			 * (fire on Ctrl, strafe on Alt, run on Shift).
+			 */
 			switch (ev.code) {
 			case KEY_LEFTSHIFT: case KEY_RIGHTSHIFT:
-				shift = !!ev.value; continue;
+				shift = !!ev.value; break;
 			case KEY_LEFTCTRL: case KEY_RIGHTCTRL:
-				mod_ctrl = !!ev.value; continue;
+				mod_ctrl = !!ev.value; break;
 			case KEY_LEFTALT: case KEY_RIGHTALT:
 				mod_alt = !!ev.value;
 				/* Letting Alt go is what commits the choice. */
 				if (!mod_alt)
 					switcher_end();
-				continue;
+				break;
 			case KEY_CAPSLOCK:
 				/*
 				 * Only toggle it ourselves if nothing else is.
@@ -2767,6 +2792,7 @@ static void menu_popover_build(char **labels, int n, size_t maxlen,
 			       int32_t ax, int32_t ay, lv_event_cb_t cb);
 static void appmenu_open(int parent);
 static void appmenu_launch(const char *cmd);
+static void win_close(struct winrec *w);
 static void audio_set_pct(int pct);
 static int audio_get_pct(void);
 static void state_set(const char *key, int val);
@@ -2913,6 +2939,22 @@ static void ctl_line(char *buf)
 			}
 			printf("lvdesk: volume %d\n", volume_current());
 			fflush(stdout);
+		} else if (!strncmp(buf, "close ", 6)) {
+			/*
+			 * Exactly what the title bar's X button does, so the
+			 * close path can be exercised without a human and a
+			 * photograph. It had never been tested end to end, and
+			 * it was leaving the client alive.
+			 */
+			int idx = atoi(buf + 6);
+
+			if (idx >= 0 && idx < win_n && wins[idx].win) {
+				printf("lvdesk: ctl close %d ('%s')\n", idx,
+				       xshim_window_title(wins[idx].xid) ?
+				       xshim_window_title(wins[idx].xid) : "?");
+				fflush(stdout);
+				win_close(&wins[idx]);
+			}
 		} else if (!strncmp(buf, "run ", 4)) {
 			/* Type a command into the built-in terminal. */
 			term_raise_and_run(buf + 4);
@@ -3884,6 +3926,9 @@ static void xwin_on_mode(int w, int h)
  * framebuffer (an 8-bit window is expanded through its palette, a 16-bit
  * one copied) and only the damaged rows are handed to the driver.
  */
+static int prof_on;			/* LVDESK_PROF; defined with the profiler below */
+static uint64_t prof_ns(void);
+
 static void fs_present(uint32_t id)
 {
 	const uint16_t *pal, *px = NULL;
@@ -3917,12 +3962,26 @@ static void fs_present(uint32_t id)
 			if (dy + dh > sh) dh = sh - dy;
 			if (dw <= 0 || dh <= 0)
 				return;
-			for (y = dy; y < dy + dh; y++)
-				memcpy(kms_fs_map + (size_t)y * kms_fs_pitch +
-				       (size_t)dx * 4,
-				       (const uint32_t *)raw + (size_t)y * sw + dx,
-				       (size_t)dw * 4);
-			kms_fs_dirty(dx, dy, dx + dw - 1, dy + dh - 1);
+			{
+				uint64_t t0 = prof_on ? prof_ns() : 0, t1;
+
+				for (y = dy; y < dy + dh; y++)
+					memcpy(kms_fs_map +
+					       (size_t)y * kms_fs_pitch +
+					       (size_t)dx * 4,
+					       (const uint32_t *)raw +
+					       (size_t)y * sw + dx,
+					       (size_t)dw * 4);
+				t1 = prof_on ? prof_ns() : 0;
+				kms_fs_dirty(dx, dy, dx + dw - 1, dy + dh - 1);
+				if (prof_on)
+					fprintf(stderr, "fs32: %dx%d+%d+%d copy "
+						"%u us dirty %u us\n", dw, dh,
+						dx, dy,
+						(unsigned)((t1 - t0) / 1000),
+						(unsigned)((prof_ns() - t1) /
+							   1000));
+			}
 			return;
 		}
 		px = xshim_window_pixels(id, &sw, &sh);
@@ -5313,6 +5372,21 @@ static void appmenu_spawn(const char *cmd)
 		if (fd >= 0) { dup2(fd, 0); close(fd); }
 		if (lg >= 0) { dup2(lg, 1); dup2(lg, 2); close(lg); }
 	}
+	/*
+	 * Everything else is OURS and the child must not have it. A menu-
+	 * launched prboom was found holding the desktop's evdev keyboards and
+	 * mice, /dev/tty0 and the control FIFO - all inherited across this
+	 * fork, because nothing closed them and they are not O_CLOEXEC.
+	 * Closing by number rather than marking each open site is deliberate:
+	 * the leak covers descriptors opened by LVGL and ALSA too, which no
+	 * amount of discipline in this file would have caught.
+	 */
+	{
+		int fd;
+
+		for (fd = 3; fd < 256; fd++)
+			close(fd);
+	}
 	signal(SIGCHLD, SIG_DFL);
 	signal(SIGPIPE, SIG_DFL);
 	execl("/bin/sh", "-sh", "-l", "-c", cmd, (char *)NULL);
@@ -5336,12 +5410,27 @@ static void appmenu_launch(const char *cmd)
 		name[n] = 0;
 		if (!sp)
 			return;
+		/*
+		 * One instance - but only while that instance still has a
+		 * window to raise. A process of the right name with NO window
+		 * is a stuck one (a client that outlived its connection, say),
+		 * and refusing to launch because of it makes the menu entry
+		 * permanently dead with nothing on screen to explain why: the
+		 * reported symptom was "I closed Doom and could never start it
+		 * again". Raising is the single-instance behaviour; if there
+		 * is nothing to raise, the guard has no subject and the launch
+		 * goes ahead.
+		 */
 		if (proc_running(name)) {
-			/* one instance: bring it up instead of a second */
-			printf("lvdesk: menu: %s already running\n", name);
+			if (xwin_raise_by_name(name)) {
+				printf("lvdesk: menu: %s already running - "
+				       "raised it\n", name);
+				fflush(stdout);
+				return;
+			}
+			printf("lvdesk: menu: a %s is running with no window; "
+			       "starting another\n", name);
 			fflush(stdout);
-			xwin_raise_by_name(name);
-			return;
 		}
 		cmd = sp + 1;
 	}

@@ -338,6 +338,7 @@ static int vm_cli = -1;			/* who switched away from the panel */
  * WM would grow the window to the screen and SDL2 would scale on the CPU.
  */
 static void vm_switch(int idx, int owner);
+static void win_resize(struct res *r, int w, int h, int force);
 static void ewmh_fullscreen(struct res *w, int on)
 {
 	int i, best = -1, n = (int)(sizeof(vm_modes) / sizeof(vm_modes[0]));
@@ -361,8 +362,19 @@ static void ewmh_fullscreen(struct res *w, int on)
 			 * scanout path all the same - that is where a 32-bit
 			 * frame gets converted by the PPA instead of the CPU.
 			 */
-			fprintf(stderr, "xshim: EWMH fullscreen 0x%x at panel size\n",
-				w->id);
+			fprintf(stderr, "xshim: EWMH fullscreen 0x%x %dx%d at "
+				"panel size\n", w->id, w->w, w->h);
+			/*
+			 * SDL2 sized the window to what it believes the desktop
+			 * is (its own default, 800x600 for chocolate-doom -
+			 * there is no mode list to tell it otherwise). The
+			 * scanout is the panel, so a larger window was being
+			 * presented cropped. A fullscreen window IS the panel:
+			 * resize it and the ConfigureNotify makes the client
+			 * letterbox into the real geometry.
+			 */
+			if (w->w != XSHIM_W || w->h != XSHIM_H)
+				win_resize(w, XSHIM_W, XSHIM_H, 1);
 			vm_cli = w->owner;
 			vm_native = 1;
 			if (fsnat_cb)
@@ -424,6 +436,7 @@ static struct res *top_of(struct res *r);
 struct cli;
 static void out_flush(struct cli *c);
 static void vidmode_request(struct cli *c, const uint8_t *r, int len);
+static void randr_request(struct cli *c, const uint8_t *r, int len);
 static void out_push(struct cli *c, const void *p, size_t n);
 static void notify_draw(struct res *d);
 static int trace_on(void);
@@ -1724,9 +1737,9 @@ static void fill_poly(struct res *d, const int16_t *pts, int n, uint32_t c)
 				if (xs[j] < xs[i]) {
 					k = xs[i]; xs[i] = xs[j]; xs[j] = k;
 				}
+		/* Each span is one run, not a px_set() per pixel. */
 		for (i = 0; i + 1 < cnt; i += 2)
-			for (j = xs[i]; j <= xs[i + 1]; j++)
-				px_set(d, j, y, c);
+			px_hspan(d, xs[i], y, xs[i + 1] - xs[i] + 1, c);
 	}
 }
 
@@ -2778,6 +2791,20 @@ static void expose_window(struct cli *c, struct res *w)
 #define MITSHM_MAJOR		202
 #define VIDMODE_MAJOR	203
 #define VIDMODE_ERROR	170
+/*
+ * RANDR, for SDL2. SDL 2.32 has no XVidMode client at all; XRandR is the only
+ * way it will ever learn a mode other than the desktop, and without one a
+ * "fullscreen" SDL2 window is the panel size and the client scales on the
+ * CPU (chocolate-doom: 800x480 ARGB per frame, 0.2 fps, and the board
+ * swapped itself to death twice). This answers the same mode list VidMode
+ * does, through the 1.2 resource model SDL walks: one output on one crtc.
+ */
+#define RANDR_MAJOR	204
+#define RANDR_ERROR	176		/* BadOutput..BadLease: 5 codes */
+#define RANDR_EVENT	100		/* RRScreenChangeNotify, RRNotify */
+#define RANDR_CRTC	0x2f000001u	/* XIDs a client can never allocate */
+#define RANDR_OUTPUT	0x2f000002u
+#define RANDR_MODE0	0x2f000100u	/* + index into vm_modes */
 #define MITSHM_ERROR		144
 
 /* Segments a client has attached. Small: a client has one or two. */
@@ -5380,6 +5407,10 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 			vidmode_request(c, r, len);
 			return;
 		}
+		if (op == RANDR_MAJOR) {
+			randr_request(c, r, len);
+			return;
+		}
 		if (c->nunimpl[op & 127]++ == 0) {
 			fprintf(stderr, "xshim: extension request, major "
 				"opcode %u minor %u - not implemented\n", op,
@@ -5429,6 +5460,12 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 			d24[1] = VIDMODE_MAJOR;
 			d24[2] = 0;
 			d24[3] = VIDMODE_ERROR;
+		}
+		if (n == 5 && !memcmp(r + 8, "RANDR", 5)) {
+			d24[0] = 1;
+			d24[1] = RANDR_MAJOR;
+			d24[2] = RANDR_EVENT;
+			d24[3] = RANDR_ERROR;
 		}
 		if (n == 7 && !memcmp(r + 8, "MIT-SHM", 7)) {
 			d24[0] = 1;
@@ -5909,7 +5946,7 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		struct res *d = res_find(get32(r + 4));
 		struct res *g = res_find(get32(r + 8));
 		int n = r[1], x = gets16(r + 12), y = gets16(r + 14);
-		int i, j;
+		int j;
 
 		if (!d || !drawable_ok(d) || !g) {
 			send_error(c, d ? X_BAD_GC : X_BAD_DRAWABLE,
@@ -5918,13 +5955,15 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		}
 		if (16 + n > len)
 			n = len - 16;
+		if (!op_target(d))	/* px_hspan() does not break aliases */
+			break;
 		{
 			const struct xfont *f = font_of(g);
 			int wid = text_width(f, r + 16, n);
 
+			/* The background box is a run per row. */
 			for (j = y - f->ascent; j < y + f->descent; j++)
-				for (i = x; i < x + wid; i++)
-					px_set(d, i, j, g->bg);
+				px_hspan(d, x, j, wid, g->bg);
 		}
 		if (trace_on())
 			fprintf(stderr, "xshim: ImageText8 0x%x '%.*s' fg=%04x "
@@ -6020,6 +6059,8 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		if (!d || !drawable_ok(d) || !g || n < 3)
 			break;
 		if (n > 64) n = 64;
+		if (!op_target(d))	/* px_hspan() does not break aliases */
+			break;
 		for (i = 0; i < n; i++) {
 			pts[i * 2] = gets16(r + 16 + i * 4);
 			pts[i * 2 + 1] = gets16(r + 16 + i * 4 + 2);
@@ -6941,6 +6982,53 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 						     (q[0] >> 3));
 				}
 			}
+		} else if (op_target(d) && d->buf->bpp == 4) {
+			/*
+			 * And for an ARGB8888 destination - the arm that was
+			 * never written. A depth-32 visual client (SDL2, st)
+			 * fell through to px_set() below: 384,000 calls for
+			 * one 800x480 chocolate-doom frame, 49% of lvdesk's
+			 * time in a PC sample, out of XIP flash. Rows are
+			 * written as runs with the depth branch hoisted, and a
+			 * depth-24 image gets its padding byte forced to
+			 * opaque alpha the way the per-pixel path always did,
+			 * so RENDER and the scanout still see solid pixels.
+			 */
+			struct res *b = d->buf;
+			for (y = 0; y < ih; y++) {
+				const uint8_t *row = src + (size_t)y * pad;
+				int bx, by, bw, x0;
+				uint32_t *out;
+				if (!span_clip(d, dx, dy + y, iw,
+					       &bx, &by, &bw))
+					continue;
+				x0 = bx - (dx + d->ax);
+				out = (uint32_t *)b->px +
+				      (size_t)by * b->w + bx;
+				if (depth >= 32) {
+					memcpy(out, row + (size_t)x0 * 4,
+					       (size_t)bw * 4);
+				} else if (depth > 16) {
+					const uint32_t *q = (const uint32_t *)
+						(row + (size_t)x0 * 4);
+					for (x = 0; x < bw; x++)
+						out[x] = q[x] | 0xFF000000u;
+				} else if (depth > 8) {
+					const uint8_t *q = row +
+						(size_t)x0 * 2;
+					for (x = 0; x < bw; x++, q += 2) {
+						unsigned s16 = q[0] | (q[1] << 8);
+						out[x] = 0xFF000000u |
+						  (((s16 >> 11) << 3) << 16) |
+						  ((((s16 >> 5) & 0x3F) << 2) << 8) |
+						  ((s16 & 0x1F) << 3);
+					}
+				} else {
+					for (x = 0; x < bw; x++)
+						out[x] = 0xFF000000u |
+							 (row[x0 + x] * 0x010101u);
+				}
+			}
 		} else if (op_target(d) && d->buf->bpp == 1 && depth <= 8) {
 			/*
 			 * The same run-per-row treatment for an INDEXED
@@ -7204,6 +7292,205 @@ static void vidmode_request(struct cli *c, const uint8_t *r, int len)
 	(void)len;
 }
 
+/* ---------------------------------------------------------------- RANDR */
+/*
+ * Wire layout per randrproto.h. Everything a client can see is derived from
+ * vm_modes[]: one screen, one crtc, one output ("LCD-1", the 7" panel at
+ * 154x86 mm), and the modes. SetCrtcConfig is VidMode's SwitchToMode with a
+ * mode XID instead of timings, and the same vm_switch() behind it, so the
+ * window that follows the switch gets EWMH-fullscreened onto a PPA-scaled
+ * mode exactly as an SDL 1.2 client does.
+ *
+ * Offsets below are reply-relative minus 8 (send_reply() takes the 24 data
+ * bytes that follow the 8-byte header); GetOutputInfo's nClones and
+ * nameLength fall at +32 and +34, so they lead the extra data.
+ */
+#define RANDR_NAME	"LCD-1"
+#define RANDR_MM_W	154
+#define RANDR_MM_H	86
+#define RANDR_NMODES	((int)(sizeof(vm_modes) / sizeof(vm_modes[0])))
+
+/* xRRModeInfo, 32 bytes. Timings as VidMode's: made up, 60 Hz. */
+static int randr_mode_record(uint8_t *m, int i, char *name, size_t nsz)
+{
+	unsigned w = vm_modes[i].w, h = vm_modes[i].h;
+	unsigned ht = w + 24, vt = h + 8;
+	int nl = snprintf(name, nsz, "%ux%u", w, h);
+
+	memset(m, 0, 32);
+	put32(m + 0, RANDR_MODE0 + i);
+	put16(m + 4, w);
+	put16(m + 6, h);
+	put32(m + 8, ht * vt * 60);		/* dotClock, Hz */
+	put16(m + 12, w + 8);			/* hSyncStart */
+	put16(m + 14, w + 16);			/* hSyncEnd */
+	put16(m + 16, ht);			/* hTotal */
+	put16(m + 18, 0);			/* hSkew */
+	put16(m + 20, h + 2);			/* vSyncStart */
+	put16(m + 22, h + 4);			/* vSyncEnd */
+	put16(m + 24, vt);			/* vTotal */
+	put16(m + 26, nl);			/* nameLength */
+	put32(m + 28, 0);			/* modeFlags */
+	return nl;
+}
+
+static void randr_request(struct cli *c, const uint8_t *r, int len)
+{
+	uint8_t minor = r[1];
+	uint8_t d24[24];
+	int i, n = RANDR_NMODES;
+
+	memset(d24, 0, sizeof d24);
+	switch (minor) {
+	case 0:						/* QueryVersion */
+		put32(d24 + 0, 1);
+		put32(d24 + 4, 5);
+		send_reply(c, 0, d24, NULL, 0);
+		break;
+	case 4:						/* SelectInput */
+		break;					/* nothing ever changes */
+	case 6:						/* GetScreenSizeRange */
+		put16(d24 + 0, vm_modes[n - 1].w);
+		put16(d24 + 2, vm_modes[n - 1].h);
+		put16(d24 + 4, XSHIM_W);
+		put16(d24 + 6, XSHIM_H);
+		send_reply(c, 0, d24, NULL, 0);
+		break;
+	case 7:						/* SetScreenSize */
+		break;					/* the panel is the panel */
+	case 8:						/* GetScreenResources */
+	case 25: {					/* GetScreenResourcesCurrent */
+		/* crtcs[1], outputs[1], modes[n], names (padded) */
+		static uint8_t ex[8 + 48 * RANDR_NMODES + 4];
+		char name[16];
+		int off = 8, nb = 0, pad;
+
+		put32(ex + 0, RANDR_CRTC);
+		put32(ex + 4, RANDR_OUTPUT);
+		for (i = 0; i < n; i++, off += 32)
+			randr_mode_record(ex + off, i, name, sizeof name);
+		for (i = 0; i < n; i++) {
+			int nl = snprintf(name, sizeof name, "%ux%u",
+					  vm_modes[i].w, vm_modes[i].h);
+			memcpy(ex + off + nb, name, nl);
+			nb += nl;
+		}
+		pad = (4 - (nb & 3)) & 3;
+		memset(ex + off + nb, 0, pad);
+		put32(d24 + 0, 1);			/* timestamp */
+		put32(d24 + 4, 1);			/* configTimestamp */
+		put16(d24 + 8, 1);			/* nCrtcs */
+		put16(d24 + 10, 1);			/* nOutputs */
+		put16(d24 + 12, n);			/* nModes */
+		put16(d24 + 14, nb);			/* nbytesNames */
+		send_reply(c, 0, d24, ex, off + nb + pad);
+		break;
+	}
+	case 9: {					/* GetOutputInfo */
+		/* nClones, nameLength, crtcs[1], modes[n], clones[0], name */
+		uint8_t ex[4 + 4 + 4 * RANDR_NMODES + 8];
+		int off = 8, nl = (int)strlen(RANDR_NAME);
+
+		if (get32(r + 4) != RANDR_OUTPUT) {
+			send_error(c, RANDR_ERROR + 0, get32(r + 4),
+				   RANDR_MAJOR);		/* BadOutput */
+			break;
+		}
+		put16(ex + 0, 0);			/* nClones */
+		put16(ex + 2, nl);			/* nameLength */
+		put32(ex + 4, RANDR_CRTC);
+		for (i = 0; i < n; i++, off += 4)
+			put32(ex + off, RANDR_MODE0 + i);
+		memset(ex + off, 0, 8);
+		memcpy(ex + off, RANDR_NAME, nl);
+		put32(d24 + 0, 1);			/* timestamp */
+		put32(d24 + 4, RANDR_CRTC);		/* crtc */
+		put32(d24 + 8, RANDR_MM_W);
+		put32(d24 + 12, RANDR_MM_H);
+		d24[16] = 0;				/* Connected */
+		d24[17] = 0;				/* SubPixelUnknown */
+		put16(d24 + 18, 1);			/* nCrtcs */
+		put16(d24 + 20, n);			/* nModes */
+		put16(d24 + 22, 1);			/* nPreferred */
+		send_reply(c, 0, d24, ex, off + 8);	/* status Success */
+		break;
+	}
+	case 20: {					/* GetCrtcInfo */
+		uint8_t ex[8];
+
+		if (get32(r + 4) != RANDR_CRTC) {
+			send_error(c, RANDR_ERROR + 1, get32(r + 4),
+				   RANDR_MAJOR);		/* BadCrtc */
+			break;
+		}
+		put32(ex + 0, RANDR_OUTPUT);		/* outputs[1] */
+		put32(ex + 4, RANDR_OUTPUT);		/* possible[1] */
+		put32(d24 + 0, 1);			/* timestamp */
+		put16(d24 + 4, 0);			/* x */
+		put16(d24 + 6, 0);			/* y */
+		put16(d24 + 8, vm_modes[vm_cur].w);
+		put16(d24 + 10, vm_modes[vm_cur].h);
+		put32(d24 + 12, RANDR_MODE0 + vm_cur);
+		put16(d24 + 16, 1);			/* rotation: Rotate_0 */
+		put16(d24 + 18, 1);			/* rotations */
+		put16(d24 + 20, 1);			/* nOutput */
+		put16(d24 + 22, 1);			/* nPossibleOutput */
+		send_reply(c, 0, d24, ex, 8);
+		break;
+	}
+	case 21: {					/* SetCrtcConfig */
+		uint32_t mode = get32(r + 20);
+
+		if (get32(r + 4) != RANDR_CRTC) {
+			send_error(c, RANDR_ERROR + 1, get32(r + 4),
+				   RANDR_MAJOR);
+			break;
+		}
+		/*
+		 * SDL disables the crtc (mode None) before setting the new
+		 * one. That is not a request to show the panel; ignore it,
+		 * or every switch would go panel-then-mode with a mode-set
+		 * in between.
+		 */
+		if (mode) {
+			i = (mode >= RANDR_MODE0 &&
+			     mode < RANDR_MODE0 + (uint32_t)n) ?
+			    (int)(mode - RANDR_MODE0) : -1;
+			if (i < 0) {
+				send_error(c, RANDR_ERROR + 2, mode,
+					   RANDR_MAJOR);	/* BadMode */
+				break;
+			}
+			fprintf(stderr, "xshim: RANDR SetCrtcConfig %ux%u "
+				"(client %d)\n", vm_modes[i].w, vm_modes[i].h,
+				cur_owner);
+			vm_switch(i, cur_owner);
+		}
+		put32(d24 + 0, 1);			/* newTimestamp */
+		send_reply(c, 0, d24, NULL, 0);		/* status Success */
+		break;
+	}
+	case 31:					/* GetOutputPrimary */
+		put32(d24 + 0, RANDR_OUTPUT);
+		send_reply(c, 0, d24, NULL, 0);
+		break;
+	case 10:					/* ListOutputProperties */
+		put16(d24 + 0, 0);			/* nAtoms: no EDID */
+		send_reply(c, 0, d24, NULL, 0);
+		break;
+	case 15:					/* GetOutputProperty */
+		send_reply(c, 0, d24, NULL, 0);		/* type None, 0 items */
+		break;
+	default:
+		if (c->nunimpl[RANDR_MAJOR & 127]++ == 0)
+			fprintf(stderr, "xshim: RANDR minor %u not implemented\n",
+				minor);
+		send_error(c, X_BAD_IMPLEMENTATION, 0, RANDR_MAJOR);
+		break;
+	}
+	(void)len;
+}
+
 /* ------------------------------------------------------------------- API */
 
 int xshim_init(void (*on_window)(uint32_t, int, int),
@@ -7338,23 +7625,26 @@ static int px_share(struct res *r)
 	return 1;
 }
 
-void xshim_window_resize(uint32_t id, int w, int h)
+static void win_resize(struct res *r, int w, int h, int force)
 {
-	struct res *r = res_find(id);
 	struct cli *c;
 	uint8_t d[28];
 
 	if (trace_on())
 		fprintf(stderr, "xshim: resize req 0x%x -> %dx%d (res %s, "
-			"cur %dx%d, owner %d, hints %d)\n", id, w, h,
+			"cur %dx%d, owner %d, hints %d)\n", r ? r->id : 0, w, h,
 			r ? "found" : "MISSING", r ? r->w : -1, r ? r->h : -1,
 			r ? r->owner : -1, r ? r->has_hints : -1);
 	if (!r || r->type != R_WINDOW || w <= 0 || h <= 0)
 		return;
 	if (r->w == w && r->h == h)
 		return;
-	/* Never push a size a client has declared it cannot accept. */
-	if (r->has_hints) {
+	/*
+	 * Never push a size a client has declared it cannot accept - unless
+	 * the client itself asked for the screen (EWMH fullscreen), where the
+	 * hints describe the window it had, not the one it wants.
+	 */
+	if (r->has_hints && !force) {
 		if (r->max_w && w > r->max_w) w = r->max_w;
 		if (r->max_h && h > r->max_h) h = r->max_h;
 		if (r->min_w && w < r->min_w) w = r->min_w;
@@ -7396,6 +7686,11 @@ void xshim_window_resize(uint32_t id, int w, int h)
 	}
 	if (c->fd >= 0)
 		out_flush(c);
+}
+
+void xshim_window_resize(uint32_t id, int w, int h)
+{
+	win_resize(res_find(id), w, h, 0);
 }
 
 /*
@@ -8078,15 +8373,47 @@ void xshim_on_warp(void (*cb)(uint32_t top, int x, int y))
 	warp_cb = cb;
 }
 
+/*
+ * Is this grab still real? A grab belongs to a window, and a window that is
+ * gone or no longer viewable cannot hold one - that is the X rule, and here
+ * it is also the difference between a desktop and a brick. lvdesk routes
+ * EVERY key to the grab holder ahead of the focused window, so a grab left
+ * behind by a client whose window has been closed swallows the keyboard for
+ * the whole session with nothing on screen to explain it.
+ */
+static struct res *grab_live(uint32_t id, int owner)
+{
+	struct res *g = id ? res_find(id) : NULL;
+
+	if (g && g->type == R_WINDOW && owner >= 0 && owner < MAXCLI &&
+	    cli[owner].fd >= 0) {
+		struct res *t = top_of(g);
+
+		if (t && t->mapped)
+			return t;
+	}
+	return NULL;
+}
+
 uint32_t xshim_grab_top(void)
 {
-	struct res *g = NULL;
+	struct res *g = grab_live(grab_win, grab_cli);
 
-	if (grab_win)
-		g = res_find(grab_win);
-	else if (kgrab_win)
-		g = res_find(kgrab_win);
-	g = top_of(g);
+	if (!g && grab_win) {
+		fprintf(stderr, "xshim: pointer grab on 0x%x released - its "
+			"window is gone\n", grab_win);
+		grab_win = 0;
+		grab_cli = -1;
+	}
+	if (!g) {
+		g = grab_live(kgrab_win, kgrab_cli);
+		if (!g && kgrab_win) {
+			fprintf(stderr, "xshim: keyboard grab on 0x%x released "
+				"- its window is gone\n", kgrab_win);
+			kgrab_win = 0;
+			kgrab_cli = -1;
+		}
+	}
 	return g ? g->id : 0;
 }
 

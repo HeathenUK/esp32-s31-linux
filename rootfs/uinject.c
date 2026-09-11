@@ -273,7 +273,34 @@ int main(int argc, char **argv)
 	msleep(getenv("UINJECT_SETTLE") ? atoi(getenv("UINJECT_SETTLE")) : 2600);
 	home();
 
-	if (!strcmp(what, "type")) {
+	if (!strcmp(what, "key")) {
+		/*
+		 * Press named evdev codes, one at a time: `uinject key 1` is
+		 * Escape. The modes below are scripted sequences, which is
+		 * the wrong instrument when the question is "does this ONE
+		 * key reach the application" - the answer was being inferred
+		 * from a scripted burst against a Doom attract demo, where
+		 * the screen changes on its own and proves nothing.
+		 */
+		int a;
+
+		for (a = 2; a < argc; a++)
+			key(atoi(argv[a]));
+	} else if (!strcmp(what, "hold")) {
+		/*
+		 * Hold one code down for a while: `uinject hold 29 1500`
+		 * holds left Ctrl. A game reads a held modifier as an action
+		 * (Doom fires on Ctrl), so press-and-release tells you
+		 * nothing about whether the hold is seen.
+		 */
+		int code = argc > 2 ? atoi(argv[2]) : KEY_LEFTCTRL;
+		int ms = argc > 3 ? atoi(argv[3]) : 1000;
+
+		emit(kbd_fd, EV_KEY, code, 1); syn(kbd_fd);
+		msleep(ms);
+		emit(kbd_fd, EV_KEY, code, 0); syn(kbd_fd);
+		msleep(120);
+	} else if (!strcmp(what, "type")) {
 		type(argc > 2 ? argv[2] : "hello\n", argc > 3 ? atoi(argv[3]) : 90);
 	} else if (!strcmp(what, "keytest")) {
 		/*

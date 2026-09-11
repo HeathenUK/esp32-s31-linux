@@ -412,5 +412,14 @@ BR2_PACKAGE_SDL_X11=y
 # backend asks for, with chocolate-doom as the first client.
 BR2_PACKAGE_SDL2=y
 BR2_PACKAGE_SDL2_X11=y
+# libXrandr is here ONLY so SDL2 configures its XRandR mode code in
+# (--enable-video-x11-xrandr needs the header at build time). SDL 2.32 has
+# no XVidMode at all, so without XRandR it knows exactly one mode - the
+# desktop - and a "fullscreen" chocolate-doom renders 800x480 on the CPU
+# and swaps the board flat. The stock library never reaches the board:
+# x11-stage overwrites it with xlite's libXrandr.so.2 (xlite/xrandr.c),
+# which speaks the RANDR protocol to xshim and lists the same modes VidMode
+# does. SDL2 dlopens "libXrandr.so.2" by name, so nothing links to it.
+BR2_PACKAGE_XLIB_LIBXRANDR=y
 BR2_PACKAGE_CHOCOLATE_DOOM=y
 BR2_PACKAGE_DOOM_WAD=y

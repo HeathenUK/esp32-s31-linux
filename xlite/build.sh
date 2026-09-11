@@ -28,3 +28,17 @@ $CC -O2 -fno-omit-frame-pointer -fPIC -shared -Wall -Wno-unused-parameter $INSTR
 	-o "$OUT" /src/xlite/*.c
 ${CC%gcc}strip "$OUT"
 ls -l "$OUT"
+
+# libXrandr.so.2: the RANDR client SDL2 dlopens by that name. Built from its
+# own directory so the glob above cannot pull it into libX11, and linked
+# against the libX11 just built for xlite_req()/xlite_reply(). See
+# xlite/randr/xrandr.c for why this exists (SDL 2.32 has no XVidMode).
+RR=/src/images/libXrandr.so.2.2.0
+rm -f "$RR"
+$CC -O2 -fPIC -shared -Wall -Wno-unused-parameter \
+	-I"$SYSROOT/usr/include" -I/src/xlite \
+	$LDHARD \
+	-Wl,-soname,libXrandr.so.2 \
+	-o "$RR" /src/xlite/randr/xrandr.c "$OUT"
+${CC%gcc}strip "$RR"
+ls -l "$RR"
