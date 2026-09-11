@@ -7890,21 +7890,27 @@ timedemo end never takes that path.
 the console handover still recreates a 768 kB fbdev client on every
 lvdesk stop.
 
-## OPEN: fullscreen 640x480 - the default `./prboom` freezes at the title screen (2026-09-11)
+## RESOLVED: the bare `./prboom` "freeze" was 640x480, and an empty config (2026-09-11)
 
-User report: `./prboom` with no arguments from the lvdesk terminal (prboom's
-default is fullscreen at 640x480) shows the first title screen and then
-visually freezes while the sound carries on. Not yet investigated.
+Reproduced with both sides traced: the bare launch came up fullscreen at
+640x480 and was not frozen - it was presenting at ~5 fps (driver ops 20
+per 4 s; prboom at 63% of the core, lvdesk 31%) with the demo loop
+running and one audio underrun. The title screen is static anyway, and
+the demo after it is a 3-5 fps slideshow. Doom's own cost at 640x480,
+windowed, measured with fpsonly.so: **9.5 fps** (against 24 fps at
+320x200 fullscreen in normal play). 640x480 is 4.8x the pixels of 320x200
+on a 320 MHz core; it is simply too slow on this board, not a frame-path
+fault.
 
-A recorded observation from the same afternoon that is probably the same
-mechanism: a fullscreen 320x200 timedemo ran to its end (20.7 fps, console
-clean apart from mode-set lines) and on exit the log shows the expected
-restore - `video mode 800x480`, `fullscreen off` - followed by a SECOND
-switch, `video mode 640x480` -> `kms: fullscreen 640x480`, with no client
-window presenting, and prboom then sat in ppoll and never exited. So SDL
-asks for 640x480 at teardown (its saved mode, or a stale mode list entry),
-and lvdesk enters a 640x480 fullscreen in which nothing is shown. Start
-there: what xshim reports as the current mode at init (what SDL saves),
-and what xshim_mode_window() finds for a 640x480 mode owner whose window
-is 640x480 - yesterday's matrix only checked driver ops for that size.
-Killing prboom leaves fullscreen cleanly.
+Why the bare launch was 640x480 at all: `/root/.prboom/prboom.cfg` was
+ZERO bytes, dated 2026-09-10 12:18. prboom rewrites its config on exit,
+and the exit crash (fixed today) killed it after the truncate and before
+the write - so the user's saved settings (`prboom.cfg.bak22`: videomode
+"8", use_fullscreen 0) were gone and prboom fell back to its built-in
+640x480 fullscreen. Config restored: screen_width 320, screen_height 200,
+videomode "8", use_fullscreen 0. Bare launch verified at 320x200, ~23
+fps, clean exit, lvdesk out of fullscreen.
+
+The exit-time 640x480 switch seen after a fullscreen timedemo is the
+same default: SDL restores the "saved" mode it believes it started in,
+which with an empty config was 640x480. Not a separate defect.
