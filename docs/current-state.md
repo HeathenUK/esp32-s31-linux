@@ -7874,6 +7874,18 @@ maps: everything else XIP). I could not find a change that made the tail
 worse than it was; the numbers here are the first per-interval record,
 so there is no yesterday to compare against.
 
+**Behind the crash: a hang.** With free() no longer dying, a fullscreen
+prboom sent SIGTERM sat in ppoll forever. Traced on both sides
+(XLITE_TRACE_INPUT + XSHIM_TRACE): SDL's X11_LeaveFullScreen unmaps its
+fullscreen window and XIfEvent()s for the UnmapNotify - which xshim had
+never sent (MapNotify yes, its opposite no). UnmapWindow now delivers
+UnmapNotify; the traced SIGTERM exit then runs to XCloseDisplay and the
+process is gone. One caveat that is prboom's, not ours: its signal handler
+calls exit() from inside the handler, so a SIGTERM that lands while the
+main thread is inside an X call re-enters the client library and can
+stall in a blocking read (seen once, 1 of 3 runs); a normal quit or a
+timedemo end never takes that path.
+
 **Open:** the demo's paging variance (swappiness/min_free are the knobs);
 the console handover still recreates a 768 kB fbdev client on every
 lvdesk stop.

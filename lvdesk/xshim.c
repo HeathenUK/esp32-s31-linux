@@ -5874,6 +5874,23 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 			send_error(c, X_BAD_WINDOW, get32(r + 4), op);
 			break;
 		}
+		if (w->mapped) {
+			/*
+			 * UnmapNotify. MapNotify has always been sent; its
+			 * opposite never was, and SDL's X11_LeaveFullScreen
+			 * unmaps its fullscreen window and then XIfEvent()s
+			 * for exactly this before it will close the display.
+			 * With the exit crash fixed, that wait was the next
+			 * thing on the path: prboom sat in ppoll forever on
+			 * SIGTERM from fullscreen (2026-09-11).
+			 */
+			uint8_t d[28];
+
+			memset(d, 0, sizeof(d));
+			put32(d, w->id);		/* event window */
+			put32(d + 4, w->id);		/* window */
+			send_event(c, 18, d, 28);
+		}
 		w->mapped = 0;
 		geom_update(w);
 		par = res_find(w->parent);
