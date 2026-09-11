@@ -326,6 +326,7 @@ static int input_rescan_due(uint32_t scan_at)
 }
 static int shift, mod_ctrl, mod_alt, mod_caps;
 static int fs_active, fs_w, fs_h;	/* fullscreen (direct scanout) state */
+static void cursor_vis_update(void);
 static int caps_led_seen;	/* the kernel drives the Caps Lock LED */
 
 /*
@@ -3746,6 +3747,7 @@ static void xwin_on_mode(int w, int h)
 			lv_obj_invalidate(lv_screen_active());
 			printf("lvdesk: fullscreen off\n");
 			fflush(stdout);
+			cursor_vis_update();
 		}
 		return;
 	}
@@ -3757,6 +3759,7 @@ static void xwin_on_mode(int w, int h)
 	fs_w = w;
 	fs_h = h;
 	fs_win = 0;			/* resolved on the first draw */
+	cursor_vis_update();
 	printf("lvdesk: fullscreen %dx%d\n", w, h);
 	fflush(stdout);
 }
@@ -3875,6 +3878,7 @@ static void xwin_on_close(uint32_t id)
 		lv_obj_invalidate(lv_screen_active());
 		printf("lvdesk: fullscreen off (client gone)\n");
 		fflush(stdout);
+		cursor_vis_update();
 	}
 	for (i = 0; i < xwin_n; i++)
 		if (xwins[i].id == id) {
@@ -7192,6 +7196,56 @@ static void mouse_scan(void)
 	}
 }
 
+/*
+ * Decide whether the pointer is drawn: hidden over a client that defined an
+ * invisible cursor for the window under it (or its grab), and ALWAYS hidden
+ * in fullscreen - the mode is the client's whole frame, and a pointer on top
+ * of Doom is both wrong and a per-frame cursor repaint in the driver.
+ *
+ * Called from the mouse path, and from every fullscreen enter/leave: this
+ * used to live inside mouse_poll() only, so a game started from the
+ * terminal and played from the keyboard kept the arrow on screen until the
+ * mouse first moved (2026-09-11).
+ */
+static void cursor_vis_update(void)
+{
+	static int hidden;
+	uint32_t g;
+	int hide = 0, i;
+
+	if (!hw_cursor)
+		return;
+	g = xshim_grab_top();
+	for (i = 0; i < xwin_n; i++) {
+		lv_area_t a;
+
+		if (!xwins[i].img || !xwins[i].win ||
+		    lv_obj_has_flag(xwins[i].win, LV_OBJ_FLAG_HIDDEN))
+			continue;
+		lv_obj_get_coords(xwins[i].img, &a);
+		if (g ? xwins[i].id == g
+		      : (ptr_x >= a.x1 && ptr_x <= a.x2 &&
+			 ptr_y >= a.y1 && ptr_y <= a.y2)) {
+			hide = xshim_cursor_hidden(xwins[i].id,
+						   ptr_x - a.x1,
+						   ptr_y - a.y1);
+			break;
+		}
+	}
+	if (fs_active)
+		hide = 1;
+	if (hide != hidden) {
+		uint32_t t0 = lv_tick_get();
+
+		kms_cursor_show(!hide);
+		hidden = hide;
+		printf("lvdesk: pointer %s (%u ms)\n",
+		       hide ? "hidden" : "shown",
+		       (unsigned)(lv_tick_get() - t0));
+		fflush(stdout);
+	}
+}
+
 static int mouse_poll(void)
 {
 	struct input_event ev;
@@ -7525,44 +7579,7 @@ static int mouse_poll(void)
 		}
 		cursor_pending = (ptr_x != last_cx || ptr_y != last_cy);
 	}
-	/*
-	 * A client that defined an invisible cursor for the window under the
-	 * pointer (or for its grab) gets no pointer drawn over it.
-	 */
-	if (hw_cursor) {
-		static int hidden;
-		uint32_t g = xshim_grab_top();
-		int hide = 0, i;
-
-		for (i = 0; i < xwin_n; i++) {
-			lv_area_t a;
-
-			if (!xwins[i].img || !xwins[i].win ||
-			    lv_obj_has_flag(xwins[i].win, LV_OBJ_FLAG_HIDDEN))
-				continue;
-			lv_obj_get_coords(xwins[i].img, &a);
-			if (g ? xwins[i].id == g
-			      : (ptr_x >= a.x1 && ptr_x <= a.x2 &&
-				 ptr_y >= a.y1 && ptr_y <= a.y2)) {
-				hide = xshim_cursor_hidden(xwins[i].id,
-							   ptr_x - a.x1,
-							   ptr_y - a.y1);
-				break;
-			}
-		}
-		if (fs_active)
-			hide = 1;
-		if (hide != hidden) {
-			uint32_t t0 = lv_tick_get();
-
-			kms_cursor_show(!hide);
-			hidden = hide;
-			printf("lvdesk: pointer %s (%u ms)\n",
-			       hide ? "hidden" : "shown",
-			       (unsigned)(lv_tick_get() - t0));
-			fflush(stdout);
-		}
-	}
+	cursor_vis_update();
 
 	/*
 	 * The wheel scrolls whatever is under the pointer that can scroll.

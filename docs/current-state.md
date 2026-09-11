@@ -7924,3 +7924,16 @@ onto the 640x480 panel area, which is what the restored config gives.
 The exit-time 640x480 switch seen after a fullscreen timedemo is the
 same default: SDL restores the "saved" mode it believes it started in,
 which with an empty config was 640x480. Not a separate defect.
+
+## The pointer in fullscreen (2026-09-11)
+
+lvdesk already hid the pointer in fullscreen, but the decision lived in
+mouse_poll() and ran only after a mouse event - a game launched from the
+terminal and played from the keyboard kept the arrow on screen. Hoisted
+into cursor_vis_update(), called from the mouse path and from every
+fullscreen enter/leave. Verified: "pointer hidden" logged on entry,
+screenshot clean. In the driver a hidden cursor is a freed cursor image,
+so the per-frame cursor repaint (and the PPA wait before it) is skipped
+too; measured on the same boot, 320x240 bare launch: 20.9 -> 21.3 fps
+median, which is inside run-to-run noise - the repaint was never the
+cost.
