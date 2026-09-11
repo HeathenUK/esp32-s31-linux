@@ -1968,6 +1968,60 @@ static int mixer_nelem;
 static snd_mixer_elem_t *mixer_elem;	/* the first, for reading back */
 static long mixer_min, mixer_max;
 
+/*
+ * Persistent desktop state: /etc/lvdesk/state, `key=value` per line, on the
+ * card. The codec forgets its volume at every boot and lvdesk was the only
+ * thing that ever set it, so the slider's last position is stored here and
+ * applied at start. Anything else worth keeping across a boot goes in the
+ * same file (state_set/state_get); it is rewritten whole, it is tiny.
+ */
+#define STATE_FILE	"/etc/lvdesk/state"
+
+static int state_get(const char *key, int def)
+{
+	FILE *f = fopen(STATE_FILE, "r");
+	char line[128];
+	size_t kl = strlen(key);
+	int v = def;
+
+	if (!f)
+		return def;
+	while (fgets(line, sizeof(line), f))
+		if (!strncmp(line, key, kl) && line[kl] == '=')
+			v = atoi(line + kl + 1);
+	fclose(f);
+	return v;
+}
+
+static void state_set(const char *key, int val)
+{
+	char lines[16][128];
+	int n = 0, i, done = 0;
+	size_t kl = strlen(key);
+	FILE *f = fopen(STATE_FILE, "r");
+
+	if (f) {
+		while (n < 16 && fgets(lines[n], sizeof(lines[0]), f))
+			n++;
+		fclose(f);
+	}
+	f = fopen(STATE_FILE ".new", "w");
+	if (!f)
+		return;
+	for (i = 0; i < n; i++) {
+		if (!strncmp(lines[i], key, kl) && lines[i][kl] == '=') {
+			fprintf(f, "%s=%d\n", key, val);
+			done = 1;
+		} else {
+			fputs(lines[i], f);
+		}
+	}
+	if (!done)
+		fprintf(f, "%s=%d\n", key, val);
+	fclose(f);
+	rename(STATE_FILE ".new", STATE_FILE);
+}
+
 static void audio_open(void)
 {
 	snd_mixer_selem_id_t *sid;
@@ -2712,6 +2766,13 @@ static void ctxmenu_open(const char *replyfifo, char *items);
 static void menu_popover_build(char **labels, int n, size_t maxlen,
 			       int32_t ax, int32_t ay, lv_event_cb_t cb);
 static void appmenu_open(int parent);
+static void appmenu_launch(const char *cmd);
+static void audio_set_pct(int pct);
+static int audio_get_pct(void);
+static void state_set(const char *key, int val);
+static void volume_apply(int v);
+static int volume_current(void);
+static int state_get(const char *key, int def);
 static void term_raise_and_run(const char *cmd);
 
 static void ctl_line(char *buf)
@@ -2837,6 +2898,21 @@ static void ctl_line(char *buf)
 				*items++ = '\0';
 				ctxmenu_open(fifo, items);
 			}
+		} else if (!strncmp(buf, "launch ", 7)) {
+			/* Exactly what a menu entry does: login shell, no
+			 * terminal, @name single-instance guard honoured. */
+			appmenu_launch(buf + 7);
+		} else if (!strncmp(buf, "volume", 6)) {
+			/* volume [0-100]: set (and remember) or report. */
+			if (buf[6] == ' ') {
+				int v = atoi(buf + 7);
+
+				if (v < 0) v = 0;
+				if (v > 100) v = 100;
+				volume_apply(v);
+			}
+			printf("lvdesk: volume %d\n", volume_current());
+			fflush(stdout);
 		} else if (!strncmp(buf, "run ", 4)) {
 			/* Type a command into the built-in terminal. */
 			term_raise_and_run(buf + 4);
@@ -6721,6 +6797,31 @@ static void vol_label_set(int v)
 /* Defined with the routing below; the slider needs to know where sound goes. */
 static int audio_out_bt;
 
+/*
+ * One slider, two volumes. The speakers and a Bluetooth sink are different
+ * devices at different comfortable levels, so each output keeps its own
+ * remembered level (`volume` and `volume_bt` in the state file): the slider
+ * drives whichever output is current and shows that output's level, and
+ * switching outputs re-applies the level that output last had.
+ */
+static int volume_current(void)
+{
+	if (audio_out_bt)
+		return state_get("volume_bt", 60);
+	return audio_get_pct();
+}
+
+static void volume_apply(int v)
+{
+	if (audio_out_bt) {
+		bt_cmd("volume %d", v);
+		state_set("volume_bt", v);
+	} else {
+		audio_set_pct(v);
+		state_set("volume", v);
+	}
+}
+
 static void vol_set_cb(lv_event_t *e)
 {
 	int v = lv_slider_get_value(lv_event_get_target(e));
@@ -6732,9 +6833,7 @@ static void vol_set_cb(lv_event_t *e)
 	 * the codec keeps the level the speakers will use when the output
 	 * comes back, and neither costs anything to write.
 	 */
-	audio_set_pct(v);
-	if (audio_out_bt)
-		bt_cmd("volume %d", v);
+	volume_apply(v);
 	vol_label_set(v);
 	if (!audio_out_bt)
 		audio_bong();
@@ -6812,8 +6911,10 @@ static void audio_out_cb(lv_event_t *e)
 				break;
 			}
 		bt_cmd("route on");
+		bt_cmd("volume %d", state_get("volume_bt", 60));
 	} else {
 		bt_cmd("route off");
+		audio_set_pct(state_get("volume", audio_get_pct()));
 	}
 	popover_close();
 }
@@ -6857,7 +6958,7 @@ static void tray_audio_cb(lv_event_t *e)
 
 	if (!pop)
 		return;
-	v = audio_get_pct();
+	v = volume_current();
 
 	vol_label = lv_label_create(pop);
 	lv_obj_set_pos(vol_label, 0, 0);
@@ -8307,6 +8408,15 @@ int main(void)
 
 	in_dbg = getenv("LVDESK_INDBG") != NULL;
 	ctl_init();
+	{
+		/* The codec boots at its own default; restore the last level. */
+		int v = state_get("volume", -1);
+
+		if (v >= 0) {
+			audio_set_pct(v);
+			printf("lvdesk: volume restored to %d\n", v);
+		}
+	}
 	input_watch_init();
 	mouse_init();			/* pointer and keyboard are both read here */
 	kbd_open();

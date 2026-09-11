@@ -7937,3 +7937,38 @@ so the per-frame cursor repaint (and the PPA wait before it) is skipped
 too; measured on the same boot, 320x240 bare launch: 20.9 -> 21.3 fps
 median, which is inside run-to-run noise - the repaint was never the
 cost.
+
+## Application menu and persistent state (2026-09-11)
+
+**Right-click the empty desktop -> application menu.** Data, not code:
+`/etc/lvdesk/menu.conf` (overlay copy in the repo; the live file is on the
+card under /etc), re-read on every open. Two spaces per level nest;
+`label = command` is an entry, a line without `=` a submenu. Submenus
+drill down in the same popover with a "< Back" row - one popup at a time,
+same with a finger. Commands run in a login shell of their own
+(`sh -l -c`, setsid, stdin /dev/null, output appended to
+/tmp/lvdesk-apps.log), so /etc/profile's environment (DISPLAY,
+DOOMWADDIR, the opener) reaches them without a terminal window. `@name
+cmd` runs only if no process called `name` exists, and raises its window
+instead; `!terminal` raises the built-in terminal. Verified by injector:
+Apps > Calculator opens xcalc; Games > Doom > Fullscreen 320x240 runs the
+demo at 320x240 fullscreen with DOOMWADDIR set. The same launcher is on
+the ctl fifo: `echo "launch @prboom cd /root/doom/wads && ./prboom ..." >
+/tmp/lvdesk.ctl`, which is how a script (or the serial console) starts an
+app exactly the way the menu does.
+
+**State file: /etc/lvdesk/state**, `key=value`, rewritten whole. First
+tenant is the volume, which the codec forgot at every boot: the slider's
+level is stored on release and applied at lvdesk start ("volume restored
+to N" in the log). Speakers and Bluetooth are separate levels (`volume`,
+`volume_bt`): the slider drives and shows the current output's level, and
+switching outputs re-applies that output's stored level. `volume [N]` on
+the ctl fifo sets or reports it. Verified across a reboot.
+
+Still not persistent, listed for the record: the audio OUTPUT choice
+(/run/s31-sink is tmpfs, so every boot starts on the speakers - restoring
+Bluetooth needs to wait for the sink to actually reconnect, or it points
+sound at nothing); window positions and the terminal's size; pointer
+acceleration (an environment variable). Already persistent: Wi-Fi
+networks (wpa_supplicant.conf), Bluetooth pairings (bluez store), the
+clock (fake-hwclock stamp), prboom's own config, xfiles' thumbnail cache.
