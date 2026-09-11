@@ -165,10 +165,21 @@ static void slave_close(struct route *r)
 	}
 }
 
-static int slave_open(struct route *r)
+/*
+ * One attempt at opening the sink. `direct` skips alsa-lib's plug entirely
+ * and talks to the device itself, which is only possible when we can satisfy
+ * every parameter exactly - our own format and channel count, and a rate the
+ * hardware takes natively (the frame-repeat multiple, or the plain rate).
+ * That is the point of doing the conversion here: plug's job was to bridge
+ * the rate, and once this plugin bridges it there is nothing left for plug
+ * to do but copy every period through another ring. The fallback keeps it
+ * for the sinks that still need it - the Bluetooth loopback runs at whatever
+ * s31-bt opened, and an odd rate has no whole multiple to reach.
+ */
+static int slave_try(struct route *r, int direct, snd_pcm_t **out)
 {
 	char name[80];
-	snd_pcm_t *old = r->slave, *pcm = NULL;
+	snd_pcm_t *pcm = NULL;
 	const char *step = "open";
 	int err;
 
@@ -188,7 +199,10 @@ static int slave_open(struct route *r)
 	 * the trailing 0 as a second argument to plug, which fails with
 	 * "Unknown parameter 1" and leaves the sink unopenable.
 	 */
-	snprintf(name, sizeof(name), "plug:'%s'", r->sink);
+	if (direct)
+		snprintf(name, sizeof(name), "%s", r->sink);
+	else
+		snprintf(name, sizeof(name), "plug:'%s'", r->sink);
 	err = snd_pcm_open(&pcm, name, SND_PCM_STREAM_PLAYBACK, 0);
 	if (err < 0)
 		goto done;
@@ -252,8 +266,17 @@ static int slave_open(struct route *r)
 							  r->io.rate * up, 0) < 0)
 			up = 1;
 		rate = r->io.rate * up;
-		if ((err = snd_pcm_hw_params_set_rate_near(pcm, hw,
-				&rate, &dir)) < 0)
+		/*
+		 * Direct means exact: without plug underneath there is nothing
+		 * to convert a near miss, so a rate we cannot have is a reason
+		 * to fall back, not to round. set_rate (not _near) says so.
+		 */
+		if (direct)
+			err = snd_pcm_hw_params_set_rate(pcm, hw, rate, 0);
+		else
+			err = snd_pcm_hw_params_set_rate_near(pcm, hw, &rate,
+							      &dir);
+		if (err < 0)
 			goto done;
 		/*
 		 * Whatever came back is what the slave believes it is playing,
@@ -340,7 +363,7 @@ static int slave_open(struct route *r)
 		}
 		if (getenv("S31ROUTE_DEBUG"))
 			fprintf(stderr, "s31route: %s app %u Hz ring %lu/%lu -> sink %u Hz %lu/%lu avail_min %lu\n",
-				r->sink, r->io.rate,
+				name, r->io.rate,
 				(unsigned long)r->io.buffer_size,
 				(unsigned long)r->io.period_size, rate,
 				(unsigned long)buf, (unsigned long)per,
@@ -355,6 +378,26 @@ done:
 			snd_pcm_close(pcm);
 		return err;
 	}
+	*out = pcm;
+	return 0;
+}
+
+static int slave_open(struct route *r)
+{
+	snd_pcm_t *old = r->slave, *pcm = NULL;
+	int err;
+
+	/*
+	 * Open the new sink BEFORE closing the old one. A switch to a sink
+	 * that will not open (busy, unplugged, asking for what it cannot do)
+	 * then leaves the stream where it was instead of returning -ENODEV
+	 * to an application that treats that as the end of sound.
+	 */
+	err = slave_try(r, 1, &pcm);
+	if (err < 0)
+		err = slave_try(r, 0, &pcm);
+	if (err < 0)
+		return err;
 	r->slave = pcm;
 	if (old)
 		snd_pcm_close(old);

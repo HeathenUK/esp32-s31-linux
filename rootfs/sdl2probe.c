@@ -65,6 +65,31 @@ int main(void)
 	else
 		printf("P GetCurrentDisplayMode failed: %s\n", SDL_GetError());
 
+	/*
+	 * The mode LIST, which is the whole question for fullscreen. Without
+	 * XRandR SDL 2.32 knows exactly one mode - the desktop - and
+	 * SDL_WINDOW_FULLSCREEN can then only mean a window the size of the
+	 * panel, with the application scaling every frame on the CPU. One
+	 * line per mode here is the difference between "fullscreen works"
+	 * and "fullscreen is a full-panel software scale".
+	 */
+	{
+		int nm = SDL_GetNumDisplayModes(0), i;
+
+		printf("P display modes = %d\n", nm);
+		for (i = 0; i < nm && i < 16; i++) {
+			SDL_DisplayMode m;
+
+			if (SDL_GetDisplayMode(0, i, &m) == 0)
+				printf("P   [%d] %dx%d @%d %s\n", i, m.w, m.h,
+				       m.refresh_rate,
+				       SDL_GetPixelFormatName(m.format));
+			else
+				printf("P   [%d] failed: %s\n", i,
+				       SDL_GetError());
+		}
+	}
+
 	win = SDL_CreateWindow("sdl2probe", SDL_WINDOWPOS_UNDEFINED,
 			       SDL_WINDOWPOS_UNDEFINED, 320, 200, 0);
 	if (!win) {
