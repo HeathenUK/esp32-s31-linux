@@ -2549,6 +2549,27 @@ Pixmap XCreatePixmapFromBitmapData(Display *dpy, Drawable d, char *data,
 	return p;
 }
 
+/* A depth-1 bitmap from client data: SDL2 builds its blank cursor this way. */
+XLITE_IMPL(XCreateBitmapFromData)
+Pixmap XCreateBitmapFromData(Display *dpy, Drawable d, const char *data,
+			     unsigned w, unsigned h)
+{
+	return XCreatePixmapFromBitmapData(dpy, d, (char *)data, w, h, 1, 0, 1);
+}
+
+/* WM_NORMAL_HINTS is never stored server-side here; say so honestly. */
+XLITE_IMPL(XGetWMNormalHints)
+Status XGetWMNormalHints(Display *dpy, Window w, XSizeHints *hints,
+			 long *supplied)
+{
+	(void)dpy; (void)w;
+	if (hints)
+		memset(hints, 0, sizeof(*hints));
+	if (supplied)
+		*supplied = 0;
+	return 0;
+}
+
 XLITE_IMPL(XGetGCValues)
 Status XGetGCValues(Display *dpy, GC gc, unsigned long mask, XGCValues *out)
 {

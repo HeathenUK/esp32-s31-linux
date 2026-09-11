@@ -8091,8 +8091,18 @@ doing every step on the CPU. That is the port's design and SDL2's API,
 neither of which we touch. Also why it "looks higher-res": the upscaled
 texture is drawn with linear filtering when the window is not 1:1.
 
-What is ours to do: (a) hand SDL2 a 32-bit window
-(SDL_VIDEO_X11_VISUALID=0x23) so its last conversion becomes a memcpy,
-and do the 32->16 in the PPA on our side (measurement in progress);
-(b) the fullscreen PPA scale path taking XRGB8888 input so a 32-bit
-fullscreen client is converted and scaled in one hardware pass.
+**The 32-bit window, measured: WORSE.** SDL_VIDEO_X11_VISUALID=0x23 gives
+SDL2 an ARGB window (zero-copy, `bpp 4`), which removes its RGB888->RGB565
+pass - and the same timedemo drops from 10.7 to **5.5 fps**, because our
+side then converts 32->16 on the CPU (xshim_window_pixels' shadow) and
+every frame moves twice the bytes through PSRAM. Not shipped. The only
+form in which a 32-bit client could pay off is the fullscreen scale path
+taking XRGB8888 so the PPA converts and scales in one pass; for a port
+whose cost is inside SDL2's software renderer that would still leave it
+well behind prboom, so it is not pursued for chocolate-doom.
+
+**Verdict.** chocolate-doom is the SDL2 proof: the shim now carries a real
+SDL2 client through init, play and a clean exit with one harmless stub
+left (XGetDefault, NULL). It is not a faster Doom and cannot be on this
+board; prboom on SDL 1.2 stays the Doom. SDL2 in XIP is what TyrQuake
+needs, which is the next port worth an afternoon.
