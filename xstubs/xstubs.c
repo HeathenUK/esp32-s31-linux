@@ -198,7 +198,7 @@ void XShapeCombineMask(void *dpy, unsigned long dest, int kind, int x, int y,
  * through PutImage, because the shim accepts PutImage and does nothing with
  * it. For a 16x16 icon that is a handful of requests.
  */
-#define XPM_MAXCOL 256
+#define XPM_MAXCOL 1024
 
 struct xpm_col { char key[8]; unsigned long pixel; int none; };
 

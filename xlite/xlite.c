@@ -840,6 +840,7 @@ int XSync(Display *d, Bool discard)
 	xlite_send(x, r);
 	if (xlite_reply(x, seq, hdr, &extra, &nextra))
 		free(extra);
+	x->shm_seq = x->pub.request;	/* the server has caught up */
 	if (discard) {
 		x->qhead = x->qtail = 0;
 		x->pub.qlen = 0;

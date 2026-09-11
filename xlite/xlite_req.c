@@ -2921,6 +2921,8 @@ void XliteShmDamaged(Display *dpy, Pixmap p)
 		 */
 		xlite_flush(x);
 		xlite_send(x, r);
+		/* nothing before this needs ordering against the next write */
+		x->shm_seq = x->pub.request;
 	}
 }
 
@@ -3351,6 +3353,18 @@ int XPutImage(Display *dpy, Drawable d, GC gc, XImage *im, int sx, int sy,
 	 */
 	base = XliteShmMap(dpy, d, &sw, &sh, &stride, &bpp);
 	if (base && bpp > 0 && im->bits_per_pixel == bpp * 8) {
+		/*
+		 * ORDER the write behind anything already queued for the
+		 * server. Wire requests execute when the server reads them;
+		 * this memcpy executes now. A client that clears a rectangle
+		 * and then puts an image into it - xfiles, for every thumbnail
+		 * - had the clear land AFTER the image and wipe it. Real Xlib
+		 * never has this problem because PutImage is itself a request.
+		 * One round trip, and only when something is actually pending:
+		 * SDL's frame loop is PutImage + Damaged and never pays it.
+		 */
+		if (x->pub.request != x->shm_seq)
+			XSync(dpy, False);
 		for (y = 0; (unsigned)y < h && dy + y < sh; y++) {
 			const char *s = im->data +
 					(size_t)(sy + y) * im->bytes_per_line +
@@ -3427,6 +3441,8 @@ XImage *XGetImage(Display *dpy, Drawable d, int sx, int sy, unsigned int w,
 	base = XliteShmMap(dpy, d, &sw, &sh, &stride, &bpp);
 	if (!base || bpp != 2)
 		return NULL;		/* only shared drawables can be read */
+	if (((struct xdpy *)dpy)->pub.request != ((struct xdpy *)dpy)->shm_seq)
+		XSync(dpy, False);	/* read what the queued requests drew */
 	buf = malloc((size_t)w * h * 2);
 	if (!buf)
 		return NULL;

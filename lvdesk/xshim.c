@@ -518,6 +518,19 @@ static void notify_draw(struct res *d)
 
 		for (i = 0; i < MAXRES; i++)
 			if (res[i].type == R_WINDOW && res[i].alias == d->id) {
+				/*
+				 * The window SHOWS this pixmap's pixels, so a
+				 * draw into the pixmap is a draw into the
+				 * window - and the window's RGB565 shadow
+				 * (xshim_window_pixels) refreshes only on the
+				 * window's own dirty flag. Without this, a
+				 * depth-32 client that composes into its
+				 * background pixmap and clears the window
+				 * kept showing the shadow from its FIRST
+				 * paint: xfiles' thumbnails landed in the
+				 * pixmap, were composited, and never appeared.
+				 */
+				res[i].dirty = 1;
 				if (draw_cb)
 					draw_cb(res[i].id);
 				break;
@@ -1591,7 +1604,7 @@ static void redraw_child_borders(struct res *d, int x, int y, int w, int h)
 	}
 }
 
-static void draw_line(struct res *d, int x0, int y0, int x1, int y1, uint16_t c)
+static void draw_line(struct res *d, int x0, int y0, int x1, int y1, uint32_t c)
 {
 	int dx = x1 > x0 ? x1 - x0 : x0 - x1;
 	int dy = y1 > y0 ? y1 - y0 : y0 - y1;
@@ -1614,7 +1627,7 @@ static void draw_line(struct res *d, int x0, int y0, int x1, int y1, uint16_t c)
  * clock hands are convex so Winding would give the same answer, but the
  * default is what the client asked for.
  */
-static void fill_poly(struct res *d, const int16_t *pts, int n, uint16_t c)
+static void fill_poly(struct res *d, const int16_t *pts, int n, uint32_t c)
 {
 	int ymin = 1 << 30, ymax = -(1 << 30), y, i, j, k;
 	int xs[64];
@@ -1850,7 +1863,7 @@ static int glyph_adv(const struct xfont *f, uint8_t ch)
  * outside the font's range is skipped rather than substituted - a missing
  * glyph should look missing, not like a different character.
  */
-static void draw_glyph(struct res *d, int x, int y, uint8_t ch, uint16_t c,
+static void draw_glyph(struct res *d, int x, int y, uint8_t ch, uint32_t c,
 		       const struct xfont *f)
 {
 	const unsigned char *g;
@@ -2896,61 +2909,66 @@ static void blend_px(struct res *d, int x, int y, int r8, int g8, int b8,
 	if (b->bpp == 4) {
 		/*
 		 * ARGB8888 target - the depth-32 visual that st and xfiles
-		 * pick. Same operator table as the RGB565 path below, on 8-bit
-		 * channels, alpha written opaque. A separate block so the
-		 * 16-bit path, the per-pixel hot path for every other client,
-		 * is untouched.
+		 * pick - and the one surface here that HAS a destination
+		 * alpha, so the RGB565 shortcuts below (Ad = 1 everywhere) are
+		 * wrong for it. This was a copy of that table with the alpha
+		 * byte written opaque: Clear left opaque black, OverReverse
+		 * did nothing, Atop was Over. xfiles builds its sheet from
+		 * exactly those - Clear the layers, Over the icons, Atop the
+		 * selection colour through an alpha layer, then OverReverse
+		 * the background UNDER it all - and the result was a black
+		 * sheet with the icon cells painted out.
+		 *
+		 * Pixels are premultiplied, as RENDER's ARGB32 is: S = C*As
+		 * with As = cov (source alpha times mask coverage), and the
+		 * general form R = S*Fa + D*Fb from the RENDER spec.
 		 */
 		uint32_t *q = &((uint32_t *)b->px)[(size_t)ay * b->w + ax];
+		int as = cov < 0 ? 0 : cov > 255 ? 255 : cov;
+		int sr, sg, sb2, da, ra, rr, rg, rb, fa, fb;
 
-		switch (op) {
-		case PICT_OP_DST:
-		case PICT_OP_OVER_REVERSE:
+		if (op == PICT_OP_DST)
 			return;
-		case PICT_OP_CLEAR:
-		case PICT_OP_OUT:
+		if (op == PICT_OP_CLEAR) {
 			*q = 0;
 			return;
-		default:
-			break;
 		}
-		if (cov <= 0)
-			return;
-		if (op == PICT_OP_SRC || op == PICT_OP_IN ||
-		    ((op == PICT_OP_OVER || op == PICT_OP_ATOP) && cov >= 255)) {
-			*q = 0xFF000000u | ((uint32_t)r8 << 16) |
-			     ((uint32_t)g8 << 8) | (uint32_t)b8;
+		if (op == PICT_OP_SRC || (op == PICT_OP_OVER && as >= 255)) {
+			*q = ((uint32_t)as << 24) |
+			     ((uint32_t)(r8 * as / 255) << 16) |
+			     ((uint32_t)(g8 * as / 255) << 8) |
+			     (uint32_t)(b8 * as / 255);
 			return;
 		}
-		dr = (*q >> 16) & 0xFF;
-		dg = (*q >> 8) & 0xFF;
-		db = *q & 0xFF;
+		if (op == PICT_OP_OVER && as == 0)
+			return;
+		sr = r8 * as / 255; sg = g8 * as / 255; sb2 = b8 * as / 255;
+		da = (*q >> 24) & 0xFF;
+		dr = (*q >> 16) & 0xFF; dg = (*q >> 8) & 0xFF; db = *q & 0xFF;
+		/* Fa and Fb in 0..255 */
 		switch (op) {
-		case PICT_OP_IN_REVERSE:
-		case PICT_OP_ATOP_REVERSE:
-			dr = dr * cov / 255;
-			dg = dg * cov / 255;
-			db = db * cov / 255;
-			break;
-		case PICT_OP_OUT_REVERSE:
-		case PICT_OP_XOR:
-			dr = dr * (255 - cov) / 255;
-			dg = dg * (255 - cov) / 255;
-			db = db * (255 - cov) / 255;
-			break;
-		case PICT_OP_ADD:
-			dr += r8 * cov / 255; if (dr > 255) dr = 255;
-			dg += g8 * cov / 255; if (dg > 255) dg = 255;
-			db += b8 * cov / 255; if (db > 255) db = 255;
-			break;
-		default:
-			dr += ((r8 - dr) * cov) >> 8;
-			dg += ((g8 - dg) * cov) >> 8;
-			db += ((b8 - db) * cov) >> 8;
-			break;
+		case PICT_OP_OVER:		fa = 255;      fb = 255 - as; break;
+		case PICT_OP_OVER_REVERSE:	fa = 255 - da; fb = 255;      break;
+		case PICT_OP_IN:		fa = da;       fb = 0;        break;
+		case PICT_OP_IN_REVERSE:	fa = 0;        fb = as;       break;
+		case PICT_OP_OUT:		fa = 255 - da; fb = 0;        break;
+		case PICT_OP_OUT_REVERSE:	fa = 0;        fb = 255 - as; break;
+		case PICT_OP_ATOP:		fa = da;       fb = 255 - as; break;
+		case PICT_OP_ATOP_REVERSE:	fa = 255 - da; fb = as;       break;
+		case PICT_OP_XOR:		fa = 255 - da; fb = 255 - as; break;
+		case PICT_OP_ADD:		fa = 255;      fb = 255;      break;
+		default:			fa = 255;      fb = 255 - as; break;
 		}
-		*q = 0xFF000000u | ((uint32_t)dr << 16) | ((uint32_t)dg << 8) |
-		     (uint32_t)db;
+		ra = (as * fa + da * fb) / 255;
+		rr = (sr * fa + dr * fb) / 255;
+		rg = (sg * fa + dg * fb) / 255;
+		rb = (sb2 * fa + db * fb) / 255;
+		if (ra > 255) ra = 255;
+		if (rr > 255) rr = 255;
+		if (rg > 255) rg = 255;
+		if (rb > 255) rb = 255;
+		*q = ((uint32_t)ra << 24) | ((uint32_t)rr << 16) |
+		     ((uint32_t)rg << 8) | (uint32_t)rb;
 		return;
 	}
 	p = &b->px[(size_t)ay * b->w + ax];
@@ -3055,8 +3073,13 @@ static void render_fill(struct res *d, struct pict *dp, int x, int y,
 
 	pict_clip(dp, &x0, &y0, &x1, &y1);
 	if (op == PICT_OP_CLEAR) {
+		/*
+		 * Zero everything. On RGB565 that is black; on ARGB8888 it is
+		 * TRANSPARENT black, which is the whole point of the operator
+		 * - xfiles clears its alpha layers with it before drawing.
+		 */
 		r8 = g8 = b8 = 0;
-		a8 = 255;
+		a8 = d->buf && d->buf->bpp == 4 ? 0 : 255;
 		op = PICT_OP_SRC;
 	}
 	/*
@@ -3069,8 +3092,10 @@ static void render_fill(struct res *d, struct pict *dp, int x, int y,
 	if ((op == PICT_OP_SRC || (op == PICT_OP_OVER && a8 >= 255)) &&
 	    d->buf && (d->buf->bpp == 2 || d->buf->bpp == 4) && op_target(d)) {
 		uint32_t c = d->buf->bpp == 4 ?
-			0xFF000000u | ((uint32_t)r8 << 16) |
-				((uint32_t)g8 << 8) | (uint32_t)b8 :
+			((uint32_t)a8 << 24) |
+				((uint32_t)(r8 * a8 / 255) << 16) |
+				((uint32_t)(g8 * a8 / 255) << 8) |
+				(uint32_t)(b8 * a8 / 255) :
 			(uint32_t)(((r8 & 0xF8) << 8) | ((g8 & 0xFC) << 3) |
 				   (b8 >> 3));
 
@@ -3587,7 +3612,8 @@ static void render_composite(struct cli *c, const uint8_t *r)
 		 */
 		if (!mp->solid && sp && !sp->solid &&
 		    (op == PICT_OP_OVER || op == PICT_OP_ATOP) &&
-		    d->buf && d->buf->bpp == 2 && m->buf && op_target(d)) {
+		    d->buf && d->buf->bpp == 2 && m->buf &&
+		    m->buf->bpp != 4 && op_target(d)) {
 			struct res *ss = res_find(sp->drawable);
 
 			if (drawable_ok(ss) && ss->buf &&
@@ -3859,7 +3885,7 @@ static void render_composite(struct cli *c, const uint8_t *r)
 			for (i = x0; i < x1; i++) {
 				int mx = mask_x + (i - dx);
 				int my = mask_y + (j - dy);
-				uint16_t mv = 0;
+				uint32_t mv = 0;
 				int cov, sr, sg, sb;
 
 				if (mp->solid) {
@@ -3871,6 +3897,8 @@ static void render_composite(struct cli *c, const uint8_t *r)
 					mv = px_get(m, mx, my);
 					cov = m->depth == 1 ? (mv ? 255 : 0) :
 					      m->bpp == 1 ? mv :
+					      (m->buf && m->buf->bpp == 4) ?
+					      (mv >> 24) & 0xFF :
 					      (((mv >> 11) & 0x1F) * 255) / 31;
 				}
 				if (!cov)
@@ -3898,11 +3926,16 @@ static void render_composite(struct cli *c, const uint8_t *r)
 						 * scales the coverage, as
 						 * Over requires.
 						 */
-						sr = (v >> 16) & 0xFF;
-						sg = (v >> 8) & 0xFF;
-						sb = v & 0xFF;
-						cov = cov * ((v >> 24) & 0xFF) /
-						      255;
+						int va = (v >> 24) & 0xFF;
+
+						if (!va)
+							continue;
+						/* stored premultiplied; blend_px
+						 * multiplies by cov itself */
+						sr = ((v >> 16) & 0xFF) * 255 / va;
+						sg = ((v >> 8) & 0xFF) * 255 / va;
+						sb = (v & 0xFF) * 255 / va;
+						cov = cov * va / 255;
 						if (!cov)
 							continue;
 					} else {
@@ -4005,18 +4038,34 @@ static void render_composite(struct cli *c, const uint8_t *r)
 					continue;
 				}
 				if (s->buf->bpp == 4) {
+					/*
+					 * A premultiplied ARGB source keeps
+					 * its own alpha and the request's
+					 * operator. Forcing Src at full
+					 * coverage - as this did - stamped
+					 * the transparent surround of
+					 * xfiles' icon layer onto its sheet
+					 * as opaque black.
+					 */
 					uint32_t a = ((const uint32_t *)
 						      s->buf->px)[o];
-					blend_px(d, i, j, (a >> 16) & 0xFF,
-						 (a >> 8) & 0xFF, a & 0xFF,
-						 255, PICT_OP_SRC);
+					int va = (a >> 24) & 0xFF;
+
+					if (!va && op != PICT_OP_SRC) {
+						continue;
+					}
+					blend_px(d, i, j,
+						 va ? ((a >> 16) & 0xFF) * 255 / va : 0,
+						 va ? ((a >> 8) & 0xFF) * 255 / va : 0,
+						 va ? (a & 0xFF) * 255 / va : 0,
+						 va, op);
 					wrote++;
 					continue;
 				}
 				v = s->buf->px[o];
 			}
 			blend_px(d, i, j, (v >> 11) << 3, ((v >> 5) & 0x3F) << 2,
-				 (v & 0x1F) << 3, 255, PICT_OP_SRC);
+				 (v & 0x1F) << 3, 255, op);
 			wrote++;
 		}
 	if (trace_on())
@@ -4266,7 +4315,9 @@ static int render_request(struct cli *c, const uint8_t *r, int len)
 		 * these - 276k pixels of no-op that blend_px was faithfully
 		 * computing one pixel at a time, 46 ms per request.
 		 */
-		if (r[4] == PICT_OP_DST || r[4] == PICT_OP_OVER_REVERSE ||
+		if (r[4] == PICT_OP_DST ||
+		    (r[4] == PICT_OP_OVER_REVERSE &&
+		     !(d->buf && d->buf->bpp == 4)) ||
 		    (r[4] == PICT_OP_OVER && ca == 0))
 			return 1;
 		/*
@@ -4281,12 +4332,19 @@ static int render_request(struct cli *c, const uint8_t *r, int len)
 		     (r[4] == PICT_OP_OVER && ca >= 255)) && d->buf) {
 			struct res *b;
 			uint16_t col;
+			uint32_t c32;
 			int full = 0;
 
 			if (r[4] == PICT_OP_CLEAR) {
 				cr = cg = cb = 0;
-				ca = 255;
+				/* transparent where the surface has alpha */
+				ca = d->buf->bpp == 4 ? 0 : 255;
 			}
+			/* premultiplied ARGB8888, carrying the colour's alpha */
+			c32 = ((uint32_t)ca << 24) |
+			      ((uint32_t)(cr * ca / 255) << 16) |
+			      ((uint32_t)(cg * ca / 255) << 8) |
+			      (uint32_t)(cb * ca / 255);
 			/* one rect spanning the drawable = nothing to keep */
 			if (end - p == 8 && gets16(p) <= 0 &&
 			    gets16(p + 2) <= 0 &&
@@ -4310,7 +4368,8 @@ static int render_request(struct cli *c, const uint8_t *r, int len)
 			 * maximise, traced 2026-09-03). Nothing changed, so
 			 * there is no damage to report either.
 			 */
-			if (was_hole && (b->bpp == 1 ? cr == 0 : col == 0)) {
+			if (was_hole && (b->bpp == 1 ? cr == 0 :
+					 b->bpp == 4 ? c32 == 0 : col == 0)) {
 				b->hole = 1;
 				return 1;
 			}
@@ -4378,6 +4437,7 @@ static int render_request(struct cli *c, const uint8_t *r, int len)
 				if (b->shm_fd >= 0 && x0 == 0 && y0 == 0 &&
 				    x1 == b->w && y1 == b->h &&
 				    ((b->bpp == 1 && cr == 0) ||
+				     (b->bpp == 4 && c32 == 0) ||
 				     (b->bpp == 2 && col == 0)) &&
 				    fallocate(b->shm_fd, FALLOC_FL_PUNCH_HOLE |
 					      FALLOC_FL_KEEP_SIZE, 0,
@@ -4411,12 +4471,14 @@ static int render_request(struct cli *c, const uint8_t *r, int len)
 					 * below wrote `col` as halfwords at
 					 * a halfword stride into these
 					 * buffers, which painted xfiles'
-					 * sheet black (2026-09-11).
+					 * sheet black (2026-09-11). The
+					 * value carries the request's alpha:
+					 * a Clear here is 0, not opaque
+					 * black - these are xfiles' alpha
+					 * layers, and an opaque "clear" made
+					 * every later masked composite paint
+					 * its colour over the whole cell.
 					 */
-					uint32_t c32 = 0xFF000000u |
-						((uint32_t)cr << 16) |
-						((uint32_t)cg << 8) |
-						(uint32_t)cb;
 					for (y = y0; y < y1; y++) {
 						uint32_t *q = (uint32_t *)b->px +
 							(size_t)y * b->w + x0;

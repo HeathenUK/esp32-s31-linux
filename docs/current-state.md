@@ -7785,3 +7785,95 @@ empty although xfilesthumb works standalone; the 1x1 solid pictures and
 sheet colour are delivered as the app computes them - the dark sheet may
 be its theme; `scripts/xref.sh xfiles` cannot build the reference because
 xfiles is a git package with no tarball in buildroot/dl.
+
+## prboom's exit crash, xfiles' thumbnails, an OOM, and the "laggy" timedemo (2026-09-11)
+
+**The exit crash was mine, from the MIT-SHM work (a319e93, 2026-09-08).**
+`rootfs/freetrace.c` (LD_PRELOAD: a ring of free() callers, dumped on
+SIGSEGV, chaining to prboom's own handler which would otherwise replace
+it) named the caller on the first run: `ximg_destroy` in xlite, freeing
+`0x9506a000` - a page-aligned pointer, i.e. the MIT-SHM segment. xlite's
+XShmCreateImage installed XCreateImage's destroy hook, which free()s
+im->data; SDL's X11_DestroyImage calls XDestroyImage BEFORE shmdt(), so
+every exit handed the shmat() address to free() and died in musl's
+get_meta(). libXext's `_XShmDestroyImage` frees only the XImage; ours
+does now (f36270f). Verified: the windowed timedemo exits clean, no
+`unhandled signal` on a recorded console.
+
+**xfiles thumbnails: seven defects, all in our shims, none in xfiles.**
+Traced with XSHIM_TRACE/XSHIM_WATCH/XSHIM_IMGDBG and the client's shared
+mappings; every one was a 16-bit-era assumption meeting the depth-32
+visual added on 09-07:
+1. RENDER Clear wrote OPAQUE black into ARGB surfaces (both render_fill
+   and the FillRectangles span fast path), so xfiles' alpha layers were
+   never transparent.
+2. The "Ad = 1 everywhere" shortcut skipped OverReverse on ARGB targets;
+   xfiles paints its sheet UNDER the icons with exactly that operator.
+3. The unmasked Composite forced PictOpSrc at full coverage, stamping the
+   icon layer's transparent surround onto the sheet.
+4. blend_px's ARGB block was a copy of the RGB565 operator table with the
+   alpha byte forced opaque. It is now the general Porter-Duff form on
+   premultiplied pixels with a real destination alpha.
+5. A depth-32 MASK's coverage was read from bits 11-15 (a green/red
+   fragment), not the alpha byte.
+6. draw_glyph/draw_line/fill_poly took `uint16_t c`: an opaque white GC
+   foreground became 0x0000FFFF - alpha 0, cyan. That is why every label
+   was cyan and why, once alpha was honoured, the labels vanished.
+7. A window that ALIASES its background pixmap (xfiles' canvas) never had
+   its own dirty flag set when the pixmap was drawn into, so its RGB565
+   shadow (xshim_window_pixels) was converted once and never again:
+   thumbnails were composited into the canvas and never shown.
+Plus two outside xshim: libXpm (xstubs) capped colours at 256 and
+file-image.xpm has 388 (the image-file icon was an all-zero pixmap, seen
+as `SHM damaged 0x200022 0/4096`), and xlite's zero-copy XPutImage wrote
+into shared pages with earlier requests still queued - a clear could land
+after the image. It now XSyncs only when something is pending, which
+SDL's PutImage+Damaged loop never is.
+
+Result (screenshot xf_good.jpg): folder and image-file icons, white
+labels, thumbnails. A host-made JPEG (four-quadrant gradient) thumbnails
+correctly; d.jpg and u.jpg do too. h.jpg, panel.jpg and w768.jpg thumbnail
+as bars/noise because the ORIGINALS are bars/noise (pulled and viewed on
+the host: old broken encoder captures) - the thumbnails are faithful.
+red.jpg is 903 bytes and does not decode (the logged 0x8800).
+
+**A recorded OOM, and its cause: the watermark boost.** During the DRM
+console handover on `S40lvdesk stop` the kernel logged
+`Normal free:6096kB boost:2048kB min:3072kB ... free_cma:3624kB,
+all_unreclaimable? yes` and killed sh, bluetoothd and S40lvdesk to give a
+kworker 768 kB for the fbdev client. Free memory was fine; the 6 MB CMA
+region's free pages do not count for GFP_KERNEL, and the fragmentation
+boost had raised min from 1024 kB to 3072 kB. `vm.watermark_boost_factor
+= 0` in 99-s31-memory.conf (applied live too). Restarts since: clean.
+
+**runsh.py resets the console loglevel.** The "something resets it to 1
+at runtime" from yesterday is `dmesg -n 1` at the top of every runsh.py
+run. `echo 8 > /proc/sys/kernel/printk` inside the arming script, and a
+conlog capture is valid only until the next runsh call.
+
+**The "laggy in places" timedemo.** Per-10-frame intervals from
+fpsonly.so, windowed 320x200 -timedemo demo1, one run per arm on a fresh
+boot (the first two arms also carried a 2 s vmstat sampler and an SD-
+backed fps log - harness pollution, kept for honesty):
+
+| arm | change | reported fps | median | p5 | <15 fps | <10 fps | swap moved |
+|---|---|---|---|---|---|---|---|
+| A | shipped, sampler on SD | 17.8 | 22.8 | 9.8 | 111/504 | 29 | 2.7 MB |
+| C | boost=0, sampler on SD | 20.5 | 23.6 | 11.0 | 82/504 | 5 | 1.9 MB |
+| D | shipped, clean harness | 20.7 | 23.8 | 11.1 | 84/505 | 2 | 0 |
+| E | ppa_policy=0 ppa_async=0 | 19.7 | 23.6 | 10.8 | 87/504 | 11 | 1.7 MB |
+| (freetrace run, no sampler) | | 22.8 | | | | | |
+
+The ~10 fps intervals are at the same demo timestamps in every arm - the
+heavy scenes of demo1 - and the adaptive dispatch (arm E is the old fixed
+crossover, synchronous) changes nothing in the tail. What moves the
+REPORTED number by 5 fps is swap traffic during the run (A vs D), which
+varies run to run with page-cache state; the SD swap file is the
+mechanism. Nothing Doom loads comes from SD except prboom itself (its
+maps: everything else XIP). I could not find a change that made the tail
+worse than it was; the numbers here are the first per-interval record,
+so there is no yesterday to compare against.
+
+**Open:** the demo's paging variance (swappiness/min_free are the knobs);
+the console handover still recreates a 768 kB fbdev client on every
+lvdesk stop.

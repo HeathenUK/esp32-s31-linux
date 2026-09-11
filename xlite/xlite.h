@@ -76,6 +76,8 @@ struct xdpy {
 	struct _XDisplay pub;		/* MUST be first: clients cast to it */
 
 	int shm_fd;			/* last fd received with SCM_RIGHTS */
+	unsigned long shm_seq;		/* pub.request when the server was last
+					 * known to have caught up (see XPutImage) */
 	int fd;
 	int wake[2];			/* worker->event-wait doorbell pipe */
 	/*
