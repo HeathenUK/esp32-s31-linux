@@ -7907,9 +7907,19 @@ ZERO bytes, dated 2026-09-10 12:18. prboom rewrites its config on exit,
 and the exit crash (fixed today) killed it after the truncate and before
 the write - so the user's saved settings (`prboom.cfg.bak22`: videomode
 "8", use_fullscreen 0) were gone and prboom fell back to its built-in
-640x480 fullscreen. Config restored: screen_width 320, screen_height 200,
-videomode "8", use_fullscreen 0. Bare launch verified at 320x200, ~23
-fps, clean exit, lvdesk out of fullscreen.
+640x480 fullscreen. Config set to what the user runs: screen_width 320, screen_height 240,
+videomode "8", use_fullscreen 1. Bare launch verified: `mode 320x240
+scales to 640x480`, demo playing (screenshot bare240.jpg), 20.9 fps
+median over 45 s with sound, no underruns, clean exit, lvdesk out of
+fullscreen.
+
+Measured properly afterwards with fpsonly.so (the driver op count above
+is NOT a frame count at 640x480, where nothing is scaled): a TRUE 640x480
+fullscreen render - `-width 640 -height 480 -fullscreen`, and the
+empty-config launch, which is the same thing - runs at 4 fps mean, 8 fps
+median over 34 s of normal play, 1-2 fps through the intro. The "~20 fps
+at 640x480 fullscreen" the user remembers is the 320x240 render scaled
+onto the 640x480 panel area, which is what the restored config gives.
 
 The exit-time 640x480 switch seen after a fullscreen timedemo is the
 same default: SDL restores the "saved" mode it believes it started in,
