@@ -62,7 +62,40 @@ struct route {
 	int pfd;		/* what the application polls; see the header */
 	unsigned follow_ctr;	/* throttle the /run/s31-sink stat() */
 	snd_pcm_uframes_t transferred;
+	unsigned up;		/* integer upsample factor; 1 = pass through */
+	char *ubuf;		/* staging for the expanded frames */
+	size_t ubuf_bytes;
 };
+
+/*
+ * Rate conversion by REPEATING frames, where the arithmetic allows it.
+ *
+ * This codec's driver has an exact-match coefficient table with no 22050 or
+ * 11025 entry, so every low-rate stream on this board is converted - and
+ * until now that conversion was alsa-lib's general resampler inside plug,
+ * which interpolates in floating point, per sample, on a hart whose double
+ * is a library call. Doom and Quake both ask for 22050, and 22050 x 2 is
+ * exactly 44100, a rate the hardware runs natively. Duplicating each frame
+ * is then a memcpy and is arithmetically identical to nearest-neighbour
+ * upsampling - not an approximation of the resampler but a different, exact
+ * answer for integer ratios.
+ *
+ * The factor is the smallest whole multiple that lands in the hardware's own
+ * range, so 22050 doubles to 44100, 11025 quadruples to 44100, 16000 triples
+ * to 48000 and 44100 is left alone. Anything that does not divide exactly
+ * keeps the old path, resampler and all.
+ */
+static unsigned upsample_factor(unsigned rate)
+{
+	unsigned n;
+
+	if (!rate)
+		return 1;
+	for (n = 2; n <= 6; n++)
+		if (rate * n >= 44100 && rate * n <= 48000)
+			return n;
+	return 1;
+}
 
 static void sink_read(struct route *r, char *out, size_t n)
 {
@@ -83,6 +116,46 @@ static void sink_read(struct route *r, char *out, size_t n)
 }
 
 static int xrun(struct route *r);
+
+static snd_pcm_sframes_t slave_write(struct route *r, const char *buf,
+				     snd_pcm_uframes_t size)
+{
+	unsigned fb = r->io.channels * 2;	/* S16_LE only; see constraints */
+	snd_pcm_uframes_t i;
+	snd_pcm_sframes_t n;
+	unsigned k;
+	char *p;
+
+	if (r->up <= 1)
+		return snd_pcm_writei(r->slave, buf, size);
+	if (r->ubuf_bytes < (size_t)size * r->up * fb) {
+		size_t want = (size_t)size * r->up * fb;
+		char *nb = realloc(r->ubuf, want);
+
+		if (!nb)
+			return -ENOMEM;
+		r->ubuf = nb;
+		r->ubuf_bytes = want;
+	}
+	p = r->ubuf;
+	for (i = 0; i < size; i++) {
+		const char *src = buf + (size_t)i * fb;
+
+		for (k = 0; k < r->up; k++, p += fb)
+			memcpy(p, src, fb);
+	}
+	n = snd_pcm_writei(r->slave, r->ubuf, (snd_pcm_uframes_t)size * r->up);
+	if (n < 0)
+		return n;
+	/*
+	 * Report the APPLICATION's frames. writei is blocking here and the
+	 * rings are mirrored, so a short write is an xrun's business rather
+	 * than a routine partial - but round down regardless, because
+	 * claiming a frame we only partly wrote would desynchronise the
+	 * pointer for the rest of the stream.
+	 */
+	return n / (snd_pcm_sframes_t)r->up;
+}
 
 static void slave_close(struct route *r)
 {
@@ -146,7 +219,7 @@ static int slave_open(struct route *r)
 	{
 		snd_pcm_hw_params_t *hw;
 		snd_pcm_sw_params_t *sw;
-		unsigned rate = r->io.rate;
+		unsigned rate = r->io.rate, up = upsample_factor(r->io.rate);
 		snd_pcm_uframes_t buf, per, want_buf, want_per, amin;
 		int dir = 0;
 		struct pollfd pfd;
@@ -163,10 +236,34 @@ static int slave_open(struct route *r)
 		    (err = snd_pcm_hw_params_set_format(pcm, hw,
 				r->io.format)) < 0 ||
 		    (err = snd_pcm_hw_params_set_channels(pcm, hw,
-				r->io.channels)) < 0 ||
-		    (err = snd_pcm_hw_params_set_rate_near(pcm, hw,
+				r->io.channels)) < 0)
+			goto done;
+		/*
+		 * Ask for the multiple only if the sink will take it EXACTLY.
+		 * test_rate answers without narrowing the configuration space,
+		 * so a sink that cannot do it (the Bluetooth loopback runs at
+		 * whatever s31-bt opened) falls back to the plain rate with
+		 * nothing committed and nothing to unwind. Committing first
+		 * and checking after cannot be undone, and getting it wrong
+		 * means the slave plays our doubled frames at the single rate:
+		 * an octave down, at half speed.
+		 */
+		if (up > 1 && snd_pcm_hw_params_test_rate(pcm, hw,
+							  r->io.rate * up, 0) < 0)
+			up = 1;
+		rate = r->io.rate * up;
+		if ((err = snd_pcm_hw_params_set_rate_near(pcm, hw,
 				&rate, &dir)) < 0)
 			goto done;
+		/*
+		 * Whatever came back is what the slave believes it is playing,
+		 * so the repeat factor has to follow it exactly or the pitch
+		 * is wrong. A near-miss means pass-through, not a guess.
+		 */
+		r->up = (rate && rate % r->io.rate == 0) ? rate / r->io.rate : 1;
+		if (r->up > 1)
+			SNDERR("s31route: %u Hz -> %u Hz by %ux frame repeat",
+			       r->io.rate, rate, r->up);
 		/*
 		 * Mirror the application's ring, in the sink's rate. The
 		 * application can never be more than its own ring ahead of what
@@ -414,7 +511,7 @@ static snd_pcm_sframes_t route_transfer(snd_pcm_ioplug_t *io,
 	if (!r->slave)
 		return -ENODEV;
 	buf = (const char *)areas->addr + (areas->first + areas->step * offset) / 8;
-	n = snd_pcm_writei(r->slave, buf, size);
+	n = slave_write(r, buf, size);
 	if (n == -EPIPE)
 		return xrun(r);
 	if (n == -ENODEV || n == -EIO) {
@@ -423,7 +520,7 @@ static snd_pcm_sframes_t route_transfer(snd_pcm_ioplug_t *io,
 		sink_follow(r);
 		if (!r->slave)
 			return -ENODEV;
-		n = snd_pcm_writei(r->slave, buf, size);
+		n = slave_write(r, buf, size);
 	}
 	if (n < 0)
 		return n;
@@ -438,6 +535,7 @@ static int route_close(snd_pcm_ioplug_t *io)
 	slave_close(r);
 	if (r->pfd >= 0)
 		close(r->pfd);
+	free(r->ubuf);
 	free(r);
 	return 0;
 }

@@ -2125,7 +2125,15 @@ static int audio_get_pct(void)
 					    &cdb) == 0) {
 		if (cdb >= 0)
 			return 100;
-		if (cdb <= -VOL_SPAN_CDB)
+		/*
+		 * STRICTLY below the floor is silence; exactly at it is the
+		 * quietest step the bar can express, which is 10%. With <=
+		 * here, setting 10% and reading it back gave 0: the setter
+		 * lands on precisely -VOL_SPAN_CDB, so the boundary belongs
+		 * to the formula below, not to silence. The state file said
+		 * 10 while the slider showed 0.
+		 */
+		if (cdb < -VOL_SPAN_CDB)
 			return 0;
 		return (int)(100.f * powf(10.f, (float)cdb / VOL_SPAN_CDB) + 0.5f);
 	}
