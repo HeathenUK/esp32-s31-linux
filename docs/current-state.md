@@ -7972,3 +7972,49 @@ sound at nothing); window positions and the terminal's size; pointer
 acceleration (an environment variable). Already persistent: Wi-Fi
 networks (wpa_supplicant.conf), Bluetooth pairings (bluez store), the
 clock (fake-hwclock stamp), prboom's own config, xfiles' thumbnail cache.
+
+## Paging under Doom and Quake, measured at no cost; readahead was the cost (2026-09-11)
+
+**How to measure paging without perturbing it:** counters the kernel keeps
+anyway - `/proc/<pid>/stat` field 12 (major faults), `/sys/block/mmcblk0/
+stat` (sectors read), `SwapFree` - sampled once a second with shell
+builtins only (`scripts/board/pagewatch.sh`, run on the board under setsid).
+No forks, no ioctls, nothing the workload can feel. `/proc/vmstat` has none
+of the pgmajfault/pswpin counters on this kernel (VM_EVENT_COUNTERS off) and
+there is no per-process I/O accounting, so these three are what exists.
+
+**Doom, windowed 320x200 timedemo, same warm boot, one run each:**
+
+| readahead | SD read | prboom major faults | swapped out | fps median / p5 |
+|---|---|---|---|---|
+| 512 KB (was shipped) | 98 MB (351 KB/s) | 586 | 2.2 MB | 18.8 / 10.2 |
+| 16 KB | 5.4 MB (19 KB/s) | 386 | 148 KB | 19.9 / 10.9 |
+
+S02s31-blockdev set 512 KB for streaming throughput (11.8 vs 8.3 MB/s
+sequential on a 4 MB file). Under a game every small WAD miss became a
+half-megabyte read and the page cache it filled pushed anonymous pages to
+swap. Shipped at 16 KB now (overlay and the live card). The frame-rate
+tail barely moves: the dips are scene cost, not paging - but the SD was
+doing 18x the work for nothing.
+
+**Quake, 320x240 windowed timedemo at 16 KB:** 9.4 MB read, 11 major
+faults/s, 3.9 MB swapped during the demo. Quake is memory-bound (its 8 MB
+heap on a 15 MB machine) and that is swap traffic, not readahead; the
+only levers are the heap size this port does not expose and the memory
+everything else holds.
+
+**Debug scaffolding audit (what could be costing performance):**
+- Kernel: no KALLSYMS, PROFILING, PERF_EVENTS, FTRACE, TRACEPOINTS,
+  DEBUG_FS, SLUB_DEBUG, lock debugging, SCHEDSTATS or hung-task detector.
+  PRINTK_TIME on (a timestamp per printk, nothing per frame). Console
+  loglevel 1 at runtime.
+- Daemons: lvdesk, s31-bt, udevd, wpa_supplicant, udhcpc, syslogd,
+  watchdogd. No keylogger, klogd, crond or bluetoothd running.
+- lvdesk/xshim: every trace is environment-gated (XSHIM_TRACE, _IMGDBG,
+  _PROF, _WATCH, LVPROF, LVDESK_PROF); the always-on items are counters
+  (one increment) and the once-per-200-expansions line. The driver's
+  adaptive dispatch reads ktime per op; arm E earlier today (policy 0,
+  synchronous) measured the same tail, so that accounting is not the cost.
+- Preloads (fpsonly, freetrace, syscount) exist only when a run asks for
+  them; fpsonly writes ten bytes per ten frames to tmpfs.
+Nothing found that is on by default and per-frame.

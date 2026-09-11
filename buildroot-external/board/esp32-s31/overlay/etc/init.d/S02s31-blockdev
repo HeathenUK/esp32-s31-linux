@@ -1,14 +1,21 @@
 #!/bin/sh
 #
-# Readahead for the microSD root. 512 KB measured slightly better than both the
-# 128 KB default and a 16 KB minimum, mostly by cutting the number of allocation
-# and reclaim rounds rather than by reading further ahead. Set per-device because
-# it is a queue attribute, not a sysctl.
+# Readahead for the microSD root: 16 KB.
+#
+# It was 512 KB, which measured slightly better for a sequential read (11.8
+# against 8.3 MB/s on a 4 MB file, 2026-09-11). But the card's real workload
+# is RANDOM: a game re-reading WAD lumps, swap, page-cache refaults. Under a
+# Doom timedemo the 512 KB window turned every small miss into a
+# half-megabyte read - 98 MB from the card in 280 s, 2.2 MB pushed to swap
+# to make room for it - against 5.4 MB read and 148 KB swapped at 16 KB,
+# with the frame rate a little better rather than worse. The streaming case
+# on this board is Wi-Fi-bound long before 8 MB/s matters. Set per-device
+# because it is a queue attribute, not a sysctl.
 
 case "$1" in
 	start)
 		for q in /sys/block/mmcblk*/queue; do
-			[ -w "$q/read_ahead_kb" ] && echo 512 > "$q/read_ahead_kb"
+			[ -w "$q/read_ahead_kb" ] && echo 16 > "$q/read_ahead_kb"
 		done
 		;;
 	stop|restart|reload)
