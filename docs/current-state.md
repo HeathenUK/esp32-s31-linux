@@ -7735,3 +7735,53 @@ CORRECTION: xclock's face draws through xshim's Trapezoids handler (case
 10) and RENDERS on the fixed build - face, ticks and hands verified in a
 screenshot. It was the same regression as xcalc (cause 1) and is fixed.
 The earlier claim that a blank face was expected was wrong and unchecked.
+
+## xfiles renders again; what broke it, what fixed it, what is still open (2026-09-11 morning)
+
+**What broke it** (bisected with historical server and client binaries,
+swapped independently): two commits on 2026-09-07, both from the SDL
+performance work. `a093d32` made lvdesk's direct expansion the default
+and, as a side effect, nulled the LVGL image of EVERY window while
+expanding only depth-8 ones - xcalc, xclock, xfiles and st went blank.
+`48a5305` added the depth-32 visual so st could run; xfiles then chose it,
+and the shim's depth-32 support was partial. Only Doom was tested after
+either.
+
+**Fixes** (all in our shims; SDL path untouched, Doom windowed fresh boot
+23.1-23.8 fps across the night):
+- lvdesk: direct expansion per window, only when it holds indices.
+- xshim: QueryPictFormats describes the depth-32 visual; VisibilityNotify
+  on map (st draws nothing until one arrives); 32-bit targets in the
+  per-pixel blend, FillRectangles (wrote halfwords), PutImage, Composite
+  sources and repeat sources; window background, GC colours, border and
+  text no longer truncated to 16 bits; colormaps tracked so AllocColor
+  answers in the colormap's visual format; GetGeometry reports real
+  geometry and depth (was a root/800x480/16 stub).
+- xlite: depth-32 visual in the screen tables as the object
+  XGetVisualInfo returns; XInitImage implemented.
+- xstubs (libXpm): honours XpmDepth/XpmColormap - icons were built at
+  depth 16 and composed as 32-bit (the dot grid).
+- xftlite: text pixel derived from the target's depth, not an AllocColor
+  on the default colormap (labels were 0x0000ffff).
+Verified by screenshot: icons, labels, layout. xclock and xcalc render.
+
+**Stability, recorded.** Every launch with the console recorded at
+loglevel 8 survived: 3x xfiles thumbnails off, 3x thumbnails on, Doom
+timedemo. The JPEG decoder logged its known handled decode errors
+(0x8000/0x8800) on two files; the thumbnail helper run by hand produces
+correct output on the others. NO board death has been captured on the
+console in any recorded run; every "death" was unrecorded silence, most
+coinciding with a screenshot wait or a script outliving its runsh window.
+The DRM ioctl numbers in userspace match the kernel table (audit done).
+
+**One real recorded fault:** prboom SIGSEGV at EXIT after a completed
+timedemo - `__libc_free` -> `get_meta` on a bad pointer (badaddr 0x8). A
+bad or double free in a close path, caller not yet identified (needs a
+stack, not a register dump). It is why some "post-timedemo" polls saw no
+prboom; the board was alive.
+
+**Open:** xfiles thumbnails render as empty cells and its cache stays
+empty although xfilesthumb works standalone; the 1x1 solid pictures and
+sheet colour are delivered as the app computes them - the dark sheet may
+be its theme; `scripts/xref.sh xfiles` cannot build the reference because
+xfiles is a git package with no tarball in buildroot/dl.
