@@ -7889,3 +7889,22 @@ timedemo end never takes that path.
 **Open:** the demo's paging variance (swappiness/min_free are the knobs);
 the console handover still recreates a 768 kB fbdev client on every
 lvdesk stop.
+
+## OPEN: fullscreen 640x480 - the default `./prboom` freezes at the title screen (2026-09-11)
+
+User report: `./prboom` with no arguments from the lvdesk terminal (prboom's
+default is fullscreen at 640x480) shows the first title screen and then
+visually freezes while the sound carries on. Not yet investigated.
+
+A recorded observation from the same afternoon that is probably the same
+mechanism: a fullscreen 320x200 timedemo ran to its end (20.7 fps, console
+clean apart from mode-set lines) and on exit the log shows the expected
+restore - `video mode 800x480`, `fullscreen off` - followed by a SECOND
+switch, `video mode 640x480` -> `kms: fullscreen 640x480`, with no client
+window presenting, and prboom then sat in ppoll and never exited. So SDL
+asks for 640x480 at teardown (its saved mode, or a stale mode list entry),
+and lvdesk enters a 640x480 fullscreen in which nothing is shown. Start
+there: what xshim reports as the current mode at init (what SDL saves),
+and what xshim_mode_window() finds for a 640x480 mode owner whose window
+is 640x480 - yesterday's matrix only checked driver ops for that size.
+Killing prboom leaves fullscreen cleanly.
