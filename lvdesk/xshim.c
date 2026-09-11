@@ -6637,8 +6637,15 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		 */
 		struct res *w = res_find(get32(r + 4));
 		uint32_t prop = get32(r + 8), nch = get32(r + 20);
+		/*
+		 * _NET_WM_NAME too: SDL2 sets only the EWMH name (UTF8), never
+		 * WM_NAME, so every SDL2 window was "X client" in the bar.
+		 */
+		int is_name = prop == 39 ||
+			(prop > 68 && prop - 1 < (uint32_t)natom &&
+			 atom[prop - 1] && !strcmp(atom[prop - 1], "_NET_WM_NAME"));
 
-		if (w && w->type == R_WINDOW && prop == 39 && r[16] == 8) {
+		if (w && w->type == R_WINDOW && is_name && r[16] == 8) {
 			if (nch > sizeof(w->title) - 1)
 				nch = sizeof(w->title) - 1;
 			if (24 + nch <= (uint32_t)len &&
@@ -8101,6 +8108,16 @@ static void client_data(struct cli *c)
 			fprintf(stderr, "xshim: %s is %d bytes, larger than the "
 				"%zu-byte input buffer - discarding it\n",
 				opstr(r[0]), len, sizeof(c->in));
+			/*
+			 * It still COUNTS. Every request advances the
+			 * sequence number whether or not the server does
+			 * anything with it, and replies carry that number.
+			 * Skipping the increment here put every later reply
+			 * one behind what the client expected: SDL2 sent its
+			 * _NET_WM_ICON, then hung forever in R_Init waiting
+			 * for reply 87 while reply 86 arrived (2026-09-11).
+			 */
+			c->seq++;
 			c->skip = (size_t)len - drop;
 			off += drop;
 			continue;

@@ -1108,6 +1108,60 @@ static Bool take_check(struct xdpy *x, int (*pred)(const XEvent *, long),
 	return got ? True : False;
 }
 
+/*
+ * The predicate forms. SDL2 waits for its window's MapNotify through
+ * XIfEvent and polls with XCheckIfEvent; these were stubs returning 0 without
+ * consuming anything, which SDL2 survived but every caller that trusts the
+ * event it got back would not.
+ */
+struct ifev {
+	Display *d;
+	Bool (*f)(Display *, XEvent *, XPointer);
+	XPointer a;
+};
+
+static int pred_if(const XEvent *e, long arg)
+{
+	struct ifev *s = (struct ifev *)arg;
+
+	return s->f(s->d, (XEvent *)e, s->a) ? 1 : 0;
+}
+
+XLITE_IMPL(XIfEvent)
+int XIfEvent(Display *d, XEvent *ev, Bool (*f)(Display *, XEvent *, XPointer),
+	     XPointer a)
+{
+	struct ifev s = { d, f, a };
+
+	return take_wait(XD(d), pred_if, (long)&s, ev);
+}
+
+XLITE_IMPL(XCheckIfEvent)
+Bool XCheckIfEvent(Display *d, XEvent *ev,
+		   Bool (*f)(Display *, XEvent *, XPointer), XPointer a)
+{
+	struct ifev s = { d, f, a };
+
+	return take_check(XD(d), pred_if, (long)&s, ev);
+}
+
+struct winmask { Window w; long mask; };
+
+static int pred_winmask(const XEvent *e, long arg)
+{
+	struct winmask *s = (struct winmask *)arg;
+
+	return e->xany.window == s->w && (ev_mask_for(e->type) & s->mask);
+}
+
+XLITE_IMPL(XWindowEvent)
+int XWindowEvent(Display *d, Window w, long mask, XEvent *ev)
+{
+	struct winmask s = { w, mask };
+
+	return take_wait(XD(d), pred_winmask, (long)&s, ev);
+}
+
 XLITE_IMPL(XMaskEvent)
 int XMaskEvent(Display *d, long mask, XEvent *ev)
 {

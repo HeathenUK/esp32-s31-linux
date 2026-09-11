@@ -1656,6 +1656,79 @@ int XSetRegion(Display *dpy, GC gc, Region r)
 
 /* ----------------------------------------------------------------- misc */
 
+/* SetInputFocus (42): the shim routes keys by its own focus, but the request
+ * is cheap to honour and SDL2 sends it on every window raise. */
+XLITE_IMPL(XSetInputFocus)
+int XSetInputFocus(Display *dpy, Window focus, int revert_to, Time t)
+{
+	REQ(dpy, 42, (uint8_t)revert_to, 3);
+	p32(r + 4, focus);
+	p32(r + 8, (uint32_t)t);
+	xlite_send(x, r);
+	return 1;
+}
+
+/* TranslateCoordinates (40): SDL2 asks where its window sits on the root. */
+XLITE_IMPL(XTranslateCoordinates)
+Bool XTranslateCoordinates(Display *dpy, Window src, Window dst, int sx, int sy,
+			   int *dx, int *dy, Window *child)
+{
+	unsigned char hdr[32], *extra = NULL;
+	size_t nextra = 0;
+	uint32_t seq;
+
+	{
+		REQ(dpy, 40, 0, 4);
+		p32(r + 4, src);
+		p32(r + 8, dst);
+		p16(r + 12, (uint16_t)sx);
+		p16(r + 14, (uint16_t)sy);
+		seq = x->pub.request;
+		xlite_send(x, r);
+		if (!xlite_reply(x, seq, hdr, &extra, &nextra))
+			return False;
+	}
+	free(extra);
+	if (child) *child = g32(hdr + 8);
+	if (dx) *dx = (short)g16(hdr + 12);
+	if (dy) *dy = (short)g16(hdr + 14);
+	return hdr[1] ? True : False;		/* same-screen */
+}
+
+/* QueryTree (15): root, parent and children. The shim reports no children. */
+XLITE_IMPL(XQueryTree)
+Status XQueryTree(Display *dpy, Window w, Window *root, Window *parent,
+		  Window **children, unsigned int *nchildren)
+{
+	unsigned char hdr[32], *extra = NULL;
+	size_t nextra = 0;
+	uint32_t seq;
+	unsigned n, i;
+
+	{
+		REQ(dpy, 15, 0, 2);
+		p32(r + 4, w);
+		seq = x->pub.request;
+		xlite_send(x, r);
+		if (!xlite_reply(x, seq, hdr, &extra, &nextra))
+			return 0;
+	}
+	if (root) *root = g32(hdr + 8);
+	if (parent) *parent = g32(hdr + 12);
+	n = g16(hdr + 16);
+	if (nextra / 4 < n)
+		n = (unsigned)(nextra / 4);
+	if (nchildren) *nchildren = n;
+	if (children) {
+		*children = n ? malloc(n * sizeof(Window)) : NULL;
+		if (*children)
+			for (i = 0; i < n; i++)
+				(*children)[i] = g32(extra + i * 4);
+	}
+	free(extra);
+	return 1;
+}
+
 XLITE_IMPL(XGetGeometry)
 Status XGetGeometry(Display *dpy, Drawable d, Window *root, int *px, int *py,
 		    unsigned *w, unsigned *h, unsigned *bw, unsigned *depth)

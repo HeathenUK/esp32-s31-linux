@@ -619,10 +619,23 @@ XIP_ROOTFS_IMG := $(BUILD_DIR)/rootfs-xip.cramfs
 # To go back to X, use the desktop set below - it is kept because it was tuned
 # by measurement, not guesswork (see the note above about which binaries go in
 # which image, and why libXft belongs here).
+# bluetoothd LEFT XIP on 2026-09-11, deliberately this time: it is the
+# control plane only (pairing, SDP, AVDTP signalling, AVRCP buttons) and is
+# out of the data path once a device is connected - HID goes controller to
+# kernel hidp to evdev, A2DP from s31-bt straight into the L2CAP socket. Its
+# text and glib's were 2.4 MB of this image; that space is SDL2 now. The
+# cost is a few 4 KB faults off the card when a headset button or a reconnect
+# wakes it under a game. The trap from the LAST eviction (an Aug-23 copy on
+# the card without the a2dp plugin) is closed by checksum: the card's copy
+# matched the target tree (b7d1d1d8) before this was shipped.
+# libpng16 and libz join for prboom's screenshots and xcalc for the menu -
+# 290 KB of text off the card on every use, measured as churn in smaps.
 XIP_ROOTS ?= bin/busybox usr/sbin/wpa_supplicant usr/sbin/iw usr/bin/lvdesk \
 	usr/lib/alsa-lib/libasound_module_pcm_s31route.so \
 	usr/bin/s31-coex usr/lib/libSDL-1.2.so.0.11.4 \
-	usr/libexec/bluetooth/bluetoothd \
+	usr/lib/libSDL2-2.0.so.0.3200.10 \
+	usr/lib/libpng16.so.16.58.0 usr/lib/libz.so.1.3.2 usr/bin/xcalc \
+	usr/lib/libdbus-1.so.3.32.4 \
 	usr/bin/xfilesctl usr/bin/s31-open usr/bin/s31-thumb usr/bin/xfilesthumb usr/bin/s31-thumbs
 
 # In the closure but deliberately left on the card. NEEDED is not the same as

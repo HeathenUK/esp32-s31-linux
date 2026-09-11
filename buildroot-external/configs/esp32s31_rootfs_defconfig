@@ -96,7 +96,7 @@ BR2_TARGET_ROOTFS_EXT2_4=y
 # during imaging, and read back again to verify. 512M cost ~9 min of writing
 # zeros for a filesystem using 51M. S01s31-growroot resizes to fill the card on
 # first boot, so the running system is no smaller.
-BR2_TARGET_ROOTFS_EXT2_SIZE="128M"
+BR2_TARGET_ROOTFS_EXT2_SIZE="192M"
 BR2_TARGET_ROOTFS_EXT2_LABEL="s31root"
 # 4 KiB blocks, not mkfs.ext4's small-filesystem default of 1 KiB. Block group
 # size scales with block size (8 blocks/group * blocksize), so 1 KiB blocks give
@@ -407,7 +407,10 @@ BR2_PACKAGE_SDL_X11=y
 # SDL 1.2 above stays. If SDL2 is ever wanted again, re-enable both symbols
 # together and check the GENERATED .config - Buildroot silently ignores
 # defconfig symbols it does not recognise, so an edit here proves nothing.
-# BR2_PACKAGE_SDL2=y
-# BR2_PACKAGE_SDL2_X11=y
-# BR2_PACKAGE_CHOCOLATE_DOOM=y
+# RE-ENABLED 2026-09-11: SDL2 lives in XIP now (bluetoothd moved to the
+# card to make room) so the shim can be brought up to what the SDL2 X11
+# backend asks for, with chocolate-doom as the first client.
+BR2_PACKAGE_SDL2=y
+BR2_PACKAGE_SDL2_X11=y
+BR2_PACKAGE_CHOCOLATE_DOOM=y
 BR2_PACKAGE_DOOM_WAD=y
