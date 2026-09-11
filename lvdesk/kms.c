@@ -524,7 +524,9 @@ static int kms_setcrtc(uint32_t fb_id, const struct drm_mode_modeinfo *m)
 	return ioctl(kms_fd, DRM_IOCTL_MODE_SETCRTC, &crtc);
 }
 
-int kms_fs_enter(int w, int h)
+uint32_t kms_fs_bpp;
+
+int kms_fs_enter(int w, int h, int bpp)
 {
 	struct drm_mode_create_dumb creq;
 	struct drm_mode_map_dumb mreq;
@@ -533,13 +535,14 @@ int kms_fs_enter(int w, int h)
 
 	if (kms_fd < 0 || w <= 0 || h <= 0)
 		return -1;
-	if (kms_fs_map && (int)kms_fs_w == w && (int)kms_fs_h == h)
+	if (kms_fs_map && (int)kms_fs_w == w && (int)kms_fs_h == h &&
+	    (int)kms_fs_bpp == bpp)
 		return 0;
 	kms_fs_free();
 	memset(&creq, 0, sizeof(creq));
 	creq.width = w;
 	creq.height = h;
-	creq.bpp = 16;
+	creq.bpp = bpp;		/* 16 (RGB565) or 32 (XRGB8888, PPA converts) */
 	if (ioctl(kms_fd, DRM_IOCTL_MODE_CREATE_DUMB, &creq) < 0) {
 		perror("kms: fs CREATE_DUMB");
 		return -1;
@@ -551,8 +554,9 @@ int kms_fs_enter(int w, int h)
 	fb.width = w;
 	fb.height = h;
 	fb.pitch = kms_fs_pitch;
-	fb.bpp = 16;
-	fb.depth = 16;
+	fb.bpp = bpp;
+	fb.depth = bpp == 32 ? 24 : 16;
+	kms_fs_bpp = bpp;
 	fb.handle = fs_handle;
 	if (ioctl(kms_fd, DRM_IOCTL_MODE_ADDFB, &fb) < 0) {
 		perror("kms: fs ADDFB");

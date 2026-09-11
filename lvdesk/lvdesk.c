@@ -3816,6 +3816,40 @@ static int fs_enabled(void)
 	return v;
 }
 
+/*
+ * A panel-sized window asked for fullscreen (SDL2's only kind): keep the
+ * desktop's mode, but present the window through the direct scanout path,
+ * which is what lets a depth-32 client's frames be converted by the PPA.
+ */
+static void xwin_on_fsnative(int on)
+{
+	if (!fs_enabled())
+		return;
+	if (!on) {
+		if (fs_active) {
+			kms_fs_leave();
+			fs_active = 0;
+			fs_win = 0;
+			lv_obj_invalidate(lv_screen_active());
+			printf("lvdesk: fullscreen off (panel size)\n");
+			fflush(stdout);
+			cursor_vis_update();
+		}
+		return;
+	}
+	if (kms_fs_enter((int)kms_w, (int)kms_h, 16) < 0) {
+		fs_active = 0;
+		return;
+	}
+	fs_active = 1;
+	fs_w = (int)kms_w;
+	fs_h = (int)kms_h;
+	fs_win = 0;
+	cursor_vis_update();
+	printf("lvdesk: fullscreen at panel size\n");
+	fflush(stdout);
+}
+
 static void xwin_on_mode(int w, int h)
 {
 	if (!fs_enabled())
@@ -3832,7 +3866,7 @@ static void xwin_on_mode(int w, int h)
 		}
 		return;
 	}
-	if (kms_fs_enter(w, h) < 0) {
+	if (kms_fs_enter(w, h, 16) < 0) {
 		fs_active = 0;
 		return;
 	}
@@ -3858,6 +3892,39 @@ static void fs_present(uint32_t id)
 
 	src = xshim_window_indices(id, &sw, &sh, &sstride, &pal);
 	if (!src || !pal) {
+		/*
+		 * A depth-32 window goes to the panel as XRGB8888: the mode's
+		 * buffer is recreated at 32 bpp and the driver's PPA path
+		 * converts and scales it in one pass. Copying the client's
+		 * ARGB rows here is the only CPU work per frame; the 32->16
+		 * shadow conversion (5.5 fps for chocolate-doom) is skipped.
+		 */
+		int bpp = 0;
+		const void *raw = xshim_window_raw(id, &sw, &sh, &bpp);
+
+		if (raw && bpp == 4) {
+			if (kms_fs_bpp != 32 &&
+			    kms_fs_enter(fs_w, fs_h, 32) < 0)
+				return;
+			if (!xshim_window_take_damage(id, &dx, &dy, &dw, &dh)) {
+				dx = dy = 0;
+				dw = sw;
+				dh = sh;
+			}
+			if (dx + dw > fs_w) dw = fs_w - dx;
+			if (dy + dh > fs_h) dh = fs_h - dy;
+			if (dx + dw > sw) dw = sw - dx;
+			if (dy + dh > sh) dh = sh - dy;
+			if (dw <= 0 || dh <= 0)
+				return;
+			for (y = dy; y < dy + dh; y++)
+				memcpy(kms_fs_map + (size_t)y * kms_fs_pitch +
+				       (size_t)dx * 4,
+				       (const uint32_t *)raw + (size_t)y * sw + dx,
+				       (size_t)dw * 4);
+			kms_fs_dirty(dx, dy, dx + dw - 1, dy + dh - 1);
+			return;
+		}
 		px = xshim_window_pixels(id, &sw, &sh);
 		if (!px)
 			return;
@@ -8664,6 +8731,7 @@ int main(void)
 	xshim_on_title(xwin_on_title);
 	xshim_on_warp(xwin_on_warp);
 	xshim_on_mode(xwin_on_mode);
+	xshim_on_fsnative(xwin_on_fsnative);
 	if (xshim_init(xwin_on_window, xwin_on_draw, xwin_on_close) < 0)
 		fprintf(stderr, "lvdesk: no X shim (socket in use?)\n");
 

@@ -108,6 +108,7 @@ int xshim_cursor_hidden(uint32_t top, int x, int y);
  * that window scaled to the panel and composites nothing else.
  */
 void xshim_on_mode(void (*cb)(int w, int h));
+void xshim_on_fsnative(void (*cb)(int on));	/* EWMH fullscreen of a panel-sized window */
 
 /* The mapped top-level that covers (0,0)-(w,h) in root coordinates, or 0. */
 uint32_t xshim_mode_window(int w, int h);
@@ -122,6 +123,8 @@ void xshim_window_close(uint32_t id);
 
 /* The RGB565 pixels of a client window, or NULL. Not copied. */
 const uint16_t *xshim_window_pixels(uint32_t id, int *w, int *h);
+/* The window's pixels AS STORED (bpp 1, 2 or 4): no shadow, no conversion. */
+const void *xshim_window_raw(uint32_t id, int *w, int *h, int *bpp);
 int xshim_window_take_damage(uint32_t id, int *x, int *y, int *w, int *h);
 
 /*

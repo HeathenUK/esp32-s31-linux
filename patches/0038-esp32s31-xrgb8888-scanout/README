@@ -1,0 +1,18 @@
+0038 - XRGB8888 client buffers on the fullscreen (PPA) scanout path
+
+Cumulative full-file copies of esp32s31-lcd.c, esp32s31-ppa.c and
+esp32s31-ppa.h on top of 0037 (linux-71-port/ is gitignored, so this is
+the only record).
+
+The plane advertises DRM_FORMAT_XRGB8888 next to RGB565. A 32-bit
+framebuffer is forced onto the engine path in esp32s31_lcd_copy_one() and
+scaled through the SRM with RX colour mode ARGB8888 (vendor ppa_ll value
+0) and a 4-byte source descriptor, so the engine converts to the RGB565
+scanout as it scales. esp32s31_ppa_srm_ex() takes the source bpp; the two
+existing exports pass 2, esp32s31_ppa_scale_rect32(_async) pass 4. The
+CPU copy and CPU scale paths never see a 32-bit source.
+
+Purpose: an SDL2 client given the depth-32 visual (SDL_VIDEO_X11_VISUALID
+=0x23) hands us ARGB frames; lvdesk recreates the mode buffer at 32 bpp
+and copies rows raw (fs_present), and no CPU pass converts 32->16.
+Experiment for chocolate-doom; see docs/current-state.md 2026-09-11.

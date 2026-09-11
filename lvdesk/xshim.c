@@ -200,6 +200,7 @@ struct res {
 	char title[32];			/* WM_NAME, windows only */
 	uint32_t cursor;		/* windows: CWCursor, 0 = inherit */
 	uint8_t cur_hidden;		/* cursors: mask all zero, draws nothing */
+	uint8_t want_fs;		/* _NET_WM_STATE_FULLSCREEN set on the window */
 };
 
 struct cli {
@@ -268,6 +269,8 @@ struct cli {
 static struct res res[MAXRES];
 static struct cli cli[MAXCLI];
 static char *atom[MAXATOM];
+#define ATOM_BASE	68		/* XA_LAST_PREDEFINED: interned ids start after it */
+
 
 /*
  * Pointer state. Declared up here rather than beside xshim_pointer() because
@@ -288,6 +291,14 @@ static int ptr_root_x, ptr_root_y;	/* last pointer position, root coords */
 static struct { uint32_t sel, owner; } selown[MAXSEL];
 static int nselown;
 static int natom;
+
+static const char *atom_name(uint32_t id)
+{
+	if (id <= ATOM_BASE || id - ATOM_BASE - 1 >= (uint32_t)natom)
+		return NULL;
+	return atom[id - ATOM_BASE - 1];
+}
+
 static int cur_owner;			/* client whose request is in flight */
 /*
  * What the shim itself is holding. Drawable buffers are the only allocation of
@@ -304,6 +315,8 @@ static void (*close_cb)(uint32_t id);
 static void (*title_cb)(uint32_t id);
 static void (*warp_cb)(uint32_t top, int x, int y);
 static void (*mode_cb)(int w, int h);
+static void (*fsnat_cb)(int on);	/* fullscreen at the panel's own size */
+static int vm_native;			/* that state is on */
 
 /*
  * XFree86-VidMode. The list is what a client may switch to; the panel is the
@@ -317,6 +330,56 @@ static const struct { uint16_t w, h; } vm_modes[] = {
 };
 static int vm_cur;			/* index into vm_modes */
 static int vm_cli = -1;			/* who switched away from the panel */
+
+/*
+ * EWMH fullscreen, answered the way VidMode is: the panel switches to the
+ * smallest mode that holds the window and the window keeps its own size,
+ * so the client renders at its size and the PPA scales it. A real desktop
+ * WM would grow the window to the screen and SDL2 would scale on the CPU.
+ */
+static void vm_switch(int idx, int owner);
+static void ewmh_fullscreen(struct res *w, int on)
+{
+	int i, best = -1, n = (int)(sizeof(vm_modes) / sizeof(vm_modes[0]));
+
+	if (on) {
+		for (i = 1; i < n; i++)
+			if (vm_modes[i].w >= w->w && vm_modes[i].h >= w->h &&
+			    (best < 0 || (uint32_t)vm_modes[i].w * vm_modes[i].h <
+					 (uint32_t)vm_modes[best].w * vm_modes[best].h))
+				best = i;
+		if (best > 0) {
+			fprintf(stderr, "xshim: EWMH fullscreen 0x%x %dx%d -> "
+				"mode %ux%u\n", w->id, w->w, w->h,
+				vm_modes[best].w, vm_modes[best].h);
+			vm_switch(best, w->owner);
+		} else if (w->w >= XSHIM_W && w->h >= XSHIM_H) {
+			/*
+			 * A panel-sized window (SDL2 sizes every fullscreen
+			 * window to the desktop, having no mode list): no
+			 * mode switch, but present it through the direct
+			 * scanout path all the same - that is where a 32-bit
+			 * frame gets converted by the PPA instead of the CPU.
+			 */
+			fprintf(stderr, "xshim: EWMH fullscreen 0x%x at panel size\n",
+				w->id);
+			vm_cli = w->owner;
+			vm_native = 1;
+			if (fsnat_cb)
+				fsnat_cb(1);
+		}
+	} else if (vm_cur) {
+		fprintf(stderr, "xshim: EWMH fullscreen off 0x%x\n", w->id);
+		vm_switch(0, w->owner);
+	} else if (vm_native) {
+		fprintf(stderr, "xshim: EWMH fullscreen off 0x%x (panel size)\n",
+			w->id);
+		vm_native = 0;
+		vm_cli = -1;
+		if (fsnat_cb)
+			fsnat_cb(0);
+	}
+}
 
 /*
  * Colormaps were never tracked - every AllocColor answered with an RGB565
@@ -5382,16 +5445,26 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		int n = get16(r + 4);
 		int i, id = 0;
 
+		/*
+		 * Interned atoms live ABOVE the 68 predefined ones. They used
+		 * to be numbered from 1, so a client's first InternAtom
+		 * ("UTF8_STRING", say) answered with an id that was also
+		 * XA_PRIMARY, and its 39th could collide with WM_NAME - which
+		 * is how SDL2's _NET_WM_NAME could never be told apart from
+		 * anything else (2026-09-11).
+		 */
 		for (i = 0; i < natom; i++)
 			if (atom[i] && (int)strlen(atom[i]) == n &&
-			    !memcmp(atom[i], r + 8, n)) { id = i + 1; break; }
+			    !memcmp(atom[i], r + 8, n)) { id = i + 1 + ATOM_BASE; break; }
 		if (!id && natom < MAXATOM) {
 			atom[natom] = strndup((const char *)r + 8, n);
-			id = ++natom;
+			id = ++natom + ATOM_BASE;
 		} else if (!id) {
 			fprintf(stderr, "xshim: out of atoms (%d) interning "
 				"'%.*s' - raise MAXATOM\n", MAXATOM, n, r + 8);
 		}
+		if (trace_on())
+			fprintf(stderr, "xshim:   atom %d = '%.*s'\n", id, n, r + 8);
 		put32(d24, id);
 		send_reply(c, 0, d24, NULL, 0);
 		break;
@@ -5750,6 +5823,8 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 				continue;
 			m->mapped = 1;
 			geom_update(m);
+			if (m->want_fs && m->parent == ROOT_ID)
+				ewmh_fullscreen(m, 1);
 			/*
 			 * The SERVER paints the background when a window is
 			 * mapped; the client then draws its content in
@@ -6642,9 +6717,32 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		 * WM_NAME, so every SDL2 window was "X client" in the bar.
 		 */
 		int is_name = prop == 39 ||
-			(prop > 68 && prop - 1 < (uint32_t)natom &&
-			 atom[prop - 1] && !strcmp(atom[prop - 1], "_NET_WM_NAME"));
+			(prop > ATOM_BASE && prop - ATOM_BASE - 1 < (uint32_t)natom &&
+			 atom[prop - ATOM_BASE - 1] &&
+			 !strcmp(atom[prop - ATOM_BASE - 1], "_NET_WM_NAME"));
 
+		{
+			const char *pn = atom_name(prop);
+
+			if (trace_on())
+				fprintf(stderr, "xshim:   property %u(%s) fmt %u n %u on 0x%x\n",
+					prop, pn ? pn : "?", r[16], nch, get32(r + 4));
+			if (w && w->type == R_WINDOW && pn &&
+			    !strcmp(pn, "_NET_WM_STATE") && r[16] == 32) {
+				uint32_t k, fs = 0;
+
+				for (k = 0; k < nch && 24 + k * 4 + 4 <= (uint32_t)len; k++) {
+					const char *an = atom_name(get32(r + 24 + k * 4));
+
+					if (an && !strcmp(an, "_NET_WM_STATE_FULLSCREEN"))
+						fs = 1;
+				}
+				/* SDL2 sets this BEFORE mapping; applied at map */
+				w->want_fs = fs;
+				if (w->mapped)
+					ewmh_fullscreen(w, fs);
+			}
+		}
 		if (w && w->type == R_WINDOW && is_name && r[16] == 8) {
 			if (nch > sizeof(w->title) - 1)
 				nch = sizeof(w->title) - 1;
@@ -6702,7 +6800,53 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 	 * state this shim does not keep. Ignore them explicitly.
 	 */
 	case 19:					/* DeleteProperty */
-	case 25:					/* SendEvent      */
+		if (trace_on())
+			fprintf(stderr, "xshim: ignoring DeleteProperty (19)\n");
+		break;
+	case 25: {					/* SendEvent      */
+		/*
+		 * The one client message that matters here: the EWMH
+		 * fullscreen request. SDL2 has no VidMode path (no XRandR or
+		 * Xxf86vm in this build), so SDL_WINDOW_FULLSCREEN* sends
+		 * _NET_WM_STATE add/remove FULLSCREEN to the root and then
+		 * polls the window's geometry for 100 ms. Answer it the way
+		 * VidMode is answered: switch the panel to the mode that
+		 * fits the window and leave the window its own size, so the
+		 * client keeps rendering at 320x200 and the PPA scales it -
+		 * instead of the window growing to 800x480 and SDL2 scaling
+		 * its frame on the CPU, which is what a real desktop WM
+		 * would make it do. Everything else sent here is ignored
+		 * as before.
+		 */
+		const uint8_t *e = r + 12;
+		uint32_t win = get32(e + 4), mtype = get32(e + 8);
+		uint32_t act = get32(e + 12), a1 = get32(e + 16),
+			 a2 = get32(e + 20);
+		const char *mt = atom_name(mtype);
+		struct res *w = res_find(win);
+
+		if (len >= 44 && e[0] == 33 && mt && !strcmp(mt, "_NET_WM_STATE") &&
+		    w && w->type == R_WINDOW) {
+			const char *n1 = atom_name(a1), *n2 = atom_name(a2);
+			int fs = (n1 && !strcmp(n1, "_NET_WM_STATE_FULLSCREEN")) ||
+				 (n2 && !strcmp(n2, "_NET_WM_STATE_FULLSCREEN"));
+
+			if (fs) {
+				if (act == 2)		/* toggle */
+					act = vm_cur ? 0 : 1;
+				w->want_fs = act == 1;
+				ewmh_fullscreen(w, act == 1);
+				break;
+			}
+		}
+		if (trace_on())
+			fprintf(stderr, "xshim: ignoring SendEvent len=%d type=%u "
+				"win=0x%x mtype=%u(%s) act=%u a1=%u(%s) a2=%u(%s)\n",
+				len, e[0], win, mtype, mt ? mt : "?", act,
+				a1, atom_name(a1) ? atom_name(a1) : "?",
+				a2, atom_name(a2) ? atom_name(a2) : "?");
+		break;
+	}
 	case 36:					/* GrabServer     */
 	case 37:					/* UngrabServer   */
 	case 42:					/* SetInputFocus  */
@@ -7317,6 +7461,19 @@ const uint8_t *xshim_window_indices(uint32_t id, int *w, int *h,
 	return (const uint8_t *)r->px;
 }
 
+const void *xshim_window_raw(uint32_t id, int *w, int *h, int *bpp)
+{
+	struct res *r = res_find(id);
+
+	if (!r || r->type != R_WINDOW || !r->px)
+		return NULL;
+	*w = r->w;
+	*h = r->h;
+	*bpp = r->bpp ? r->bpp : 2;
+	r->dirty = 0;
+	return r->px;
+}
+
 const uint16_t *xshim_window_pixels(uint32_t id, int *w, int *h)
 {
 	struct res *r = res_find(id);
@@ -7865,6 +8022,11 @@ void xshim_focus(uint32_t id)
 void xshim_on_mode(void (*cb)(int w, int h))
 {
 	mode_cb = cb;
+}
+
+void xshim_on_fsnative(void (*cb)(int on))
+{
+	fsnat_cb = cb;
 }
 
 uint32_t xshim_mode_window(int w, int h)
