@@ -8018,3 +8018,27 @@ everything else holds.
 - Preloads (fpsonly, freetrace, syscount) exist only when a run asks for
   them; fpsonly writes ten bytes per ten frames to tmpfs.
 Nothing found that is on by default and per-frame.
+
+## What Doom actually pages (2026-09-11)
+
+Per-mapping Rss/Swap from /proc/<pid>/smaps every 5 s through a fullscreen
+320x240 timedemo (20 samples). Churn = sum of Rss changes between samples:
+
+| mapping | Rss min-max | churn |
+|---|---|---|
+| anonymous (the zone heap) | 1.6-3.5 MB | 1.9 MB, a monotonic ramp: lazy commit, not paging (44 KB ever swapped) |
+| doom1.wad (MAPPED, not read) | 264-796 KB | 1.8 MB: page-cache faults, each pulling a readahead window - this is the SD traffic |
+| /root/doom/prboom (on SD by choice) | 356-552 KB | 232 KB: its own text evicted and refetched |
+| prboom.wad | 4-84 KB | 80 KB |
+| libpng16, libz (on SD, not in XIP) | 8-36 KB | 44 KB together |
+| everything in XIP (libc, SDL, mixer, net, X11) | 8 KB each | 0 |
+| lvdesk | 688 KB | 0, 132 KB swapped |
+
+So: nothing left to move into XIP except prboom itself (declined) and the
+two tiny image libraries (44 KB of churn, not worth a partition byte).
+The WAD is mmapped by prboom, which is why readahead mattered and why the
+remaining 5 MB per demo is the level's lumps faulting in at 16 KB a time.
+And the dips are NOT the paging: correlating the fps intervals with the
+fault samples, slow intervals (<15 fps) carried 3.2 faults per sample
+against 2.7 for fast ones, and half the slow intervals had zero faults.
+The dips are the scenes.
