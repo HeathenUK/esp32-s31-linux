@@ -42,6 +42,8 @@
 #include <alsa/asoundlib.h>
 #include <signal.h>
 #include <stdio.h>
+#include <dirent.h>
+#include <strings.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
@@ -2707,6 +2709,9 @@ static void ctl_init(void)
 }
 
 static void ctxmenu_open(const char *replyfifo, char *items);
+static void menu_popover_build(char **labels, int n, size_t maxlen,
+			       int32_t ax, int32_t ay, lv_event_cb_t cb);
+static void appmenu_open(int parent);
 static void term_raise_and_run(const char *cmd);
 
 static void ctl_line(char *buf)
@@ -4892,6 +4897,23 @@ static void ctxmenu_open(const char *replyfifo, char *items)
 
 	popover_close();	/* answers any pending menu with "" first */
 	snprintf(ctx_reply, sizeof(ctx_reply), "%s", replyfifo);
+	menu_popover_build(labels, n, maxlen, ptr_x, ptr_y, ctx_item_cb);
+	pop_owner = &owner_key;
+}
+
+/*
+ * The popover-with-a-list that both the ctl context menu and the desktop's
+ * application menu are made of: scrim, panel at (ax,ay) clamped on-screen,
+ * one 30 px row per label, `cb` on each row. The caller sets pop_owner.
+ */
+static void menu_popover_build(char **labels, int n, size_t maxlen,
+			       int32_t ax, int32_t ay, lv_event_cb_t cb)
+{
+	int32_t sw = lv_display_get_horizontal_resolution(NULL);
+	int32_t sh = lv_display_get_vertical_resolution(NULL);
+	int i, w, h;
+	int32_t x, y;
+	lv_obj_t *list;
 
 	w = 40 + (int)maxlen * 9;
 	if (w < 120) w = 120;
@@ -4918,8 +4940,8 @@ static void ctxmenu_open(const char *replyfifo, char *items)
 	lv_obj_remove_flag(pop_obj, LV_OBJ_FLAG_SCROLLABLE);
 
 	/* At the pointer, clamped on-screen like every context menu. */
-	x = ptr_x;
-	y = ptr_y;
+	x = ax;
+	y = ay;
 	if (x + w > sw - 2) x = sw - 2 - w;
 	if (y + h > sh - TASKBAR_H) y = sh - TASKBAR_H - h;
 	if (x < 2) x = 2;
@@ -4945,10 +4967,308 @@ static void ctxmenu_open(const char *replyfifo, char *items)
 		lv_obj_set_flex_align(b, LV_FLEX_ALIGN_START,
 				      LV_FLEX_ALIGN_CENTER,
 				      LV_FLEX_ALIGN_CENTER);
-		lv_obj_add_event_cb(b, ctx_item_cb, LV_EVENT_CLICKED, NULL);
+		lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, NULL);
 	}
+}
 
-	pop_owner = &owner_key;
+/* ------------------------------------------------------ application menu */
+
+/*
+ * A right-click on the empty desktop opens this. It is DATA, not code:
+ * /etc/lvdesk/menu.conf, re-read on every open so an edit on the card is
+ * live at once. Indentation (two spaces or a tab per level) nests; a line
+ * with `=` is a command, one without is a submenu:
+ *
+ *     Games
+ *       Doom
+ *         Fullscreen 320x240 = cd /root/doom/wads && ./prboom -fullscreen
+ *
+ * Commands run through a login shell of their own (appmenu_spawn), so they
+ * get /etc/profile's environment without a terminal window; their output
+ * goes to /tmp/lvdesk-apps.log. A command starting with `@name ` is
+ * launched only if no process called `name` is running - two Dooms do not
+ * fit in 15 MB. `!terminal` raises the terminal itself.
+ *
+ * Submenus DRILL DOWN in the same popover (first row "< Back") rather than
+ * cascading beside it: one popup at a time is the rule every popover here
+ * follows, and it works the same with a finger as with a mouse.
+ */
+#define MENU_CONF	"/etc/lvdesk/menu.conf"
+#define MENU_MAX	96
+
+struct mitem {
+	char label[40];
+	char cmd[200];		/* empty: a submenu */
+	int parent;		/* -1 at the root */
+	int depth;
+};
+static struct mitem mitems[MENU_MAX];
+static int mitem_n;
+static int menu_cur = -1;		/* submenu shown, -1 = root */
+static int32_t menu_x, menu_y;		/* where it opened; submenus stay put */
+static const char menu_owner_key;
+
+static void appmenu_load(void)
+{
+	FILE *f = fopen(MENU_CONF, "r");
+	char line[300];
+	int stack[16], depth, i;
+
+	mitem_n = 0;
+	if (!f)
+		return;
+	for (i = 0; i < 16; i++)
+		stack[i] = -1;
+	while (fgets(line, sizeof(line), f) && mitem_n < MENU_MAX) {
+		char *p = line, *eq, *e;
+		struct mitem *m;
+
+		depth = 0;
+		while (*p == ' ' || *p == '\t') {
+			depth += *p == '\t' ? 2 : 1;
+			p++;
+		}
+		depth /= 2;
+		if (depth > 15) depth = 15;
+		e = p + strlen(p);
+		while (e > p && (e[-1] == '\n' || e[-1] == '\r' ||
+				 e[-1] == ' ' || e[-1] == '\t'))
+			*--e = 0;
+		if (!*p || *p == '#')
+			continue;
+		m = &mitems[mitem_n];
+		memset(m, 0, sizeof(*m));
+		m->depth = depth;
+		m->parent = depth ? stack[depth - 1] : -1;
+		eq = strchr(p, '=');
+		if (eq) {
+			e = eq;
+			while (e > p && (e[-1] == ' ' || e[-1] == '\t'))
+				e--;
+			snprintf(m->label, sizeof(m->label), "%.*s",
+				 (int)(e - p), p);
+			eq++;
+			while (*eq == ' ' || *eq == '\t')
+				eq++;
+			snprintf(m->cmd, sizeof(m->cmd), "%s", eq);
+		} else {
+			snprintf(m->label, sizeof(m->label), "%s", p);
+		}
+		stack[depth] = mitem_n;
+		for (i = depth + 1; i < 16; i++)
+			stack[i] = -1;
+		mitem_n++;
+	}
+	fclose(f);
+}
+
+static int mitem_has_children(int idx)
+{
+	int i;
+
+	for (i = 0; i < mitem_n; i++)
+		if (mitems[i].parent == idx)
+			return 1;
+	return 0;
+}
+
+/* Is a process with this comm name running? (/proc walk, no fork.) */
+static int proc_running(const char *name)
+{
+	DIR *d = opendir("/proc");
+	struct dirent *de;
+	int found = 0;
+
+	if (!d)
+		return 0;
+	while (!found && (de = readdir(d))) {
+		char path[64], comm[32];
+		FILE *f;
+
+		if (de->d_name[0] < '0' || de->d_name[0] > '9')
+			continue;
+		snprintf(path, sizeof(path), "/proc/%s/comm", de->d_name);
+		f = fopen(path, "r");
+		if (!f)
+			continue;
+		if (fgets(comm, sizeof(comm), f)) {
+			char *nl = strchr(comm, '\n');
+
+			if (nl) *nl = 0;
+			if (!strcmp(comm, name))
+				found = 1;
+		}
+		fclose(f);
+	}
+	closedir(d);
+	return found;
+}
+
+static void appmenu_open(int parent);
+
+/* strcasestr without _GNU_SOURCE: a title match is all this needs. */
+static int title_has(const char *hay, const char *needle)
+{
+	size_t n = strlen(needle), i;
+
+	for (i = 0; hay[i]; i++)
+		if (!strncasecmp(hay + i, needle, n))
+			return 1;
+	return 0;
+}
+
+/* Raise the X window whose title mentions `name`, if there is one. */
+static int xwin_raise_by_name(const char *name)
+{
+	int i;
+
+	for (i = 0; i < xwin_n; i++) {
+		const char *t = xwins[i].win ? xshim_window_title(xwins[i].id)
+					     : NULL;
+		struct winrec *r;
+
+		if (!t || !title_has(t, name))
+			continue;
+		r = win_find(xwins[i].win);
+		if (!r)
+			continue;
+		if (r->minimised) {
+			lv_obj_remove_flag(r->win, LV_OBJ_FLAG_HIDDEN);
+			r->minimised = 0;
+		}
+		lv_obj_move_foreground(r->win);
+		win_set_focus(r);
+		return 1;
+	}
+	return 0;
+}
+
+/*
+ * Run a menu command: a LOGIN shell (`sh -l -c`) so /etc/profile's
+ * environment - DISPLAY, DOOMWADDIR, the opener - reaches the program,
+ * without a terminal window in the way. Its own session, stdin closed,
+ * stdout/stderr appended to MENU_LOG so a failing launch leaves a message.
+ */
+#define MENU_LOG	"/tmp/lvdesk-apps.log"
+
+static void appmenu_spawn(const char *cmd)
+{
+	pid_t pid = fork();
+
+	if (pid < 0)
+		return;
+	if (pid > 0) {
+		printf("lvdesk: menu: [%d] %s\n", (int)pid, cmd);
+		fflush(stdout);
+		return;
+	}
+	setsid();
+	{
+		int fd = open("/dev/null", O_RDONLY);
+		int lg = open(MENU_LOG, O_WRONLY | O_CREAT | O_APPEND, 0644);
+
+		if (fd >= 0) { dup2(fd, 0); close(fd); }
+		if (lg >= 0) { dup2(lg, 1); dup2(lg, 2); close(lg); }
+	}
+	signal(SIGCHLD, SIG_DFL);
+	signal(SIGPIPE, SIG_DFL);
+	execl("/bin/sh", "-sh", "-l", "-c", cmd, (char *)NULL);
+	_exit(127);
+}
+
+static void appmenu_launch(const char *cmd)
+{
+	if (cmd[0] == '!') {
+		if (!strcmp(cmd, "!terminal"))
+			term_raise_and_run("");
+		return;
+	}
+	if (cmd[0] == '@') {
+		char name[32];
+		const char *sp = strchr(cmd, ' ');
+		size_t n = sp ? (size_t)(sp - cmd - 1) : strlen(cmd + 1);
+
+		if (n >= sizeof(name)) n = sizeof(name) - 1;
+		memcpy(name, cmd + 1, n);
+		name[n] = 0;
+		if (!sp)
+			return;
+		if (proc_running(name)) {
+			/* one instance: bring it up instead of a second */
+			printf("lvdesk: menu: %s already running\n", name);
+			fflush(stdout);
+			xwin_raise_by_name(name);
+			return;
+		}
+		cmd = sp + 1;
+	}
+	appmenu_spawn(cmd);
+}
+
+static void appmenu_item_cb(lv_event_t *e)
+{
+	lv_obj_t *btn = lv_event_get_target(e);
+	int row = (int)lv_obj_get_index(btn), i, n = 0, idx = -1;
+	int parent = menu_cur;
+
+	if (parent >= 0) {
+		if (row == 0) {			/* "< Back" */
+			appmenu_open(mitems[parent].parent);
+			return;
+		}
+		row--;
+	}
+	for (i = 0; i < mitem_n; i++)
+		if (mitems[i].parent == parent && n++ == row) {
+			idx = i;
+			break;
+		}
+	if (idx < 0)
+		return;
+	if (!mitems[idx].cmd[0] && mitem_has_children(idx)) {
+		appmenu_open(idx);
+		return;
+	}
+	{
+		char cmd[sizeof(mitems[0].cmd)];
+
+		snprintf(cmd, sizeof(cmd), "%s", mitems[idx].cmd);
+		popover_close();
+		appmenu_launch(cmd);
+	}
+}
+
+static void appmenu_open(int parent)
+{
+	char *labels[MENU_MAX + 1];
+	int n = 0, i;
+	size_t maxlen = 0;
+
+	if (parent < 0) {
+		appmenu_load();
+		menu_x = ptr_x;
+		menu_y = ptr_y;
+	}
+	popover_close();
+	if (!mitem_n) {
+		printf("lvdesk: menu: no " MENU_CONF "\n");
+		fflush(stdout);
+		return;
+	}
+	if (parent >= 0)
+		labels[n++] = (char *)"< Back";
+	for (i = 0; i < mitem_n; i++)
+		if (mitems[i].parent == parent) {
+			labels[n++] = mitems[i].label;
+			if (strlen(mitems[i].label) > maxlen)
+				maxlen = strlen(mitems[i].label);
+		}
+	if (!n)
+		return;
+	if (maxlen < 6) maxlen = 6;
+	menu_cur = parent;
+	menu_popover_build(labels, n, maxlen, menu_x, menu_y, appmenu_item_cb);
+	pop_owner = &menu_owner_key;
 }
 
 /* Type one command line into the built-in terminal and bring it up front. */
@@ -7598,7 +7918,27 @@ static int mouse_poll(void)
 		if (getenv("LVDESK_AIMDBG"))
 			printf("lvdesk: btn%d at %d,%d\n", btn_extra,
 			       (int)ptr_x, (int)ptr_y), fflush(stdout);
-		xwin_send_button(btn_extra, btn_extra_act);
+		if (!xwin_send_button(btn_extra, btn_extra_act) &&
+		    btn_extra == 3 && btn_extra_act == 1 && !fs_active &&
+		    ptr_y < h - TASKBAR_H) {
+			/*
+			 * No X window took it: a right-click on the bare
+			 * desktop (or on one of our own windows' chrome)
+			 * opens the application menu. Not over the terminal
+			 * body, which may want its own selection some day.
+			 */
+			lv_area_t ta;
+			int over_term = 0;
+
+			if (term.win && !lv_obj_has_flag(term.win,
+							  LV_OBJ_FLAG_HIDDEN)) {
+				lv_obj_get_coords(term.win, &ta);
+				over_term = ptr_x >= ta.x1 && ptr_x <= ta.x2 &&
+					    ptr_y >= ta.y1 && ptr_y <= ta.y2;
+			}
+			if (!over_term)
+				appmenu_open(-1);
+		}
 		btn_extra = 0;
 	}
 	if (wheel) {
