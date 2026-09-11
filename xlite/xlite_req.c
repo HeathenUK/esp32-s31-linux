@@ -2532,6 +2532,7 @@ XStandardColormap *XAllocStandardColormap(void)
  *
  *     ShmSeg shmseg;  int shmid;  char *shmaddr;  Bool readOnly;
  */
+static int ximg_destroy_shared(XImage *im);
 typedef unsigned long XliteShmSeg;
 typedef struct {
 	XliteShmSeg shmseg;
@@ -2625,6 +2626,17 @@ XImage *XShmCreateImage(Display *dpy, Visual *vis, unsigned int depth,
 	 */
 	im = XCreateImage(dpy, vis, depth, format, 0, data,
 			  width, height, 32, 0);
+	/*
+	 * The pixels are the CLIENT'S shared segment, not ours to free.
+	 * XCreateImage installs ximg_destroy, which frees im->data - right
+	 * for an image over malloc'd memory, and a crash for this one: SDL's
+	 * X11_DestroyImage calls XDestroyImage BEFORE shmdt(), so at exit the
+	 * shmat() address went to free() and prboom died in musl's
+	 * get_meta() every time it quit. libXext's _XShmDestroyImage frees
+	 * only the XImage, and so does this.
+	 */
+	if (im)
+		im->f.destroy_image = ximg_destroy_shared;
 	/*
 	 * Real Xlib hangs the segment info off the image here, and
 	 * XShmPutImage reads it back from there - it has no shminfo argument
@@ -3059,6 +3071,13 @@ static int ximg_destroy(XImage *im)
 		free(im->data);
 		free(im);
 	}
+	return 1;
+}
+
+/* For images over memory the client owns (MIT-SHM): the struct only. */
+static int ximg_destroy_shared(XImage *im)
+{
+	free(im);
 	return 1;
 }
 
