@@ -42,3 +42,6 @@ rootfs/sdlquake
 rootfs/sdlquake.*
 rootfs/ioctlprof.so
 rootfs/lvdesk.syms
+tyrquake/
+rootfs/tyr-quake
+rootfs/tyr-quake.*

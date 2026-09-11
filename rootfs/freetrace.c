@@ -109,6 +109,29 @@ static void init(void)
 	inited = 1;
 }
 
+/* Who called exit()? A silent exit(1) is otherwise unattributable. */
+void exit(int code)
+{
+	static void (*real_exit)(int);
+	const char *log = getenv("FREETRACE_LOG");
+	int fd = log ? open(log, O_WRONLY | O_CREAT | O_APPEND, 0644) : 2;
+	char buf[64];
+
+	if (!inited)
+		init();
+	if (!real_exit)
+		real_exit = dlsym(RTLD_NEXT, "exit");
+	if (fd < 0)
+		fd = 2;
+	snprintf(buf, sizeof buf, "freetrace: exit(%d) called\n", code);
+	write(fd, buf, strlen(buf));
+	dump_addr(fd, "from", __builtin_return_address(0));
+	if (fd != 2)
+		close(fd);
+	real_exit(code);
+	_exit(code);
+}
+
 void free(void *p)
 {
 	unsigned k;
