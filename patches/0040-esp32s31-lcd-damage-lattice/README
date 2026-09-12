@@ -1,0 +1,55 @@
+drm/esp32s31: snap the damage rectangle to the scale lattice before the PPA
+
+The port tree is gitignored, so this is the whole modified file rather than a
+diff. Copy it back over
+linux-71-port/drivers/gpu/drm/espressif/esp32s31-lcd.c before building.
+CUMULATIVE for this file: supersedes 0039, 0038, 0037.
+
+WHY
+A fullscreen SDL2 client renders 320x200 and the panel is 800x480, so the
+driver PPA-scales by 38/16 into a 760x475 picture centred at +20+2. That
+scale is exact and the full-frame path is correct.
+
+The engine does NOT scale a sub-rectangle by the picture's ratio.
+esp32s31_ppa_srm_ex() derives the factor from the rectangle it is handed,
+as (out * 16) / src TRUNCATED to sixteenths (esp32s31_ppa_scale_factor,
+PPA_SRM_SCAL_FRAG_MAX = 16). So a damage rectangle whose height is not a
+whole number of lattice steps asks for a factor that is not the frame's, and
+the engine writes that band at its own scale. The content inside lands at
+the wrong offset while the correctly-scaled copy underneath survives,
+because nothing damaged those rows.
+
+Seen as Chocolate Doom painting the status-bar labels twice - AMMO, HEALTH,
+ARMS and ARMOR each appearing at two vertical offsets - and as bands of a
+previous frame persisting across screen changes.
+
+The origin was already aligned down to the engine's 32-pixel macro block,
+which happens to be a multiple of the lattice step here, so the ORIGIN was
+right. The SIZE was not, and the size is what picks the factor.
+
+It only appeared with SDL2. SDL 1.2 clients reach the shim through the
+xlite-SHM "Damaged" request, which reports no rectangle at all, so
+dmg_valid stays unset and the desktop repaints the whole window: the driver
+never saw a partial rectangle. SDL2 uses real MIT-SHM ShmPutImage, where
+xshim hashes each row and damages only the rows that changed.
+
+It also came and went, because the adaptive engine picker sends some size
+buckets to esp32s31_lcd_scale_rect_cpu(), which maps every OUTPUT row back
+through the frame's ratio and is phase-correct by construction.
+
+WHAT
+In the damage loop in esp32s31_lcd_plane_update():
+
+  q     = out * 16 / render          (sixteenths, exact by mode-set)
+  step  = 16 / gcd(q, 16)            (8 for 320x200 -> 760x475)
+
+  x1/y1 align DOWN to the largest multiple of step that is <= 32 (so the
+  macro-block alignment is kept where the lattice allows), x2/y2 align UP to
+  step and clamp to the framebuffer. render_w/render_h are multiples of step
+  by construction, so the clamp stays exact.
+
+Cost: at most 7 extra source rows and 7 columns per rectangle.
+
+NOT DONE, and worth doing: now that partial rectangles scale correctly, the
+xlite-SHM Damaged request could carry one instead of forcing a full-window
+repaint for every SDL 1.2 client.

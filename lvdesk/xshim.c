@@ -143,6 +143,20 @@ struct res {
 	 */
 	uint32_t *rowhash;
 	int rowhash_h;
+	/*
+	 * Those hashes describe the SOURCE of the last image put here, and
+	 * they are only a safe proxy for "the destination already holds this"
+	 * for as long as nobody ELSE writes the destination. Every other
+	 * writer - an ordinary drawing op, a whole-surface clear punched to a
+	 * hole, an alias break that swaps the buffer outright - bumps wrgen,
+	 * and a ShmPutImage whose rowhash_gen does not match treats every row
+	 * as changed and re-syncs. Without this a punched hole zeroed the
+	 * pages while the hashes still described the old pixels, so the next
+	 * identical frame was skipped row by row and the panel kept a mix of
+	 * two screens. That is the artifact; it is not a stride bug.
+	 */
+	uint32_t wrgen;
+	uint32_t rowhash_gen;
 	int ax, ay;			/* our origin within that buffer */
 	int cx0, cy0, cx1, cy1;		/* clip, in that buffer's coords */
 	/*
@@ -202,6 +216,20 @@ struct res {
 	uint8_t cur_hidden;		/* cursors: mask all zero, draws nothing */
 	uint8_t want_fs;		/* _NET_WM_STATE_FULLSCREEN set on the window */
 };
+
+/*
+ * "Something other than ShmPutImage just wrote these pixels."
+ *
+ * One increment, on paths that are already doing real work per call, so the
+ * cost is nil - and it is the whole correctness condition for the row-hash
+ * damage optimisation. Call it BEFORE or AFTER the write, it does not matter;
+ * what matters is that no writer escapes it.
+ */
+static void wr_touch(struct res *b)
+{
+	if (b)
+		b->wrgen++;
+}
 
 struct cli {
 	int fd;
@@ -904,6 +932,7 @@ static int alias_break_ex(struct res *w, int keep_contents)
 	w->px = own;
 	/* zeroed: all zero; copied: whatever the pixmap was known to be */
 	w->hole = keep_contents ? (pm && pm->px && pm->hole) : 1;
+	wr_touch(w);
 	w->alias = 0;
 	notify_draw(w);			/* the desktop caches this pointer */
 	mem_win += n; n_win++;
@@ -1119,6 +1148,7 @@ static void px_set(struct res *d, int x, int y, uint32_t c)
 		return;
 	b->dirty = 1;
 	b->hole = 0;
+	wr_touch(b);
 	/*
 	 * The colour is a PIXEL VALUE in the drawable's own visual, so its
 	 * width follows the surface: an index at depth 8, RGB565 at 16, and
@@ -1326,6 +1356,7 @@ static struct res *op_target_ex(struct res *d, int full_cover)
 		return NULL;
 	b->dirty = 1;
 	b->hole = 0;
+	wr_touch(b);
 	return b;
 }
 
@@ -1498,6 +1529,7 @@ static void win_fill(struct res *d, int x, int y, int w, int h)
 			px_release(d);
 			d->px = pm->px;
 			d->hole = pm->hole;
+			wr_touch(d);
 			d->alias = pm->id;
 			/*
 			 * The desktop CACHES this pointer (lvdesk keeps it in
@@ -2968,6 +3000,7 @@ static void blend_px(struct res *d, int x, int y, int r8, int g8, int b8,
 		return;
 	b->dirty = 1;
 	b->hole = 0;
+	wr_touch(b);
 	if (b->bpp == 1) {
 		/*
 		 * One byte of intensity. This is the same quantity the RGB565
@@ -4461,6 +4494,7 @@ static int render_request(struct cli *c, const uint8_t *r, int len)
 			if (was_hole && (b->bpp == 1 ? cr == 0 :
 					 b->bpp == 4 ? c32 == 0 : col == 0)) {
 				b->hole = 1;
+				wr_touch(b);
 				return 1;
 			}
 			int px0 = -32768, py0 = -32768;
@@ -4534,6 +4568,7 @@ static int render_request(struct cli *c, const uint8_t *r, int len)
 					      (off_t)b->shm_len) == 0) {
 					n_punch++;
 					b->hole = 1;
+					wr_touch(b);
 					xshim_px_acc += (uint64_t)(x1 - x0) *
 							(y1 - y0);
 					if (x0 < bx0) bx0 = x0;
@@ -4951,6 +4986,8 @@ static void mitshm_request(struct cli *c, const uint8_t *r, int len)
 			 * one event per several days, which is the right trade
 			 * for one native multiply per four bytes.
 			 */
+			int hforce;
+
 			if (!rowdmg_on()) {
 				b->rowhash_h = 0;
 			} else if (b->rowhash_h != b->h) {
@@ -4958,7 +4995,18 @@ static void mitshm_request(struct cli *c, const uint8_t *r, int len)
 				b->rowhash = calloc((size_t)(b->h > 0 ? b->h : 1),
 						    sizeof *b->rowhash);
 				b->rowhash_h = b->rowhash ? b->h : 0;
+				b->rowhash_gen = b->wrgen - 1;	/* force */
 			}
+			/*
+			 * Anyone else written here since we last hashed? Then
+			 * the hashes describe pixels that are no longer in the
+			 * buffer and every row has to be treated as changed.
+			 * b->hole is the same condition stated a second way -
+			 * the pages have been punched to zero - and is cheap
+			 * enough to test that there is no reason not to.
+			 */
+			hforce = (b->rowhash_gen != b->wrgen) || b->hole;
+			b->rowhash_gen = b->wrgen;
 
 			for (y = 0; y < sh; y++) {
 				int ty = dy + y;
@@ -5010,7 +5058,7 @@ static void mitshm_request(struct cli *c, const uint8_t *r, int len)
 						dp[k] = sp[k];
 					}
 				}
-				changed = b->rowhash[ty] != hv;
+				changed = hforce || b->rowhash[ty] != hv;
 				b->rowhash[ty] = hv;
 				if (changed) {
 					if (cy0 < 0)
@@ -5338,6 +5386,7 @@ static void xshm_request(struct cli *c, const uint8_t *r, int len)
 			p->buf->dirty = 1;
 		p->dirty = 1;
 		p->hole = 0;
+		wr_touch(p->buf ? p->buf : p);
 		notify_draw(p);
 	}
 }

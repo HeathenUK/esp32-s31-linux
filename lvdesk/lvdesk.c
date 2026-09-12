@@ -4306,9 +4306,31 @@ static void fs_present(uint32_t id)
 		 * a frame, ~0.8 us, against milliseconds being attributed.
 		 */
 		uint64_t t = prof_ns();
+		/*
+		 * LVDESK_FULLDIRTY=1 keeps the small expansion but reports the
+		 * whole screen as damaged. It exists to split one artifact in
+		 * two: with row-hash damage on, Doom's status-bar labels paint
+		 * twice, and the cause is either xshim skipping rows it should
+		 * not, or the driver scaling a PARTIAL dirty rectangle to a
+		 * different phase than a full one. Copy the same pixels, tell
+		 * the driver something different, and the arms separate.
+		 * LVDESK_DMGLOG=1 prints the rectangle it was handed.
+		 */
+		static int fulldirty = -1, dmglog = -1;
+
+		if (fulldirty < 0)
+			fulldirty = getenv("LVDESK_FULLDIRTY") != NULL;
+		if (dmglog < 0)
+			dmglog = getenv("LVDESK_DMGLOG") != NULL;
+		if (dmglog)
+			fprintf(stderr, "fsdmg: %dx%d+%d+%d of %dx%d\n",
+				dw, dh, dx, dy, sw, sh);
 
 		fsg_expand_us = (uint32_t)((t - fsg_t_expand) / 1000u);
-		kms_fs_dirty(dx, dy, dx + dw - 1, dy + dh - 1);
+		if (fulldirty)
+			kms_fs_dirty(0, 0, sw - 1, sh - 1);
+		else
+			kms_fs_dirty(dx, dy, dx + dw - 1, dy + dh - 1);
 		fsg_dirty_us = (uint32_t)((prof_ns() - t) / 1000u);
 		if (fsg_expand_us > fsg_expand_max)
 			fsg_expand_max = fsg_expand_us;
