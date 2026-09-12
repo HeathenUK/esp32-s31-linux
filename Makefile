@@ -721,6 +721,42 @@ x11-stage:
 		printf "  %-24s %7d bytes\n" $$f $$(stat -f%z images/$$f 2>/dev/null || stat -c%s images/$$f); \
 	done
 
+# ---------------------------------------------------------------------------
+# /etc DOES NOT COME FROM FLASH.
+#
+# The XIP images cover usr/bin, usr/lib, usr/libexec and lib. Everything else,
+# /etc included, lives on the ext4 card, and the card is only rewritten by a
+# full re-image. So editing an init script in the overlay, committing it and
+# flashing changes NOTHING on a running board - the file is correct in the
+# repo and in the next image, and stale on the card in front of you.
+#
+# That cost a measurement: the fix that stops ntpd stepping the clock under a
+# running benchmark was committed, flashed twice, and never reached the board,
+# so the next run absorbed the step again and reported 0.1 fps.
+#
+# This pushes the overlay's /etc to the card and verifies it. ETC=<path>
+# restricts it to one file, relative to the overlay root.
+#
+#   make deploy-etc                      everything under overlay/etc
+#   make deploy-etc ETC=etc/init.d/S30clock    just that one
+# ---------------------------------------------------------------------------
+OVERLAY := $(BUILDROOT_EXTERNAL)/board/esp32-s31/overlay
+ETC ?=
+
+deploy-etc:
+	@set -e; \
+	if [ -n "$(ETC)" ]; then \
+		LIST="$(ETC)"; \
+	else \
+		LIST=$$(cd $(OVERLAY) && find etc -type f | sort); \
+	fi; \
+	for f in $$LIST; do \
+		test -f "$(OVERLAY)/$$f" || { echo "ERROR: $(OVERLAY)/$$f is missing" >&2; exit 1; }; \
+		echo "--- $$f"; \
+		python3 scripts/board/deploy.py "$(OVERLAY)/$$f" "/$$f" || exit 1; \
+	done; \
+	echo "deploy-etc: done. deploy.py verifies each file by md5 on both ends."
+
 xip-fast:
 	@echo "--- syncing overlay into the Buildroot target ---"
 	cp -a $(BUILDROOT_EXTERNAL)/board/esp32-s31/overlay/. $(BUILDROOT_OUT)/target/

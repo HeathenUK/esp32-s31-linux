@@ -490,13 +490,47 @@ static int slave_open(struct route *r)
 	 * frame repeat happens above plug, and plug passes 44100 through
 	 * untouched. S31ROUTE_DIRECT=1 restores the experiment.
 	 */
-	err = -ENODEV;
-	if (getenv("S31ROUTE_DIRECT"))
-		err = slave_try(r, 1, &pcm);
-	if (err < 0)
-		err = slave_try(r, 0, &pcm);
-	if (err < 0)
+	/*
+	 * RETRY THE FIRST OPEN. A hard failure here is not a missing device,
+	 * it is usually the PREVIOUS process not having let go yet: the codec
+	 * PCM takes a single opener, and a game started seconds after the last
+	 * one exited can arrive while the old handle is still being torn down.
+	 *
+	 * What makes that expensive is the client's reaction. prboom treats
+	 * -ENODEV on a write as unrecoverable: "ALSA write failed
+	 * (unrecoverable): No such device", I_ShutdownSound, and that process
+	 * plays nothing ever again. A whole benchmark run went by in silence
+	 * that way, and from outside it looked like sound was broken rather
+	 * than like one open having lost a race.
+	 *
+	 * So retry, but ONLY when there is nothing to fall back to. A sink
+	 * SWITCH still fails fast and leaves the stream on the old device,
+	 * which is what the comment above is about: retrying a switch would
+	 * stall audio that is currently fine.
+	 *
+	 * 8 tries, 40 ms apart. A close completes in far less than 320 ms, and
+	 * a genuinely absent device still reports in under a third of a second.
+	 */
+	{
+		int tries = old ? 1 : 8;
+
+		for (;;) {
+			err = -ENODEV;
+			if (getenv("S31ROUTE_DIRECT"))
+				err = slave_try(r, 1, &pcm);
+			if (err < 0)
+				err = slave_try(r, 0, &pcm);
+			if (err >= 0 || --tries <= 0)
+				break;
+			usleep(40000);
+		}
+	}
+	if (err < 0) {
+		if (!old)
+			SNDERR("s31route: could not open \"%s\" after "
+			       "retrying: %s", r->sink, snd_strerror(err));
 		return err;
+	}
 	r->slave = pcm;
 	if (old)
 		snd_pcm_close(old);
