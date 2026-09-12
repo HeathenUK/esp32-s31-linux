@@ -17,16 +17,25 @@ The same argument as `xlite` for libX11, and the numbers are more lopsided.
 So the whole surface is about 50 functions, and roughly 30 of them are the
 hw_params/sw_params setters, which are pure bookkeeping over one ioctl.
 
-Worse than the size is **where it lives**. It is in `XIP_SKIP`, so it sits on
-the SD card as ordinary page cache rather than in XIP flash. The recorded
-reason (docs/current-state.md) is that the two XIP images total 8,205,052
-bytes against 7,602,176 of partition, and that libasound is "NEEDED by lvdesk
-but only for the volume mixer and occasional PCM writes". That reasoning
-weighed lvdesk's volume slider and missed that **every audio client dlopens
-the same library and calls into it on every period**. The result is that 943 kB
-of the audio path is evictable page cache on the card, so a page can be
-re-read from SD in the middle of playback - a plausible mechanism for
-intermittent crackling, and one nothing in the current design prevents.
+**RETRACTED, 2026-09-12: libasound is NOT on the SD card.** The Makefile's
+`XIP_SKIP` names it, and the docs record the reasoning for leaving it on the
+card, so I asserted that its pages were evictable page cache sitting in the
+middle of the audio path and offered that as a mechanism for crackling. The
+board says otherwise: `/mnt/xip2/usr/lib/libasound.so.2.0.0` exists, so it is
+in XIP image 2, in flash, at zero RSS and not evictable. `XIP_SKIP` evidently
+only governs image 1's staging. The eviction story was wrong and there is no
+crackle mechanism there.
+
+What survives is the size argument alone, and it is weaker on its own: 943 kB
+of flash serving about 50 functions. Also on the record against it: the
+`SYNC_PTR` ioctl in libasound's hw layer was measured at ~10% of the audio
+path (docs/current-state.md).
+
+And an on-CPU page profile of prboom WITH SOUND does not show libasound at
+all - not one page above 0.3% of 1500 samples - nor s31route. The audio cost
+is inside prboom's own mixer and in syscalls. So this shim is a memory and
+tidiness argument, not a performance one, and it should not be sold as a
+performance fix.
 
 Already measured against it: the `SYNC_PTR` ioctl in libasound's hw layer was
 ~10% of the audio path (docs/current-state.md).
