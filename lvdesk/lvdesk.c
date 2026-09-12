@@ -3937,8 +3937,73 @@ static void xwin_on_mode(int w, int h)
 static int prof_on;			/* LVDESK_PROF; defined with the profiler below */
 static uint64_t prof_ns(void);
 
+/*
+ * FRAME GAPS, always on.
+ *
+ * "Hitching" has been chased through a proxy - bursts of major faults -
+ * without anyone ever measuring the hitch. A hitch is a frame that took too
+ * long to reach the panel, and this is the only place that knows when a
+ * fullscreen frame actually got there. Cheap enough to leave on: one clock
+ * read and a handful of compares per presented frame, against a frame that
+ * costs milliseconds.
+ *
+ * Buckets are inter-present intervals. At 25 fps a normal frame is ~40 ms,
+ * so anything past 100 ms is a stall a human sees. The worst eight are kept
+ * with the frame number so they can be lined up against whatever else was
+ * sampled at that moment.
+ */
+#define FSG_WORST 8
+static uint64_t fsg_last, fsg_frames;
+static uint32_t fsg_bucket[6];		/* <25 <50 <100 <200 <400 >=400 ms */
+static uint32_t fsg_worst_ms[FSG_WORST];
+static uint64_t fsg_worst_frame[FSG_WORST];
+
+static void fsg_note(void)
+{
+	uint64_t now = prof_ns();
+	uint32_t ms;
+	int i, w;
+
+	if (!fsg_last) {
+		fsg_last = now;
+		return;
+	}
+	ms = (uint32_t)((now - fsg_last) / 1000000u);
+	fsg_last = now;
+	fsg_frames++;
+	i = ms < 25 ? 0 : ms < 50 ? 1 : ms < 100 ? 2 :
+	    ms < 200 ? 3 : ms < 400 ? 4 : 5;
+	fsg_bucket[i]++;
+	w = 0;
+	for (i = 1; i < FSG_WORST; i++)
+		if (fsg_worst_ms[i] < fsg_worst_ms[w])
+			w = i;
+	if (ms > fsg_worst_ms[w]) {
+		fsg_worst_ms[w] = ms;
+		fsg_worst_frame[w] = fsg_frames;
+	}
+}
+
+static void fsg_report(void)
+{
+	int i;
+
+	printf("lvdesk: frames %llu  gaps <25:%u <50:%u <100:%u <200:%u "
+	       "<400:%u >=400:%u\n", (unsigned long long)fsg_frames,
+	       fsg_bucket[0], fsg_bucket[1], fsg_bucket[2], fsg_bucket[3],
+	       fsg_bucket[4], fsg_bucket[5]);
+	printf("lvdesk: worst gaps ms:");
+	for (i = 0; i < FSG_WORST; i++)
+		if (fsg_worst_ms[i])
+			printf(" %u@f%llu", fsg_worst_ms[i],
+			       (unsigned long long)fsg_worst_frame[i]);
+	printf("\n");
+	fflush(stdout);
+}
+
 static void fs_present(uint32_t id)
 {
+	fsg_note();
 	const uint16_t *pal, *px = NULL;
 	const uint8_t *src;
 	int sw, sh, sstride, dx, dy, dw, dh, y;
@@ -9101,7 +9166,8 @@ int main(void)
 				       "%u pointer; worst stall %u ms\n",
 				       kbd_dropped, mouse_dropped,
 				       (unsigned)kbd_worst_stall_ms);
-				printf("lvdesk: input lag avg %u ms, worst "
+				fsg_report();
+		printf("lvdesk: input lag avg %u ms, worst "
 				       "%u ms, over %u events\n",
 				       in_lag_n ? in_lag_sum / in_lag_n : 0,
 				       in_lag_max, in_lag_n);

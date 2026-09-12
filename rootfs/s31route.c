@@ -407,8 +407,23 @@ static int slave_try(struct route *r, int direct, snd_pcm_t **out)
 		 * unavoidable when the period does not fit in the hardware at
 		 * all, and is much cheaper than an xrun.
 		 */
-		if (buf > 1 && amin > buf / 2)
-			amin = buf / 2;
+		/*
+		 * ONLY when it is genuinely unsatisfiable. Clamping to half
+		 * the buffer unconditionally looked safer and was not: through
+		 * plug the sink buffer is much larger than the codec's, so
+		 * half of it is a threshold that takes far too long to reach,
+		 * and prboom sat in ppoll() with the PCM RUNNING, rendering 29
+		 * frames in four minutes. aplay never showed it because its
+		 * periods are large enough to cross the threshold anyway.
+		 *
+		 * The actual defect was avail_min EXCEEDING the buffer, which
+		 * alsa-lib clamps to the buffer size and which can then only
+		 * be satisfied by a completely empty sink - an underrun every
+		 * period. Leave one period of headroom and change nothing
+		 * else, so every case that already worked is untouched.
+		 */
+		if (amin > buf)
+			amin = buf > per ? buf - per : per;
 		if (amin < per)
 			amin = per;
 		if (amin > buf)
@@ -461,7 +476,23 @@ static int slave_open(struct route *r)
 	 * then leaves the stream where it was instead of returning -ENODEV
 	 * to an application that treats that as the end of sound.
 	 */
-	err = slave_try(r, 1, &pcm);
+	/*
+	 * plug FIRST, direct only on request.
+	 *
+	 * Opening hw: directly and skipping plug measured NOTHING - 27 ticks
+	 * against 28 over a 4 s aplay - and then broke prboom: SDL negotiates
+	 * a period the codec cannot give, the fallback leaves alsa-lib's state
+	 * machine unhappy, and the game blocks in snd_pcm_recover with
+	 * "Sound protocol is not compatible", rendering 9 frames in three
+	 * minutes. aplay was too forgiving a client to catch it.
+	 *
+	 * The conversion work this plugin does is unaffected either way: the
+	 * frame repeat happens above plug, and plug passes 44100 through
+	 * untouched. S31ROUTE_DIRECT=1 restores the experiment.
+	 */
+	err = -ENODEV;
+	if (getenv("S31ROUTE_DIRECT"))
+		err = slave_try(r, 1, &pcm);
 	if (err < 0)
 		err = slave_try(r, 0, &pcm);
 	if (err < 0)
