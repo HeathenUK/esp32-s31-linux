@@ -7890,6 +7890,56 @@ timedemo end never takes that path.
 the console handover still recreates a 768 kB fbdev client on every
 lvdesk stop.
 
+## FAILED: deep buffering in s31route, and why the ceiling is 93 ms (2026-09-12)
+
+The crackle in Doom is the frame dips, heard rather than seen, and it is
+arithmetic. The codec's ring is `ESP32S31_I2S_BUFFER_BYTES` = 16 KiB of
+uncached internal SRAM: 4,096 frames, **93 ms at 44100**. The desktop's frame
+gaps run 100-400 ms under load, 180-250 of them over 100 ms in a single
+timedemo. Every stall longer than 93 ms underruns the codec. That is why it
+happens in most runs but not every run.
+
+**The ring cannot grow.** `S31_AUDIO_DMA_BASE` 0x2F062000 + 0x8000 ends at
+0x2F06A000; `S31_HP_SHARED_BASE`, the hosted Wi-Fi transport ring, is at
+0x2F06AF80. That is 3,968 bytes of headroom, behind a build-time assert, worth
+11 ms. Growing downward takes SRAM from hart0's ESP-IDF where Wi-Fi and
+Bluetooth live. It must be internal SRAM: coherent memory on this SoC is
+cached PSRAM and a cached ring lets the DMA read stale samples.
+
+**The attempt.** Put the buffer in the plugin instead: expand the
+application's frames into a staging ring in ordinary PSRAM, accept them
+immediately, and drain to the codec from a worker thread. The application
+could then run (its own ring + the staging) ahead of the DAC.
+
+**It did not work, and it silenced the board.** Two bugs found and fixed and it
+still would not play:
+
+- Starting the sink in `route_start()` with an empty ring underran it within
+  milliseconds of every start.
+- Reporting the worker's `-EPIPE` up to the application threw the buffer away
+  at the moment it was needed and told SDL the stream had broken, which is how
+  sound vanishes for a whole run.
+- Still XRUN after both, with `/proc/asound` reporting `avail 4335` against a
+  4,096-frame buffer, which should not be possible. That is the thread to pull
+  if anyone tries again.
+
+Reverted with `git checkout`, not merely disabled. Sound confirmed working
+again afterwards: PCM state RUNNING, plugin md5 identical to the last good
+build.
+
+**And a design doubt to settle BEFORE writing any more code.** If a dip is the
+whole system stalling, the drain worker does not get the CPU either, and no
+amount of upstream buffering refills a 93 ms DMA ring that nobody can write
+to. Buffering only helps if the stall is the application's alone. That was
+assumed, never measured, and it is cheap to measure: sample whether a
+non-game thread runs during a 300 ms frame gap.
+
+The clean long-term answer is the hart0 transport in `shared/s31_audio_sram.h`,
+whose payload rings are already in PSRAM with `S31_AUDIO_RING_BYTES` a
+software constant. It is not what plays today - `/proc/asound/cards` shows only
+the simple-card - so using it means a new ALSA platform driver, which keeps
+standard ALSA above and gets deep buffering AND low latency below.
+
 ## prboom's config lives on the card, and level_precache is now on (2026-09-12)
 
 `/root/.prboom/prboom.cfg`, which the repo does not carry. Two settings there
