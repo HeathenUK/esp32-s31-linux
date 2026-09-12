@@ -3956,9 +3956,11 @@ static uint64_t prof_ns(void);
 static uint32_t fsg_present_us, fsg_present_max_us;
 static uint32_t fsg_expand_us, fsg_expand_max, fsg_dirty_us, fsg_dirty_max;
 static uint32_t fsg_dirty_bucket[5];	/* <1 <3 <6 <12 >=12 ms */
+static int fsg_vec_ok;			/* LVDESK_VEC=1 enables; see below */
 static uint64_t fsg_t_expand;
 #define FSG_LOG 96			/* every long frame, in order */
 #define FSG_MIN_MS 30			/* ~0.75 of a 40 ms frame at 25 fps */
+#define FSG_STALL_MS 55			/* clear of a normal frame; see fsg_note */
 static uint64_t fsg_last, fsg_frames;
 static uint32_t fsg_bucket[6];		/* <25 <50 <100 <200 <400 >=400 ms */
 static uint32_t fsg_log_ms[FSG_LOG];
@@ -4020,8 +4022,24 @@ static void fsg_note(void)
 	 * single 137 ms frame three minutes later. Both are real; only one was
 	 * visible in the report.
 	 */
+	/*
+	 * READ /proc/vmstat ONLY FOR A GENUINE STALL.
+	 *
+	 * This used to read it whenever a gap passed FSG_MIN_MS/2 = 15 ms,
+	 * and a normal frame here is ~40 ms - so it opened and parsed a 4 kB
+	 * proc file EVERY FRAME. Measured: 3.4 ms of an 11.4 ms present was
+	 * neither the expansion nor the kernel scale; it was this. The
+	 * instrument was costing 8% of the frame budget it was measuring,
+	 * which is the same trap as timing a path with a clock read that
+	 * costs more than the path.
+	 *
+	 * FSG_STALL_MS is well clear of a normal frame, so only a real stall
+	 * pays for the fault count - and a real stall is already long enough
+	 * that a few hundred microseconds of proc parsing does not change
+	 * what it tells us.
+	 */
 	if (ms >= FSG_MIN_MS && fsg_n < FSG_LOG) {
-		uint64_t mf = fsg_read_majflt();
+		uint64_t mf = ms >= FSG_STALL_MS ? fsg_read_majflt() : 0;
 
 		fsg_log_ms[fsg_n] = ms;
 		fsg_log_frame[fsg_n] = fsg_frames;
@@ -4029,11 +4047,6 @@ static void fsg_note(void)
 					 mf > fsg_last_majflt) ?
 					mf - fsg_last_majflt : 0;
 		fsg_n++;
-		if (mf)
-			fsg_last_majflt = mf;
-	} else if (ms >= FSG_MIN_MS / 2) {
-		uint64_t mf = fsg_read_majflt();
-
 		if (mf)
 			fsg_last_majflt = mf;
 	}
@@ -4158,7 +4171,88 @@ static void fs_present(uint32_t id)
 			 * so halving the stores is the whole optimisation.
 			 * Measured 3.37 ms per 320x240 frame before.
 			 */
-			if (((((uintptr_t)sp | (uintptr_t)dp) & 3u) == 0)) {
+			/*
+			 * VECTOR STORES, xespv 2.2.
+			 *
+			 * The destination is write-combining scanout memory,
+			 * where the number of stores is what costs: eight
+			 * 16-bit stores became four 32-bit ones for 9%, which
+			 * said the loop is store-bound but that halving was
+			 * not enough. This core has a 128-bit vector unit -
+			 * lvdesk is already built _xespv2p2 - so eight pixels
+			 * become ONE store, four times fewer again, and a
+			 * full-width store on write-combining memory is a
+			 * single burst rather than four partial writes.
+			 *
+			 * The palette lookup is a 256-entry gather and does
+			 * not vectorise, so it stays scalar into a 16-byte
+			 * aligned staging buffer on the (cached) stack; only
+			 * the crossing into uncached memory is vector. There
+			 * is no GPR-to-vector move in this ISA, which is why
+			 * the staging buffer exists rather than building the
+			 * value in registers.
+			 *
+			 * AND IT LOSES. Measured, 320x240 fullscreen:
+			 *
+			 *   scalar, paired 32-bit stores   3062 us
+			 *   vector, lane moves + 1 store   4550 us
+			 *   vector, staging buffer         6149 us
+			 *
+			 * One 128-bit store is SLOWER than four 32-bit
+			 * stores, which can only mean the write-combine
+			 * buffer already coalesces them in hardware - there
+			 * was never a store-width win to capture, and the
+			 * lane moves are pure added instructions. It also
+			 * explains the earlier 16-to-32-bit change buying
+			 * only 9%: that was fewer store instructions against
+			 * identical coalesced traffic.
+			 *
+			 * The lesson for the next attempt is not "vector is
+			 * useless here" but "find the part that is actually
+			 * data-parallel". This loop is a 256-entry gather,
+			 * which no vector unit on this chip can do, and a
+			 * store path the hardware already widens. Off by
+			 * default; LVDESK_VEC=1 re-enables it so the
+			 * comparison can be repeated without relinking.
+			 */
+			if (fsg_vec_ok && ((uintptr_t)dp & 15u) == 0 &&
+			    ((uintptr_t)sp & 3u) == 0) {
+				uint16_t *vd = dp;
+
+				for (; k + 7 < dw; k += 8) {
+					uint32_t a4 = *(const uint32_t *)(sp + k);
+					uint32_t b4 = *(const uint32_t *)(sp + k + 4);
+					uint32_t p0, p1, p2, p3;
+
+					/* Pack in GPRs, move straight into the
+					 * vector lanes. The first version went
+					 * through a staging buffer and was 2x
+					 * SLOWER than the scalar path (6149 us
+					 * against 3062): eight cached stores
+					 * plus a load cost more than the four
+					 * uncached stores they replaced. With
+					 * esp.movi.32.q there is no memory
+					 * round trip at all. */
+					p0 = (uint32_t)pal[a4 & 0xff] |
+					     ((uint32_t)pal[(a4 >> 8) & 0xff] << 16);
+					p1 = (uint32_t)pal[(a4 >> 16) & 0xff] |
+					     ((uint32_t)pal[(a4 >> 24) & 0xff] << 16);
+					p2 = (uint32_t)pal[b4 & 0xff] |
+					     ((uint32_t)pal[(b4 >> 8) & 0xff] << 16);
+					p3 = (uint32_t)pal[(b4 >> 16) & 0xff] |
+					     ((uint32_t)pal[(b4 >> 24) & 0xff] << 16);
+					__asm__ volatile(
+						"esp.movi.32.q q0, %[a], 0\n\t"
+						"esp.movi.32.q q0, %[b], 1\n\t"
+						"esp.movi.32.q q0, %[c], 2\n\t"
+						"esp.movi.32.q q0, %[e], 3\n\t"
+						"esp.vst.128.ip q0, %[d], 16"
+						: [d] "+r"(vd)
+						: [a] "r"(p0), [b] "r"(p1),
+						  [c] "r"(p2), [e] "r"(p3)
+						: "memory");
+				}
+			} else if (((((uintptr_t)sp | (uintptr_t)dp) & 3u) == 0)) {
 				uint32_t *dw32 = (uint32_t *)dp;
 
 				for (; k + 7 < dw; k += 8) {
@@ -8563,6 +8657,7 @@ int main(void)
 	 */
 	term_log = getenv("LVDESK_TERMLOG") != NULL;
 	prof_on = getenv("LVDESK_PROF") != NULL;
+	fsg_vec_ok = getenv("LVDESK_VEC") != NULL;
 	rect_log = getenv("LVDESK_RECTLOG") != NULL;
 	/*
 	 * Interrupting poll() is wanted here, not a problem: the loop re-runs
