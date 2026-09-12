@@ -7890,6 +7890,27 @@ timedemo end never takes that path.
 the console handover still recreates a 768 kB fbdev client on every
 lvdesk stop.
 
+## prboom's config lives on the card, and level_precache is now on (2026-09-12)
+
+`/root/.prboom/prboom.cfg`, which the repo does not carry. Two settings there
+matter and both are easy to lose to a re-image:
+
+    level_precache                 1      <- enabled 2026-09-12, by request
+    samplerate                 22050
+    sound_card                    -1      (-1 is autodetect, NOT off)
+
+`level_precache` was 0. It is on now. An earlier sweep of precache, swappiness
+and readahead found no effect on the hitching (a6b3688), but that was judged
+against a frame instrument later found to be measuring CPU time rather than
+wall clock, so the earlier null is not evidence. It has not been re-measured.
+
+Benchmarks here run WITH sound from now on. `-nosound` measures a case nobody
+plays, and sound is the worst case: same binary, warm, back to back, 23.0 fps
+with sound against 26.9 without - 6.3 ms a frame. That cost lands inside
+prboom (its own mixer and its ALSA writes), not in the desktop: per-process
+accounting during a sounded run gives prboom 56% of the machine, lvdesk 37%,
+idle 11%, and lvdesk's share is the same either way.
+
 ## RESOLVED: the bare `./prboom` "freeze" was 640x480, and an empty config (2026-09-11)
 
 Reproduced with both sides traced: the bare launch came up fullscreen at
@@ -8140,3 +8161,48 @@ the record; NOT in the menu. sdlquake remains the Quake.
 Tooling note: `freetrace.so` now also traces exit() callers - a silent
 exit(1) resolved to Sys_Error in one run, and its message had been in the
 log all along, above the block-buffered stdout lines that print at exit.
+
+## SDL2 fullscreen on the shim, and the 32-bit scanout path (2026-09-11, evening)
+
+**SDL2 has no VidMode.** This build has neither XRandR nor Xxf86vm, so its
+mode list is the one desktop mode and every fullscreen request is
+"desktop fullscreen": SDL2 asks the window manager for
+_NET_WM_STATE_FULLSCREEN (a ClientMessage to the root, or the property set
+at creation), and sizes the window to what it believes the desktop is. The
+shim never answered either, so `-fullscreen` produced a plain window.
+
+**What the shim does now** (xshim, commit 9ed26b6):
+- Interned atoms are numbered above the 68 predefined ones. They started
+  at 1, so a client's first InternAtom was also XA_PRIMARY and its 39th
+  could be WM_NAME - which is why SDL2's _NET_WM_NAME title and its
+  _NET_WM_STATE could never be recognised by name.
+- _NET_WM_STATE FULLSCREEN is honoured from the property (SDL2 sets it
+  before mapping; applied at MapWindow) and from the client message. A
+  window that fits a VidMode mode gets that mode, exactly as VidMode
+  clients do - the window keeps its size and the PPA scales it. A window
+  the size of the panel or larger (SDL2's case: it grew the window to
+  800x600, its idea of the desktop) is presented through the direct
+  scanout path at the panel's size, cropped.
+- Found on the way: the DeleteProperty case fell through into the next
+  label, so every DeleteProperty ran the SendEvent handler on garbage.
+
+**The 32-bit scanout path** (patch 0038, kernel #187): the plane accepts
+XRGB8888; a 32-bit framebuffer is forced onto the PPA scaler with RX
+colour mode ARGB8888, so the 32->16 conversion rides the scale pass that
+was already there. lvdesk gives a depth-32 fullscreen window a 32 bpp
+mode buffer and copies its rows raw. Nothing on the 16-bit path changed.
+Verified by screenshot: chocolate-doom fullscreen on the 0x23 visual,
+title and gameplay on the whole panel, colours right.
+
+**Measured, chocolate-doom, demo1, no sound:**
+
+| configuration | fps |
+|---|---|
+| windowed 320x200, 16-bit window (yesterday) | 10.7 |
+| windowed 320x200, 32-bit window, CPU shadow conversion | 5.5 |
+| windowed 320x200, 32-bit window, upscale textures off by config | 5.4 |
+| fullscreen (panel-size window), 32-bit through the PPA | see below |
+
+The windowed 32-bit result did not move with the config change because
+its cost is lvdesk's per-pixel 32->16 shadow conversion, which only the
+fullscreen path avoids.
