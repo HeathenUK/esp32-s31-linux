@@ -1,0 +1,49 @@
+ASoC: es8389: add an 11025 Hz coefficient row for this board
+
+Copy es8389.c back over linux-71-port/sound/soc/codecs/es8389.c before
+building. Kernel only - no DTS change, so `make linux` alone is enough.
+
+WHY
+Doom's sound effects are 11025 Hz, and prboom's mixer (SDL/i_sound.c,
+I_UpdateSound) is a per-output-sample loop over all eight channels doing a
+linear interpolation and two volume lookups each. Its cost therefore scales
+LINEARLY with the output rate: 44100 is four times the work of 11025. At
+11025 the per-channel step is (lump_rate << 16) / snd_samplerate = 65536
+exactly, so stepremainder stays zero and the interpolation degenerates to a
+copy - no resampling, no error. prboom's own built-in default is 11025 and
+its buffer sizing is written as SAMPLECOUNT * snd_samplerate / 11025.
+
+The codec could not do it, so every low-rate stream on this board was being
+converted somewhere - by alsa-lib's float resampler, or by our s31route
+plugin repeating frames. Both are work that exists only because of a missing
+table row.
+
+WHAT WAS MISSING
+coeff_div[] is a vendor characterisation table, and it populates the 8 kHz
+and 48 kHz families heavily while giving the 44.1 kHz family only ratios 32
+to 512. There is no 11025 and no 22050 entry anywhere in it. get_coeff()
+matches on (rate, mclk) exactly, so an unlisted rate is simply refused.
+
+This is not a silicon limit:
+  - The DAI already advertises the rate: es8389_RATES is
+    SNDRV_PCM_RATE_8000_96000, which includes 11025.
+  - The chip already runs ratio 256 (five rates use it) and already runs
+    MCLK 2822400 (44100 at ratio 64).
+  - 11025 * 256 = 2822400, and our I2S driver fixes MCLK at rate * 256
+    (ESP32S31_I2S_MCLK_MULTIPLE), so that is exactly the pair it will ask
+    for.
+
+THE REGISTERS ARE CLONED FROM THE 44100 RATIO-256 ROW, AND THAT IS A GUESS
+Defensible, because 44100 and 48000 share that row BYTE FOR BYTE despite
+being 8% apart - these values are not a fine per-rate calibration.
+
+But three columns do track the rate across families:
+    8 kHz    0x09 0x19 0x07
+   16 kHz    0x12 0x31 0x0E
+   44.1/48   0x35 0x91 0x28
+They are plausibly a filter or oversampling setting. If 11025 comes out
+muffled, aliased or at the wrong pitch - as opposed to silent - that triple
+is the thing to scale.
+
+VERIFY BY EAR. s31-audio-verify-by-ear: instruments on this board have called
+a pure-noise stream "working" four separate times.
