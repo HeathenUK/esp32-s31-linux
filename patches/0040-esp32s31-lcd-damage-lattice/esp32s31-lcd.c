@@ -1113,6 +1113,23 @@ module_param(ppa_min_bytes, uint, 0644);
 static unsigned int ppa_policy = 1;
 module_param(ppa_policy, uint, 0644);
 MODULE_PARM_DESC(ppa_policy, "0 = fixed ppa_min_bytes threshold, 1 = adaptive per size bucket");
+/*
+ * PIN THE ENGINE, for telling the two of them apart.
+ *
+ * The CPU scaler and the PPA are supposed to produce identical pixels and for
+ * a long time they did not: the CPU path maps every output row back through
+ * the frame's ratio, while the engine derived its factor from each damage
+ * rectangle. The adaptive picker alternated between them, so the artifact
+ * came and went and looked like a race. Nothing could hold one engine still
+ * long enough to compare, and that is what made it expensive to find.
+ *
+ * 0 = adaptive (the default and what ships), 1 = always the CPU, 2 = always
+ * the engine. Runtime, so a suspect frame can be reproduced on each in turn
+ * without a rebuild.
+ */
+static unsigned int force_eng;
+module_param(force_eng, uint, 0644);
+MODULE_PARM_DESC(force_eng, "0 = adaptive, 1 = always the CPU scaler, 2 = always the PPA");
 static bool ppa_async = true;
 module_param(ppa_async, bool, 0644);
 MODULE_PARM_DESC(ppa_async, "return from the commit while the PPA runs");
@@ -2671,6 +2688,10 @@ static void esp32s31_lcd_copy_one(struct esp32s31_lcd *lcd,
 	/* The CPU can only take what it can address, and scale what it can map. */
 	if (!obj->vaddr || (scaled && !lcd->scale_xmap) ||
 	    fb->format->cpp[0] == 4)	/* 32-bit: only the engine converts */
+		eng = ESP32S31_ENG_PPA;
+	else if (force_eng == 1)
+		eng = ESP32S31_ENG_CPU;
+	else if (force_eng == 2)
 		eng = ESP32S31_ENG_PPA;
 	else
 		eng = esp32s31_lcd_eng_pick(lcd, sc, b, obytes);

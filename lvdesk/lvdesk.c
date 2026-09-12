@@ -4075,6 +4075,17 @@ static void fsg_note(void)
 	(void)w;
 }
 
+/*
+ * Rows the row-hash cache let us leave alone, and frames it skipped whole.
+ * rows_seen is the denominator - "kept" alone cannot tell a cache that is not
+ * helping from a client that is genuinely repainting. forced counts frames
+ * where something invalidated every row (a new palette, a new scanout buffer,
+ * a change of window), which is the first thing to suspect when kept stays
+ * near zero on content that looks still.
+ */
+static unsigned long fsrh_rows_kept, fsrh_frames_skipped;
+static unsigned long fsrh_rows_seen, fsrh_forced, fsrh_presents, fsrh_skipped;
+
 static void fsg_report(void)
 {
 	int i;
@@ -4089,6 +4100,13 @@ static void fsg_report(void)
 	printf("lvdesk: dirty ms <1:%u <3:%u <6:%u <12:%u >=12:%u\n",
 	       fsg_dirty_bucket[0], fsg_dirty_bucket[1], fsg_dirty_bucket[2],
 	       fsg_dirty_bucket[3], fsg_dirty_bucket[4]);
+	printf("lvdesk: rowskip presents %lu, rows %lu/%lu kept (%lu%%), "
+	       "frames forced %lu, skipped whole %lu\n",
+	       fsrh_presents, fsrh_rows_kept, fsrh_rows_seen,
+	       fsrh_rows_seen ? fsrh_rows_kept * 100 / fsrh_rows_seen : 0,
+	       fsrh_forced, fsrh_frames_skipped);
+	printf("lvdesk: rowskip scans stood down on %lu presents\n",
+	       fsrh_skipped);
 	printf("lvdesk: long frames (>=%d ms) n=%d:", FSG_MIN_MS, fsg_n);
 	for (i = 0; i < fsg_n; i++)
 		printf(" f%llu:%ums/mf%llu",
@@ -4096,6 +4114,125 @@ static void fsg_report(void)
 		       (unsigned long long)fsg_log_majflt[i]);
 	printf("\n");
 	fflush(stdout);
+}
+
+/*
+ * WHAT WE LAST WROTE TO EACH SCANOUT ROW.
+ *
+ * An SDL 1.2 client reaches the shim through xlite-SHM, which reports that
+ * the surface changed and nothing about WHERE - so every frame repainted the
+ * whole window: a full palette expansion into write-combining scanout memory
+ * and then a full-frame scale in the driver. The client does not know either
+ * (SDL_Flip hands over the whole surface), so the only place the answer
+ * exists is here, where every source byte is read anyway.
+ *
+ * Hash the row, then expand it only if the hash moved. The re-read is from
+ * L1 - a row is 320 to 800 bytes - so what this costs is one multiply per
+ * four bytes, and what it saves is the store pass into uncached memory plus
+ * the driver's scale of those rows. The same trade xshim already makes on
+ * its MIT-SHM path, moved to where the zero-copy clients are.
+ *
+ * The palette is part of the answer: identical indices through a different
+ * palette are different pixels, and Doom changes the palette on every damage
+ * flash. It is folded into the seed, so a palette change invalidates every
+ * row at once. So does a new scanout buffer (kms_fs_gen) and a change of
+ * window or geometry.
+ */
+static uint32_t *fsrh;			/* one hash per source row */
+static int fsrh_h;
+static uint32_t fsrh_id, fsrh_seed, fsrh_gen;
+static int fsrh_valid;
+
+static int fsrh_on(void)
+{
+	static int v = -1;
+
+	if (v < 0)
+		v = getenv("LVDESK_NOROWSKIP") == NULL;
+	return v;
+}
+
+/* 32-bit FNV-1a: one native multiply per word on this core. */
+static uint32_t fsrh_hash(const void *p, size_t n, uint32_t h)
+{
+	const uint8_t *b = (const uint8_t *)p;
+	size_t i = 0;
+
+	if (((uintptr_t)b & 3u) == 0) {
+		const uint32_t *w = (const uint32_t *)p;
+		size_t nw = n / 4;
+
+		for (; i < nw; i++)
+			h = (h ^ w[i]) * 16777619u;
+		i *= 4;
+	}
+	for (; i < n; i++)
+		h = (h ^ b[i]) * 16777619u;
+	return h;
+}
+
+/*
+ * Frames left to skip the row scan entirely. See fsrh_begin().
+ */
+static unsigned fsrh_probe;
+
+/*
+ * Re-arm the cache for this window.
+ *
+ * Returns FSRH_USE to trust the hashes, FSRH_FORCE to hash but treat every
+ * row as changed, or FSRH_OFF to not hash at all.
+ *
+ * FSRH_OFF exists because the hash is NOT free here. Unchanged rows cost a
+ * read and the multiplies instead of a read and a store pass, which is a win.
+ * Changed rows cost the hash on top of the expansion they were going to pay
+ * anyway. Which of those dominates is a property of the client, not of the
+ * code: prboom playing demo1 keeps 337 rows out of 77,243, because an action
+ * game redraws its view every frame and the status bar's digits and face
+ * animate. A still client keeps nearly all of them.
+ *
+ * So stand down when a scan finds less than an eighth of the rows unchanged,
+ * and try again 64 frames later. An action game pays the scan on one frame in
+ * 64; a still one pays it always and stops repainting altogether. The same
+ * shape as the driver's CPU-versus-PPA picker, for the same reason: the right
+ * answer depends on the workload and cannot be chosen at build time.
+ */
+enum { FSRH_USE = 0, FSRH_FORCE = 1, FSRH_OFF = 2 };
+
+static int fsrh_begin(uint32_t id, int h, const uint16_t *pal)
+{
+	uint32_t seed = 2166136261u;
+
+	if (!fsrh_on())
+		return FSRH_OFF;
+	if (fsrh_probe) {
+		fsrh_probe--;
+		/*
+		 * The hashes go stale while the scan is off, so the first
+		 * scan after standing down cannot trust them.
+		 */
+		fsrh_valid = 0;
+		return FSRH_OFF;
+	}
+	if (pal)
+		seed = fsrh_hash(pal, 256 * sizeof *pal, seed);
+	if (h != fsrh_h) {
+		free(fsrh);
+		fsrh = calloc((size_t)(h > 0 ? h : 1), sizeof *fsrh);
+		fsrh_h = fsrh ? h : 0;
+		fsrh_valid = 0;
+	}
+	if (!fsrh)
+		return FSRH_OFF;
+	if (id != fsrh_id || seed != fsrh_seed || kms_fs_gen != fsrh_gen)
+		fsrh_valid = 0;
+	fsrh_id = id;
+	fsrh_seed = seed;
+	fsrh_gen = kms_fs_gen;
+	if (!fsrh_valid) {
+		fsrh_valid = 1;
+		return FSRH_FORCE;
+	}
+	return FSRH_USE;
 }
 
 static void fs_present(uint32_t id)
@@ -4157,6 +4294,12 @@ static void fs_present(uint32_t id)
 		px = xshim_window_pixels(id, &sw, &sh);
 		if (!px)
 			return;
+		/*
+		 * A 16-bit surface has no palette. Leaving the one
+		 * xshim_window_indices() wrote would fold a stale pointer's
+		 * contents into the row seed.
+		 */
+		pal = NULL;
 		sstride = sw;
 	}
 	if (!xshim_window_take_damage(id, &dx, &dy, &dw, &dh)) {
@@ -4171,10 +4314,51 @@ static void fs_present(uint32_t id)
 	if (dw <= 0 || dh <= 0)
 		return;
 	fsg_t_expand = prof_ns();
+	{
+	int rmode = fsrh_begin(id, sh, pal);
+	int rforce = rmode != FSRH_USE;
+	int cy0 = -1, cy1 = -1;
+	unsigned rkept = 0;
+
+	fsrh_presents++;
+	fsrh_rows_seen += (unsigned long)dh;
+	if (rmode == FSRH_FORCE)
+		fsrh_forced++;
+	if (rmode == FSRH_OFF)
+		fsrh_skipped++;
+
 	for (y = dy; y < dy + dh; y++) {
 		uint16_t *dp = (uint16_t *)(kms_fs_map + (size_t)y * kms_fs_pitch)
 			       + dx;
 		int k = 0;
+		int bpp1 = px ? 2 : 1;
+		const uint8_t *row = px ? (const uint8_t *)(px + (size_t)y *
+							    sstride + dx)
+					: src + (size_t)y * sstride + dx;
+
+		/*
+		 * Hash first, expand second. Unchanged rows cost the read and
+		 * the multiplies and nothing else - no stores into uncached
+		 * scanout memory, and no rows added to the rectangle the
+		 * driver has to scale.
+		 */
+		if (fsrh && rmode == FSRH_USE) {
+			uint32_t hv = fsrh_hash(row, (size_t)dw * bpp1,
+						2166136261u);
+
+			if (hv == fsrh[y]) {
+				fsrh_rows_kept++;
+				rkept++;
+				continue;
+			}
+			fsrh[y] = hv;
+		} else if (fsrh && rmode == FSRH_FORCE) {
+			fsrh[y] = fsrh_hash(row, (size_t)dw * bpp1,
+					    2166136261u);
+		}
+		if (cy0 < 0)
+			cy0 = y;
+		cy1 = y;
 
 		if (px) {
 			memcpy(dp, px + (size_t)y * sstride + dx, (size_t)dw * 2);
@@ -4263,16 +4447,38 @@ static void fs_present(uint32_t id)
 					     ((uint32_t)pal[(b4 >> 8) & 0xff] << 16);
 					p3 = (uint32_t)pal[(b4 >> 16) & 0xff] |
 					     ((uint32_t)pal[(b4 >> 24) & 0xff] << 16);
+					/*
+					 * PIN THE REGISTERS. esp.movi.32.q
+					 * encodes its GPR in four bits, so it
+					 * only reaches x8-x15 - the compressed
+					 * register set. A plain "r" constraint
+					 * lets GCC pick anything, and it does:
+					 * an unrelated edit to this function
+					 * changed the allocation and the build
+					 * died with "illegal operands
+					 * esp.movi.32.q q0,t1,1" (t1 is x6).
+					 * There is no GCC constraint for that
+					 * subset on RISC-V, so name the
+					 * registers. Applies to every esp.movi
+					 * in this tree.
+					 */
+					register uint32_t r0 __asm__("a0") = p0;
+					register uint32_t r1 __asm__("a1") = p1;
+					register uint32_t r2 __asm__("a2") = p2;
+					register uint32_t r3 __asm__("a3") = p3;
+					register uint16_t *rd __asm__("a4") = vd;
+
 					__asm__ volatile(
 						"esp.movi.32.q q0, %[a], 0\n\t"
 						"esp.movi.32.q q0, %[b], 1\n\t"
 						"esp.movi.32.q q0, %[c], 2\n\t"
 						"esp.movi.32.q q0, %[e], 3\n\t"
 						"esp.vst.128.ip q0, %[d], 16"
-						: [d] "+r"(vd)
-						: [a] "r"(p0), [b] "r"(p1),
-						  [c] "r"(p2), [e] "r"(p3)
+						: [d] "+r"(rd)
+						: [a] "r"(r0), [b] "r"(r1),
+						  [c] "r"(r2), [e] "r"(r3)
 						: "memory");
+					vd = rd;
 				}
 			} else if (((((uintptr_t)sp | (uintptr_t)dp) & 3u) == 0)) {
 				uint32_t *dw32 = (uint32_t *)dp;
@@ -4296,6 +4502,25 @@ static void fs_present(uint32_t id)
 			for (; k < dw; k++)
 				dp[k] = pal[sp[k]];
 		}
+	}
+	/*
+	 * Not one row moved. Nothing was written, so there is nothing to
+	 * show: no DIRTYFB, no commit, no scale. This is the whole win on a
+	 * client that is mostly still.
+	 */
+	/*
+	 * Was the scan worth making? Only a real scan can answer - a forced
+	 * pass keeps nothing by construction, so it must not be counted
+	 * against the client.
+	 */
+	if (rmode == FSRH_USE && rkept < (unsigned)dh / 8)
+		fsrh_probe = 63;
+	if (cy0 < 0) {
+		fsrh_frames_skipped++;
+		return;
+	}
+	dh = cy1 - cy0 + 1;
+	dy = cy0;
 	}
 	{
 		/*

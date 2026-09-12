@@ -157,6 +157,12 @@ struct res {
 	 */
 	uint32_t wrgen;
 	uint32_t rowhash_gen;
+	/*
+	 * Frames left to skip the row scan on the zero-copy path. See
+	 * xlrd_try(): hashing there is a read pass the server does not
+	 * otherwise make, so it has to earn its place per client.
+	 */
+	uint8_t hprobe;
 	int ax, ay;			/* our origin within that buffer */
 	int cx0, cy0, cx1, cy1;		/* clip, in that buffer's coords */
 	/*
@@ -229,6 +235,27 @@ static void wr_touch(struct res *b)
 {
 	if (b)
 		b->wrgen++;
+}
+
+/* 32-bit FNV-1a. One native multiply per word; the 64-bit constants have to
+ * be synthesised on this core and cost more than they save. */
+static uint32_t row_hash(const void *p, size_t n)
+{
+	const uint8_t *b = (const uint8_t *)p;
+	uint32_t h = 2166136261u;
+	size_t i = 0;
+
+	if (((uintptr_t)b & 3u) == 0) {
+		const uint32_t *w = (const uint32_t *)p;
+		size_t nw = n / 4;
+
+		for (; i < nw; i++)
+			h = (h ^ w[i]) * 16777619u;
+		i *= 4;
+	}
+	for (; i < n; i++)
+		h = (h ^ b[i]) * 16777619u;
+	return h;
 }
 
 struct cli {
@@ -489,6 +516,50 @@ static int rowdmg_on(void)
 static unsigned long nshmput;
 /* Frames whose every row hashed identical - nothing presented at all. */
 static unsigned long nrow_skip;	/* MIT-SHM ShmPutImage requests served */
+static unsigned long xlrd_scans, xlrd_rows, xlrd_kept, xlrd_off, xlrd_still;
+
+/*
+ * ROW DAMAGE ON THE ZERO-COPY PATH.
+ *
+ * An SDL 1.2 client writes its indices straight into the memfd that IS the
+ * window's surface and then sends xlite-SHM "Damaged", which said the surface
+ * changed and nothing about where. dmg_valid stayed unset, so the desktop
+ * invalidated the whole window, LVGL flushed the whole window, the PPA
+ * expanded every index through the palette and the driver scaled and
+ * committed every row. Every frame, however little moved.
+ *
+ * The client cannot help: SDL_Flip hands over the whole surface. So find out
+ * here, by hashing the rows.
+ *
+ * THE CATCH, and why this is adaptive rather than unconditional. On the
+ * MIT-SHM path the hash is free: that path already reads every source byte to
+ * copy it, so hashing is ALU on data in flight. Here NOTHING reads the
+ * surface - that is the entire point of the zero-copy path - so the scan is a
+ * read pass the server would not otherwise make, ~77 kB a frame for a
+ * 320x240 client.
+ *
+ * Measured, prboom playing demo1: 0% of rows unchanged. An action game
+ * redraws the view every frame and the status bar's digits and face animate,
+ * so there is nothing to keep and the scan is pure loss. A still client is
+ * the opposite. Both are common and neither is the default case.
+ *
+ * So: scan, and if a scan finds less than an eighth of the rows unchanged,
+ * stop scanning for the next 63 frames and report no rectangle exactly as
+ * before. An action game pays the scan on one frame in 64, ~1.5%; a still
+ * client pays it every frame and stops repainting entirely. Same shape as the
+ * driver's engine picker, and for the same reason: which side of the line a
+ * client falls on is not knowable in advance.
+ *
+ * XSHIM_NOXLDMG=1 turns the whole thing off.
+ */
+static int xlrd_on(void)
+{
+	static int v = -1;
+
+	if (v < 0)
+		v = getenv("XSHIM_NOXLDMG") == NULL;
+	return v;
+}
 
 /*
  * A one-entry-per-bucket index over the resource table.
@@ -1046,6 +1117,11 @@ void xshim_mem_report(void)
 		nreqs, nreplies, nreqs ? nreplies * 100 / nreqs : 0);
 	fprintf(stderr, "xshim: %lu MIT-SHM ShmPutImage, %lu identical "
 		"(no rows changed)\n", nshmput, nrow_skip);
+	fprintf(stderr, "xshim: xlite-SHM row scans %lu, rows %lu/%lu kept "
+		"(%lu%%), frames still %lu, scans skipped %lu\n",
+		xlrd_scans, xlrd_kept, xlrd_rows,
+		xlrd_rows ? xlrd_kept * 100 / xlrd_rows : 0,
+		xlrd_still, xlrd_off);
 	size_t d1 = 0, empty = 0;
 
 	fprintf(stderr, "xshim: %d window buffers %zu kB, %d pixmaps %zu kB, "
@@ -5382,11 +5458,95 @@ static void xshm_request(struct cli *c, const uint8_t *r, int len)
 		 * is by definition "who owns the pixels we draw into", so it
 		 * is the res whose shadow an expansion actually fills.
 		 */
+		{
+			struct res *b = p->buf ? p->buf : p;
+			int y, cy0 = -1, cy1 = -1, scanned = 0;
+
+			if (xlrd_on() && b && b->px && b->w > 0 && b->h > 0 &&
+			    b->ax == 0 && b->ay == 0) {
+				if (b->hprobe) {
+					b->hprobe--;
+					xlrd_off++;
+				} else if (b->rowhash_h != b->h) {
+					free(b->rowhash);
+					b->rowhash = calloc((size_t)b->h,
+							    sizeof *b->rowhash);
+					b->rowhash_h = b->rowhash ? b->h : 0;
+					b->rowhash_gen = b->wrgen - 1;
+				}
+			}
+			if (b && b->rowhash && b->rowhash_h == b->h &&
+			    !b->hprobe && xlrd_on()) {
+				size_t stride = (size_t)b->w * b->bpp;
+				/*
+				 * A foreign writer since the last scan - an
+				 * ordinary drawing op, a clear punched to a
+				 * hole, an alias break, a new palette - means
+				 * the hashes describe pixels that are gone.
+				 */
+				int force = (b->rowhash_gen != b->wrgen) ||
+					    b->hole;
+				unsigned kept = 0;
+
+				b->rowhash_gen = b->wrgen;
+				for (y = 0; y < b->h; y++) {
+					uint32_t hv = row_hash((const uint8_t *)
+							       b->px +
+							       (size_t)y *
+							       stride, stride);
+
+					if (!force && hv == b->rowhash[y]) {
+						kept++;
+						continue;
+					}
+					b->rowhash[y] = hv;
+					if (cy0 < 0)
+						cy0 = y;
+					cy1 = y;
+				}
+				scanned = 1;
+				xlrd_scans++;
+				xlrd_rows += (unsigned long)b->h;
+				xlrd_kept += kept;
+				/*
+				 * Not worth the read pass on this client.
+				 * Stand down and try again in 64 frames.
+				 */
+				if (kept < (unsigned)b->h / 8)
+					b->hprobe = 63;
+				if (cy0 < 0) {
+					/*
+					 * Nothing moved. Report nothing: no
+					 * dirty flag, no notify, no repaint.
+					 * This is the whole win on a client
+					 * that is sitting still.
+					 */
+					xlrd_still++;
+					return;
+				}
+				damage_add(b, 0, cy0, b->w, cy1 - cy0 + 1);
+				/*
+				 * "Damaged" means the client has written real
+				 * pixels, so the surface is no longer a hole -
+				 * and clearing it here rather than leaving it
+				 * on the child keeps the next scan's force
+				 * condition from firing for ever.
+				 */
+				b->hole = 0;
+			}
+			(void)scanned;
+		}
 		if (p->buf)
 			p->buf->dirty = 1;
 		p->dirty = 1;
 		p->hole = 0;
-		wr_touch(p->buf ? p->buf : p);
+		/*
+		 * NO wr_touch() here. On every other path it means "someone
+		 * other than the row hashes wrote these pixels". Here the
+		 * writer IS the client whose writes the hashes record, so
+		 * bumping the generation would force every row every frame and
+		 * the scan above could never skip anything.
+		 */
 		notify_draw(p);
 	}
 }
@@ -6727,8 +6887,18 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		 */
 		for (i = 0; i < MAXRES; i++)
 			if (res[i].type == R_WINDOW &&
-			    res[i].owner == (int)(c - cli) && res[i].bpp == 1)
+			    res[i].owner == (int)(c - cli) && res[i].bpp == 1) {
 				res[i].dirty = 1;
+				/*
+				 * And the row hashes are now lying. They
+				 * record INDICES, which have not changed; what
+				 * changed is what those indices mean, so an
+				 * unchanged row is a changed picture. Doom
+				 * flashes the palette on every pickup and
+				 * every hit, so this is not a corner case.
+				 */
+				wr_touch(res[i].buf ? res[i].buf : &res[i]);
+			}
 		break;
 	}
 	case 91: {					/* QueryColors */

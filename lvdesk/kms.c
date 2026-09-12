@@ -525,6 +525,12 @@ static int kms_setcrtc(uint32_t fb_id, const struct drm_mode_modeinfo *m)
 }
 
 uint32_t kms_fs_bpp;
+/*
+ * Bumped whenever the scanout buffer is recreated or cleared. Anything
+ * caching "what we last wrote to a scanout row" has to throw that away when
+ * the rows underneath it are new memory.
+ */
+uint32_t kms_fs_gen;
 
 int kms_fs_enter(int w, int h, int bpp)
 {
@@ -579,6 +585,7 @@ int kms_fs_enter(int w, int h, int bpp)
 		return -1;
 	}
 	memset(kms_fs_map, 0, fs_size);
+	kms_fs_gen++;
 	/*
 	 * Timings are nominal: the driver drives the panel at its own and
 	 * reads only the size from this. They just have to be a legal mode.

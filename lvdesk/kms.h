@@ -58,6 +58,7 @@ int kms_dirty_rects(const struct kms_rect *r, int n);
 /* A client's video mode scanned out directly; see kms.c. */
 extern uint8_t *kms_fs_map;
 extern uint32_t kms_fs_pitch, kms_fs_w, kms_fs_h, kms_fs_bpp;
+extern uint32_t kms_fs_gen;
 int kms_fs_enter(int w, int h, int bpp);
 void kms_fs_leave(void);
 int kms_fs_dirty(int x1, int y1, int x2, int y2);	/* inclusive */

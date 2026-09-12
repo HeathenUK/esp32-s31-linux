@@ -27,11 +27,25 @@ The origin was already aligned down to the engine's 32-pixel macro block,
 which happens to be a multiple of the lattice step here, so the ORIGIN was
 right. The SIZE was not, and the size is what picks the factor.
 
-It only appeared with SDL2. SDL 1.2 clients reach the shim through the
-xlite-SHM "Damaged" request, which reports no rectangle at all, so
-dmg_valid stays unset and the desktop repaints the whole window: the driver
-never saw a partial rectangle. SDL2 uses real MIT-SHM ShmPutImage, where
-xshim hashes each row and damages only the rows that changed.
+WHY IT ONLY APPEARED WITH CHOCOLATE DOOM - corrected 2026-09-12.
+
+The first explanation recorded here was wrong and is retracted. It said SDL
+1.2 clients report no rectangle, so the driver never saw a partial one.
+prboom's own counters refute that: 1273 MIT-SHM ShmPutImage requests in a
+20 s run, 80 of them identical. prboom goes through exactly the same
+row-hash damage path as SDL2 and has been sending partial rectangles all
+along.
+
+The real reason is the scale factor, and it is a much better answer because
+it is arithmetic rather than a story. prboom renders 320x240 and the driver
+logs "mode 320x240 scales to 640x480 at +80+0": q = 480 * 16 / 240 = 32,
+gcd(32, 16) = 16, so step = 1 and EVERY rectangle maps exactly. Chocolate
+Doom renders 320x200 into 760x475: q = 38, gcd(38, 16) = 2, step = 8, and
+any rectangle not a multiple of 8 rows misses.
+
+So the bug was never about which library a client used. It was about
+whether the client's chosen resolution happens to scale by a whole power of
+two.
 
 It also came and went, because the adaptive engine picker sends some size
 buckets to esp32s31_lcd_scale_rect_cpu(), which maps every OUTPUT row back
@@ -50,6 +64,7 @@ In the damage loop in esp32s31_lcd_plane_update():
 
 Cost: at most 7 extra source rows and 7 columns per rectangle.
 
-NOT DONE, and worth doing: now that partial rectangles scale correctly, the
-xlite-SHM Damaged request could carry one instead of forcing a full-window
-repaint for every SDL 1.2 client.
+The xlite-SHM Damaged request does still report no rectangle, and xshim now
+has an adaptive row scan for it. It is NOT what fixed anything here and it
+has never fired in a measured run: neither prboom nor Chocolate Doom uses
+that request. Do not cite it as a win until a client is found that does.
