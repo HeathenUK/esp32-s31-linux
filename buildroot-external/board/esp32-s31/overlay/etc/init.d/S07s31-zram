@@ -1,0 +1,88 @@
+#!/bin/sh
+#
+# Compressed RAM swap, in front of the microSD swap file.
+#
+# Swapping to the card costs a large fraction of a core and runs at 1.7 MB/s.
+# Compressing a page and keeping it in RAM costs CPU and no I/O, so zram takes
+# priority and the card is left as overflow for when zram is full.
+#
+# Sized conservatively at a third of RAM: zram's capacity is measured in
+# uncompressed pages, and the memory it really consumes is that divided by the
+# compression ratio. Oversizing it on a machine this small risks spending all of
+# RAM on compressed copies of RAM.
+#
+# Settings come from /etc/s31-swap.conf so configurations can be compared
+# without rebuilding: ZRAM_MB=0 disables it.
+#
+# MOVED S03 -> S07, 2026-09-12. It has to run AFTER S05xip, because the
+# prioritised swapon needs s31swapon and that lives in the XIP image: at S03
+# the overlay is not mounted yet, /usr/bin/s31swapon does not exist, the
+# fallback ran, and zram came up at priority -1 alongside the card. Which is
+# the bug this was all meant to fix.
+#
+# Running after S04s31-swap is fine now and was not before. The old position
+# existed to get zram enabled BEFORE the card so that swapon order would
+# decide precedence. With an explicit priority, order does not matter.
+
+CONF=/etc/s31-swap.conf
+ZRAM_MB=4
+ZRAM_MEM_LIMIT_KB=0
+[ -r "$CONF" ] && . "$CONF"
+
+case "$1" in
+	start)
+		[ "${ZRAM_MB:-0}" -gt 0 ] || exit 0
+		modprobe zram 2>/dev/null
+		[ -b /dev/zram0 ] || exit 0
+		echo lzo-rle > /sys/block/zram0/comp_algorithm 2>/dev/null
+		echo $((ZRAM_MB * 1024 * 1024)) > /sys/block/zram0/disksize 2>/dev/null
+		# BOUND THE RAM, not just the capacity.
+		#
+		# disksize is UNCOMPRESSED capacity. Without mem_limit it is the
+		# only bound, so the pool can grow to disksize divided by the
+		# compression ratio - and on 2026-09-12 a 4 MB device grew to
+		# 3,484 kB of pages on a board with under 1 MB spare, took the
+		# desktop out of memory, and spilled 1.8 MB to the card anyway.
+		#
+		# The whole argument for zram here is that it is a cheap layer
+		# IN FRONT of the card. That is only true if its cost is
+		# capped: past mem_limit zram refuses writes and the kernel
+		# falls through to the next swap device, which is exactly the
+		# intended behaviour. A page on the card costs no RAM at all,
+		# so an unbounded pool is strictly worse than no zram.
+		if [ "${ZRAM_MEM_LIMIT_KB:-0}" -gt 0 ]; then
+			echo $((ZRAM_MEM_LIMIT_KB * 1024)) \
+				> /sys/block/zram0/mem_limit 2>/dev/null
+		fi
+		mkswap /dev/zram0 >/dev/null 2>&1
+		# EXPLICIT PRIORITY, via our own tool.
+		#
+		# What was here before said: no -p needed, because busybox
+		# swapon has none and the kernel auto-assigns descending
+		# priorities in swapon order, so enabling zram first makes it
+		# primary. That was WRONG and it was never checked. With both
+		# devices up, /proc/swaps showed BOTH at priority -1, and equal
+		# priority means the kernel round-robins - so half the swap
+		# traffic went to the microSD card anyway and the tiering this
+		# script exists for had never happened.
+		#
+		# busybox really cannot do it: swapon takes only [-a] [-e]
+		# [DEVICE], rejects -p, and has no fstab "pri=" support either.
+		# rootfs/s31swapon.c is swapon(2) with SWAP_FLAG_PREFER, which
+		# is all that was missing.
+		if s31swapon /dev/zram0 100 >/dev/null 2>&1; then
+			echo "zram swap enabled: ${ZRAM_MB}M at priority 100, RAM capped at ${ZRAM_MEM_LIMIT_KB}kB"
+		elif swapon /dev/zram0 2>/dev/null; then
+			# s31swapon missing from an older image: still better
+			# than no zram, but say so, because a silent fallback
+			# here restores the round-robin bug invisibly.
+			echo "zram swap enabled: ${ZRAM_MB}M (NO PRIORITY -"
+			echo "  s31swapon missing, so the card will take a"
+			echo "  share of swap traffic)"
+		fi
+		;;
+	stop)
+		swapoff /dev/zram0 2>/dev/null
+		;;
+esac
+exit 0

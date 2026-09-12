@@ -1,0 +1,31 @@
+dts: cut the display CMA pool from 6 MB to 4 MB
+
+Copy esp32s31.dtsi back over
+linux-71-port/arch/riscv/boot/dts/espressif/esp32s31.dtsi before building.
+A DTS change needs BOTH `make linux` AND `make opensbi` - the kernel uses a
+builtin DTB, so rebuilding only OpenSBI leaves the old tree in force.
+
+WHY
+Memory is the binding constraint on this board: 15,412 kB total, of which
+4,244 is unreclaimable slab. The display pool was 6 MB with 3,128 kB of it
+free at idle, and CmaFree does not count as headroom (see
+s31-watermark-boost-oom).
+
+WHY THE OLD FAILURE DOES NOT APPLY
+The node recorded a specific failure at 4 MB: three contiguous 768 kB
+allocations in flight at 800x480 - the driver's scanout buffer, fbdev
+emulation's console framebuffer, and THE DESKTOP'S OWN render target - with
+the third failing as "CREATE_DUMB: Out of memory". That third allocation was
+Xorg's. lvdesk presents through the driver's own fullscreen buffer and never
+makes it.
+
+Verified on kernel #198: boots, takes DRM master, runs a fullscreen client
+through a full timedemo with no CREATE_DUMB failure, no "scaling off", no CMA
+allocation failure. CmaFree 1,096 kB of 4,096 under load, so the working set
+is ~2.8 MB - the same as the 6 MB pool showed.
+
+STILL OWED
+A settled fresh-boot-per-arm measurement of available memory. The two idle
+samples taken so far had very different page-cache histories and non-CMA free
+came out slightly LOWER at 4 MB, which is the wrong direction and is probably
+the comparison rather than the change.

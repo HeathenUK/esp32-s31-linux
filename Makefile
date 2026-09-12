@@ -632,7 +632,7 @@ XIP_ROOTFS_IMG := $(BUILD_DIR)/rootfs-xip.cramfs
 # 290 KB of text off the card on every use, measured as churn in smaps.
 XIP_ROOTS ?= bin/busybox usr/sbin/wpa_supplicant usr/sbin/iw usr/bin/lvdesk \
 	usr/lib/alsa-lib/libasound_module_pcm_s31route.so \
-	usr/bin/s31-coex usr/lib/libSDL-1.2.so.0.11.4 \
+	usr/bin/s31-coex usr/bin/s31swapon usr/lib/libSDL-1.2.so.0.11.4 \
 	usr/lib/libSDL2-2.0.so.0.3200.10 usr/lib/libXrandr.so.2.2.0 \
 	usr/lib/libpng16.so.16.58.0 usr/lib/libz.so.1.3.2 usr/bin/xcalc \
 	usr/lib/libdbus-1.so.3.32.4 \
