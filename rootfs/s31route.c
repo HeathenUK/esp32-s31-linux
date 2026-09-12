@@ -137,12 +137,53 @@ static snd_pcm_sframes_t slave_write(struct route *r, const char *buf,
 		r->ubuf = nb;
 		r->ubuf_bytes = want;
 	}
+	/*
+	 * Stereo S16 is FOUR BYTES - one 32-bit store, not a memcpy call.
+	 *
+	 * The first version of this loop called memcpy() once per copied
+	 * frame: at 22050 doubled that is ~44,000 four-byte calls a second,
+	 * every one of them a call into code executing from 80 MHz XIP
+	 * flash, to move a single word. Specialising the two shapes the
+	 * constraints actually allow (stereo and mono S16) turns the whole
+	 * expansion into aligned word stores with the branch hoisted out.
+	 */
 	p = r->ubuf;
-	for (i = 0; i < size; i++) {
-		const char *src = buf + (size_t)i * fb;
+	if (fb == 4) {
+		const uint32_t *src = (const uint32_t *)buf;
+		uint32_t *dst = (uint32_t *)p;
 
-		for (k = 0; k < r->up; k++, p += fb)
-			memcpy(p, src, fb);
+		if (r->up == 2) {
+			for (i = 0; i < size; i++) {
+				uint32_t v = src[i];
+
+				*dst++ = v;
+				*dst++ = v;
+			}
+		} else {
+			for (i = 0; i < size; i++) {
+				uint32_t v = src[i];
+
+				for (k = 0; k < r->up; k++)
+					*dst++ = v;
+			}
+		}
+	} else if (fb == 2) {
+		const uint16_t *src = (const uint16_t *)buf;
+		uint16_t *dst = (uint16_t *)p;
+
+		for (i = 0; i < size; i++) {
+			uint16_t v = src[i];
+
+			for (k = 0; k < r->up; k++)
+				*dst++ = v;
+		}
+	} else {
+		for (i = 0; i < size; i++) {
+			const char *src = buf + (size_t)i * fb;
+
+			for (k = 0; k < r->up; k++, p += fb)
+				memcpy(p, src, fb);
+		}
 	}
 	n = snd_pcm_writei(r->slave, r->ubuf, (snd_pcm_uframes_t)size * r->up);
 	if (n < 0)
@@ -343,6 +384,33 @@ static int slave_try(struct route *r, int direct, snd_pcm_t **out)
 		amin = want_per;
 		if (buf > want_buf && buf - want_buf + want_per > amin)
 			amin = buf - want_buf + want_per;
+		/*
+		 * ...BUT NEVER MORE THAN THE SINK CAN EVER OFFER.
+		 *
+		 * All of the reasoning above assumes the sink can hold the
+		 * application's ring. This codec cannot: it reports
+		 * BUFFER_SIZE [256..4096], which at 44100 is 93 ms, while
+		 * aplay at 22050 asks for a 125 ms period - and the frame
+		 * repeat doubles that period into 5512 sink frames against a
+		 * 4096-frame buffer. avail_min then exceeds the buffer
+		 * entirely, alsa-lib clamps it to the buffer size, and the
+		 * poll can only be satisfied when the sink is COMPLETELY
+		 * EMPTY. That is an underrun every period by construction:
+		 * 64 of them in an 8-second play, on every rate including
+		 * native 44100, heard as intermittent crackling.
+		 *
+		 * Half the buffer leaves ~46 ms still queued at each wake,
+		 * which is the margin that has to cover our scheduling
+		 * latency on a board where a reclaim stall is tens of ms. The
+		 * cost is that an application period larger than that takes
+		 * more than one round through alsa-lib's write loop - which is
+		 * unavoidable when the period does not fit in the hardware at
+		 * all, and is much cheaper than an xrun.
+		 */
+		if (buf > 1 && amin > buf / 2)
+			amin = buf / 2;
+		if (amin < per)
+			amin = per;
 		if (amin > buf)
 			amin = buf;
 		step = "sw_params";
