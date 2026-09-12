@@ -22,6 +22,23 @@
  * cache of a file that is still being read is a pessimisation - the whole
  * case rests on precache having already taken its copy.
  *
+ * MEASURED, AND THE PREMISE WAS WRONG. 2026-09-12, prboom timedemo with
+ * sound, warm, dropping doom1.wad every 10 s:
+ *
+ *                    fps   majflt   sectors read
+ *   baseline        23.2      144      19,224
+ *   WAD dropped     22.1      254      32,688
+ *
+ * Worse on every count, and the reason is visible in the tool's own output:
+ * each drop freed 8 to 120 kB, not megabytes. Cached was only ~1,088 kB in
+ * total. The WAD was never being held twice - memory pressure had already
+ * evicted the page-cache copy long before, so all the dropping achieved was
+ * forcing re-reads of the parts still in use.
+ *
+ * The tool is fine and the reasoning was not: "this file is 4.1 MB and the
+ * app also has a copy" says nothing about how much of it the cache actually
+ * holds. Check Cached first next time.
+ *
  *   fadvdrop [-v] [-n secs] <file> [file...]
  *
  *     -n secs   keep going, dropping every `secs` seconds, until killed.
