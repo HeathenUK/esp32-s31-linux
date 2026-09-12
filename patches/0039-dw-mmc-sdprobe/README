@@ -1,0 +1,97 @@
+dw_mmc: a live instrument for the SD per-request floor, and where the time
+actually goes
+
+WHY THIS EXISTS
+
+The ~2.0-2.5 ms per-request SD floor has been "explained" several times and
+never localised, because the instruments meant to localise it were dead:
+
+  - req_timing, cmd_probe and busy_wait have DEFINE_SHOW_ATTRIBUTE and are
+    never passed to debugfs_create_file(), so none of the three files has
+    ever existed;
+  - DIAG=0 compiles DEBUG_FS out of the shipping kernel anyway, so even a
+    registered file would be absent;
+  - /proc/profile drops samples past _etext and the whole request path
+    (dw_mmc, blk-mq, mmc core, sched, entry) is in .text..fast, so the
+    "dw_mmc is 0.0%" line that was treated as independent confirmation
+    could not have seen the driver at any cost.
+
+A sub-agent reported that the accumulators were also never written. That is
+only PARTLY true and worth recording: busy_ns, gap, cmd_alone and
+cmd_with_data all have writers; ns_issue_cmd, ns_cmd_data and req_count did
+not. The stamps t_issue/t_cmd/t_data were being taken and thrown away.
+
+WHAT CHANGED
+
+  - the missing writers for ns_issue_cmd / ns_cmd_data / req_count, at the
+    point in dw_mci_interrupt() where the stamps were already being taken;
+  - ns_prep / n_prep around dw_mci_submit_data() at its call site, which
+    runs BEFORE t_issue is stamped and was therefore outside every previous
+    timing window;
+  - ns_reset / n_reset inside dw_mci_ctrl_reset();
+  - n_cmd_all, counting EVERY command rather than only data commands;
+  - readout through module_param_cb(sdprobe) rather than debugfs, because
+    DIAG=1 puts the kernel 16 KB past the linux partition AND debugfs costs
+    1.14 MB of RAM, which would perturb the page-cache pressure being
+    studied. lost_irq_poll already proves the mechanism here.
+  - the instrument measures ITSELF at probe: ktime_get_ns() is an MMIO
+    write, a polled read and two more reads on this board, and reports 412
+    ns per pair, so every figure below can be read net of its own cost.
+
+Cost when not being read: ~3 extra ktime pairs per request, about 1.2 us on
+a 2000 us request. Left in deliberately - a dead instrument is how this
+question stayed open for so long.
+
+WHAT IT MEASURED (kernel #193, idle board, sdlat O_DIRECT random reads)
+
+Counters differenced around one clean workload, so the averages describe
+that workload and not whatever else the system did:
+
+  4 KiB:   issue2cmd   85 us     cmd2data   287 us     -> 372 us in driver
+  64 KiB:  issue2cmd  125 us     cmd2data  1311 us
+  512 KiB: issue2cmd   78 us     cmd2data  4698 us  (2 requests per read)
+
+  prep  36-45 us      reset 1.2-1.4 us      busy 1571 calls, 0 waits
+
+Userspace sees min 1.911/1.922/1.930/1.976/1.986 ms for 4 KiB across five
+runs. So of ~1.95 ms, only 372 us lies between the CMD register write and
+the DATA_OVER interrupt. About 1.6 ms is OUTSIDE the driver entirely.
+
+THE THREE HYPOTHESES THIS KILLS
+
+  - the unconditional DMA reset per request: 1.2 us, not hundreds;
+  - request preparation (dma_map_sg, descriptors): 36-45 us;
+  - dw_mci_wait_while_busy: called 1571 times, waited zero times.
+
+AND ONE IT FALSIFIES BY PREMISE. CMD23 was dismissed on the arithmetic that
+a 4 KiB read uses CMD17 with no stop. n_cmd_all says otherwise: 504 commands
+for 238 data commands, a ratio of 2.1, so 4 KiB reads are CMD18 + CMD12.
+The dismissal may still be right, but not for that reason.
+
+WHERE THE TIME ACTUALLY GOES
+
+rootfs/ctxbench on this kernel: 612 us per pipe round trip, ~303 us per
+context switch. rootfs/ctxbench2: thread round trip 595 us against process
+606 us - only 2%, so switch_mm and the TLB are NOT the cost.
+
+A blocking read() is at least two switches (block, wake) and, with the mmc
+core's hand-off, plausibly four. Four times 303 us is 1.21 ms. Add syscall
+entry/exit on a board where generic entry measured 2.83x, and the ~1.6 ms
+outside the driver is accounted for without anything SD-specific.
+
+This is the same root cause as two other open items: socket syscalls at
+1.3-5.8 ms (af_unix AND inet, "structural"), and the ~8 ms kworker hand-off.
+They are one problem - a context switch here costs ~303 us against 2-5 us on
+comparable hardware - and it is worth far more than dw_mmc, because it is
+paid by every blocking path on the board, including the major faults that
+make Doom hitch.
+
+STILL UNRESOLVED, AND IT IS A REAL CONTRADICTION
+
+sdprobe reports bus_hz 40000000, ios_clock 40000000, timing 2 (SD_HS),
+width 2 (4-bit). That is a hard 20 MB/s ceiling. The size sweep measures a
+marginal transfer rate of ~49 MB/s (512 KiB min 12.254 ms vs 256 KiB 7.011
+ms). Both cannot be true. 49 MB/s needs ~98 MHz SDR or ~49 MHz DDR at four
+bits, so the CIU divider assumption in clk-esp32s31.c (LS_DIV, an inferred
+N+1 encoding) is the place to look. If the clock is not what the driver
+believes, every timeout derived from bus_hz is wrong too.
