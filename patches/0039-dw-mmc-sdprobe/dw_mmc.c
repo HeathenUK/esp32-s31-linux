@@ -386,6 +386,13 @@ static u32 dw_mci_first_status[4];
 static atomic_t dw_mci_status_slot;
 
 static atomic64_t dw_mci_ns_req, dw_mci_n_req;
+/*
+ * PER HOST, not file-scope. The first version of this was a single global,
+ * which mispairs the moment anything nests - and it did: it reported a
+ * request SHORTER than a phase inside it (589 us against cmd2data's 780).
+ * Requests are serialised per host, so one field per host is the correct
+ * scope and the pairing is then exact.
+ */
 static u64 dw_mci_t_req_enter;
 static atomic64_t dw_mci_n_cmd_all;
 static u32 dw_mci_last_opcode;
@@ -1886,7 +1893,8 @@ static void dw_mci_request(struct mmc_host *mmc, struct mmc_request *mrq)
 	 * can finally be attributed to the layers above rather than guessed
 	 * at. Entry here to the mmc_request_done() that ends it.
 	 */
-	dw_mci_t_req_enter = ktime_get_ns();
+	if (!dw_mci_t_req_enter)		/* ignore nesting; pair the outer */
+		dw_mci_t_req_enter = ktime_get_ns();
 	struct dw_mci *host = mmc_priv(mmc);
 	struct mmc_command *cmd;
 

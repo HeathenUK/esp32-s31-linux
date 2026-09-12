@@ -3955,6 +3955,7 @@ static uint64_t prof_ns(void);
 #define FSG_WORST 8
 static uint32_t fsg_present_us, fsg_present_max_us;
 static uint32_t fsg_expand_us, fsg_expand_max, fsg_dirty_us, fsg_dirty_max;
+static uint32_t fsg_dirty_bucket[5];	/* <1 <3 <6 <12 >=12 ms */
 static uint64_t fsg_t_expand;
 #define FSG_LOG 96			/* every long frame, in order */
 #define FSG_MIN_MS 30			/* ~0.75 of a 40 ms frame at 25 fps */
@@ -4050,6 +4051,9 @@ static void fsg_report(void)
 	printf("lvdesk: present us last %u worst %u | expand %u/%u dirty %u/%u\n",
 	       fsg_present_us, fsg_present_max_us, fsg_expand_us,
 	       fsg_expand_max, fsg_dirty_us, fsg_dirty_max);
+	printf("lvdesk: dirty ms <1:%u <3:%u <6:%u <12:%u >=12:%u\n",
+	       fsg_dirty_bucket[0], fsg_dirty_bucket[1], fsg_dirty_bucket[2],
+	       fsg_dirty_bucket[3], fsg_dirty_bucket[4]);
 	printf("lvdesk: long frames (>=%d ms) n=%d:", FSG_MIN_MS, fsg_n);
 	for (i = 0; i < fsg_n; i++)
 		printf(" f%llu:%ums/mf%llu",
@@ -4194,6 +4198,19 @@ static void fs_present(uint32_t id)
 			fsg_expand_max = fsg_expand_us;
 		if (fsg_dirty_us > fsg_dirty_max)
 			fsg_dirty_max = fsg_dirty_us;
+		/*
+		 * HOW OFTEN is the present blocked, not just how badly.
+		 * DIRTYFB is a blocking atomic commit that waits for the
+		 * previous commit's flip event, which the driver signals from
+		 * an emulated-vblank hrtimer - so the worst case is a whole
+		 * frame period. Replacing that with a direct .dirty callback
+		 * is a real driver change, and it is only worth the risk if
+		 * the tail is common rather than rare.
+		 */
+		fsg_dirty_bucket[fsg_dirty_us < 1000 ? 0 :
+				 fsg_dirty_us < 3000 ? 1 :
+				 fsg_dirty_us < 6000 ? 2 :
+				 fsg_dirty_us < 12000 ? 3 : 4]++;
 	}
 }
 
