@@ -422,4 +422,13 @@ BR2_PACKAGE_SDL2_X11=y
 # does. SDL2 dlopens "libXrandr.so.2" by name, so nothing links to it.
 BR2_PACKAGE_XLIB_LIBXRANDR=y
 BR2_PACKAGE_CHOCOLATE_DOOM=y
+# A SECOND SDL 1.2 client, to find out whether Doom's speed is the stack's
+# or whether we tuned for one program. OpenTyrian is 320x200 and
+# palettised, so it should land on the same CLUT and zero-copy paths
+# prboom does, but it spends its time on many small sprite blits rather
+# than one software-rendered frame - a different shape of the same stack.
+# Network support off: it would pull in SDL_net for a feature nothing here
+# uses.
+BR2_PACKAGE_OPENTYRIAN=y
+# BR2_PACKAGE_OPENTYRIAN_NET is not set
 BR2_PACKAGE_DOOM_WAD=y
