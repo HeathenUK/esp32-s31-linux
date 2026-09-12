@@ -32,8 +32,33 @@
  * every allocation to PAGE_SIZE. The reservation below covers the short gap up
  * to the hosted ring as well, so nothing on the FreeRTOS side lands in it.
  */
-#define S31_AUDIO_DMA_BASE             0x2F062000U
-#define S31_AUDIO_DMA_SIZE             0x00008000U
+/*
+ * GROWN 32 KiB -> 64 KiB, 2026-09-12, and the base moved DOWN to keep the top
+ * where it was.
+ *
+ * What the ring holds is TIME, and time is the ring divided by the rate. At
+ * 16 KiB per stream that is 372 ms at 11025 but only 93 ms at 44100 - and a
+ * frame dip longer than the ring is an underrun, heard as a crackle. Doom's
+ * dips run 100-400 ms, so 11025 is clean and 44100 is not. Doubling each
+ * stream to 32 KiB takes 44100 from 93 ms to 186 ms, which covers the whole
+ * 100-200 ms band where most of the dips are.
+ *
+ * The 32 KiB comes from hart0's heap, which is the only place it can: this
+ * has to be uncached internal SRAM (PSRAM is cached here and the GDMA would
+ * read stale samples), and the region above is the hosted Wi-Fi transport
+ * ring 3,968 bytes up. rootfs/s31_freertos_mem.c reports hart0's internal
+ * DMA-capable heap as 222,592 total with a HISTORICAL MINIMUM FREE of 60,456
+ * bytes - the worst case ever observed with the radios running. Taking 32,768
+ * leaves 27,688 of proven headroom.
+ *
+ * THE LOADER MUST BE REFLASHED WITH THIS. main.c reserves
+ * [S31_AUDIO_DMA_BASE, LINUX_SRAM_START) from the ESP-IDF heap allocator; if
+ * the loader still fences off the old base, hart0's heap will happily
+ * allocate inside our DMA ring. That is silent memory corruption, not a boot
+ * failure. Loader, OpenSBI and kernel all carry this map.
+ */
+#define S31_AUDIO_DMA_BASE             0x2F05A000U
+#define S31_AUDIO_DMA_SIZE             0x00010000U
 
 /* Compact internal HP-SRAM transport and Linux DMA reservation. */
 #define S31_HP_SHARED_BASE             0x2F06AF80U

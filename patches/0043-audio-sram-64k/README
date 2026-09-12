@@ -1,0 +1,61 @@
+audio: grow the I2S SRAM ring 32 KiB -> 64 KiB, taking the space from hart0
+
+THREE ARTEFACTS. The memory map lives in the loader, OpenSBI and the kernel,
+and all three must agree:
+
+    make bootloader && make opensbi && make linux
+    make flash-loader && make flash-opensbi && make flash-linux
+
+Files here are the kernel's two. The third change is
+shared/s31_memory_layout.h (S31_AUDIO_DMA_BASE 0x2F062000 -> 0x2F05A000,
+S31_AUDIO_DMA_SIZE 0x8000 -> 0x10000), which is in the repo proper.
+
+WHY
+What the ring holds is TIME, and time is bytes divided by rate. At 16 KiB per
+stream that is 372 ms at 11025 but only 93 ms at 44100 - and a frame dip
+longer than the ring underruns, which is heard as a crackle. lvdesk's frame
+gaps under Doom run 100-400 ms. That is why 11025 is clean and 44100 is not:
+not the codec, not the plugin, just arithmetic.
+
+    rate     16 KiB    32 KiB
+    11025    372 ms    743 ms
+    22050    186 ms    372 ms
+    44100     93 ms    186 ms
+
+Verified on the board: BUFFER_SIZE went from [256 4096] to [256 8192], and a
+44100 stream now reports buffer_size 8184.
+
+WHERE THE MEMORY CAME FROM
+It has to be uncached internal SRAM - PSRAM is cached on this SoC and the
+GDMA would read stale samples - and the hosted Wi-Fi transport ring sits
+3,968 bytes above the pool, so the only direction is down, into hart0's heap.
+
+rootfs/s31_freertos_mem.c (built now, was not) asks hart0 for its internal
+DMA-capable heap over the existing hosted-sram ioctl:
+
+                          before      after
+    Total heap           222,592    189,824
+    Historical min free   60,456     36,344
+    Verdict                 PASS       PASS
+
+The historical minimum is the honest number - the worst ever observed with
+the radios running - so 32 KiB was affordable and 48 KiB would not have been.
+35.5 KiB of margin remains. IF WI-FI OR BLUETOOTH START MISBEHAVING, SUSPECT
+THIS FIRST.
+
+THE LOADER IS NOT OPTIONAL. main.c reserves [S31_AUDIO_DMA_BASE,
+LINUX_SRAM_START) from the ESP-IDF heap allocator. A stale loader fences off
+the OLD base, so hart0's heap would allocate inside Linux's DMA ring: silent
+corruption, not a boot failure.
+
+TOOLING NOTE. make flash-bootloader shells out to idf.py and cannot work on
+this host - no host-side ESP-IDF has an esp32s31 target, the S31-capable one
+is v6.1-dev inside the build container. make flash-loader was added to do it
+with $(ESPFLASH) like every other flash target, offset read from
+partitions.csv.
+
+WHAT THIS DOES NOT FIX
+A dip longer than 186 ms still underruns, and the worst frame measured today
+was 386 ms. This halves the problem; it does not remove it. The unbounded
+version is rings in PSRAM via the hart0 transport, with everything that
+implies (see docs/current-state.md).

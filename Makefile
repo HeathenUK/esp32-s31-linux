@@ -60,6 +60,9 @@ TOOLCHAIN_ARCHIVE := $(BUILD_DIR)/downloads/$(TOOLCHAIN_RELEASE_ASSET)
 PARTITIONS_CSV := $(CURDIR)/bootloader/partitions.csv
 OPENSBI_OFFSET := $(shell awk -F, '/opensbi/ {gsub(/ /, "", $$4); print $$4}' $(PARTITIONS_CSV))
 LINUX_OFFSET := $(shell awk -F, '/linux/ {gsub(/ /, "", $$4); print $$4}' $(PARTITIONS_CSV))
+# The loader app, read from the same CSV rather than hardcoded - the docs
+# warn that partition geometry lives in several places that must agree.
+LOADER_OFFSET := $(shell awk -F, '/factory/ {gsub(/ /, "", $$4); print $$4}' $(PARTITIONS_CSV))
 ROOTFS_OFFSET := $(shell awk -F, '/rootfs/ {gsub(/ /, "", $$4); print $$4}' $(PARTITIONS_CSV))
 XIP2_OFFSET := $(shell awk -F, '/xip2/ {gsub(/ /, "", $$4); print $$4}' $(PARTITIONS_CSV))
 
@@ -546,6 +549,8 @@ sync-images:
 	@# reached the board. flash-linux now refuses to flash a kernel older
 	@# than the build (see check-kernel-fresh), but the fix is to copy it.
 	./docker/build.sh 'for f in rootfs-xip.cramfs rootfs-xip2.cramfs rootfs.squashfs xipImage System.map fw_payload.bin; do if [ -f /src/build/$$f ]; then cp -v /src/build/$$f /src/images/$$f; fi; done'
+	@# The loader builds inside bootloader/build, not build/.
+	./docker/build.sh 'test -f /src/bootloader/build/hello_world.bin && cp -v /src/bootloader/build/hello_world.bin /src/images/hello_world.bin || true'
 BUILDROOT_MAKE = $(MAKE) -C $(BUILDROOT_DIR) O=$(BUILDROOT_OUT) \
 	BR2_EXTERNAL=$(BUILDROOT_EXTERNAL) BR2_DL_DIR=$(BUILDROOT_DL_DIR)
 
@@ -1143,6 +1148,24 @@ flash-imager:
 reset:
 	@$(WITHLOCK) $(ESPTOOL) -p $(SERIAL_PORT) --after hard-reset chip-id >/dev/null 2>&1 || true
 	@echo "reset $(SERIAL_PORT)"
+
+# FLASH THE LOADER THE SAME WAY AS EVERYTHING ELSE.
+#
+# flash-bootloader below shells out to idf.py, which needs a working host
+# ESP-IDF - and this host's is a different tree whose toolchains are not
+# installed, so it fails with "tool riscv32-esp-elf has no installed
+# versions" before it ever reaches the serial port. Every other flash target
+# uses $(ESPFLASH), which is IDF's esptool from ~/.espressif, and that works.
+#
+# The loader app is hello_world.bin at the factory offset, NOT bootloader.bin.
+# It carries shared/s31_memory_layout.h, so any change to the memory map needs
+# this flashed alongside OpenSBI and the kernel or the three disagree - and
+# for the audio SRAM pool specifically, a stale loader lets hart0's heap
+# allocate inside Linux's DMA ring, which is silent corruption rather than a
+# boot failure.
+flash-loader: sync-images
+	$(call sayflash,$(CURDIR)/images/hello_world.bin)
+	$(ESPFLASH) $(LOADER_OFFSET) $(CURDIR)/images/hello_world.bin
 
 flash-bootloader:
 	@if [ -z "$(IDF_EXPORT)" ]; then echo "ERROR: ESP-IDF export.sh not found under $(HOME)"; exit 1; fi
