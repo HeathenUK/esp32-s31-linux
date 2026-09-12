@@ -3954,6 +3954,8 @@ static uint64_t prof_ns(void);
  */
 #define FSG_WORST 8
 static uint32_t fsg_present_us, fsg_present_max_us;
+static uint32_t fsg_expand_us, fsg_expand_max, fsg_dirty_us, fsg_dirty_max;
+static uint64_t fsg_t_expand;
 #define FSG_LOG 96			/* every long frame, in order */
 #define FSG_MIN_MS 30			/* ~0.75 of a 40 ms frame at 25 fps */
 static uint64_t fsg_last, fsg_frames;
@@ -4045,8 +4047,9 @@ static void fsg_report(void)
 	       "<400:%u >=400:%u\n", (unsigned long long)fsg_frames,
 	       fsg_bucket[0], fsg_bucket[1], fsg_bucket[2], fsg_bucket[3],
 	       fsg_bucket[4], fsg_bucket[5]);
-	printf("lvdesk: present us last %u worst %u\n", fsg_present_us,
-	       fsg_present_max_us);
+	printf("lvdesk: present us last %u worst %u | expand %u/%u dirty %u/%u\n",
+	       fsg_present_us, fsg_present_max_us, fsg_expand_us,
+	       fsg_expand_max, fsg_dirty_us, fsg_dirty_max);
 	printf("lvdesk: long frames (>=%d ms) n=%d:", FSG_MIN_MS, fsg_n);
 	for (i = 0; i < fsg_n; i++)
 		printf(" f%llu:%ums/mf%llu",
@@ -4128,6 +4131,7 @@ static void fs_present(uint32_t id)
 	if (dy + dh > sh) dh = sh - dy;
 	if (dw <= 0 || dh <= 0)
 		return;
+	fsg_t_expand = prof_ns();
 	for (y = dy; y < dy + dh; y++) {
 		uint16_t *dp = (uint16_t *)(kms_fs_map + (size_t)y * kms_fs_pitch)
 			       + dx;
@@ -4140,26 +4144,57 @@ static void fs_present(uint32_t id)
 		{
 			const uint8_t *sp = src + (size_t)y * sstride + dx;
 
+			/*
+			 * PAIR THE STORES. This wrote eight 16-bit halfwords
+			 * per iteration; the windowed expander two screens up
+			 * has always combined two pixels into one 32-bit store
+			 * and this path never picked it up. The destination is
+			 * the scanout buffer - write-combining memory, where
+			 * the store count is what costs, not the arithmetic -
+			 * so halving the stores is the whole optimisation.
+			 * Measured 3.37 ms per 320x240 frame before.
+			 */
 			if (((((uintptr_t)sp | (uintptr_t)dp) & 3u) == 0)) {
+				uint32_t *dw32 = (uint32_t *)dp;
+
 				for (; k + 7 < dw; k += 8) {
 					uint32_t a4 = *(const uint32_t *)(sp + k);
 					uint32_t b4 = *(const uint32_t *)(sp + k + 4);
 
-					dp[k]     = pal[a4 & 0xff];
-					dp[k + 1] = pal[(a4 >> 8) & 0xff];
-					dp[k + 2] = pal[(a4 >> 16) & 0xff];
-					dp[k + 3] = pal[(a4 >> 24) & 0xff];
-					dp[k + 4] = pal[b4 & 0xff];
-					dp[k + 5] = pal[(b4 >> 8) & 0xff];
-					dp[k + 6] = pal[(b4 >> 16) & 0xff];
-					dp[k + 7] = pal[(b4 >> 24) & 0xff];
+					dw32[k >> 1] = (uint32_t)pal[a4 & 0xff] |
+						((uint32_t)pal[(a4 >> 8) & 0xff] << 16);
+					dw32[(k >> 1) + 1] =
+						(uint32_t)pal[(a4 >> 16) & 0xff] |
+						((uint32_t)pal[(a4 >> 24) & 0xff] << 16);
+					dw32[(k >> 1) + 2] = (uint32_t)pal[b4 & 0xff] |
+						((uint32_t)pal[(b4 >> 8) & 0xff] << 16);
+					dw32[(k >> 1) + 3] =
+						(uint32_t)pal[(b4 >> 16) & 0xff] |
+						((uint32_t)pal[(b4 >> 24) & 0xff] << 16);
 				}
 			}
 			for (; k < dw; k++)
 				dp[k] = pal[sp[k]];
 		}
 	}
-	kms_fs_dirty(dx, dy, dx + dw - 1, dy + dh - 1);
+	{
+		/*
+		 * SPLIT THE PRESENT. It costs 3.6-8.6 ms of a 40 ms frame and
+		 * the two halves need opposite fixes: the palette expansion is
+		 * a CPU loop here, while kms_fs_dirty() is an ioctl that makes
+		 * the driver scale synchronously with the PPA. Two clock reads
+		 * a frame, ~0.8 us, against milliseconds being attributed.
+		 */
+		uint64_t t = prof_ns();
+
+		fsg_expand_us = (uint32_t)((t - fsg_t_expand) / 1000u);
+		kms_fs_dirty(dx, dy, dx + dw - 1, dy + dh - 1);
+		fsg_dirty_us = (uint32_t)((prof_ns() - t) / 1000u);
+		if (fsg_expand_us > fsg_expand_max)
+			fsg_expand_max = fsg_expand_us;
+		if (fsg_dirty_us > fsg_dirty_max)
+			fsg_dirty_max = fsg_dirty_us;
+	}
 }
 
 static void xwin_on_warp(uint32_t top, int x, int y)
