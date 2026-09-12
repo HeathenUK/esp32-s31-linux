@@ -57,10 +57,52 @@ start() {
 	# that cannot succeed until the radio associates.
 	OPTS=""
 	for s in $SERVERS; do OPTS="$OPTS -p $s"; done
+	# STEP EARLY, ONCE, THEN DISCIPLINE.
+	#
+	# There is no RTC, so the restored stamp is out by however long the
+	# board was powered off - seventeen hours, in the case that exposed
+	# this. ntpd corrects that with a STEP, because nothing sane slews
+	# seventeen hours, and left to itself it steps whenever its first poll
+	# happens to succeed. That is after the desktop is up and after a
+	# person can have launched something.
+	#
+	# SDL 1.2 times with the WALL CLOCK (SDL_GetTicks is gettimeofday
+	# based, not CLOCK_MONOTONIC), so an application running across the
+	# step measures the step. prboom's timedemo reported 5026 gametics in
+	# 2,134,306 realtics - 0.1 fps, and seventeen hours of "elapsed" time
+	# in a four-minute run. Two such readings differed by 14.8 minutes,
+	# which was exactly the real time between the two runs: the size of
+	# the error is the age of the saved stamp, not anything about the
+	# machine. A whole afternoon's measurements were called into question
+	# by it, and the number is so wrong that it reads as a broken machine
+	# rather than a broken clock.
+	#
+	# So: wait for a route in the background, take ONE step with -q, and
+	# only then start the daemon. The step then lands a second or two
+	# after the radio associates - around 35 s in, before the desktop
+	# finishes starting - instead of at an arbitrary later moment. Still
+	# nothing blocking: this is a background subshell and the boot does
+	# not wait for it.
+	#
+	# It does not make the wall clock safe to measure with. It makes the
+	# one unavoidable discontinuity land somewhere predictable.
 	# "busybox ntpd", not "ntpd": the applet is compiled in, but the
 	# /usr/sbin/ntpd symlink only exists if the rootfs was installed with
 	# this busybox. Calling the applet by name works either way.
-	busybox ntpd $OPTS >/dev/null 2>&1 && echo "OK" || echo "FAIL"
+	(
+		i=0
+		while [ $i -lt 120 ]; do
+			ip route | grep -q '^default' && break
+			sleep 1
+			i=$((i + 1))
+		done
+		# -q -n: step now and exit, in the foreground of this subshell.
+		# Bounded by its own timeout so a dead uplink cannot leave the
+		# daemon unstarted for ever.
+		busybox timeout 30 busybox ntpd -q -n $OPTS >/dev/null 2>&1
+		busybox ntpd $OPTS >/dev/null 2>&1
+	) >/dev/null 2>&1 </dev/null &
+	echo "OK (stepping in the background, then disciplining)"
 }
 
 stop() {
