@@ -208,7 +208,19 @@ static void ramtext_init(void)
 			}
 			r = move_range(a, b, path);
 			if (r > 0) { total += r; n++; }
-			break;
+			/*
+			 * NO break. Several ranges can name the same library -
+			 * "prboom:1c000+4000,prboom:4b000+b000" is the normal
+			 * case, one entry per hot cluster from a profile - and
+			 * breaking here applied only the FIRST of them. It
+			 * silently moved 16 kB of an intended 192 kB and the
+			 * experiment that depended on it measured nothing, as
+			 * it should have. Only a whole-mapping move ends the
+			 * scan for this mapping, because there is nothing left
+			 * to add to it.
+			 */
+			if (!rlen)
+				break;
 		}
 		free(list);
 	}

@@ -48,6 +48,29 @@
  *
  * Only file-backed executable pages are considered: anonymous pages are
  * already RAM, and pinning the heap is not what this is for.
+ *
+ * MEASURED, AND IT LOSES. 2026-09-12, prboom timedemo with sound, warm, same
+ * boot, back to back:
+ *
+ *     baseline        22.7 fps   419 major faults
+ *     ramhot 512 kB   21.2 fps   511 major faults   (93 pages, VmLck 212 kB)
+ *
+ * Worse on both counts. The reason is this board's standing constraint:
+ * memory is the binding limit, not CPU. Pinning code takes RAM away from the
+ * page cache that was already caching the same code, and an mlocked page
+ * cannot be reclaimed when it goes cold, so the pressure lands somewhere
+ * else. Zero-sum at best, and there is no slack here for it to win.
+ *
+ * It is opt-in by construction - nothing loads it without LD_PRELOAD - and it
+ * should stay that way. Keep it for a board with spare RAM, or for a process
+ * whose hot set is genuinely bigger than what the cache is holding. Do not
+ * reach for it here again without new numbers.
+ *
+ * The companion negative is in rootfs/ramtext.c: MOVING code out of XIP flash
+ * into RAM is worth 4.8x for a 41 kB footprint and nothing at all for 322
+ * bytes, and every hot footprint measured in this workload is a few kB and
+ * already instruction-cache resident. Both directions are now closed with
+ * numbers.
  */
 #define _GNU_SOURCE
 #include <stdio.h>
