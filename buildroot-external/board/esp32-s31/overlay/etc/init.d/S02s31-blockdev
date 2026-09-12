@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# Readahead for the microSD root: 16 KB.
+# Readahead for the microSD root: 128 KB.
 #
 # It was 512 KB, which measured slightly better for a sequential read (11.8
 # against 8.3 MB/s on a 4 MB file, 2026-09-11). But the card's real workload
@@ -11,11 +11,40 @@
 # with the frame rate a little better rather than worse. The streaming case
 # on this board is Wi-Fi-bound long before 8 MB/s matters. Set per-device
 # because it is a queue attribute, not a sysctl.
+#
+# RAISED 16 -> 128 KB on 2026-09-12, chasing reported hitching in play. The
+# hitches are major faults: prboom mmaps the WAD and holds only ~56 KB of
+# 4 MB resident, so every new texture, sprite or sound is an SD read, and
+# they arrive in bursts - 41 faults and 1.5 MB inside 1.7 s was sampled
+# under the attract demo. Major faults per 30 s of demo, cold cache each
+# arm, baseline repeated three times for a noise floor of about +-3%:
+#
+#     16 KB   107, 109, 113        512 KB    69
+#     64 KB    65                 1024 KB   336   <- the cliff is real
+#    128 KB    55                  256 KB   42, 48, 61
+#
+# Over a 120 s window: 272 faults / 601 KB read / 916 KB swapped at 16 KB
+# against 193 / 1099 / 1248 at 128 KB. So ~29% fewer stalls for half a
+# megabyte more reading and a third of a megabyte more swap over two
+# minutes. 256 KB measured slightly better still and is NOT taken: 512
+# already regresses and 1024 is catastrophic, so 128 keeps a wide margin
+# from a cliff whose position will move with memory pressure.
+#
+# The 98 MB figure above stands for what it measured - a full timedemo at
+# 512 KB - and did not reproduce at 128 KB over two minutes. Both numbers
+# are kept because they were taken under different loads, and the cliff
+# above shows why the difference matters.
+#
+# This does NOT cure the hitching, and no readahead can: the WAD is 4 MB
+# and free memory is ~3 MB, so the page cache can never hold it. The two
+# things that would are prboom's binary in XIP (it runs from the card
+# today, 244 KB resident competing for the same cache) and the WAD itself
+# in XIP flash, which needs a repartition - xip1 has 790 KB spare.
 
 case "$1" in
 	start)
 		for q in /sys/block/mmcblk*/queue; do
-			[ -w "$q/read_ahead_kb" ] && echo 16 > "$q/read_ahead_kb"
+			[ -w "$q/read_ahead_kb" ] && echo 128 > "$q/read_ahead_kb"
 		done
 		;;
 	stop|restart|reload)
