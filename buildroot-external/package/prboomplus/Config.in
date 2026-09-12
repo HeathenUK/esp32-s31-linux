@@ -1,0 +1,11 @@
+config BR2_PACKAGE_PRBOOMPLUS
+	bool "prboom-plus"
+	select BR2_PACKAGE_SDL
+	select BR2_PACKAGE_SDL_MIXER
+	select BR2_PACKAGE_SDL_NET
+	help
+	  PrBoom+ 2.5.1.4, the last SDL 1.2 release of the maintained
+	  PrBoom fork. Built alongside prboom 2.5.0 so the two engines
+	  can be compared with the graphics library held constant.
+
+	  https://github.com/coelckers/prboom-plus

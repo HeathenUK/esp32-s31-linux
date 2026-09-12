@@ -1,6 +1,16 @@
 #!/bin/sh
 #
-# Readahead for the microSD root: 64 KB.
+# Readahead for the microSD root: 128 KB.
+#
+# THE 64 KB MEASUREMENT IS WITHDRAWN, 2026-09-12. The sweep that chose it ran
+# 60 s per arm, and stray benchmark drivers were running on the board
+# throughout that period without my knowing - killed with `pkill -f`, which
+# busybox does not implement, so they never died. They were starting and
+# killing games and rewriting configuration between my own samples. Every
+# number from that sweep is contaminated and none of it is evidence.
+#
+# Back to 128 KB, the value that has been shipping. Re-run the sweep on a
+# board verified quiet first.
 #
 # RE-MEASURED 2026-09-12 and CHANGED 128 -> 64. The 128 KB choice below was
 # made judging stalls with a frame instrument that was reading
@@ -70,7 +80,7 @@
 case "$1" in
 	start)
 		for q in /sys/block/mmcblk*/queue; do
-			[ -w "$q/read_ahead_kb" ] && echo 64 > "$q/read_ahead_kb"
+			[ -w "$q/read_ahead_kb" ] && echo 128 > "$q/read_ahead_kb"
 		done
 		;;
 	stop|restart|reload)

@@ -62,40 +62,7 @@ struct route {
 	int pfd;		/* what the application polls; see the header */
 	unsigned follow_ctr;	/* throttle the /run/s31-sink stat() */
 	snd_pcm_uframes_t transferred;
-	unsigned up;		/* integer upsample factor; 1 = pass through */
-	char *ubuf;		/* staging for the expanded frames */
-	size_t ubuf_bytes;
 };
-
-/*
- * Rate conversion by REPEATING frames, where the arithmetic allows it.
- *
- * This codec's driver has an exact-match coefficient table with no 22050 or
- * 11025 entry, so every low-rate stream on this board is converted - and
- * until now that conversion was alsa-lib's general resampler inside plug,
- * which interpolates in floating point, per sample, on a hart whose double
- * is a library call. Doom and Quake both ask for 22050, and 22050 x 2 is
- * exactly 44100, a rate the hardware runs natively. Duplicating each frame
- * is then a memcpy and is arithmetically identical to nearest-neighbour
- * upsampling - not an approximation of the resampler but a different, exact
- * answer for integer ratios.
- *
- * The factor is the smallest whole multiple that lands in the hardware's own
- * range, so 22050 doubles to 44100, 11025 quadruples to 44100, 16000 triples
- * to 48000 and 44100 is left alone. Anything that does not divide exactly
- * keeps the old path, resampler and all.
- */
-static unsigned upsample_factor(unsigned rate)
-{
-	unsigned n;
-
-	if (!rate)
-		return 1;
-	for (n = 2; n <= 6; n++)
-		if (rate * n >= 44100 && rate * n <= 48000)
-			return n;
-	return 1;
-}
 
 static void sink_read(struct route *r, char *out, size_t n)
 {
@@ -117,87 +84,6 @@ static void sink_read(struct route *r, char *out, size_t n)
 
 static int xrun(struct route *r);
 
-static snd_pcm_sframes_t slave_write(struct route *r, const char *buf,
-				     snd_pcm_uframes_t size)
-{
-	unsigned fb = r->io.channels * 2;	/* S16_LE only; see constraints */
-	snd_pcm_uframes_t i;
-	snd_pcm_sframes_t n;
-	unsigned k;
-	char *p;
-
-	if (r->up <= 1)
-		return snd_pcm_writei(r->slave, buf, size);
-	if (r->ubuf_bytes < (size_t)size * r->up * fb) {
-		size_t want = (size_t)size * r->up * fb;
-		char *nb = realloc(r->ubuf, want);
-
-		if (!nb)
-			return -ENOMEM;
-		r->ubuf = nb;
-		r->ubuf_bytes = want;
-	}
-	/*
-	 * Stereo S16 is FOUR BYTES - one 32-bit store, not a memcpy call.
-	 *
-	 * The first version of this loop called memcpy() once per copied
-	 * frame: at 22050 doubled that is ~44,000 four-byte calls a second,
-	 * every one of them a call into code executing from 80 MHz XIP
-	 * flash, to move a single word. Specialising the two shapes the
-	 * constraints actually allow (stereo and mono S16) turns the whole
-	 * expansion into aligned word stores with the branch hoisted out.
-	 */
-	p = r->ubuf;
-	if (fb == 4) {
-		const uint32_t *src = (const uint32_t *)buf;
-		uint32_t *dst = (uint32_t *)p;
-
-		if (r->up == 2) {
-			for (i = 0; i < size; i++) {
-				uint32_t v = src[i];
-
-				*dst++ = v;
-				*dst++ = v;
-			}
-		} else {
-			for (i = 0; i < size; i++) {
-				uint32_t v = src[i];
-
-				for (k = 0; k < r->up; k++)
-					*dst++ = v;
-			}
-		}
-	} else if (fb == 2) {
-		const uint16_t *src = (const uint16_t *)buf;
-		uint16_t *dst = (uint16_t *)p;
-
-		for (i = 0; i < size; i++) {
-			uint16_t v = src[i];
-
-			for (k = 0; k < r->up; k++)
-				*dst++ = v;
-		}
-	} else {
-		for (i = 0; i < size; i++) {
-			const char *src = buf + (size_t)i * fb;
-
-			for (k = 0; k < r->up; k++, p += fb)
-				memcpy(p, src, fb);
-		}
-	}
-	n = snd_pcm_writei(r->slave, r->ubuf, (snd_pcm_uframes_t)size * r->up);
-	if (n < 0)
-		return n;
-	/*
-	 * Report the APPLICATION's frames. writei is blocking here and the
-	 * rings are mirrored, so a short write is an xrun's business rather
-	 * than a routine partial - but round down regardless, because
-	 * claiming a frame we only partly wrote would desynchronise the
-	 * pointer for the rest of the stream.
-	 */
-	return n / (snd_pcm_sframes_t)r->up;
-}
-
 static void slave_close(struct route *r)
 {
 	if (r->slave) {
@@ -206,21 +92,10 @@ static void slave_close(struct route *r)
 	}
 }
 
-/*
- * One attempt at opening the sink. `direct` skips alsa-lib's plug entirely
- * and talks to the device itself, which is only possible when we can satisfy
- * every parameter exactly - our own format and channel count, and a rate the
- * hardware takes natively (the frame-repeat multiple, or the plain rate).
- * That is the point of doing the conversion here: plug's job was to bridge
- * the rate, and once this plugin bridges it there is nothing left for plug
- * to do but copy every period through another ring. The fallback keeps it
- * for the sinks that still need it - the Bluetooth loopback runs at whatever
- * s31-bt opened, and an odd rate has no whole multiple to reach.
- */
-static int slave_try(struct route *r, int direct, snd_pcm_t **out)
+static int slave_open(struct route *r)
 {
 	char name[80];
-	snd_pcm_t *pcm = NULL;
+	snd_pcm_t *old = r->slave, *pcm = NULL;
 	const char *step = "open";
 	int err;
 
@@ -240,10 +115,7 @@ static int slave_try(struct route *r, int direct, snd_pcm_t **out)
 	 * the trailing 0 as a second argument to plug, which fails with
 	 * "Unknown parameter 1" and leaves the sink unopenable.
 	 */
-	if (direct)
-		snprintf(name, sizeof(name), "%s", r->sink);
-	else
-		snprintf(name, sizeof(name), "plug:'%s'", r->sink);
+	snprintf(name, sizeof(name), "plug:'%s'", r->sink);
 	err = snd_pcm_open(&pcm, name, SND_PCM_STREAM_PLAYBACK, 0);
 	if (err < 0)
 		goto done;
@@ -274,7 +146,7 @@ static int slave_try(struct route *r, int direct, snd_pcm_t **out)
 	{
 		snd_pcm_hw_params_t *hw;
 		snd_pcm_sw_params_t *sw;
-		unsigned rate = r->io.rate, up = upsample_factor(r->io.rate);
+		unsigned rate = r->io.rate;
 		snd_pcm_uframes_t buf, per, want_buf, want_per, amin;
 		int dir = 0;
 		struct pollfd pfd;
@@ -291,43 +163,10 @@ static int slave_try(struct route *r, int direct, snd_pcm_t **out)
 		    (err = snd_pcm_hw_params_set_format(pcm, hw,
 				r->io.format)) < 0 ||
 		    (err = snd_pcm_hw_params_set_channels(pcm, hw,
-				r->io.channels)) < 0)
+				r->io.channels)) < 0 ||
+		    (err = snd_pcm_hw_params_set_rate_near(pcm, hw,
+				&rate, &dir)) < 0)
 			goto done;
-		/*
-		 * Ask for the multiple only if the sink will take it EXACTLY.
-		 * test_rate answers without narrowing the configuration space,
-		 * so a sink that cannot do it (the Bluetooth loopback runs at
-		 * whatever s31-bt opened) falls back to the plain rate with
-		 * nothing committed and nothing to unwind. Committing first
-		 * and checking after cannot be undone, and getting it wrong
-		 * means the slave plays our doubled frames at the single rate:
-		 * an octave down, at half speed.
-		 */
-		if (up > 1 && snd_pcm_hw_params_test_rate(pcm, hw,
-							  r->io.rate * up, 0) < 0)
-			up = 1;
-		rate = r->io.rate * up;
-		/*
-		 * Direct means exact: without plug underneath there is nothing
-		 * to convert a near miss, so a rate we cannot have is a reason
-		 * to fall back, not to round. set_rate (not _near) says so.
-		 */
-		if (direct)
-			err = snd_pcm_hw_params_set_rate(pcm, hw, rate, 0);
-		else
-			err = snd_pcm_hw_params_set_rate_near(pcm, hw, &rate,
-							      &dir);
-		if (err < 0)
-			goto done;
-		/*
-		 * Whatever came back is what the slave believes it is playing,
-		 * so the repeat factor has to follow it exactly or the pitch
-		 * is wrong. A near-miss means pass-through, not a guess.
-		 */
-		r->up = (rate && rate % r->io.rate == 0) ? rate / r->io.rate : 1;
-		if (r->up > 1)
-			SNDERR("s31route: %u Hz -> %u Hz by %ux frame repeat",
-			       r->io.rate, rate, r->up);
 		/*
 		 * Mirror the application's ring, in the sink's rate. The
 		 * application can never be more than its own ring ahead of what
@@ -384,48 +223,6 @@ static int slave_try(struct route *r, int direct, snd_pcm_t **out)
 		amin = want_per;
 		if (buf > want_buf && buf - want_buf + want_per > amin)
 			amin = buf - want_buf + want_per;
-		/*
-		 * ...BUT NEVER MORE THAN THE SINK CAN EVER OFFER.
-		 *
-		 * All of the reasoning above assumes the sink can hold the
-		 * application's ring. This codec cannot: it reports
-		 * BUFFER_SIZE [256..4096], which at 44100 is 93 ms, while
-		 * aplay at 22050 asks for a 125 ms period - and the frame
-		 * repeat doubles that period into 5512 sink frames against a
-		 * 4096-frame buffer. avail_min then exceeds the buffer
-		 * entirely, alsa-lib clamps it to the buffer size, and the
-		 * poll can only be satisfied when the sink is COMPLETELY
-		 * EMPTY. That is an underrun every period by construction:
-		 * 64 of them in an 8-second play, on every rate including
-		 * native 44100, heard as intermittent crackling.
-		 *
-		 * Half the buffer leaves ~46 ms still queued at each wake,
-		 * which is the margin that has to cover our scheduling
-		 * latency on a board where a reclaim stall is tens of ms. The
-		 * cost is that an application period larger than that takes
-		 * more than one round through alsa-lib's write loop - which is
-		 * unavoidable when the period does not fit in the hardware at
-		 * all, and is much cheaper than an xrun.
-		 */
-		/*
-		 * ONLY when it is genuinely unsatisfiable. Clamping to half
-		 * the buffer unconditionally looked safer and was not: through
-		 * plug the sink buffer is much larger than the codec's, so
-		 * half of it is a threshold that takes far too long to reach,
-		 * and prboom sat in ppoll() with the PCM RUNNING, rendering 29
-		 * frames in four minutes. aplay never showed it because its
-		 * periods are large enough to cross the threshold anyway.
-		 *
-		 * The actual defect was avail_min EXCEEDING the buffer, which
-		 * alsa-lib clamps to the buffer size and which can then only
-		 * be satisfied by a completely empty sink - an underrun every
-		 * period. Leave one period of headroom and change nothing
-		 * else, so every case that already worked is untouched.
-		 */
-		if (amin > buf)
-			amin = buf > per ? buf - per : per;
-		if (amin < per)
-			amin = per;
 		if (amin > buf)
 			amin = buf;
 		step = "sw_params";
@@ -446,7 +243,7 @@ static int slave_try(struct route *r, int direct, snd_pcm_t **out)
 		}
 		if (getenv("S31ROUTE_DEBUG"))
 			fprintf(stderr, "s31route: %s app %u Hz ring %lu/%lu -> sink %u Hz %lu/%lu avail_min %lu\n",
-				name, r->io.rate,
+				r->sink, r->io.rate,
 				(unsigned long)r->io.buffer_size,
 				(unsigned long)r->io.period_size, rate,
 				(unsigned long)buf, (unsigned long)per,
@@ -459,76 +256,6 @@ done:
 				snd_strerror(err));
 		if (pcm)
 			snd_pcm_close(pcm);
-		return err;
-	}
-	*out = pcm;
-	return 0;
-}
-
-static int slave_open(struct route *r)
-{
-	snd_pcm_t *old = r->slave, *pcm = NULL;
-	int err;
-
-	/*
-	 * Open the new sink BEFORE closing the old one. A switch to a sink
-	 * that will not open (busy, unplugged, asking for what it cannot do)
-	 * then leaves the stream where it was instead of returning -ENODEV
-	 * to an application that treats that as the end of sound.
-	 */
-	/*
-	 * plug FIRST, direct only on request.
-	 *
-	 * Opening hw: directly and skipping plug measured NOTHING - 27 ticks
-	 * against 28 over a 4 s aplay - and then broke prboom: SDL negotiates
-	 * a period the codec cannot give, the fallback leaves alsa-lib's state
-	 * machine unhappy, and the game blocks in snd_pcm_recover with
-	 * "Sound protocol is not compatible", rendering 9 frames in three
-	 * minutes. aplay was too forgiving a client to catch it.
-	 *
-	 * The conversion work this plugin does is unaffected either way: the
-	 * frame repeat happens above plug, and plug passes 44100 through
-	 * untouched. S31ROUTE_DIRECT=1 restores the experiment.
-	 */
-	/*
-	 * RETRY THE FIRST OPEN. A hard failure here is not a missing device,
-	 * it is usually the PREVIOUS process not having let go yet: the codec
-	 * PCM takes a single opener, and a game started seconds after the last
-	 * one exited can arrive while the old handle is still being torn down.
-	 *
-	 * What makes that expensive is the client's reaction. prboom treats
-	 * -ENODEV on a write as unrecoverable: "ALSA write failed
-	 * (unrecoverable): No such device", I_ShutdownSound, and that process
-	 * plays nothing ever again. A whole benchmark run went by in silence
-	 * that way, and from outside it looked like sound was broken rather
-	 * than like one open having lost a race.
-	 *
-	 * So retry, but ONLY when there is nothing to fall back to. A sink
-	 * SWITCH still fails fast and leaves the stream on the old device,
-	 * which is what the comment above is about: retrying a switch would
-	 * stall audio that is currently fine.
-	 *
-	 * 8 tries, 40 ms apart. A close completes in far less than 320 ms, and
-	 * a genuinely absent device still reports in under a third of a second.
-	 */
-	{
-		int tries = old ? 1 : 8;
-
-		for (;;) {
-			err = -ENODEV;
-			if (getenv("S31ROUTE_DIRECT"))
-				err = slave_try(r, 1, &pcm);
-			if (err < 0)
-				err = slave_try(r, 0, &pcm);
-			if (err >= 0 || --tries <= 0)
-				break;
-			usleep(40000);
-		}
-	}
-	if (err < 0) {
-		if (!old)
-			SNDERR("s31route: could not open \"%s\" after "
-			       "retrying: %s", r->sink, snd_strerror(err));
 		return err;
 	}
 	r->slave = pcm;
@@ -687,7 +414,7 @@ static snd_pcm_sframes_t route_transfer(snd_pcm_ioplug_t *io,
 	if (!r->slave)
 		return -ENODEV;
 	buf = (const char *)areas->addr + (areas->first + areas->step * offset) / 8;
-	n = slave_write(r, buf, size);
+	n = snd_pcm_writei(r->slave, buf, size);
 	if (n == -EPIPE)
 		return xrun(r);
 	if (n == -ENODEV || n == -EIO) {
@@ -696,7 +423,7 @@ static snd_pcm_sframes_t route_transfer(snd_pcm_ioplug_t *io,
 		sink_follow(r);
 		if (!r->slave)
 			return -ENODEV;
-		n = slave_write(r, buf, size);
+		n = snd_pcm_writei(r->slave, buf, size);
 	}
 	if (n < 0)
 		return n;
@@ -711,7 +438,6 @@ static int route_close(snd_pcm_ioplug_t *io)
 	slave_close(r);
 	if (r->pfd >= 0)
 		close(r->pfd);
-	free(r->ubuf);
 	free(r);
 	return 0;
 }
