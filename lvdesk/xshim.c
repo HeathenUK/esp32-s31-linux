@@ -44,6 +44,7 @@
 #include <drm/drm_mode.h>
 #include "kms.h"
 #include "xshim.h"
+#include "hottext.h"
 #include "xshim_font.h"
 
 #define MAXCLI		4
@@ -4869,7 +4870,13 @@ static void shmseg_drop(struct shmseg *sg)
 	memset(sg, 0, sizeof(*sg));
 }
 
-static void mitshm_request(struct cli *c, const uint8_t *r, int len)
+/*
+ * HOTTEXT: measured, not guessed. An on-CPU page profile of lvdesk during a
+ * prboom timedemo put 11.7% of its samples on the page this function's second
+ * half occupies - the row-hash-and-copy loop. It is called once per client
+ * frame (5,032 ShmPutImage in one timedemo).
+ */
+static void HOTTEXT mitshm_request(struct cli *c, const uint8_t *r, int len)
 {
 	uint8_t d24[24];
 	uint8_t op = r[1];
@@ -5311,7 +5318,7 @@ static void mitshm_request(struct cli *c, const uint8_t *r, int len)
 	}
 }
 
-static void xshm_request(struct cli *c, const uint8_t *r, int len)
+static void HOTTEXT xshm_request(struct cli *c, const uint8_t *r, int len)
 {
 	uint8_t d24[24];
 	uint8_t op = r[0];

@@ -41,6 +41,7 @@
 #include <math.h>
 #include <alsa/asoundlib.h>
 #include <signal.h>
+#include <setjmp.h>
 #include <stdio.h>
 #include <dirent.h>
 #include <strings.h>
@@ -64,6 +65,7 @@
 #include "src/drivers/lv_drivers.h"
 #include <drm/drm.h>
 #include "kms.h"
+#include "hottext.h"
 
 /*
  * DRM_IOCTL_ESP32S31_PPA_CLUT, as widened to take a destination rectangle.
@@ -4010,7 +4012,75 @@ static uint64_t fsg_read_majflt(void)
  * when this thread was descheduled, which is the trap recorded above
  * lvp_now().
  */
-static uint64_t fsg_wall_ns(void)
+/*
+ * THE FRAME INSTRUMENT IS OFF BY DEFAULT, and this is the second time that
+ * lesson has been learnt in this file.
+ *
+ * A clock read here is a SYSCALL, and a syscall on this board costs of the
+ * order of a millisecond (docs/current-state.md; .text..fast on the net spine
+ * measured zero, the cost is structural). This instrument took four of them
+ * per present - fsg_note's wall clock, the expand and dirty stage timers, and
+ * the present timer around the call - which at ~23 presents a second is about
+ * a hundred syscalls a second spent measuring.
+ *
+ * An on-CPU page profile of lvdesk during a prboom timedemo put 16.4% of its
+ * samples in libc's clock_gettime page: a sixth of the desktop's CPU, and the
+ * fourth largest item in the whole frame, spent entirely on measuring the
+ * frame. The earlier incident was cruder - fsg_note read /proc/vmstat every
+ * frame, 3.4 ms of a 40 ms budget - and was fixed by making that read rare
+ * rather than by asking whether the instrument should be running at all.
+ *
+ * LVDESK_FSG=1 turns it back on. Everything it reports stays exactly as it
+ * was; it simply is not armed unless asked for.
+ */
+/*
+ * fsg_on   - frame-gap tracking. Cheap now (one CSR read per present), so it
+ *            is ON by default: LVDESK_NOFSG=1 disables it. This is the dip
+ *            tracker, and a dip nobody is counting is a dip nobody fixes.
+ * fsg_stage - the per-stage timers (expand, dirty, present). Those still use
+ *            CLOCK_THREAD_CPUTIME_ID, which is a real syscall with no CSR
+ *            equivalent, so they stay OFF unless LVDESK_FSGSTAGE=1.
+ */
+static int fsg_on = 1;
+static int fsg_stage;
+
+/*
+ * READ THE TIMER CSR, NOT THE CLOCK SYSCALL.
+ *
+ * clock_gettime() is a real syscall here - there is no usable vDSO for this
+ * rv32 XIP kernel - and a syscall on this board costs of the order of a
+ * millisecond. That is what put 16.4% of lvdesk's on-CPU samples in libc's
+ * clock_gettime page: a sixth of the desktop, spent measuring the desktop.
+ *
+ * The hart reports zicntr, so `time` is a CSR and rdtime is one instruction.
+ * On rv32 it takes three reads to get 64 bits safely, because the low half
+ * can wrap between reading the two halves.
+ *
+ * U-mode access to it is not guaranteed - it depends on what scounteren
+ * permits, and this kernel is a port - so probe once under a SIGILL handler
+ * and fall back to the syscall. Never assume an instruction is available
+ * because the ISA string lists the extension; docs/ records a whole day lost
+ * to exactly that with the hardware loop unit.
+ *
+ * The CSR counts at some fixed rate, not in nanoseconds, so calibrate against
+ * one real clock read at startup. One syscall, once, instead of four a frame.
+ */
+static int fsg_csr_ok;			/* rdtime usable from U-mode */
+static uint64_t fsg_csr_num = 1, fsg_csr_den = 1;	/* ns = ticks*num/den */
+
+static inline uint64_t fsg_rdtime(void)
+{
+	uint32_t hi, lo, hi2;
+
+	do {
+		__asm__ volatile("rdtimeh %0" : "=r"(hi));
+		__asm__ volatile("rdtime  %0" : "=r"(lo));
+		__asm__ volatile("rdtimeh %0" : "=r"(hi2));
+	} while (hi != hi2);
+	return ((uint64_t)hi << 32) | lo;
+}
+
+static uint64_t fsg_syscall_ns(void)
 {
 	struct timespec t;
 
@@ -4018,12 +4088,81 @@ static uint64_t fsg_wall_ns(void)
 	return (uint64_t)t.tv_sec * 1000000000ull + t.tv_nsec;
 }
 
+static sigjmp_buf fsg_ill_jmp;
+
+static void fsg_on_sigill(int sig)
+{
+	(void)sig;
+	siglongjmp(fsg_ill_jmp, 1);
+}
+
+/*
+ * Probe rdtime and work out its rate. Call once, early, before any handler
+ * we care about is installed.
+ */
+static void fsg_clock_init(void)
+{
+	struct sigaction sa, old;
+	uint64_t t0, t1, n0, n1;
+
+	memset(&sa, 0, sizeof sa);
+	sa.sa_handler = fsg_on_sigill;
+	sigaction(SIGILL, &sa, &old);
+	if (sigsetjmp(fsg_ill_jmp, 1) == 0) {
+		(void)fsg_rdtime();
+		fsg_csr_ok = 1;
+	}
+	sigaction(SIGILL, &old, NULL);
+	if (!fsg_csr_ok) {
+		fprintf(stderr, "lvdesk: rdtime traps from U-mode; frame "
+			"timing falls back to clock_gettime\n");
+		return;
+	}
+	/*
+	 * Calibrate over a short, real interval. nanosleep is a syscall we
+	 * pay once. A ratio rather than a float: there is no hardware double
+	 * on this board and this is integer arithmetic per frame afterwards.
+	 */
+	n0 = fsg_syscall_ns();
+	t0 = fsg_rdtime();
+	{
+		struct timespec ts = { 0, 20000000 };	/* 20 ms */
+
+		nanosleep(&ts, NULL);
+	}
+	t1 = fsg_rdtime();
+	n1 = fsg_syscall_ns();
+	if (t1 > t0 && n1 > n0) {
+		fsg_csr_den = t1 - t0;
+		fsg_csr_num = n1 - n0;
+		fprintf(stderr, "lvdesk: rdtime works, %llu ticks per %llu ns "
+			"(%llu kHz)\n", (unsigned long long)fsg_csr_den,
+			(unsigned long long)fsg_csr_num,
+			(unsigned long long)((fsg_csr_den * 1000000ull) /
+					     (fsg_csr_num ? fsg_csr_num : 1)));
+	} else {
+		fsg_csr_ok = 0;
+		fprintf(stderr, "lvdesk: rdtime did not advance; falling back "
+			"to clock_gettime\n");
+	}
+}
+
+static uint64_t fsg_wall_ns(void)
+{
+	if (fsg_csr_ok)
+		return fsg_rdtime() * fsg_csr_num / fsg_csr_den;
+	return fsg_syscall_ns();
+}
+
 static void fsg_note(void)
 {
-	uint64_t now = fsg_wall_ns();
+	uint64_t now;
 	uint32_t ms;
 	int i, w = 0;
 
+	if (!fsg_on)
+		return;
+	now = fsg_wall_ns();
 	if (!fsg_last) {
 		fsg_last = now;
 		return;
@@ -4313,7 +4452,7 @@ static void fs_present(uint32_t id)
 	if (dy + dh > sh) dh = sh - dy;
 	if (dw <= 0 || dh <= 0)
 		return;
-	fsg_t_expand = prof_ns();
+	fsg_t_expand = fsg_stage ? prof_ns() : 0;
 	{
 	int rmode = fsrh_begin(id, sh, pal);
 	int rforce = rmode != FSRH_USE;
@@ -4530,7 +4669,7 @@ static void fs_present(uint32_t id)
 		 * the driver scale synchronously with the PPA. Two clock reads
 		 * a frame, ~0.8 us, against milliseconds being attributed.
 		 */
-		uint64_t t = prof_ns();
+		uint64_t t = fsg_stage ? prof_ns() : 0;
 		/*
 		 * LVDESK_FULLDIRTY=1 keeps the small expansion but reports the
 		 * whole screen as damaged. It exists to split one artifact in
@@ -4556,7 +4695,8 @@ static void fs_present(uint32_t id)
 			kms_fs_dirty(0, 0, sw - 1, sh - 1);
 		else
 			kms_fs_dirty(dx, dy, dx + dw - 1, dy + dh - 1);
-		fsg_dirty_us = (uint32_t)((prof_ns() - t) / 1000u);
+		fsg_dirty_us = fsg_stage ?
+			       (uint32_t)((prof_ns() - t) / 1000u) : 0;
 		if (fsg_expand_us > fsg_expand_max)
 			fsg_expand_max = fsg_expand_us;
 		if (fsg_dirty_us > fsg_dirty_max)
@@ -5305,7 +5445,11 @@ static void xwin_blit_direct(const lv_area_t *area)
 	}
 }
 
-static void xwin_on_draw(uint32_t id)
+/*
+ * HOTTEXT: 11.8% of lvdesk's on-CPU samples land on this function's first
+ * page. It is the draw callback, and the expanders inline into it.
+ */
+static void HOTTEXT xwin_on_draw(uint32_t id)
 {
 	int i, w, h;
 
@@ -5320,11 +5464,12 @@ static void xwin_on_draw(uint32_t id)
 			 * worst present is a couple of ms while frames are
 			 * missing by 170, the time is not in the desktop.
 			 */
-			uint64_t t0 = prof_ns();
+			uint64_t t0 = fsg_stage ? prof_ns() : 0;
 			uint32_t us;
 
 			fs_present(id);
-			us = (uint32_t)((prof_ns() - t0) / 1000u);
+			us = fsg_stage ?
+			     (uint32_t)((prof_ns() - t0) / 1000u) : 0;
 			fsg_present_us = us;
 			if (us > fsg_present_max_us)
 				fsg_present_max_us = us;
@@ -8905,6 +9050,18 @@ static void mouse_init(void)
 
 int main(void)
 {
+	/*
+	 * FIRST, before anything hot has run: move the code marked HOTTEXT
+	 * out of XIP flash into RAM. Measured at 4.8x for code that overflows
+	 * the instruction cache (rootfs/ramtext.c, and see hottext.h).
+	 * LVDESK_NOHOTTEXT=1 turns it off; LVDESK_RAMTEXT=<off>:<len> moves an
+	 * arbitrary window instead, to find the hot cluster by sweep.
+	 */
+	hottext_init();
+	fsg_clock_init();
+	fsg_on = getenv("LVDESK_NOFSG") == NULL;
+	fsg_stage = getenv("LVDESK_FSGSTAGE") != NULL;
+
 	/*
 	 * NO mlockall here, and this is measured, not assumed.
 	 *

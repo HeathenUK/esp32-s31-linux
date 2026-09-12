@@ -24,7 +24,7 @@ cat /tmp/srcs | xargs -P "$(nproc)" -I{} sh -c \
 EXTRA=""
 LIBS=""
 if [ "$APP" = lvdesk ]; then
-  EXTRA="/src/lvdesk/kms.c /src/lvdesk/xshim.c"
+  EXTRA="/src/lvdesk/kms.c /src/lvdesk/xshim.c /src/lvdesk/hottext.c"
   # ALSA's mixer API, not a fork to amixer - see the audio popover.
   # ALSA lives in the buildroot sysroot, which SYSROOT has always pointed at
   # and nothing used. Headers to compile against, the .so to link against; the
