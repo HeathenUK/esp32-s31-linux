@@ -3953,16 +3953,49 @@ static uint64_t prof_ns(void);
  * sampled at that moment.
  */
 #define FSG_WORST 8
+static uint32_t fsg_present_us, fsg_present_max_us;
+#define FSG_LOG 96			/* every long frame, in order */
+#define FSG_MIN_MS 30			/* ~0.75 of a 40 ms frame at 25 fps */
 static uint64_t fsg_last, fsg_frames;
 static uint32_t fsg_bucket[6];		/* <25 <50 <100 <200 <400 >=400 ms */
-static uint32_t fsg_worst_ms[FSG_WORST];
-static uint64_t fsg_worst_frame[FSG_WORST];
+static uint32_t fsg_log_ms[FSG_LOG];
+static uint64_t fsg_log_frame[FSG_LOG];
+static uint64_t fsg_log_majflt[FSG_LOG];
+static int fsg_n;
+/*
+ * Global major-fault count, read ONLY when a gap is already long. Reading
+ * /proc/vmstat costs a parse, so it cannot go in the per-frame path - but a
+ * gap over the threshold happens a handful of times in a five-thousand
+ * frame run, and being able to say "that 137 ms frame took N major faults"
+ * is the difference between knowing and guessing. Which is the whole reason
+ * this instrument exists.
+ */
+static uint64_t fsg_worst_majflt[FSG_WORST];
+static uint64_t fsg_last_majflt;
+
+static uint64_t fsg_read_majflt(void)
+{
+	char buf[4096];
+	int fd = open("/proc/vmstat", O_RDONLY);
+	ssize_t n;
+	char *p;
+
+	if (fd < 0)
+		return 0;
+	n = read(fd, buf, sizeof(buf) - 1);
+	close(fd);
+	if (n <= 0)
+		return 0;
+	buf[n] = 0;
+	p = strstr(buf, "pgmajfault ");
+	return p ? strtoull(p + 11, NULL, 10) : 0;
+}
 
 static void fsg_note(void)
 {
 	uint64_t now = prof_ns();
 	uint32_t ms;
-	int i, w;
+	int i, w = 0;
 
 	if (!fsg_last) {
 		fsg_last = now;
@@ -3974,14 +4007,34 @@ static void fsg_note(void)
 	i = ms < 25 ? 0 : ms < 50 ? 1 : ms < 100 ? 2 :
 	    ms < 200 ? 3 : ms < 400 ? 4 : 5;
 	fsg_bucket[i]++;
-	w = 0;
-	for (i = 1; i < FSG_WORST; i++)
-		if (fsg_worst_ms[i] < fsg_worst_ms[w])
-			w = i;
-	if (ms > fsg_worst_ms[w]) {
-		fsg_worst_ms[w] = ms;
-		fsg_worst_frame[w] = fsg_frames;
+	/*
+	 * EVERY long frame, in order - not the top eight.
+	 *
+	 * A "worst N" list is biased to the largest gap in the run and hides
+	 * what a human actually notices, which is a CLUSTER of merely-long
+	 * frames. The reported hitch is five seconds in, at the first corridor
+	 * and the first monsters, while the top-eight list was dominated by a
+	 * single 137 ms frame three minutes later. Both are real; only one was
+	 * visible in the report.
+	 */
+	if (ms >= FSG_MIN_MS && fsg_n < FSG_LOG) {
+		uint64_t mf = fsg_read_majflt();
+
+		fsg_log_ms[fsg_n] = ms;
+		fsg_log_frame[fsg_n] = fsg_frames;
+		fsg_log_majflt[fsg_n] = (mf && fsg_last_majflt &&
+					 mf > fsg_last_majflt) ?
+					mf - fsg_last_majflt : 0;
+		fsg_n++;
+		if (mf)
+			fsg_last_majflt = mf;
+	} else if (ms >= FSG_MIN_MS / 2) {
+		uint64_t mf = fsg_read_majflt();
+
+		if (mf)
+			fsg_last_majflt = mf;
 	}
+	(void)w;
 }
 
 static void fsg_report(void)
@@ -3992,11 +4045,13 @@ static void fsg_report(void)
 	       "<400:%u >=400:%u\n", (unsigned long long)fsg_frames,
 	       fsg_bucket[0], fsg_bucket[1], fsg_bucket[2], fsg_bucket[3],
 	       fsg_bucket[4], fsg_bucket[5]);
-	printf("lvdesk: worst gaps ms:");
-	for (i = 0; i < FSG_WORST; i++)
-		if (fsg_worst_ms[i])
-			printf(" %u@f%llu", fsg_worst_ms[i],
-			       (unsigned long long)fsg_worst_frame[i]);
+	printf("lvdesk: present us last %u worst %u\n", fsg_present_us,
+	       fsg_present_max_us);
+	printf("lvdesk: long frames (>=%d ms) n=%d:", FSG_MIN_MS, fsg_n);
+	for (i = 0; i < fsg_n; i++)
+		printf(" f%llu:%ums/mf%llu",
+		       (unsigned long long)fsg_log_frame[i], fsg_log_ms[i],
+		       (unsigned long long)fsg_log_majflt[i]);
 	printf("\n");
 	fflush(stdout);
 }
@@ -4843,7 +4898,21 @@ static void xwin_on_draw(uint32_t id)
 		if (!fs_win)
 			fs_win = xshim_mode_window(fs_w, fs_h);
 		if (id == fs_win) {
+			/*
+			 * How much of a long frame is OURS? fsg_note()
+			 * measures present-to-present, which contains the
+			 * client's render, the scheduler and this call. If the
+			 * worst present is a couple of ms while frames are
+			 * missing by 170, the time is not in the desktop.
+			 */
+			uint64_t t0 = prof_ns();
+			uint32_t us;
+
 			fs_present(id);
+			us = (uint32_t)((prof_ns() - t0) / 1000u);
+			fsg_present_us = us;
+			if (us > fsg_present_max_us)
+				fsg_present_max_us = us;
 			return;
 		}
 	}

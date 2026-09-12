@@ -385,6 +385,8 @@ static atomic64_t dw_mci_ns_alone, dw_mci_ns_with_data;
 static u32 dw_mci_first_status[4];
 static atomic_t dw_mci_status_slot;
 
+static atomic64_t dw_mci_ns_req, dw_mci_n_req;
+static u64 dw_mci_t_req_enter;
 static atomic64_t dw_mci_n_cmd_all;
 static u32 dw_mci_last_opcode;
 static atomic64_t dw_mci_busy_calls;
@@ -410,6 +412,7 @@ static int dw_mci_probe_get(char *buf, const struct kernel_param *kp)
 	u64 nb = atomic64_read(&dw_mci_busy_calls);
 	u64 nq = atomic64_read(&dw_mci_req_count);
 	u64 nc = atomic64_read(&dw_mci_n_cmd_all);
+	u64 nrq = atomic64_read(&dw_mci_n_req);
 	u64 nd = atomic64_read(&dw_mci_ns_data_end);
 
 	return scnprintf(buf, PAGE_SIZE,
@@ -423,6 +426,7 @@ static int dw_mci_probe_get(char *buf, const struct kernel_param *kp)
 			 "issue2cmd n %llu avg_ns %llu\n"
 			 "cmd2data  n %llu avg_ns %llu\n"
 			 "cmds_all  n %llu last_opcode %u\n"
+			 "req_total n %llu avg_ns %llu\n"
 			 "bus_hz %u ios_clock %u timing %d width %d\n",
 			 dw_mci_ns_ktime_self,
 			 np, np ? div64_u64((u64)atomic64_read(&dw_mci_ns_prep), np) : 0,
@@ -435,6 +439,7 @@ static int dw_mci_probe_get(char *buf, const struct kernel_param *kp)
 			 nq, nq ? div64_u64((u64)atomic64_read(&dw_mci_ns_issue_cmd), nq) : 0,
 			 nd, nd ? div64_u64((u64)atomic64_read(&dw_mci_ns_cmd_data), nd) : 0,
 			 nc, dw_mci_last_opcode,
+			 nrq, nrq ? div64_u64((u64)atomic64_read(&dw_mci_ns_req), nrq) : 0,
 			 h ? h->bus_hz : 0,
 			 h ? h->mmc->ios.clock : 0,
 			 h ? h->mmc->ios.timing : -1,
@@ -1874,6 +1879,14 @@ static void dw_mci_start_request(struct dw_mci *host, struct mmc_command *cmd)
 
 static void dw_mci_request(struct mmc_host *mmc, struct mmc_request *mrq)
 {
+	/*
+	 * THE WHOLE REQUEST, as the mmc core sees it. The command and data
+	 * phases account for only 372 us of a ~1950 us 4 KiB read; this
+	 * brackets everything the driver does around them, so the remainder
+	 * can finally be attributed to the layers above rather than guessed
+	 * at. Entry here to the mmc_request_done() that ends it.
+	 */
+	dw_mci_t_req_enter = ktime_get_ns();
 	struct dw_mci *host = mmc_priv(mmc);
 	struct mmc_command *cmd;
 
@@ -2358,6 +2371,12 @@ static void dw_mci_request_end(struct dw_mci *host, struct mmc_request *mrq)
 	spin_unlock(&host->lock);
 	/* If this came from the software queue, it finishes there. */
 	if (!dw_mci_hsq_finalize(prev_mmc, mrq))
+		if (dw_mci_t_req_enter) {
+			atomic64_add(ktime_get_ns() - dw_mci_t_req_enter,
+				     &dw_mci_ns_req);
+			atomic64_inc(&dw_mci_n_req);
+			dw_mci_t_req_enter = 0;
+		}
 		mmc_request_done(prev_mmc, mrq);
 	spin_lock(&host->lock);
 }
