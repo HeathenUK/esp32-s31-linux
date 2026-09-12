@@ -3996,9 +3996,31 @@ static uint64_t fsg_read_majflt(void)
 	return p ? strtoull(p + 11, NULL, 10) : 0;
 }
 
+/*
+ * WALL CLOCK, deliberately - prof_ns() is CLOCK_THREAD_CPUTIME_ID.
+ *
+ * The gap between presents IS wall time; that is what frame pacing means
+ * and what a human sees. Timing it with thread CPU time measured how much
+ * CPU lvdesk burned between frames instead, which is a useful number but a
+ * different one - and every "long frame" reported before this was a frame
+ * where the DESKTOP was busy, not one that arrived late.
+ *
+ * The stage timers (expand, dirty, present) stay on CPU time: for a code
+ * section on a saturated single core, wall clock also counts the intervals
+ * when this thread was descheduled, which is the trap recorded above
+ * lvp_now().
+ */
+static uint64_t fsg_wall_ns(void)
+{
+	struct timespec t;
+
+	clock_gettime(CLOCK_MONOTONIC, &t);
+	return (uint64_t)t.tv_sec * 1000000000ull + t.tv_nsec;
+}
+
 static void fsg_note(void)
 {
-	uint64_t now = prof_ns();
+	uint64_t now = fsg_wall_ns();
 	uint32_t ms;
 	int i, w = 0;
 
