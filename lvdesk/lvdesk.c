@@ -4282,12 +4282,22 @@ static int fsrh_h;
 static uint32_t fsrh_id, fsrh_seed, fsrh_gen;
 static int fsrh_valid;
 
+/*
+ * OFF BY DEFAULT: measured null on the only client tested.
+ *
+ * prboom, one timedemo with sound: 59 rows kept out of 2,031,184, and the
+ * adaptive probe stood the scan down on 9,691 of 10,008 presents. An action
+ * game redraws its view every frame and the status bar's digits and face
+ * animate, so there is nothing to keep. The idea is sound for a STILL client
+ * and no still client has been measured, so the code stays and the default
+ * does not. LVDESK_ROWSKIP=1 enables it.
+ */
 static int fsrh_on(void)
 {
 	static int v = -1;
 
 	if (v < 0)
-		v = getenv("LVDESK_NOROWSKIP") == NULL;
+		v = getenv("LVDESK_ROWSKIP") != NULL;
 	return v;
 }
 

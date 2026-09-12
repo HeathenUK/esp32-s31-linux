@@ -140,9 +140,31 @@ void hottext_init(void)
 	size_t n = (size_t)(hot_stop - hot_start);
 	long moved;
 
-	if (getenv("LVDESK_NOHOTTEXT")) {
-		fprintf(stderr, "hottext: disabled by LVDESK_NOHOTTEXT "
-			"(%zu bytes would have moved)\n", n);
+	/*
+	 * OFF BY DEFAULT, because it measured worse. prboom timedemo with
+	 * sound, same binary, same boot, discarded warm-up then measured run:
+	 *
+	 *     hot text in RAM      23.1 cold, 23.5 warm
+	 *     hot text in flash    24.3 cold
+	 *
+	 * The move itself is verified sound - the range shows as anonymous
+	 * r-xp in /proc/pid/maps and the bytes memcmp clean - so this is not a
+	 * broken mechanism. It is that there is nothing here worth moving.
+	 * rootfs/ramtext.c measures the flash penalty at 4.8x for a 41 kB
+	 * footprint and at NOTHING for 322 bytes, because a small loop is
+	 * instruction-cache resident and cannot care where it is backed.
+	 * lvdesk's entire hot user-mode code is xwin_on_draw plus
+	 * mitshm_request, 8.5 kB together, which fits.
+	 *
+	 * Why RAM should come out slower rather than merely equal is not
+	 * established. Do not claim it is noise without more runs than the
+	 * three that exist.
+	 *
+	 * LVDESK_HOTTEXT=1 re-enables it so the comparison can be repeated.
+	 */
+	if (!getenv("LVDESK_HOTTEXT")) {
+		fprintf(stderr, "hottext: off by default (%zu bytes would "
+			"move; LVDESK_HOTTEXT=1 enables)\n", n);
 		return;
 	}
 	if (!n) {

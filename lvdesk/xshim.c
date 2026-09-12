@@ -553,12 +553,21 @@ static unsigned long xlrd_scans, xlrd_rows, xlrd_kept, xlrd_off, xlrd_still;
  *
  * XSHIM_NOXLDMG=1 turns the whole thing off.
  */
+/*
+ * OFF BY DEFAULT: it has never fired in a measured run.
+ *
+ * Neither prboom nor Chocolate Doom uses the xlite-SHM Damaged request - both
+ * go through MIT-SHM ShmPutImage - so this scanned zero times across every
+ * benchmark taken. Untested code in a hot path is a liability, not an
+ * optimisation. XSHIM_XLDMG=1 enables it when a client that uses that request
+ * turns up to test it against.
+ */
 static int xlrd_on(void)
 {
 	static int v = -1;
 
 	if (v < 0)
-		v = getenv("XSHIM_NOXLDMG") == NULL;
+		v = getenv("XSHIM_XLDMG") != NULL;
 	return v;
 }
 
