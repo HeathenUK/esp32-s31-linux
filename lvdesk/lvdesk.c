@@ -7981,13 +7981,7 @@ static void audio_route_write(int bt)
 
 	if (!f)
 		return;
-	/*
-	 * "sink_codec" is the mmap_emul wrapper in /etc/asound.conf, not the raw
-	 * device - the hart0 transport is RW-only and alsa-lib's converters need
-	 * an mmap-capable slave. The loopback needs no wrapper; snd_aloop
-	 * supports mmap natively.
-	 */
-	fprintf(f, "%s\n", bt ? "hw:1,0" : "sink_codec");
+	fprintf(f, "%s\n", bt ? "hw:1,0" : "hw:0,0");
 	fclose(f);
 }
 

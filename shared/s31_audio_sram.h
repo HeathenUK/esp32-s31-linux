@@ -35,16 +35,7 @@ typedef uint32_t s31_audio_u32;
 
 #define S31_AUDIO_MAGIC                 0x41313353U /* "S31A" */
 #define S31_AUDIO_ABI_VERSION           3U
-/*
- * The wire rate. FIXED, but the value is a choice, not a constraint: what the
- * design needs is ONE clock domain so a Linux stream setup cannot retune I2S
- * underneath another producer. 44100 is the rate this board's content actually
- * uses - s31-bt's A2DP route is 44100, and the ES8389 takes 44100 and 48000
- * through the same ratio-256 coefficient row - so picking it means the common
- * case is bit-exact and needs no conversion at all. I2S_STD_CLK_DEFAULT_CONFIG
- * derives the dividers from this, and both sides must be rebuilt together.
- */
-#define S31_AUDIO_HW_RATE               44100U
+#define S31_AUDIO_HW_RATE               48000U
 #define S31_AUDIO_HW_CHANNELS           2U
 #define S31_AUDIO_SAMPLE_BYTES          2U
 

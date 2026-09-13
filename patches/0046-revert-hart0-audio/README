@@ -1,0 +1,29 @@
+audio: back to Linux-owned I2S, and playback takes the whole SRAM pool
+
+Copy esp32s31_generic.dts over linux-71-port/arch/riscv/boot/dts/espressif/
+and esp32s31-i2s.c over linux-71-port/sound/soc/espressif/ before building.
+A DTS change needs BOTH `make linux` AND `make opensbi`.
+
+WHY THE HART0 PATH WAS ABANDONED
+It worked - playback, sink switching, stored volume, resampling at every rate,
+zero underruns - but it never sounded right. The wire rate has to be FIXED for
+hart0 to mix, and 44100 is the rate this board has always crackled at, so
+every source then converted to a rate that crackles. Linux-owned I2S takes
+8000-96000 NATIVELY, so nothing converts at all, which is why it sounds clean.
+That is the whole trade and it is not close.
+
+WHAT CAME BACK WITH IT
+  * loader: CONFIG_S31_AUDIO_ENABLE off (43 kB smaller)
+  * dts: i2s0 okay, freertos_audio disabled, card cpu dai = &i2s0
+  * audio_sram node re-enabled - it is Linux's DMA ring again
+  * asound.conf, s31route and lvdesk's sink name all reverted
+
+NO CAPTURE, AND THAT IS WHAT PAID FOR THE BUFFER
+ESP32S31_I2S_BUFFER_BYTES feeds ONE snd_pcm_hardware shared by both streams,
+so two streams meant two rings and the 64 KiB pool had to be split. Recording
+is not wanted here, so the capture stream is gone from the DAI and playback
+takes the entire pool: 32768 -> 65536 bytes, 186 -> 372 ms at 44100, about
+1.5 s at 11025. No extra memory from hart0's heap. The RX plumbing is left
+intact unopened; restoring capture is re-adding one block and halving this.
+
+VERIFIED BY EAR: "sounds great".

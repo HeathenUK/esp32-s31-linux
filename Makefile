@@ -262,7 +262,13 @@ USB_HS ?= 0
 # USB_BUFDMA=1 adds dwc2.desc_dma=0 (buffer DMA): the only mode in which
 # full/low-speed devices behind a high-speed hub work, because descriptor
 # DMA refuses split transactions (hcd_ddma.c). Costs the 8 kHz SOF.
-USB_BUFDMA ?= 0
+# DEFAULT ON. This is the board's working configuration, and it must not
+# depend on remembering to type it: CMDLINE_NOW strips these options out of the
+# existing .config and re-adds them only from these flags, so ANY `make linux`
+# without them silently reverts the port to descriptor DMA at high speed. That
+# happened on 2026-09-13 across a day of audio rebuilds and was found when a
+# mouse was plugged in and neither receiver enumerated at all.
+USB_BUFDMA ?= 1
 # USB_SOF=1 adds dwc2.sof_irq=1, unmasking the start-of-frame interrupt while
 # KEEPING descriptor DMA.
 #
@@ -327,7 +333,7 @@ endif
 # stay at HIGH speed running the 8 kHz SOF (measured 39% of the core). Buffer
 # DMA is therefore only affordable pinned to full speed, where the SOF is
 # 1 kHz. Use the two together: make linux USB_BUFDMA=1 USB_FS=1.
-USB_FS ?= 0
+USB_FS ?= 1
 ifeq ($(USB_FS),1)
 CMDLINE_ADD += dwc2.host_full_speed=1
 endif
