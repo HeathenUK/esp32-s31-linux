@@ -123,22 +123,23 @@
  * 96 kHz -- 8 KiB was enough up to 48 kHz but underran above it.
  */
 /*
- * 64 KiB, the WHOLE pool, because there is no capture on this board.
+ * 32 KiB per stream, doubled 2026-09-12. What the ring holds is TIME: 16 KiB
+ * was 372 ms at 11025 but only 93 ms at 44100, and a frame dip longer than the
+ * ring underruns and is heard as a crackle. 32 KiB takes 44100 to 186 ms.
  *
- * What the ring holds is TIME: 16 KiB was 372 ms at 11025 but only 93 ms at
- * 44100, and a frame dip longer than the ring underruns and is heard as a
- * crackle. It went to 32 KiB (186 ms at 44100) on 2026-09-12, and this
- * constant feeds one snd_pcm_hardware shared by playback and capture - so two
- * streams meant two rings and the pool had to be 64 KiB for both.
+ * Both streams take the same size - this constant feeds one snd_pcm_hardware
+ * shared by playback and capture - so the pool is 64 KiB.
  *
- * Recording is not wanted here. Removing the capture stream from the DAI below
- * leaves one ring, so it takes the entire pool: 372 ms at 44100 and about 1.5 s
- * at 11025, without asking hart0's heap for another byte.
+ * DO NOT take capture's half for playback. Tried 2026-09-13: dropping the
+ * capture stream from the DAI does free the pool, and it also leaves the
+ * duplex codec's ADC unconfigured, which puts a high hiss on the speaker and
+ * makes playback sound hollow and distant. Muting the ADC at the es8389 comes
+ * first, or not at all.
  *
  * See shared/s31_memory_layout.h for the headroom measurement and the warning
  * that the LOADER carries this map too.
  */
-#define ESP32S31_I2S_BUFFER_BYTES	65536
+#define ESP32S31_I2S_BUFFER_BYTES	32768
 
 struct esp32s31_i2s {
 	struct device *dev;
@@ -534,11 +535,23 @@ static struct snd_soc_dai_driver esp32s31_i2s_dai = {
 		.formats = ESP32S31_I2S_FORMATS,
 	},
 	/*
-	 * NO CAPTURE. Not wanted on this board, and dropping it is what lets
-	 * playback have the entire 64 KiB SRAM pool rather than half of it.
-	 * The RX plumbing below is left intact - it costs nothing unopened -
-	 * so restoring capture is re-adding this block and halving the buffer.
+	 * CAPTURE STAYS, even though recording is not wanted here.
+	 *
+	 * Removing it to give playback the whole SRAM pool produced a HIGH
+	 * HISS from the speaker and a hollow, distant playback - the codec is
+	 * a duplex part, and with no capture stream on the link its ADC path
+	 * is never configured, so the microphone bleeds into the output mixer.
+	 * The buffer is not worth that. If the pool is ever wanted for
+	 * playback alone, the ADC has to be explicitly muted at the codec
+	 * first, and that is an es8389 change, not a DAI one.
 	 */
+	.capture = {
+		.stream_name = "Capture",
+		.channels_min = 2,
+		.channels_max = 2,
+		.rates = ESP32S31_I2S_RATES,
+		.formats = ESP32S31_I2S_FORMATS,
+	},
 	.ops = &esp32s31_i2s_dai_ops,
 	.symmetric_rate = 1,
 };

@@ -27,3 +27,37 @@ takes the entire pool: 32768 -> 65536 bytes, 186 -> 372 ms at 44100, about
 intact unopened; restoring capture is re-adding one block and halving this.
 
 VERIFIED BY EAR: "sounds great".
+
+--- CAPTURE STAYS, and why the buffer did not grow ---
+
+Removing the capture stream to give playback the whole 64 KiB pool produced a
+HIGH HISS and hollow, distant playback. The codec is a duplex part and with no
+capture stream on the link its ADC path is never configured. Reverted:
+capture is back in the DAI and ESP32S31_I2S_BUFFER_BYTES is 32768 again.
+
+Taking that half is still possible, but the ADC has to be silenced first - see
+/etc/init.d/S38audio-mixer and the lvdesk mixer fix - and then re-tested by
+ear, not by counters.
+
+--- THE HISS WAS TWO FAULTS, NOT ONE ---
+
+1. lvdesk drove ADC2DAC Mixer. It selected EVERY mixer element with a playback
+   volume and set them all to the user's volume; the ES8389 exposes its
+   ADC->DAC SIDETONE as one. So every lvdesk start turned the microphone into
+   the speaker at the slider's setting. Long predates any hart0 work. Fixed in
+   lvdesk: prefer elements naming themselves a DAC, never one naming ADC.
+
+2. A LATCHED ANALOG STATE in the codec, cleared only by a POWER CYCLE. Before
+   it: silence at 44100 and 11025 both hissed. After it, nothing else changed:
+   silence at 44100 and 48000 both clean, and Doom sounds right. Almost
+   certainly caused here - hart0 spent a period clocking I2S onto the ES8311's
+   default pads (52/53/55/56/54) instead of this board's (2/3/4/5/6) while also
+   asserting the PA on GPIO7, and two ASRC attempts wedged hart0 mid-stream.
+
+   THE LESSON IS THE ONE ALREADY IN CLAUDE.md AND IT WAS STILL MISSED: an
+   esptool reset pulls the SoC's EN line only. The codec and amplifier have
+   their own power domain and survive it. Hours went into software theories -
+   digital attenuation into a fixed-gain amp, a wrong coefficient row for the
+   clock ratio - for a fault that a power cycle had already fixed. When audio
+   misbehaves after ANY experiment that drove I2S or the codec, power cycle
+   FIRST and re-measure before theorising.

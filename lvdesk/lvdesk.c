@@ -2024,6 +2024,17 @@ static void wpa_events_open(void)
 
 /* ------------------------------------------------------------ alsa mixer */
 
+/* Case-insensitive substring. strcasestr needs _GNU_SOURCE; this is two uses. */
+static int name_has(const char *hay, const char *needle)
+{
+	size_t n = strlen(needle);
+
+	for (; *hay; hay++)
+		if (!strncasecmp(hay, needle, n))
+			return 1;
+	return 0;
+}
+
 static snd_mixer_t *mixer;
 /*
  * Every element with a playback volume, not just the first.
@@ -2114,16 +2125,48 @@ static void audio_open(void)
 	 * than hardcoding a name: the es8389 calls its output "DAC", but the
 	 * control set is the codec driver's business and has changed before.
 	 */
-	for (e = snd_mixer_first_elem(mixer); e; e = snd_mixer_elem_next(e)) {
-		if (!snd_mixer_selem_is_active(e))
-			continue;
-		if (!snd_mixer_selem_has_playback_volume(e))
-			continue;
-		if (mixer_nelem < MIXER_MAX_ELEMS)
-			mixer_elems[mixer_nelem++] = e;
-		if (!mixer_elem)
-			mixer_elem = e;
+	/*
+	 * "Has a playback volume" IS NOT THE SAME AS "is an output volume".
+	 *
+	 * This codec exposes ADC2DAC Mixer - a SIDETONE that routes its ADC
+	 * straight into its DAC - as an element with a playback volume. The
+	 * old loop took it, so every lvdesk start turned the microphone up
+	 * into the speaker at the user's volume setting. That is the hiss,
+	 * and it was there long before any of the hart0 work: stop lvdesk and
+	 * the register stays where it was, start it and it jumps to 66%.
+	 *
+	 * Two passes rather than a hardcoded name, because the control set is
+	 * the codec driver's business and has been renamed before. Prefer
+	 * anything that calls itself a DAC; if the codec names its output
+	 * something else entirely, fall back to the old broad scan but still
+	 * refuse anything with ADC in the name. An output volume control is
+	 * never an ADC path.
+	 */
+	for (int pass = 0; pass < 2 && !mixer_nelem; pass++) {
+		for (e = snd_mixer_first_elem(mixer); e;
+		     e = snd_mixer_elem_next(e)) {
+			const char *nm;
+
+			if (!snd_mixer_selem_is_active(e))
+				continue;
+			if (!snd_mixer_selem_has_playback_volume(e))
+				continue;
+			snd_mixer_selem_get_id(e, sid);
+			nm = snd_mixer_selem_id_get_name(sid);
+			if (!nm)
+				continue;
+			if (name_has(nm, "ADC"))
+				continue;	/* never an output */
+			if (pass == 0 && !name_has(nm, "DAC"))
+				continue;	/* first pass: DACs only */
+			if (mixer_nelem < MIXER_MAX_ELEMS)
+				mixer_elems[mixer_nelem++] = e;
+			if (!mixer_elem)
+				mixer_elem = e;
+			printf("lvdesk: volume drives '%s'\n", nm);
+		}
 	}
+	fflush(stdout);
 	if (mixer_elem)
 		snd_mixer_selem_get_playback_volume_range(mixer_elem,
 							  &mixer_min, &mixer_max);
@@ -10095,7 +10138,29 @@ int main(void)
 		 * on every trip costs little; input arrives far more slowly
 		 * than the panel refreshes, so this cannot outrun the hardware.
 		 */
-		if (frame_due) {
+		/*
+		 * NOTHING LVGL DRAWS IS ON THE PANEL WHILE A CLIENT IS
+		 * FULLSCREEN, so do not draw it.
+		 *
+		 * kms_flush_cb() already returns immediately when fs_active -
+		 * the mode's buffer is what the display scans out - so every
+		 * one of these walks produced pixels the driver then threw
+		 * away. Measured with prboom fullscreen: lv_timer_handler()
+		 * and lv_refr_now() together cost 234 ms of a 5.2 s window,
+		 * about 4.5% of wall clock, while lvdesk as a whole was
+		 * burning 64% as much CPU as the game it was presenting.
+		 *
+		 * The comment below was written asking exactly this question -
+		 * "the number that decides whether the walk is worth
+		 * bypassing" - and the instrument it describes answered it.
+		 *
+		 * lv_tick_inc() still runs every pass, so LVGL's clock does
+		 * not drift; only its timers and its draw are paused. The
+		 * paths that leave fullscreen (xwin_on_mode, xwin_on_close)
+		 * already invalidate the screen, which is what makes the
+		 * desktop repaint rather than come back as a stale buffer.
+		 */
+		if (frame_due && !fs_active) {
 			/*
 			 * LVPROF times these on the SAME real clock as the
 			 * flush callback. prof_timer/prof_refr above are in

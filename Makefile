@@ -302,7 +302,7 @@ USB_BUFDMA ?= 1
 # and the controller does not survive an unbind/rebind. It has to come in on
 # the command line, which is CMDLINE_FORCE here.
 USB_SOF ?= 0
-CMDLINE_NOW = $$(sed -n 's/^CONFIG_CMDLINE=\"\(.*\)\"/\1/p' $(LINUX_OUT)/.config | sed 's/ earlycon//g; s/ dwc2.host_full_speed=0//g; s/ dwc2.host_full_speed=1//g; s/ dwc2.desc_dma=0//g; s/ dwc2.sof_irq=1//g; s/ snd_aloop.index=1//g; s/ profile=6//g')
+CMDLINE_NOW = $$(sed -n 's/^CONFIG_CMDLINE=\"\(.*\)\"/\1/p' $(LINUX_OUT)/.config | sed 's/ earlycon//g; s/ dwc2.host_full_speed=0//g; s/ dwc2.host_full_speed=1//g; s/ usbcore.autosuspend=-1//g; s/ dwc2.desc_dma=0//g; s/ dwc2.sof_irq=1//g; s/ snd_aloop.index=1//g; s/ profile=6//g')
 # The ALSA loopback must not steal card 0 from the Korvo codec: it would
 # silently redirect every app's default output into the loopback and leave
 # the volume mixer attached to a card with no controls.
@@ -334,8 +334,26 @@ endif
 # DMA is therefore only affordable pinned to full speed, where the SOF is
 # 1 kHz. Use the two together: make linux USB_BUFDMA=1 USB_FS=1.
 USB_FS ?= 1
+# USB_NOSUSPEND=1 adds usbcore.autosuspend=-1, which stops usbcore suspending
+# the hubs.
+#
+# ROOT CAUSE of the long-standing "hotplug after boot does nothing". usbcore
+# autosuspends a hub two seconds after it goes idle, and a SUSPENDED HUB NEVER
+# REPORTS A NEWLY PLUGGED DEVICE - dwc2 does not surface remote wakeup from it
+# in this mode. So devices present at boot worked (the initial scan found them)
+# and anything plugged in later was invisible for ever. Proven 2026-09-13:
+# with only the hub enumerated and "4 ports detected", writing "on" to
+# power/control of usb1 and 1-1 made BOTH receivers appear within seconds.
+#
+# Default ON. These are HID receivers that have to be awake to be any use, the
+# board is mains powered, and this is exactly the class of setting that must
+# not depend on being remembered - see USB_BUFDMA above.
+USB_NOSUSPEND ?= 1
 ifeq ($(USB_FS),1)
 CMDLINE_ADD += dwc2.host_full_speed=1
+endif
+ifeq ($(USB_NOSUSPEND),1)
+CMDLINE_ADD += usbcore.autosuspend=-1
 endif
 EARLYCON_TWEAK = --set-str CMDLINE "$(CMDLINE_NOW)$(if $(CMDLINE_ADD), $(CMDLINE_ADD),)"
 
