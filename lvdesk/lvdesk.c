@@ -330,6 +330,8 @@ static int input_rescan_due(uint32_t scan_at)
 }
 static int shift, mod_ctrl, mod_alt, mod_caps;
 static int fs_active, fs_w, fs_h;	/* fullscreen (direct scanout) state */
+static uint32_t fs_win;			/* the fullscreen client's top-level */
+static uint32_t fs_focused;		/* fs_win we have already handed focus to */
 static void cursor_vis_update(void);
 static int caps_led_seen;	/* the kernel drives the Caps Lock LED */
 
@@ -655,9 +657,9 @@ static void kbd_scan(void)
 		 * the state also owns the light. Falls back to read-only, in
 		 * which case the state still tracks, just without the LED.
 		 */
-		fd = open(path, O_RDWR | O_NONBLOCK);
+		fd = open(path, O_RDWR | O_NONBLOCK | O_CLOEXEC);
 		if (fd < 0)
-			fd = open(path, O_RDONLY | O_NONBLOCK);
+			fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
 		if (fd < 0)
 			continue;
 		/* already have this one? compare by device node identity */
@@ -727,6 +729,8 @@ static void kbd_open(void)
  * actually happens (the line discipline briefly full) without reintroducing a
  * blocking write, and anything still unwritten is counted rather than ignored.
  */
+static void term_ensure(void);
+
 static void term_write(const char *buf, int n)
 {
 	int tries = 0, off = 0;
@@ -1633,6 +1637,25 @@ static void term_resize_cb(lv_event_t *e)
 	term.need_fit = 1;
 }
 
+/*
+ * Spawn on demand, once. term.fd is 0 in a zero-initialised static struct, and
+ * 0 is a perfectly valid descriptor - stdin - so "not spawned" has to be an
+ * explicit -1 or every term_write() lands on stdin.
+ */
+static void term_spawn(void);
+static void term_build_window(void);
+
+static void term_ensure(void)
+{
+	if (term.fd == 0)
+		term.fd = -1;
+	term_build_window();
+	if (!term.win)
+		return;
+	if (term.fd < 0)
+		term_spawn();
+}
+
 static void term_spawn(void)
 {
 	struct winsize ws = { .ws_row = term.nrows, .ws_col = term.cols };
@@ -1671,6 +1694,27 @@ static void term_spawn(void)
 		setenv("TERM", getenv("LVDESK_TERM") ? getenv("LVDESK_TERM")
 						    : "vt102", 1);
 		setenv("PS1", "$ ", 1);
+		/*
+		 * Everything above fd 2 is OURS - the evdev keyboards and
+		 * mice (with their EVIOCGRAB), /dev/tty0, the control FIFO,
+		 * the X sockets, the pty master. forkpty() wires 0/1/2 to the
+		 * slave and leaves the rest inherited. The evdev fds are now
+		 * O_CLOEXEC so exec would clear them anyway, but close by
+		 * number as the menu-launch path does: the leak also covers
+		 * descriptors opened by LVGL and ALSA, which no amount of
+		 * discipline at each open site would catch.
+		 *
+		 * This is not tidiness. EVIOCGRAB lives on the open file
+		 * DESCRIPTION, so a shell holding a duplicate keeps the
+		 * keyboard grabbed after lvdesk exits - which made dropping
+		 * to fbcon look like the same input fault.
+		 */
+		{
+			int cfd;
+
+			for (cfd = 3; cfd < 256; cfd++)
+				close(cfd);
+		}
 		/*
 		 * argv[0] "-sh" marks a login shell so /etc/profile is read -
 		 * that is where PATH and OPENER (xfiles' opener) come from.
@@ -2638,6 +2682,16 @@ static void mru_drop(struct winrec *w)
 static void win_set_focus(struct winrec *w)
 {
 	if (win_focus == w)
+		return;
+	/*
+	 * A fullscreen client owns the keyboard. Refuse to hand focus to
+	 * anything else while it is up - there are a dozen callers here and
+	 * only one of them needs to know about fullscreen if the rule lives in
+	 * one place. The fullscreen client's OWN top-levels still qualify:
+	 * prboom has two, and SDL grabs on one of them.
+	 */
+	if (fs_active && w && fs_win && w->xid != fs_win &&
+	    w->xid != xshim_grab_top())
 		return;
 	if (win_focus)
 		lv_obj_set_style_bg_color(win_focus->hdr,
@@ -3665,7 +3719,7 @@ static int32_t ptr_x, ptr_y;	/* pointer state, defined below */
  * not presented at all until the mode comes back.
  */
 /* fs_active/fs_w/fs_h declared earlier (before kbd_poll needs fs_active) */
-static uint32_t fs_win;
+
 
 /*
  * Send a button the LVGL indev does not carry straight to the client under the
@@ -3683,6 +3737,22 @@ static uint32_t fs_win;
 static int xwin_send_button(int button, int act)
 {
 	int i;
+
+	/*
+	 * Never hit-test frames while a client is fullscreen.
+	 *
+	 * The pointer is in the MODE's coordinates then (0..fs_w-1), and the
+	 * window frames are still laid out in DESKTOP coordinates. The two are
+	 * not comparable, so a press at, say, 160,120 in a 320x240 mode falls
+	 * inside some frame's rectangle by pure accident - and this function
+	 * treats a press as a claim on the keyboard and moves focus there.
+	 * That FocusOut is what made prboom leave fullscreen the instant the
+	 * weapon was fired: SDL 1.2 restores the video mode when its window
+	 * loses focus. The fullscreen client already gets the click through
+	 * the grab path above, so there is nothing to do here.
+	 */
+	if (fs_active)
+		return 0;
 
 	for (i = 0; i < xwin_n; i++) {
 		lv_area_t a;
@@ -3882,6 +3952,7 @@ static void xwin_on_fsnative(int on)
 			kms_fs_leave();
 			fs_active = 0;
 			fs_win = 0;
+			fs_focused = 0;
 			lv_obj_invalidate(lv_screen_active());
 			printf("lvdesk: fullscreen off (panel size)\n");
 			fflush(stdout);
@@ -3911,6 +3982,7 @@ static void xwin_on_mode(int w, int h)
 			kms_fs_leave();
 			fs_active = 0;
 			fs_win = 0;
+			fs_focused = 0;
 			lv_obj_invalidate(lv_screen_active());
 			printf("lvdesk: fullscreen off\n");
 			fflush(stdout);
@@ -4771,10 +4843,19 @@ static void xwin_on_close(uint32_t id)
 	 * drawing into it - a frozen screen and no way back. Leave fullscreen
 	 * here too, so a dead fullscreen app drops straight to the desktop.
 	 */
-	if (fs_active && id == fs_win) {
+	/*
+	 * `!fs_win` is part of the test on purpose. fs_win is resolved on the
+	 * first DRAW, so a client that enters fullscreen and dies before it
+	 * draws leaves fs_win at 0, `id == fs_win` never matches any real
+	 * window, and fullscreen stays latched on for ever. The pointer is
+	 * then clamped to the dead mode's size rather than the panel's, which
+	 * reads as the cursor refusing to move past an invisible edge.
+	 */
+	if (fs_active && (id == fs_win || !fs_win)) {
 		kms_fs_leave();
 		fs_active = 0;
 		fs_win = 0;
+		fs_focused = 0;
 		lv_obj_invalidate(lv_screen_active());
 		printf("lvdesk: fullscreen off (client gone)\n");
 		fflush(stdout);
@@ -5464,8 +5545,57 @@ static void HOTTEXT xwin_on_draw(uint32_t id)
 	int i, w, h;
 
 	if (fs_active) {
-		if (!fs_win)
+		if (!fs_win) {
 			fs_win = xshim_mode_window(fs_w, fs_h);
+			/*
+			 * A fullscreen client owns the keyboard, so focus has
+			 * to follow it here rather than stay wherever the last
+			 * make_window() left it.
+			 *
+			 * prboom -fullscreen creates TWO top-levels ("prboom
+			 * 2.5.0" and a second bare "X client"), and
+			 * make_window() focuses whichever was built last - so
+			 * focus sat on the wrong one and the game got no keys
+			 * at all until the user clicked it, which is what
+			 * moved focus. Keys go strictly to the focused window
+			 * (kbd_key), so correcting the FOCUS fixes presses,
+			 * releases and grabs together; routing keys straight
+			 * to fs_win would have sent presses to the game and
+			 * left the RELEASES going elsewhere, which is how a
+			 * key gets stuck down.
+			 */
+			if (fs_win && fs_focused != fs_win) {
+				uint32_t want = xshim_grab_top();
+				int k;
+
+				/*
+				 * Prefer the window holding the pointer grab.
+				 * prboom -fullscreen has TWO top-levels and
+				 * SDL grabs on one of them; focusing the other
+				 * made SDL see a FocusOut on its grabbed
+				 * window and release the grab, after which
+				 * clicks fell through to the desktop chrome.
+				 */
+				if (!want)
+					want = fs_win;
+
+				/*
+				 * Latched on the window id, not on fs_win
+				 * being unset. fs_win is cleared on several
+				 * paths while fullscreen is still up, and
+				 * without the latch this re-ran from the DRAW
+				 * callback - re-focusing, and so re-sending
+				 * FocusIn, potentially every frame.
+				 */
+				fs_focused = fs_win;
+				for (k = 0; k < win_n; k++)
+					if (wins[k].win &&
+					    wins[k].xid == want) {
+						win_set_focus(&wins[k]);
+						break;
+					}
+			}
+		}
 		if (id == fs_win) {
 			/*
 			 * How much of a long frame is OURS? fsg_note()
@@ -6216,14 +6346,76 @@ static void appmenu_open(int parent)
 }
 
 /* Type one command line into the built-in terminal and bring it up front. */
+/*
+ * Build the terminal window. Called the first time a terminal is actually
+ * opened, never at start-up: the desktop comes up with no terminal window, no
+ * task bar button for one, no pty and no shell.
+ *
+ * It used to be built here unconditionally and that was the only door to it,
+ * so leaving the window in place while making only the SHELL lazy produced a
+ * terminal with no prompt and no cursor, and anything typed into it sat in the
+ * pty until /bin/sh started and echoed the lot back in one burst.
+ */
+static void term_build_window(void)
+{
+	lv_obj_t *content;
+
+	if (term.win)
+		return;
+	term.win = make_window("Terminal", 8, 8, 500, 320);
+	content = lv_win_get_content(term.win);
+	term.content = content;
+	lv_obj_set_style_bg_color(content, lv_color_hex(COL_TERM_BG), 0);
+	lv_obj_set_style_pad_all(content, 4, 0);
+	lv_obj_remove_flag(content, LV_OBJ_FLAG_SCROLLABLE);
+	memset(term.grid, ' ', sizeof(term.grid));
+	memset(term.sb, ' ', sizeof(term.sb));
+	memset(term.attr, TERM_FG_DEFAULT, sizeof(term.attr));
+	memset(term.sbattr, TERM_FG_DEFAULT, sizeof(term.sbattr));
+	term.cur_fg = TERM_FG_DEFAULT;
+	for (int r = 0; r < TERM_MAXROWS; r++) {
+		term.grid[r][TERM_MAXCOLS] = 0;
+		term.sb[r % TERM_SCROLLBACK][TERM_MAXCOLS] = 0;
+		term.rows[r] = lv_label_create(content);
+		lv_obj_set_style_text_font(term.rows[r], FONT_TERM, 0);
+		lv_obj_set_style_text_color(term.rows[r],
+					    lv_color_hex(COL_TERM_FG), 0);
+		lv_obj_set_style_pad_all(term.rows[r], 0, 0);
+		lv_label_set_recolor(term.rows[r], true);
+		lv_obj_set_pos(term.rows[r], 0, r * TERM_CH);
+		lv_label_set_text(term.rows[r], "");
+		lv_obj_add_flag(term.rows[r], LV_OBJ_FLAG_HIDDEN);
+	}
+	for (int r = 0; r < TERM_SCROLLBACK; r++)
+		term.sb[r][TERM_MAXCOLS] = 0;
+	term.cols = 0;
+	term.nrows = 0;
+	term_fit();
+	/*
+	 * Register what this window does with a keystroke. This is the only
+	 * place the desktop learns that the terminal takes keyboard input;
+	 * the dispatcher knows nothing about terminals, only that a focused
+	 * window may or may not have a handler. A second window wanting keys
+	 * sets its own here and needs no change anywhere else.
+	 */
+	win_find(term.win)->on_key = term_key;
+
+	win_add_grip(win_find(term.win));
+	/* Re-fit when the window is resized or maximised. */
+	lv_obj_add_event_cb(term.win, term_resize_cb, LV_EVENT_SIZE_CHANGED, NULL);
+}
+
 static void term_raise_and_run(const char *cmd)
 {
 	struct winrec *w;
 
-	if (term.fd < 0 || !cmd || !*cmd)
+	term_ensure();
+	if (term.fd < 0)
 		return;
-	write(term.fd, cmd, strlen(cmd));
-	write(term.fd, "\n", 1);
+	if (cmd && *cmd) {
+		write(term.fd, cmd, strlen(cmd));
+		write(term.fd, "\n", 1);
+	}
 	w = win_find(term.win);
 	if (w) {
 		if (w->minimised) {
@@ -8426,7 +8618,7 @@ static void mouse_scan(void)
 
 	for (i = 0; i < 32 && mouse_n < MAXMOUSE; i++) {
 		snprintf(path, sizeof(path), "/dev/input/event%d", i);
-		fd = open(path, O_RDONLY | O_NONBLOCK);
+		fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
 		if (fd < 0)
 			continue;
 		known = 0;
@@ -9001,7 +9193,19 @@ static void mouse_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
 	}
 	data->point.x = ptr_x;
 	data->point.y = ptr_y;
-	data->state = (ptr_pressed && !xshim_grab_top())
+	/*
+	 * A press is withheld from LVGL while a client holds a pointer grab -
+	 * and ALSO while a client is fullscreen, grab or no grab.
+	 *
+	 * The window frames still exist underneath a fullscreen client; they
+	 * are simply not on the panel. Without this, a click that no grab
+	 * claimed was dispatched to that invisible chrome: firing a weapon in
+	 * prboom hit a title bar or the maximise button, which resized the
+	 * window, which made SDL reset the video mode and drop out of
+	 * fullscreen, leaving blank frames on the desktop. A fullscreen client
+	 * owns the screen, so nothing behind it may take a click.
+	 */
+	data->state = (ptr_pressed && !xshim_grab_top() && !fs_active)
 		      ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
 }
 
@@ -9488,48 +9692,6 @@ int main(void)
 		clock_update();
 	}
 
-	/* terminal window */
-	term.win = make_window("Terminal", 8, 8, 500, 320);
-	content = lv_win_get_content(term.win);
-	term.content = content;
-	lv_obj_set_style_bg_color(content, lv_color_hex(COL_TERM_BG), 0);
-	lv_obj_set_style_pad_all(content, 4, 0);
-	lv_obj_remove_flag(content, LV_OBJ_FLAG_SCROLLABLE);
-	memset(term.grid, ' ', sizeof(term.grid));
-	memset(term.sb, ' ', sizeof(term.sb));
-	memset(term.attr, TERM_FG_DEFAULT, sizeof(term.attr));
-	memset(term.sbattr, TERM_FG_DEFAULT, sizeof(term.sbattr));
-	term.cur_fg = TERM_FG_DEFAULT;
-	for (int r = 0; r < TERM_MAXROWS; r++) {
-		term.grid[r][TERM_MAXCOLS] = 0;
-		term.sb[r % TERM_SCROLLBACK][TERM_MAXCOLS] = 0;
-		term.rows[r] = lv_label_create(content);
-		lv_obj_set_style_text_font(term.rows[r], FONT_TERM, 0);
-		lv_obj_set_style_text_color(term.rows[r],
-					    lv_color_hex(COL_TERM_FG), 0);
-		lv_obj_set_style_pad_all(term.rows[r], 0, 0);
-		lv_label_set_recolor(term.rows[r], true);
-		lv_obj_set_pos(term.rows[r], 0, r * TERM_CH);
-		lv_label_set_text(term.rows[r], "");
-		lv_obj_add_flag(term.rows[r], LV_OBJ_FLAG_HIDDEN);
-	}
-	for (int r = 0; r < TERM_SCROLLBACK; r++)
-		term.sb[r][TERM_MAXCOLS] = 0;
-	term.cols = 0;
-	term.nrows = 0;
-	term_fit();
-	/*
-	 * Register what this window does with a keystroke. This is the only
-	 * place the desktop learns that the terminal takes keyboard input;
-	 * the dispatcher knows nothing about terminals, only that a focused
-	 * window may or may not have a handler. A second window wanting keys
-	 * sets its own here and needs no change anywhere else.
-	 */
-	win_find(term.win)->on_key = term_key;
-
-	win_add_grip(win_find(term.win));
-	/* Re-fit when the window is resized or maximised. */
-	lv_obj_add_event_cb(term.win, term_resize_cb, LV_EVENT_SIZE_CHANGED, NULL);
 	/*
 	 * Stand up the X shim before the shell, so anything started from the
 	 * terminal inherits a DISPLAY that resolves to us.
@@ -9549,8 +9711,22 @@ int main(void)
 	if (xshim_init(xwin_on_window, xwin_on_draw, xwin_on_close) < 0)
 		fprintf(stderr, "lvdesk: no X shim (socket in use?)\n");
 
-	term_spawn();
-	term.dirty = 1;
+	/*
+	 * No terminal at start-up. It cost a shell and a pty for something
+	 * that is usually not wanted, and every one of those shells used to
+	 * inherit the desktop's grabbed input devices. LVDESK_TERM_AT_START=1
+	 * restores the old behaviour; otherwise the terminal is spawned on
+	 * demand, the first time one is actually opened.
+	 */
+	term.fd = -1;
+	/*
+	 * Nothing terminal-shaped exists until something asks for one:
+	 * "System > Terminal" in the menu (the "!terminal" command), or the
+	 * ctl FIFO's run path. LVDESK_TERM_AT_START=1 brings the old
+	 * always-there terminal back.
+	 */
+	if (getenv("LVDESK_TERM_AT_START"))
+		term_ensure();
 
 	/*
 	 * The terminal is what the desktop is for, so it starts focused and on
@@ -9851,6 +10027,28 @@ int main(void)
 				cursor_settle();
 			PROF_ADD_MAX(prof_input, prof_max_input, t0);
 		}
+
+		/*
+		 * Hand the clients their input BEFORE we spend the frame
+		 * drawing, not after.
+		 *
+		 * Motion is deliberately deferred rather than written per
+		 * event - a socket write is 1-6 ms here and one per
+		 * MotionNotify cost ~7% of the core - but the only flush used
+		 * to sit just before poll(), at the very END of the pass. So
+		 * an event read immediately after poll() waited out the whole
+		 * render and present before it was written. Measured with
+		 * prboom fullscreen: 96 loop passes over 30 ms in 25 s, most
+		 * of them 40-130 ms and spikes to 850 ms, every one of them
+		 * added to every pointer event.
+		 *
+		 * Coalescing is unaffected: a run of motion read in one pass
+		 * still leaves as a single write. Only its position in the
+		 * pass changes, so the client can start its next frame on
+		 * input we already have instead of input we are sitting on.
+		 */
+		xshim_flush();
+
 
 		/*
 		 * Redraw *now*, not when LVGL's refresh timer next comes round.

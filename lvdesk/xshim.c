@@ -305,6 +305,13 @@ struct cli {
 	uint8_t *pend;
 	size_t pendn, pendcap;
 	/*
+	 * Where a foldable MotionNotify sits in `out`, for motion compression
+	 * (send_event_d). An OFFSET, not a pointer, because pend_add()/
+	 * out_push() may move buffers underneath it.
+	 */
+	size_t mot_off;
+	int mot_valid;
+	/*
 	 * The last few requests, for when something goes wrong. An X client
 	 * that fails does so several requests after the one that broke it, so
 	 * the opcode we refused is rarely the whole story.
@@ -517,6 +524,10 @@ static int rowdmg_on(void)
 static unsigned long nshmput;
 /* Frames whose every row hashed identical - nothing presented at all. */
 static unsigned long nrow_skip;	/* MIT-SHM ShmPutImage requests served */
+/* MotionNotify events folded into a later one by motion compression. */
+static unsigned long xsp_motion_dropped;
+/* XSHIM_WARPMOTION, resolved once: does a warp synthesise its MotionNotify. */
+static int warpmotion = -1;
 static unsigned long xlrd_scans, xlrd_rows, xlrd_kept, xlrd_off, xlrd_still;
 
 /*
@@ -1127,6 +1138,8 @@ void xshim_mem_report(void)
 		nreqs, nreplies, nreqs ? nreplies * 100 / nreqs : 0);
 	fprintf(stderr, "xshim: %lu MIT-SHM ShmPutImage, %lu identical "
 		"(no rows changed)\n", nshmput, nrow_skip);
+	fprintf(stderr, "xshim: %lu MotionNotify folded by compression\n",
+		xsp_motion_dropped);
 	fprintf(stderr, "xshim: xlite-SHM row scans %lu, rows %lu/%lu kept "
 		"(%lu%%), frames still %lu, scans skipped %lu\n",
 		xlrd_scans, xlrd_kept, xlrd_rows,
@@ -2630,6 +2643,13 @@ static void out_flush(struct cli *c)
 {
 	size_t went;
 
+	/*
+	 * Nothing in `out` may be folded after this: some or all of it is
+	 * about to be handed to write(). outn going to 0 below also makes the
+	 * marker fail its bounds test, so this is belt and braces.
+	 */
+	c->mot_valid = 0;
+
 	if (c->pendn) {
 		went = out_try(c, c->pend, c->pendn);
 		if (went < c->pendn) {
@@ -2736,7 +2756,53 @@ static void send_event_d(struct cli *c, uint8_t type, uint8_t detail,
 	memcpy(e + 4, d, n > 28 ? 28 : n);
 	if (xsp_on > 0 && type < 64)
 		xsp_ev[type]++;
-	out_push(c, e, 32);
+	/*
+	 * MOTION COMPRESSION, which every real X server does and this did not.
+	 *
+	 * A 1 kHz mouse against a desktop loop running at 10-25 Hz while a
+	 * fullscreen game presents means tens of MotionNotify events queue per
+	 * pass, and the client must read and process every one before it can
+	 * draw. That is "swing the mouse, it lags, then lurches": the lurch is
+	 * the client applying a queue of positions it could have had as one.
+	 * Coordinates are absolute, so a client deriving relative motion from
+	 * successive positions gets an identical total from the last alone.
+	 *
+	 * Fold ONLY in the `out` staging buffer, and only at a remembered
+	 * offset. The first version of this indexed `pend` at pendn - 32,
+	 * which is wrong twice over: events are staged in `out`, and `pend`
+	 * holds whatever a partial socket write refused - an arbitrary byte
+	 * remainder with no event alignment at all. It therefore overwrote the
+	 * middle of a half-sent event and corrupted the protocol stream, which
+	 * left fullscreen SDL clients with blank, undrawable windows.
+	 *
+	 * The marker self-invalidates: it is only trusted while it still lies
+	 * wholly inside `out`, and out_flush() sets outn to 0, so anything
+	 * already handed to write() can never be touched. Any non-motion event
+	 * clears it, so a button or key push is a barrier and ordering holds.
+	 */
+	if (type == 6 && c->mot_valid && c->mot_off + 32 <= c->outn &&
+	    c->out[c->mot_off] == 6 &&
+	    !memcmp(c->out + c->mot_off + 12, e + 12, 4)) {
+		memcpy(c->out + c->mot_off, e, 32);
+		xsp_motion_dropped++;
+		return;
+	}
+	{
+		size_t before = c->outn;
+
+		out_push(c, e, 32);
+		/*
+		 * Foldable only if it landed contiguously in `out`. out_push()
+		 * may flush or spill to `pend` first, in which case the
+		 * arithmetic does not match and the marker stays off.
+		 */
+		if (type == 6 && c->outn == before + 32) {
+			c->mot_off = before;
+			c->mot_valid = 1;
+		} else {
+			c->mot_valid = 0;
+		}
+	}
 }
 
 static void send_event(struct cli *c, uint8_t type, const uint8_t *d, int n)
@@ -6719,15 +6785,40 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 			break;
 		warp_cb(dst->buf->id, dst->ax + dx, dst->ay + dy);
 		/*
-		 * A warp generates MotionNotify, and SDL relies on it: after
-		 * recentring the pointer it blocks in XMaskEvent for exactly
-		 * that event. TEST TOGGLE XSHIM_WARPMOTION: this synth is
-		 * suspected of a warp/motion feedback loop that wedges the
-		 * board under sustained relative motion.
+		 * A warp generates MotionNotify, and the protocol REQUIRES it.
+		 * ON by default now; XSHIM_WARPMOTION=0 restores the old
+		 * behaviour for comparison.
+		 *
+		 * SDL recentres the pointer after every mouse-look update and
+		 * then blocks in XMaskEvent for exactly the motion event that
+		 * warp produces. With the synth off it never arrives, so the
+		 * game STALLS until the next real mouse motion unblocks it -
+		 * and that event carries the whole accumulated delta, so the
+		 * view jumps. "Move the mouse, it lags, then lurches" is this,
+		 * not frame rate.
+		 *
+		 * It was disabled on a SUSPICION of a warp/motion feedback
+		 * loop. The loop does not happen, because the event reports
+		 * the warp DESTINATION exactly: SDL compares it against the
+		 * point it asked for, recognises its own warp and discards it
+		 * instead of deriving a delta from it. Every real X server
+		 * behaves this way.
+		 *
+		 * The fold marker is cleared first. Motion compression must
+		 * never absorb this event into a later one with different
+		 * coordinates - SDL would not recognise the warp, and would
+		 * keep blocking, which is the very stall being fixed.
 		 */
-		if (getenv("XSHIM_WARPMOTION")) {
+		if (warpmotion < 0) {
+			const char *e = getenv("XSHIM_WARPMOTION");
+
+			warpmotion = !(e && !strcmp(e, "0"));
+		}
+		if (warpmotion) {
+			c->mot_valid = 0;
 			xshim_pointer(dst->buf->id, dst->ax + dx,
 				      dst->ay + dy, 0, 0);
+			c->mot_valid = 0;
 			out_flush(c);
 		}
 		break;
@@ -8192,6 +8283,9 @@ static uint32_t xshim_now_ms(void)
 	return (uint32_t)(ts.tv_sec * 1000u + ts.tv_nsec / 1000000u);
 }
 
+/* XSHIM_EVTIME, resolved once: -1 unknown, 0 stamp zero, 1 stamp real time. */
+static int evtime = -1;
+
 static void send_device_event(struct cli *c, uint8_t type, uint8_t detail,
 			      struct res *w, int x, int y, uint32_t sel,
 			      uint16_t state)
@@ -8219,12 +8313,26 @@ static void send_device_event(struct cli *c, uint8_t type, uint8_t detail,
 		fprintf(stderr, "xshim:   -> 0x%x\n", w->id);
 	memset(d, 0, sizeof(d));
 	/*
-	 * A real server time, not 0. SDL's autorepeat filter treats a
-	 * KeyRelease followed by a KeyPress of the same key "within 2 ms"
-	 * as a repeat and swallows both; with every event stamped 0, three
-	 * Enters were one Enter. Milliseconds of CLOCK_MONOTONIC.
+	 * A real server time, not 0, and ON by default now.
+	 *
+	 * Every X server stamps every event; a client is entitled to use the
+	 * timestamp and several do. SDL's autorepeat filter treats a
+	 * KeyRelease followed by a KeyPress of the same key "within 2 ms" as a
+	 * repeat and swallows both, so with every event stamped 0 three Enters
+	 * were one Enter. That was found, fixed behind XSHIM_EVTIME, and then
+	 * left opt-in - which means the shipped default was the broken one.
+	 * XSHIM_EVTIME=0 restores it for comparison.
+	 *
+	 * The lookup is cached. It used to be a getenv() per event, string
+	 * compare and all, on a path that runs for every motion event as well
+	 * as every key.
 	 */
-	put32(d + 0, getenv("XSHIM_EVTIME") ? xshim_now_ms() : 0);
+	if (evtime < 0) {
+		const char *e = getenv("XSHIM_EVTIME");
+
+		evtime = !(e && !strcmp(e, "0"));
+	}
+	put32(d + 0, evtime ? xshim_now_ms() : 0);
 	put32(d + 4, ROOT_ID);
 	put32(d + 8, w->id);			/* event window */
 	put32(d + 12, child);
@@ -8427,6 +8535,7 @@ static void client_drop(struct cli *c, int notify)
 	c->pend = NULL;
 	c->pendn = c->pendcap = 0;
 	c->outn = 0;
+	c->mot_valid = 0;		/* no foldable motion in a reset client */
 
 	if (grab_cli == owner) {
 		grab_win = 0;
