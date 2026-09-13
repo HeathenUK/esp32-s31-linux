@@ -528,6 +528,8 @@ static unsigned long nrow_skip;	/* MIT-SHM ShmPutImage requests served */
 static unsigned long xsp_motion_dropped;
 /* XSHIM_WARPMOTION, resolved once: does a warp synthesise its MotionNotify. */
 static int warpmotion = -1;
+/* XSHIM_PAIR, resolved once: pack two converted pixels per store. */
+static int pairconv = -1;
 static unsigned long xlrd_scans, xlrd_rows, xlrd_kept, xlrd_off, xlrd_still;
 
 /*
@@ -8139,13 +8141,70 @@ const uint16_t *xshim_window_pixels(uint32_t id, int *w, int *h)
 		} else if (!r->dirty) {
 			return r->shadow;
 		}
-		for (i = 0; i < n; i++) {
-			uint32_t px = src[i];
+		/*
+		 * TWO PIXELS PER ITERATION, ONE 32-BIT STORE.
+		 *
+		 * The obvious per-pixel loop is not bus-bound and so has room
+		 * to give: the same client measured 10.7 fps with a 16-bit
+		 * window and 5.5 with a 32-bit one, which puts the conversion
+		 * at ~88 ms a frame for 384 kB - 4.4 MB/s against this board's
+		 * 13.6 MB/s copy ceiling. That gap is loop overhead, not
+		 * memory, so halving the stores and the loop bookkeeping is
+		 * worth more here than any engine would be. (Contrast the
+		 * palette expander, where the CPU and the PPA are level
+		 * because that path IS at the bandwidth ceiling and both move
+		 * the same bytes.)
+		 *
+		 * Little-endian, so the lower pixel occupies the low half.
+		 * r->shadow comes from malloc and is at least 8-byte aligned,
+		 * which makes the 32-bit stores aligned for even i.
+		 *
+		 * MEASURED NULL, 2026-09-13, and therefore OFF by default -
+		 * XSHIM_PAIR=1 enables it. chocolate-doom windowed 320x200
+		 * depth-32, client frames counted over 40 s on one binary and
+		 * one boot per arm: paired 12.9 fps, scalar 12.5. Three per
+		 * cent on single runs is inside this board's noise floor, so
+		 * the premise above - that the gap to the copy ceiling is loop
+		 * overhead - is NOT supported. Whatever costs the other 9 MB/s
+		 * is not the store count.
+		 *
+		 * The real win for this client was elsewhere: forwarding the
+		 * MIT-SHM group in xstubs took it from the 5.5 fps recorded in
+		 * docs/current-state.md to ~12.6, because SDL2 had been
+		 * pushing every frame through the socket instead.
+		 */
+#define XS_RGB565(px) ((((px) & 0x00F80000) >> 8) | \
+		       (((px) & 0x0000FC00) >> 5) | \
+		       (((px) & 0x000000F8) >> 3))
+		/*
+		 * XSHIM_PAIR=0 selects the old one-pixel-per-store loop, so
+		 * the two can be A/B'd on ONE binary in one boot rather than
+		 * a rebuild and a flash per arm.
+		 */
+		if (pairconv < 0) {
+			const char *e = getenv("XSHIM_PAIR");
 
-			r->shadow[i] = (uint16_t)(((px & 0x00F80000) >> 8) |
-						  ((px & 0x0000FC00) >> 5) |
-						  ((px & 0x000000F8) >> 3));
+			pairconv = e && !strcmp(e, "1");
 		}
+		if (pairconv) {
+			uint32_t *dst2 = (uint32_t *)(void *)r->shadow;
+			size_t pairs = n / 2;
+
+			for (i = 0; i < pairs; i++) {
+				uint32_t a0 = src[2 * i];
+				uint32_t b0 = src[2 * i + 1];
+
+				dst2[i] = XS_RGB565(a0) |
+					  (XS_RGB565(b0) << 16);
+			}
+			if (n & 1)
+				r->shadow[n - 1] = (uint16_t)
+					XS_RGB565(src[n - 1]);
+		} else {
+			for (i = 0; i < n; i++)
+				r->shadow[i] = (uint16_t)XS_RGB565(src[i]);
+		}
+#undef XS_RGB565
 		r->dirty = 0;
 		return r->shadow;
 	}
