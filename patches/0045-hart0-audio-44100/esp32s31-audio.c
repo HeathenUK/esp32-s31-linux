@@ -84,12 +84,15 @@ static const struct snd_pcm_hardware s31_audio_hardware = {
 	 * case converts nowhere at all.
 	 */
 	/*
-	 * WIRE RATE ONLY - the ASRC lane is NOT safe to hand work to yet.
-	 * Advertising the lane's rates and playing 11025 through it WEDGED
-	 * THE BOARD: silent console, no panic in the next boot log, and hart0
-	 * came back clean on reset. A lane that never completes blocks hart0's
-	 * high-priority audio task, and hart0 owns the radios, so the whole
-	 * board goes with it. Do not re-enable without a timeout on the lane.
+	 * WIRE RATE ONLY.
+	 *
+	 * DISARMED. Arming it wedged the board TWICE, on the first stream
+	 * each time: once before the descriptor leak was fixed and once
+	 * after, so the leak was not the cause. The lane's wait was already
+	 * bounded at 20 ms, so it is not a missing timeout either. Do not
+	 * arm this again without first reproducing the hang with hart0
+	 * instrumented - it takes the radios and the console with it, so
+	 * there is no post-mortem to read.
 	 */
 	.rates = SNDRV_PCM_RATE_44100,
 	.rate_min = S31_AUDIO_HW_RATE,

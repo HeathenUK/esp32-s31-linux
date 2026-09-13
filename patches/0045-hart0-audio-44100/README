@@ -98,3 +98,34 @@ open interval containing no integer, because 256 frames at 11025 is 23219.95
 us), which suggests the driver's narrow period/buffer limits leave the
 refinement nowhere to land. Fixing the ASRC path makes this moot for the rates
 that matter.
+
+--- 2026-09-13, the ASRC attempt, part two ---
+
+THE LANE IS DISARMED AND MUST STAY SO UNTIL THE HANG IS UNDERSTOOD.
+Arming it wedged the board TWICE, on the FIRST stream each time:
+
+  attempt 1: rates widened, lane as shipped.
+             Suspected an unbounded wait. IT IS NOT - the wait is
+             xQueueReceive(..., pdMS_TO_TICKS(20)), bounded at 20 ms.
+  attempt 2: same, after fixing a real descriptor leak (below).
+             Wedged identically. So the leak was not the cause either.
+
+Both times: console silent, hart0 clean on the next reset, no panic anywhere.
+hart0 owns the radios and the console chatter, so when it goes there is no
+post-mortem to read - which is exactly why the next attempt needs hart0
+instrumented FIRST, not another blind variant. Two blind variants were already
+tried and both cost a wedge.
+
+KEPT, because they are correct independently of the lane:
+  * .dest_info now derives from S31_AUDIO_HW_RATE instead of a hardcoded
+    48000, which became wrong the moment the wire rate moved to 44100.
+  * The two GDMA descriptor lists are created ONCE per lane in
+    s31_audio_asrc_init() and only re-mounted per conversion. They were
+    created on every call and never freed - asrc_hw_gdma_free_link_list()
+    exists and was never used - which at ~172 blocks a second leaked two
+    lists a block out of hart0's small heap. A real bug, just not this one.
+
+ALSO LEARNED: after a wedge, a flash-and-reset is not enough to get sound
+back - 44100 kept failing with "write error: I/O error" until a full
+alive.py --reset, after which it worked first time. Do not diagnose audio on
+a board that has just been wedged.

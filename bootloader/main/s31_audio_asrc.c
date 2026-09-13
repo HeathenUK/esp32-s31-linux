@@ -36,10 +36,9 @@ static asrc_hal_context_t s_hal;
 static bool supported_rate(unsigned int rate)
 {
 	/*
-	 * 11025 and 22050 were added here and the board WEDGED the first time
-	 * a stream was played through the lane - see esp32s31-audio.c. Left
-	 * as the original list until the lane has a completion timeout; the
-	 * whitelist is not what is unsafe, the unbounded wait is.
+	 * The lane is DISARMED from the Linux side (esp32s31-audio.c
+	 * advertises the wire rate only), so nothing reaches here today.
+	 * Playing through it wedged the board twice; see that file.
 	 */
 	static const unsigned int rates[] = { 8000, 16000, 24000, 32000, 44100, 48000 };
 
@@ -61,6 +60,30 @@ esp_err_t s31_audio_asrc_init(void)
 		if (asrc_hw_gdma_create_channel(i, s_lane[i].events,
 						ASRC_BURST_BYTES, &s_lane[i].tx,
 						&s_lane[i].rx) != ESP_OK)
+			return ESP_FAIL;
+		/*
+		 * ONCE, here, sized for the worst case - not per conversion.
+		 *
+		 * These were created on every call and never freed, and
+		 * asrc_hw_gdma_free_link_list() exists and was never used. At
+		 * the block rate (HW_RATE / BLOCK_FRAMES, ~172 a second) that
+		 * leaked two descriptor lists a block out of hart0's small
+		 * heap, which WEDGED THE WHOLE BOARD within seconds of the
+		 * first stream: console silent, no panic, hart0 clean on the
+		 * next reset. It was misread as a missing timeout; the wait
+		 * was already bounded at 20 ms.
+		 *
+		 * Creating them once also takes the allocation out of the
+		 * per-block path, which is where it never belonged.
+		 */
+		if (asrc_hw_gdma_create_link_list(
+			    S31_AUDIO_MAX_INPUT_FRAMES * 2 * sizeof(int16_t),
+			    &s_lane[i].input_list,
+			    &s_lane[i].input_descriptors) != ESP_OK ||
+		    asrc_hw_gdma_create_link_list(
+			    S31_AUDIO_BLOCK_FRAMES * 2 * sizeof(int16_t),
+			    &s_lane[i].output_list,
+			    &s_lane[i].output_descriptors) != ESP_OK)
 			return ESP_FAIL;
 	}
 	return ESP_OK;
@@ -102,10 +125,9 @@ esp_err_t s31_audio_asrc_convert(unsigned int lane, unsigned int input_rate,
 	xQueueReset(state->events);
 	for (size_t i = 0; i < input_frames * channels; i++)
 		state->input[i] = (int16_t)(input[i] ^ 0x8000U);
-	if (asrc_hw_gdma_create_link_list(input_bytes, &state->input_list,
-					&state->input_descriptors) != ESP_OK ||
-	    asrc_hw_gdma_create_link_list(output_bytes, &state->output_list,
-					&state->output_descriptors) != ESP_OK ||
+	/* Lists are created once in s31_audio_asrc_init(); re-mount only. */
+	if (input_desc > state->input_descriptors ||
+	    output_desc > state->output_descriptors ||
 	    asrc_hw_gdma_mount_link_list(state->input_list, input_desc,
 			(uint8_t *)state->input, input_bytes) != ESP_OK ||
 	    asrc_hw_gdma_mount_link_list(state->output_list, output_desc,
