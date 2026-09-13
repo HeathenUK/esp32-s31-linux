@@ -487,8 +487,31 @@ static int route_constraints(snd_pcm_ioplug_t *io)
 					      1024, 65536);
 	if (err < 0)
 		return err;
-	return snd_pcm_ioplug_set_param_minmax(io, SND_PCM_IOPLUG_HW_PERIODS,
-					       2, 16);
+	err = snd_pcm_ioplug_set_param_minmax(io, SND_PCM_IOPLUG_HW_PERIODS,
+					      2, 8);
+	if (err < 0)
+		return err;
+	/*
+	 * Bound the WHOLE buffer to what a sink can hold, not just the period.
+	 *
+	 * Period bytes and period count were bounded independently, so an
+	 * application could negotiate 16 x 65536 with us and then we would
+	 * mirror it onto a sink that holds 16 kB. The sink clamps, the two
+	 * rings stop agreeing, and "sink writable" and "ring writable" become
+	 * the different questions the comment in route_open() warns about -
+	 * the write loop spins and the stream underruns continuously.
+	 *
+	 * Measured, music through the full default chain, six seconds:
+	 *
+	 *     aplay's own choice (~500 ms ring)     408 underruns
+	 *     ring matched to the 93 ms sink          0 underruns
+	 *     matched ring, resampled from 22050      0 underruns
+	 *
+	 * 16384 bytes is the hart0 transport's whole ring, which is 4096
+	 * frames - 93 ms - at the 44100 wire rate.
+	 */
+	return snd_pcm_ioplug_set_param_minmax(io, SND_PCM_IOPLUG_HW_BUFFER_BYTES,
+					       2048, 16384);
 }
 
 SND_PCM_PLUGIN_DEFINE_FUNC(s31route)
