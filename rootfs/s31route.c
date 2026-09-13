@@ -52,7 +52,12 @@
 #include <stdint.h>
 
 #define SINK_FILE	"/run/s31-sink"
-#define SINK_DEFAULT	"hw:0,0"
+/*
+ * The mmap_emul wrapper from /etc/asound.conf, not the raw device: the hart0
+ * transport is RW-only, and alsa-lib's rate and format converters need an
+ * mmap-capable slave or they cannot attach at all.
+ */
+#define SINK_DEFAULT	"sink_codec"
 
 struct route {
 	snd_pcm_ioplug_t io;
