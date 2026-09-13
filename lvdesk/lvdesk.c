@@ -3691,6 +3691,7 @@ static struct xwin {
 	lv_obj_t *win;
 	lv_obj_t *img;
 	lv_image_dsc_t dsc;
+	int drawn;		/* has the client ever put pixels in it? */
 } xwins[MAXXWIN];
 static int xwin_n;
 
@@ -5003,6 +5004,14 @@ static void xwin_on_window(uint32_t id, int w, int h)
 	x = &xwins[xwin_n++];
 	x->id = id;
 	x->win = win;
+	/*
+	 * Hidden until the client actually draws into it - see xwin_on_draw().
+	 * A frame put on screen at map time and never painted is just a white
+	 * box the user cannot get rid of.
+	 */
+	x->drawn = 0;
+	if (win)
+		lv_obj_add_flag(win, LV_OBJ_FLAG_HIDDEN);
 	x->dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
 	x->dsc.header.cf = LV_COLOR_FORMAT_RGB565;
 	x->dsc.header.w = pw;
@@ -5619,6 +5628,26 @@ static void HOTTEXT xwin_on_draw(uint32_t id)
 
 	for (i = 0; i < xwin_n; i++)
 		if (xwins[i].id == id) {
+			/*
+			 * First pixels: show the frame now, not at map time.
+			 *
+			 * prboom -fullscreen creates TWO top-levels and only
+			 * ever draws into one; SDL uses the other for the
+			 * video mode. Framing a window the moment it is
+			 * mapped therefore put an empty white box on the
+			 * desktop that nothing would ever paint, and two of
+			 * them were briefly visible before fullscreen took
+			 * effect. A window earns its frame by drawing into
+			 * it. Nothing else changes: the client is mapped and
+			 * gets its Expose as before, which is what makes it
+			 * draw in the first place.
+			 */
+			if (!xwins[i].drawn) {
+				xwins[i].drawn = 1;
+				if (xwins[i].win)
+					lv_obj_remove_flag(xwins[i].win,
+							   LV_OBJ_FLAG_HIDDEN);
+			}
 			/*
 			 * The shim's direct-render model means child windows
 			 * draw straight into their top-level's buffer, so this
