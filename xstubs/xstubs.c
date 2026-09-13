@@ -35,6 +35,7 @@
  * so by name instead of misbehaving quietly.
  */
 #include <stdio.h>
+#include <dlfcn.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
@@ -122,10 +123,57 @@ void SmcSaveYourselfDone(void *c, int success) { (void)c; (void)success; }
  * CONFIG_SYSVIPC, so the shmget() SDL would do next cannot succeed, and the
  * shim does not implement the extension either.
  */
-int XShmQueryExtension(void *dpy) { (void)dpy; return 0; }
+/*
+ * FORWARDED, not stubbed - and the comment above was wrong on both counts.
+ *
+ * SDL2 resolves the whole MIT-SHM group through SDL_X11_MODULE(SHM), which
+ * it dlopens from libXext.so.6 - THIS library - while SDL 1.2 takes the same
+ * functions from libX11, where xlite implements them for real. So prboom got
+ * zero-copy and chocolate-doom silently did not: measured, an SDL2 client
+ * runs a whole timedemo with ZERO ShmPutImage requests and pushes every
+ * frame through the socket instead, ~128 kB per frame.
+ *
+ * Two separate faults did it. XShmQueryExtension answered False, and
+ * XShmCreatePixmap was missing entirely - and SDL2 disables the module if
+ * ANY symbol in the group fails to resolve, so the missing one was fatal on
+ * its own.
+ *
+ * The old comment justified both by saying the kernel has no CONFIG_SYSVIPC.
+ * It does: CONFIG_SYSVIPC=y, /proc/sysvipc/shm exists, ipcs works, and
+ * xshim has implemented the SysV attach since it learned to shmat(). That
+ * claim was stale and it cost every SDL2 client a socket round trip per
+ * frame.
+ *
+ * dlopen rather than a link so the call cannot resolve back to this file and
+ * recurse: a handle to libX11 searches ITS table first. RTLD_NOLOAD first
+ * because libX11 is always already mapped in any X client.
+ */
+static void *shm_fn(const char *name)
+{
+	static void *h;
+
+	if (!h) {
+		h = dlopen("libX11.so.6", RTLD_NOW | RTLD_NOLOAD);
+		if (!h)
+			h = dlopen("libX11.so.6", RTLD_NOW);
+	}
+	return h ? dlsym(h, name) : NULL;
+}
+
+int XShmQueryExtension(void *dpy)
+{
+	int (*f)(void *) = (int (*)(void *))shm_fn("XShmQueryExtension");
+
+	return f ? f(dpy) : 0;
+}
 int XShmQueryVersion(void *dpy, int *maj, int *min, int *pixmaps)
 {
-	(void)dpy;
+	int (*f)(void *, int *, int *, int *) =
+		(int (*)(void *, int *, int *, int *))
+		shm_fn("XShmQueryVersion");
+
+	if (f)
+		return f(dpy, maj, min, pixmaps);
 	if (maj) *maj = 0;
 	if (min) *min = 0;
 	if (pixmaps) *pixmaps = 0;
@@ -134,18 +182,53 @@ int XShmQueryVersion(void *dpy, int *maj, int *min, int *pixmaps)
 void *XShmCreateImage(void *dpy, void *vis, unsigned depth, int fmt, char *data,
 		      void *shminfo, unsigned w, unsigned h)
 {
-	(void)dpy; (void)vis; (void)depth; (void)fmt; (void)data;
-	(void)shminfo; (void)w; (void)h;
-	return 0;
+	void *(*f)(void *, void *, unsigned, int, char *, void *, unsigned,
+		   unsigned) = (void *(*)(void *, void *, unsigned, int, char *,
+					  void *, unsigned, unsigned))
+		shm_fn("XShmCreateImage");
+
+	return f ? f(dpy, vis, depth, fmt, data, shminfo, w, h) : 0;
 }
-int XShmAttach(void *dpy, void *shminfo) { (void)dpy; (void)shminfo; return 0; }
-int XShmDetach(void *dpy, void *shminfo) { (void)dpy; (void)shminfo; return 0; }
+int XShmAttach(void *dpy, void *shminfo)
+{
+	int (*f)(void *, void *) =
+		(int (*)(void *, void *))shm_fn("XShmAttach");
+
+	return f ? f(dpy, shminfo) : 0;
+}
+int XShmDetach(void *dpy, void *shminfo)
+{
+	int (*f)(void *, void *) =
+		(int (*)(void *, void *))shm_fn("XShmDetach");
+
+	return f ? f(dpy, shminfo) : 0;
+}
 int XShmPutImage(void *dpy, unsigned long d, void *gc, void *im, int sx, int sy,
 		 int dx, int dy, unsigned w, unsigned h, int send)
 {
-	(void)dpy; (void)d; (void)gc; (void)im; (void)sx; (void)sy;
-	(void)dx; (void)dy; (void)w; (void)h; (void)send;
-	return 0;
+	int (*f)(void *, unsigned long, void *, void *, int, int, int, int,
+		 unsigned, unsigned, int) =
+		(int (*)(void *, unsigned long, void *, void *, int, int, int,
+			 int, unsigned, unsigned, int))shm_fn("XShmPutImage");
+
+	return f ? f(dpy, d, gc, im, sx, sy, dx, dy, w, h, send) : 0;
+}
+/*
+ * Present so the group RESOLVES; SDL2's framebuffer path never calls it -
+ * it uses CreateImage/Attach/PutImage - and returning None is a legal
+ * failure for anything that does.
+ */
+unsigned long XShmCreatePixmap(void *dpy, unsigned long d, char *data,
+			       void *shminfo, unsigned w, unsigned h,
+			       unsigned depth)
+{
+	unsigned long (*f)(void *, unsigned long, char *, void *, unsigned,
+			   unsigned, unsigned) =
+		(unsigned long (*)(void *, unsigned long, char *, void *,
+				   unsigned, unsigned, unsigned))
+		shm_fn("XShmCreatePixmap");
+
+	return f ? f(dpy, d, data, shminfo, w, h, depth) : 0;
 }
 
 /* Xlib's extension bookkeeping, which the Shm code above would have used. */
