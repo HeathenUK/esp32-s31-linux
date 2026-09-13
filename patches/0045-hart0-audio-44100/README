@@ -59,3 +59,42 @@ Cause unknown. It was invisible before because the ASoC path took 11025 and
 22050 NATIVELY - see patches/0042 - so the converter was never exercised.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+--- 2026-09-13, the ASRC attempt ---
+
+HOW RATE CONVERSION SHOULD BE FIXED: the ASRC lane, not software. hart0 owns
+two lanes, s31_audio_asrc.c already drives them, and s31_audio.c already sizes
+the input for the ratio and calls the lane for any stream whose rate is not
+the wire rate. That is hardware conversion at zero CPU cost, and it takes
+alsa-lib's plug layer out of the path entirely.
+
+FIXED HERE: s31_audio_asrc.c hardcoded `.dest_info = { 48000, ... }`. That was
+correct while the wire rate was 48000 and became silently wrong the moment it
+moved to 44100 - the lane would convert every source to a rate the I2S no
+longer runs at. It now uses S31_AUDIO_HW_RATE like everything else.
+
+NOT ENABLED, AND WHY. Advertising the lane's rates from the Linux driver and
+playing 11025 through it WEDGED THE BOARD: console silent, no panic, and hart0
+came back clean on the next reset. The audio task is high priority and hart0
+owns the radios, so a lane that never completes takes the whole board down.
+s31_audio_asrc_convert() waits on the lane without a timeout.
+
+THE ORDER OF WORK:
+  1. Put a bounded wait on the lane in s31_audio_asrc_convert(), returning
+     ESP_ERR_TIMEOUT so the caller's existing xrun-and-skip path handles it.
+     The unbounded wait is what is unsafe, not the rate list.
+  2. Re-measure the "808 xruns in four seconds" claim in esp32s31-audio.c.
+     It was taken at the 48000 wire rate, before the pin map was corrected and
+     before dest_info was fixed, so it is not evidence about the current
+     configuration.
+  3. Only then widen .rates in esp32s31-audio.c and supported_rate() in
+     s31_audio_asrc.c together, and keep them in step.
+
+SEPARATELY STILL OPEN: alsa-lib's plug cannot configure this device at all.
+At 11025 it narrows to period 256 frames / 4 periods / a 4 kB buffer - 16 kB
+at the sink, inside every limit - and still fails "Unable to install hw
+params". The ranges it reports are degenerate (PERIOD_TIME (23219 23220) is an
+open interval containing no integer, because 256 frames at 11025 is 23219.95
+us), which suggests the driver's narrow period/buffer limits leave the
+refinement nowhere to land. Fixing the ASRC path makes this moot for the rates
+that matter.

@@ -10,6 +10,7 @@
 #include "freertos/semphr.h"
 #include "hal/asrc_hal.h"
 
+#include "s31_audio_sram.h"
 #include "s31_audio_internal.h"
 
 #define ASRC_LANES 2
@@ -34,6 +35,12 @@ static asrc_hal_context_t s_hal;
 
 static bool supported_rate(unsigned int rate)
 {
+	/*
+	 * 11025 and 22050 were added here and the board WEDGED the first time
+	 * a stream was played through the lane - see esp32s31-audio.c. Left
+	 * as the original list until the lane has a completion timeout; the
+	 * whitelist is not what is unsafe, the unbounded wait is.
+	 */
 	static const unsigned int rates[] = { 8000, 16000, 24000, 32000, 44100, 48000 };
 
 	for (unsigned int i = 0; i < sizeof(rates) / sizeof(rates[0]); i++)
@@ -67,7 +74,13 @@ esp_err_t s31_audio_asrc_convert(unsigned int lane, unsigned int input_rate,
 	struct asrc_lane *state;
 	asrc_hal_config_t config = {
 		.src_info = { input_rate, channels, 16 },
-		.dest_info = { 48000, channels, 16 },
+		/*
+		 * The WIRE rate, not a literal. This was hardcoded to 48000
+		 * and silently became wrong the moment S31_AUDIO_HW_RATE
+		 * moved to 44100: the lane would have converted every source
+		 * to a rate the I2S no longer runs at.
+		 */
+		.dest_info = { S31_AUDIO_HW_RATE, channels, 16 },
 	};
 	asrc_hw_gdma_evt_t event;
 	uint32_t input_bytes = input_frames * channels * sizeof(*input);

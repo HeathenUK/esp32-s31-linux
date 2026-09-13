@@ -83,6 +83,14 @@ static const struct snd_pcm_hardware s31_audio_hardware = {
 	 * this board's content and the A2DP route already use, so the common
 	 * case converts nowhere at all.
 	 */
+	/*
+	 * WIRE RATE ONLY - the ASRC lane is NOT safe to hand work to yet.
+	 * Advertising the lane's rates and playing 11025 through it WEDGED
+	 * THE BOARD: silent console, no panic in the next boot log, and hart0
+	 * came back clean on reset. A lane that never completes blocks hart0's
+	 * high-priority audio task, and hart0 owns the radios, so the whole
+	 * board goes with it. Do not re-enable without a timeout on the lane.
+	 */
 	.rates = SNDRV_PCM_RATE_44100,
 	.rate_min = S31_AUDIO_HW_RATE,
 	.rate_max = S31_AUDIO_HW_RATE,
