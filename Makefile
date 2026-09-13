@@ -263,7 +263,40 @@ USB_HS ?= 0
 # full/low-speed devices behind a high-speed hub work, because descriptor
 # DMA refuses split transactions (hcd_ddma.c). Costs the 8 kHz SOF.
 USB_BUFDMA ?= 0
-CMDLINE_NOW = $$(sed -n 's/^CONFIG_CMDLINE=\"\(.*\)\"/\1/p' $(LINUX_OUT)/.config | sed 's/ earlycon//g; s/ dwc2.host_full_speed=0//g; s/ dwc2.desc_dma=0//g; s/ snd_aloop.index=1//g; s/ profile=6//g')
+# USB_SOF=1 adds dwc2.sof_irq=1, unmasking the start-of-frame interrupt while
+# KEEPING descriptor DMA.
+#
+# sof_irq was turned off because the 1 kHz flood was a leftover mask bit in
+# DDMA mode and switching it off returned ~6% of the core. What that did not
+# check is whether anything still needs SOF to advance the periodic schedule.
+#
+# RETRACTED, 2026-09-12: "zero interrupts in three seconds while idle" was
+# cited here as proof the schedule had stalled. It is not. In descriptor DMA
+# an interrupt-IN descriptor stays armed across NAKs and only raises IOC when
+# data actually arrives, so zero interrupts from two idle HID devices is the
+# correct and intended state - it is what the sof_irq=0 measurement recorded
+# in the first place.
+#
+# The real gap is in the scheduler lists (hcd_queue.c). dwc2_schedule_periodic
+# has an explicit DDMA case - "Don't rely on SOF and start in ready schedule" -
+# but dwc2_hcd_qh_deactivate, which runs when a periodic transfer COMPLETES
+# with QTDs still queued, does not. It falls back to comparing next_active_frame
+# against hsotg->frame_number and parks the QH in periodic_sched_inactive,
+# commented "we know SOF interrupt will handle future frames". With SOF masked
+# no such interrupt exists, and dwc2_hcd_select_transactions only ever draws
+# periodic work from periodic_sched_ready - so a QH that lands in inactive is
+# stranded. hsotg->frame_number is also only refreshed off other traffic, which
+# is why moving the mouse lets the next keyboard key through.
+#
+# Setting this to 1 restores upstream behaviour (upstream enables SOF on the
+# first periodic QH unconditionally). Tried 2026-09-12: it did NOT fix input -
+# keys then stuck down instead - so there is a second fault as well.
+#
+# The parameter is read at host initialisation, so a sysfs write does nothing
+# and the controller does not survive an unbind/rebind. It has to come in on
+# the command line, which is CMDLINE_FORCE here.
+USB_SOF ?= 0
+CMDLINE_NOW = $$(sed -n 's/^CONFIG_CMDLINE=\"\(.*\)\"/\1/p' $(LINUX_OUT)/.config | sed 's/ earlycon//g; s/ dwc2.host_full_speed=0//g; s/ dwc2.host_full_speed=1//g; s/ dwc2.desc_dma=0//g; s/ dwc2.sof_irq=1//g; s/ snd_aloop.index=1//g; s/ profile=6//g')
 # The ALSA loopback must not steal card 0 from the Korvo codec: it would
 # silently redirect every app's default output into the loopback and leave
 # the volume mixer attached to a card with no controls.
@@ -281,8 +314,22 @@ endif
 ifeq ($(USB_HS),1)
 CMDLINE_ADD += dwc2.host_full_speed=0
 endif
+ifeq ($(USB_SOF),1)
+CMDLINE_ADD += dwc2.sof_irq=1
+endif
 ifeq ($(USB_BUFDMA),1)
 CMDLINE_ADD += dwc2.desc_dma=0
+endif
+# USB_FS=1 PINS the root port to full speed (dwc2.host_full_speed=1) instead of
+# leaving it adaptive. Adaptive only drops to full speed when a QH needs a
+# split, and that refusal happens in the descriptor-DMA path - so with
+# USB_BUFDMA=1 splits are supported, nothing ever refuses, and the port would
+# stay at HIGH speed running the 8 kHz SOF (measured 39% of the core). Buffer
+# DMA is therefore only affordable pinned to full speed, where the SOF is
+# 1 kHz. Use the two together: make linux USB_BUFDMA=1 USB_FS=1.
+USB_FS ?= 0
+ifeq ($(USB_FS),1)
+CMDLINE_ADD += dwc2.host_full_speed=1
 endif
 EARLYCON_TWEAK = --set-str CMDLINE "$(CMDLINE_NOW)$(if $(CMDLINE_ADD), $(CMDLINE_ADD),)"
 
@@ -365,6 +412,20 @@ LINUX_TARGET ?= xipImage
 # rootfs. The SD imager is the one deliberate exception: it is flashed over the
 # normal kernel only for as long as it takes to write the card, and the restore
 # step reflashes rootfs anyway. See docs/sd-imager.md.
+# CMA's reservation must have its base AND size aligned to one pageblock
+# (CMA_MIN_ALIGNMENT_BYTES in mm/cma.c); rmem_cma_setup() rejects the region
+# outright otherwise and the board boots with no CMA at all. pageblock_order is
+# PAGE_BLOCK_MAX_ORDER when there are no huge pages, which defaults to
+# MAX_PAGE_ORDER = 10, i.e. 4 MiB - so the CMA pool could only ever be a
+# multiple of 4 MiB.
+#
+# CONFIG_PAGE_BLOCK_MAX_ORDER lowers the pageblock WITHOUT lowering
+# MAX_PAGE_ORDER, so the buddy allocator keeps its 4 MiB maximum allocation and
+# only the migratetype granularity changes. Order 8 is 1 MiB, which makes a
+# 5 MB CMA pool legal. mm/Kconfig's stated cost is THP success rate, and this
+# kernel has neither CONFIG_HUGETLBFS nor THP.
+PAGE_BLOCK_ORDER ?= 8
+
 LINUX_SIZE_FATAL ?= 1
 
 linux: toolchain | $(LINUX_OUT)
@@ -454,7 +515,8 @@ linux: toolchain | $(LINUX_OUT)
 		--enable PREEMPT_NONE \
 		--enable DRM_FBDEV_EMULATION \
 		--disable IPV6 \
-		--enable SYSVIPC
+		--enable SYSVIPC \
+		--set-val PAGE_BLOCK_MAX_ORDER $(PAGE_BLOCK_ORDER)
 	$(MAKE) -C $(LINUX_DIR) O=$(LINUX_OUT) ARCH=riscv CROSS_COMPILE="$(CROSS_COMPILE)" olddefconfig
 	$(MAKE) -C $(LINUX_DIR) O=$(LINUX_OUT) ARCH=riscv CROSS_COMPILE="$(CROSS_COMPILE)" \
 		KCFLAGS="-march=$(S31_SAFE_ISA) $(S31_COMMON_FLAGS)" -j$(JOBS) $(LINUX_TARGET) dtbs

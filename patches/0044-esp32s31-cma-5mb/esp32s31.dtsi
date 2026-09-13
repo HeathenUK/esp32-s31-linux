@@ -1,0 +1,1208 @@
+// SPDX-License-Identifier: GPL-2.0+
+/*
+ * Espressif ESP32-S31 minimal Device Tree Source.
+ */
+
+#include <dt-bindings/interrupt-controller/irq.h>
+#include <dt-bindings/clock/esp32s31-clock.h>
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/pinctrl/esp32s31-pinmux.h>
+
+/ {
+	#address-cells = <1>;
+	#size-cells = <1>;
+	compatible = "espressif,esp32s31";
+
+	memory@50000000 {
+		device_type = "memory";
+		reg = <0x50000000 0x01000000>;
+	};
+
+	reserved-memory {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+
+		/*
+		 * Scanout and client buffers for the LCD_CAM RGB controller.
+		 *
+		 * This is CMA, not a coherent pool, and the difference matters
+		 * on a 16 MiB machine. The coherent pool allocator is
+		 * bitmap_find_free_region(), which only understands power-of-two
+		 * page orders: an 800x480x16 buffer is 150 pages and takes 256,
+		 * and 640x480 clients take 1 MiB each instead of 600 KiB. CMA
+		 * allocates by page count, so nothing is rounded away.
+		 *
+		 * `reusable` (and the absence of `no-map`) is what selects
+		 * rmem_cma_setup() over rmem_dma_setup(); the latter rejects
+		 * `reusable` outright. It also means the region counts towards
+		 * MemTotal and the kernel may place movable pages in whatever
+		 * the display is not using, instead of the memory being carved
+		 * out of the system entirely.
+		 *
+		 * Base and size must both be pageblock-aligned - MAX_PAGE_ORDER
+		 * with no huge pages, so 4 MiB here. 0x50800000 is the highest
+		 * 4 MiB-aligned base that clears the audio and OpenSBI
+		 * reservations at the top of PSRAM.
+		 *
+		 * DO NOT shrink this to "reclaim" the CmaFree you will see -
+		 * measured at 1904 kB of 4096 kB with the desktop running. It
+		 * is not reclaimable, because it was never taken: `reusable`
+		 * (rather than `no-map`) means the kernel already uses this
+		 * region for movable allocations - anonymous pages and page
+		 * cache - whenever DMA is not. MemTotal is 15456 kB with
+		 * CmaTotal at 4096 kB and 15456 kB with it at 0.
+		 *
+		 * Shrinking it is also not possible without patching
+		 * ARCH_FORCE_MAX_ORDER into arch/riscv/Kconfig, which does not
+		 * define it. A 3 MiB region is simply rejected - "reserved mem:
+		 * node framebuffer@50800000 compatible matching fail", CmaTotal
+		 * 0, and no scanout buffer at all.
+		 */
+		/*
+		 * 6 MiB, not 4.
+		 *
+		 * At the panel's native 800x480 there are three contiguous
+		 * allocations in flight: the driver's private scanout buffer
+		 * (768,000), fbdev emulation's framebuffer for the console
+		 * (768,000) and the desktop's own render target (770,048).
+		 * That is 2.25 MB of a 4 MB pool which also holds migratable
+		 * page cache, and the third allocation simply failed -
+		 * "CREATE_DUMB: Out of memory", with the desktop falling back
+		 * to no KMS at all. At the reduced 640x384 the console's
+		 * framebuffer is only 491,520 and it fitted, which is why this
+		 * looked like a mode-specific display bug for a long time.
+		 *
+		 * Growing it was TRIED and REVERTED: at 6 MiB the kernel reports
+		 * "Memory: 8964K/16384K available" against ~10.9 MB before, so
+		 * on this 15.4 MB board the reservation is not free the way
+		 * `reusable` suggests - and the native boot still hung, only
+		 * earlier. Do not reach for this again without measuring
+		 * available memory first.
+		 *
+		 * The region can grow to 0x50fe0000 before it meets the audio
+		 * reservation. Shrinking it is what does not work - see above.
+		 */
+		lcd_reserved: framebuffer@50800000 {
+			compatible = "shared-dma-pool";
+			/*
+			 * 6 MB, to hold an 800x480 indexed window - 384 KB of
+			 * indices plus 768 KB of RGB565 - on top of scanout.
+			 *
+			 * CUT TO 4 MB ON 2026-09-06 AND PUT BACK THE SAME DAY.
+			 * The cut was made on evidence that turned out to be an
+			 * instrument fault: alive.py reported STAGE SILENT for
+			 * a board that was busy rather than wedged, because a
+			 * shell prompt is two characters and its line filter
+			 * dropped anything under four. Every "wedge" behind
+			 * that cut - PPA, GEM, CMA, the capture path - was a
+			 * healthy board that runsh.py could reach throughout.
+			 * alive.py now proves liveness by echoing a nonce.
+			 *
+			 * What remains TRUE and unretracted is the paragraph
+			 * above: an earlier, independent attempt at 6 MB
+			 * measured "Memory: 8964K/16384K available" against
+			 * ~10.9 MB. Measure available memory when changing
+			 * this. At 6 MB with a 640x400 client the board runs
+			 * with ~1.3-1.9 MB available and CmaFree ~800 KB.
+			 *
+			 * CUT TO 4 MB AGAIN, 2026-09-12, by request, with the
+			 * measurement the paragraph above asks for. At idle on
+			 * 6 MB: MemTotal 15,412 kB, CmaTotal 6,144, CmaFree
+			 * 3,128 - so 3 MB of the pool sits unused, and
+			 * CmaFree does not count as headroom (see
+			 * s31-watermark-boost-oom: a "6 MB free" OOM was the
+			 * boost plus unusable CMA pages).
+			 *
+			 * The failure mode recorded above is specific and has
+			 * not been retracted: three contiguous 768 kB
+			 * allocations in flight at 800x480, and the third
+			 * fails. One of the three is FBDEV EMULATION's console
+			 * framebuffer, which is dead weight the moment lvdesk
+			 * takes DRM master - so if this cut reproduces
+			 * "CREATE_DUMB: Out of memory", the next move is to
+			 * stop allocating that, not to put the 2 MB back.
+			 *
+			 * IT DID NOT. Kernel #198, 4 MB, booted, took DRM
+			 * master, ran a fullscreen 320x240 client through a
+			 * whole timedemo: no CREATE_DUMB failure, no "scaling
+			 * off", no CMA allocation failure in dmesg, scanout
+			 * buffer reserved at 768000 bytes as usual. Under load
+			 * CmaFree 1,096 kB of 4,096, so ~2.8 MB in use - the
+			 * same working set the 6 MB pool showed.
+			 *
+			 * The old three-allocation failure was from the Xorg
+			 * era, where the DESKTOP allocated its own 770,048
+			 * byte render target on top of the driver's scanout
+			 * and fbdev's console framebuffer. lvdesk does not:
+			 * it presents through the driver's own fullscreen
+			 * buffer. So the third allocation that failed is one
+			 * this desktop never makes.
+			 *
+			 * What the cut did NOT obviously do is hand 2 MB back
+			 * to the general allocator. Non-CMA free (MemFree
+			 * minus CmaFree) read 1,908 kB at idle on 6 MB and
+			 * 1,624 kB on 4 MB, which is the wrong direction -
+			 * though those two samples are from boots with very
+			 * different page-cache histories and are not a fair
+			 * comparison. A settled fresh-boot-per-arm measurement
+			 * is still owed here.
+			 */
+			/*
+			 * 5 MB. CMA requires base AND size aligned to
+			 * CMA_MIN_ALIGNMENT_BYTES, which is one pageblock, and
+			 * rmem_cma_setup() rejects the region outright if they
+			 * are not - the board then boots with NO CMA. At the
+			 * default pageblock of 4 MiB this could only be a
+			 * multiple of 4 MiB; the Makefile now sets
+			 * CONFIG_PAGE_BLOCK_MAX_ORDER=8 (1 MiB) so 0x500000 is
+			 * legal. See PAGE_BLOCK_ORDER in the Makefile - change
+			 * both together or the region is silently dropped.
+			 *
+			 * The ceiling here is audio_reserved at 0x50fe0000.
+			 */
+			reg = <0x50800000 0x00500000>;
+			reusable;
+		};
+
+		audio_reserved: audio@50fe0000 {
+			reg = <0x50fe0000 0x00010000>;
+		};
+
+		opensbi_reserved: opensbi@50ff0000 {
+			reg = <0x50ff0000 0x00010000>;
+			no-map;
+		};
+	};
+
+	aliases {
+		serial0 = &uhci0;
+		serial1 = &uart1;
+		serial2 = &uart2;
+		mmc0 = &sdmmc;
+		ethernet0 = &emac;
+	};
+
+	cpus {
+		#address-cells = <1>;
+		#size-cells = <0>;
+		timebase-frequency = <320000000>;
+
+		cpu0: cpu@1 {
+			device_type = "cpu";
+			compatible = "espressif,esp32s31", "riscv";
+			reg = <1>;
+			riscv,isa = "rv32imafbcn_zba_zbb_zbc_zbs";
+			riscv,isa-base = "rv32i";
+			riscv,isa-extensions = "i", "m", "a", "f", "zba", "zbb",
+					       "zbc", "zbs", "c",
+					       "zicntr", "zicsr", "zifencei";
+			mmu-type = "riscv,sv32";
+			i-cache-block-size = <64>;
+			i-cache-sets = <256>;
+			i-cache-size = <32768>;
+			d-cache-block-size = <64>;
+			d-cache-sets = <512>;
+			d-cache-size = <65536>;
+			cpu0_intc: interrupt-controller {
+				#interrupt-cells = <1>;
+				interrupt-controller;
+				compatible = "riscv,cpu-intc";
+			};
+		};
+
+		cpu-map {
+			cluster0 {
+				core0 { cpu = <&cpu0>; };
+			};
+		};
+	};
+
+	xtal: oscillator {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <40000000>;
+	};
+
+	soc {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		compatible = "simple-bus";
+		ranges;
+		dma-noncoherent;
+
+		cache: cache-controller@2c000000 {
+			compatible = "espressif,esp32s31-cache";
+			reg = <0x2c000000 0x1000>;
+			espressif,icache-id = <1>;
+		};
+
+		axi_gdma: dma-controller@20348000 {
+			compatible = "espressif,esp32s31-axi-gdma";
+			/* 12 KiB descriptor pool in loader-reserved HP SRAM. */
+			reg = <0x20348000 0x1000>, <0x20587078 0x4>,
+			      <0x2f072380 0x3000>;
+			reg-names = "dma", "clkrst", "descriptors";
+			interrupt-parent = <&clic>;
+			interrupts = <33 48 IRQ_TYPE_LEVEL_HIGH>,
+				     <34 49 IRQ_TYPE_LEVEL_HIGH>,
+				     <35 50 IRQ_TYPE_LEVEL_HIGH>,
+				     <36 51 IRQ_TYPE_LEVEL_HIGH>,
+				     <37 52 IRQ_TYPE_LEVEL_HIGH>,
+				     <38 53 IRQ_TYPE_LEVEL_HIGH>;
+			interrupt-names = "rx0", "rx1", "rx2",
+					  "tx0", "tx1", "tx2";
+			/* pair index, AXI peripheral trigger (LCD=0 .. SHA=5) */
+			#dma-cells = <2>;
+			dma-channels = <3>;
+			status = "okay";
+		};
+
+		ahb_gdma: dma-controller@20343000 {
+			compatible = "espressif,esp32s31-ahb-gdma";
+			reg = <0x20343000 0x628>, <0x2f075380 0x1000>;
+			reg-names = "dma", "descriptors";
+			clocks = <&clkc ESP32S31_CLK_AHB_GDMA>;
+			interrupt-parent = <&clic>;
+			interrupts = <22 36 IRQ_TYPE_LEVEL_HIGH>,
+				     <23 37 IRQ_TYPE_LEVEL_HIGH>,
+				     <24 38 IRQ_TYPE_LEVEL_HIGH>,
+				     <25 39 IRQ_TYPE_LEVEL_HIGH>,
+				     <26 40 IRQ_TYPE_LEVEL_HIGH>,
+				     <27 41 IRQ_TYPE_LEVEL_HIGH>,
+				     <28 42 IRQ_TYPE_LEVEL_HIGH>,
+				     <29 43 IRQ_TYPE_LEVEL_HIGH>,
+				     <30 44 IRQ_TYPE_LEVEL_HIGH>,
+				     <31 45 IRQ_TYPE_LEVEL_HIGH>;
+			interrupt-names = "rx0", "rx1", "rx2", "rx3", "rx4",
+					  "tx0", "tx1", "tx2", "tx3", "tx4";
+			#dma-cells = <2>;
+			dma-channels = <5>;
+			/*
+			 * ALSA allocates a stream's buffer against the *DMA
+			 * controller's* device, not the DAI's, so the pool has
+			 * to be reachable from this node or the allocator
+			 * quietly falls back to coherent memory - which is
+			 * cached here, and the DMA then reads stale samples.
+			 */
+			iram = <&audio_dma_pool>;
+			status = "okay";
+		};
+
+		uhci0: serial@20398000 {
+			compatible = "espressif,esp32s31-uhci-uart";
+			reg = <0x20398000 0x100>, <0x20587084 0x4>,
+			      <0x2038a000 0x1000>, <0x2f076400 0x2800>;
+			reg-names = "uhci", "clkrst", "uart", "dma-buf";
+			clocks = <&clkc ESP32S31_CLK_UHCI>,
+				 <&clkc ESP32S31_CLK_UART0>;
+			clock-names = "bus", "uart";
+			/*
+			 * UHCI TX/RX must share one pair, and pair 4 is the one
+			 * nothing else wants: 3 and 2 carry I2S, and 0-1 are
+			 * FreeRTOS's whenever it is built with audio.
+			 */
+			dmas = <&ahb_gdma 4 0>, <&ahb_gdma 4 0>;
+			dma-names = "tx", "rx";
+			pinctrl-names = "default";
+			pinctrl-0 = <&uart0_default>;
+			status = "okay";
+		};
+
+		clkc: clock-controller@20587000 {
+			compatible = "espressif,esp32s31-clock";
+			reg = <0x20587000 0x1000>, <0x20586000 0x1000>,
+			      <0x20359000 0x1000>;
+			reg-names = "hp-sys-clkrst", "hp-system", "cnnt-sys";
+			#clock-cells = <1>;
+		};
+
+		efuse: efuse@2071502c {
+			compatible = "espressif,esp32s31-efuse";
+			/*
+			 * IDF EFUSE_RD_WR_DIS through RD_SYS_PART2_DATA7:
+			 * complete BLK0..BLK9 read-shadow range.  Hardware
+			 * returns zero for blocks protected by RD_DIS.
+			 */
+			reg = <0x2071502c 0x13c>;
+			read-only;
+
+			nvmem-layout {
+				compatible = "fixed-layout";
+				#address-cells = <1>;
+				#size-cells = <1>;
+
+				factory_mac: mac-address@0 {
+					compatible = "mac-base";
+					/* BLK1 starts 0x24 bytes into this provider. */
+					reg = <0x24 0x6>;
+					#nvmem-cell-cells = <1>;
+				};
+			};
+		};
+
+		trng: rng@20814000 {
+			compatible = "espressif,esp32s31-trng";
+			reg = <0x20814000 0x100>, <0x2071003c 0x4>;
+			reg-names = "trng", "clkrst";
+			status = "okay";
+		};
+
+		crypto: crypto@20508000 {
+			compatible = "espressif,esp32s31-crypto";
+			/* AES, SHA, RSA/MPI and ECC are one HP crypto register island. */
+			reg = <0x20508000 0x4000>, <0x20587058 0x4>;
+			reg-names = "crypto", "clkrst";
+			dmas = <&axi_gdma 0 5>;
+			dma-names = "sha";
+			status = "okay";
+		};
+
+		adc: adc@20815000 {
+			compatible = "espressif,esp32s31-adc";
+			reg = <0x20815000 0x400>, <0x20710020 0x4>;
+			reg-names = "adc", "clkrst";
+			#io-channel-cells = <1>;
+			status = "disabled";
+		};
+
+		tsens: temperature-sensor@20818000 {
+			compatible = "espressif,esp32s31-tsens";
+			reg = <0x20818000 0x2c>, <0x20710030 0x4>;
+			reg-names = "tsens", "clkrst";
+			status = "disabled";
+		};
+
+		touch: touch-sensor@20816000 {
+			compatible = "espressif,esp32s31-touch";
+			reg = <0x20816000 0x104>, <0x20705000 0x100>,
+			      <0x2071002c 0x4>;
+			reg-names = "touch", "touch-aon", "clkrst";
+			status = "disabled";
+		};
+
+		comparator: comparator@2039a000 {
+			compatible = "espressif,esp32s31-comparator";
+			reg = <0x2039a000 0x400>, <0x205871b8 0x4>;
+			reg-names = "comparator", "clkrst";
+			interrupt-parent = <&clic>;
+			interrupts = <22 135 IRQ_TYPE_LEVEL_HIGH>;
+			espressif,reference-level = <3>;
+			status = "disabled";
+		};
+
+		/*
+		 * Loader-reserved internal SRAM handed to ALSA as its DMA ring.
+		 * The GDMA reads playback samples straight out of here, and
+		 * internal RAM is not cached on this SoC, so no flushing is
+		 * needed between the CPU writing and the DMA reading.
+		 */
+		audio_sram: sram@2f05a000 {
+			compatible = "mmio-sram";
+			/*
+			 * 64 KiB, grown from 32 KiB by moving the base down.
+			 * Must match S31_AUDIO_DMA_BASE/SIZE in
+			 * shared/s31_memory_layout.h AND the loader's
+			 * reservation - see the comment there.
+			 */
+			reg = <0x2f05a000 0x10000>;
+			#address-cells = <1>;
+			#size-cells = <1>;
+			ranges = <0x0 0x2f05a000 0x10000>;
+
+			audio_dma_pool: pool@0 {
+				reg = <0x0 0x10000>;
+				label = "audio-dma";
+				pool;
+				export;
+			};
+		};
+
+		i2s0: i2s@20387000 {
+			compatible = "espressif,esp32s31-i2s";
+			/*
+			 * Controller registers plus the instance's clock and
+			 * reset words in HP_SYS_CLKRST, which is where I2S
+			 * clocking lives on this SoC.
+			 */
+			reg = <0x20387000 0x100>, <0x205870e4 0x14>;
+			reg-names = "i2s", "clkrst";
+			/*
+			 * No interrupt: everything the driver needs is reported
+			 * by the GDMA channel, and the controller's own source
+			 * (6) only signals FIFO over/underrun. Left unrouted
+			 * rather than given a CLIC ID, since those are
+			 * hand-allocated here and would go unused.
+			 */
+			/*
+			 * Separate GDMA pairs per direction: a pair is one
+			 * dmaengine channel object, and terminating it stops
+			 * both halves, so sharing one would make stopping
+			 * playback also stop capture. Pairs 0-2 are free
+			 * whenever the FreeRTOS core is built without audio,
+			 * which is the only configuration that can reach here
+			 * -- it otherwise owns these pads. Both select the I2S0
+			 * channel-0 trigger (1), one per direction.
+			 */
+			dmas = <&ahb_gdma 3 1>, <&ahb_gdma 2 1>;
+			dma-names = "tx", "rx";
+			iram = <&audio_dma_pool>;
+			pinctrl-names = "default";
+			pinctrl-0 = <&i2s0_default>;
+			#sound-dai-cells = <0>;
+			status = "disabled";
+		};
+
+		i2c1: i2c@20386000 {
+			compatible = "espressif,esp32s31-i2c";
+			/* Controller registers plus its clock/reset word in
+			 * HP_SYS_CLKRST; the I2C block has no clock register
+			 * of its own on this SoC. */
+			reg = <0x20386000 0x100>, <0x205870e0 0x4>;
+			reg-names = "i2c", "clkrst";
+			interrupt-parent = <&clic>;
+			/* raw CLIC ID21, IDF ETS_I2C1_INTR_SOURCE (24). */
+			interrupts = <21 24 IRQ_TYPE_LEVEL_HIGH>;
+			pinctrl-names = "default";
+			pinctrl-0 = <&i2c1_default>;
+			clock-frequency = <100000>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "disabled";
+		};
+
+		/*
+		 * Pixel Processing Accelerator: memory-to-memory scale/rotate/
+		 * mirror, alpha blend and fill, fed by the 2D-DMA engine (which
+		 * is separate from the AXI GDMA that drives scanout).
+		 *
+		 * Clock and reset for both blocks live in HP_SYS_CLKRST, one
+		 * register each: DMA2D_CTRL0 at 0x205870b0 and PPA_CTRL0 at
+		 * 0x205870b4, bit 0 clock enable and bit 1 reset.
+		 *
+		 * Source 102 is ETS_PPA_INTR_SOURCE, 32 an unused CLIC slot.
+		 *
+		 * Do NOT derive source numbers by counting matches of
+		 * "ETS_.*_INTR_SOURCE" in soc/interrupts.h: eight entries
+		 * (ETS_GPIO_INTR0-3_SOURCE, ETS_CPU_INTR_FROM_CPU_0-3_SOURCE)
+		 * do not end in _INTR_SOURCE, so everything after them comes out
+		 * 8 too low. Cross-check against a known-good node - the USB
+		 * OTGHS node uses source 99 - or read the interrupt matrix at
+		 * 0x20585800 + source*4 with devmem and look for the slot.
+		 *
+		 * The descriptor lives in loader-reserved HP SRAM, mapped
+		 * uncached. hart0 reserves 0x2f072380..0x2f079c00 for DMA, and
+		 * that window is nearly all spoken for - the AXI GDMA takes
+		 * 0x2f072380+0x3000, the second DMA controller 0x2f075380+
+		 * 0x1000, and the UHCI serial dma-buf starts at 0x2f076400.
+		 * This 128-byte gap between the last two is what is left; check
+		 * /proc/iomem before moving it.
+		 *
+		 * The two HP_SYSTEM windows are the memory low-power controls.
+		 * Both default to LP_EN=1, i.e. the blocks' internal memories
+		 * come out of reset powered down; the engine then accepts every
+		 * register write and produces nothing, and the RX DMA completes
+		 * with a FIFO underflow.
+		 *
+		 * It must be uncached: dma_alloc_coherent returns *cached*
+		 * memory on this SoC, and a 2D-DMA fed from it reads a stale
+		 * descriptor and never starts - measured, not assumed.
+		 */
+		ppa: pixel-accelerator@20345000 {
+			compatible = "espressif,esp32s31-ppa";
+			/*
+			 * This node is really "the 2D-DMA block and the engines
+			 * hanging off it". The JPEG codec is one of those
+			 * engines: it is fed by the same 2D-DMA, so it shares
+			 * this driver's channel arbitration and descriptor
+			 * pool rather than mapping dma2d a second time.
+			 *
+			 * JPEG addresses are the same convention as the PPA's
+			 * and were checked against it: PPA_CTRL0 is
+			 * HP_SYS_CLKRST + 0xb4 and appears here as 0x205870b4,
+			 * so JPEG_CTRL0 (+0xb8) is 0x205870b8; PPA_MEM_LP_CTRL
+			 * is HP_SYS + 0x29c = 0x2058629c, so JPEG's (+0x2a0)
+			 * is 0x205862a0.
+			 */
+			reg = <0x20345000 0x200>, <0x20346000 0xa30>,
+			      <0x205870b4 0x4>, <0x205870b0 0x4>,
+			      <0x2f076380 0x80>,
+			      <0x2058629c 0x4>, <0x20586210 0x4>,
+			      <0x20344000 0x100>, <0x205870b8 0x4>,
+			      <0x205862a0 0x4>;
+			reg-names = "ppa", "dma2d", "ppa-clkrst", "dma2d-clkrst",
+				    "descriptors", "ppa-memlp", "dma2d-memlp",
+				    "jpeg", "jpeg-clkrst", "jpeg-memlp";
+			interrupt-parent = <&clic>;
+			/*
+			 * The PPA's interrupt, then the JPEG codec's. 101 is not
+			 * a guess: computing the index of ETS_JPEG_INTR_SOURCE in
+			 * the SoC's interrupt enum gives 101, and the same
+			 * computation gives 102 for the PPA - which is the number
+			 * that was already here and known good.
+			 *
+			 * The FIRST cell is the CLIC line, not the source. There
+			 * are only 48 of them and each device picks one; reusing
+			 * the PPA's line 32 for the codec made both lookups
+			 * return the same virq, so request_irq() collided and
+			 * took the whole driver - display scaler included - down
+			 * with a flags mismatch. Lines 16-42 are all taken (the two DMA
+			 * controllers alone hold 22-38), so use 43.
+			 */
+			interrupts = <32 102 IRQ_TYPE_LEVEL_HIGH>,
+				     <43 101 IRQ_TYPE_LEVEL_HIGH>;
+			interrupt-names = "ppa", "jpeg";
+			/*
+			 * Same reserved window as the display controller. The
+			 * PPA writes with DMA to raw physical addresses, so it
+			 * is bounded to this region: without that a debugfs
+			 * write can aim 768 KB of DMA at live kernel PSRAM.
+			 */
+			memory-region = <&lcd_reserved>;
+			status = "disabled";
+		};
+
+		lcd: display-controller@20396000 {
+			compatible = "espressif,esp32s31-lcd";
+			/*
+			 * LCD_CAM raises VSYNC at every frame boundary, which is
+			 * the display's real vblank. Source 13 is
+			 * ETS_LCD_CAM_INTR_SOURCE; 42 is an unused CLIC slot.
+			 */
+			interrupt-parent = <&clic>;
+			interrupts = <42 13 IRQ_TYPE_LEVEL_HIGH>;
+			/* LCD_CAM registers plus its module clock in HP_SYS_CLKRST. */
+			reg = <0x20396000 0x100>, <0x20587150 0x4>;
+			reg-names = "lcd", "clkrst";
+			/* AXI GDMA pair 2, peripheral trigger 0 (LCD). */
+			dmas = <&axi_gdma 2 0>;
+			dma-names = "lcd";
+			memory-region = <&lcd_reserved>;
+			status = "disabled";
+
+			port {
+				lcd_out: endpoint {
+					remote-endpoint = <&panel_in>;
+				};
+			};
+		};
+
+		gpio: pinctrl@20583000 {
+			compatible = "espressif,esp32s31-pinctrl";
+			reg = <0x20583000 0x0e00>, <0x20582000 0x1000>,
+			      <0x20588000 0x1000>;
+			reg-names = "gpio", "iomux", "cnnt-pad-ctrl";
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+			interrupt-parent = <&clic>;
+			/* GPIO_INTR0 matrix source 61, aggregated level output. */
+			interrupts = <18 61 IRQ_TYPE_LEVEL_HIGH>;
+			/*
+			 * Owned by the LCD_CAM RGB interface: data lines, PCLK,
+			 * DE, HSYNC and VSYNC. Keep gpiolib off them.
+			 */
+			gpio-reserved-ranges = <8 12>, <33 4>, <40 1>, <43 3>;
+
+			uart0_default: uart0-default-pins {
+				tx-pins {
+					pinmux = <ESP32S31_IOMUX(58, 0)>;
+					drive-strength = <20>;
+				};
+
+				rx-pins {
+					pinmux = <ESP32S31_IOMUX_IN(59, 0, 10)>;
+					bias-pull-up;
+					input-enable;
+				};
+			};
+
+			uart1_default: uart1-default-pins {
+				tx-pins {
+					pinmux = <ESP32S31_MATRIX_OUT(42, 13, 0)>;
+					drive-strength = <20>;
+				};
+
+				rx-pins {
+					pinmux = <ESP32S31_MATRIX_IN(43, 13, 0)>;
+					bias-pull-up;
+					input-enable;
+				};
+			};
+
+			uart2_default: uart2-default-pins {
+				tx-pins {
+					pinmux = <ESP32S31_MATRIX_OUT(42, 16, 0)>;
+					drive-strength = <20>;
+				};
+
+				rx-pins {
+					pinmux = <ESP32S31_MATRIX_IN(43, 16, 0)>;
+					bias-pull-up;
+					input-enable;
+				};
+			};
+
+			i2s0_default: i2s0-default-pins {
+				/* Korvo-1: MCLK 2, BCLK 3, WS 4, DOUT 5. */
+				/*
+				 * Output BCK 25 and WS 27 only. This board has no
+				 * MCLK trace to the codec, so that signal stays
+				 * unrouted; the controller still generates it
+				 * internally to divide BCLK down from.
+				 */
+				clk-pins {
+					pinmux = <ESP32S31_MATRIX_OUT(3, 25, 0)>,
+						 <ESP32S31_MATRIX_OUT(4, 27, 0)>;
+					drive-strength = <20>;
+					/*
+					 * The pad driver has to be turned on
+					 * explicitly. Routing a signal through
+					 * the matrix alone leaves the pin
+					 * undriven, so the codec sees no MCLK,
+					 * bit clock or word select and its DAC
+					 * free-runs into noise.
+					 */
+					output-enable;
+				};
+
+				dout-pins {
+					pinmux = <ESP32S31_MATRIX_OUT(5, 28, 0)>;
+					drive-strength = <20>;
+					output-enable;
+				};
+
+				/*
+				 * The codec's SDOUT is our capture input. Signal
+				 * 28 is O_SD as an output and I_SD as an input,
+				 * so the same index serves both directions.
+				 */
+				din-pins {
+					pinmux = <ESP32S31_MATRIX_IN(6, 28, 0)>;
+					bias-disable;
+					input-enable;
+				};
+
+				/*
+				 * Capture runs the receiver as a slave off the
+				 * transmitter's clocks, because only the TX
+				 * section's BCK and WS (signals 25 and 27) reach
+				 * the pads. The receiver listens on its own
+				 * indices - I_BCK 29 and I_WS 30 - so those are
+				 * routed back in from the very pads the
+				 * transmitter drives. Without input-enable the
+				 * pad's input buffer stays off and the matrix
+				 * reads nothing, which looks exactly like a dead
+				 * microphone: the stream starts, no sample ever
+				 * arrives, and the read fails with EIO.
+				 */
+				rx-clk-pins {
+					pinmux = <ESP32S31_MATRIX_IN(3, 29, 0)>,
+						 <ESP32S31_MATRIX_IN(4, 30, 0)>;
+					bias-disable;
+					input-enable;
+				};
+			};
+
+			i2c1_default: i2c1-default-pins {
+				/*
+				 * Open drain and bidirectional: each pad drives
+				 * the peripheral output and is also routed back
+				 * as its input, so the controller can see the
+				 * line a slave is holding low.
+				 */
+				sda-pins {
+					pinmux = <ESP32S31_MATRIX_OUT(0, 71, 0)>,
+						 <ESP32S31_MATRIX_IN(0, 71, 0)>;
+					drive-open-drain;
+					bias-pull-up;
+					input-enable;
+				};
+
+				scl-pins {
+					pinmux = <ESP32S31_MATRIX_OUT(1, 70, 0)>,
+						 <ESP32S31_MATRIX_IN(1, 70, 0)>;
+					drive-open-drain;
+					bias-pull-up;
+					input-enable;
+				};
+			};
+
+			sdmmc0_default: sdmmc0-default-pins {
+				clk-pins {
+					pinmux = <ESP32S31_IOMUX(24, 4)>;
+					bias-disable;
+					input-enable;
+					drive-strength = <40>;
+				};
+
+				cmd-data-pins {
+					pinmux = <ESP32S31_IOMUX(25, 4)>,
+						 <ESP32S31_IOMUX(20, 4)>,
+						 <ESP32S31_IOMUX(21, 4)>,
+						 <ESP32S31_IOMUX(22, 4)>,
+						 <ESP32S31_IOMUX(23, 4)>;
+					bias-pull-up;
+					input-enable;
+					drive-strength = <40>;
+				};
+
+				control-signals {
+					/* IDF slot0 defaults: present, no SDIO IRQ, writable. */
+					pinmux = <ESP32S31_MATRIX_IN(ESP32S31_MATRIX_CONST_ZERO, 126, 0)>,
+						 <ESP32S31_MATRIX_IN(ESP32S31_MATRIX_CONST_ONE, 128, 0)>,
+						 <ESP32S31_MATRIX_IN(ESP32S31_MATRIX_CONST_ONE, 130,
+								  ESP32S31_PINMUX_INVERT)>;
+				};
+			};
+
+			sdmmc1_default: sdmmc1-default-pins {
+				clk-pins {
+					pinmux = <ESP32S31_IOMUX(39, 4)>;
+					bias-disable;
+					input-enable;
+					drive-strength = <40>;
+				};
+
+				cmd-data-pins {
+					pinmux = <ESP32S31_IOMUX(40, 4)>,
+						 <ESP32S31_IOMUX(35, 4)>,
+						 <ESP32S31_IOMUX(36, 4)>,
+						 <ESP32S31_IOMUX(37, 4)>,
+						 <ESP32S31_IOMUX(38, 4)>;
+					bias-pull-up;
+					input-enable;
+					drive-strength = <40>;
+				};
+
+				control-signals {
+					pinmux = <ESP32S31_MATRIX_IN(ESP32S31_MATRIX_CONST_ZERO, 127, 0)>,
+						 <ESP32S31_MATRIX_IN(ESP32S31_MATRIX_CONST_ONE, 129, 0)>,
+						 <ESP32S31_MATRIX_IN(ESP32S31_MATRIX_CONST_ONE, 131,
+								  ESP32S31_PINMUX_INVERT)>;
+				};
+			};
+
+			pwm_counter_test: pwm-counter-test-pins {
+				outputs {
+					pinmux = <ESP32S31_MATRIX_OUT(26, 126, 0)>,
+						 <ESP32S31_MATRIX_OUT(27, 230, 0)>,
+						 <ESP32S31_MATRIX_OUT(28, 89, 0)>,
+						 <ESP32S31_MATRIX_OUT(25, 95, 0)>,
+						 <ESP32S31_MATRIX_OUT(30, 86, 0)>,
+						 <ESP32S31_MATRIX_OUT(31, 113, 0)>,
+						 <ESP32S31_MATRIX_OUT(32, 72, 0)>;
+					drive-strength = <20>;
+				};
+
+				loopback-inputs {
+					pinmux = <ESP32S31_MATRIX_IN(26, 141, 0)>,
+						 <ESP32S31_MATRIX_IN(27, 204, 0)>;
+					input-enable;
+					bias-disable;
+				};
+			};
+
+			adc_test: adc-test-pins {
+				adc-pads {
+					pinmux = <ESP32S31_IOMUX(42, 1)>,
+						 <ESP32S31_IOMUX(43, 1)>,
+						 <ESP32S31_IOMUX(44, 1)>,
+						 <ESP32S31_IOMUX(45, 1)>,
+						 <ESP32S31_IOMUX(46, 1)>,
+						 <ESP32S31_IOMUX(47, 1)>,
+						 <ESP32S31_IOMUX(48, 1)>,
+						 <ESP32S31_IOMUX(49, 1)>,
+						 <ESP32S31_IOMUX(50, 1)>,
+						 <ESP32S31_IOMUX(51, 1)>,
+						 <ESP32S31_IOMUX(52, 1)>,
+						 <ESP32S31_IOMUX(53, 1)>,
+						 <ESP32S31_IOMUX(54, 1)>,
+						 <ESP32S31_IOMUX(55, 1)>,
+						 <ESP32S31_IOMUX(56, 1)>,
+						 <ESP32S31_IOMUX(57, 1)>;
+					bias-disable;
+					input-disable;
+					output-disable;
+				};
+			};
+
+			touch_test: touch-test-pins {
+				touch-pads {
+					pinmux = <ESP32S31_IOMUX(6, 1)>,
+						 <ESP32S31_IOMUX(7, 1)>,
+						 <ESP32S31_IOMUX(8, 1)>,
+						 <ESP32S31_IOMUX(9, 1)>,
+						 <ESP32S31_IOMUX(10, 1)>,
+						 <ESP32S31_IOMUX(11, 1)>,
+						 <ESP32S31_IOMUX(12, 1)>,
+						 <ESP32S31_IOMUX(13, 1)>,
+						 <ESP32S31_IOMUX(14, 1)>,
+						 <ESP32S31_IOMUX(15, 1)>,
+						 <ESP32S31_IOMUX(16, 1)>,
+						 <ESP32S31_IOMUX(17, 1)>,
+						 <ESP32S31_IOMUX(18, 1)>,
+						 <ESP32S31_IOMUX(19, 1)>;
+					bias-disable;
+					input-disable;
+					output-disable;
+				};
+			};
+
+			comparator_test: comparator-test-pins {
+				comparator-pads {
+					pinmux = <ESP32S31_IOMUX(37, 1)>,
+						 <ESP32S31_IOMUX(38, 1)>,
+						 <ESP32S31_IOMUX(39, 1)>,
+						 <ESP32S31_IOMUX(40, 1)>;
+					bias-disable;
+					input-disable;
+					output-disable;
+				};
+			};
+
+			emac_rgmii_default: emac-rgmii-default-pins {
+				smi-pins {
+					pinmux = <ESP32S31_MATRIX_OUT(5, 108, 0)>,
+						 <ESP32S31_MATRIX_OUT(6, 109, 0)>,
+						 <ESP32S31_MATRIX_IN(6, 107, 0)>;
+					bias-disable;
+					input-enable;
+					drive-strength = <20>;
+				};
+
+				tx-pins {
+					pinmux = <ESP32S31_IOMUX(8, 2)>,
+						 <ESP32S31_IOMUX(9, 2)>,
+						 <ESP32S31_IOMUX(10, 2)>,
+						 <ESP32S31_IOMUX(11, 2)>,
+						 <ESP32S31_IOMUX(12, 2)>,
+						 <ESP32S31_IOMUX(13, 2)>;
+					bias-disable;
+					drive-strength = <40>;
+				};
+
+				rx-pins {
+					pinmux = <ESP32S31_IOMUX_IN(14, 2, 184)>,
+						 <ESP32S31_IOMUX_IN(15, 2, 178)>,
+						 <ESP32S31_IOMUX_IN(16, 2, 182)>,
+						 <ESP32S31_IOMUX_IN(17, 2, 181)>,
+						 <ESP32S31_IOMUX_IN(18, 2, 180)>,
+						 <ESP32S31_IOMUX_IN(19, 2, 179)>;
+					bias-disable;
+					input-enable;
+				};
+			};
+		};
+
+		/*
+		 * The SDMMC and GMAC IP blocks are DesignWare cores.  The S31
+		 * gate/reset and SRAM low-power controls live in HP_SYS_CLKRST and
+		 * CNNT_SYS respectively, rather than in either core.  Do not bind
+		 * either core to the 40 MHz crystal: SDMMC is sourced from MPLL with
+		 * a programmable divider and GMAC has independently selectable MAC
+		 * and PTP clocks.
+		 *
+		 * The S31 clock controller below owns the Linux-visible gates,
+		 * reset pulses, SRAM power forcing, and GMAC reference divider.
+		 * Runtime clock disable still intentionally leaves these domains on
+		 * until a fuller genpd/runtime-PM model exists.
+		 */
+		sdmmc: mmc@20342000 {
+			compatible = "espressif,esp32s31-dw-mshc", "snps,dw-mshc";
+			reg = <0x20342000 0x1000>;
+			interrupt-parent = <&clic>;
+			/*
+			 * raw CLIC interrupt, IDF ETS_SDIO_HOST_INTR_SOURCE.
+			 *
+			 * LEVEL, not edge. The controller asserts and holds its
+			 * interrupt line until the status bits are written back,
+			 * which is what every other device in this file is
+			 * declared as. Wired as EDGE_RISING it only latches on a
+			 * transition, so an event raised while the line is
+			 * already high produces no new edge and is not seen until
+			 * something re-triggers - which showed up as 2.07 ms
+			 * between writing the command register and observing
+			 * CMD_DONE, on a command that takes microseconds on the
+			 * wire.
+			 */
+			interrupts = <16 3 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&clkc ESP32S31_CLK_SDMMC_BIU>,
+				 <&clkc ESP32S31_CLK_SDMMC_CIU>;
+			clock-names = "biu", "ciu";
+			pinctrl-names = "default";
+			pinctrl-0 = <&sdmmc0_default>;
+			espressif,slot-id = <0>;
+			bus-width = <4>;
+			cap-sd-highspeed;
+			/*
+			 * Straight off the CIU clock with no further division.
+			 * 40 MHz enumerates and reads, but silently corrupts
+			 * data, so this stays at 20 until that is understood.
+			 */
+			max-frequency = <40000000>;
+			cap-sdio-irq;
+			status = "disabled";
+		};
+
+		emac: ethernet@20350000 {
+			compatible = "espressif,esp32s31-gmac", "snps,dwmac";
+			/* MAC (0x0), PTP (0x700), and DMA (0x1000) register banks. */
+			reg = <0x20350000 0x2000>;
+			interrupt-parent = <&clic>;
+			/* raw CLIC ID17, IDF ETS_SBD_INTR_SOURCE (matrix source 98). */
+			interrupts = <17 98 IRQ_TYPE_LEVEL_HIGH>;
+			interrupt-names = "macirq";
+			clocks = <&clkc ESP32S31_CLK_EMAC_STMMACETH>,
+				 <&clkc ESP32S31_CLK_EMAC_PCLK>,
+				 <&clkc ESP32S31_CLK_EMAC_PTP_REF>,
+				 <&clkc ESP32S31_CLK_EMAC_RGMII_TXC>;
+			clock-names = "stmmaceth", "pclk", "ptp_ref", "tx";
+			pinctrl-names = "default";
+			pinctrl-0 = <&emac_rgmii_default>;
+			/* Match IDF esp_read_mac(ESP_MAC_ETH): factory base + 3. */
+			nvmem-cells = <&factory_mac 3>;
+			nvmem-cell-names = "mac-address";
+			/* ESP32-S31-Function-CoreBoard-1 onboard YT8531DC-CA. */
+			phy-mode = "rgmii-id";
+			phy-handle = <&yt8531>;
+			/*
+			 * The current S31 bring-up boards use flying-wire RGMII.
+			 * Keep the default link at 100 Mbps until a clock driver
+			 * and controlled board routing prove 1 Gbps reliable.
+			 */
+			max-speed = <1000>;
+			status = "disabled";
+
+			mdio {
+				compatible = "snps,dwmac-mdio";
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				yt8531: ethernet-phy@0 {
+					compatible = "ethernet-phy-id4f51.e91b";
+					reg = <0>;
+					reset-gpios = <&gpio 7 GPIO_ACTIVE_LOW>;
+					reset-assert-us = <10000>;
+					reset-deassert-us = <100000>;
+					/* PHY strap: RXDLY enabled, TXDLY disabled. */
+					rx-internal-delay-ps = <1950>;
+					tx-internal-delay-ps = <1950>;
+					motorcomm,auto-sleep-disabled;
+				};
+			};
+		};
+
+		/* Entire 16 MiB Flash, linearly mapped at the physical-offset alias. */
+		flash: flash@40000000 {
+			compatible = "espressif,esp32s31-flash-mtd";
+			reg = <0x40000000 0x01000000>;
+		};
+
+		usb_phy: phy@20380000 {
+			compatible = "espressif,esp32s31-usb-phy";
+			reg = <0x20380000 0x20>, <0x205870ac 0x4>,
+			      <0x20359030 0x4>, <0x20589024 0x4>,
+			      <0x205890b0 0x4>;
+			reg-names = "utmi", "clkrst", "otg-ctrl", "usb-ctrl",
+				    "phy-ctrl";
+			#phy-cells = <0>;
+			/* Follows usb_otghs. */
+			status = "okay";
+		};
+
+		usb_otghs: usb@20300000 {
+			compatible = "espressif,esp32s31-dwc2", "snps,dwc2";
+			/* 64-byte local-memory window after the GDMA descriptor pools. */
+			reg = <0x20300000 0x1000>, <0x2f076380 0x40>;
+			reg-names = "core", "local-mem";
+			interrupt-parent = <&clic>;
+			interrupts = <39 99 IRQ_TYPE_LEVEL_HIGH>;
+			phys = <&usb_phy>;
+			phy-names = "usb2-phy";
+			dr_mode = "host";
+			/*
+			 * hart0 owns this controller now - see
+			 * docs/usb-on-hart0-plan.md. There is one USB OTG
+			 * peripheral on this SoC and a peripheral belongs to
+			 * one hart, so Linux must not probe it: two drivers
+			 * touching the same core is not a thing that half
+			 * works.
+			 *
+			 * Linux's dwc2 could not talk to low-speed devices
+			 * here. With the root port forced to full speed the
+			 * hub becomes a plain repeater and low-speed devices
+			 * go via PRE packets, which fail every transaction;
+			 * the only working alternative cost 39% of a core.
+			 */
+			status = "okay";
+		};
+
+		hosted_sram: wireless@2f06af80 {
+			compatible = "espressif,esp32s31-hosted-sram";
+			/* Compact HP SRAM transport shared exclusively by both harts. */
+			reg = <0x2f06af80 0x7400>;
+			interrupt-parent = <&clic>;
+			/* CPU_INTR_FROM_CPU_2 source 67 -> free raw CLIC ID40. */
+			interrupts = <40 67 IRQ_TYPE_EDGE_RISING>;
+			status = "okay";
+		};
+
+		freertos_audio: audio@2f06b180 {
+			compatible = "espressif,esp32s31-freertos-audio";
+			#sound-dai-cells = <0>;
+			reg = <0x2f06b180 0x00000400>,
+			      <0x50fe0000 0x0000c000>, <0x2058601c 0x4>,
+			      <0x20586014 0x4>;
+			reg-names = "control", "rings", "h1-to-h0", "h0-to-h1";
+			memory-region = <&audio_reserved>;
+			interrupt-parent = <&clic>;
+			/* CPU_INTR_FROM_CPU_1 source 66 -> raw CLIC ID41. */
+			interrupts = <41 66 IRQ_TYPE_EDGE_RISING>;
+			status = "okay";
+		};
+
+		ledc0: pwm@20392000 {
+			compatible = "espressif,esp32s31-ledc";
+			reg = <0x20392000 0x180>, <0x20586208 0x4>;
+			clocks = <&clkc ESP32S31_CLK_LEDC0>;
+			#pwm-cells = <3>;
+			status = "disabled";
+		};
+
+		ledc1: pwm@2039c000 {
+			compatible = "espressif,esp32s31-ledc";
+			reg = <0x2039c000 0x180>, <0x20586298 0x4>;
+			clocks = <&clkc ESP32S31_CLK_LEDC1>;
+			#pwm-cells = <3>;
+			status = "disabled";
+		};
+
+		mcpwm0: pwm@20381000 {
+			compatible = "espressif,esp32s31-mcpwm";
+			reg = <0x20381000 0x164>;
+			clocks = <&clkc ESP32S31_CLK_MCPWM0>;
+			#pwm-cells = <3>;
+			status = "disabled";
+		};
+
+		mcpwm1: pwm@20382000 {
+			compatible = "espressif,esp32s31-mcpwm";
+			reg = <0x20382000 0x164>;
+			clocks = <&clkc ESP32S31_CLK_MCPWM1>;
+			#pwm-cells = <3>;
+			status = "disabled";
+		};
+
+		mcpwm2: pwm@20383000 {
+			compatible = "espressif,esp32s31-mcpwm";
+			reg = <0x20383000 0x164>;
+			clocks = <&clkc ESP32S31_CLK_MCPWM2>;
+			#pwm-cells = <3>;
+			status = "disabled";
+		};
+
+		mcpwm3: pwm@20384000 {
+			compatible = "espressif,esp32s31-mcpwm";
+			reg = <0x20384000 0x164>;
+			clocks = <&clkc ESP32S31_CLK_MCPWM3>;
+			#pwm-cells = <3>;
+			status = "disabled";
+		};
+
+		sdm: pwm@20583e00 {
+			compatible = "espressif,esp32s31-sigma-delta";
+			reg = <0x20583e00 0x28>;
+			clock-frequency = <80000000>;
+			#pwm-cells = <3>;
+			status = "disabled";
+		};
+
+		pcnt0: counter@20389000 {
+			compatible = "espressif,esp32s31-pcnt";
+			reg = <0x20389000 0x100>;
+			clocks = <&clkc ESP32S31_CLK_PCNT0>;
+			status = "disabled";
+		};
+
+		pcnt1: counter@2039d000 {
+			compatible = "espressif,esp32s31-pcnt";
+			reg = <0x2039d000 0x100>;
+			clocks = <&clkc ESP32S31_CLK_PCNT1>;
+			status = "disabled";
+		};
+
+		systimer: timer@20399000 {
+			compatible = "espressif,esp32s31-systimer";
+			reg = <0x20399000 0x100>;
+			clocks = <&clkc ESP32S31_CLK_SYSTIMER>;
+			status = "disabled";
+		};
+
+		rtc_timer: timer@20800000 {
+			compatible = "espressif,esp32s31-rtc-timer";
+			reg = <0x20800000 0x400>;
+			status = "disabled";
+		};
+
+		clic: interrupt-controller@10a00000 {
+			#interrupt-cells = <3>;
+			#address-cells = <0>;
+			compatible = "espressif,esp32s31-clic";
+			reg = <0x10a00000 0x20000>;
+			interrupt-controller;
+			espressif,num-interrupts = <48>;
+		};
+
+		uart1: serial@2038b000 {
+			compatible = "espressif,esp32s31-uart";
+			reg = <0x2038b000 0x1000>;
+			interrupt-parent = <&clic>;
+			interrupts = <19 10 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&clkc ESP32S31_CLK_UART1>;
+			clock-frequency = <40000000>;
+			pinctrl-names = "default";
+			pinctrl-0 = <&uart1_default>;
+			/* Untested; keep disabled by default. */
+			status = "disabled";
+		};
+
+		uart2: serial@2038c000 {
+			compatible = "espressif,esp32s31-uart";
+			reg = <0x2038c000 0x1000>;
+			interrupt-parent = <&clic>;
+			interrupts = <20 11 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&clkc ESP32S31_CLK_UART2>;
+			clock-frequency = <40000000>;
+			pinctrl-names = "default";
+			pinctrl-0 = <&uart2_default>;
+			/* Untested; keep disabled by default. */
+			status = "disabled";
+		};
+
+		wdt0: watchdog@20580000 {
+			compatible = "espressif,esp32s31-timg-wdt";
+			reg = <0x20580000 0x100>;
+			clocks = <&clkc ESP32S31_CLK_WDT0>;
+			timeout-sec = <30>;
+			status = "okay";
+		};
+
+		wdt1: watchdog@20581000 {
+			compatible = "espressif,esp32s31-timg-wdt";
+			reg = <0x20581000 0x100>;
+			clocks = <&clkc ESP32S31_CLK_WDT1>;
+			timeout-sec = <30>;
+			status = "okay";
+		};
+
+		rtc_wdt: watchdog@20801000 {
+			compatible = "espressif,esp32s31-rtc-wdt";
+			reg = <0x20801000 0x400>;
+			timeout-sec = <30>;
+			status = "okay";
+		};
+
+	};
+};

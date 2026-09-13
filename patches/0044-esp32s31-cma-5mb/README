@@ -1,0 +1,40 @@
+dts: display CMA pool 4 MB -> 5 MB, via a 1 MiB pageblock
+
+Copy esp32s31.dtsi back over
+linux-71-port/arch/riscv/boot/dts/espressif/esp32s31.dtsi before building.
+A DTS change needs BOTH `make linux` AND `make opensbi` - the kernel uses a
+builtin DTB, so rebuilding only OpenSBI leaves the old tree in force.
+
+THIS PATCH DOES NOT WORK ON ITS OWN.
+It depends on PAGE_BLOCK_ORDER in the Makefile, which sets
+CONFIG_PAGE_BLOCK_MAX_ORDER=8. Apply the dtsi without it and the board boots
+with NO CMA AT ALL - see below. Change the two together.
+
+WHY 5 MB WAS "IMPOSSIBLE" UNTIL IT WAS NOT
+CMA requires the reservation's base AND size to be aligned to
+CMA_MIN_ALIGNMENT_BYTES, which is one pageblock (mm/cma.c, rmem_cma_setup);
+a misaligned region is REJECTED OUTRIGHT rather than rounded. With no huge
+pages, pageblock_order is PAGE_BLOCK_MAX_ORDER, which defaults to
+MAX_PAGE_ORDER = 10 - 4 MiB with 4 KiB pages. So the pool could only ever be
+a multiple of 4 MiB, and 0x500000 would have been dropped silently.
+
+8 MB is the next legal size at the default and does not fit: the region
+starts at 0x50800000 and audio_reserved is at 0x50fe0000, so it would run
+into it. Moving the base down is possible but was not needed.
+
+CONFIG_PAGE_BLOCK_MAX_ORDER (mm/Kconfig) lowers the pageblock WITHOUT
+lowering MAX_PAGE_ORDER, so the buddy allocator keeps its 4 MiB maximum
+allocation and only the migratetype granularity changes. Order 8 is 1 MiB,
+which makes 5 MB legal. The stated cost in mm/Kconfig is THP success rate,
+and this kernel has neither CONFIG_HUGETLBFS nor THP.
+
+VERIFIED
+Kernel #205: CmaTotal 5120 kB, CmaFree 1592 kB at idle, board boots, display
+comes up, no CMA allocation failure and no "scaling off" in dmesg.
+
+WHY
+CmaFree read 4 kB with a fullscreen client up - the pool was completely
+consumed - while the desktop was slow and paging. Requested by the user.
+This does NOT explain where ~3.6 MB of the pool goes at idle against a
+768,000 byte scanout buffer; that is still unaccounted for and is the next
+thing to measure.
