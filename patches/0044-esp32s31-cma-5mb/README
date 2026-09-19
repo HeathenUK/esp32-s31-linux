@@ -38,3 +38,9 @@ consumed - while the desktop was slow and paging. Requested by the user.
 This does NOT explain where ~3.6 MB of the pool goes at idle against a
 768,000 byte scanout buffer; that is still unaccounted for and is the next
 thing to measure.
+
+2026-09-19: NOW 3 MB (0x300000). Direct scanout (patches/0047, LVDESK_DIRECT=1)
+removed lvdesk's own 768 KB dumb buffer from the pool, so the working set is
+the scanout (768 KB) plus one fullscreen client buffer (800x480x32 = 1.5 MB).
+The directory keeps its name; the pageblock requirement above is unchanged.
+scripts/board/gate.py expects CmaTotal 3072.

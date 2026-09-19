@@ -160,8 +160,15 @@
 			 * both together or the region is silently dropped.
 			 *
 			 * The ceiling here is audio_reserved at 0x50fe0000.
+			 *
+			 * 3 MB from 2026-09-19: direct scanout (lvdesk
+			 * renders into the driver's scanout buffer, no dumb
+			 * buffer of its own) took 768 KB out of the pool's
+			 * working set, and the fullscreen ceiling is the
+			 * scanout (768 KB) plus one 800x480 32-bit client
+			 * buffer (1.5 MB) = 2.25 MB. The 1 MiB pageblock stays.
 			 */
-			reg = <0x50800000 0x00500000>;
+			reg = <0x50800000 0x00300000>;
 			reusable;
 		};
 

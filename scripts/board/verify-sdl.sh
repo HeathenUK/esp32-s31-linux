@@ -154,6 +154,7 @@ esac
 # project's standard measurement (user, 2026-09-19). VS_SOUND=0 gives the old
 # -nosound arm for comparison with figures taken before this date.
 VS_SNDFLAG=""; [ "${VS_SOUND:-1}" = 0 ] && VS_SNDFLAG="-nosound"
+VS_VOL=${VS_VOL:-110}
 cat > "$D/vs_fire.sh" <<SH
 export DISPLAY=:0
 export LD_LIBRARY_PATH=/root/doom/lib
@@ -169,6 +170,12 @@ sleep 1
 # relative motion with no homing and no click; +4000/-4000 clamps at the
 # edge whatever the acceleration curve does.
 [ -x /root/uinject ] && /root/uinject move 4000 -4000 200 >/dev/null 2>&1
+# Benchmarks run QUIET (user, 2026-09-19): sound stays on - it is part of the
+# workload - but the codec's DAC volume drops to VS_VOL (0-255, 0.5 dB steps,
+# 191 = 0 dB; 110 = -40.5 dB, faintly audible on the speaker) for the run and
+# is put back afterwards, so the desktop's own volume setting survives.
+amixer -c 0 sget DACL 2>/dev/null | sed -n 's/.*Playback \\([0-9]*\\) \[.*/\\1/p' | head -1 > /root/vs_vol.saved
+amixer -c 0 sset DACL $VS_VOL >/dev/null 2>&1; amixer -c 0 sset DACR $VS_VOL >/dev/null 2>&1
 rm -f /root/doom/vs.log
 cd /root/doom/wads
 setsid /root/doom/prboom -width $W -height $H $VS_WINFLAG $VS_SNDFLAG $TD >/root/doom/vs.log 2>&1 </dev/null &
@@ -280,6 +287,11 @@ done
 
 FINAL=$(R "$D/vs_probe.sh" 40)
 [ -n "$FINAL" ] && LASTGOOD="$FINAL"
+cat > "$D/vs_vol.sh" <<'SH'
+[ -s /root/vs_vol.saved ] && v=$(cat /root/vs_vol.saved) && [ -n "$v" ] && { amixer -c 0 sset DACL "$v" >/dev/null 2>&1; amixer -c 0 sset DACR "$v" >/dev/null 2>&1; echo "ZZ volume restored to $v"; }
+rm -f /root/vs_vol.saved
+SH
+R "$D/vs_vol.sh" 20 >/dev/null
 echo "$FINAL" | grep -q "ZEROCOPY window" && ZC_SEEN=1
 echo "$FINAL" | grep -q "HARDWARE (PPA)" && HW_SEEN=1
 echo "$FINAL" | grep -q "CPU (software loop)" && CPU_SEEN=1

@@ -46,9 +46,15 @@ ROOT = HERE.parents[1]
 BASELINE = HERE / "gate-baseline.json"
 
 # The cmdline contract. Each of these was lost at least once and cost a day.
-CMDLINE_REQUIRED = ["dwc2.desc_dma=0", "dwc2.host_full_speed=1", "usbcore.autosuspend=-1"]
+# USB moved to hart0 on 2026-09-19 (USB_HART0=1: no dwc2 in the kernel, the
+# esp32s31-hosted-hid transport instead). The dwc2 tokens then no longer
+# apply; the contract becomes "the hosted HID driver is present and has a
+# keyboard/mouse attached". Either arm passes, and which one is reported.
+CMDLINE_REQUIRED_DWC2 = ["dwc2.desc_dma=0", "dwc2.host_full_speed=1", "usbcore.autosuspend=-1"]
 CMDLINE_FORBIDDEN = ["profile=6", "dwc2.sof_irq=1"]
-CMA_KB = 5120
+# 5120 until 2026-09-19; 3072 once lvdesk renders into the driver's scanout
+# buffer (direct scanout): 768 KB scanout + one 800x480x32 client buffer.
+CMA_KB = 3072
 
 CANARY = [  # (label, sdl, case, timers) - the two cases the futex incident moved most
     ("sdl1-indexed", 1, "indexed_frame", False),
@@ -61,6 +67,7 @@ no() { echo "CHK|$1|FAIL|$2"; }
 nf() { echo "CHK|$1|INFO|$2"; }
 echo "CHK|uname|INFO|$(uname -r) $(uname -v)"
 echo "CHK|cmdline|INFO|$(cat /proc/cmdline)"
+echo "CHK|hid|INFO|attach=$(cat /sys/kernel/esp32s31-hid/attach 2>/dev/null) reports=$(cat /sys/kernel/esp32s31-hid/reports 2>/dev/null) dwc2=$([ -d /sys/module/dwc2 ] && echo y || echo n)"
 echo "CHK|isa|INFO|$(sed -n 's/^isa[ \t]*: //p' /proc/cpuinfo | head -1)"
 echo "CHK|meminfo|INFO|$(awk '/MemTotal|MemAvailable|CmaTotal|CmaFree/{printf "%s%s ", $1, $2}' /proc/meminfo)"
 echo "CHK|env|INFO|$(tr '\n' ' ' < /etc/lvdesk.env 2>/dev/null)"
@@ -126,10 +133,18 @@ def stage_contract(out, results):
     else:
         results.append(("contract", "kernel build matches images/xipImage", "FAIL", f"board={info.get('uname')!r} image=#{want}"))
     cl = info.get("cmdline", "")
-    missing = [t for t in CMDLINE_REQUIRED if t not in cl.split()]
+    hid = dict(re.findall(r"(\w+)=(\S*)", info.get("hid", "")))
     present = [t for t in CMDLINE_FORBIDDEN if t in cl.split()]
-    results.append(("contract", "cmdline USB contract", "PASS" if not missing and not present else "FAIL",
-                    ("missing " + " ".join(missing) if missing else "") + (" forbidden " + " ".join(present) if present else "")))
+    if hid.get("dwc2") == "n":
+        # hart0 USB arm: the transport must exist and have enumerated something
+        att = hid.get("attach", "")
+        results.append(("contract", "USB contract (hart0 HID transport)",
+                        "PASS" if att.isdigit() and int(att) > 0 and not present else "FAIL",
+                        f"attach={att} reports={hid.get('reports')}" + (" forbidden " + " ".join(present) if present else "")))
+    else:
+        missing = [t for t in CMDLINE_REQUIRED_DWC2 if t not in cl.split()]
+        results.append(("contract", "USB contract (dwc2 cmdline)", "PASS" if not missing and not present else "FAIL",
+                        ("missing " + " ".join(missing) if missing else "") + (" forbidden " + " ".join(present) if present else "")))
     isa = info.get("isa", "")
     results.append(("contract", "ISA has hardware float", "PASS" if re.match(r"rv32im?af", isa) else "FAIL", isa))
     mem = dict(re.findall(r"(\w+):(\d+)", info.get("meminfo", "")))

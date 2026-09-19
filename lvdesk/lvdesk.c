@@ -948,8 +948,8 @@ static int kbd_poll(void)
 			if (gap > kbd_worst_stall_ms)
 				kbd_worst_stall_ms = gap;
 			if (gap > 500) {
-				printf("lvdesk: input starved for %u ms\n",
-				       (unsigned)gap);
+				printf("lvdesk: input starved for %u ms (at tick %u)\n",
+				       (unsigned)gap, (unsigned)now);
 				fflush(stdout);
 			}
 		}
@@ -4051,6 +4051,66 @@ static int fs_enabled(void)
  * desktop's mode, but present the window through the direct scanout path,
  * which is what lets a depth-32 client's frames be converted by the PPA.
  */
+/*
+ * Fullscreen means NOTHING LVGL draws is meant for the panel - and under
+ * direct scanout (LVDESK_DIRECT=1) the LVGL draw buffer IS the panel: the
+ * display renders LV_DISPLAY_RENDER_MODE_DIRECT into kms_map, so pixels are
+ * on screen before kms_flush_cb() ever runs, and the fs_active early-return
+ * there is too late. Seen 2026-09-19: the desktop repainting in the 20 px
+ * pillarbox bars of prboom -fullscreen 320x200, the clock ticking, the
+ * software cursor drawn over the game. Pause the display's refresh timer
+ * for the whole fullscreen period instead - no refresh pass can run from
+ * any lv_timer_handler() call site - and resume + invalidate on leave.
+ * LVGL's other timers (clock label, blink) keep running; they only
+ * invalidate, which is harmless while the refresh timer is paused.
+ */
+static const char *refr_site = "?";	/* which call site is refreshing */
+static unsigned refr_in_fs;		/* refreshes seen while fullscreen */
+
+static void refr_start_cb(lv_event_t *e)
+{
+	(void)e;
+	if (!fs_active)
+		return;
+	if (refr_in_fs++ < 8) {
+		printf("lvdesk: REFRESH DURING FULLSCREEN #%u via %s\n",
+		       refr_in_fs, refr_site);
+		fflush(stdout);
+	}
+}
+
+static void fs_render_noop(lv_timer_t *t)
+{
+	(void)t;
+}
+
+static void fs_render_set(int on)
+{
+	lv_timer_t *t = lv_display_get_refr_timer(NULL);
+
+	if (!t) {
+		printf("lvdesk: fs_render_set(%d): NO refresh timer\n", on);
+		return;
+	}
+	/*
+	 * Not lv_timer_pause(): lv_display_refr_timer() pauses its own timer
+	 * after every refresh and LVGL resumes it from the next invalidation
+	 * (the 5 s clock label was enough), so an outside pause held for
+	 * exactly one label change - measured 2026-09-19, seven refreshes in
+	 * 20 s of fullscreen. Swapping the callback survives resumes: the
+	 * timer may fire, and paints nothing. lv_qnx.c does the same.
+	 */
+	if (on) {
+		lv_timer_set_cb(t, lv_display_refr_timer);
+		lv_timer_resume(t);
+	} else {
+		lv_timer_set_cb(t, fs_render_noop);
+	}
+	printf("lvdesk: fs_render_set(%d): refresh %s (refreshes during fullscreen so far %u)\n",
+	       on, on ? "restored" : "disabled", refr_in_fs);
+	fflush(stdout);
+}
+
 static void xwin_on_fsnative(int on)
 {
 	if (!fs_enabled())
@@ -4061,6 +4121,7 @@ static void xwin_on_fsnative(int on)
 			fs_active = 0;
 			fs_win = 0;
 			fs_focused = 0;
+			fs_render_set(1);
 			lv_obj_invalidate(lv_screen_active());
 			printf("lvdesk: fullscreen off (panel size)\n");
 			fflush(stdout);
@@ -4068,8 +4129,10 @@ static void xwin_on_fsnative(int on)
 		}
 		return;
 	}
+	fs_render_set(0);
 	if (kms_fs_enter((int)kms_w, (int)kms_h, 16) < 0) {
 		fs_active = 0;
+		fs_render_set(1);
 		return;
 	}
 	fs_active = 1;
@@ -4091,6 +4154,7 @@ static void xwin_on_mode(int w, int h)
 			fs_active = 0;
 			fs_win = 0;
 			fs_focused = 0;
+			fs_render_set(1);
 			lv_obj_invalidate(lv_screen_active());
 			printf("lvdesk: fullscreen off\n");
 			fflush(stdout);
@@ -4098,8 +4162,10 @@ static void xwin_on_mode(int w, int h)
 		}
 		return;
 	}
+	fs_render_set(0);
 	if (kms_fs_enter(w, h, 16) < 0) {
 		fs_active = 0;
+		fs_render_set(1);
 		return;
 	}
 	fs_active = 1;
@@ -4964,6 +5030,7 @@ static void xwin_on_close(uint32_t id)
 		fs_active = 0;
 		fs_win = 0;
 		fs_focused = 0;
+		fs_render_set(1);
 		lv_obj_invalidate(lv_screen_active());
 		printf("lvdesk: fullscreen off (client gone)\n");
 		fflush(stdout);
@@ -8874,7 +8941,15 @@ static void cursor_vis_update(void)
 	uint32_t g;
 	int hide = 0, i;
 
-	if (!hw_cursor)
+	/*
+	 * The software cursor (direct scanout refuses the plane) obeys the
+	 * same rules: a client that hid its cursor (SDL's XDefineCursor with a
+	 * blank glyph, both windowed and fullscreen) or holds a grab gets no
+	 * desktop arrow drawn over it. Before 2026-09-19 this returned early
+	 * for the LVGL cursor, so under LVDESK_DIRECT=1 the arrow sat on top
+	 * of every game window, and every move of it was a refresh.
+	 */
+	if (!hw_cursor && !cursor_obj)
 		return;
 	g = xshim_grab_top();
 	for (i = 0; i < xwin_n; i++) {
@@ -8898,7 +8973,12 @@ static void cursor_vis_update(void)
 	if (hide != hidden) {
 		uint32_t t0 = lv_tick_get();
 
-		kms_cursor_show(!hide);
+		if (hw_cursor)
+			kms_cursor_show(!hide);
+		else if (hide)
+			lv_obj_add_flag(cursor_obj, LV_OBJ_FLAG_HIDDEN);
+		else
+			lv_obj_remove_flag(cursor_obj, LV_OBJ_FLAG_HIDDEN);
 		hidden = hide;
 		cursor_hidden = hide;	/* published for the move gate */
 		printf("lvdesk: pointer %s (%u ms)\n",
@@ -9558,6 +9638,7 @@ int main(void)
 	if (!disp) { printf("lvdesk: display create failed\n"); return 1; }
 	lv_display_set_color_format(disp, LV_COLOR_FORMAT_RGB565);
 	lv_display_set_flush_cb(disp, kms_flush_cb);
+	lv_display_add_event_cb(disp, refr_start_cb, LV_EVENT_REFR_START, NULL);
 
 	/*
 	 * Bandwidth probe, LVDESK_PROF only.
@@ -9984,6 +10065,19 @@ int main(void)
 			uint32_t since = nowms - last_frame_ms;
 
 			frame_due = since >= FRAME_MS;
+			/*
+			 * Cursor visibility is re-evaluated once per frame tick,
+			 * not only on mouse motion. A client's XDefineCursor
+			 * (SDL hides the arrow), a pointer grab, a warp to the
+			 * window centre and a window mapping under the pointer
+			 * all change the answer without the user moving, and
+			 * until 2026-09-19 the arrow stayed drawn over every
+			 * SDL window until the next physical mouse event.
+			 * cursor_vis_update() is idempotent and walks a
+			 * handful of windows; at ~50 Hz it costs nothing.
+			 */
+			if (frame_due)
+				cursor_vis_update();
 			if (frame_due) {
 				/*
 				 * The SECOND lv_timer_handler call site, and it
@@ -10012,7 +10106,9 @@ int main(void)
 				 * the mouse get serviced. The draw walk below
 				 * is the part worth skipping; this is not.
 				 */
+				refr_site = "timer_handler(input)";
 				next = lv_timer_handler();
+				refr_site = "?";
 				xshim_canary_check("lv_timer_handler"); xwin_dsc_check("lv_timer_handler");
 				PROF_ADD(prof_timer, t0);
 				if (lvp_on > 0) {
@@ -10324,7 +10420,9 @@ int main(void)
 			 */
 			uint64_t lv_a = lvp_on > 0 ? lvp_now() : 0;
 
+			refr_site = "timer_handler(frame)";
 			{ PROF_START(t0); lv_timer_handler(); PROF_ADD_MAX(prof_timer, prof_max_timer, t0); }
+			refr_site = "?";
 			if (lvp_on > 0) {
 				uint64_t lv_b = lvp_now();
 
@@ -10334,7 +10432,9 @@ int main(void)
 			}
 			{
 				PROF_START(t0);
+				refr_site = "refr_now";
 				lv_refr_now(NULL);
+				refr_site = "?";
 				PROF_ADD_MAX(prof_refr, prof_max_refr, t0);
 			}
 			if (lvp_on > 0) {

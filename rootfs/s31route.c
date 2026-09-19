@@ -184,7 +184,16 @@ static int slave_open(struct route *r)
 		 * period fits.  This adds underrun headroom without increasing
 		 * SDL's callback size or making its poll loop spin.
 		 */
+		/*
+		 * At least the mirrored ring, never less. The rate-scaled
+		 * 4096*rate/48000 alone is 941 frames at 11025, BELOW the
+		 * application's own 1024-frame ring, so the sink was clamped
+		 * under the ring it was meant to mirror. set_buffer_size_near
+		 * clamps to what the hardware holds (32 KiB of SRAM ring).
+		 */
 		buf = (snd_pcm_uframes_t)((uint64_t)4096 * rate / 48000);
+		if (buf < want_buf)
+			buf = want_buf;
 		if ((err = snd_pcm_hw_params_set_buffer_size_near(pcm, hw,
 				&buf)) < 0)
 			goto done;
@@ -489,8 +498,29 @@ static int route_constraints(snd_pcm_ioplug_t *io)
 					      1024, 65536);
 	if (err < 0)
 		return err;
-	return snd_pcm_ioplug_set_param_minmax(io, SND_PCM_IOPLUG_HW_PERIODS,
-					       2, 16);
+	/*
+	 * MINIMUM FOUR PERIODS. The application's own ring is what covers a
+	 * frame dip: the sink can never be more than that ring ahead of what
+	 * has played. SDL 1.2 asks for two periods of its slice (prboom:
+	 * 2 x 512 frames = 93 ms at 11025) and Doom's dips run 100-400 ms
+	 * (docs/current-state.md), so at two periods every dip is an
+	 * underrun. Four periods is 186 ms at 11025 and 46 ms at 44100 - the
+	 * minimum that actually helps - and the sink mirrors it below.
+	 * S31ROUTE_MIN_PERIODS overrides for an A/B; the hard ceiling of 16
+	 * (and the ring in SRAM: 32 KiB, 8192 frames) is unchanged.
+	 */
+	{
+		const char *e = getenv("S31ROUTE_MIN_PERIODS");
+		unsigned int min_periods = e ? (unsigned int)atoi(e) : 4;
+
+		if (min_periods < 2)
+			min_periods = 2;
+		if (min_periods > 16)
+			min_periods = 16;
+		return snd_pcm_ioplug_set_param_minmax(io,
+						       SND_PCM_IOPLUG_HW_PERIODS,
+						       min_periods, 16);
+	}
 }
 
 SND_PCM_PLUGIN_DEFINE_FUNC(s31route)

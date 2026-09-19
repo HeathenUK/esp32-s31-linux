@@ -53,7 +53,11 @@ snap /tmp/cs_b
 		t0=$(awk -v p="$pid" '$1==p {print $3; exit}' /tmp/cs_a)
 		[ -n "$t0" ] || t0=0
 		d=$((t1 - t0))
-		[ "$d" -gt 0 ] && echo "$d $comm $pid"
+		if [ "$d" -gt 0 ]; then
+			# a bare "sh" says nothing: show what it was running
+			cl=""; [ -r /proc/$pid/cmdline ] && cl=$(tr '\0' ' ' < /proc/$pid/cmdline | cut -c1-70)
+			echo "$d $comm $pid  [$cl]"
+		fi
 	done < /tmp/cs_b | sort -rn
 	a=$(grep ^STAT /tmp/cs_a); b=$(grep ^STAT /tmp/cs_b)
 	set -- $a; au=$2; an=$3; as=$4; ai=$5; aw=$6; aq=$7; asq=$8
