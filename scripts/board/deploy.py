@@ -162,12 +162,20 @@ def main():
         else:
             print("board has no address; using the console")
 
-    # The console path, unchanged, for small files and for a board with no
-    # network - which is exactly when it is still the right answer.
+    # The console path returns console text, not an exit status. Verify the
+    # destination as on the network path before reporting success.
     import deploy_bin
     if size >= NET_THRESHOLD:
         print("warning: %d KB over the console will take minutes" % (size // 1024))
-    return deploy_bin.deploy(path, dest)
+    reply = deploy_bin.deploy(path, dest)
+    print(reply)
+    if 'DEPLOY_FAILED' in reply or not re.search(r'^DEPLOY_OK\s*$', reply, re.M):
+        return 1
+    if not already_there(path, dest):
+        print('DEPLOY_FAIL console checksum mismatch or unavailable')
+        return 1
+    print('DEPLOY_OK console md5 verified')
+    return 0
 
 
 if __name__ == '__main__':

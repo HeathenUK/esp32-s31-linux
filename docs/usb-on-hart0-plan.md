@@ -1,5 +1,11 @@
 # Moving USB host to hart0
 
+> September 13 review: this is a historical proposal, not the current USB
+> configuration or an approved migration. See [updated investigation](usb-input-investigation-2026-09-13.md).
+> Current Linux uses full-speed buffer DMA. Prefer evaluating a raw-HID transport
+> into Linux HID/UHID over the boot-only design below; ownership is reversible,
+> and silent drops require more than a counter.
+
 ## Why
 
 Linux's dwc2 port cannot talk to low-speed devices on the path this board uses.

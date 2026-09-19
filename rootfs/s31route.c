@@ -177,7 +177,14 @@ static int slave_open(struct route *r)
 		 */
 		want_buf = (snd_pcm_uframes_t)((uint64_t)r->io.buffer_size * rate / r->io.rate);
 		want_per = (snd_pcm_uframes_t)((uint64_t)r->io.period_size * rate / r->io.rate);
-		buf = want_buf;
+		/*
+		 * Give the physical codec the largest buffer it can safely
+		 * sustain.  The application-facing ring remains unchanged; the
+		 * avail_min calculation below still wakes SDL only when its own
+		 * period fits.  This adds underrun headroom without increasing
+		 * SDL's callback size or making its poll loop spin.
+		 */
+		buf = (snd_pcm_uframes_t)((uint64_t)4096 * rate / 48000);
 		if ((err = snd_pcm_hw_params_set_buffer_size_near(pcm, hw,
 				&buf)) < 0)
 			goto done;
@@ -278,7 +285,7 @@ static void sink_follow(struct route *r)
 	 * slave is always opened immediately when there is none (below), so
 	 * startup is not delayed.
 	 */
-	if (r->slave && r->follow_ctr++ % 16)
+	if (r->slave && r->follow_ctr++ % 128)
 		return;
 	if (stat(SINK_FILE, &st) < 0) {
 		if (!r->slave)

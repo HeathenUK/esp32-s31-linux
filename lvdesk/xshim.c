@@ -7218,12 +7218,15 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 	}
 	case 36:					/* GrabServer     */
 	case 37:					/* UngrabServer   */
-	case 42:					/* SetInputFocus  */
 	case 46:					/* CloseFont      */
 	case 109:					/* ChangeHosts    */
 		if (trace_on())
 			fprintf(stderr, "xshim: ignoring %s (%u)\n",
 				opstr(op), op);
+		break;
+	case 42:					/* SetInputFocus */
+		/* SDL2 explicitly focuses its fullscreen window before polling. */
+		xshim_focus(get32(r + 4));
 		break;
 	case 72: {					/* PutImage */
 		/*

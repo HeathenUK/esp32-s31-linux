@@ -1,0 +1,16 @@
+{
+  "rootfs/sdlbench1.c": "c1276b531bc3b1127b53fe22dc05c0e6719c01ec3ed1c5a68c078d58d908e574",
+  "rootfs/sdlbench2.c": "ff26594fd0db3ecfad60537eac647926d1540e4df3fcb157a695a4505e890cc5",
+  "rootfs/sdlbench-common.h": "1f4f0d3ad8ba0871b4d2e6b58a7cdba17ee80d4b27889879dd9b988b435f6b5c",
+  "rootfs/sdlbench-runtime.h": "7f8b5228f1e927f1bbe840f72a97ffea5c1fe294ddbabcc91e36caecec21402e",
+  "rootfs/sdlbench-visual.c": "2efdc81aa3431b8c4e371e142e18772da0ba08c442382618bbb29011fbaa050b",
+  "rootfs/build-sdlbench.sh": "7e7e06bd83b326ff44afdb2cb446e87afb6a04b70359633b5f051c699f05d3c6",
+  "rootfs/sdlbench1.bin": "a2c3a683d2a86ce6966abc383e40832fb86a64956906539b847749bd04e2dcfc",
+  "rootfs/sdlbench2.bin": "4c2ddbcfcccf74a86b94c9ffa9cbcfc072b6ec7049dc8f021fb1b94ac41a1bc4",
+  "running_kernel": "#219 Sun Sep 13 17:01:06 UTC 2026",
+  "stock_library_md5": {
+    "SDL1": "5339279768f42aa7fff8fa4e32ab6fab",
+    "SDL2": "d50d5a2dfb894dfbb319a5e4be5486a7",
+    "lvdesk": "d013d999d596f7c8ffeddf3f9b5327b5"
+  }
+}

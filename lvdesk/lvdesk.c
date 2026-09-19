@@ -2024,17 +2024,6 @@ static void wpa_events_open(void)
 
 /* ------------------------------------------------------------ alsa mixer */
 
-/* Case-insensitive substring. strcasestr needs _GNU_SOURCE; this is two uses. */
-static int name_has(const char *hay, const char *needle)
-{
-	size_t n = strlen(needle);
-
-	for (; *hay; hay++)
-		if (!strncasecmp(hay, needle, n))
-			return 1;
-	return 0;
-}
-
 static snd_mixer_t *mixer;
 /*
  * Every element with a playback volume, not just the first.
@@ -2125,48 +2114,17 @@ static void audio_open(void)
 	 * than hardcoding a name: the es8389 calls its output "DAC", but the
 	 * control set is the codec driver's business and has changed before.
 	 */
-	/*
-	 * "Has a playback volume" IS NOT THE SAME AS "is an output volume".
-	 *
-	 * This codec exposes ADC2DAC Mixer - a SIDETONE that routes its ADC
-	 * straight into its DAC - as an element with a playback volume. The
-	 * old loop took it, so every lvdesk start turned the microphone up
-	 * into the speaker at the user's volume setting. That is the hiss,
-	 * and it was there long before any of the hart0 work: stop lvdesk and
-	 * the register stays where it was, start it and it jumps to 66%.
-	 *
-	 * Two passes rather than a hardcoded name, because the control set is
-	 * the codec driver's business and has been renamed before. Prefer
-	 * anything that calls itself a DAC; if the codec names its output
-	 * something else entirely, fall back to the old broad scan but still
-	 * refuse anything with ADC in the name. An output volume control is
-	 * never an ADC path.
-	 */
-	for (int pass = 0; pass < 2 && !mixer_nelem; pass++) {
-		for (e = snd_mixer_first_elem(mixer); e;
-		     e = snd_mixer_elem_next(e)) {
-			const char *nm;
-
+	for (e = snd_mixer_first_elem(mixer); e; e = snd_mixer_elem_next(e)) {
 			if (!snd_mixer_selem_is_active(e))
 				continue;
 			if (!snd_mixer_selem_has_playback_volume(e))
 				continue;
-			snd_mixer_selem_get_id(e, sid);
-			nm = snd_mixer_selem_id_get_name(sid);
-			if (!nm)
-				continue;
-			if (name_has(nm, "ADC"))
-				continue;	/* never an output */
-			if (pass == 0 && !name_has(nm, "DAC"))
-				continue;	/* first pass: DACs only */
 			if (mixer_nelem < MIXER_MAX_ELEMS)
 				mixer_elems[mixer_nelem++] = e;
 			if (!mixer_elem)
 				mixer_elem = e;
-			printf("lvdesk: volume drives '%s'\n", nm);
 		}
-	}
-	fflush(stdout);
+
 	if (mixer_elem)
 		snd_mixer_selem_get_playback_volume_range(mixer_elem,
 							  &mixer_min, &mixer_max);
@@ -8760,6 +8718,12 @@ static void mouse_scan(void)
  * terminal and played from the keyboard kept the arrow on screen until the
  * mouse first moved (2026-09-11).
  */
+/*
+ * Is the hardware cursor currently hidden? Read by the loop so it does not pay
+ * a DRM ioctl to move something invisible - see the move below.
+ */
+static int cursor_hidden;
+
 static void cursor_vis_update(void)
 {
 	static int hidden;
@@ -8792,6 +8756,7 @@ static void cursor_vis_update(void)
 
 		kms_cursor_show(!hide);
 		hidden = hide;
+		cursor_hidden = hide;	/* published for the move gate */
 		printf("lvdesk: pointer %s (%u ms)\n",
 		       hide ? "hidden" : "shown",
 		       (unsigned)(lv_tick_get() - t0));
@@ -9123,7 +9088,20 @@ static int mouse_poll(void)
 		 * moves could never be seen. The final position is always sent
 		 * because the pending check below runs on the next loop.
 		 */
-		if ((ptr_x != last_cx || ptr_y != last_cy) &&
+		/*
+		 * Do not move a cursor nobody can see.
+		 *
+		 * The legacy cursor ioctl pulls the primary plane into the
+		 * atomic state, so each one costs a commit - ~1 ms, measured.
+		 * Paced at 16 ms that is up to ~62 a second. Throughout
+		 * fullscreen mouse-look the cursor is HIDDEN (the client holds
+		 * a pointer grab) while ptr_x/ptr_y change constantly, so
+		 * every one of those was a commit for an invisible sprite:
+		 * about 6% of wall clock. cursor_vis_update() below still runs
+		 * and will show it again the moment it should be visible.
+		 */
+		if (!cursor_hidden &&
+		    (ptr_x != last_cx || ptr_y != last_cy) &&
 		    (uint32_t)(nowms - last_cms) >= 16) {
 			last_cx = ptr_x;
 			last_cy = ptr_y;
@@ -9866,6 +9844,21 @@ int main(void)
 
 				last_frame_ms = nowms;
 				PROF_START(t0);
+				/*
+				 * NOT gated on fs_active, deliberately.
+				 *
+				 * Skipping this while fullscreen and setting a
+				 * fixed poll timeout instead collapsed the
+				 * loop from ~500 passes per 5 s to 80, and
+				 * prboom's OWN cpu fell from 1149 to 705 ticks
+				 * over an identical 20 s window - the game
+				 * using LESS cpu after freeing some up means
+				 * it was rendering fewer frames. This call
+				 * sets the poll timeout, so dropping it
+				 * changes how often the client's socket and
+				 * the mouse get serviced. The draw walk below
+				 * is the part worth skipping; this is not.
+				 */
 				next = lv_timer_handler();
 				PROF_ADD(prof_timer, t0);
 				if (lvp_on > 0) {

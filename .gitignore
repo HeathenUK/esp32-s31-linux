@@ -34,6 +34,7 @@ linux-71-port/
 # LVGL upstream checkout and built app binaries
 /lvgl/
 /lvdesk/*.bin
+/artifacts/sdlbench/
 xlite/stubs.c
 rootfs/*.bin
 .xref-work/

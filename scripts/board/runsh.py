@@ -82,9 +82,8 @@ def run(path, timeout=240, boot_wait=0, shell_wait=75.0):
     # happened repeatedly (a 1.45 MB copy, a `find /` over the SD card) and
     # each time it was diagnosed as a wedged board.
     #
-    # So the board kills it too. The watchdog is given a little longer than the
-    # host's patience, so a script that finishes normally is never disturbed
-    # and only a genuine overrun is cut - and the marker says which happened,
+    # So the board kills it too. The watchdog fires just before the host's
+    # deadline, so the caller can receive an explicit timeout marker,
     # rather than leaving silence to be interpreted.
     # The marker is spelled RS_TIME"K"ILL in the command so the literal
     # RS_TIMEKILL appears ONLY in the board's output, never in the echoed
@@ -107,9 +106,12 @@ def run(path, timeout=240, boot_wait=0, shell_wait=75.0):
     # nothing - which is the exact failure this is meant to remove. `kill -0`
     # first, so a script that finished normally is never announced.
     p.write(('sh /tmp/r.sh 2>&1 & __rp=$!; '
-             '( sleep %d; kill -0 $__rp 2>/dev/null && '
+             # Reap the sleep as well as its shell. Killing only the subshell
+             # left an orphan sleep (and its memory) after every short call.
+             "( trap 'kill \"$__rs_sleep\" 2>/dev/null; wait \"$__rs_sleep\" 2>/dev/null; exit' TERM INT; "
+             'sleep %d & __rs_sleep=$!; wait "$__rs_sleep"; kill -0 $__rp 2>/dev/null && '
              '{ echo RS_TIME"K"ILL; kill -9 $__rp 2>/dev/null; } ) & __rw=$!; '
-             'wait $__rp 2>/dev/null; kill $__rw 2>/dev/null; '
+             'wait $__rp 2>/dev/null; kill $__rw 2>/dev/null; wait $__rw 2>/dev/null; '
              'echo RS_DONE\n' % guard).encode())
     o, _ = until(lambda b: 'RS_DONE' in b.split('echo RS_DONE')[-1], timeout)
     p.close()

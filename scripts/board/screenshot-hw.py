@@ -30,7 +30,7 @@ Two things this must not hardcode, both learned the hard way:
 """
 import base64
 import binascii
-import urllib.request, subprocess, sys, pathlib
+import urllib.request, subprocess, sys, pathlib, os
 
 HERE = pathlib.Path(__file__).resolve().parent
 OUT = sys.argv[1] if len(sys.argv) > 1 else "panel.jpg"
@@ -79,9 +79,13 @@ echo "B64END"
 def run(script, timeout="120"):
     tmp = pathlib.Path("/tmp/_hwshot.sh")
     tmp.write_text(script)
-    return subprocess.run([sys.executable, str(HERE / "runsh.py"),
-                           str(tmp), timeout],
-                          capture_output=True, text=True).stdout
+    result = subprocess.run([sys.executable, str(HERE / "runsh.py"),
+                             str(tmp), timeout],
+                            capture_output=True, text=True)
+    if result.returncode:
+        sys.exit(result.stderr.strip() or result.stdout.strip() or
+                 f'runsh failed with exit status {result.returncode}')
+    return result.stdout
 
 
 # ---------------------------------------------------------------- network
@@ -134,14 +138,31 @@ def fetch_over_wifi(quality, port=8137):
         with urllib.request.urlopen(url, timeout=30) as r:
             data = r.read()
     except Exception as e:                                   # noqa: BLE001
-        print(f"wifi fetch failed ({e})", file=sys.stderr)
-        return None
+        # On macOS, Python and the system curl can have different local-network
+        # access. Try the same board URL with curl before putting a multi-frame
+        # JPEG payload onto the serial console. Still validate the JPEG below.
+        print(f"Python wifi fetch failed ({e}); trying curl", file=sys.stderr)
+        try:
+            fetched = subprocess.run(
+                ["curl", "--fail", "--silent", "--show-error",
+                 "--connect-timeout", "3", "--max-time", "15", url],
+                capture_output=True, timeout=17)
+        except (OSError, subprocess.TimeoutExpired) as curl_error:
+            print(f"curl wifi fetch failed ({curl_error})", file=sys.stderr)
+            return None
+        if fetched.returncode:
+            print(f"curl wifi fetch failed ({fetched.stderr.decode(errors='replace').strip()})",
+                  file=sys.stderr)
+            return None
+        data = fetched.stdout
     print(f"via wifi {ip[-1]} ({len(data)} bytes)")
     return data
 
 # DRM first - it is the path that works without debugfs.
 _net = fetch_over_wifi(QUALITY)
 if _net is not None:
+    if os.environ.get('SCREENSHOT_KEEP_MJPEG') == '1':
+        pathlib.Path(OUT + '.mjpeg').write_bytes(_net)
     nxt = _net.find(b"\xff\xd8", 2)
     if nxt > 0:
         _net = _net[:nxt]
@@ -199,6 +220,8 @@ except binascii.Error as e:
              f"a capture fault - the board is fine.")
 # mjpegrec writes concatenated JPEGs (that is what MJPEG is). Keep the first.
 if via == "drm/mjpegrec":
+    if os.environ.get('SCREENSHOT_KEEP_MJPEG') == '1':
+        pathlib.Path(OUT + '.mjpeg').write_bytes(data)
     nxt = data.find(b"\xff\xd8", 2)
     if nxt > 0:
         data = data[:nxt]

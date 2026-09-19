@@ -540,8 +540,11 @@ linux: toolchain | $(LINUX_OUT)
 		--enable DRM_FBDEV_EMULATION \
 		--disable IPV6 \
 		--enable SYSVIPC \
+		--enable FUTEX \
 		--set-val PAGE_BLOCK_MAX_ORDER $(PAGE_BLOCK_ORDER)
 	$(MAKE) -C $(LINUX_DIR) O=$(LINUX_OUT) ARCH=riscv CROSS_COMPILE="$(CROSS_COMPILE)" olddefconfig
+	@# Stock musl/SDL need blocking waits; ENOSYS turns contention into spinning.
+	@grep -qx 'CONFIG_FUTEX=y' $(LINUX_OUT)/.config || { echo "ERROR: stock threaded userspace requires CONFIG_FUTEX=y"; exit 1; }
 	$(MAKE) -C $(LINUX_DIR) O=$(LINUX_OUT) ARCH=riscv CROSS_COMPILE="$(CROSS_COMPILE)" \
 		KCFLAGS="-march=$(S31_SAFE_ISA) $(S31_COMMON_FLAGS)" -j$(JOBS) $(LINUX_TARGET) dtbs
 	cp -v $(LINUX_OUT)/arch/riscv/boot/$(LINUX_TARGET) $(XIP_IMAGE)
@@ -724,7 +727,8 @@ XIP_ROOTFS_IMG := $(BUILD_DIR)/rootfs-xip.cramfs
 XIP_ROOTS ?= bin/busybox usr/sbin/wpa_supplicant usr/sbin/iw usr/bin/lvdesk \
 	usr/lib/alsa-lib/libasound_module_pcm_s31route.so \
 	usr/bin/s31-coex usr/bin/s31swapon usr/lib/libSDL-1.2.so.0.11.4 \
-	usr/lib/libSDL2-2.0.so.0.3200.10 usr/lib/libXrandr.so.2.2.0 \
+	usr/lib/libSDL2-2.0.so.0.3200.10 usr/lib/libSDL2_mixer-2.0.so.0.600.3 \
+	usr/lib/libXrandr.so.2.2.0 \
 	usr/lib/libpng16.so.16.58.0 usr/lib/libz.so.1.3.2 usr/bin/xcalc \
 	usr/lib/libdbus-1.so.3.32.4 \
 	usr/bin/xfilesctl usr/bin/s31-open usr/bin/s31-thumb usr/bin/xfilesthumb usr/bin/s31-thumbs

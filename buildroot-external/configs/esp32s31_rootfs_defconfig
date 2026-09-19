@@ -412,6 +412,7 @@ BR2_PACKAGE_SDL_X11=y
 # backend asks for, with chocolate-doom as the first client.
 BR2_PACKAGE_SDL2=y
 BR2_PACKAGE_SDL2_X11=y
+BR2_PACKAGE_SDL2_MIXER=y
 # libXrandr is here ONLY so SDL2 configures its XRandR mode code in
 # (--enable-video-x11-xrandr needs the header at build time). SDL 2.32 has
 # no XVidMode at all, so without XRandR it knows exactly one mode - the

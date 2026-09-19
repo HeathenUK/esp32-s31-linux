@@ -4,6 +4,147 @@ Read this first after a context reset. It records what is true of the board
 right now, what is in flight, and — most importantly — what has already been
 tried and failed, so it is not tried again.
 
+## SDL audio route optimisation (2026-09-13)
+
+`s31route` now opens the codec directly for native 48 kHz S16 stereo streams,
+avoiding the ALSA `plug` conversion used by SDL1-rate clients. The codec sink
+requests up to 4096 frames while the application period and wake policy remain
+unchanged. The XIP image was rebuilt and flashed, followed by a full reset.
+The separate staging queue remains deliberately unimplemented until a timedemo
+shows that direct native-format writes still block; adding it would cost a copy
+and SRAM.
+
+## Audio regression: comparison with yesterday (2026-09-13 evening)
+
+Reference is the last September 12 commit, `ae15343` (21:18 BST); this is a
+source reference, not a complete snapshot of yesterday's flashed images and SD
+state. Compared against the current working tree:
+
+- Linux I2S driver matches yesterday's `0043` driver except for comments:
+  capture is restored and the per-stream buffer is 32768 bytes. The cold-boot
+  live #219 card also advertises playback **and capture**.
+- ES8389 codec driver is byte-identical to yesterday's `0042` source.
+- Loader main.c, sdkconfig (hart0 audio disabled), shared memory layout,
+  s31route source and overlay binary, and asound.conf are byte-identical.
+- The new S38audio-mixer intervention and DAC-only lvdesk volume selection have
+  been reverted; the live lvdesk binary is rebuilt from the yesterday-style
+  broad mixer selection.
+- Other system changes include CMA 4 to 5 MiB/pageblock order 8, USB boot
+  defaults and FUTEX restoration. These can change contention; none is proven
+  to cause this audio failure. The new Chocolate fullscreen launcher/profile
+  is also new, and audible output has not been verified.
+
+After the user's cold power cycle: physical PCM closed, no Chocolate process,
+ADC2DAC Mixer/ADCL/ADCR zero, DACL/R 154 (-18.5 dB, 60%). The direct 48 kHz
+lvdesk bong bypasses s31route, whereas game default audio goes through it.
+Historical claims in patch 0046 and S38 comments that removing the capture DAI
+necessarily left the ADC unconfigured, or that a latched codec state explains
+all failures, are **not established root causes**. Do not use them as proof.
+No mixer writes or audio deployment were made during this comparison.
+
+## Chocolate Doom SDL2 startup probe (2026-09-13 evening)
+
+The exact fullscreen 320x240 sound launcher was run after a warm reset. It
+created the X11 clients but never reached gameplay: the log stopped at
+`I_Init`, and the process remained runnable with only X sockets open and no
+ALSA device. The preceding messages were `xlite: UNIMPLEMENTED XGrabServer()`
+and `XUngrabServer()`.
+
+A `-nomusic` control behaved the same way, stopping after `NET_Init` at those
+same Xlib calls. xlite now encodes and sends the standard `GrabServer` and
+`UngrabServer` requests; the replacement library rebuilt and XIP image was
+flashed. A bounded trace then showed continuous `MIT-SHM PutImage` and
+`GetInputFocus` traffic, so the apparent stall was request processing rather
+than a dead client. The shim now implements `SetInputFocus`. An experimental
+four-request client budget was tested and immediately reverted: it reduced
+X throughput without producing input or audio, so it is not part of the
+implementation. Final audio/input gameplay verification is still pending;
+no client source was changed.
+
+The first profile edit did not affect Chocolate's vanilla device variables:
+`snd_musicdevice` is read from the persistent `default.cfg`, while the extra
+file is for Chocolate-specific settings. The live `default.cfg` is now set to
+`snd_musicdevice 0` and `snd_sfxdevice 3`; a normal launch reaches `NET_Init`
+without the OPL failure. A direct `aplay -D default /root/tone440.wav` also
+opens and closes cleanly through `s31route`. The remaining missing evidence is
+an in-game SDL audio open, because the current title-screen/input path still
+does not advance the game.
+
+The root cause of the missing SDL audio backend was confirmed in the Chocolate
+binary: it contained only the PC-speaker driver because Buildroot passed
+`--disable-sdl2mixer`. `BR2_PACKAGE_SDL2_MIXER=y` is now enabled, the SDL2_mixer
+library is included in the XIP closure, and the userspace image has been
+rebuilt and flashed.
+
+The menu's `/root/doom/chocolate-doom` was a separately deployed SD-card
+binary, so flashing the Buildroot image alone did not replace the executable
+the menu actually launched. The SDL2_mixer-enabled Buildroot binary is now
+deployed over that path; a running instance must be restarted to load it.
+
+## Chocolate Doom fullscreen sound launcher (2026-09-13)
+
+Added **Games → Doom → Chocolate Doom fullscreen 320x240 (sound)** to the
+live right-click menu and repository overlay. It uses `-fullscreen -extraconfig
+/etc/lvdesk/chocolate-fullscreen.cfg`, requesting 320x240 with aspect correction,
+software rendering and smooth pixel scaling off. Sound effects/music use the
+existing primary config (both enabled, volume 8 at deployment); no mute switches
+are passed. Chocolate Doom's `-width`/`-height` switches force windowed mode, so
+they must not be appended to this launcher. The separate profile preserves the
+existing window launcher's extra config. Live entry and profile checksum verified;
+no game was launched as part of this menu edit. Menu reloads on each open.
+
+## Intermittent USB input: current review (2026-09-13)
+
+See [the focused investigation](usb-input-investigation-2026-09-13.md). Live #219
+uses full-speed **buffer DMA**, not the historical DDMA shipping configuration.
+SOF is automatically enabled for buffer DMA despite `sof_irq=N`; global USB
+autosuspend is already disabled. No USB configuration was changed in this review.
+The short-report diagnostic and old keylog cannot establish report corruption or
+axis/event loss as currently written. Binary usbmon, hidraw and UHID are already
+available. Next useful evidence is one bounded capture during a bad episode.
+Hart0 host + Linux raw-HID transport is a credible alternative; the old boot-only
+proposal is not generic HID compatibility and has not been accepted as the fix.
+
+## SDL performance baseline and next direction (2026-09-13)
+
+**The baseline is closed; do not restart a broad benchmark campaign.** Independent
+stock-SDL clients and the quiet, gated runner are ready for targeted optimization
+A/Bs. See [benchmark results](sdlbench-results-2026-09-13.md),
+[usage](sdlbench.md) and [revised priorities](performance-opportunities-2026-09-13.md#baseline-closed-revised-direction-september-13-evening).
+
+- FUTEX was absent from actual kernel #218: both mismatch probes returned ENOSYS.
+  The Makefile override was removed by `10821ca`, after being added by `0ea51f8`.
+  It is restored and asserted after olddefconfig. Kernel #219 (17:01:06 UTC)
+  has been built, flashed, runtime verified, and restored after the old-kernel A/B.
+- Five 60-frame runs per configuration: SDL2 indexed submission median 101.962 →
+  45.216 ms. SDL1 with timers 59.072 → 54.415 ms; without timers the ranges overlap.
+  No reproducible SDL1 futex regression. These are not game or physical panel FPS.
+- The gate caught roughly 27 seconds of 0% Linux CPU idle after Wi-Fi was already
+  associated on the restored boot. Tests waited for three quiet windows. Startup
+  and minimum-time warmup are excluded; post-run association/carrier checks reject
+  reconnects. No extra remote commands or screenshots occur during baseline loops.
+- Final generic smoke: 81 measured cases across SDL1 depths 8/16/32 and SDL2
+  rendering/window surfaces. A prior SDL2 640x400 run lost lvdesk after client
+  exit and is explicitly failed. SDL1 audio callback jitter also remains open.
+- `runsh.py` watchdog cleanup now reaps the sleep child. Small console deployment
+  now checks destination MD5 and returns a proper CLI status; both visual binaries
+  deployed successfully through that path.
+- Screenshot STOP retains a 512 KB vmalloc ring. Hardware encoding is not a claim
+  that the whole capture/transfer is non-perturbing. The numerical observer sweep
+  was cancelled when the baseline closed; no percentage has been measured.
+
+Separate hardware JPEG/MJPEG checks passed for indexed SDL1 and SDL2 texture
+output, including visible motion and clean client exit. The board was then
+rebooted to clear recorder memory: final kernel #219, lvdesk alive, VmallocUsed
+400 KB. Forced watchdog timeout and subsequent recovery were also verified.
+
+**User direction:** general PrBoom, OpenTyrian and SDL1/SDL2 compatibility; never
+modify client application source. Prefer standard Linux capability exposure and
+existing library backends. Another SDL ABI shim is a last resort. The next
+implementation target is the permanent-scanout/GEM mapping proof, followed by
+consumer-driven framework/backend work. Do not assume adding a kernel driver
+will automatically accelerate a stock library's existing CPU loops.
+
 ## Where the desktop stands (2026-08-23)
 
 **Xorg + modesetting, jwm, st, xcalc, xfiles.** Weston, foot, X11Libre's Xfbdev

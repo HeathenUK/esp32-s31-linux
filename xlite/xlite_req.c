@@ -2277,6 +2277,30 @@ Cursor XCreatePixmapCursor(Display *dpy, Pixmap source, Pixmap mask,
 /* ----------------------------------------------------- grabs and warps */
 
 /*
+ * XGrabServer/XUngrabServer are ordering requests.  SDL2 uses them while it
+ * changes the window and input state during startup.  They do not generate a
+ * reply, but they must still go through xlite's shared request buffer so the
+ * following requests cannot overtake them.  The shim serialises its clients
+ * already; sending the standard wire requests preserves that contract without
+ * imposing a client-side wait.
+ */
+XLITE_IMPL(XGrabServer)
+int XGrabServer(Display *dpy)
+{
+	REQ(dpy, 36, 0, 1);
+	xlite_send(x, r);
+	return 1;
+}
+
+XLITE_IMPL(XUngrabServer)
+int XUngrabServer(Display *dpy)
+{
+	REQ(dpy, 37, 0, 1);
+	xlite_send(x, r);
+	return 1;
+}
+
+/*
  * Pointer and keyboard grabs, and the warp SDL needs for relative motion.
  *
  * SDL 1.2 recentres the pointer with XWarpPointer after every MotionNotify
