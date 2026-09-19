@@ -24,16 +24,23 @@ snap() {
 		[ -r "$d/stat" ] || continue
 		read -r line < "$d/stat" || continue
 		# comm may contain spaces; it is bracketed, so strip up to ") "
+		of="$1"
 		rest=${line#*) }
+		comm=${line#* (}; comm=${comm%%)*}
+		# `set --` clobbers $1 (the output file), hence $of above ($out is the
+		# script-level result path and must not be shadowed).
 		set -- $rest
 		# after ')' the fields are state(3) ppid ... utime is field 14
 		# overall, i.e. the 12th of $rest; stime the 13th
 		ut=${12}; st=${13}
-		comm=${line#* (}; comm=${comm%%)*}
-		echo "${d#/proc/} $comm $((ut + st))" >> "$1"
+		echo "${d#/proc/} $comm $((ut + st))" >> "$of"
+		set -- "$of"
 	done
-	read -r c u n s i w q sq rest < /proc/stat
-	echo "STAT $u $n $s $i $w $q $sq" >> "$1"
+	# busybox sh: `read` into a positional list works, but $1 inside snap()
+	# is the OUTPUT FILE, so the fields must not be read into $1..$n. Named
+	# variables only.
+	read -r cpu_ u_ n_ s_ i_ w_ q_ sq_ rest_ < /proc/stat
+	echo "STAT $u_ $n_ $s_ $i_ $w_ $q_ $sq_" >> "$1"
 }
 snap /tmp/cs_a
 sleep "$secs"
