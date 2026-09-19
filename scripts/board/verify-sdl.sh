@@ -125,7 +125,7 @@ say "board: executing commands"
 # regression rather than as a harness fault.
 cp "$(dirname "$0")/clocksettle.sh" "$D/clocksettle.sh" 2>/dev/null || true
 if [ -r "$D/clocksettle.sh" ]; then
-	C=$(R "$D/clocksettle.sh" 120)
+	C=$(R "$D/clocksettle.sh" 260)	# ntpd steps 60-90 s after Wi-Fi; the gate loops up to 4 min
 	echo "$C" | grep -q "clock settled" || { say "FAIL: clock never settled"; exit 1; }
 	say "clock: settled"
 fi

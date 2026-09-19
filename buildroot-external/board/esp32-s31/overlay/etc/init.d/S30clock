@@ -25,7 +25,12 @@
 # whose Wi-Fi takes 60 s to associate, which is normal here - reaches the
 # desktop at exactly the same speed as one with a working uplink.
 
-STAMP=/var/lib/misc/fake-hwclock.data
+# ON THE CARD. /var/lib is a symlink into tmpfs on this rootfs, so the stamp
+# used to be written to RAM and every boot read "no saved time" - the board
+# started at the epoch on every reset for months, and the hourly cron save was
+# saving into the same vanishing place. /etc is the ext4 root and persists.
+STAMP=/etc/fake-hwclock.data
+STEPPED=/tmp/clock-stepped	# uptime at which ntpd stepped; tmpfs, so per boot
 SERVERS="pool.ntp.org time.cloudflare.com"
 
 save_time() {
@@ -35,6 +40,10 @@ save_time() {
 
 start() {
 	printf "Restoring clock: "
+	# Migrate a stamp an older image saved to the tmpfs path, if one exists
+	# this boot (it will not, but the cost of checking is nothing).
+	[ -r "$STAMP" ] || [ ! -r /var/lib/misc/fake-hwclock.data ] || \
+		cp /var/lib/misc/fake-hwclock.data "$STAMP" 2>/dev/null
 	if [ -r "$STAMP" ]; then
 		SAVED=$(cat "$STAMP")
 		# Only ever forwards. If the current clock is already later -
@@ -96,10 +105,46 @@ start() {
 			sleep 1
 			i=$((i + 1))
 		done
-		# -q -n: step now and exit, in the foreground of this subshell.
-		# Bounded by its own timeout so a dead uplink cannot leave the
-		# daemon unstarted for ever.
-		busybox timeout 30 busybox ntpd -q -n $OPTS >/dev/null 2>&1
+		# The route appears before the resolver does. A -q attempt that
+		# fires into an empty resolv.conf fails after its whole 30 s
+		# timeout, and the step then waited for the daemon's own
+		# schedule - 60-90 s after association, measured 2026-09-19.
+		# Wait for a name to resolve (bounded), then step with short
+		# retries: one successful round trip is all -q needs.
+		i=0
+		while [ $i -lt 30 ]; do
+			nslookup time.cloudflare.com >/dev/null 2>&1 && break
+			sleep 1
+			i=$((i + 1))
+		done
+		# NO `timeout`. This busybox is static and has no timeout applet,
+		# so `busybox timeout 30 busybox ntpd -q` failed with "applet not
+		# found" (exit 127) on every boot since the static busybox landed
+		# - the early step never ran once, and the daemon stepped on its
+		# own schedule 60-90 s after association. Background the step and
+		# watch it from the shell instead; a bare -q takes ~2 s here.
+		for try in 1 2 3 4; do
+			busybox ntpd -q -n $OPTS >/dev/null 2>&1 &
+			q=$!
+			n=0
+			while kill -0 $q 2>/dev/null && [ $n -lt 15 ]; do
+				sleep 1
+				n=$((n + 1))
+			done
+			if kill -0 $q 2>/dev/null; then
+				kill $q 2>/dev/null
+				wait $q 2>/dev/null
+				sleep 2
+				continue
+			fi
+			if wait $q; then
+				cut -d. -f1 /proc/uptime > $STEPPED
+				logger -t clock "stepped by ntpd at uptime $(cat $STEPPED)s: $(date -u '+%Y-%m-%d %H:%M:%S')"
+				save_time
+				break
+			fi
+			sleep 2
+		done
 		busybox ntpd $OPTS >/dev/null 2>&1
 	) >/dev/null 2>&1 </dev/null &
 	echo "OK (stepping in the background, then disciplining)"

@@ -40,7 +40,14 @@ for ((r = 1; r <= REP; r++)); do
 	for i in $order; do
 		arm=${ARMS[$i]}; tag="arm$i-r$r"
 		echo "--- $tag  [${arm:-stock}]"
-		VS_ENV="$arm" VS_MODE=$MODE bash scripts/board/verify-sdl.sh "$W" "$H" --timedemo > "$OUT/$tag.log" 2>&1
+		# One retry when a HARNESS gate rejected the run (clock, boot
+		# window, launch) - those are not the board's result. A fps
+		# verdict, pass or fail, is never retried.
+		for attempt in 1 2; do
+			VS_ENV="$arm" VS_MODE=$MODE bash scripts/board/verify-sdl.sh "$W" "$H" --timedemo > "$OUT/$tag.log" 2>&1
+			grep -qE "clock never settled|no command executed within|could not start the client|env not applied" "$OUT/$tag.log" || break
+			[ $attempt = 1 ] && { echo "    $tag: harness gate ($(grep -oE 'clock never settled|no command executed within|could not start the client|env not applied' "$OUT/$tag.log" | head -1)) - retrying once"; cp "$OUT/$tag.log" "$OUT/$tag.attempt1.log"; }
+		done
 		fps=$(sed -n 's/.*= \([0-9.]*\) frames per second.*/\1/p' "$OUT/$tag.log" | tail -1)
 		res=$(grep -o "RESULT *: [A-Z]*" "$OUT/$tag.log" | tail -1)
 		echo "$i|${arm:-stock}|$r|${fps:-NA}|${res:-NORESULT}" >> "$OUT/results.psv"

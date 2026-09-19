@@ -1,6 +1,8 @@
-# Persist the clock hourly.
+# Persist the clock every five minutes.
 #
-# With no RTC the saved timestamp is the only thing standing between a power
-# cut and a boot back at the epoch. Saving only at shutdown would lose the lot
-# on an unclean loss of power, which on a dev board is most of them.
-0 * * * * /etc/init.d/S30clock save
+# With no RTC the saved timestamp is the only thing standing between a reset
+# and a boot back at the epoch, and resets are how this board is driven all
+# day. Five minutes bounds how stale the restored clock can be; the write is
+# twenty bytes to the card. (It was hourly, into a tmpfs path, so it saved
+# nothing - see S30clock.)
+*/5 * * * * /etc/init.d/S30clock save
