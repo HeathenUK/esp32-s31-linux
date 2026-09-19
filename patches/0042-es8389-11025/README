@@ -47,3 +47,11 @@ is the thing to scale.
 
 VERIFY BY EAR. s31-audio-verify-by-ear: instruments on this board have called
 a pure-noise stream "working" four separate times.
+
+UPDATE 2026-09-19: THE 256x ROW NEVER MATCHED. This board has no MCLK line and
+es8389_pcm_hw_params derives the clock as channels * width * rate (32x for
+S16 stereo), so get_coeff(11025, 2822400) failed on every stream ("Clock
+coefficients do not match" in dmesg) and the dividers stayed at idle: loud
+hiss, faint muffled audio. Rows {32, 352800, 11025} and {32, 705600, 22050}
+are added, cloned from the 44100 ratio-32 row. Verified by dmesg (no mismatch),
+the I2C dividers during the stream, and by ear.
