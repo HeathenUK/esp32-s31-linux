@@ -126,8 +126,11 @@ say "board: executing commands"
 cp "$(dirname "$0")/clocksettle.sh" "$D/clocksettle.sh" 2>/dev/null || true
 if [ -r "$D/clocksettle.sh" ]; then
 	C=$(R "$D/clocksettle.sh" 260)	# ntpd steps 60-90 s after Wi-Fi; the gate loops up to 4 min
-	echo "$C" | grep -q "clock settled" || { say "FAIL: clock never settled"; exit 1; }
-	say "clock: settled"
+	# Every line the board prints through R() must carry the ZZ prefix or
+	# the filter drops it: this gate read "never settled" for a clock that
+	# HAD settled, on every run, until clocksettle.sh prefixed its output.
+	echo "$C" | grep -q "clock settled" || { say "FAIL: clock never settled - board said: $(echo "$C" | tail -2 | tr '\n' ' ')"; exit 1; }
+	say "clock: $(echo "$C" | grep 'clock settled' | tail -1 | sed 's/^ZZ clock //')"
 fi
 
 # --- launch ----------------------------------------------------------------

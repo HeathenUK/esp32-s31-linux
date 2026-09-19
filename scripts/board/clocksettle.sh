@@ -21,13 +21,13 @@ while [ $i -lt 48 ]; do
 		A=$(date +%s); sleep 5; B=$(date +%s)
 		D=$((B - A))
 		if [ $D -ge 4 ] && [ $D -le 6 ]; then
-			echo "clock settled: $(date '+%Y-%m-%d %H:%M:%S') (stepped at uptime $(cat /tmp/clock-stepped 2>/dev/null || echo '?')s, now $(cut -d. -f1 /proc/uptime)s)"
+			echo "ZZ clock settled: $(date '+%Y-%m-%d %H:%M:%S') (stepped at uptime $(cat /tmp/clock-stepped 2>/dev/null || echo '?')s, now $(cut -d. -f1 /proc/uptime)s)"
 			exit 0
 		fi
-		echo "clock stepped mid-check (${D}s for 5s), retrying"
+		echo "ZZ clock stepped mid-check (${D}s for 5s), retrying"
 	fi
 	i=$((i + 1))
 	sleep 5
 done
-echo "clock NOT settled: year=$(date +%Y)"
+echo "ZZ clock NOT settled: year=$(date +%Y)"
 exit 1
