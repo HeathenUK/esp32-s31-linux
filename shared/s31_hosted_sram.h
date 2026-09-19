@@ -62,8 +62,40 @@ enum s31_hosted_if_type {
 	S31_HOSTED_HCI_IF,
 	S31_HOSTED_PRIV_IF,
 	S31_HOSTED_TEST_IF,
+	/*
+	 * USB HID from hart0 (bootloader/main/s31_usb_hid.c) to Linux
+	 * (drivers/hid/esp32s31-hosted-hid.c). Appended after the ESP-Hosted
+	 * values so nothing that mirrors adapter.h moves. Carries struct
+	 * s31_hosted_hid_msg records: raw HID reports plus the report
+	 * descriptor at attach, so Linux's HID core parses exactly what a
+	 * USB-attached device would have given it.
+	 */
+	S31_HOSTED_HID_IF,
 	S31_HOSTED_MAX_IF,
 };
+
+#define S31_HOSTED_HID_ATTACH		1U
+#define S31_HOSTED_HID_REPORT		2U
+#define S31_HOSTED_HID_DETACH		3U
+#define S31_HOSTED_HID_MAX_DEVICES	8U
+/* The largest data[] that fits one ring slot behind the payload header. */
+#define S31_HOSTED_HID_MAX_DATA		1500U
+
+struct s31_hosted_hid_msg {
+	s31_u8 kind;		/* S31_HOSTED_HID_* */
+	s31_u8 dev;		/* hart0 device slot, 0..MAX_DEVICES-1 */
+	s31_u16 len;		/* bytes in data[]: descriptor or report */
+	s31_u16 vid;
+	s31_u16 pid;
+	s31_u8 addr;		/* USB address, for the log */
+	s31_u8 iface;
+	s31_u8 sub_class;	/* 1 = boot interface */
+	s31_u8 proto;		/* 1 keyboard, 2 mouse, 0 none */
+	s31_u32 seq;		/* per-device report counter; a gap is a drop */
+	s31_u8 data[];
+} __attribute__((packed));
+_Static_assert(sizeof(struct s31_hosted_hid_msg) == 16,
+	       "hosted HID message ABI changed");
 
 enum s31_hosted_control_type {
 	S31_HOSTED_CTRL_PING = 1,
@@ -117,6 +149,12 @@ enum s31_hosted_control_type {
 	 */
 	S31_HOSTED_CTRL_COEX_SET,
 	S31_HOSTED_CTRL_COEX_SET_RESPONSE,
+	/*
+	 * APPENDED LAST so nothing before it renumbers. Linux's HID driver has
+	 * (re)started: hart0 re-sends an ATTACH for every HID device it holds,
+	 * because attaches sent before Linux was listening went with the ring.
+	 */
+	S31_HOSTED_CTRL_HID_RESYNC,
 };
 
 enum s31_hosted_link_state {

@@ -1,0 +1,12 @@
+hid/esp32s31: HID devices owned by hart0, over the shared-SRAM transport
+
+The port tree is gitignored, so these are the whole files. Copy back over
+  linux-71-port/drivers/hid/{esp32s31-hosted-hid.c,esp32s31-hosted-hid.h,Kconfig,Makefile}
+  linux-71-port/drivers/net/ethernet/espressif/esp32s31-hosted-sram.c
+before building. Kconfig/Makefile: only the ESP32S31_HOSTED_HID additions.
+CUMULATIVE for esp32s31-hosted-sram.c.
+
+Build with `make linux USB_HART0=1` (drops dwc2, usbhid, the USB PHY driver;
+enables ESP32S31_HOSTED_HID). The loader must be built with
+CONFIG_S31_USB_HID_ENABLE=y (bootloader/sdkconfig) - one hart owns the block.
+Design and findings: docs/worklog-2026-09-19.md, "USB on hart0".

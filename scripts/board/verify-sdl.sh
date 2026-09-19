@@ -159,6 +159,15 @@ export LD_LIBRARY_PATH=/root/doom/lib
 export DOOMWADDIR=/root/doom/wads
 for p in \$(ps | awk '/prboom/ && !/awk/ {print \$1}'); do kill -9 \$p 2>/dev/null; done
 sleep 1
+# PARK THE POINTER IN THE TOP-RIGHT CORNER, away from every window. A cursor
+# over the client costs a driver lift+repaint per damaged frame (hardware
+# plane) or an LVGL refresh per move (software cursor), and the desktop
+# leaves it wherever it was - which is the centre of the panel, i.e. on top
+# of a 320x200 window, on every fresh boot. \`uinject park\` is NOT this: it
+# moves to the CENTRE and holds for 75 s (a photography aid). \`move\` is
+# relative motion with no homing and no click; +4000/-4000 clamps at the
+# edge whatever the acceleration curve does.
+[ -x /root/uinject ] && /root/uinject move 4000 -4000 200 >/dev/null 2>&1
 rm -f /root/doom/vs.log
 cd /root/doom/wads
 setsid /root/doom/prboom -width $W -height $H $VS_WINFLAG $VS_SNDFLAG $TD >/root/doom/vs.log 2>&1 </dev/null &

@@ -349,6 +349,21 @@ USB_FS ?= 1
 # board is mains powered, and this is exactly the class of setting that must
 # not depend on being remembered - see USB_BUFDMA above.
 USB_NOSUSPEND ?= 1
+# USB_HART0=1: the USB controller belongs to hart0 (bootloader/sdkconfig
+# CONFIG_S31_USB_HID_ENABLE=y drives HID devices with Espressif's host stack
+# and hands reports to Linux over the shared-SRAM transport). Linux must then
+# not touch the controller at all: dwc2 and usbhid come out, and with them the
+# 1 kHz buffer-DMA SOF interrupt (measured 6.7% of the core idle, 1045 irq/s
+# with no device attached, 2026-09-19). The dwc2 command-line options are
+# harmless without the driver and are left alone. THE TWO SIDES MUST AGREE:
+# a kernel with dwc2 and a loader with the HID host would fight over one
+# block. docs/usb-on-hart0-plan.md.
+USB_HART0 ?= 0
+ifeq ($(USB_HART0),1)
+USB_TWEAKS := --disable USB_DWC2 --disable USB_DWC2_HOST --disable USB_HID --disable USB_MON --disable PHY_ESP32S31_USB --enable ESP32S31_HOSTED_HID
+else
+USB_TWEAKS := --enable USB_DWC2 --enable USB_DWC2_HOST --enable USB_HID --enable USB_MON --enable PHY_ESP32S31_USB
+endif
 ifeq ($(USB_FS),1)
 CMDLINE_ADD += dwc2.host_full_speed=1
 endif
@@ -489,12 +504,11 @@ linux: toolchain | $(LINUX_OUT)
 		--disable CFG80211_CRDA_SUPPORT \
 		--enable HID \
 		--enable HID_GENERIC \
-		--enable USB_HID \
+		$(USB_TWEAKS) \
 		--enable HIDRAW \
 		--enable UHID \
 		--enable SND_ALOOP \
 		--enable DEBUG_FS \
-		--enable USB_MON \
 		$(DIAG_TWEAKS) \
 		$(SLAB_TWEAKS) \
 		--set-val LOG_BUF_SHIFT 14 \

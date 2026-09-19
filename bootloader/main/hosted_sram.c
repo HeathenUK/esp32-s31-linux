@@ -19,6 +19,9 @@
 #include "esp_coexist.h"
 #include "private/esp_coexist_internal.h"
 #include "sdkconfig.h"
+#if CONFIG_S31_USB_HID_ENABLE
+#include "s31_usb_hid.h"
+#endif
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "soc/hp_system_reg.h"
@@ -583,6 +586,11 @@ static void process_h1_frame(const uint8_t *frame, size_t frame_length)
 				 msg->value == S31_HOSTED_LINK_UP ?
 				 "up" : "down");
 			break;
+#if CONFIG_S31_USB_HID_ENABLE
+		case S31_HOSTED_CTRL_HID_RESYNC:
+			s31_usb_hid_resync();
+			break;
+#endif
 		default:
 			break;
 		}

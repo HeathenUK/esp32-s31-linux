@@ -522,12 +522,6 @@ void app_main(void)
      * the RX task blocks between notifications, so Linux cannot alter its
      * interrupt-matrix route by resetting hart1.
      */
-#if CONFIG_S31_USB_HID_ENABLE
-    /* Before the transport: a HID device present at power-on should be
-     * enumerated by the time Linux is up, not seconds later. */
-    if (s31_usb_hid_start() != ESP_OK)
-        ESP_LOGE(TAG, "USB HID host failed to start");
-#endif
 
     if (s31_hosted_sram_start() != ESP_OK)
         loader_restart("hosted SRAM transport");
@@ -592,5 +586,18 @@ void app_main(void)
 #endif
     start_linux_on_core1(fdt);
     ESP_LOGI(TAG, "hart1 released to OpenSBI; hart0 FreeRTOS continues");
+#if CONFIG_S31_USB_HID_ENABLE
+    /*
+     * DIAGNOSTIC ORDERING, 2026-09-19: started before the transport, the
+     * USB host's root-port object was corrupted at exactly the moment hart1
+     * was released (panic in hcd_port_handle_event -> xSemaphoreGive with a
+     * queue-set pointer of 1). Starting it after the release separates the
+     * two in time so the cause can be attributed. Linux resyncs attached
+     * devices when its driver comes up, so nothing is lost by starting late.
+     */
+    vTaskDelay(pdMS_TO_TICKS(3000));
+    if (s31_usb_hid_start() != ESP_OK)
+        ESP_LOGE(TAG, "USB HID host failed to start");
+#endif
 #endif
 }

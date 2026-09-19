@@ -11,3 +11,6 @@
  * in the device tree before enabling this. See docs/usb-on-hart0-plan.md.
  */
 esp_err_t s31_usb_hid_start(void);
+
+/* Linux (re)started its HID driver: re-announce every attached device. */
+void s31_usb_hid_resync(void);
