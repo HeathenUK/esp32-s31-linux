@@ -131,6 +131,10 @@ if [ -r "$D/clocksettle.sh" ]; then
 fi
 
 # --- launch ----------------------------------------------------------------
+if [ "${VS_CPUSHARE:-0}" = 1 ]; then
+	{ echo "cat > /root/cpushare.sh <<'CPUSHARE_EOF'"; cat "$(dirname "$0")/cpushare.sh"; echo "CPUSHARE_EOF"; echo 'rm -f /root/cpushare.txt; echo "ZZ cpushare shipped"'; } > "$D/vs_cps.sh"
+	R "$D/vs_cps.sh" 40 | grep -q "cpushare shipped" || { say "FAIL: could not ship cpushare.sh"; exit 1; }
+fi
 TD=""; [ "$MODE" = "--timedemo" ] && TD="-timedemo demo1"
 # prboom DEFAULTS TO FULLSCREEN (use_fullscreen=1 in the binary), and once the
 # shim grew VidMode a "windowed" run without -window silently became a
@@ -155,6 +159,12 @@ sleep 1
 rm -f /root/doom/vs.log
 cd /root/doom/wads
 setsid /root/doom/prboom -width $W -height $H $VS_WINFLAG $VS_SNDFLAG $TD >/root/doom/vs.log 2>&1 </dev/null &
+# VS_CPUSHARE=1: 30 s into the run, attribute 60 s of CPU per task
+# (scripts/board/cpushare.sh, shipped below). Fork-free, so it does not
+# disturb what it measures; the file is read back in the verdict.
+if [ "${VS_SOUND:-0}" = 1 ] || [ "${VS_CPUSHARE:-0}" = 1 ]; then :; fi
+[ "${VS_CPUSHARE:-0}" = 1 ] && [ -r /root/cpushare.sh ] && \
+	setsid sh -c 'sleep 30; sh /root/cpushare.sh 60 /root/cpushare.txt' </dev/null >/dev/null 2>&1 &
 echo "ZZ u0=\$(cut -d. -f1 /proc/uptime)"
 SH
 U0=$(R "$D/vs_fire.sh" 40 | sed -n 's/^ZZ u0=//p')
@@ -319,6 +329,13 @@ if [ -n "$FPSLINE" ]; then
 elif [ -n "$TD" ]; then
 	say "  timedemo               : DID NOT FINISH in ${RUN_BUDGET}s"
 	PASS=0
+fi
+if [ "${VS_CPUSHARE:-0}" = 1 ]; then
+	cat > "$D/vs_cpsget.sh" <<'SH'
+[ -r /root/cpushare.txt ] && sed 's/^/ZZ cps /' /root/cpushare.txt | head -25 || echo "ZZ cps MISSING"
+SH
+	say "  cpu share (60 s mid-run, ticks; game vs everything else):"
+	R "$D/vs_cpsget.sh" 40 | sed 's/^ZZ cps /      /' | tee -a "$D/cpushare-${W}x${H}.txt"
 fi
 say "  RESULT                 : $([ $PASS = 1 ] && echo PASS || echo FAIL)"
 exit $((1 - PASS))

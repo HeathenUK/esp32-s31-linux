@@ -9435,6 +9435,15 @@ static void mouse_init(void)
 		hw_cursor = 1;
 		printf("lvdesk: hardware cursor plane\n");
 	} else {
+		/*
+		 * Direct scanout refuses the plane on purpose (the lift would
+		 * have no clean source), so the LVGL cursor is the design there
+		 * - stage 1 of docs/scanout-direct-plan.md. Its cost is the
+		 * full-refresh-per-move measured above; that is what the A/B
+		 * has to weigh against the copy it removes.
+		 */
+		printf("lvdesk: software cursor%s\n",
+		       kms_direct ? " (direct scanout)" : "");
 		cursor_obj = lv_image_create(lv_layer_sys());
 		lv_image_set_src(cursor_obj, &lvdesk_cursor_img);
 		lv_obj_remove_flag(cursor_obj, LV_OBJ_FLAG_CLICKABLE);

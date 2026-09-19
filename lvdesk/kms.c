@@ -38,6 +38,20 @@
 static int kms_fd = -1;
 static uint32_t kms_fb_id;
 static uint32_t kms_handle;
+int kms_direct;			/* 1: the framebuffer IS the scanout buffer */
+
+/*
+ * Declared here rather than including the driver's uapi header, which the
+ * toolchain sysroot does not carry - see lvdesk.c for the same pattern. The
+ * authority is linux-71-port/include/uapi/drm/esp32s31_drm.h.
+ */
+#define DRM_ESP32S31_SCANOUT_GET 0x06
+struct drm_esp32s31_scanout {
+	uint32_t handle, pitch, size, width, height;
+};
+#define DRM_IOCTL_ESP32S31_SCANOUT_GET \
+	_IOR(DRM_IOCTL_BASE, DRM_COMMAND_BASE + DRM_ESP32S31_SCANOUT_GET, \
+	     struct drm_esp32s31_scanout)
 
 uint8_t *kms_map;
 uint32_t kms_w, kms_h, kms_pitch, kms_size;
@@ -212,11 +226,38 @@ int kms_open(const char *path)
 	kms_w = mode.hdisplay;
 	kms_h = mode.vdisplay;
 
-	/* RGB565: the panel scans it out and the plane refuses anything else. */
+	/*
+	 * DIRECT SCANOUT (LVDESK_DIRECT=1): ask the driver for a handle to its
+	 * permanent scanout buffer and render straight into it, instead of a
+	 * dumb buffer the driver copies from on every DIRTYFB. Everything
+	 * downstream is identical - ADDFB, MAP_DUMB, mmap, SETCRTC - only the
+	 * handle's origin differs. Falls back to CREATE_DUMB on any refusal
+	 * (older kernel: ENOTTY/EINVAL), so one lvdesk binary runs both arms.
+	 * The hardware cursor is refused by the driver in this mode and
+	 * lvdesk paints its LVGL cursor instead (kms_direct is read there).
+	 */
 	memset(&creq, 0, sizeof(creq));
 	creq.width = kms_w;
 	creq.height = kms_h;
 	creq.bpp = 16;
+	if (getenv("LVDESK_DIRECT") && !strcmp(getenv("LVDESK_DIRECT"), "1")) {
+		struct drm_esp32s31_scanout sc;
+
+		memset(&sc, 0, sizeof(sc));
+		if (ioctl(kms_fd, DRM_IOCTL_ESP32S31_SCANOUT_GET, &sc) == 0 &&
+		    sc.width == kms_w && sc.height == kms_h) {
+			kms_direct = 1;
+			creq.handle = sc.handle;
+			creq.pitch = sc.pitch;
+			creq.size = sc.size;
+			printf("kms: DIRECT scanout: handle %u, %ux%u pitch %u "
+			       "(%u bytes) - no per-frame copy\n", sc.handle,
+			       sc.width, sc.height, sc.pitch, sc.size);
+		} else {
+			printf("kms: direct scanout refused (%s) - dumb buffer\n",
+			       strerror(errno));
+		}
+	}
 	/*
 	 * Retry briefly. Taking DRM master makes the driver release fbdev
 	 * emulation's framebuffer - the panel's worth of memory that the
@@ -225,7 +266,7 @@ int kms_open(const char *path)
 	 * retry the desktop loses a race it would win a millisecond later and
 	 * exits with "Out of memory".
 	 */
-	{
+	if (!kms_direct) {
 		int tries;
 
 		for (tries = 0; tries < 20; tries++) {

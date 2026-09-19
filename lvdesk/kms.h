@@ -16,6 +16,7 @@ extern uint32_t kms_w, kms_h, kms_pitch, kms_size;
 struct kms_rect { int x1, y1, x2, y2; };	/* inclusive */
 
 int kms_open(const char *path);
+extern int kms_direct;		/* 1: rendering straight into the scanout buffer */
 
 /*
  * The DRM fd. The PPA can only address buffers allocated through it, so an

@@ -1,0 +1,34 @@
+drm/esp32s31: direct scanout - hand the compositor the panel's own buffer
+
+The port tree is gitignored, so these are the whole modified files rather
+than diffs. Copy them back over
+  linux-71-port/drivers/gpu/drm/espressif/esp32s31-lcd.c
+  linux-71-port/include/uapi/drm/esp32s31_drm.h
+before building. CUMULATIVE for esp32s31-lcd.c: supersedes 0040 (and what
+0040 superseded). Design: docs/scanout-direct-plan.md, stage 1.
+
+WHAT
+- The permanent scanout buffer is now a drm_gem_dma_object (scan_gem), same
+  pool, same cached memory, same physical address for the life of the driver;
+  the driver holds its own reference for ever, so a client's exit or crash can
+  never free what the cyclic DMA reads. Bare dma_alloc_coherent is the fallback.
+- DRM_IOCTL_ESP32S31_SCANOUT_GET (master only) returns a GEM handle to it plus
+  geometry. lvdesk (LVDESK_DIRECT=1) uses that handle instead of CREATE_DUMB
+  and proceeds exactly as before: MAP_DUMB, mmap, ADDFB, SETCRTC.
+- pipe_update: when the plane fb IS scan_gem there is nothing to copy; the
+  commit writes back the damaged rows' cache lines (the flush the copy path
+  paid for the client buffer anyway) and returns. Counted as path direct=.
+- cursor_set2 refuses the hardware cursor while that fb is on the CRTC: the
+  lift's "copy clean client pixels back" has no clean source when src == dst.
+  lvdesk falls back to its LVGL cursor (stage 1); stage 2 would be a
+  save-under cursor with the re-save-on-damage invariant from the plan.
+
+WHAT DOES NOT CHANGE
+- fbcon: the fbdev client keeps its own framebuffer and the copy path; the
+  handover (S40lvdesk stop/start) works as before because the DMA address
+  never moves. acceptance.sh exercises it both ways, twice.
+- Fullscreen mode switches, the JPEG recorder, the PPA scaling path.
+
+MEASURE, DO NOT ASSUME: ab.sh "" "LVDESK_DIRECT=1" (fresh boot per run), the
+LVPROF DIRTYFB time, MemAvailable (one 770 kB dumb buffer fewer), and the
+pointer-move cost of the software cursor on the desktop.
