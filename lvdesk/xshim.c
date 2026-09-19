@@ -143,6 +143,7 @@ struct res {
 	 * us nothing about what actually changed; this recovers it.
 	 */
 	uint32_t *rowhash;
+	size_t shadow_n;		/* bytes allocated behind shadow */
 	int rowhash_h;
 	/*
 	 * Those hashes describe the SOURCE of the last image put here, and
@@ -222,6 +223,8 @@ struct res {
 	uint32_t cursor;		/* windows: CWCursor, 0 = inherit */
 	uint8_t cur_hidden;		/* cursors: mask all zero, draws nothing */
 	uint8_t want_fs;		/* _NET_WM_STATE_FULLSCREEN set on the window */
+	uint8_t canary;		/* px is a heap block; hdr holds its allocator header */
+	uint32_t hdr;
 };
 
 /*
@@ -505,6 +508,7 @@ static void notify_draw(struct res *d);
 static int trace_on(void);
 static void px_release(struct res *r);
 static int px_share(struct res *r);
+static int canary_on(void);
 
 static unsigned long rf_calls, rf_steps;
 static unsigned long nreplies, nreqs;
@@ -681,6 +685,12 @@ static void res_free(uint32_t id)
 
 	if (!r)
 		return;
+	if (trace_on())
+		fprintf(stderr, "xshim: res_free 0x%x type %d %dx%d bpp %d px %p "
+			"alias 0x%x adopted %d gem %u shm %d buf %p parent 0x%x "
+			"owner %d\n", r->id, r->type, r->w, r->h, r->bpp,
+			(void *)r->px, r->alias, r->px_adopted, r->gem_src,
+			r->shm_fd, (void *)r->buf, r->parent, r->owner);
 	px_release(r);
 	r->type = R_FREE;
 	/*
@@ -691,6 +701,18 @@ static void res_free(uint32_t id)
 	for (i = 0; i < MAXRES; i++)
 		if (res[i].buf == r)
 			res[i].buf = NULL;
+}
+
+/* res_free() for a window and everything under it, deepest first. */
+static void res_free_tree(uint32_t id)
+{
+	int i;
+
+	for (i = 0; i < MAXRES; i++)
+		if (res[i].type == R_WINDOW && res[i].parent == id &&
+		    res[i].id != id)
+			res_free_tree(res[i].id);
+	res_free(id);
 }
 
 static struct res *top_of(struct res *r)
@@ -903,6 +925,7 @@ static int win8_gem_alloc(struct res *r, int w, int h)
 	 */
 	memset(m, 0, cs.size);
 	r->px = m;
+	r->canary = 0;
 	r->gem_src = cs.handle;
 	r->gem_len = cs.size;
 	return 1;
@@ -963,6 +986,7 @@ static uint16_t *px_alloc(struct res *r, int w, int h)
 
 			if (m != MAP_FAILED) {
 				r->px = m;
+				r->canary = 0;
 				r->shm_fd = fd;
 				r->shm_len = n;
 				r->hole = 1;
@@ -979,8 +1003,21 @@ static uint16_t *px_alloc(struct res *r, int w, int h)
 		/* fall through to the heap on any failure */
 	}
 	r->px = calloc((size_t)w * h, r->bpp);
+	r->canary = 0;
 	if (!r->px)
 		return NULL;
+	if (canary_on()) {
+		/*
+		 * Watch musl's 4-byte slot header in front of the block without
+		 * changing the block's size: padding the allocation moved the
+		 * heap around and the overrun stopped landing on anything
+		 * watched. The header is written once by malloc and never
+		 * legitimately changes, so any difference is a neighbour
+		 * writing past its end - exactly what get_meta() dies on.
+		 */
+		memcpy(&r->hdr, (const uint8_t *)r->px - 4, 4);
+		r->canary = 1;
+	}
 	r->hole = 1;
 	if (r->type == R_PIXMAP) {
 		mem_pix += n; n_pix++;
@@ -1024,6 +1061,7 @@ static int alias_break_ex(struct res *w, int keep_contents)
 	else
 		memset(own, 0, n);
 	w->px = own;
+	w->canary = 0;
 	/* zeroed: all zero; copied: whatever the pixmap was known to be */
 	w->hole = keep_contents ? (pm && pm->px && pm->hole) : 1;
 	wr_touch(w);
@@ -1052,8 +1090,28 @@ static void px_release(struct res *r)
 {
 	if (r->type == R_PIXMAP)
 		alias_drop(r);
+	/*
+	 * The shadow (RGB565 conversion of px) and the row hashes are derived
+	 * from THESE pixels at THIS size, and they die with them - on EVERY
+	 * path out of here, the alias one included. The alias early-return
+	 * below used to skip them, so a window that borrowed its background
+	 * pixmap's pixels and was then RESIZED kept a shadow sized for the old
+	 * geometry; the next xshim_window_pixels() converted the new, larger
+	 * frame into it and wrote up to 143 KB (xfiles 600x460 -> 798x436)
+	 * past its end. Black converts to zero, so the overrun zero-filled
+	 * whatever mapping followed: musl slot headers (lvdesk died in free()
+	 * at the client's exit, 2026-09-19) or a neighbouring window's pixels
+	 * (xcalc's window showing garbage when xfiles was resized over it).
+	 */
+	free(r->shadow);
+	r->shadow = NULL;
+	r->shadow_n = 0;
+	free(r->rowhash);
+	r->rowhash = NULL;
+	r->rowhash_h = 0;
 	if (r->alias) {			/* borrowed pixels are not ours */
 		r->px = NULL;
+		r->canary = 0;
 		r->alias = 0;
 		return;
 	}
@@ -1069,9 +1127,8 @@ static void px_release(struct res *r)
 	 * free of somebody else's allocation.
 	 */
 	if (r->px_adopted) {
-		free(r->shadow);
-		r->shadow = NULL;
 		r->px = NULL;
+		r->canary = 0;
 		r->px_adopted = 0;
 		return;
 	}
@@ -1080,11 +1137,6 @@ static void px_release(struct res *r)
 	} else {
 		mem_win -= n; n_win--;
 	}
-	free(r->shadow);
-	r->shadow = NULL;
-	free(r->rowhash);
-	r->rowhash = NULL;
-	r->rowhash_h = 0;
 	/*
 	 * GEM FIRST. This test used to be `shm_fd >= 0`, which decides between
 	 * munmap and free - and a GEM surface that has not been SHARED yet has
@@ -1126,8 +1178,27 @@ static void px_release(struct res *r)
 		r->px = NULL;
 		return;
 	}
+	if (r->canary)
+		xshim_canary_check("free");
+	r->canary = 0;
 	free(r->px);
 	r->px = NULL;
+}
+
+/*
+ * The pointer the desktop SHOULD be presenting this window from right now -
+ * exactly what xshim_window_pixels() would return, without converting. For
+ * the XSHIM_CANARY dangling-descriptor check in lvdesk.
+ */
+const void *xshim_window_pixel_ptr(uint32_t id)
+{
+	struct res *r = res_find(id);
+
+	if (!r || r->type != R_WINDOW)
+		return NULL;
+	if (r->bpp == 4 || r->bpp == 1)
+		return r->shadow;
+	return r->px;
 }
 
 void xshim_mem_report(void)
@@ -1629,6 +1700,7 @@ static void win_fill(struct res *d, int x, int y, int w, int h)
 		    pm->h == d->h && pm->bpp == d->bpp) {
 			px_release(d);
 			d->px = pm->px;
+			d->canary = 0;
 			d->hole = pm->hole;
 			wr_touch(d);
 			d->alias = pm->id;
@@ -1973,6 +2045,95 @@ static int trace_on(void)
 	if (v < 0)
 		v = getenv("XSHIM_TRACE") != NULL;
 	return v;
+}
+
+/*
+ * XSHIM_CANARY=1: every heap-backed drawable is allocated with 64 guard bytes
+ * on each side, and xshim_canary_check() verifies all of them - after every
+ * request, and from lvdesk's loop. A heap overrun then names the request or
+ * loop pass that did it instead of surfacing minutes later as free() dying in
+ * musl's get_meta (the 2026-09-19 teardown crash: a 16x16 pixmap's allocator
+ * header had been zeroed by a neighbour, and nothing in the trace touched it).
+ */
+static int canary_on(void)
+{
+	static int v = -1;
+
+	if (v < 0)
+		v = getenv("XSHIM_CANARY") != NULL;
+	return v;
+}
+
+static void dump_recent(struct cli *c);
+void xshim_canary_check(const char *when)
+{
+	int i;
+
+	if (!canary_on())
+		return;
+	for (i = 0; i < MAXRES; i++) {
+		struct res *r = &res[i];
+		const uint8_t *h;
+		uint32_t now;
+
+		if (r->type == R_FREE || !r->canary || !r->px)
+			continue;
+		h = (const uint8_t *)r->px - 4;
+		memcpy(&now, h, 4);
+		if (now == r->hdr)
+			continue;
+		fprintf(stderr, "xshim: HEAP HEADER SMASHED at '%s': 0x%x type %d "
+			"%dx%d bpp %d px %p owner %d: header was %08x now %08x; "
+			"16 bytes before px:", when, r->id, r->type, r->w, r->h,
+			r->bpp, (void *)r->px, r->owner, r->hdr, now);
+		for (h = (const uint8_t *)r->px - 16; h < (const uint8_t *)r->px; h++)
+			fprintf(stderr, " %02x", *h);
+		fprintf(stderr, "\n");
+		/*
+		 * Whose block sits just before it? The overrunner is almost
+		 * always the previous slot in the same size class, so list every
+		 * allocation of ours that ends within 8 KB before the victim.
+		 */
+		{
+			const uint8_t *v = (const uint8_t *)r->px;
+			int j;
+
+			for (j = 0; j < MAXRES; j++) {
+				struct res *q = &res[j];
+				const uint8_t *a;
+				size_t qn;
+
+				if (q->type == R_FREE)
+					continue;
+				qn = (size_t)q->w * q->h * (q->bpp ? q->bpp : 2);
+				a = (const uint8_t *)q->px;
+				if (a && a < v && a + 8192 > v)
+					fprintf(stderr, "xshim:   near: px of 0x%x "
+						"type %d %dx%d bpp %d at %p..%p "
+						"(%ld before)\n", q->id, q->type,
+						q->w, q->h, q->bpp, (void *)a,
+						(void *)(a + qn), (long)(v - (a + qn)));
+				a = (const uint8_t *)q->shadow;
+				if (a && a < v && a + 8192 > v)
+					fprintf(stderr, "xshim:   near: shadow of 0x%x "
+						"type %d %dx%d bpp %d at %p "
+						"(%ld before)\n", q->id, q->type,
+						q->w, q->h, q->bpp, (void *)a,
+						(long)(v - a));
+				a = (const uint8_t *)q->rowhash;
+				if (a && a < v && a + 8192 > v)
+					fprintf(stderr, "xshim:   near: rowhash of 0x%x "
+						"type %d %dx%d rows %d at %p "
+						"(%ld before)\n", q->id, q->type,
+						q->w, q->h, q->rowhash_h, (void *)a,
+						(long)(v - a));
+			}
+		}
+		if (cur_owner >= 0 && cur_owner < MAXCLI)
+			dump_recent(&cli[cur_owner]);
+		fflush(stderr);
+		abort();
+	}
 }
 
 /* The last few requests this client sent, oldest first. */
@@ -2900,12 +3061,15 @@ static void paint_subtree(struct cli *c, struct res *w)
 	int i;
 
 	win_fill(w, 0, 0, w->w, w->h);
+	xshim_canary_check("paint_subtree:fill");
 	draw_border(w);
+	xshim_canary_check("paint_subtree:border");
 	queue_expose(c, w, 0, 0, w->w, w->h);
 	for (i = 0; i < MAXRES; i++)
 		if (res[i].type == R_WINDOW && res[i].parent == w->id &&
 		    res[i].mapped && &res[i] != w)
 			paint_subtree(c, &res[i]);
+	xshim_canary_check("paint_subtree:children");
 }
 
 static void expose_window(struct cli *c, struct res *w)
@@ -2915,6 +3079,7 @@ static void expose_window(struct cli *c, struct res *w)
 	memset(d, 0, sizeof(d));
 	put32(d, w->id); put32(d + 4, w->id);
 	send_event(c, 19, d, 28);		/* MapNotify */
+	xshim_canary_check("expose_window:MapNotify");
 	/*
 	 * VisibilityNotify, Unobscured, for a client that asked for it. st
 	 * refuses to draw at all until one arrives (WIN_VISIBLE is set only
@@ -4930,6 +5095,7 @@ static void shmseg_drop(struct shmseg *sg)
 			size_t n = (size_t)w->w * w->h * (w->bpp ? w->bpp : 2);
 
 			w->px = calloc(n, 1);
+			w->canary = 0;
 			w->px_adopted = 0;
 			if (!w->px)
 				w->w = w->h = 0;	/* nothing to draw */
@@ -6114,9 +6280,38 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 				gid, mask, g->fg, g->bg);
 		break;
 	}
-	case 60: case 54: case 4:			/* Free GC/Pixmap/Window */
+	case 60: case 54:				/* FreeGC, FreePixmap */
 		res_free(get32(r + 4));
 		break;
+
+	case 4: {					/* DestroyWindow */
+		struct res *w = res_find(get32(r + 4));
+
+		if (!w || w->type != R_WINDOW)
+			break;
+		/*
+		 * TELL THE DESKTOP FIRST. This used to be a bare res_free(),
+		 * which released the window's pixels - munmap for a memfd
+		 * window - while lvdesk's image widget still named them; the
+		 * desktop only heard about the window when the SOCKET closed.
+		 * A client that destroys its window and then exits (SDL2's
+		 * SDL_DestroyWindow, then SDL_Quit) left a gap between the
+		 * two in which any LVGL refresh drew from unmapped memory:
+		 * lvdesk died in lv_memcpy, intermittently, after clean SDL2
+		 * exits (the "desktop absent, exit 90" runs of 2026-09-13 and
+		 * the second crash of 2026-09-19). close_cb is xwin_on_close,
+		 * which forgets the window and leaves fullscreen if it owned
+		 * it, and does NOT drop the client - a program may destroy
+		 * one window and carry on.
+		 *
+		 * X destroys the subtree with the window, so do that too:
+		 * children used to be left behind with buf = NULL.
+		 */
+		if (w->parent == ROOT_ID && close_cb)
+			close_cb(w->id);
+		res_free_tree(w->id);
+		break;
+	}
 
 	case 8: case 9: {				/* Map(Sub)Windows */
 		int i;
@@ -7950,6 +8145,7 @@ static int px_share(struct res *r)
 	else
 		memset(m, 0, n);
 	free(r->px);
+	r->canary = 0;
 	r->px = m;
 	r->shm_fd = fd;
 	r->shm_len = n;
@@ -7998,9 +8194,12 @@ static void win_resize(struct res *r, int w, int h, int force)
 		if (!px_alloc(r, w, h))
 			return;
 	}
+	xshim_canary_check("resize:px_alloc");
 	r->w = w; r->h = h;
 	geom_update(r);
+	xshim_canary_check("resize:geom");
 	win_fill(r, 0, 0, w, h);
+	xshim_canary_check("resize:fill");
 
 	memset(d, 0, sizeof(d));
 	put32(d, r->id); put32(d + 4, r->id);
@@ -8013,8 +8212,10 @@ static void win_resize(struct res *r, int w, int h, int force)
 			r->owner, r->event_mask);
 	if (r->mapped) {
 		expose_window(c, r);
+		xshim_canary_check("resize:expose_window");
 		notify_draw(r);
 	}
+	xshim_canary_check("resize:expose");
 	if (c->fd >= 0)
 		out_flush(c);
 }
@@ -8136,10 +8337,17 @@ const uint16_t *xshim_window_pixels(uint32_t id, int *w, int *h)
 		const uint32_t *src = (const uint32_t *)r->px;
 		size_t n = (size_t)r->w * r->h, i;
 
+		/* Never trust a shadow sized for some earlier geometry. */
+		if (r->shadow && r->shadow_n < n * 2) {
+			free(r->shadow);
+			r->shadow = NULL;
+			r->shadow_n = 0;
+		}
 		if (!r->shadow) {
 			r->shadow = malloc(n * 2);
 			if (!r->shadow)
 				return NULL;
+			r->shadow_n = n * 2;
 			r->dirty = 1;
 		} else if (!r->dirty) {
 			return r->shadow;
@@ -8216,10 +8424,17 @@ const uint16_t *xshim_window_pixels(uint32_t id, int *w, int *h)
 		size_t n = (size_t)r->w * r->h, i;
 		const uint16_t *pal;
 
+		/* Never trust a shadow sized for some earlier geometry. */
+		if (r->shadow && r->shadow_n < n * 2) {
+			free(r->shadow);
+			r->shadow = NULL;
+			r->shadow_n = 0;
+		}
 		if (!r->shadow) {
 			r->shadow = malloc(n * 2);
 			if (!r->shadow)
 				return NULL;
+			r->shadow_n = n * 2;
 			r->dirty = 1;
 		} else if (!r->dirty) {
 			return r->shadow;
@@ -8593,6 +8808,7 @@ static void client_drop(struct cli *c, int notify)
 {
 	int owner = (int)(c - cli), i;
 
+	xshim_canary_check("client_drop:start");
 	free(c->pend);
 	c->pend = NULL;
 	c->pendn = c->pendcap = 0;
@@ -8652,6 +8868,7 @@ static void client_drop(struct cli *c, int notify)
 			if (res[i].type == R_WINDOW && res[i].owner == owner &&
 			    res[i].parent == ROOT_ID)
 				close_cb(res[i].id);
+	xshim_canary_check("client_drop:close_cb");
 	for (i = 0; i < MAXRES; i++)
 		if (res[i].type != R_FREE && res[i].owner == owner)
 			res_free(res[i].id);
@@ -9026,6 +9243,7 @@ static void client_data(struct cli *c)
 
 			xshim_px_acc = 0;
 			handle(c, r, len);
+			xshim_canary_check(opstr(r[0]));
 			dt = xsp_now() - th;
 			dc = xsp_cpu_now() - tc;
 			xsp_handle += dt;
@@ -9039,6 +9257,7 @@ static void client_data(struct cli *c)
 			xsp_calls++;
 		} else {
 			handle(c, r, len);
+			xshim_canary_check(opstr(r[0]));
 		}
 		off += len;
 	}

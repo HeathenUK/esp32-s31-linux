@@ -41,6 +41,7 @@
 #include <math.h>
 #include <alsa/asoundlib.h>
 #include <signal.h>
+#include <ucontext.h>
 #include <setjmp.h>
 #include <stdio.h>
 #include <dirent.h>
@@ -572,6 +573,59 @@ static void vt_fatal(int sig)
 	raise(sig);
 }
 
+/*
+ * A death needs a recording. There is no gdb on the board and no core
+ * pattern, so a SIGSEGV used to leave exactly one line of evidence - the
+ * shell's "Segmentation fault" - and the 2026-09-19 teardown crash was found
+ * only because a wrapper recorded the exit status. This prints what a
+ * debugger would have started from: the faulting address, pc, ra, sp, and
+ * every word on the stack that points into our own text - candidate return
+ * addresses to resolve with addr2line against lvdesk.syms (built with
+ * LVDESK_SYMS=... alongside the stripped binary; strip does not move code).
+ * &crash_report is printed so a PIE slide can be subtracted host-side.
+ * Raw write(), not stdio: the process is dying and the log is what matters.
+ */
+static void crash_report(int sig, siginfo_t *si, void *ucv)
+{
+	extern char __executable_start[], etext[];
+	ucontext_t *uc = ucv;
+	unsigned long pc = uc->uc_mcontext.__gregs[0];
+	unsigned long ra = uc->uc_mcontext.__gregs[1];
+	unsigned long sp = uc->uc_mcontext.__gregs[2];
+	unsigned long *w, *end;
+	char b[160];
+	int n, k = 0;
+
+	n = snprintf(b, sizeof b,
+		     "lvdesk: CRASH sig=%d addr=%p pc=0x%lx ra=0x%lx sp=0x%lx "
+		     "text=%p..%p report=%p\n", sig, si ? si->si_addr : NULL,
+		     pc, ra, sp, __executable_start, etext, (void *)crash_report);
+	write(1, b, n);
+	/* 16 KB of stack above sp; a page past the top faults, which is fine */
+	end = (unsigned long *)((sp & ~3UL) + 16384);
+	for (w = (unsigned long *)(sp & ~3UL); w < end && k < 64; w++) {
+		if (*w >= (unsigned long)__executable_start &&
+		    *w < (unsigned long)etext) {
+			n = snprintf(b, sizeof b, "lvdesk:   stack[%04x] 0x%lx\n",
+				     (unsigned)((char *)w - (char *)sp), *w);
+			write(1, b, n);
+			k++;
+		}
+	}
+	write(1, "lvdesk: CRASH end\n", 18);
+	vt_fatal(sig);
+}
+
+static void crash_hook(int sig)
+{
+	struct sigaction sa;
+
+	memset(&sa, 0, sizeof sa);
+	sa.sa_sigaction = crash_report;
+	sa.sa_flags = SA_SIGINFO;
+	sigaction(sig, &sa, NULL);
+}
+
 static void vt_takeover(void)
 {
 	long mode;
@@ -603,8 +657,9 @@ static void vt_takeover(void)
 	signal(SIGTERM, vt_fatal);
 	signal(SIGINT, vt_fatal);
 	signal(SIGHUP, vt_fatal);
-	signal(SIGSEGV, vt_fatal);
-	signal(SIGABRT, vt_fatal);
+	crash_hook(SIGSEGV);
+	crash_hook(SIGABRT);
+	crash_hook(SIGBUS);
 	printf("lvdesk: console keyboard off, fbcon in graphics mode\n");
 }
 
@@ -2024,6 +2079,17 @@ static void wpa_events_open(void)
 
 /* ------------------------------------------------------------ alsa mixer */
 
+/* Case-insensitive substring. strcasestr needs _GNU_SOURCE; this is two uses. */
+static int name_has(const char *hay, const char *needle)
+{
+	size_t n = strlen(needle);
+
+	for (; *hay; hay++)
+		if (!strncasecmp(hay, needle, n))
+			return 1;
+	return 0;
+}
+
 static snd_mixer_t *mixer;
 /*
  * Every element with a playback volume, not just the first.
@@ -2114,16 +2180,50 @@ static void audio_open(void)
 	 * than hardcoding a name: the es8389 calls its output "DAC", but the
 	 * control set is the codec driver's business and has changed before.
 	 */
-	for (e = snd_mixer_first_elem(mixer); e; e = snd_mixer_elem_next(e)) {
+	/*
+	 * "Has a playback volume" IS NOT THE SAME AS "is an output volume".
+	 *
+	 * This codec exposes ADC2DAC Mixer - a SIDETONE that routes its ADC
+	 * straight into its DAC - as an element with a playback volume. The
+	 * old loop took it, so every lvdesk start turned the microphone up
+	 * into the speaker at the user's volume setting. That is the hiss,
+	 * and it was there long before any of the hart0 work: stop lvdesk and
+	 * the register stays where it was, start it and it jumps to 66%.
+	 * Measured directly on 2026-09-13; reverted by mistake on 2026-09-13
+	 * and reinstated 2026-09-19 (the gate now asserts ADC2DAC Mixer=0).
+	 *
+	 * Two passes rather than a hardcoded name, because the control set is
+	 * the codec driver's business and has been renamed before. Prefer
+	 * anything that calls itself a DAC; if the codec names its output
+	 * something else entirely, fall back to the old broad scan but still
+	 * refuse anything with ADC in the name. An output volume control is
+	 * never an ADC path.
+	 */
+	for (int pass = 0; pass < 2 && !mixer_nelem; pass++) {
+		for (e = snd_mixer_first_elem(mixer); e;
+		     e = snd_mixer_elem_next(e)) {
+			const char *nm;
+
 			if (!snd_mixer_selem_is_active(e))
 				continue;
 			if (!snd_mixer_selem_has_playback_volume(e))
 				continue;
+			snd_mixer_selem_get_id(e, sid);
+			nm = snd_mixer_selem_id_get_name(sid);
+			if (!nm)
+				continue;
+			if (name_has(nm, "ADC"))
+				continue;	/* never an output */
+			if (pass == 0 && !name_has(nm, "DAC"))
+				continue;	/* first pass: DACs only */
 			if (mixer_nelem < MIXER_MAX_ELEMS)
 				mixer_elems[mixer_nelem++] = e;
 			if (!mixer_elem)
 				mixer_elem = e;
+			printf("lvdesk: volume drives '%s'\n", nm);
 		}
+	}
+	fflush(stdout);
 
 	if (mixer_elem)
 		snd_mixer_selem_get_playback_volume_range(mixer_elem,
@@ -2858,6 +2958,7 @@ static void menu_popover_build(char **labels, int n, size_t maxlen,
 static void appmenu_open(int parent);
 static void appmenu_launch(const char *cmd);
 static void win_close(struct winrec *w);
+static void xwin_dsc_check(const char *when);
 static void audio_set_pct(int pct);
 static int audio_get_pct(void);
 static void state_set(const char *key, int val);
@@ -3052,6 +3153,8 @@ static void ctl_poll(void)
 
 			*nl = '\0';
 			ctl_line(acc);
+		xshim_canary_check("ctl"); xwin_dsc_check("ctl");
+			xshim_canary_check("ctl"); xwin_dsc_check("ctl");
 			rest = accn - (size_t)(nl + 1 - acc);
 			memmove(acc, nl + 1, rest);
 			accn = rest;
@@ -3158,6 +3261,7 @@ static void win_close(struct winrec *w)
 {
 	if (!w || !w->win)
 		return;
+	xshim_canary_check("win_close:start"); xwin_dsc_check("win_close:start");
 	/*
 	 * A switcher on screen holds pointers to windows, one of which may be
 	 * this one. Drop it rather than commit it - Alt-F4 during an Alt-Tab
@@ -3175,7 +3279,9 @@ static void win_close(struct winrec *w)
 		w->on_close();
 	if (w->tbtn)
 		lv_obj_delete(w->tbtn);
+	xshim_canary_check("win_close:before lv_obj_delete(win)");
 	lv_obj_delete(w->win);
+	xshim_canary_check("win_close:after lv_obj_delete(win)"); xwin_dsc_check("win_close:after lv_obj_delete(win)");
 	w->win = NULL;
 	w->tbtn = NULL;
 	mru_drop(w);
@@ -5550,6 +5656,44 @@ static void xwin_blit_direct(const lv_area_t *area)
  * HOTTEXT: 11.8% of lvdesk's on-CPU samples land on this function's first
  * page. It is the draw callback, and the expanders inline into it.
  */
+/*
+ * XSHIM_CANARY=1: is every client image still pointing at pixels the shim
+ * owns? An lv_image whose descriptor outlives the buffer it names is drawn
+ * from freed memory on the next refresh - which is what the 2026-09-19 second
+ * crash was (lv_memcpy from an unmapped heap group). Run at the same
+ * checkpoints as xshim_canary_check(); a visible stale image aborts with the
+ * crash report, a hidden one is only logged.
+ */
+static void xwin_dsc_check(const char *when)
+{
+	static int on = -1;
+	int i;
+
+	if (on < 0)
+		on = getenv("XSHIM_CANARY") != NULL;
+	if (!on)
+		return;
+	for (i = 0; i < xwin_n; i++) {
+		const void *cur;
+		int hidden;
+
+		if (!xwins[i].img || !lv_image_get_src(xwins[i].img))
+			continue;
+		cur = xshim_window_pixel_ptr(xwins[i].id);
+		if (cur == (const void *)xwins[i].dsc.data)
+			continue;
+		hidden = lv_obj_has_flag(xwins[i].win, LV_OBJ_FLAG_HIDDEN);
+		printf("lvdesk: STALE IMAGE at '%s': win 0x%x dsc.data=%p "
+		       "shim now %p %ux%u hidden=%d\n", when, xwins[i].id,
+		       (const void *)xwins[i].dsc.data, cur,
+		       (unsigned)xwins[i].dsc.header.w,
+		       (unsigned)xwins[i].dsc.header.h, hidden);
+		fflush(stdout);
+		if (!hidden)
+			abort();
+	}
+}
+
 static void HOTTEXT xwin_on_draw(uint32_t id)
 {
 	int i, w, h;
@@ -9860,6 +10004,7 @@ int main(void)
 				 * is the part worth skipping; this is not.
 				 */
 				next = lv_timer_handler();
+				xshim_canary_check("lv_timer_handler"); xwin_dsc_check("lv_timer_handler");
 				PROF_ADD(prof_timer, t0);
 				if (lvp_on > 0) {
 					lvp_lvtimer += lvp_now() - lv_c;
@@ -10048,6 +10193,8 @@ int main(void)
 					busy = 1;
 				}
 			}
+			xshim_canary_check("loop");
+			xwin_dsc_check("loop");	/* no-op unless XSHIM_CANARY */
 			/*
 			 * Only reap when a child has actually exited. waitpid()
 			 * on every loop was 83 ms per window to learn nothing.

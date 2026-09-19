@@ -177,3 +177,7 @@ void xshim_window_resize(uint32_t id, int w, int h);
 int xshim_window_resizable(uint32_t id);
 
 #endif /* LVDESK_XSHIM_H */
+
+/* XSHIM_CANARY=1 heap guards; a no-op otherwise. Call it from the loop. */
+void xshim_canary_check(const char *when);
+const void *xshim_window_pixel_ptr(uint32_t id);

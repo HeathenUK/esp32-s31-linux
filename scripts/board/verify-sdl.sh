@@ -32,6 +32,8 @@
 # says what it last saw.
 #
 #   verify-sdl.sh <w> <h> [--timedemo]
+#   env: VS_MODE=window|fullscreen (default fullscreen), VS_SOUND=1,
+#        VS_ENV="VAR=val ..." (the arm, written to /etc/lvdesk.env)
 set -u
 cd "$(dirname "$0")/../.."
 
@@ -69,18 +71,24 @@ SH
 # Arm selection: XSHIM_PPA_MIN_PX in the environment is written to the board
 # BEFORE the reset, so the arm is fixed for the whole boot and provable from
 # the log afterwards.
-if [ -n "${XSHIM_PPA_MIN_PX:-}" ]; then
-	cat > "$D/vs_env.sh" <<SH
-cat > /etc/lvdesk.env <<'EOF'
-export XSHIM_PPA_MIN_PX=$XSHIM_PPA_MIN_PX
-EOF
-sync
-sed 's/^/ZZ env /' /etc/lvdesk.env
-SH
+# VS_ENV generalises that: a space-separated "VAR=val VAR2=val" list written
+# to /etc/lvdesk.env verbatim (as export lines), so ANY runtime switch can be
+# an arm - LVDESK_DIRECTEXP, a module parameter echoed by lvdesk.env, or the
+# stock arm as VS_ENV="" (the empty string, distinct from unset, EMPTIES the
+# file so the stock arm is provable too). XSHIM_PPA_MIN_PX keeps working.
+[ -n "${XSHIM_PPA_MIN_PX:-}" ] && VS_ENV="${VS_ENV:+$VS_ENV }XSHIM_PPA_MIN_PX=$XSHIM_PPA_MIN_PX"
+if [ -n "${VS_ENV+set}" ]; then
+	{
+		echo ": > /etc/lvdesk.env"
+		for kv in $VS_ENV; do echo "echo 'export $kv' >> /etc/lvdesk.env"; done
+		echo "sync"
+		echo "echo \"ZZ env \$(tr '\\n' ' ' < /etc/lvdesk.env)\""
+	} > "$D/vs_env.sh"
 	E=$(R "$D/vs_env.sh" 40)
-	echo "$E" | grep -q "XSHIM_PPA_MIN_PX=$XSHIM_PPA_MIN_PX" || {
-		say "FAIL: env not applied"; exit 1; }
-	say "arm: XSHIM_PPA_MIN_PX=$XSHIM_PPA_MIN_PX (confirmed on the board)"
+	for kv in $VS_ENV; do
+		echo "$E" | grep -q "export $kv" || { say "FAIL: env not applied ($kv)"; exit 1; }
+	done
+	say "arm: ${VS_ENV:-(stock, lvdesk.env emptied)} (confirmed on the board)"
 else
 	# DO NOT touch /etc/lvdesk.env here.
 	#
@@ -124,6 +132,20 @@ fi
 
 # --- launch ----------------------------------------------------------------
 TD=""; [ "$MODE" = "--timedemo" ] && TD="-timedemo demo1"
+# prboom DEFAULTS TO FULLSCREEN (use_fullscreen=1 in the binary), and once the
+# shim grew VidMode a "windowed" run without -window silently became a
+# fullscreen one - a whole day of numbers were mislabelled that way. So the
+# mode is always passed explicitly and printed. VS_MODE=window|fullscreen,
+# default fullscreen (what every historical verify-sdl number actually was).
+VS_MODE=${VS_MODE:-fullscreen}
+case "$VS_MODE" in
+	window) VS_WINFLAG="-window" ;;
+	fullscreen) VS_WINFLAG="-fullscreen" ;;
+	*) say "FAIL: VS_MODE must be window or fullscreen"; exit 1 ;;
+esac
+# VS_SOUND=1 runs with sound (the real-world case); default is -nosound, which
+# is what the historical fps figures were taken with.
+VS_SNDFLAG="-nosound"; [ "${VS_SOUND:-0}" = 1 ] && VS_SNDFLAG=""
 cat > "$D/vs_fire.sh" <<SH
 export DISPLAY=:0
 export LD_LIBRARY_PATH=/root/doom/lib
@@ -132,12 +154,12 @@ for p in \$(ps | awk '/prboom/ && !/awk/ {print \$1}'); do kill -9 \$p 2>/dev/nu
 sleep 1
 rm -f /root/doom/vs.log
 cd /root/doom/wads
-setsid /root/doom/prboom -width $W -height $H -nosound $TD >/root/doom/vs.log 2>&1 </dev/null &
+setsid /root/doom/prboom -width $W -height $H $VS_WINFLAG $VS_SNDFLAG $TD >/root/doom/vs.log 2>&1 </dev/null &
 echo "ZZ u0=\$(cut -d. -f1 /proc/uptime)"
 SH
 U0=$(R "$D/vs_fire.sh" 40 | sed -n 's/^ZZ u0=//p')
 [ -n "$U0" ] || { say "FAIL: could not start the client"; exit 1; }
-say "launched ${W}x${H}${TD:+ timedemo}"
+say "launched ${W}x${H} ${VS_MODE}${VS_SNDFLAG:+ nosound}${TD:+ timedemo}"
 
 cat > "$D/vs_probe.sh" <<'SH'
 { grep "ZEROCOPY window" /var/log/lvdesk.log

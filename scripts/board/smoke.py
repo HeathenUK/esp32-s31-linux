@@ -98,24 +98,49 @@ if [ -x /root/mjpegrec ]; then
 	# redraw at the new size) followed by a RAISE while the client is idle:
 	# the Expose is queued with no traffic behind it to flush it, and the
 	# window never comes back. That is the sequence a human hit.
-	/root/mjpegrec /tmp/sm.mjpeg 3 8 90 256 >/dev/null 2>&1 &
-	REC=$!
-	usleep 300000
-	ctl "max $TOP"                  # restore - a resize
-	sleep 1
-	ctl "raise $TOP"                # ...then a raise, client idle
-	sleep 1
-	wait $REC 2>/dev/null
-	SZ=$(wc -c < /tmp/sm.mjpeg 2>/dev/null || echo 0)
-	[ "$SZ" -gt 0 ] && ok "restore+raise repaints" "${SZ} bytes captured" \
-	                || no "restore+raise repaints" "no frames - nothing was drawn"
-	[ "$SZ" -gt 35000 ] && ok "window has content" "${SZ} bytes" \
-	                    || no "window has content" "${SZ} bytes - blank or flat"
+	# Two attempts, not one. On a COLD boot xfiles pages its text in from
+	# the card on first use and the restore repaint can land after a 3 s
+	# recording window has closed: 0 frames, which reads exactly like "the
+	# desktop never repainted" and failed the gate twice on 2026-09-19 while
+	# the same board passed 12/12 a minute later. A second attempt after the
+	# client has had its first repaint separates "slow once" (reported as
+	# INFO) from "never" (still a FAIL).
+	SZ=0; ATT=0
+	while [ "$SZ" -le 0 ] && [ $ATT -lt 2 ]; do
+		ATT=$((ATT + 1))
+		rm -f /tmp/sm.mjpeg /tmp/sm.mjpeg.txt
+		/root/mjpegrec /tmp/sm.mjpeg 6 8 90 256 >/dev/null 2>&1 &
+		REC=$!
+		usleep 300000
+		ctl "max $TOP"                  # restore - a resize
+		sleep 1
+		ctl "raise $TOP"                # ...then a raise, client idle
+		sleep 1
+		wait $REC 2>/dev/null
+		SZ=$(wc -c < /tmp/sm.mjpeg 2>/dev/null || echo 0)
+		if [ "$SZ" -le 0 ] && [ $ATT -lt 2 ]; then
+			echo "CHK|repaint attempt 1 empty|INFO|retrying once (cold start?)"
+			ctl "max $TOP"; sleep 3     # back to maximised for the retry
+		fi
+	done
+	# Judge CONTENT on the largest single frame, not the total: the total
+	# is frames x size and a cold client that repaints once fails it while
+	# painting perfectly. Calibrated 2026-09-19 on the board (q90, 800x480):
+	#   bare desktop            5-10 kB per frame
+	#   restored window, BLANK  19-23 kB
+	#   restored xfiles PAINTED 54-65 kB
+	# 40000 splits blank from painted with margin on both sides.
+	SIZES=$(awk 'NF==3{print $2}' /tmp/sm.mjpeg.txt 2>/dev/null | tr '\n' ' ')
+	MAXF=$(printf '%s\n' $SIZES | sort -n | tail -1); MAXF=${MAXF:-0}
+	[ "$SZ" -gt 0 ] && ok "restore+raise repaints" "frames: ${SIZES}bytes" \
+	                || no "restore+raise repaints" "no frames in 6 s - nothing was drawn"
+	[ "$MAXF" -gt 40000 ] && ok "window has content" "largest frame ${MAXF} B" \
+	                      || no "window has content" "largest frame ${MAXF} B - a painted xfiles is 54-65 kB, a blank one 19-23"
 	echo "CHK|maximise CPU|INFO|$(( (B - A) * 10 )) ms"
 	# The recording ring and its output are the harness's own
 	# footprint - 640 kB of ring plus the file on tmpfs read as a
 	# memory regression and failed this on a healthy board.
-	rm -f /tmp/sm.mjpeg
+	rm -f /tmp/sm.mjpeg /tmp/sm.mjpeg.txt
 else
 	no "restore+raise repaints" "/root/mjpegrec missing"
 fi

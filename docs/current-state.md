@@ -4,6 +4,38 @@ Read this first after a context reset. It records what is true of the board
 right now, what is in flight, and — most importantly — what has already been
 tried and failed, so it is not tried again.
 
+## Two lvdesk crashes found and fixed; a fast gate now exists (2026-09-19)
+
+Full account and the running to-do list: `docs/worklog-2026-09-19.md`.
+
+- `make gate` (scripts/board/gate.py, ~2.5 min) asserts the on-board
+  configuration contract (kernel build number, USB cmdline flags, hardware
+  float, CMA size, futex, codec, sidetone muted, sdlbench binaries match the
+  tree), runs smoke.py, and compares two sdlbench canaries with
+  `scripts/board/gate-baseline.json`. `make gate-quick` is ~80 s. `make
+  acceptance` adds a reset, the fbcon<->lvdesk handover both ways and the real
+  Doom timedemos. `scripts/board/ab.sh` is the fresh-boot-per-run A/B over
+  verify-sdl.sh for anything that claims a performance win.
+- **Crash 1**: a window aliased to its background pixmap (xfiles) and then
+  resized kept an old-size RGB565 shadow; the next conversion overran it by
+  143 KB of zeros, corrupting musl slot headers and neighbouring windows'
+  pixel mappings (the "xfiles over xcalc corrupts xcalc" report). lvdesk died in
+  free() when the clients exited. Fixed in xshim.c px_release (derived buffers
+  freed on every path) and xshim_window_pixels (shadow carries its size).
+- **Crash 2**: DestroyWindow freed and unmapped a window's pixels without
+  telling lvdesk, whose image widget kept drawing from them until the socket
+  closed. SDL2's clean exit does exactly that, intermittently killing the
+  desktop after a run ("desktop absent, exit 90" on 2026-09-13). Fixed:
+  DestroyWindow notifies the desktop first and frees the subtree.
+- **Diagnostics that stay**: lvdesk's crash_report() (pc/ra/sp + text-pointing
+  stack words, resolve with addr2line against lvdesk.syms), `XSHIM_TRACE=1`
+  res_free provenance lines, and `XSHIM_CANARY=1`: a musl slot-header watch on
+  every heap drawable plus a dangling-image-descriptor check, both verified
+  after every request and loop pass. Guard-byte padding did NOT find crash 1 -
+  it moved the heap and the bug with it; the header watch preserves layout.
+- The mixer sidetone fix (DAC-only volume selection + S38audio-mixer) is back;
+  the second agent's tree had reverted it and the board was at ADC2DAC 62.
+
 ## SDL audio route optimisation (2026-09-13)
 
 `s31route` now opens the codec directly for native 48 kHz S16 stereo streams,

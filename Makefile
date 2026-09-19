@@ -1267,3 +1267,20 @@ flash-all: flash-opensbi flash-linux flash-rootfs flash-bootloader
 
 erase:
 	esptool -p /dev/ttyUSB0 -b 2000000 erase-flash
+
+# --- regression gates (scripts/board/gate.py, acceptance.sh) -------------
+# `make gate` is the fast one (~2.5 min: on-board config contract, desktop
+# smoke, two sdlbench canaries against scripts/board/gate-baseline.json).
+# `make gate-quick` skips the canaries (~80 s). `make acceptance` resets the
+# board and adds the fbcon<->lvdesk handover test and the real Doom timedemos
+# (~8 min). Run `make gate` after EVERY flash; both the FUTEX loss and the USB
+# flag loss of September 2026 would have been caught by it in under a minute.
+.PHONY: gate gate-quick gate-baseline acceptance
+gate:
+	python3 scripts/board/gate.py
+gate-quick:
+	python3 scripts/board/gate.py --quick
+gate-baseline:
+	python3 scripts/board/gate.py --update-baseline
+acceptance:
+	bash scripts/board/acceptance.sh
