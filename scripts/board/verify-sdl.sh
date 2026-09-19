@@ -32,7 +32,7 @@
 # says what it last saw.
 #
 #   verify-sdl.sh <w> <h> [--timedemo]
-#   env: VS_MODE=window|fullscreen (default fullscreen), VS_SOUND=1,
+#   env: VS_MODE=window|fullscreen (default fullscreen), VS_SOUND=0 for -nosound,
 #        VS_ENV="VAR=val ..." (the arm, written to /etc/lvdesk.env)
 set -u
 cd "$(dirname "$0")/../.."
@@ -150,9 +150,10 @@ case "$VS_MODE" in
 	fullscreen) VS_WINFLAG="-fullscreen" ;;
 	*) say "FAIL: VS_MODE must be window or fullscreen"; exit 1 ;;
 esac
-# VS_SOUND=1 runs with sound (the real-world case); default is -nosound, which
-# is what the historical fps figures were taken with.
-VS_SNDFLAG="-nosound"; [ "${VS_SOUND:-0}" = 1 ] && VS_SNDFLAG=""
+# WITH SOUND BY DEFAULT: that is how the game is played and it is the
+# project's standard measurement (user, 2026-09-19). VS_SOUND=0 gives the old
+# -nosound arm for comparison with figures taken before this date.
+VS_SNDFLAG=""; [ "${VS_SOUND:-1}" = 0 ] && VS_SNDFLAG="-nosound"
 cat > "$D/vs_fire.sh" <<SH
 export DISPLAY=:0
 export LD_LIBRARY_PATH=/root/doom/lib

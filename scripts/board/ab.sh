@@ -32,7 +32,7 @@ NAME=${1:?name}; REP=${2:?repeats}; shift 2
 ARMS=("$@")
 OUT=artifacts/ab/$NAME-$(date +%Y%m%d-%H%M%S); mkdir -p "$OUT"
 MODE=${VS_MODE:-fullscreen}; W=${AB_W:-320}; H=${AB_H:-200}
-echo "ab: $NAME  ${#ARMS[@]} arms x $REP  ${W}x${H} $MODE sound=${VS_SOUND:-0}  -> $OUT"
+echo "ab: $NAME  ${#ARMS[@]} arms x $REP  ${W}x${H} $MODE sound=${VS_SOUND:-1}  -> $OUT"
 
 for ((r = 1; r <= REP; r++)); do
 	order=$(seq 0 $((${#ARMS[@]} - 1)))
