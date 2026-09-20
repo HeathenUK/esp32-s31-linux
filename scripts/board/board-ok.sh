@@ -47,7 +47,10 @@ else
 fi
 # A bare desktop is ~15 kB, a desktop with a painting client ~47-105 kB, and a
 # black screen ~19 kB with a window on it. Below 10 kB there is nothing at all.
-if [ "$SZ" -lt 10000 ]; then
+# 2026-09-20: the bare lvdesk desktop now encodes to 9.2 kB (measured twice,
+# t6c.jpg and the acceptance boot shot), so 10 kB called a healthy idle
+# desktop empty. A single flat colour at 800x480 is ~5-6 kB.
+if [ "$SZ" -lt 7000 ]; then
 	echo "BOARD UP but SCREEN EMPTY (${SZ} B) | ${INFO#ZZ }"
 	exit 1
 fi

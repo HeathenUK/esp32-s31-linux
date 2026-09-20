@@ -156,7 +156,12 @@ int main(int argc, char **argv)
 	}
 
 	printf("PCSAMPLE %d samples of pid %d\n", got, pid);
-	for (int pass = 0; pass < 12; pass++) {
+	/* PCSAMPLE_TOP=n: print the top n buckets instead of 12 - needed to
+	 * aggregate a flat profile by function on the host (OpenTyrian's
+	 * soft-double mix, 2026-09-20). */
+	int top = getenv("PCSAMPLE_TOP") ? atoi(getenv("PCSAMPLE_TOP")) : 12;
+
+	for (int pass = 0; pass < top; pass++) {
 		int best = -1;
 		for (int i = 0; i < nbuckets; i++)
 			if (buckets[i].n && (best < 0 || buckets[i].n > buckets[best].n))

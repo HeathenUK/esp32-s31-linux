@@ -3,7 +3,9 @@
 #
 # FOUR CLAIMS, EACH FROM EVIDENCE THE SHIM PRINTS UNCONDITIONALLY:
 #
-#   1. zero-copy      "xshim: ZEROCOPY window ..."   (a window, not a cursor)
+#   1. zero-copy      "xshim: ZEROCOPY window ..." or "xshim: MIT-SHM attach ..."
+#                     (SDL has used MIT-SHM since 2026-09; the XLITE-SHM window
+#                     share line alone made every verdict since then say NO)
 #   2. CPU LUT        proven BY CONSTRUCTION, not by a log line - see below
 #   3. it painted     several screenshots taken DURING the run
 #   4. it was fast    prboom's fps, cross-checked against /proc/uptime
@@ -192,7 +194,7 @@ U0=$(R "$D/vs_fire.sh" 40 | sed -n 's/^ZZ u0=//p')
 say "launched ${W}x${H} ${VS_MODE}${VS_SNDFLAG:+ nosound}${TD:+ timedemo}"
 
 cat > "$D/vs_probe.sh" <<'SH'
-{ grep "ZEROCOPY window" /var/log/lvdesk.log
+{ grep -E "ZEROCOPY window|MIT-SHM attach" /var/log/lvdesk.log
   grep "xshim: CLUT " /var/log/lvdesk.log
   echo "doom=$(ps | grep -c '[p]rboom')"
   grep -h "frames per second" /root/doom/vs.log 2>/dev/null
@@ -272,7 +274,7 @@ while [ "$(date +%s)" -lt "$RUN_END" ]; do
 	# contention) must not be read as "no". Once seen, it stays seen -
 	# treating a failed probe as a negative is what produced a bogus
 	# "zero-copy: NO" on a run that had four shares in its own log.
-	echo "$OUT" | grep -q "ZEROCOPY window" && ZC_SEEN=1
+	echo "$OUT" | grep -qE "ZEROCOPY window|MIT-SHM attach" && ZC_SEEN=1
 	echo "$OUT" | grep -q "HARDWARE (PPA)" && HW_SEEN=1
 	echo "$OUT" | grep -q "CPU (software loop)" && CPU_SEEN=1
 	[ -n "$OUT" ] && LASTGOOD="$OUT"
@@ -292,7 +294,7 @@ cat > "$D/vs_vol.sh" <<'SH'
 rm -f /root/vs_vol.saved
 SH
 R "$D/vs_vol.sh" 20 >/dev/null
-echo "$FINAL" | grep -q "ZEROCOPY window" && ZC_SEEN=1
+echo "$FINAL" | grep -qE "ZEROCOPY window|MIT-SHM attach" && ZC_SEEN=1
 echo "$FINAL" | grep -q "HARDWARE (PPA)" && HW_SEEN=1
 echo "$FINAL" | grep -q "CPU (software loop)" && CPU_SEEN=1
 ZC=$ZC_SEEN; HW=$HW_SEEN; CPU=$CPU_SEEN
