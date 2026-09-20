@@ -1,0 +1,25 @@
+esp32s31-clic: native IPIs for CONFIG_SMP
+
+File: drivers/irqchip/irq-esp32s31-clic.c (whole file). All new code is under
+#ifdef CONFIG_SMP; the UP kernel is unchanged.
+
+An SMP kernel IPIs itself constantly (irq_work: deferred printk, RCU, tick).
+Our OpenSBI platform registers no IPI device, so with "providing IPIs using
+SBI IPI extension" the first self-IPI was lost: the boot reached "console
+[ttyS0] enabled", printed nothing live, and parked in arch_cpu_idle.
+
+IPI = software-set pending bit on CLIC slot 47 (free, S-mode, EDGE, level 1),
+own hart through the normal S window, other hart through +0x10000.
+ipi_mux_create + riscv_ipi_set_virq_range in the probe, i.e. before
+sbi_ipi_init(), which then stands down. The handler clears the latch BEFORE
+ipi_mux_process() so a concurrent send re-raises instead of being wiped.
+
+The slot must NOT have SHV: stvt is never installed on S31 (non-vectored by
+design), and a vectored slot jumps to 4*id - the first attempt oopsed at
+epc 0xbc = 47*4.
+
+Not the FROM_CPU_n doorbells GrieferPig uses: all four are taken here
+(0 IDF yield, 1 vCPU doorbell, 2/3 hosted). TODO stage 3: a CPU on hart0 has
+emulated interrupts and is kicked through FROM_CPU_1 instead.
+
+Verified 2026-09-20: #241 SMP boots to desktop, Wi-Fi/BT/HID up, 1 CPU.
