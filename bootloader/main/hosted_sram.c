@@ -122,6 +122,8 @@ static void IRAM_ATTR h1_doorbell_isr(void *arg)
 
 	(void)arg;
 	REG_WRITE(HP_SYSTEM_CPU_INT_FROM_CPU_3_REG, 0);	/* FIRST: a later ring re-asserts */
+	/* Order the peripheral acknowledgement before observing producer state. */
+	__asm__ volatile ("fence iorw, iorw" ::: "memory");
 #if CONFIG_S31_VCPU_PROTOTYPE
 	{
 		/*

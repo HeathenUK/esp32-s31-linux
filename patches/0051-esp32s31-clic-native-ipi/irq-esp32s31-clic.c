@@ -279,6 +279,7 @@ static struct esp32s31_clic *esp32s31_ipi_clic __ro_after_init;
 #define ESP32S31_LENT_HARTID	0
 static void __iomem *esp32s31_ipi_doorbell __ro_after_init;
 static void __iomem *esp32s31_ipi_req __ro_after_init;
+static void __iomem *esp32s31_hart1_ipi_doorbell __ro_after_init;
 static DEFINE_RAW_SPINLOCK(esp32s31_ipi_req_lock);
 
 /* DIAGNOSTIC (smp bring-up): who sent what to whom, and who took it. */
@@ -286,8 +287,6 @@ static atomic_t s31_ipi_sent[2][2], s31_ipi_taken[2];
 
 static void esp32s31_clic_ipi_send(unsigned int cpu)
 {
-	struct esp32s31_clic *clic = esp32s31_ipi_clic;
-	unsigned int other;
 
 	atomic_inc(&s31_ipi_sent[smp_processor_id() & 1][cpu & 1]);
 	if (cpuid_to_hartid_map(cpu) == ESP32S31_LENT_HARTID) {
@@ -310,18 +309,9 @@ static void esp32s31_clic_ipi_send(unsigned int cpu)
 		raw_spin_unlock_irqrestore(&esp32s31_ipi_req_lock, flags);
 		return;
 	}
-	/*
-	 * From the lent hart to hart 1 we write hart 1's slot through the
-	 * +0x10000 alias of OUR S window. Measured 2026-09-20: that works
-	 * (secondary bring-up completes, hundreds of IPIs). Asking the hart0
-	 * monitor to set the bit from M-mode (0x20811000 + 47*4) does NOT -
-	 * one send, hart 1 never woke.
-	 */
-	other = cpu == smp_processor_id() ? 0 : ESP32S31_CLIC_DUALCORE_OFF;
-	writeb(1, clic->regs + other + ESP32S31_CLIC_CTRL_BASE -
-	       ESP32S31_CLIC_BASE +
-	       ESP32S31_CLIC_IPI_SLOT * ESP32S31_CLIC_INT_STRIDE +
-	       ESP32S31_CLIC_INT_IP);
+	/* Real level doorbell: unlike a software CLIC pending bit, this wakes
+	 * hart 1 from WFI. Self-IPIs use exactly the same path. */
+	writel(1, esp32s31_hart1_ipi_doorbell);
 }
 
 static void esp32s31_clic_ipi_local_init(struct esp32s31_clic *clic)
@@ -331,7 +321,7 @@ static void esp32s31_clic_ipi_local_init(struct esp32s31_clic *clic)
 		    /* NO SHV: stvt is not installed on S31 (see
 		     * esp32s31_clic_install_vectors), so a vectored slot jumps
 		     * to 4*id - slot 47 oopsed at epc 0xbc. */
-		    CLIC_ATTR_MODE_S | CLIC_ATTR_TRIG_EDGE_RISE);
+		    CLIC_ATTR_MODE_S | CLIC_ATTR_TRIG_LEVEL);
 	clic_writeb(clic, ESP32S31_CLIC_IPI_SLOT, ESP32S31_CLIC_INT_CTL,
 		    CLICCTL_MAKE(ESP32S31_EXTERNAL_LEVEL, ESP32S31_MAX_PRIORITY));
 	clic_writeb(clic, ESP32S31_CLIC_IPI_SLOT, ESP32S31_CLIC_INT_IP, 0);
@@ -913,8 +903,11 @@ void esp32s31_clic_handle_irq(struct pt_regs *regs)
 		 * ipi_mux_process() must re-raise it, not be wiped after. */
 		/* On the lent CPU the IPI is injected; through the alias this write
 		 * would swallow an IPI pending for HART 1. */
-		if (!clic_on_lent_cpu())
+		if (!clic_on_lent_cpu()) {
+			writel(0, esp32s31_hart1_ipi_doorbell);
+			readl(esp32s31_hart1_ipi_doorbell);
 			clic_writeb(clic, irq_id, ESP32S31_CLIC_INT_IP, 0);
+		}
 		atomic_inc(&s31_ipi_taken[smp_processor_id() & 1]);
 		ipi_mux_process();
 		goto out;
@@ -1217,10 +1210,16 @@ static int __init esp32s31_clic_probe(struct device_node *node,
 			esp32s31_ipi_clic = clic;
 			esp32s31_ipi_doorbell = ioremap(0x2058601c, 4);	/* FROM_CPU_3 */
 			esp32s31_ipi_req = ioremap(0x2f06afbc, 4);	/* s31_hosted_control.lent_cpu_ipi_req */
+			esp32s31_hart1_ipi_doorbell = ioremap(0x20586014, 4);
+			if (!esp32s31_ipi_doorbell || !esp32s31_ipi_req ||
+			    !esp32s31_hart1_ipi_doorbell)
+				panic("CLIC: cannot map SMP doorbells");
+			writel(0, esp32s31_hart1_ipi_doorbell);
+			esp32s31_intmatrix_route(clic, 66, ESP32S31_CLIC_IPI_SLOT);
 			esp32s31_clic_ipi_local_init(clic);
 			/* Before sbi_ipi_init(), which then stands down. */
 			riscv_ipi_set_virq_range(virq, BITS_PER_BYTE);
-			pr_info("CLIC: native IPIs on slot %d\n",
+			pr_info("CLIC: hardware FROM_CPU_1 IPIs on slot %d (level)\n",
 				ESP32S31_CLIC_IPI_SLOT);
 			/* Idle policy is per hart: arch_cpu_idle() in process.c. */
 		}
@@ -1255,11 +1254,22 @@ err_free:
 #include <linux/workqueue.h>
 #include <linux/kernel_stat.h>
 #include <linux/sched/stat.h>
+#include <linux/sched/debug.h>
+static unsigned int s31_smp_dump_after;
+core_param(s31_smp_dump_after, s31_smp_dump_after, uint, 0400);
+static unsigned long s31_smp_dump_at;
+static bool s31_smp_dump_done;
 static struct timer_list s31_smp_beat;
 static void __iomem *s31_busmon, *s31_h0trace;
 
 static void s31_smp_beat_fn(struct timer_list *t)
 {
+	if (s31_smp_dump_after && !s31_smp_dump_done &&
+	    time_after_eq(jiffies, s31_smp_dump_at)) {
+		s31_smp_dump_done = true;
+		pr_info("s31-smp: one-shot task snapshot (diagnostic boot)\n");
+		show_state_filter(0);
+	}
 	/* (A 'hart0 frozen' panic lived here. It is WRONG now that an idle CPU1
 	 * lets hart0 sleep in FreeRTOS's idle loop: a constant PC is the goal.) */
 	if (s31_busmon) {
@@ -1285,6 +1295,7 @@ static void s31_smp_beat_fn(struct timer_list *t)
 
 static int __init s31_smp_beat_init(void)
 {
+	s31_smp_dump_at = jiffies + s31_smp_dump_after * HZ;
 	s31_busmon = ioremap(0x2d002000, 0x100);
 	s31_h0trace = ioremap(0x50fef000, 0x1000);
 	if (s31_h0trace)

@@ -37,3 +37,11 @@ touch no hardware there (through the alias they would hit HART 1's timer latch
 and swallow hart 1's pending IPI). set_affinity still refuses: every device
 interrupt stays on hart 1. Result: 5/5 boots, 0 I2C errors, rcS complete at
 32.6-36.6 s (UP ~33 s).
+
+UPDATE: hardware doorbell migration (step 2). FROM_CPU_1/source 66 now drives
+hart1 slot 47 as a LEVEL source, including self-IPIs. Clear the register and
+CLIC latch before consuming mux bits. FROM_CPU_3 is shared on hart0 with
+hosted transport; Linux increments the serialized SRAM request counter first.
+Polling idle remains for this step; restoring WFI is a separate change.
+The optional s31_smp_dump_after boot parameter emits one task snapshot; its
+default is zero, so normal boots do not dump tasks.

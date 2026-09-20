@@ -56,7 +56,7 @@ STAGES = [
     ("DISPLAY_UP",   ("scanout started",)),
     ("ROOT_MOUNTED", ("Mounted root", "Run /init", "VFS: Pivoted")),
     ("USERSPACE",    ("Starting syslogd", "Growing root", "Starting udevd")),
-    ("LOGIN",        (re.compile(r"login:\s*$", re.M),)),
+    ("LOGIN",        (re.compile(r"\blogin:"),)),
     # A PROMPT, at the end of a line - not the substring "# ". hart0's loader
     # prints "## Label            Usage ..." above its partition table on every
     # boot, so the old needle called any board that reached the second-stage
@@ -233,15 +233,16 @@ def watch_reset(timeout):
 
     # Then Linux, at the baud the console switches to.
     print("--- linux phase (1 Mbps, %ds) ---" % timeout)
-    late, _ = read_for(1000000, timeout, poke=b"\r\n")
+    late, _ = read_for(1000000, timeout, poke=b"\r\n", until=b"login:")
     late_lines = readable_lines(late)
     print("(%d raw bytes, %d readable lines)" % (len(late), len(late_lines)))
     stage = furthest(late) or early_stage
     if stage in ("LOGIN", "SHELL"):
         # Seeing a prompt scroll past is not the same as a board that answers.
         nonce = "A%dZ" % (int(time.time() * 1000) % 100000000)
-        text, _ = read_for(1000000, 4.0, poke=("\r\necho %s\r\n" % nonce).encode())
-        if nonce_output(text, nonce) or re.search(r"login:\s*$", text, re.M):
+        poke = b"\r\n" if stage == "LOGIN" else ("\r\necho %s\r\n" % nonce).encode()
+        text, _ = read_for(1000000, 4.0, poke=poke)
+        if nonce_output(text, nonce) or re.search(r"\blogin:", text):
             return report(stage, late_lines, "confirmed: the console answered a poke")
         print("STAGE %s_SEEN_BUT_SILENT" % stage)
         print("  a %s prompt went past during boot, but the console did NOT answer a" % stage.lower())

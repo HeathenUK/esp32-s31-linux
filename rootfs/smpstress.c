@@ -19,6 +19,9 @@ static atomic_int turn, errors, ready, go;
 static atomic_uint completed[2], total;
 static unsigned iterations = 10000;
 static int cpus[2] = {0, 1};
+static int timer_test;
+static uint64_t last_ns, max_sleep_ns;
+static atomic_uint clock_errors;
 
 static void timeout(int sig)
 {
@@ -73,6 +76,18 @@ static void *worker(void *arg)
                 _exit(1);
             }
         }
+        struct timespec stamp;
+        clock_gettime(CLOCK_MONOTONIC, &stamp);
+        uint64_t now_ns = (uint64_t)stamp.tv_sec*1000000000u + stamp.tv_nsec;
+        if (now_ns < last_ns) atomic_fetch_add(&clock_errors, 1);
+        last_ns = now_ns; /* turn's release/acquire serializes these writes */
+        if (timer_test && id == 1) {
+            struct timespec delay = { .tv_nsec = 1000000 };
+            while (nanosleep(&delay, &delay) && errno == EINTR) { }
+            clock_gettime(CLOCK_MONOTONIC, &stamp);
+            uint64_t elapsed = (uint64_t)stamp.tv_sec*1000000000u + stamp.tv_nsec - now_ns;
+            if (elapsed > max_sleep_ns) max_sleep_ns = elapsed;
+        }
         if (sched_getcpu() != cpus[id] ||
             !fp_yield(0x3f000000u + (unsigned)id * 0x10000u + i))
             atomic_fetch_add(&errors, 1);
@@ -93,6 +108,7 @@ int main(int argc, char **argv)
     struct timespec start, end;
     if (argc > 1) iterations = (unsigned)strtoul(argv[1], NULL, 0);
     if (argc > 2) cpus[1] = atoi(argv[2]); /* 0: same-CPU control */
+    if (argc > 3) timer_test = atoi(argv[3]);
     if (!iterations || iterations > 1000000 || cpus[1] < 0 || cpus[1] > 1)
         return 1;
     signal(SIGALRM, timeout);
@@ -109,11 +125,12 @@ int main(int argc, char **argv)
     alarm(0);
     long long us = (end.tv_sec-start.tv_sec)*1000000LL +
                    (end.tv_nsec-start.tv_nsec)/1000;
-    int bad = atomic_load(&errors) || atomic_load(&total) != 2*iterations;
+    int bad = atomic_load(&errors) || atomic_load(&clock_errors) || atomic_load(&total) != 2*iterations;
     printf("smpstress: %s cpus=%d,%d iterations=%u completed=%u,%u "
-           "errors=%d elapsed_us=%lld roundtrip_us=%lld\n",
+           "errors=%d elapsed_us=%lld roundtrip_us=%lld clock_errors=%u max_sleep_us=%llu\n",
            bad ? "FAIL" : "PASS", cpus[0], cpus[1], iterations,
            atomic_load(&completed[0]), atomic_load(&completed[1]),
-           atomic_load(&errors), us, us/iterations);
+           atomic_load(&errors), us, us/iterations, atomic_load(&clock_errors),
+           (unsigned long long)(max_sleep_ns/1000));
     return bad;
 }
