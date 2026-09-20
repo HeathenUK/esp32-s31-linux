@@ -42,24 +42,58 @@
 #define XLW_SHIFT_R	29	/* 0xFFE2 */
 #define XLW_CONTROL_L	30	/* 0xFFE3 */
 #define XLW_CONTROL_R	31	/* 0xFFE4 */
-#define XLW_CAPS_LOCK	32	/* 0xFFE5 */
-#define XLW_ALT_L	33	/* 0xFFE9 */
-#define XLW_ALT_R	34	/* 0xFFEA */
-#define XLW_SUPER_L	35	/* 0xFFEB */
-#define XLW_SUPER_R	36	/* 0xFFEC */
+/*
+ * NOT 32-36. A wire keycode below 128 that is not in the table IS its ASCII
+ * character, so 32 is SPACE, 33 '!', 34 '"', 35 '#', 36 '$'. From 2026-09-11
+ * to 2026-09-20 Caps_Lock was 32 and the Alts and Supers 33-36: every space
+ * bar press reached clients as a Caps_Lock press (which SDL never releases,
+ * so KMOD_CAPS then rode on every later key), and '!' '"' '#' '$' were
+ * modifiers. Found with rootfs/sdlkeys.c. 28-31 are safe - ASCII control
+ * codes no key produces - and the rest live in 128-159, the C1 block that
+ * Latin-1 leaves unprintable.
+ */
+#define XLW_CAPS_LOCK	128	/* 0xFFE5 */
+#define XLW_ALT_L	129	/* 0xFFE9 */
+#define XLW_ALT_R	130	/* 0xFFEA */
+#define XLW_SUPER_L	131	/* 0xFFEB */
+#define XLW_SUPER_R	132	/* 0xFFEC */
+
+static const unsigned short xlw_lo[] = {
+	0,      0xFF0D, 0xFF08, 0xFF09, 0xFF1B, 0xFFFF, 0xFF51,
+	0xFF52, 0xFF53, 0xFF54, 0xFF50, 0xFF57, 0xFF55, 0xFF56,
+	0xFF63, 0xFF8D, 0xFFBE, 0xFFBF, 0xFFC0, 0xFFC1, 0xFFC2,
+	0xFFC3, 0xFFC4, 0xFFC5, 0xFFC6, 0xFFC7, 0xFFC8, 0xFFC9,
+	0xFFE1, 0xFFE2, 0xFFE3, 0xFFE4,
+};
+static const unsigned short xlw_hi[] = {	/* from 128 */
+	0xFFE5, 0xFFE9, 0xFFEA, 0xFFEB, 0xFFEC,
+};
 
 static inline unsigned int xlw_widen(unsigned int c)
 {
-	static const unsigned short t[] = {
-		0,      0xFF0D, 0xFF08, 0xFF09, 0xFF1B, 0xFFFF, 0xFF51,
-		0xFF52, 0xFF53, 0xFF54, 0xFF50, 0xFF57, 0xFF55, 0xFF56,
-		0xFF63, 0xFF8D, 0xFFBE, 0xFFBF, 0xFFC0, 0xFFC1, 0xFFC2,
-		0xFFC3, 0xFFC4, 0xFFC5, 0xFFC6, 0xFFC7, 0xFFC8, 0xFFC9,
-		0xFFE1, 0xFFE2, 0xFFE3, 0xFFE4, 0xFFE5, 0xFFE9, 0xFFEA,
-		0xFFEB, 0xFFEC,
-	};
+	if (c < sizeof(xlw_lo) / sizeof(xlw_lo[0]))
+		return xlw_lo[c];
+	if (c >= 128 && c - 128 < sizeof(xlw_hi) / sizeof(xlw_hi[0]))
+		return xlw_hi[c - 128];
+	return c;
+}
 
-	return c < sizeof(t) / sizeof(t[0]) ? t[c] : c;
+/* The inverse, for XKeysymToKeycode: 0 when the keysym has no keycode. */
+static inline unsigned int xlw_narrow(unsigned int ks)
+{
+	unsigned int k;
+
+	if (ks >= 32 && ks < 127)
+		return ks;
+	if (ks >= 160 && ks < 256)
+		return ks;
+	for (k = 1; k < sizeof(xlw_lo) / sizeof(xlw_lo[0]); k++)
+		if (xlw_lo[k] == ks)
+			return k;
+	for (k = 0; k < sizeof(xlw_hi) / sizeof(xlw_hi[0]); k++)
+		if (xlw_hi[k] == ks)
+			return 128 + k;
+	return 0;
 }
 
 #endif

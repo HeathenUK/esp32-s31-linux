@@ -507,7 +507,7 @@ XLITE_IMPL(XKeysymToKeycode)
 KeyCode XKeysymToKeycode(Display *dpy, KeySym ks)
 {
 	(void)dpy;
-	return (KeyCode)(ks & 0xff);
+	return (KeyCode)xlw_narrow((unsigned int)ks);
 }
 
 /* UTF-8 flavour of XLookupString; for Latin-1 the bytes are the same. */

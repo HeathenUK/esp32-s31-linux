@@ -1,5 +1,21 @@
 # Where this work stands
 
+## 2026-09-20: X transport in shared memory, SPACE-as-Caps_Lock fixed, CMA 3 MiB
+
+- **XLITE-RING** (xlite/xring.h): xlite<->xshim byte stream in a memfd ring
+  with eventfd doorbells; socket kept for fds and HUP. 31.6 -> 33.4 fps on
+  windowed prboom with sound, same boot. XLITE_RING=0 / XSHIM_RING=0 disable.
+- **Fullscreen under direct scanout** no longer paints the desktop: the LVGL
+  refresh timer's callback is swapped for a no-op while fullscreen (a pause
+  does not hold - LVGL resumes it on invalidation).
+- **Wire keycodes**: Caps_Lock/Alt/Super collided with SPACE ! " # $ since
+  2026-09-11; now 128-132. Test with rootfs/sdlkeys.c, not keylog (blind
+  under lvdesk's EVIOCGRAB).
+- **CMA 3 MiB**, kernel #229 with DRM_IOCTL_ESP32S31_PRESENT (patches/0049).
+- NEVER leave vm.swappiness=0 on the board: it OOM-killed Quake with 62 MB
+  of swap free.
+Details and numbers: docs/worklog-2026-09-19.md.
+
 Read this first after a context reset. It records what is true of the board
 right now, what is in flight, and — most importantly — what has already been
 tried and failed, so it is not tried again.
