@@ -1,0 +1,25 @@
+Temporary kernel compatibility affinity for PIE on asymmetric S31 SMP.
+Whole-file snapshots: arch/riscv/include/asm/{processor.h,mmu_context.h},
+arch/riscv/kernel/esp32s31-ext.c. Apply after0053/0054.
+
+Uses force/relax_compatible_cpus_allowed_ptr to preserve user affinity and
+fork inheritance; releases after100ms by default. Runtime rollback:
+s31_pie_affinity_ms=0 keeps restrictions permanent. Stats: s31_pie_stats.
+Under validation; do not treat as accepted until the worklog says so.
+
+Default is 0 (permanent compatibility affinity), pending boot-stall diagnosis.
+The 100ms opt-in passed the warm regression, but failed two startup boots.
+Stats live at /sys/module/esp32s31_ext/parameters/s31_pie_stats; the lease
+core_param is /sys/module/kernel/parameters/s31_pie_affinity_ms.
+
+MOVED TO THE ATTIC 2026-09-21 - NOT APPLIED. Kernels #294-#300 carrying this
+prototype stalled at boot (RCU stall around S01seedrng) and the user reported
+freezes at unpredictable moments, including in lvdesk - WITH THE LEASE AT 0.
+"Off" is not off: the patch overrides task_cpu_possible_mask() for every task
+and replaces the simple pin with force_compatible_cpus_allowed_ptr(), so the
+scheduler's view of every task changes whatever the lease value. The kernel
+without it (#291, and the rollback build #301) passed 3 + 5 reset/stress soak
+cycles. The last stall record taken with it (pie-peer-record-boot2.log, #300):
+CPU1 in smp_call_function_many_cond waiting for CPU0; CPU0 in the ticket
+spinlock wait loop under page_vma_mapped_walk with its IPI and timer pending,
+enabled and NOT taken. Cause not established. Do not re-apply this as it is.

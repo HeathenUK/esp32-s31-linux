@@ -31,7 +31,6 @@
  *       bits [4:0] = not used for priority with CLICINTCTLBITS=3
  */
 
-#include <linux/uaccess.h>
 #include <linux/cpu.h>
 #include <linux/hrtimer_rearm.h>
 #include <linux/interrupt.h>
@@ -279,7 +278,6 @@ static DEFINE_RAW_SPINLOCK(esp32s31_ipi_req_lock);
 
 /* DIAGNOSTIC (smp bring-up): who sent what to whom, and who took it. */
 static atomic_t s31_ipi_sent[2][2], s31_ipi_taken[2];
-static void s31_smp_stall_probe(struct pt_regs *regs);
 
 static void esp32s31_clic_ipi_send(unsigned int cpu)
 {
@@ -874,12 +872,8 @@ void esp32s31_clic_handle_irq(struct pt_regs *regs)
 		 * S31's physical compare source is local ID7.  The generic timer
 		 * is registered on architectural supervisor timer IRQ5.
 		 */
-		if (irq_id == CLIC_CLINT_TIMER_ID) {
-#ifdef CONFIG_SMP
-			s31_smp_stall_probe(regs);
-#endif
+		if (irq_id == CLIC_CLINT_TIMER_ID)
 			linux_irq_id = CLIC_S_TIMER_ID;
-		}
 #endif
 		regs->cause = CAUSE_IRQ_FLAG | linux_irq_id;
 #ifdef CONFIG_SOC_ESP32S31
@@ -1280,56 +1274,8 @@ static bool s31_smp_dump_done;
 static struct timer_list s31_smp_beat;
 static void __iomem *s31_busmon, *s31_h0trace;
 
-/* Diagnostic only: softirq lockups can stop the normal heartbeat before RCU
- * can print a stack. Sample once per CPU from any still-running timer IRQ, before
- * the generic timer handler enters RCU stall reporting and its node locks. */
-static unsigned long s31_smp_last_beat;
-static bool s31_smp_beat_started;
-static DEFINE_PER_CPU(unsigned int, s31_smp_stall_reported);
-
-static void s31_smp_stall_probe(struct pt_regs *regs)
-{
-	unsigned int n = this_cpu_read(s31_smp_stall_reported);
-	struct esp32s31_clic *clic = this_cpu_read(clic_per_cpu);
-	u32 stack[8], peer_sp;
-
-	if (!s31_smp_diag ||
-	    !READ_ONCE(s31_smp_beat_started) || n >= 3 ||
-	    !time_after(jiffies, READ_ONCE(s31_smp_last_beat) + (6 + 2 * n) * HZ))
-		return;
-	this_cpu_write(s31_smp_stall_reported, n + 1);
-	if (s31_busmon) {
-		writel(3, s31_busmon + 0x44);
-		writel(3, s31_busmon + 0xcc);
-	}
-	peer_sp = s31_busmon ? readl(s31_busmon + (smp_processor_id() ? 0xd4 : 0x4c)) : 0;
-	memset(stack, 0, sizeof(stack));
-	if (peer_sp && copy_from_kernel_nofault(stack, (void *)(unsigned long)peer_sp, sizeof(stack)))
-		peer_sp = 0;
-	/* One record: UART DMA completions need CPU0, which may be stuck. */
-	pr_emerg("s31-stall: cpu%u pc %08lx ra %08lx sp %08lx a0 %08lx status %08lx pid %d comm %s | hart0 pc %08x sp %08x guest pc %08x ra %08x a0 %08x | hart1 pc %08x sp %08x | bell %x ipi %x/%x timer %x/%x | peer stack %08x: %08x %08x %08x %08x %08x %08x %08x %08x\n",
-		smp_processor_id(), regs->epc, regs->ra, regs->sp, regs->a0, regs->status,
-		current->pid, current->comm,
-		s31_busmon ? readl(s31_busmon + 0x48) : 0,
-		s31_busmon ? readl(s31_busmon + 0x4c) : 0,
-		s31_h0trace ? readl(s31_h0trace + 20) : 0,
-		s31_h0trace ? readl(s31_h0trace + 16) : 0,
-		s31_h0trace ? readl(s31_h0trace + 12) : 0,
-		s31_busmon ? readl(s31_busmon + 0xd0) : 0,
-		s31_busmon ? readl(s31_busmon + 0xd4) : 0,
-		readl(esp32s31_hart1_ipi_doorbell),
-		clic ? clic_readb(clic, ESP32S31_CLIC_IPI_SLOT, ESP32S31_CLIC_INT_IP) : 0,
-		clic ? clic_readb(clic, ESP32S31_CLIC_IPI_SLOT, ESP32S31_CLIC_INT_IE) : 0,
-		clic ? clic_readb(clic, CLIC_CLINT_TIMER_ID, ESP32S31_CLIC_INT_IP) : 0,
-		clic ? clic_readb(clic, CLIC_CLINT_TIMER_ID, ESP32S31_CLIC_INT_IE) : 0,
-		peer_sp, stack[0], stack[1], stack[2], stack[3],
-		stack[4], stack[5], stack[6], stack[7]);
-}
-
 static void s31_smp_beat_fn(struct timer_list *t)
 {
-	WRITE_ONCE(s31_smp_last_beat, jiffies);
-	WRITE_ONCE(s31_smp_beat_started, true);
 	if (s31_smp_dump_after && !s31_smp_dump_done &&
 	    time_after_eq(jiffies, s31_smp_dump_at)) {
 		s31_smp_dump_done = true;
