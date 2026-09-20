@@ -31,6 +31,8 @@ typedef union { double f; rep_t i; } du;
 
 #ifdef S31FP_TEST
 #define FN(n) s31_##n
+#elif defined(S31FP_PRELOAD)
+#define FN(n) s31fp_##n		/* reached by a patched jump, not by name */
 #else
 #define FN(n) __##n
 #endif
@@ -50,7 +52,12 @@ static inline int normalize(rep_t *sig)
 	return 1 - shift;
 }
 
-double FN(muldf3)(double x, double y)
+#ifdef S31FP_ASM_MUL
+#define MULNAME s31fp_muldf3_c	/* the asm fast path tail-calls this */
+#else
+#define MULNAME FN(muldf3)
+#endif
+double MULNAME(double x, double y)
 {
 	du ua = { x }, ub = { y }, r;
 	rep_t a = ua.i, b = ub.i;
