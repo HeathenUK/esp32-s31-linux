@@ -116,6 +116,9 @@ double MULNAME(double x, double y)
 	return r.f;
 }
 
+#ifdef S31FP_ASM_ADD
+double s31fp_adddf3_c(double x, double y);
+#endif
 static double addsub(rep_t a, rep_t b)
 {
 	du r;
@@ -191,16 +194,32 @@ static double addsub(rep_t a, rep_t b)
 	return r.f;
 }
 
-double FN(adddf3)(double x, double y)
+#ifdef S31FP_ASM_ADD
+#define ADDNAME s31fp_adddf3_c	/* adddf3.S tail-calls this; sub flips y first */
+#else
+#define ADDNAME FN(adddf3)
+#endif
+double ADDNAME(double x, double y)
 {
 	du a = { x }, b = { y };
 
 	return addsub(a.i, b.i);
 }
 
+#ifndef S31FP_ASM_ADD
 double FN(subdf3)(double x, double y)
 {
 	du a = { x }, b = { y };
 
 	return addsub(a.i, b.i ^ SIGN);
+}
+#endif
+
+/* Out-of-range double -> int32, as libgcc's soft-fp does it: saturate by
+ * sign; NaN goes the way its sign bit says. Reached only from conv.S. */
+int s31fp_fixdfsi_c(double x)
+{
+	du u = { x };
+
+	return (u.i & SIGN) ? (int)0x80000000u : 0x7fffffff;
 }

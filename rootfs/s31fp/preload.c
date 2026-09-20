@@ -40,13 +40,17 @@
 double s31fp_muldf3(double, double);
 double s31fp_adddf3(double, double);
 double s31fp_subdf3(double, double);
+double s31fp_floatsidf(int);
+double s31fp_floatunsidf(unsigned);
+int s31fp_fixdfsi(double);
 
 static const struct { const char *name; void *fn; } repl[] = {
 	{ "__muldf3", (void *)s31fp_muldf3 },
-#ifdef S31FP_PATCH_ADD		/* only once it beats libgcc on the board */
 	{ "__adddf3", (void *)s31fp_adddf3 },
 	{ "__subdf3", (void *)s31fp_subdf3 },
-#endif
+	{ "__floatsidf", (void *)s31fp_floatsidf },
+	{ "__floatunsidf", (void *)s31fp_floatunsidf },
+	{ "__fixdfsi", (void *)s31fp_fixdfsi },
 };
 
 static int dbg, npatched;

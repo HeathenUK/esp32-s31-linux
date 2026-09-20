@@ -6,6 +6,7 @@
 #include <string.h>
 #include <time.h>
 double s31fp_muldf3(double, double), s31fp_adddf3(double, double), s31fp_subdf3(double, double);
+double s31fp_floatsidf(int), s31fp_floatunsidf(unsigned); int s31fp_fixdfsi(double);
 static uint64_t s = 88172645463325252ULL;
 static uint64_t rnd(void) { s ^= s << 13; s ^= s >> 7; s ^= s << 17; return s; }
 static uint64_t bits(double d) { uint64_t u; memcpy(&u, &d, 8); return u; }
@@ -36,8 +37,14 @@ int main(int argc, char **argv)
 		double m = a * b, ad = a + b, sb = a - b;	/* libgcc */
 		if (!same(s31fp_muldf3(a, b), m) && bad++ < 8)
 			printf("MUL %016llx %016llx got %016llx want %016llx\n", (unsigned long long)bits(a), (unsigned long long)bits(b), (unsigned long long)bits(s31fp_muldf3(a, b)), (unsigned long long)bits(m));
-		if (!same(s31fp_adddf3(a, b), ad) && bad++ < 8) printf("ADD mismatch\n");
+		if (!same(s31fp_adddf3(a, b), ad) && bad++ < 8) printf("ADD %016llx %016llx got %016llx want %016llx\n", (unsigned long long)bits(a), (unsigned long long)bits(b), (unsigned long long)bits(s31fp_adddf3(a, b)), (unsigned long long)bits(ad));
 		if (!same(s31fp_subdf3(a, b), sb) && bad++ < 8) printf("SUB mismatch\n");
+		{
+			volatile int iv = (int)rnd() >> (rnd() % 32); volatile unsigned uv = (unsigned)rnd() >> (rnd() % 32);
+			if (!same(s31fp_floatsidf(iv), (double)iv) && bad++ < 8) printf("FLOATSI %d\n", iv);
+			if (!same(s31fp_floatunsidf(uv), (double)uv) && bad++ < 8) printf("FLOATUN %u\n", uv);
+			if (s31fp_fixdfsi(a) != (int)a && bad++ < 8) printf("FIX %016llx got %d want %d\n", (unsigned long long)bits(a), s31fp_fixdfsi(a), (int)a);
+		}
 	}
 	printf("s31fp-verify: %ld operand pairs x3 ops, %ld mismatches\n", n, bad);
 	return bad != 0;
