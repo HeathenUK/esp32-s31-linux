@@ -278,6 +278,7 @@ static struct esp32s31_clic *esp32s31_ipi_clic __ro_after_init;
  */
 #define ESP32S31_LENT_HARTID	0
 static void __iomem *esp32s31_ipi_doorbell __ro_after_init;
+static void __iomem *esp32s31_ipi_req __ro_after_init;
 
 /* DIAGNOSTIC (smp bring-up): who sent what to whom, and who took it. */
 static atomic_t s31_ipi_sent[2][2], s31_ipi_taken[2];
@@ -289,6 +290,14 @@ static void esp32s31_clic_ipi_send(unsigned int cpu)
 
 	atomic_inc(&s31_ipi_sent[smp_processor_id() & 1][cpu & 1]);
 	if (cpuid_to_hartid_map(cpu) == ESP32S31_LENT_HARTID) {
+		/*
+		 * The hart1->hart0 doorbell (FROM_CPU_3) is shared with the hosted
+		 * transport; hart 0 tells our IPI from its kicks by this request
+		 * counter, which only Linux writes. Bump, THEN ring. A lost update
+		 * between two senders is harmless: any change means "inject", and
+		 * the IPI mux bits say who asked.
+		 */
+		writel(readl(esp32s31_ipi_req) + 1, esp32s31_ipi_req);
 		writel(1, esp32s31_ipi_doorbell);
 		return;
 	}
@@ -1197,7 +1206,8 @@ static int __init esp32s31_clic_probe(struct device_node *node,
 			pr_err("CLIC: ipi_mux_create failed (%d)\n", virq);
 		} else {
 			esp32s31_ipi_clic = clic;
-			esp32s31_ipi_doorbell = ioremap(0x20586014, 4);
+			esp32s31_ipi_doorbell = ioremap(0x2058601c, 4);	/* FROM_CPU_3 */
+			esp32s31_ipi_req = ioremap(0x2f06afbc, 4);	/* s31_hosted_control.lent_cpu_ipi_req */
 			esp32s31_clic_ipi_local_init(clic);
 			/* Before sbi_ipi_init(), which then stands down. */
 			riscv_ipi_set_virq_range(virq, BITS_PER_BYTE);

@@ -224,18 +224,21 @@ static void IRAM_ATTR vcpu_inject(uint32_t *area, int force)
 
 static TaskHandle_t vcpu_handle;
 
-static void IRAM_ATTR ipi_isr(void *arg)
+/*
+ * A Linux IPI for this CPU. Called from hosted_sram.c's doorbell ISR: the
+ * hart1->hart0 line (FROM_CPU_3) is shared with the hosted transport, which
+ * owns and acks the register and tells an IPI from its own kicks by the
+ * request counter (docs/smp-ipi-plan.md). FROM_CPU_1, which this used to
+ * own, is now the IPI line INTO hart 1.
+ */
+int IRAM_ATTR s31_vcpu_ipi_from_isr(void)
 {
 	BaseType_t woken = pdFALSE;
 
-	(void)arg;
-	REG_WRITE(S31_FROM_CPU_1, 0);
 	s31_vcpu_vpending |= VIRQ_IPI;
-	if (vcpu_handle) {		/* it may be blocked in guest_idle() */
+	if (vcpu_handle)		/* it may be blocked in s31_vcpu_guest_idle() */
 		vTaskNotifyGiveFromISR(vcpu_handle, &woken);
-		if (woken)
-			portYIELD_FROM_ISR();
-	}
+	return woken == pdTRUE;
 }
 
 /*
@@ -542,8 +545,6 @@ static void vcpu_task(void *arg)
 			     (uint32_t)(uintptr_t)s31_vcpu_irq_entry : _mtvt_table[i];
 
 	my_mtvt[7] = (uint32_t)(uintptr_t)s31_vcpu_mtimer_entry;
-	if (esp_intr_alloc(ETS_CPU_INTR_FROM_CPU_1_SOURCE, 0, ipi_isr, NULL, NULL) != ESP_OK)
-		ESP_LOGE(TAG, "could not take the FROM_CPU_1 doorbell");
 	RV_SET_CSR(mcounteren, 2);	/* let S-mode try rdtime natively */
 
 #if CONFIG_S31_VCPU_LINUX

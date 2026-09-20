@@ -112,12 +112,40 @@ static void notify_hart1(void)
 		  HP_SYSTEM_CPU_INT_FROM_CPU_2);
 }
 
+#if CONFIG_S31_VCPU_PROTOTYPE
+int s31_vcpu_ipi_from_isr(void);	/* s31_vcpu.c: returns nonzero if a task was woken */
+#endif
+
 static void IRAM_ATTR h1_doorbell_isr(void *arg)
 {
 	BaseType_t wake = pdFALSE;
 
 	(void)arg;
-	REG_WRITE(HP_SYSTEM_CPU_INT_FROM_CPU_3_REG, 0);
+	REG_WRITE(HP_SYSTEM_CPU_INT_FROM_CPU_3_REG, 0);	/* FIRST: a later ring re-asserts */
+#if CONFIG_S31_VCPU_PROTOTYPE
+	{
+		/*
+		 * This line is shared with Linux's IPIs to the CPU hart 0 lends it
+		 * (docs/smp-ipi-plan.md). An IPI is a CHANGE in the request counter
+		 * only Linux writes. When the kick was an IPI and our own ring is
+		 * empty, do not wake hosted_rx - it runs at top priority and would
+		 * wake for nothing on every IPI.
+		 */
+		static uint32_t seen;
+		uint32_t req = s_ctrl->lent_cpu_ipi_req;
+
+		if (req != seen) {
+			seen = req;
+			if (s31_vcpu_ipi_from_isr())
+				wake = pdTRUE;
+			if (s_ctrl->h1_to_h0.producer == s_ctrl->h1_to_h0.consumer) {
+				if (wake)
+					portYIELD_FROM_ISR();
+				return;
+			}
+		}
+	}
+#endif
 	s_ctrl->h0_irq_count++;
 	shared_wmb();
 	if (s_rx_task)

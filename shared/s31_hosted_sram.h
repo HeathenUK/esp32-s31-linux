@@ -419,7 +419,15 @@ struct s31_hosted_control {
 	volatile s31_u32 h0_seen_h1_sequence;
 	volatile s31_u32 h0_apm_status;
 	volatile s31_u32 h0_h1_doorbell;
-	s31_u8 header_pad[4];
+	/*
+	 * SMP (docs/smp-ipi-plan.md): Linux IPIs to the CPU lent by hart 0 share
+	 * the hart1->hart0 doorbell (FROM_CPU_3) with this transport. This is the
+	 * reason word: a REQUEST COUNTER that ONLY LINUX WRITES (increment, then
+	 * ring). hart 0 keeps a private "last seen" and injects an IPI when they
+	 * differ - it never writes here, so a set/clear race cannot lose one.
+	 * Was 4 bytes of padding: the layout and ABI version are unchanged.
+	 */
+	volatile s31_u32 lent_cpu_ipi_req;
 	struct s31_hosted_ring_state h0_to_h1;
 	struct s31_hosted_ring_state h1_to_h0;
 };
@@ -465,6 +473,9 @@ _Static_assert(sizeof(struct s31_hosted_wifi_msg) == 140,
 	       "hosted Wi-Fi message ABI changed");
 _Static_assert(sizeof(struct s31_hosted_ring_state) == 192,
 	       "hosted ring state must occupy three cache lines");
+#define S31_LENT_CPU_IPI_REQ_OFFSET	60U	/* from S31_HP_SHARED_BASE: 0x2F06AFBC */
+_Static_assert(__builtin_offsetof(struct s31_hosted_control, lent_cpu_ipi_req) ==
+	       S31_LENT_CPU_IPI_REQ_OFFSET, "Linux's CLIC driver hard-codes 0x2F06AFBC");
 _Static_assert(sizeof(struct s31_hosted_control) == 448,
 	       "hosted control block ABI changed");
 _Static_assert(sizeof(struct s31_hosted_slot) == S31_HOSTED_SLOT_SIZE,
