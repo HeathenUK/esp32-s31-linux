@@ -399,14 +399,15 @@ int IRAM_ATTR s31_vcpu_trap(uint32_t *area)
 			return 0;
 		}
 		/*
-		 * SBI IPI send_ipi from the lent CPU: the only other hart is
-		 * hart 1, whose Linux IPI is a software-set pending bit on its
-		 * CLIC slot 47 (patches/0051). Set it from M-mode through the
-		 * cross-hart alias of the M window.
+		 * Legacy mini-SBI send_ipi support uses the same physical hart1
+		 * doorbell as Linux's native IPI mux. No software-pending alias:
+		 * that cannot wake hart1 from WFI.
 		 */
 		if (linux_mode && area[16] == 0x735049u && area[15] == 0) {
 			if (area[9] & 2u) {
-				*(volatile uint8_t *)(uintptr_t)(0x20801000u + 0x10000u + 47u * 4u) = 1;
+				REG_WRITE(0x20586014u, 1);	/* FROM_CPU_1 */
+				(void)REG_READ(0x20586014u);
+				__asm__ volatile ("fence iorw, iorw" ::: "memory");
 				s31_vcpu_lx[9]++;
 			}
 			area[9] = 0;

@@ -1262,6 +1262,8 @@ err_free:
 #include <linux/sched/stat.h>
 #include <linux/sched/debug.h>
 #include <linux/hrtimer.h>
+static bool s31_smp_diag;
+core_param(s31_smp_diag, s31_smp_diag, bool, 0400);
 static unsigned long s31_timer_probe;
 core_param(s31_timer_probe, s31_timer_probe, ulong, 0400);
 static void __iomem *s31_timer_trace;
@@ -1313,6 +1315,8 @@ static void s31_smp_beat_fn(struct timer_list *t)
 
 static int __init s31_smp_beat_init(void)
 {
+	if (!s31_smp_diag && !s31_timer_probe && !s31_smp_dump_after)
+		return 0;
 	if (s31_timer_probe)
 		s31_timer_trace = ioremap(s31_timer_probe, 48);
 	s31_smp_dump_at = jiffies + s31_smp_dump_after * HZ;
@@ -1331,9 +1335,9 @@ early_initcall(s31_smp_beat_init);
  * MEASURED 2026-09-21 by a one-shot self-test that lived here (6 boots of 6):
  * writes made on the lent CPU through the +0x10000 alias reach hart 1's CLIC
  * for ALL FOUR bytes of a slot - IE (1 -> 1, 0 -> 0), ATTR (42 -> 42, 40 ->
- * 40), CTL (1f -> 1f, 3f -> 3f) - and IP is how the IPI works. The alias is
+ * 40), CTL (1f -> 1f, 3f -> 3f) - and IP can be set through it. The alias is
  * sound; do not suspect it again. The test also showed initcalls running on
- * CPU1 on some boots despite isolcpus=1 (kernel_init is not bound by it).
+ * CPU1 on some boots despite isolcpus=1 (CONFIG_CPU_ISOLATION was disabled).
  * An LR/SC-versus-plain-store test was attempted next and removed: its inline
  * asm was wrong (a0 clobbered before lr.w) and it oopsed; the hardware
  * question it asked is still OPEN.
@@ -1348,7 +1352,7 @@ early_initcall(s31_smp_beat_init);
  * hart 1 truly asleep (one wfi, zero fall-throughs): ring -> awake latency
  * min 0, median 1, max 9 us. (The other 4 had a tick pending first - with
  * interrupts off that turns wfi into a no-op, so they were excluded.) The
- * software-set pending bit used for IPIs today does NOT wake wfi.
+ * former software-set IPI pending bit does NOT wake wfi.
  */
 
 IRQCHIP_DECLARE(esp32s31_clic, "espressif,esp32s31-clic", esp32s31_clic_probe);
