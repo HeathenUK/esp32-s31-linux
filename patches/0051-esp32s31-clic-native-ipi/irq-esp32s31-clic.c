@@ -279,6 +279,7 @@ static struct esp32s31_clic *esp32s31_ipi_clic __ro_after_init;
 #define ESP32S31_LENT_HARTID	0
 static void __iomem *esp32s31_ipi_doorbell __ro_after_init;
 static void __iomem *esp32s31_ipi_req __ro_after_init;
+static DEFINE_RAW_SPINLOCK(esp32s31_ipi_req_lock);
 
 /* DIAGNOSTIC (smp bring-up): who sent what to whom, and who took it. */
 static atomic_t s31_ipi_sent[2][2], s31_ipi_taken[2];
@@ -293,12 +294,20 @@ static void esp32s31_clic_ipi_send(unsigned int cpu)
 		/*
 		 * The hart1->hart0 doorbell (FROM_CPU_3) is shared with the hosted
 		 * transport; hart 0 tells our IPI from its kicks by this request
-		 * counter, which only Linux writes. Bump, THEN ring. A lost update
-		 * between two senders is harmless: any change means "inject", and
-		 * the IPI mux bits say who asked.
+		 * counter, which only Linux writes. Serialize the two senders:
+		 * if both read N and write N+1, the monitor can consume the first
+		 * IPI before the second write, see no change and lose the second.
+		 * Keep the increment and doorbell ordered inside the IRQ-safe
+		 * lock. The monitor never takes this lock or writes the counter.
 		 */
+		unsigned long flags;
+
+		raw_spin_lock_irqsave(&esp32s31_ipi_req_lock, flags);
 		writel(readl(esp32s31_ipi_req) + 1, esp32s31_ipi_req);
 		writel(1, esp32s31_ipi_doorbell);
+		/* Complete MMIO before another CPU can enter the critical section. */
+		readl(esp32s31_ipi_doorbell);
+		raw_spin_unlock_irqrestore(&esp32s31_ipi_req_lock, flags);
 		return;
 	}
 	/*
@@ -1259,7 +1268,7 @@ static void s31_smp_beat_fn(struct timer_list *t)
 			readl(s31_busmon + 0x48), readl(s31_busmon + 0x4c));
 	}
 	if (s31_h0trace)
-		pr_info("s31-smp: hart0 monitor: world step %02x coproc ecalls %u redirected %u (cause %u) cpst %04x inj t %u i %u deferred %u | enable readback %08x | last illegal: EXT_ILL<<24|FS|cpst %08x\n",
+		pr_info("s31-smp: hart0 monitor: world step %02x guest a0 %08x ra %08x pc %08x cpst %04x inj t %u i %u deferred %u | enable readback %08x | last illegal: EXT_ILL<<24|FS|cpst %08x\n",
 			readl(s31_h0trace), readl(s31_h0trace + 12), readl(s31_h0trace + 16),
 			readl(s31_h0trace + 20), readl(s31_h0trace + 24), readl(s31_h0trace + 28),
 			readl(s31_h0trace + 32), readl(s31_h0trace + 36), readl(s31_h0trace + 40),

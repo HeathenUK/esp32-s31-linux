@@ -43,6 +43,8 @@ import serial
 
 import console
 
+TRANSCRIPT = None
+
 PORT = os.environ.get("S31_PORT", "/dev/cu.usbserial-130")
 
 # Ordered: the furthest match wins, so a later stage implies the earlier ones.
@@ -86,13 +88,16 @@ def furthest(text, only=None):
     return seen
 
 
-def read_for(baud, secs, poke=None):
+def read_for(baud, secs, poke=None, until=None):
     try:
         console.take_port_lock(what='alive.py')
         s = serial.Serial(PORT, baud, timeout=0.2)
     except serial.SerialException as e:
         return "", "PORT_ERROR: %s" % e
     buf = b""
+    if TRANSCRIPT:
+        with open(TRANSCRIPT, "ab") as f:
+            f.write(("\n--- baud %d ---\n" % baud).encode())
     try:
         if poke:
             s.write(poke)
@@ -101,6 +106,11 @@ def read_for(baud, secs, poke=None):
             d = s.read(8192)
             if d:
                 buf += d
+                if TRANSCRIPT:
+                    with open(TRANSCRIPT, "ab") as f:
+                        f.write(d)
+                if until and until in buf:
+                    break
     finally:
         s.close()
     return buf.decode("utf-8", "replace"), None
@@ -208,7 +218,7 @@ def watch_reset(timeout):
                                  "reset.py")],
                    check=False, capture_output=True)
     # hart0 first, at its own baud.
-    early, _ = read_for(115200, 12.0)
+    early, _ = read_for(115200, 12.0, until=b"hart1 released to OpenSBI")
     early_lines = readable_lines(early)
     early_stage = furthest(early, only=HART0_STAGES)
     print("--- hart0 phase (115200, %d raw bytes, %d readable lines) ---"
@@ -242,10 +252,15 @@ def watch_reset(timeout):
 
 
 def main():
+    global TRANSCRIPT
     ap = argparse.ArgumentParser()
     ap.add_argument("--reset", action="store_true")
     ap.add_argument("--timeout", type=int, default=70)
+    ap.add_argument("--log", help="retain every received byte, including early boot faults")
     a = ap.parse_args()
+    TRANSCRIPT = a.log
+    if TRANSCRIPT:
+        open(TRANSCRIPT, "wb").close()
     return watch_reset(a.timeout) if a.reset else passive()
 
 

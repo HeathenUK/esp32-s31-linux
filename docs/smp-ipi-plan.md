@@ -1,6 +1,8 @@
 # Cross-hart IPIs on real doorbell lines - plan (2026-09-21)
 
-Status: step 0 DONE 2026-09-21 - premise PROVEN (see below). Steps 1-4 open.
+Status: step 0 DONE - premise PROVEN. Step 1 IN VALIDATION: inherited
+#283 used the shared doorbell; the counter serialization fix is under test.
+Steps 2-4 remain open. See docs/worklog-2026-09-19.md for evidence.
 
 ## Why
 
@@ -49,19 +51,19 @@ transport's registers, DT node and Linux driver completely untouched.
 ## Changes, by component
 
 1. **hart0 monitor** (`bootloader/main/s31_vcpu.c`)
-   - Stop allocating FROM_CPU_1. Hook FROM_CPU_3 instead, SHARED with hosted's
-     `h1_doorbell_isr` (`ESP_INTR_FLAG_SHARED` on both allocations; both ISRs
-     are ours).
-   - A shared level line needs a reason: Linux sets a flag word in internal
-     SRAM (uncached for both harts) before ringing; the monitor's ISR injects an
-     IPI only if the flag is set, and clears it. Hosted's ISR keeps acking the
-     register as it does today. No spurious guest wake-ups from hosted traffic.
+   - Stop allocating FROM_CPU_1. The hosted FROM_CPU_3 ISR owns/acks the
+     register and directly calls the monitor when the request counter changes.
+   - Linux increments a request counter in uncached internal SRAM before
+     ringing. Linux senders serialize with an IRQ-safe raw spinlock; the
+     monitor only reads the counter and keeps a private last-seen value.
+     This avoids a producer/consumer set-clear race. Hosted RX is not woken
+     for an IPI-only kick when its ring is empty.
 2. **OpenSBI** (`esp32s31.c`): `hart_start(0)` rings FROM_CPU_3 instead of _1.
 3. **Linux CLIC driver** (`irq-esp32s31-clic.c`)
    - IPI to hart 1: `writel(1, FROM_CPU_1)`. Route source 66 -> slot 47 on hart
      1's matrix bank, LEVEL. Handler: `writel(0, FROM_CPU_1)` *then*
      `ipi_mux_process()` (clear-before-process, as now).
-   - IPI to the lent CPU: set the SRAM flag, `writel(1, FROM_CPU_3)`.
+   - IPI to the lent CPU: increment the SRAM request counter, `writel(1, FROM_CPU_3)`.
    - Self-IPI on hart 1 (irq_work): same FROM_CPU_1 write - one mechanism.
    - Drop the slot-47 software-pending path.
 4. **Idle** (`arch/riscv/kernel/process.c`): remove the "hart 1 must not wfi"
@@ -98,8 +100,8 @@ state are kept (`images/xipImage-*-smp-*`, `hello_world-vcpu-*.bin`).
 
 ## Risks and unknowns, stated up front
 
-- **Premise unverified** until step 0: that a FROM_CPU level wakes hart 1's
-  `wfi`. Strong evidence (hosted's doorbell does), not proof.
+- **Premise verified** by step 0: that a FROM_CPU level wakes hart 1's
+  `wfi`. 36 clean sleeps all woke; the later migration still needs its own gates.
 - Hosted declares its line `EDGE_RISING` on a level source. Why? If level
   handling has a problem on this CLIC (re-trigger storm until cleared), step 2
   inherits it; clear-then-process in the handler is the mitigation. To check in
