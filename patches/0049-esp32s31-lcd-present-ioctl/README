@@ -1,0 +1,16 @@
+drm/esp32s31-lcd: DRM_IOCTL_ESP32S31_PRESENT - present a rectangle of the
+scanout buffer without an atomic commit
+
+Cumulative on 0047 (direct scanout). Copy
+  esp32s31-lcd.c   -> linux-71-port/drivers/gpu/drm/espressif/
+  esp32s31_drm.h   -> linux-71-port/include/uapi/drm/
+
+WHY. Under direct scanout the compositor draws into the memory the panel's
+DMA reads, so a present owes only the cache writeback of the changed pixels.
+DIRTYFB reaches that through a full atomic commit: LVPROF measured 2.2 ms per
+call for a 320x200 window (2026-09-19), and the writeback covered whole
+1600-byte rows for a 640-byte-wide window. PRESENT writes back the
+rectangle's own columns (row by row when that is under half of full rows)
+and notifies the JPEG recorder. Master only. -EINVAL when the scanout
+framebuffer is not the one on the CRTC (fullscreen client, fbcon) - lvdesk
+then falls back to DIRTYFB (lvdesk/kms.c, LVDESK_NOPRESENT=1 forces that).

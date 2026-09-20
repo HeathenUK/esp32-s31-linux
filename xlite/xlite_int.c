@@ -25,6 +25,7 @@
 #include "xlite.h"
 
 #include <errno.h>
+#include <poll.h>
 #include <unistd.h>
 
 /* --------------------------------------------------------------- output */
@@ -45,6 +46,41 @@ int xlite_flush(struct xdpy *x)
 	if (!n) {
 		xlite_out_release();
 		return 0;
+	}
+	while (n && x->ring) {
+		/*
+		 * XLITE-RING: the bytes go into shared memory and one eventfd
+		 * write wakes the server - or none, if its doorbell is still
+		 * up from the last flush. A request larger than the free room
+		 * goes in pieces; the server never blocks, so it always drains.
+		 */
+		struct xring_dir *d = &x->ring->c2s;
+		uint32_t w = xring_write(d, (uint8_t *)x->ring + XRING_C2S_OFF,
+					 XRING_C2S_SIZE, p, (uint32_t)n);
+
+		p += w; n -= w;
+		if (n)
+			XR_STORE(d->full, 1);
+		xlite_ring_bell(x);
+		if (n) {
+			struct pollfd pf[2] = {
+				{ x->efd_in, POLLIN, 0 },
+				{ x->fd, 0, 0 },
+			};
+
+			if (xring_used(d) > XRING_C2S_SIZE ||
+			    (poll(pf, 2, 5) >= 0 &&
+			     (pf[1].revents & (POLLHUP | POLLERR)))) {
+				if (x->ioerrh)
+					x->ioerrh(&x->pub);
+				rc = -1;
+				break;
+			}
+			/* The doorbell belongs to the reader; if it is up and
+			 * nobody is reading, do not spin on it. */
+			if (pf[0].revents & POLLIN)
+				usleep(500);
+		}
 	}
 	while (n) {
 		ssize_t w = write(x->fd, p, n);

@@ -53,6 +53,15 @@ struct drm_esp32s31_scanout {
 	_IOR(DRM_IOCTL_BASE, DRM_COMMAND_BASE + DRM_ESP32S31_SCANOUT_GET, \
 	     struct drm_esp32s31_scanout)
 
+/* A rectangle of the scanout buffer changed: cache writeback, no commit. */
+#define DRM_ESP32S31_PRESENT 0x07
+struct drm_esp32s31_present {
+	uint32_t x1, y1, x2, y2;	/* x2/y2 exclusive */
+};
+#define DRM_IOCTL_ESP32S31_PRESENT \
+	_IOW(DRM_IOCTL_BASE, DRM_COMMAND_BASE + DRM_ESP32S31_PRESENT, \
+	     struct drm_esp32s31_present)
+
 uint8_t *kms_map;
 uint32_t kms_w, kms_h, kms_pitch, kms_size;
 
@@ -375,6 +384,54 @@ int kms_dirty_rects(const struct kms_rect *r, int n)
 	}
 	if (!m)
 		return 0;
+
+	/*
+	 * DIRECT SCANOUT: the pixels are already in the panel's memory, so
+	 * all a present owes is the cache writeback of each rectangle. The
+	 * driver's PRESENT ioctl does exactly that; DIRTYFB does it through a
+	 * full atomic commit (2.2 ms per 320x200 frame, measured). ENOTTY =
+	 * older kernel, stop asking; EINVAL = another framebuffer is on the
+	 * CRTC right now, use DIRTYFB this once. LVDESK_NOPRESENT=1 forces
+	 * DIRTYFB so the two can be compared on one binary.
+	 */
+	if (kms_direct) {
+		static int present_ok = -1;
+
+		if (present_ok < 0)
+			present_ok = getenv("LVDESK_NOPRESENT") == NULL;
+		if (present_ok) {
+			for (i = 0; i < m; i++) {
+				struct drm_esp32s31_present pr = {
+					clip[i].x1, clip[i].y1,
+					clip[i].x2, clip[i].y2
+				};
+
+				if (ioctl(kms_fd, DRM_IOCTL_ESP32S31_PRESENT, &pr) < 0) {
+					static int fails;
+
+					/* An older kernel answers EINVAL too
+					 * (unknown driver ioctl), so give up
+					 * after a run of refusals. */
+					if (errno == ENOTTY || ++fails >= 8) {
+						present_ok = 0;
+						printf("kms: PRESENT refused (%s) - DIRTYFB from now on\n",
+						       strerror(errno));
+					}
+					break;
+				}
+			}
+			if (i == m) {
+				static int said;
+
+				if (!said) {
+					said = 1;
+					printf("kms: presenting with the PRESENT ioctl (no atomic commit)\n");
+					fflush(stdout);
+				}
+				return 0;
+			}
+		}
+	}
 
 	memset(&d, 0, sizeof(d));
 	d.fb_id = kms_fb_id;

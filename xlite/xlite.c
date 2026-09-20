@@ -12,6 +12,7 @@
 #include <errno.h>
 #include <poll.h>
 #include <fcntl.h>
+#include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -346,11 +347,121 @@ int xlite_ingrow(struct xdpy *x, size_t need)
 	return 1;
 }
 
+static void xlite_conn_lost(struct xdpy *x)
+{
+	if (x->ioerrh)
+		x->ioerrh(&x->pub);
+	else
+		fprintf(stderr, "xlite: connection to the X server was lost\n");
+	_exit(1);
+}
+
+/* ------------------------------------------------------------ XLITE-RING */
+
+/* Ring the server's doorbell unless one is already pending (xring.h). */
+void xlite_ring_bell(struct xdpy *x)
+{
+	struct xring_dir *d = &x->ring->c2s;
+
+	if (!XR_LOAD(d->sig)) {
+		uint64_t one = 1;
+
+		XR_STORE(d->sig, 1);
+		if (write(x->efd_out, &one, sizeof(one)) < 0) { /* EAGAIN: it is already up */ }
+	}
+}
+
+static int xlite_ring_read_more(struct xdpy *x, int block)
+{
+	struct xring_dir *d = &x->ring->s2c;
+	const uint8_t *data = (const uint8_t *)x->ring + XRING_S2C_OFF;
+
+	for (;;) {
+		uint32_t used;
+
+		/* Acknowledge BEFORE looking: a writer that then adds bytes
+		 * sees sig clear and rings again, so nothing is slept past. */
+		if (XR_LOAD(d->sig)) {
+			uint64_t v;
+
+			XR_STORE(d->sig, 0);
+			if (read(x->efd_in, &v, sizeof(v)) < 0) { /* empty */ }
+		}
+		used = xring_used(d);
+		if (used > XRING_S2C_SIZE)
+			xlite_conn_lost(x);
+		if (used) {
+			if (!xlite_ingrow(x, x->inlen + used))
+				return 0;
+			x->inlen += xring_read(d, data, XRING_S2C_SIZE,
+					       x->in + x->inlen, used);
+			if (XR_LOAD(d->full)) {	/* the server is waiting for room */
+				XR_STORE(d->full, 0);
+				xlite_ring_bell(x);
+			}
+			return 1;
+		}
+		if (!block)
+			return 0;
+		{
+			struct pollfd p[2] = {
+				{ x->efd_in, POLLIN, 0 },
+				{ x->fd, 0, 0 },	/* HUP/ERR only */
+			};
+
+			poll(p, 2, 1000);
+			if ((p[1].revents & (POLLHUP | POLLERR)) &&
+			    !xring_used(d))
+				xlite_conn_lost(x);
+		}
+	}
+}
+
+/*
+ * In ring mode a descriptor cannot ride the reply, so the server sends it on
+ * the socket with a one-byte payload BEFORE it queues the reply (whose detail
+ * byte is 0xFD to say so). By the time the reply is here, so is the fd.
+ */
+void xlite_ring_take_fd(struct xdpy *x)
+{
+	struct msghdr m;
+	struct iovec io;
+	char b;
+	union {
+		struct cmsghdr al;
+		char c[CMSG_SPACE(sizeof(int))];
+	} u;
+	struct cmsghdr *cm;
+
+	memset(&m, 0, sizeof(m));
+	io.iov_base = &b;
+	io.iov_len = 1;
+	m.msg_iov = &io;
+	m.msg_iovlen = 1;
+	m.msg_control = u.c;
+	m.msg_controllen = sizeof(u.c);
+	while (recvmsg(x->fd, &m, 0) < 0)
+		if (errno != EINTR)
+			return;
+	for (cm = CMSG_FIRSTHDR(&m); cm; cm = CMSG_NXTHDR(&m, cm))
+		if (cm->cmsg_level == SOL_SOCKET &&
+		    cm->cmsg_type == SCM_RIGHTS) {
+			int got;
+
+			memcpy(&got, CMSG_DATA(cm), sizeof(got));
+			if (x->shm_fd >= 0)
+				close(x->shm_fd);
+			x->shm_fd = got;
+		}
+}
+
 int xlite_read_more(struct xdpy *x, int block)
 {
 	struct pollfd pfd = { x->fd, POLLIN, 0 };
 	ssize_t n;
 
+	if (x->ring)
+		return xlite_ring_read_more(x, block);
 	if (!block && poll(&pfd, 1, 0) <= 0)
 		return 0;
 	if (!xlite_ingrow(x, x->inlen + 512))
@@ -386,8 +497,21 @@ int xlite_read_more(struct xdpy *x, int block)
 		for (cm = CMSG_FIRSTHDR(&m); cm; cm = CMSG_NXTHDR(&m, cm))
 			if (cm->cmsg_level == SOL_SOCKET &&
 			    cm->cmsg_type == SCM_RIGHTS) {
-				int got;
+				int cnt = (int)((cm->cmsg_len - CMSG_LEN(0)) /
+						sizeof(int));
+				int got, k;
 
+				if (cnt > 1) {	/* the XLITE-RING Attach reply */
+					for (k = 0; k < cnt; k++) {
+						memcpy(&got, CMSG_DATA(cm) +
+						       k * sizeof(int), sizeof(got));
+						if (x->nrfds < 4)
+							x->rfds[x->nrfds++] = got;
+						else
+							close(got);
+					}
+					continue;
+				}
 				memcpy(&got, CMSG_DATA(cm), sizeof(got));
 				if (x->shm_fd >= 0)
 					close(x->shm_fd);
@@ -395,14 +519,8 @@ int xlite_read_more(struct xdpy *x, int block)
 			}
 	}
 	if (n <= 0) {
-		if (n == 0 || errno != EINTR) {
-			if (x->ioerrh)
-				x->ioerrh(&x->pub);
-			else
-				fprintf(stderr, "xlite: connection to the X "
-					"server was lost\n");
-			_exit(1);
-		}
+		if (n == 0 || errno != EINTR)
+			xlite_conn_lost(x);
 		return 0;
 	}
 	x->inlen += n;
@@ -762,6 +880,10 @@ Display *XOpenDisplay(const char *name)
 	x->pub.synchandler = NULL;
 	x->pub.last_req = x->out;
 
+	x->ring = NULL;
+	x->ring_fd = x->efd_in = x->efd_out = -1;
+	xlite_ring_attach(&x->pub);
+	xlite_note("transport: %s", x->ring ? "XLITE-RING (shared memory)" : "socket");
 	xlite_note("connected to %s, root 0x%lx %dx%d depth %d",
 		   a.sun_path, (unsigned long)x->screen.root,
 		   x->screen.width, x->screen.height, x->screen.root_depth);
@@ -780,6 +902,14 @@ int XCloseDisplay(Display *d)
 
 	if (!x)
 		return 0;
+	xlite_flush(x);
+	if (x->ring) {
+		munmap(x->ring, XRING_TOTAL);
+		close(x->ring_fd);
+		close(x->efd_in);
+		close(x->efd_out);
+		x->ring = NULL;
+	}
 	close(x->fd);
 	free(x->pub.vendor);
 	free(x);
@@ -940,7 +1070,7 @@ static int xlite_wait_event(struct xdpy *x, XEvent *ev, int dequeue_it)
 		}
 		{
 			struct pollfd pfd[2] = {
-				{ x->fd, POLLIN, 0 },
+				{ x->ring ? x->efd_in : x->fd, POLLIN, 0 },
 				{ x->wake[0], POLLIN, 0 },
 			};
 
@@ -1076,7 +1206,7 @@ static int take_wait(struct xdpy *x, int (*pred)(const XEvent *, long),
 			return 0;
 		{
 			struct pollfd pfd[2] = {
-				{ x->fd, POLLIN, 0 },
+				{ x->ring ? x->efd_in : x->fd, POLLIN, 0 },
 				{ x->wake[0], POLLIN, 0 },
 			};
 

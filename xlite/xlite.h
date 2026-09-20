@@ -57,6 +57,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "xring.h"
+
 /*
  * Marks a function as implemented by hand, so tools/mkxlitestubs.py knows not
  * to generate a stub for it. Grepped, never compiled to anything.
@@ -79,6 +81,15 @@ struct xdpy {
 	unsigned long shm_seq;		/* pub.request when the server was last
 					 * known to have caught up (see XPutImage) */
 	int fd;
+	/*
+	 * XLITE-RING (xring.h): once attached, requests, replies and events
+	 * travel through `ring` and the socket carries only descriptors and
+	 * its own HUP. efd_in is what an event wait polls - and what
+	 * XConnectionNumber() hands out, because SDL select()s on it.
+	 */
+	struct xring_hdr *ring;
+	int ring_fd, efd_in, efd_out;
+	int rfds[4], nrfds;		/* multi-fd SCM_RIGHTS (the Attach reply) */
 	int wake[2];			/* worker->event-wait doorbell pipe */
 	/*
 	 * The sequence number is pub.request, not a field of our own: the
@@ -136,6 +147,9 @@ int xlite_reply(struct xdpy *x, uint32_t seq, unsigned char *hdr,
 		unsigned char **extra, size_t *nextra);
 void xlite_queue(struct xdpy *x, const unsigned char *ev);
 int xlite_read_more(struct xdpy *x, int block);
+void xlite_ring_bell(struct xdpy *x);
+void xlite_ring_take_fd(struct xdpy *x);
+void xlite_ring_attach(Display *dpy);
 int xlite_send(struct xdpy *x, const unsigned char *r);
 
 void xlite_shm_forget(Display *dpy, Drawable d);

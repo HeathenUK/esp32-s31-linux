@@ -3799,6 +3799,8 @@ static struct xwin {
 	lv_obj_t *img;
 	lv_image_dsc_t dsc;
 	int drawn;		/* has the client ever put pixels in it? */
+	lv_area_t fast_c;	/* image coords at the last client frame ... */
+	int fast_stable;	/* ... and how many frames they have held */
 } xwins[MAXXWIN];
 static int xwin_n;
 
@@ -5184,6 +5186,8 @@ static void xwin_on_window(uint32_t id, int w, int h)
 	 * box the user cannot get rid of.
 	 */
 	x->drawn = 0;
+	x->fast_stable = 0;		/* a reused slot must re-earn the fast path */
+	memset(&x->fast_c, 0, sizeof(x->fast_c));
 	if (win)
 		lv_obj_add_flag(win, LV_OBJ_FLAG_HIDDEN);
 	x->dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
@@ -5761,6 +5765,109 @@ static void xwin_dsc_check(const char *when)
 	}
 }
 
+/*
+ * FAST PRESENT: a client frame for an unobscured direct-expansion window goes
+ * straight from its index plane into the framebuffer and is presented, with
+ * LVGL not involved at all.
+ *
+ * The ordinary route is invalidate -> refresh timer -> object-tree walk ->
+ * draw tasks for an image widget that paints nothing -> flush callback ->
+ * xwin_blit_direct(). Everything between the first and last step is LVGL
+ * discovering that it has nothing to draw: measured 2026-09-19 at ~2.8 ms a
+ * frame outside the flush, plus a loop pass, for a 320x200 Doom window.
+ *
+ * It is only correct when NOTHING is stacked over the rectangle, because it
+ * writes pixels without asking the scene: no other client window touching
+ * ours (xwin_direct_ok), no sibling above our frame that intersects it (the
+ * terminal, a native panel), and nothing visible on the top or system layers
+ * there (menus, popovers, the switcher, the software cursor). Any doubt and
+ * the frame takes the LVGL route, which composes properly. A window that has
+ * just moved may blit once at its old position; the move's own invalidation
+ * repaints both places on the next refresh, from the same index plane.
+ *
+ * LVDESK_NOFASTPRESENT=1 turns it off for an A/B on one binary.
+ */
+static uint32_t frames_flushed;		/* defined with the flush callback */
+
+static int area_hits_children(lv_obj_t *parent, uint32_t from, const lv_area_t *a)
+{
+	uint32_t n = lv_obj_get_child_count(parent), k;
+
+	for (k = from; k < n; k++) {
+		lv_obj_t *o = lv_obj_get_child(parent, (int32_t)k);
+		lv_area_t b;
+
+		if (!o || lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN))
+			continue;
+		lv_obj_get_coords(o, &b);
+		if (b.x1 <= a->x2 && b.x2 >= a->x1 &&
+		    b.y1 <= a->y2 && b.y2 >= a->y1)
+			return 1;
+	}
+	return 0;
+}
+
+static int xwin_fast_present(int i, const lv_area_t *a)
+{
+	static int off = -1;
+	static int said;
+	lv_obj_t *win = xwins[i].win, *parent;
+	lv_area_t c = *a;
+
+	if (off < 0)
+		off = getenv("LVDESK_NOFASTPRESENT") != NULL;
+	if (off || fs_active || !win || !xwin_direct_ok(i))
+		return 0;
+	if (lv_obj_has_flag(win, LV_OBJ_FLAG_HIDDEN))
+		return 0;
+	{
+		/*
+		 * LVGL geometry is deferred: a new or resized window reports
+		 * coordinates that are not true until a refresh has laid it
+		 * out. Only trust coordinates that held across two client
+		 * frames, each of which went through a refresh.
+		 */
+		lv_area_t now;
+
+		lv_obj_get_coords(xwins[i].img, &now);
+		if (now.x1 != xwins[i].fast_c.x1 || now.y1 != xwins[i].fast_c.y1 ||
+		    now.x2 != xwins[i].fast_c.x2 || now.y2 != xwins[i].fast_c.y2) {
+			xwins[i].fast_c = now;
+			xwins[i].fast_stable = 0;
+			return 0;
+		}
+		if (xwins[i].fast_stable < 2) {
+			xwins[i].fast_stable++;
+			return 0;
+		}
+	}
+	parent = lv_obj_get_parent(win);
+	if (!parent ||
+	    area_hits_children(parent, (uint32_t)lv_obj_get_index(win) + 1, a) ||
+	    area_hits_children(lv_layer_top(), 0, a) ||
+	    area_hits_children(lv_layer_sys(), 0, a))
+		return 0;
+	if (c.x1 < 0) c.x1 = 0;
+	if (c.y1 < 0) c.y1 = 0;
+	if (c.x2 > (int32_t)kms_w - 1) c.x2 = (int32_t)kms_w - 1;
+	if (c.y2 > (int32_t)kms_h - 1) c.y2 = (int32_t)kms_h - 1;
+	if (c.x2 < c.x1 || c.y2 < c.y1)
+		return 1;			/* wholly off screen: nothing to show */
+	xwin_blit_direct(&c);
+	kms_dirty(c.x1, c.y1, c.x2, c.y2);
+	frames_flushed++;
+	if (frames_flushed % 200 == 0)
+		fprintf(stderr, "lvdesk: FRAMES %llu\n",
+			(unsigned long long)frames_flushed);
+	if (!said) {
+		said = 1;
+		printf("lvdesk: fast present (no LVGL pass) for window 0x%x\n",
+		       (unsigned)xwins[i].id);
+		fflush(stdout);
+	}
+	return 1;
+}
+
 static void HOTTEXT xwin_on_draw(uint32_t id)
 {
 	int i, w, h;
@@ -5964,6 +6071,8 @@ static void HOTTEXT xwin_on_draw(uint32_t id)
 					a.x1 += dx; a.y1 += dy;
 					a.x2 = a.x1 + dw - 1;
 					a.y2 = a.y1 + dh - 1;
+					if (direct && xwin_fast_present(i, &a))
+						return;
 					lv_obj_invalidate_area(xwins[i].img,
 							       &a);
 				} else {
@@ -8611,7 +8720,7 @@ static void kms_flush_cb(lv_display_t *d, const lv_area_t *area, uint8_t *px)
 #define MAXMOUSE 8
 /* pty + slack + every keyboard and mouse we may have open */
 /* +5: the X shim's listening socket and up to four connected clients. */
-#define NFDS        (2 + MAXKBD + MAXMOUSE + 8)	/* +1 ctl fifo, +1 s31-bt */
+#define NFDS        (2 + MAXKBD + MAXMOUSE + 12)	/* +1 ctl fifo, +1 s31-bt */
 /*
  * How long to sleep once the desktop has gone quiet.
  *
@@ -10041,7 +10150,7 @@ int main(void)
 		int n = 0, ms;
 		int i_term, i_wifi, i_kbd, i_mouse, i_watch, n_kbd, n_mouse;
 		int i_bt = -1;
-		int i_x, n_x, xfds[5];
+		int i_x, n_x, xfds[9];	/* listen + 4 clients x (socket, ring doorbell) */
 		int frame_due;
 
 		/*

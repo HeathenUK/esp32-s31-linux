@@ -11,6 +11,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 #include "xlite.h"
+#include <fcntl.h>
 
 /* Defined with the XLITE-SHM cache below; used by the free/destroy paths. */
 void xlite_shm_forget(Display *dpy, Drawable d);
@@ -2077,7 +2078,14 @@ Screen *XDefaultScreenOfDisplay(Display *dpy) { return &XD(dpy)->screen; }
 XLITE_IMPL(XScreenOfDisplay)
 Screen *XScreenOfDisplay(Display *dpy, int s) { (void)s; return &XD(dpy)->screen; }
 XLITE_IMPL(XConnectionNumber)
-int XConnectionNumber(Display *dpy) { return XD(dpy)->fd; }
+/* In ring mode input arrives through the eventfd, and that is what a client
+ * select()ing for "X has something for me" (SDL does) has to watch. */
+int XConnectionNumber(Display *dpy)
+{
+	struct xdpy *x = XD(dpy);
+
+	return x->ring ? x->efd_in : x->fd;
+}
 
 /*
  * The XESet* family: libXext registers per-extension hooks through these and
@@ -2973,6 +2981,8 @@ void *XliteShmMap(Display *dpy, Pixmap p, int *w, int *h, int *stride, int *bpp)
 			return NULL;
 	}
 	free(extra);
+	if (x->ring && hdr[1] == 0xFD && x->shm_fd < 0)
+		xlite_ring_take_fd(x);	/* ring mode: the fd came by socket */
 	fd = x->shm_fd;
 	x->shm_fd = -1;
 	if (fd < 0) {
@@ -3602,4 +3612,64 @@ XImage *XGetImage(Display *dpy, Drawable d, int sx, int sy, unsigned int w,
 	if (!im)
 		free(buf);
 	return im;
+}
+
+
+/* ------------------------------------------------------------ XLITE-RING */
+
+/*
+ * Move this connection's byte stream off the socket (xring.h). Called once,
+ * at the end of XOpenDisplay(). Any failure leaves the socket in charge, which
+ * is also what happens against a server that has never heard of it.
+ */
+void xlite_ring_attach(Display *dpy)
+{
+	struct xdpy *x = XD(dpy);
+	unsigned char hdr[32], *extra = NULL;
+	size_t nextra = 0;
+	const char *e = getenv("XLITE_RING");
+	struct xring_hdr *h;
+	int major, ev, er, k;
+	uint32_t seq;
+
+	if (e && e[0] == '0')
+		return;
+	if (!XQueryExtension(dpy, XRING_NAME, &major, &ev, &er) || !major)
+		return;
+	x->nrfds = 0;
+	{
+		unsigned char *r = xlite_req(x, major, 1, 1);
+
+		if (!r)
+			return;
+		seq = x->pub.request;
+		xlite_send(x, r);
+		if (!xlite_reply(x, seq, hdr, &extra, &nextra))
+			return;
+	}
+	free(extra);
+	if (hdr[8] != 1 || x->nrfds != 3)
+		goto refuse;
+	h = mmap(NULL, XRING_TOTAL, PROT_READ | PROT_WRITE, MAP_SHARED,
+		 x->rfds[0], 0);
+	if (h == MAP_FAILED)
+		goto refuse;
+	if (h->magic != XRING_MAGIC) {
+		munmap(h, XRING_TOTAL);
+		goto refuse;
+	}
+	x->ring_fd = x->rfds[0];
+	x->efd_out = x->rfds[1];
+	x->efd_in = x->rfds[2];
+	x->nrfds = 0;
+	fcntl(x->efd_in, F_SETFD, FD_CLOEXEC);
+	fcntl(x->efd_out, F_SETFD, FD_CLOEXEC);
+	fcntl(x->ring_fd, F_SETFD, FD_CLOEXEC);
+	x->ring = h;			/* from here on, no socket traffic */
+	x->pub.fd = x->efd_in;
+	return;
+refuse:
+	for (k = 0; k < x->nrfds; k++)
+		close(x->rfds[k]);
+	x->nrfds = 0;
 }

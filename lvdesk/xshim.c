@@ -38,6 +38,8 @@
 #include <sys/un.h>
 #include <unistd.h>
 #include <poll.h>
+#include <sys/eventfd.h>
+#include "../xlite/xring.h"
 
 #include <sys/ioctl.h>
 #include <drm/drm.h>
@@ -264,6 +266,14 @@ static uint32_t row_hash(const void *p, size_t n)
 
 struct cli {
 	int fd;
+	/*
+	 * XLITE-RING (../xlite/xring.h). Once `ring` is set the byte stream is
+	 * in shared memory: requests arrive in c2s and are announced on
+	 * efd_rd, replies and events leave through s2c and are announced on
+	 * efd_wr. `fd` stays open for descriptors and for its HUP.
+	 */
+	struct xring_hdr *ring;
+	int efd_rd, efd_wr;
 	/*
 	 * File descriptors the client has passed us with SCM_RIGHTS, in
 	 * arrival order, waiting to be claimed by the request they belong to.
@@ -2573,10 +2583,45 @@ static void send_setup(struct cli *c)
  * the shared-pixmap path: the client ends up with the SAME pages the shim
  * draws into, so bulk pixel traffic stops being protocol at all.
  */
+static void send_reply(struct cli *c, uint8_t detail, const uint8_t *d24,
+		       const uint8_t *extra, int nextra);
 static void send_reply_fd_detail(struct cli *c, uint8_t detail,
 				 const uint8_t *d24, int fd)
 {
 	out_flush(c);	/* the fd rides THIS reply; keep the stream ordered */
+	if (c->ring) {
+		/*
+		 * Ring mode: the descriptor goes by socket with a one-byte
+		 * payload FIRST, then the reply goes through the ring with
+		 * detail 0xFD, which tells xlite a descriptor is waiting.
+		 */
+		struct msghdr rm;
+		struct iovec rio;
+		char dummy = 0;
+		union {
+			struct cmsghdr al;
+			char b[CMSG_SPACE(sizeof(int))];
+		} ru;
+		struct cmsghdr *rcm;
+
+		memset(&rm, 0, sizeof(rm));
+		memset(&ru, 0, sizeof(ru));
+		rio.iov_base = &dummy;
+		rio.iov_len = 1;
+		rm.msg_iov = &rio;
+		rm.msg_iovlen = 1;
+		rm.msg_control = ru.b;
+		rm.msg_controllen = sizeof(ru.b);
+		rcm = CMSG_FIRSTHDR(&rm);
+		rcm->cmsg_level = SOL_SOCKET;
+		rcm->cmsg_type = SCM_RIGHTS;
+		rcm->cmsg_len = CMSG_LEN(sizeof(int));
+		memcpy(CMSG_DATA(rcm), &fd, sizeof(fd));
+		if (sendmsg(c->fd, &rm, MSG_NOSIGNAL) < 0)
+			perror("xshim: sendmsg (ring fd)");
+		send_reply(c, 0xFD, d24, NULL, 0);
+		return;
+	}
 	uint8_t h[32];
 	struct msghdr m;
 	struct iovec io;
@@ -2788,6 +2833,24 @@ static size_t out_try(struct cli *c, const uint8_t *p, size_t n)
 {
 	size_t off = 0;
 
+	if (c->ring) {
+		struct xring_dir *d = &c->ring->s2c;
+		uint64_t tw = xsp_on > 0 ? xsp_now() : 0;
+
+		off = xring_write(d, (uint8_t *)c->ring + XRING_S2C_OFF,
+				  XRING_S2C_SIZE, p, (uint32_t)n);
+		if (off < n)
+			XR_STORE(d->full, 1);	/* the client rings us when it has read */
+		if (off && !XR_LOAD(d->sig)) {
+			uint64_t one = 1;
+
+			XR_STORE(d->sig, 1);
+			if (write(c->efd_wr, &one, sizeof(one)) < 0) { /* already up */ }
+		}
+		if (tw)
+			xsp_write += xsp_now() - tw;
+		return off;
+	}
 	while (off < n) {
 		ssize_t w;
 		uint64_t tw = xsp_on > 0 ? xsp_now() : 0;
@@ -3128,6 +3191,7 @@ static void expose_window(struct cli *c, struct res *w)
  * ===================================================================== */
 
 #define XSHM_MAJOR		201
+#define XRING_MAJOR		205	/* XLITE-RING: see ../xlite/xring.h */
 /*
  * MIT-SHM, the REAL one, because that is the only shared-memory extension an
  * off-the-shelf client knows how to ask for.
@@ -5561,6 +5625,95 @@ static void HOTTEXT mitshm_request(struct cli *c, const uint8_t *r, int len)
 	}
 }
 
+static int ring_enabled(void)
+{
+	static int v = -1;
+
+	if (v < 0) {
+		const char *e = getenv("XSHIM_RING");
+
+		v = !(e && e[0] == '0');
+	}
+	return v;
+}
+
+/*
+ * XLITE-RING Attach (minor 1): build the shared ring and two doorbells, hand
+ * all three descriptors to the client on the socket with the reply, and from
+ * that reply on speak only through the ring. d24[0] = 1 on success; on any
+ * failure a plain reply with d24[0] = 0 leaves the socket in charge.
+ */
+static void ring_request(struct cli *c, const uint8_t *r, int len)
+{
+	uint8_t d24[24], h[32];
+	struct xring_hdr *rh = MAP_FAILED;
+	int mfd = -1, e_c2s = -1, e_s2c = -1, fds[3];
+	struct msghdr m;
+	struct iovec io;
+	union {
+		struct cmsghdr al;
+		char b[CMSG_SPACE(sizeof(int) * 3)];
+	} u;
+	struct cmsghdr *cm;
+
+	(void)len;
+	memset(d24, 0, sizeof(d24));
+	if (r[1] != 1 || c->ring || !ring_enabled())
+		goto refuse;
+	mfd = memfd_create("xlite-ring", MFD_CLOEXEC);
+	if (mfd < 0 || ftruncate(mfd, XRING_TOTAL) < 0)
+		goto refuse;
+	rh = mmap(NULL, XRING_TOTAL, PROT_READ | PROT_WRITE, MAP_SHARED, mfd, 0);
+	e_c2s = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+	e_s2c = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+	if (rh == MAP_FAILED || e_c2s < 0 || e_s2c < 0)
+		goto refuse;
+	memset(rh, 0, XRING_HDR_BYTES);
+	rh->magic = XRING_MAGIC;
+	rh->version = 1;
+
+	out_flush(c);			/* everything older leaves by socket */
+	memset(h, 0, sizeof(h));
+	h[0] = 1;
+	put16(h + 2, c->seq);
+	h[8] = 1;			/* d24[0]: attached */
+	nreplies++;
+	fds[0] = mfd; fds[1] = e_c2s; fds[2] = e_s2c;
+	memset(&m, 0, sizeof(m));
+	memset(&u, 0, sizeof(u));
+	io.iov_base = h;
+	io.iov_len = sizeof(h);
+	m.msg_iov = &io;
+	m.msg_iovlen = 1;
+	m.msg_control = u.b;
+	m.msg_controllen = sizeof(u.b);
+	cm = CMSG_FIRSTHDR(&m);
+	cm->cmsg_level = SOL_SOCKET;
+	cm->cmsg_type = SCM_RIGHTS;
+	cm->cmsg_len = CMSG_LEN(sizeof(fds));
+	memcpy(CMSG_DATA(cm), fds, sizeof(fds));
+	if (sendmsg(c->fd, &m, MSG_NOSIGNAL) < 0) {
+		perror("xshim: sendmsg (ring attach)");
+		munmap(rh, XRING_TOTAL);
+		close(mfd); close(e_c2s); close(e_s2c);
+		return;			/* the socket is dead; client_data will see it */
+	}
+	close(mfd);			/* the mapping keeps the pages */
+	c->ring = rh;
+	c->efd_rd = e_c2s;
+	c->efd_wr = e_s2c;
+	fprintf(stderr, "xshim: client %d on XLITE-RING (shared-memory transport)\n",
+		(int)(c - cli));
+	return;
+refuse:
+	if (rh != MAP_FAILED)
+		munmap(rh, XRING_TOTAL);
+	if (mfd >= 0) close(mfd);
+	if (e_c2s >= 0) close(e_c2s);
+	if (e_s2c >= 0) close(e_s2c);
+	send_reply(c, 0, d24, NULL, 0);
+}
+
 static void HOTTEXT xshm_request(struct cli *c, const uint8_t *r, int len)
 {
 	uint8_t d24[24];
@@ -5862,6 +6015,10 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 			xshm_request(c, r, len);
 			return;
 		}
+		if (op == XRING_MAJOR) {
+			ring_request(c, r, len);
+			return;
+		}
 		if (op == VIDMODE_MAJOR) {
 			vidmode_request(c, r, len);
 			return;
@@ -5905,6 +6062,15 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		if (n == 9 && !memcmp(r + 8, "XLITE-SHM", 9)) {
 			d24[0] = 1;
 			d24[1] = XSHM_MAJOR;
+			d24[2] = 0;
+			d24[3] = 0;
+		}
+		/* The transport itself (../xlite/xring.h). XSHIM_RING=0 hides it. */
+		if (n == sizeof(XRING_NAME) - 1 &&
+		    !memcmp(r + 8, XRING_NAME, sizeof(XRING_NAME) - 1) &&
+		    ring_enabled()) {
+			d24[0] = 1;
+			d24[1] = XRING_MAJOR;
 			d24[2] = 0;
 			d24[3] = 0;
 		}
@@ -8794,8 +8960,11 @@ int xshim_fds(int *out, int max)
 		return 0;
 	out[n++] = lfd;
 	for (i = 0; i < MAXCLI && n < max; i++)
-		if (cli[i].fd >= 0)
-			out[n++] = cli[i].fd;
+		if (cli[i].fd >= 0) {
+			out[n++] = cli[i].fd;		/* ring mode: HUP only */
+			if (cli[i].ring && n < max)
+				out[n++] = cli[i].efd_rd;
+		}
 	return n;
 }
 
@@ -8826,6 +8995,13 @@ static void client_drop(struct cli *c, int notify)
 	if (vm_cli == owner)
 		vm_switch(0, -1);
 
+	if (c->ring) {
+		munmap(c->ring, XRING_TOTAL);
+		c->ring = NULL;
+		close(c->efd_rd);
+		close(c->efd_wr);
+		c->efd_rd = c->efd_wr = -1;
+	}
 	if (c->fd >= 0) {
 		close(c->fd);
 		c->fd = -1;
@@ -9077,7 +9253,68 @@ const char *xshim_window_title(uint32_t id)
 	return (r && r->type == R_WINDOW && r->title[0]) ? r->title : NULL;
 }
 
+static void client_data_once(struct cli *c);
+
+/*
+ * Ring mode: acknowledge the doorbell FIRST (a client that writes after this
+ * sees it down and rings again, so nothing is slept past), notice a dead
+ * socket, then drain the ring through the ordinary parser until it is empty.
+ */
 static void client_data(struct cli *c)
+{
+	struct xring_dir *d;
+
+	if (!c->ring) {
+		client_data_once(c);
+		return;
+	}
+	d = &c->ring->c2s;
+	if (XR_LOAD(d->sig)) {
+		uint64_t v;
+
+		XR_STORE(d->sig, 0);
+		if (read(c->efd_rd, &v, sizeof(v)) < 0) { /* empty */ }
+	}
+	{
+		char junk[64];
+		ssize_t k = recv(c->fd, junk, sizeof(junk), MSG_DONTWAIT);
+
+		if (k == 0 || (k < 0 && errno != EAGAIN && errno != EWOULDBLOCK &&
+			       errno != EINTR)) {
+			client_drop(c, 1);
+			return;
+		}
+	}
+	while (c->fd >= 0 && c->ring) {
+		uint32_t used = xring_used(d);
+		size_t before = c->n;
+
+		if (used > XRING_C2S_SIZE) {
+			fprintf(stderr, "xshim: client %d corrupted its ring - "
+				"dropping it\n", (int)(c - cli));
+			client_drop(c, 1);
+			return;
+		}
+		if (!used)
+			break;
+		client_data_once(c);
+		if (c->fd >= 0 && c->n == before && xring_used(d) == used)
+			break;			/* no progress: input buffer wedged */
+	}
+	if (c->fd >= 0 && c->ring) {
+		if (XR_LOAD(d->full)) {		/* the client is waiting for room */
+			struct xring_dir *s = &c->ring->s2c;
+			uint64_t one = 1;
+
+			XR_STORE(d->full, 0);
+			XR_STORE(s->sig, 1);
+			if (write(c->efd_wr, &one, sizeof(one)) < 0) { /* up */ }
+		}
+		out_flush(c);
+	}
+}
+
+static void client_data_once(struct cli *c)
 {
 	ssize_t n;
 	size_t off = 0;
@@ -9087,7 +9324,14 @@ static void client_data(struct cli *c)
 		xsp_on = getenv("XSHIM_PROF") != NULL;
 	if (xsp_on)
 		t0 = xsp_now();
-	{
+	if (c->ring) {
+		n = (ssize_t)xring_read(&c->ring->c2s,
+					(const uint8_t *)c->ring + XRING_C2S_OFF,
+					XRING_C2S_SIZE, c->in + c->n,
+					(uint32_t)(sizeof(c->in) - c->n));
+		if (n == 0)
+			return;
+	} else {
 		/*
 		 * recvmsg, not read: a client passing an fd (ShmAttachFd,
 		 * ShmCreateSegment) sends it as ancillary data alongside the
@@ -9305,8 +9549,8 @@ void xshim_flush(void)
  */
 void xshim_poll_ready(const int *ready, int nready)
 {
-	struct pollfd p[MAXCLI + 1];
-	int map[MAXCLI + 1], n = 0, i;
+	struct pollfd p[2 * MAXCLI + 1];
+	int map[2 * MAXCLI + 1], n = 0, i;
 	static int nopass = -1;
 
 	if (nopass < 0)
@@ -9321,6 +9565,10 @@ void xshim_poll_ready(const int *ready, int nready)
 		if (cli[i].fd >= 0) {
 			p[n].fd = cli[i].fd; p[n].events = POLLIN;
 			map[n] = i; n++;
+			if (cli[i].ring) {	/* the doorbell is where requests show up */
+				p[n].fd = cli[i].efd_rd; p[n].events = POLLIN;
+				map[n] = i; n++;
+			}
 		}
 	if (ready) {
 		int j, k, any = 0;
@@ -9382,6 +9630,7 @@ void xshim_poll_ready(const int *ready, int nready)
 				if (cli[j].fd < 0) {
 					memset(&cli[j], 0, sizeof(cli[j]));
 					cli[j].fd = fd;
+					cli[j].efd_rd = cli[j].efd_wr = -1;
 					fprintf(stderr,
 						"xshim: client %d connected\n",
 						j);
