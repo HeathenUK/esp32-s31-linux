@@ -665,9 +665,12 @@ static void report_task(void *arg)
 	for (;;) {
 		volatile uint32_t *m = (volatile uint32_t *)0x50FEFFD0u;
 
-		m[3] = s31_vcpu_lx[8];			/* coproc ecalls */
-		m[4] = s31_vcpu_lx[3];			/* redirected exceptions */
-		m[5] = s31_vcpu_lx[2];			/* ... last cause */
+		/* 2026-09-21: CPU1 found spinning in do_raw_spin_lock on stalled boots.
+		 * Which lock, and who called? The heartbeat prints these three as
+		 * "coproc ecalls / redirected / cause" in DECIMAL - convert on the host. */
+		m[3] = s31_vcpu_area[9];		/* guest a0 = the lock, in do_raw_spin_lock */
+		m[4] = s31_vcpu_area[0];		/* guest ra */
+		m[5] = s31_vcpu_area[31];		/* guest pc */
 		m[6] = s31_vcpu_guest_cpst[0] | (s31_vcpu_guest_cpst[1] << 8);
 		m[7] = inj_timer;
 		m[8] = inj_ipi;
@@ -717,10 +720,71 @@ static void report_task(void *arg)
 extern void s31_vcpu_bisect_pad(void);
 void (*s31_vcpu_bisect_keep)(void) = s31_vcpu_bisect_pad;
 
+/*
+ * H1 PC SAMPLER: hart0 as a logic analyser for hart 1.
+ *
+ * There is no perf/ftrace/PMU here, /proc/profile only sees kernel code that
+ * runs with interrupts ON (96 samples in a 25 s run, 2026-09-21), and pcsample
+ * ptrace-stops its target. The bus monitor records hart 1's PC continuously
+ * and hart0 can read it without hart 1 knowing - kernel, user, interrupts off,
+ * all of it, on a UP or an SMP kernel alike.
+ *
+ *   control word  s31_h1s_ctrl : Linux writes N (1..4000) to start; we write
+ *                              0x80000000|count when done
+ *   samples       s31_h1s_buf  : count x u32 PC (internal SRAM, 16 kB)
+ *   Linux:  devmem 0x50FEFFB0 32 4000 ; <workload> ;
+ *           dd if=/dev/mem bs=4096 skip=$((0x50FEC000/4096)) count=4 | ...
+ * 1 kHz from an esp_timer: 4000 samples = 4 s.
+ */
+#include "esp_timer.h"
+/* In INTERNAL SRAM, not PSRAM: devmem maps PSRAM as cached RAM, so Linux's
+ * write of the control word sat in hart 1's D-cache and hart0 never saw it
+ * (2026-09-21). SRAM is uncached for both harts. Addresses: nm hello_world.elf
+ * | grep s31_h1s_  (they move with every loader build). */
+volatile uint32_t s31_h1s_ctrl;
+volatile uint32_t s31_h1s_buf[4000];
+#define H1S_CTRL	(&s31_h1s_ctrl)
+#define H1S_BUF		s31_h1s_buf
+static volatile uint32_t h1s_want, h1s_have;
+
+static void IRAM_ATTR h1s_tick(void *arg)
+{
+	(void)arg;
+	if (h1s_have < h1s_want)
+		H1S_BUF[h1s_have++] = REG_READ(0x2d0020d0);
+}
+
+static void h1s_task(void *arg)
+{
+	const esp_timer_create_args_t a = { .callback = h1s_tick, .name = "h1s" };
+	esp_timer_handle_t t;
+
+	(void)arg;
+	if (esp_timer_create(&a, &t) != ESP_OK)
+		vTaskDelete(NULL);
+	*H1S_CTRL = 0;
+	for (;;) {
+		uint32_t n = *H1S_CTRL;
+
+		if (n >= 1 && n <= 4000) {
+			REG_WRITE(0x2d0020cc, 3);	/* record hart 1 */
+			h1s_have = 0;
+			h1s_want = n;
+			esp_timer_start_periodic(t, 1000);
+			while (h1s_have < h1s_want)
+				vTaskDelay(pdMS_TO_TICKS(20));
+			esp_timer_stop(t);
+			*H1S_CTRL = 0x80000000u | h1s_have;
+		}
+		vTaskDelay(pdMS_TO_TICKS(50));
+	}
+}
+
 void s31_vcpu_start(void)
 {
 	/* Priority 1: above IDLE (whose hook sleeps the hart for a whole tick),
 	 * below every IDF system, radio and USB task. */
 	xTaskCreate(vcpu_task, "s31_vcpu", 4096, NULL, 1, &vcpu_handle);	/* blocks inside the trap path */
+	xTaskCreate(h1s_task, "s31_h1s", 3072, NULL, 3, NULL);
 	xTaskCreate(report_task, "s31_vcpu_rep", 2560, NULL, 2, NULL);
 }

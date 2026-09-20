@@ -1231,6 +1231,9 @@ err_free:
 
 #ifdef CONFIG_SMP
 #include <linux/timer.h>
+#include <linux/math64.h>
+#include <linux/delay.h>
+#include <linux/workqueue.h>
 #include <linux/kernel_stat.h>
 #include <linux/sched/stat.h>
 static struct timer_list s31_smp_beat;
@@ -1273,6 +1276,29 @@ static int __init s31_smp_beat_init(void)
 	return 0;
 }
 early_initcall(s31_smp_beat_init);
+
+/*
+ * MEASURED 2026-09-21 by a one-shot self-test that lived here (6 boots of 6):
+ * writes made on the lent CPU through the +0x10000 alias reach hart 1's CLIC
+ * for ALL FOUR bytes of a slot - IE (1 -> 1, 0 -> 0), ATTR (42 -> 42, 40 ->
+ * 40), CTL (1f -> 1f, 3f -> 3f) - and IP is how the IPI works. The alias is
+ * sound; do not suspect it again. The test also showed initcalls running on
+ * CPU1 on some boots despite isolcpus=1 (kernel_init is not bound by it).
+ * An LR/SC-versus-plain-store test was attempted next and removed: its inline
+ * asm was wrong (a0 clobbered before lr.w) and it oopsed; the hardware
+ * question it asked is still OPEN.
+ */
 #endif
+
+/*
+ * MEASURED 2026-09-21 (step 0 of docs/smp-ipi-plan.md, one-shot test since
+ * removed): a real CPU_INT_FROM_CPU source line DOES wake hart 1 from wfi.
+ * Source 66 (FROM_CPU_1) routed to a free slot, edge-latched; hart 1 asleep in
+ * wfi with interrupts off, the lent CPU rings 2 ms later. 36 of 40 trials had
+ * hart 1 truly asleep (one wfi, zero fall-throughs): ring -> awake latency
+ * min 0, median 1, max 9 us. (The other 4 had a tick pending first - with
+ * interrupts off that turns wfi into a no-op, so they were excluded.) The
+ * software-set pending bit used for IPIs today does NOT wake wfi.
+ */
 
 IRQCHIP_DECLARE(esp32s31_clic, "espressif,esp32s31-clic", esp32s31_clic_probe);

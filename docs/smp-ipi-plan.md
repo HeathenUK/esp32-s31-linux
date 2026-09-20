@@ -1,6 +1,6 @@
 # Cross-hart IPIs on real doorbell lines - plan (2026-09-21)
 
-Status: PLAN, nothing implemented. Agreed with the user before any code.
+Status: step 0 DONE 2026-09-21 - premise PROVEN (see below). Steps 1-4 open.
 
 ## Why
 
@@ -78,6 +78,11 @@ transport's registers, DT node and Linux driver completely untouched.
    and confirm hart 1 wakes and takes it *promptly*. One-shot, read-mostly,
    removed afterwards. If a FROM_CPU line does NOT wake `wfi`, the plan is void
    and we stop here having lost one build.
+   RESULT: 36 of 40 trials had hart 1 truly asleep (single wfi, zero
+   fall-throughs); FROM_CPU_1 woke it every time, ring->awake min 0 / median
+   1 / max 9 us. Trap found on the way: with interrupts off, a tick that goes
+   pending makes every later wfi a no-op - a first version timed that spin
+   (15,421 fall-throughs) and had to be refined to count only clean sleeps.
 1. Monitor + OpenSBI move to FROM_CPU_3 (Linux still uses the old slot-47 path
    toward hart 1). Check: 2 CPUs up, 5 boots, gate.
 2. Linux sends/receives hart-1 IPIs on FROM_CPU_1; idle policy unchanged

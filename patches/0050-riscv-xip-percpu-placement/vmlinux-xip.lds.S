@@ -195,6 +195,44 @@ SECTIONS
  * `*net/core/sock.o` matches fine. The bare `*af_unix.o` is what works.)
  */
 
+/*
+ * What CONFIG_SMP adds to every hot path, measured 2026-09-20 on the gate's SDL
+ * canaries (syscall- and wakeup-heavy): the SAME kernel held to one CPU is
+ * +10.4% / +10.8% slower than UP (16.26 vs 14.73 ms, 34.15 vs 30.82; UP with
+ * the same size diet is -2%, so it is SMP and nothing else), and all of it
+ * runs from flash. Batch 1, 6.8 kB: the IPI mux, the arch and generic
+ * cross-call code, irq_work (every deferred printk / wake-up is a self-IPI
+ * now) and the out-of-line spinlock functions. On UP these objects are
+ * absent or empty, so the list costs a UP kernel nothing.
+ *
+ * MEASURED AND LEFT OUT (gate canaries, 2026-09-21; run-to-run noise on the
+ * timers canary is +-3.5%, so none of these single-run deltas is proven):
+ *   kernel/rcu/tree.o, 24 kB: sdl1 15.79 -> 15.52 ms (-1.7%), sdl2 31.9 -> 33.2.
+ *     Not worth 24 kB of a 15.4 MB machine on that evidence.
+ *   locking/spinlock.o, 1.3 kB (+ a LOCK_TEXT exclude): DOES NOT BOOT - dies
+ *     after "SBI SRST extension detected", hart1 looping in handle_exception
+ *     with sp below _sdata. Mechanism unknown.
+ * The batch below moved sdl1 15.75 -> 15.79 (nothing) - kept because it is
+ * 5.6 kB and is the path that gets hot once tasks really run on CPU1.
+ * Guessing objects is exhausted: the next step is PROF=1 on the SMP kernel.
+ *
+ * PROFILED 2026-09-21 with the hart0 PC sampler (scripts/board/h1s-report.py;
+ * /proc/profile saw 96 samples, this sees everything), UP vs SMP on the SDL1
+ * canary, 4000 samples each. The cost is the IDLE PATH: the canary idles and
+ * wakes ~25 times a frame. UP spends 9.1% asleep in wfi. SMP spends 7.5%
+ * EXECUTING: Tree RCU needs context tracking on every idle entry/exit -
+ * ct_kernel_exit_state 1.75%, ct_kernel_exit 1.40%, ct_kernel_enter 1.23%,
+ * ct_idle_exit 0.40%, all absent on UP, all from flash - plus do_idle /
+ * default_idle_call 2.0%. Hence kernel/context_tracking.o here, and
+ * .cpuidle.text released from the flash-only rule below.
+ */
+#ifdef CONFIG_SMP
+#define S31_FAST_SMP	*kernel/irq/ipi-mux.o *riscv/kernel/smp.o *kernel/smp.o \
+			*kernel/irq_work.o *kernel/context_tracking.o
+#else
+#define S31_FAST_SMP
+#endif
+
 #define S31_FAST_OBJS	*hrtimer.o *timer.o *tick-sched.o *tick-common.o \
 			*timekeeping.o *clockevents.o \
 			*riscv/kernel/traps.o *riscv/kernel/irq.o *riscv/mm/fault.o \
@@ -207,6 +245,7 @@ SECTIONS
 			*mmc/core/block.o *mmc/core/core.o \
 			*sched/core.o *sched/build_utility.o \
 			*sched/fair.o \
+			S31_FAST_SMP \
 			S31_FAST_INPUT
 
 
@@ -222,6 +261,15 @@ SECTIONS
  * __schedule itself instead of the caller it would normally skip to. Cosmetic,
  * and cheap against the fetch cost.
  */
+/* Same reason as SCHED_TEXT below: __lockfunc code is in .spinlock.text, and
+ * the stock LOCK_TEXT sweeps it into the flash .text before our list sees it. */
+#undef LOCK_TEXT
+#define LOCK_TEXT							\
+		ALIGN_FUNCTION();					\
+		__lock_text_start = .;					\
+		*(EXCLUDE_FILE(S31_FAST_OBJS) .spinlock.text)		\
+		__lock_text_end = .;
+
 #undef SCHED_TEXT
 #define SCHED_TEXT							\
 		__sched_text_start = .;					\
@@ -246,7 +294,7 @@ SECTIONS
 		__noinstr_text_start = .;				\
 		*(EXCLUDE_FILE(S31_FAST_OBJS) .noinstr.text)		\
 		__cpuidle_text_start = .;				\
-		*(.cpuidle.text)					\
+		*(EXCLUDE_FILE(S31_FAST_OBJS) .cpuidle.text)		\
 		__cpuidle_text_end = .;					\
 		__noinstr_text_end = .;
 
@@ -350,7 +398,7 @@ SECTIONS
 	 */
 	.text.fast : AT(ADDR(.text.fast) - LOAD_OFFSET) {
 		*(.text..fast)
-		S31_FAST_OBJS(.text .text.* .sched.text .noinstr.text)
+		S31_FAST_OBJS(.text .text.* .sched.text .noinstr.text .spinlock.text .cpuidle.text)
 		/*
 		 * Whole objects, by name, rather than an attribute sprinkled
 		 * through generic kernel code. Measured with a 72 KB body on

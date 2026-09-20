@@ -396,9 +396,12 @@ SMP_TWEAKS := --enable SMP --set-val NR_CPUS 2 --enable HOTPLUG_CPU --disable RI
 # scheduler off it unless a task is placed there with taskset, which is how we
 # mean to use it anyway (docs/smp-plan.md stage 5).
 CMDLINE_ADD += isolcpus=1
+# NOT maxcpus=1 + online-later. Tried 2026-09-21 to hide a boot-dependent dead
+# interrupt (initcalls run on CPU1 on some boots despite isolcpus): it is a
+# workaround for code of ours that is wrong from the lent CPU, a normal Linux
+# does not need it, and one boot in five still failed with it. Fix the code.
 ifeq ($(SMP_ONE),1)
-# Control arm: the SMP kernel on one CPU. Separates 'races between two CPUs'
-# from 'what CONFIG_SMP itself changed'.
+# Control arm: the SMP kernel on one CPU.
 CMDLINE_ADD += maxcpus=1
 endif
 else
