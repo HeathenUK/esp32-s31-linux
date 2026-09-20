@@ -50,6 +50,8 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <stdint.h>
+#include <sys/resource.h>
+#include <sys/syscall.h>
 
 #define SINK_FILE	"/run/s31-sink"
 #define SINK_DEFAULT	"hw:0,0"
@@ -426,6 +428,40 @@ static snd_pcm_sframes_t route_transfer(snd_pcm_ioplug_t *io,
 	const char *buf;
 	snd_pcm_sframes_t n;
 
+	/*
+	 * THE THREAD THAT FEEDS THE CODEC OUTRANKS THE ONE THAT DRAWS.
+	 *
+	 * This callback runs on the application's audio thread (SDL's, for
+	 * every game here). On one core at 100% busy, CFS gives that thread
+	 * an equal share with the renderer and the desktop, and a late audio
+	 * period is an audible gap where a late video frame is nothing.
+	 * OpenTyrian is the case that forced it (2026-09-20): its FM-music
+	 * synthesis at 44.1 kHz took 56% of the core at equal weight and still
+	 * underran ten times a second - each underrun restarting playback
+	 * from an empty buffer, heard as clipped fragments and never music.
+	 *
+	 * OFF BY DEFAULT, because the measurement said so: with the boost
+	 * OpenTyrian's audio thread took 92-100% of the core, STILL underran
+	 * (96-130 per 10 s against 101 without) and starved its own game
+	 * thread to 7%. Its synthesis is double-precision on a core with no
+	 * D - half the thread in __muldf3 - and needs more than the whole
+	 * core at 44.1 kHz; priority cannot create cycles. Kept as a knob
+	 * (S31ROUTE_NICE=-10) for a producer that fits but is being preempted.
+	 * nice, never SCHED_FIFO: a runaway FIFO audio thread takes the board.
+	 */
+	{
+		static __thread int raised;
+
+		if (!raised) {
+			const char *e = getenv("S31ROUTE_NICE");
+			int prio = e ? atoi(e) : 0;
+
+			raised = 1;
+			if (prio)
+				setpriority(PRIO_PROCESS,
+					    (id_t)syscall(SYS_gettid), prio);
+		}
+	}
 	sink_follow(r);
 	if (!r->slave)
 		return -ENODEV;
