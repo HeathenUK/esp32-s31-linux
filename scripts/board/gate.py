@@ -101,7 +101,7 @@ def image_build_number():
     if not img.exists():
         return None
     data = img.read_bytes()
-    m = re.search(rb"#(\d+) [A-Z][a-z]{2} [A-Z][a-z]{2} +\d+ [\d:]+ UTC \d{4}", data)
+    m = re.search(rb"#(\d+) (?:SMP )?(?:PREEMPT\w* )?[A-Z][a-z]{2} [A-Z][a-z]{2} +\d+ [\d:]+ UTC \d{4}", data)
     return m.group(1).decode() if m else None
 
 

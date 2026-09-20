@@ -97,21 +97,16 @@ s31_vcpu_mtvec:
 	csrr	t1, mtval
 	sw	t1, 24(t0)
 	/*
-	 * DIAGNOSTIC (2026-09-20): an M-mode fault while the Linux guest exists
-	 * has so far ended in CPU_LOCKUP - IDF's panic handler faults in turn,
-	 * the chip resets, and the boot after that hangs in ROM, so nothing is
-	 * ever printed. Leave the facts where Linux's s31-smp heartbeat reads
-	 * them (it panic()s on a frozen hart0 and prints these three words),
-	 * and stop here instead.
+	 * NOT a place to stop. IDF takes M-mode exceptions ON PURPOSE: a task's
+	 * first FPU / HWLoop / PIE instruction is an illegal-instruction trap that
+	 * _panic_handler turns into a lazy coprocessor enable. A diagnostic spin
+	 * here (2026-09-20) froze hart0 the moment Wi-Fi's PHY calibration did
+	 * float maths, ~36 s into every boot - timers and IPIs for the lent CPU
+	 * stopped, RCU stalled, and the shell went silent. Breadcrumbs only.
 	 */
-	li	t1, 0x50FEFFD0
-	csrr	t0, mtval
-	sw	t0, 0(t1)
-	csrr	t0, mcause
-	sw	t0, 4(t1)
-	csrr	t0, mepc
-	sw	t0, 8(t1)
-9:	j	9b
+	lw	t1, 28(t0)
+	csrrw	t0, mscratch, zero
+	j	_panic_handler
 1:	save_guest_gprs
 	la	t0, s31_vcpu_crumbs
 	lw	t1, 8(t0)
