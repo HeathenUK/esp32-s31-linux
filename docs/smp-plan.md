@@ -4,8 +4,9 @@ Status (current): SMP/doorbell IPIs/WFI are implemented. Kernel #291 is the
 validated checkpoint (three #290 reset/stress cycles plus #291 full gate).
 The vblank timer bug is fixed; SDL canaries still6–11% slower than UP.
 
-Active step: #294 temporary PIE affinity experiment (patch0055), not accepted
-until regression and workload tests pass. Only hart1/Linux CPU0 has PIE SIMD.
+Active step: #294 temporary PIE affinity experiment (patch0055) FAILED its
+first boot with an RCU stall during service startup. Capture diagnostic core
+state before proceeding to regression/workload tests. Only hart1/Linux CPU0 has PIE SIMD.
 The generic scheduler compatibility-affinity API saves/restores user masks;
 100ms lease is an initial tunable policy, not a proven optimum.
 
@@ -19,6 +20,11 @@ Next steps, in order:
    for synthesis/game/lvdesk. s31route executes on the app's audio thread.
 4. Measure hart0 monitor IPI/wake overhead and effective CPU capacity; expose
    useful constraints to Linux rather than permanently pinning whole apps.
+5. If profiling supports it, redesign our platform's work division: lvdesk/
+   X shim, MIT-SHM/xlite rings, s31route, conversion/presentation and audio
+   workers can be split or regrouped. Keep client software unchanged. Compare
+   useful core placement against added copies, wakeups, buffers and latency;
+   do this after SMP correctness and only for measured bottlenecks.
 
 Open unrelated reports: user-observed Quake crash (deferred at their request)
 and an uncaptured 'unexpected interrupt latency' boot hang, likely the known
