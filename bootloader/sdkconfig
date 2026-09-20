@@ -1308,7 +1308,7 @@ CONFIG_S31_DISPLAY_DISP_GPIO=-1
 # CONFIG_S31_AUDIO_ENABLE is not set
 # end of S31 audio co-processor
 
-# CONFIG_S31_USB_HID_ENABLE is not set
+CONFIG_S31_USB_HID_ENABLE=y
 
 #
 # Example Configuration

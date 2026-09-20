@@ -141,7 +141,7 @@ endmenu
 
 config S31_USB_HID_ENABLE
 	bool "Own the USB controller on hart0 and enumerate HID devices"
-	default n
+	default y
 	help
 	  Take the USB OTG controller for hart0 and drive keyboards and mice
 	  with Espressif's USB host stack, instead of leaving the controller to

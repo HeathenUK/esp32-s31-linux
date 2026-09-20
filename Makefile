@@ -358,7 +358,11 @@ USB_NOSUSPEND ?= 1
 # harmless without the driver and are left alone. THE TWO SIDES MUST AGREE:
 # a kernel with dwc2 and a loader with the HID host would fight over one
 # block. docs/usb-on-hart0-plan.md.
-USB_HART0 ?= 0
+# DEFAULT 1 since 2026-09-20 (user decision): hart0 owns USB. The loader's
+# sdkconfig.defaults carries CONFIG_S31_USB_HID_ENABLE=y to match; building
+# USB_HART0=0 needs that flipped to n AND the loader reflashed, or both
+# harts drive one controller.
+USB_HART0 ?= 1
 ifeq ($(USB_HART0),1)
 USB_TWEAKS := --disable USB_DWC2 --disable USB_DWC2_HOST --disable USB_HID --disable USB_MON --disable PHY_ESP32S31_USB --enable ESP32S31_HOSTED_HID
 else
