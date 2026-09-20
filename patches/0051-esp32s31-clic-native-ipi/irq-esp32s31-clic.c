@@ -1280,34 +1280,39 @@ static struct timer_list s31_smp_beat;
 static void __iomem *s31_busmon, *s31_h0trace;
 
 /* Diagnostic only: softirq lockups can stop the normal heartbeat before RCU
- * can print a stack. Sample once from the still-running CPU0 timer IRQ, before
+ * can print a stack. Sample once per CPU from any still-running timer IRQ, before
  * the generic timer handler enters RCU stall reporting and its node locks. */
 static unsigned long s31_smp_last_beat;
-static bool s31_smp_beat_started, s31_smp_stall_reported;
+static bool s31_smp_beat_started;
+static DEFINE_PER_CPU(bool, s31_smp_stall_reported);
 
 static void s31_smp_stall_probe(struct pt_regs *regs)
 {
-	if (!s31_smp_diag || smp_processor_id() != 0 ||
-	    !s31_smp_beat_started || s31_smp_stall_reported ||
-	    !time_after(jiffies, s31_smp_last_beat + 6 * HZ))
+	if (!s31_smp_diag ||
+	    !READ_ONCE(s31_smp_beat_started) || this_cpu_read(s31_smp_stall_reported) ||
+	    !time_after(jiffies, READ_ONCE(s31_smp_last_beat) + 6 * HZ))
 		return;
-	s31_smp_stall_reported = true;
-	if (s31_busmon)
+	this_cpu_write(s31_smp_stall_reported, true);
+	if (s31_busmon) {
 		writel(3, s31_busmon + 0x44);
-	pr_emerg("s31-stall: cpu0 pc %08lx ra %08lx sp %08lx a0 %08lx status %08lx pid %d comm %s | hart0 pc %08x sp %08x guest pc %08x ra %08x a0 %08x\n",
-		regs->epc, regs->ra, regs->sp, regs->a0, regs->status,
+		writel(3, s31_busmon + 0xcc);
+	}
+	pr_emerg("s31-stall: cpu%u pc %08lx ra %08lx sp %08lx a0 %08lx status %08lx pid %d comm %s | hart0 pc %08x sp %08x guest pc %08x ra %08x a0 %08x | hart1 pc %08x sp %08x\n",
+		smp_processor_id(), regs->epc, regs->ra, regs->sp, regs->a0, regs->status,
 		current->pid, current->comm,
 		s31_busmon ? readl(s31_busmon + 0x48) : 0,
 		s31_busmon ? readl(s31_busmon + 0x4c) : 0,
 		s31_h0trace ? readl(s31_h0trace + 20) : 0,
 		s31_h0trace ? readl(s31_h0trace + 16) : 0,
-		s31_h0trace ? readl(s31_h0trace + 12) : 0);
+		s31_h0trace ? readl(s31_h0trace + 12) : 0,
+		s31_busmon ? readl(s31_busmon + 0xd0) : 0,
+		s31_busmon ? readl(s31_busmon + 0xd4) : 0);
 }
 
 static void s31_smp_beat_fn(struct timer_list *t)
 {
-	s31_smp_last_beat = jiffies;
-	s31_smp_beat_started = true;
+	WRITE_ONCE(s31_smp_last_beat, jiffies);
+	WRITE_ONCE(s31_smp_beat_started, true);
 	if (s31_smp_dump_after && !s31_smp_dump_done &&
 	    time_after_eq(jiffies, s31_smp_dump_at)) {
 		s31_smp_dump_done = true;

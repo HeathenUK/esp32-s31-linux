@@ -1,3 +1,10 @@
+Current status (supersedes the historical stages below): hardware FROM_CPU_1
+into hart1, shared FROM_CPU_3 into hart0, WFI restored. IRQ-disabled lent-idle
+returns explicitly flush deferred hrtimer rearming. Routine heartbeat is
+opt-in via s31_smp_diag=1; this also enables a one-shot hard-timer capture if
+the CPU0 softirq heartbeat stops for six seconds. See docs/smp-ipi-plan.md
+and docs/current-state.md for validation and the separate PIE experiment.
+
 esp32s31-clic: native IPIs for CONFIG_SMP
 
 File: drivers/irqchip/irq-esp32s31-clic.c (whole file). All new code is under
