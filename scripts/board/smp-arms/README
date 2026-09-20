@@ -1,0 +1,13 @@
+Prelaunch scripts for scripts/board/timedemo.sh - one STANDARD Linux knob per
+file, so each arm of docs/smp-finish-plan.md step 2 is measured on its own.
+They run on the board after the settle and before the game; whatever they print
+is kept (TD_PRE in the collect log) as the proof the knob took.
+
+  wq-cpu1.sh        unbound workqueues -> CPU1
+  rps-cpu1.sh       Wi-Fi receive protocol processing -> CPU1 (needs CONFIG_RPS)
+  napi-cpu1.sh      threaded NAPI for wlan0, its kthread on CPU1
+  all-cpu1.sh       the three together
+  load-wifi.sh      a continuous Wi-Fi download in the background (the
+                    contention the dips are made of); set TD_LOAD_URL
+Device INTERRUPTS are not here on purpose: hart 0 cannot take S-mode interrupts
+in hardware, so they stay on hart 1 (CPU0).
