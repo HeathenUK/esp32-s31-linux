@@ -190,7 +190,7 @@ struct esp32s31_clic {
 };
 
 static DEFINE_PER_CPU(struct esp32s31_clic *, clic_per_cpu);
-static DEFINE_PER_CPU(raw_spinlock_t, clic_lock);
+static DEFINE_RAW_SPINLOCK(clic_dev_lock);
 
 /* ── Register access helpers ────────────────────────────────────── */
 /*
@@ -201,17 +201,42 @@ static DEFINE_PER_CPU(raw_spinlock_t, clic_lock);
  * registers from a different core — never for the current core's own
  * registers.
  */
+/*
+ * SMP: EVERY device interrupt lives in hart 1's CLIC, and the window is
+ * virtualised per hart - the same address reaches the registers of whichever
+ * hart executes the access. So an unmask that happened to run on the CPU lent
+ * by hart 0 (an async probe on kworker/1, a threaded handler, enable_irq())
+ * set IE in hart 0's CLIC and left hart 1's slot masked: that device's
+ * interrupt was dead for the whole boot. 2026-09-20: codec I2C timing out on
+ * every transfer in 3 boots of 5, the console dying after one line in 1 of 5,
+ * by which CPU ran the probe. From the lent CPU go through the +0x10000 alias,
+ * which reaches hart 1 (verified: the IPI pending bit is written that way).
+ */
+static inline unsigned int clic_dev_off(void)
+{
+#ifdef CONFIG_SMP
+	if (cpuid_to_hartid_map(raw_smp_processor_id()) == 0)
+		return ESP32S31_CLIC_DUALCORE_OFF;
+#endif
+	return 0;
+}
+
+static inline bool clic_on_lent_cpu(void)
+{
+	return clic_dev_off() != 0;
+}
+
 static inline u8 clic_readb(struct esp32s31_clic *clic, unsigned int irq_id,
 			    unsigned int byte_off)
 {
-	return readb(clic->regs + ESP32S31_CLIC_CTRL_BASE - ESP32S31_CLIC_BASE +
+	return readb(clic->regs + clic_dev_off() + ESP32S31_CLIC_CTRL_BASE - ESP32S31_CLIC_BASE +
 		     (irq_id * ESP32S31_CLIC_INT_STRIDE) + byte_off);
 }
 
 static inline void clic_writeb(struct esp32s31_clic *clic, unsigned int irq_id,
 			       unsigned int byte_off, u8 val)
 {
-	writeb(val, clic->regs + ESP32S31_CLIC_CTRL_BASE - ESP32S31_CLIC_BASE +
+	writeb(val, clic->regs + clic_dev_off() + ESP32S31_CLIC_CTRL_BASE - ESP32S31_CLIC_BASE +
 			    (irq_id * ESP32S31_CLIC_INT_STRIDE) + byte_off);
 }
 
@@ -301,7 +326,7 @@ static void esp32s31_clic_ipi_local_init(struct esp32s31_clic *clic)
 static void esp32s31_clic_irq_mask(struct irq_data *d)
 {
 	struct esp32s31_clic *clic = irq_data_get_irq_chip_data(d);
-	raw_spinlock_t *lock = this_cpu_ptr(&clic_lock);
+	raw_spinlock_t *lock = &clic_dev_lock;	/* one register set: hart 1's */
 	unsigned long flags;
 
 	raw_spin_lock_irqsave(lock, flags);
@@ -312,7 +337,7 @@ static void esp32s31_clic_irq_mask(struct irq_data *d)
 static void esp32s31_clic_irq_unmask(struct irq_data *d)
 {
 	struct esp32s31_clic *clic = irq_data_get_irq_chip_data(d);
-	raw_spinlock_t *lock = this_cpu_ptr(&clic_lock);
+	raw_spinlock_t *lock = &clic_dev_lock;	/* one register set: hart 1's */
 	unsigned long flags;
 
 	raw_spin_lock_irqsave(lock, flags);
@@ -323,7 +348,7 @@ static void esp32s31_clic_irq_unmask(struct irq_data *d)
 static void esp32s31_clic_irq_ack(struct irq_data *d)
 {
 	struct esp32s31_clic *clic = irq_data_get_irq_chip_data(d);
-	raw_spinlock_t *lock = this_cpu_ptr(&clic_lock);
+	raw_spinlock_t *lock = &clic_dev_lock;	/* one register set: hart 1's */
 	u32 hwirq = d->hwirq;
 	unsigned long flags;
 
@@ -389,9 +414,9 @@ static int esp32s31_clic_set_type(struct irq_data *d, unsigned int flow_type)
 		attr |= CLIC_ATTR_SHV;
 #endif
 
-	raw_spin_lock_irqsave(this_cpu_ptr(&clic_lock), flags);
+	raw_spin_lock_irqsave(&clic_dev_lock, flags);
 	clic_writeb(clic, hwirq, ESP32S31_CLIC_INT_ATTR, attr);
-	raw_spin_unlock_irqrestore(this_cpu_ptr(&clic_lock), flags);
+	raw_spin_unlock_irqrestore(&clic_dev_lock, flags);
 
 	return 0;
 }
@@ -438,21 +463,21 @@ int esp32s31_clic_set_priority(unsigned int irq, unsigned int level,
 	 * priority requests so no Linux driver can re-enable hardware nesting.
 	 */
 	if (IS_ENABLED(CONFIG_SOC_ESP32S31)) {
-		raw_spin_lock_irqsave(this_cpu_ptr(&clic_lock), flags);
+		raw_spin_lock_irqsave(&clic_dev_lock, flags);
 		clic_writeb(clic, d->hwirq, ESP32S31_CLIC_INT_CTL,
 			    CLICCTL_MAKE(ESP32S31_EXTERNAL_LEVEL,
 					 ESP32S31_MAX_PRIORITY));
-		raw_spin_unlock_irqrestore(this_cpu_ptr(&clic_lock), flags);
+		raw_spin_unlock_irqrestore(&clic_dev_lock, flags);
 		return 0;
 	}
 
 	if (level >= ESP32S31_NR_LEVELS || prio > ESP32S31_MAX_PRIORITY)
 		return -EINVAL;
 
-	raw_spin_lock_irqsave(this_cpu_ptr(&clic_lock), flags);
+	raw_spin_lock_irqsave(&clic_dev_lock, flags);
 	clic_writeb(clic, d->hwirq, ESP32S31_CLIC_INT_CTL,
 		    CLICCTL_MAKE(level, prio));
-	raw_spin_unlock_irqrestore(this_cpu_ptr(&clic_lock), flags);
+	raw_spin_unlock_irqrestore(&clic_dev_lock, flags);
 
 	return 0;
 }
@@ -484,6 +509,11 @@ static void esp32s31_intc_clic_irq_mask(struct irq_data *d)
 {
 	irq_hw_number_t hwirq = d->hwirq;
 
+	/* The lent CPU's timer and IPI are injected by the hart0 monitor and
+	 * gated on sstatus.SIE alone; its CLIC is FreeRTOS's. */
+	if (clic_on_lent_cpu())
+		return;
+
 	if (WARN_ON_ONCE(!esp32s31_sclic_regs))
 		return;
 
@@ -502,6 +532,11 @@ static void esp32s31_intc_clic_irq_mask(struct irq_data *d)
 static void esp32s31_intc_clic_irq_unmask(struct irq_data *d)
 {
 	irq_hw_number_t hwirq = d->hwirq;
+
+	/* The lent CPU's timer and IPI are injected by the hart0 monitor and
+	 * gated on sstatus.SIE alone; its CLIC is FreeRTOS's. */
+	if (clic_on_lent_cpu())
+		return;
 
 	if (WARN_ON_ONCE(!esp32s31_sclic_regs))
 		return;
@@ -651,10 +686,10 @@ static int esp32s31_clic_domain_alloc(struct irq_domain *domain,
 	irq_domain_set_info(domain, virq, hwirq, &esp32s31_clic_chip, clic,
 			    handle_level_irq, NULL, NULL);
 
-	raw_spin_lock_irqsave(this_cpu_ptr(&clic_lock), flags);
+	raw_spin_lock_irqsave(&clic_dev_lock, flags);
 	clic_writeb(clic, hwirq, ESP32S31_CLIC_INT_CTL,
 		    CLICCTL_MAKE(level, ESP32S31_MAX_PRIORITY));
-	raw_spin_unlock_irqrestore(this_cpu_ptr(&clic_lock), flags);
+	raw_spin_unlock_irqrestore(&clic_dev_lock, flags);
 
 	if (type != IRQ_TYPE_NONE)
 		irq_set_irq_type(virq, type);
@@ -822,9 +857,14 @@ void esp32s31_clic_handle_irq(struct pt_regs *regs)
 		 * Clear its software IP latch with 0; unlike external edge slots,
 		 * writing 1 here prevents the next compare edge from being seen.
 		 */
-		u8 attr = clic_readb(clic, irq_id, ESP32S31_CLIC_INT_ATTR);
-		if (attr & CLIC_ATTR_TRIG_EDGE)
-			clic_writeb(clic, irq_id, ESP32S31_CLIC_INT_IP, 0);
+		/* Injected on the lent CPU: nothing to clear, and through the alias
+		 * this would clear HART 1's timer latch. */
+		if (!clic_on_lent_cpu()) {
+			u8 attr = clic_readb(clic, irq_id, ESP32S31_CLIC_INT_ATTR);
+
+			if (attr & CLIC_ATTR_TRIG_EDGE)
+				clic_writeb(clic, irq_id, ESP32S31_CLIC_INT_IP, 0);
+		}
 
 		/*
 		 * S31's physical compare source is local ID7.  The generic timer
@@ -853,7 +893,10 @@ void esp32s31_clic_handle_irq(struct pt_regs *regs)
 	if (irq_id == ESP32S31_CLIC_IPI_SLOT) {
 		/* Clear the latch BEFORE processing: a send that lands during
 		 * ipi_mux_process() must re-raise it, not be wiped after. */
-		clic_writeb(clic, irq_id, ESP32S31_CLIC_INT_IP, 0);
+		/* On the lent CPU the IPI is injected; through the alias this write
+		 * would swallow an IPI pending for HART 1. */
+		if (!clic_on_lent_cpu())
+			clic_writeb(clic, irq_id, ESP32S31_CLIC_INT_IP, 0);
 		atomic_inc(&s31_ipi_taken[smp_processor_id() & 1]);
 		ipi_mux_process();
 		goto out;
@@ -1215,7 +1258,7 @@ static void s31_smp_beat_fn(struct timer_list *t)
 		/* hart0 parked at one IDF address for 2 s while it should be
 		 * running a Linux CPU = frozen in the monitor. CPU1 may hold the
 		 * console lock, so only panic() can still speak. */
-		if (pc == last_pc && sp == last_sp && (pc >> 24) == 0x2f)
+		if (num_online_cpus() > 1 && pc == last_pc && sp == last_sp && (pc >> 24) == 0x2f)
 			panic("hart0 frozen: pc %08x sp %08x world step %02x coproc fid+1 %u ecalls %u",
 			      pc, sp, readl(s31_h0trace), readl(s31_h0trace + 4),
 			      readl(s31_h0trace + 8));

@@ -302,7 +302,7 @@ USB_BUFDMA ?= 1
 # and the controller does not survive an unbind/rebind. It has to come in on
 # the command line, which is CMDLINE_FORCE here.
 USB_SOF ?= 0
-CMDLINE_NOW = $$(sed -n 's/^CONFIG_CMDLINE=\"\(.*\)\"/\1/p' $(LINUX_OUT)/.config | sed 's/ earlycon//g; s/ dwc2.host_full_speed=0//g; s/ dwc2.host_full_speed=1//g; s/ usbcore.autosuspend=-1//g; s/ dwc2.desc_dma=0//g; s/ dwc2.sof_irq=1//g; s/ snd_aloop.index=1//g; s/ profile=6//g')
+CMDLINE_NOW = $$(sed -n 's/^CONFIG_CMDLINE=\"\(.*\)\"/\1/p' $(LINUX_OUT)/.config | sed 's/ earlycon//g; s/ dwc2.host_full_speed=0//g; s/ dwc2.host_full_speed=1//g; s/ usbcore.autosuspend=-1//g; s/ dwc2.desc_dma=0//g; s/ dwc2.sof_irq=1//g; s/ snd_aloop.index=1//g; s/ profile=6//g; s/ isolcpus=1//g; s/ maxcpus=1//g')
 # The ALSA loopback must not steal card 0 from the Korvo codec: it would
 # silently redirect every app's default output into the loopback and leave
 # the volume mixer attached to a card with no controls.
@@ -389,6 +389,18 @@ ifeq ($(SMP),1)
 # (never entered; hart0 would not survive it), multi-queue network steering
 # and scheduler topology levels that mean nothing on two identical harts.
 SMP_TWEAKS := --enable SMP --set-val NR_CPUS 2 --enable HOTPLUG_CPU --disable RISCV_BOOT_SPINWAIT $(SLIM_TWEAKS)
+# The lent CPU is OPT-IN. It is preemptible by FreeRTOS, its interrupts are
+# injected, it has no PIE unit and its firmware refuses the flash/reset calls -
+# general work landing there gave console deaths (1 boot in 3), codec I2C
+# timeouts and a 59 s boot against 33 s (2026-09-20). isolcpus keeps the
+# scheduler off it unless a task is placed there with taskset, which is how we
+# mean to use it anyway (docs/smp-plan.md stage 5).
+CMDLINE_ADD += isolcpus=1
+ifeq ($(SMP_ONE),1)
+# Control arm: the SMP kernel on one CPU. Separates 'races between two CPUs'
+# from 'what CONFIG_SMP itself changed'.
+CMDLINE_ADD += maxcpus=1
+endif
 else
 # SLIM=1 applies the SMP build's size diet to a uniprocessor kernel: the
 # bisection arm that says whether SMP or the diet broke a boot (2026-09-20).

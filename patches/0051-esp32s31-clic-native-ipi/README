@@ -23,3 +23,17 @@ Not the FROM_CPU_n doorbells GrieferPig uses: all four are taken here
 emulated interrupts and is kicked through FROM_CPU_1 instead.
 
 Verified 2026-09-20: #241 SMP boots to desktop, Wi-Fi/BT/HID up, 1 CPU.
+
+UPDATE 2026-09-20 (the one that mattered): DEVICE SLOTS ARE HART 1's, FROM
+EITHER CPU. The CLIC window is virtualised per hart, so mask/unmask/ack run on
+the lent CPU wrote hart 0's CLIC and left hart 1's slot masked - the device's
+interrupt was then dead for the whole boot. Which CPU ran the probe decided
+it: codec I2C timing out on every transfer (3 boots in 5, ~150 x 130 ms = the
+"slow boot"), console dead after one line (1 in 5). clic_readb/clic_writeb now
+add the +0x10000 alias when executing on the lent CPU; one raw spinlock
+replaces the per-CPU one (there is one register set); the lent CPU's own timer
+and IPI are injected, so its local mask/unmask and the handler's latch clears
+touch no hardware there (through the alias they would hit HART 1's timer latch
+and swallow hart 1's pending IPI). set_affinity still refuses: every device
+interrupt stays on hart 1. Result: 5/5 boots, 0 I2C errors, rcS complete at
+32.6-36.6 s (UP ~33 s).
