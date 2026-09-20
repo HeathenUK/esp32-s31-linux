@@ -59,7 +59,17 @@ for ((r = 1; r <= REP; r++)); do
 	} > "$OUT/launch-$r.sh"
 	python3 scripts/board/runsh.py "$OUT/launch-$r.sh" 25 90 > "$OUT/launch-$r.log" 2>&1
 	if ! grep -q "^TD_LAUNCHED" "$OUT/launch-$r.log"; then
-		echo "    run $r: could not launch (see $OUT/launch-$r.log)"; echo "$r|NA|NOLAUNCH" >> "$OUT/results.psv"; continue
+		# A boot that never gave a shell must leave EVIDENCE, not just "NA":
+		# 2026-09-21, one reset in ~20 on #301 produced "not one byte in 25s"
+		# and nothing was recorded. alive.py --reset watches the whole boot at
+		# both bauds (the loader's black box speaks at 115200) and keeps every
+		# byte. Then one retry, on that fresh boot.
+		echo "    run $r: no shell after reset - recording a boot: $OUT/noshell-$r.*"
+		python3 scripts/board/alive.py --reset --timeout 60 --log "$OUT/noshell-$r.raw" > "$OUT/noshell-$r.txt" 2>&1
+		python3 scripts/board/runsh.py "$OUT/launch-$r.sh" 25 30 > "$OUT/launch-$r.log" 2>&1
+		if ! grep -q "^TD_LAUNCHED" "$OUT/launch-$r.log"; then
+			echo "    run $r: could not launch even after a recorded reboot"; echo "$r|NA|NOLAUNCH" >> "$OUT/results.psv"; continue
+		fi
 	fi
 	kver=$(grep -m1 -o "#[0-9]* [A-Z].*" "$OUT/launch-$r.log" | cut -c1-40)
 	# Hands off. The settle and the whole demo happen with nobody watching.
