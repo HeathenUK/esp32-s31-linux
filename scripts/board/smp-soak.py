@@ -15,14 +15,15 @@ import sys
 HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 FATAL = re.compile(r"Kernel panic|Oops:|BUG:|Guru Meditation|CPU_LOCKUP|"
-                   r"rcu[^\n]*(?:stall|starvation)|unhandled signal|"
-                   r"Unable to handle kernel|Call Trace:", re.I)
+                   r"rcu[^\n]*(?:detected (?:expedited )?stalls?|starved for|starvation)|unhandled signal|"
+                   r"Unable to handle kernel|Call Trace:|vblank wait timed out", re.I)
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--boots", type=int, default=5)
     ap.add_argument("--iterations", type=int, default=2000)
+    ap.add_argument("--timer-iterations", type=int, default=1000)
     ap.add_argument("--kernel", required=True, help="expected build number, e.g. 284")
     ap.add_argument("--output", type=pathlib.Path, required=True)
     a = ap.parse_args()
@@ -33,6 +34,8 @@ def main():
 echo SMP_ONLINE=$(cat /sys/devices/system/cpu/online)
 /root/smpstress {a.iterations} 1
 echo SMP_STRESS_RC=$?
+/root/smpstress {a.timer_iterations} 1 1
+echo SMP_TIMER_RC=$?
 echo SMP_WIFI=$(wpa_cli -i wlan0 status | sed -n 's/^wpa_state=//p')
 echo SMP_HID=$(cat /sys/kernel/esp32s31-hid/attach)
 dmesg
@@ -56,7 +59,7 @@ echo SMP_CHECK_COMPLETE
             (out / f"check-{i}.txt").write_text(text)
             fatal = FATAL.findall(text)
             expected = [f"#{a.kernel} SMP", "SMP_ONLINE=0-1",
-                        "smpstress: PASS cpus=0,1", "SMP_STRESS_RC=0",
+                        "smpstress: PASS cpus=0,1", "SMP_STRESS_RC=0", "SMP_TIMER_RC=0",
                         "SMP_WIFI=COMPLETED", "SMP_CHECK_COMPLETE"]
             missing = [s for s in expected if s not in text]
             result = dict(boot=i, passed=not missing and not fatal,

@@ -32,6 +32,7 @@
  */
 
 #include <linux/cpu.h>
+#include <linux/hrtimer_rearm.h>
 #include <linux/interrupt.h>
 #include <linux/irq.h>
 #include <linux/irqchip.h>
@@ -257,24 +258,17 @@ static inline void clic_write_threshold(struct esp32s31_clic *clic, u8 level)
  * so with the SBI IPI extension the first self-IPI is lost and the boot
  * parks in WFI right after the console comes up (2026-09-20).
  *
- * All four CPU_INTR_FROM_CPU_n doorbells are taken (0 IDF yield, 1 vCPU
- * doorbell, 2/3 hosted transport), so the IPI is a software-set pending bit
- * on a free S-mode EDGE slot of the target hart's CLIC: our own through the
- * normal window, the other hart's through +0x10000.
- * TODO(smp stage 3): a CPU living on hart0 has emulated interrupts and wants
- * the FROM_CPU_1 doorbell instead.
+ * FROM_CPU_1 is dedicated to Linux on hart1, as a hardware level source
+ * routed to slot 47. FROM_CPU_3 is shared with hosted traffic into hart0;
+ * an SRAM request counter lets its ISR distinguish Linux IPIs. FROM_CPU_0
+ * remains IDF's yield line and FROM_CPU_2 remains hosted traffic to hart1.
  */
 #define ESP32S31_CLIC_IPI_SLOT	47
-static struct esp32s31_clic *esp32s31_ipi_clic __ro_after_init;
 
 /*
- * A CPU on physical hart 0 is a guest of FreeRTOS: its interrupts are
- * emulated by the hart0 monitor (bootloader/main/s31_vcpu.c), which takes the
- * CPU_INTR_FROM_CPU_1 doorbell and injects cause 47. A write to hart0's real
- * slot 47 would reach IDF's interrupt, not Linux - so ANY send to that CPU,
- * including its own self-IPI, rings the doorbell. hart 1 has the real slot:
- * own window from hart 1, +0x10000 from hart 0 (readable from S-mode on
- * hart0, measured 2026-09-20).
+ * The lent hart0 runs under the FreeRTOS monitor. Its shared hardware
+ * doorbell wakes that monitor, which injects Linux cause 47; Linux must not
+ * write hart0's IDF-owned CLIC slot directly. Self-IPIs use the same paths.
  */
 #define ESP32S31_LENT_HARTID	0
 static void __iomem *esp32s31_ipi_doorbell __ro_after_init;
@@ -923,6 +917,19 @@ void esp32s31_clic_handle_irq(struct pt_regs *regs)
 	 */
 
 out:
+#ifdef CONFIG_SMP
+	/*
+	 * The lent-hart monitor injects a wake interrupt at trapped WFI even
+	 * though the idle loop has SIE clear. Generic irqentry_exit correctly
+	 * skips deferred hrtimer rearming on an IRQ-disabled return, but here
+	 * the idle loop will enable IRQs without another irqentry exit. Flush
+	 * the deferred rearm while still in IRQ context with RCU watching;
+	 * otherwise the comparator stays stopped and queued timers (including
+	 * DRM vblank and nanosleep) never fire until some unrelated wakeup.
+	 */
+	if (clic_on_lent_cpu() && regs_irqs_disabled(regs))
+		hrtimer_rearm_deferred();
+#endif
 	/*
 	 * RISC-V enters this handler through do_irq()/handle_riscv_irq(),
 	 * which already performs irqentry state management, irq_enter_rcu(),
@@ -1207,7 +1214,6 @@ static int __init esp32s31_clic_probe(struct device_node *node,
 		if (virq <= 0) {
 			pr_err("CLIC: ipi_mux_create failed (%d)\n", virq);
 		} else {
-			esp32s31_ipi_clic = clic;
 			esp32s31_ipi_doorbell = ioremap(0x2058601c, 4);	/* FROM_CPU_3 */
 			esp32s31_ipi_req = ioremap(0x2f06afbc, 4);	/* s31_hosted_control.lent_cpu_ipi_req */
 			esp32s31_hart1_ipi_doorbell = ioremap(0x20586014, 4);
