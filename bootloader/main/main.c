@@ -11,6 +11,7 @@
 #include <inttypes.h>
 #include "sdkconfig.h"
 #include "s31_wifi_config.h"
+#include "nvs.h"
 #include "esp_log.h"
 void s31_vcpu_start(void);
 #include "esp_err.h"
@@ -607,6 +608,36 @@ void app_main(void)
     s31_display_progress(100);  /* handing off to Linux */
 #endif
     start_linux_on_core1(fdt);
+#if CONFIG_S31_VCPU_PROTOTYPE
+    {
+        /*
+         * What the hart0 monitor was doing when the PREVIOUS boot died. The
+         * live copy is RTC no-init RAM, which survives the interrupt
+         * watchdog's warm reset but NOT an EN pulse (reset.py, esptool) - so
+         * it is copied into NVS here and the NVS copy is printed on every
+         * boot until the next one replaces it.
+         */
+        extern volatile uint32_t s31_vcpu_trace[8];
+        uint32_t t[8];
+        size_t len = sizeof(t);
+        nvs_handle_t h;
+
+        if (nvs_open("s31dbg", NVS_READWRITE, &h) == ESP_OK) {
+            if (s31_vcpu_trace[7] == 0x54524143) {
+                memcpy(t, (void *)s31_vcpu_trace, sizeof(t));
+                nvs_set_blob(h, "vtrace", t, sizeof(t));
+                nvs_commit(h);
+                s31_vcpu_trace[7] = 0;
+            }
+            if (nvs_get_blob(h, "vtrace", t, &len) == ESP_OK && len == sizeof(t))
+                ESP_LOGE(TAG, "LAST vcpu death (NVS): step %02" PRIx32 " coproc fid+1 %" PRIu32
+                         " ecalls %" PRIu32 " guest mstatus %08" PRIx32 " pc %08" PRIx32
+                         " mcause %08" PRIx32 " exits %" PRIu32 " reset reason %d",
+                         t[0], t[1], t[2], t[3], t[4], t[5], t[6], (int)esp_reset_reason());
+            nvs_close(h);
+        }
+    }
+#endif
     ESP_LOGI(TAG, "hart1 released to OpenSBI; hart0 FreeRTOS continues");
 #if CONFIG_S31_USB_HID_ENABLE
     /*

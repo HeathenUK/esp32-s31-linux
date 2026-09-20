@@ -1,0 +1,25 @@
+esp32s31 SMP: the harts are asymmetric (PIE only on hart 1); idle must poll
+
+Files (whole files): arch/riscv/kernel/traps.c, arch/riscv/kernel/esp32s31-ext.c,
+arch/riscv/include/asm/esp32s31_ext.h; patches/0051's CLIC driver refreshed.
+
+MEASURED 2026-09-20, M-mode on hart 0 (mhartid 0, the core IDF runs on): CSR
+0x7F2 reads back 0 for writes of 1, 2 and 3, FPU on or off; esp.movx.r.sar is
+a plain illegal instruction (EXT_ILL = 0). HWLoop (0x7F1) and the FPU work.
+On hart 1 the same writes read back 2/3 and userspace runs PIE code daily. No
+gate exists in IDF's S31 register headers. The PIE vector unit is hart-1 only.
+
+1. traps.c + esp32s31-ext.c: a user task that takes an illegal-instruction
+   trap on the lent CPU is pinned to CPU0 and re-executes there
+   (esp32s31_ext_lent_cpu_illegal). Genuine illegal instructions fault again
+   on CPU0 and get SIGILL. musl's string routines are PIE, so most processes
+   end up pinned - making the second core pay needs a PIE-free musl path.
+2. CLIC driver: cpu_idle_poll_ctrl(true) when there is a second CPU. A pending
+   bit written from the OTHER hart does not wake a hart asleep in wfi; the
+   boot only advanced when hart 1's own tick woke it. GrieferPig's tree polls
+   from idle for the same reason. Also: diagnostic IPI counters and a 2 s
+   "s31-smp:" heartbeat (hart0 PC via the bus monitor, hart0 monitor counters
+   from PSRAM 0x50FEFFD0). REMOVE the heartbeat before this ships.
+   Tried and rejected: setting hart 1's IPI pending bit from M-mode on hart 0
+   (0x20811000 + 47*4) - one send, hart 1 never woke. The S-window alias
+   write from the lent CPU works (IPI accounting balances exactly).

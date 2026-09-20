@@ -31,6 +31,7 @@
  *       bits [4:0] = not used for priority with CLICINTCTLBITS=3
  */
 
+#include <linux/cpu.h>
 #include <linux/interrupt.h>
 #include <linux/irq.h>
 #include <linux/irqchip.h>
@@ -45,6 +46,7 @@
 #include <asm/csr.h>
 #include <asm/irq.h>
 #include <asm/smp.h>
+#include <asm/sbi.h>
 
 int esp32s31_clic_set_priority(unsigned int irq, unsigned int level,
 			      unsigned int prio);
@@ -252,15 +254,26 @@ static struct esp32s31_clic *esp32s31_ipi_clic __ro_after_init;
 #define ESP32S31_LENT_HARTID	0
 static void __iomem *esp32s31_ipi_doorbell __ro_after_init;
 
+/* DIAGNOSTIC (smp bring-up): who sent what to whom, and who took it. */
+static atomic_t s31_ipi_sent[2][2], s31_ipi_taken[2];
+
 static void esp32s31_clic_ipi_send(unsigned int cpu)
 {
 	struct esp32s31_clic *clic = esp32s31_ipi_clic;
 	unsigned int other;
 
+	atomic_inc(&s31_ipi_sent[smp_processor_id() & 1][cpu & 1]);
 	if (cpuid_to_hartid_map(cpu) == ESP32S31_LENT_HARTID) {
 		writel(1, esp32s31_ipi_doorbell);
 		return;
 	}
+	/*
+	 * From the lent hart to hart 1 we write hart 1's slot through the
+	 * +0x10000 alias of OUR S window. Measured 2026-09-20: that works
+	 * (secondary bring-up completes, hundreds of IPIs). Asking the hart0
+	 * monitor to set the bit from M-mode (0x20811000 + 47*4) does NOT -
+	 * one send, hart 1 never woke.
+	 */
 	other = cpu == smp_processor_id() ? 0 : ESP32S31_CLIC_DUALCORE_OFF;
 	writeb(1, clic->regs + other + ESP32S31_CLIC_CTRL_BASE -
 	       ESP32S31_CLIC_BASE +
@@ -841,6 +854,7 @@ void esp32s31_clic_handle_irq(struct pt_regs *regs)
 		/* Clear the latch BEFORE processing: a send that lands during
 		 * ipi_mux_process() must re-raise it, not be wiped after. */
 		clic_writeb(clic, irq_id, ESP32S31_CLIC_INT_IP, 0);
+		atomic_inc(&s31_ipi_taken[smp_processor_id() & 1]);
 		ipi_mux_process();
 		goto out;
 	}
@@ -1146,6 +1160,17 @@ static int __init esp32s31_clic_probe(struct device_node *node,
 			riscv_ipi_set_virq_range(virq, BITS_PER_BYTE);
 			pr_info("CLIC: native IPIs on slot %d\n",
 				ESP32S31_CLIC_IPI_SLOT);
+			/*
+			 * An IPI is a pending bit written from the OTHER hart,
+			 * and on this silicon that does not wake a hart asleep
+			 * in wfi: the boot only advanced when hart 1's own tick
+			 * happened to wake it (2026-09-20; GrieferPig's tree
+			 * polls from idle for the same reason - "CLIC lockout").
+			 * Poll instead of sleeping while there is a second CPU
+			 * to hear from.
+			 */
+			if (num_possible_cpus() > 1)
+				cpu_idle_poll_ctrl(true);
 		}
 	}
 #endif
@@ -1170,5 +1195,66 @@ err_free:
 	kfree(clic);
 	return ret;
 }
+
+#ifdef CONFIG_SMP
+#include <linux/timer.h>
+#include <linux/kernel_stat.h>
+#include <linux/sched/stat.h>
+static struct timer_list s31_smp_beat;
+static void __iomem *s31_busmon, *s31_h0trace;
+
+static void s31_smp_beat_fn(struct timer_list *t)
+{
+	if (s31_busmon && s31_h0trace) {
+		static u32 last_pc, last_sp;
+		u32 pc, sp;
+
+		writel(3, s31_busmon + 0x44);
+		pc = readl(s31_busmon + 0x48);
+		sp = readl(s31_busmon + 0x4c);
+		/* hart0 parked at one IDF address for 2 s while it should be
+		 * running a Linux CPU = frozen in the monitor. CPU1 may hold the
+		 * console lock, so only panic() can still speak. */
+		if (pc == last_pc && sp == last_sp && (pc >> 24) == 0x2f)
+			panic("hart0 frozen: pc %08x sp %08x world step %02x coproc fid+1 %u ecalls %u",
+			      pc, sp, readl(s31_h0trace), readl(s31_h0trace + 4),
+			      readl(s31_h0trace + 8));
+		last_pc = pc;
+		last_sp = sp;
+	}
+	if (s31_busmon) {
+		writel(3, s31_busmon + 0x44);	/* hart0 record enable */
+		pr_info("s31-smp: hart0 pc %08x sp %08x\n",
+			readl(s31_busmon + 0x48), readl(s31_busmon + 0x4c));
+	}
+	if (s31_h0trace)
+		pr_info("s31-smp: hart0 monitor: world step %02x coproc ecalls %u redirected %u (cause %u) cpst %04x inj t %u i %u deferred %u | enable readback %08x | last illegal: EXT_ILL<<24|FS|cpst %08x\n",
+			readl(s31_h0trace), readl(s31_h0trace + 12), readl(s31_h0trace + 16),
+			readl(s31_h0trace + 20), readl(s31_h0trace + 24), readl(s31_h0trace + 28),
+			readl(s31_h0trace + 32), readl(s31_h0trace + 36), readl(s31_h0trace + 40),
+			readl(s31_h0trace + 44));
+	pr_info("s31-smp: ipi sent 0>0 %d 0>1 %d 1>0 %d 1>1 %d | taken cpu0 %d cpu1 %d | irqs cpu0 %llu cpu1 %llu | running %u\n",
+		atomic_read(&s31_ipi_sent[0][0]), atomic_read(&s31_ipi_sent[0][1]),
+		atomic_read(&s31_ipi_sent[1][0]), atomic_read(&s31_ipi_sent[1][1]),
+		atomic_read(&s31_ipi_taken[0]), atomic_read(&s31_ipi_taken[1]),
+		(unsigned long long)kstat_cpu_irqs_sum(0),
+		(unsigned long long)(num_online_cpus() > 1 ? kstat_cpu_irqs_sum(1) : 0),
+		nr_running());
+	mod_timer(&s31_smp_beat, jiffies + 2 * HZ);
+}
+
+static int __init s31_smp_beat_init(void)
+{
+	s31_busmon = ioremap(0x2d002000, 0x100);
+	s31_h0trace = ioremap(0x50fef000, 0x1000);
+	if (s31_h0trace)
+		s31_h0trace += 0xfd0;
+	timer_setup(&s31_smp_beat, s31_smp_beat_fn, TIMER_PINNED);
+	s31_smp_beat.expires = jiffies + 2 * HZ;	/* NOT 0: jiffies starts at -5 min */
+	add_timer_on(&s31_smp_beat, 0);
+	return 0;
+}
+early_initcall(s31_smp_beat_init);
+#endif
 
 IRQCHIP_DECLARE(esp32s31_clic, "espressif,esp32s31-clic", esp32s31_clic_probe);

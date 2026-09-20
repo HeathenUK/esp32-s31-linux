@@ -40,6 +40,22 @@ extern void s31_vcpu_mtimer_entry(void);
 uint32_t s31_vcpu_area[64];
 volatile uint32_t s31_vcpu_irq_count;
 volatile uint32_t s31_vcpu_crumbs[16];	/* see s31_vcpu_asm.S; read with devmem */
+/* Linux-mode counters. NOT s31_vcpu_crumbs: the assembly owns [1]-[7] of those.
+ * [2] last redirected cause [3] redirected exceptions [4] medeleg readback
+ * [5] last refused SBI EID [6] refusals [7] shadowed CSR accesses
+ * [8] coproc ecalls [14] trapped wfi */
+volatile uint32_t s31_vcpu_lx[16];
+/* Survives a reset (RTC no-init): [0] last world-switch step (s31_vcpu_world.S
+ * marks; 0x0f = finished), [1] last coproc ecall fid+1, [2] coproc ecalls,
+ * [3] guest mstatus at the last world_in, [7] magic. Printed by main.c. */
+RTC_NOINIT_ATTR volatile uint32_t s31_vcpu_trace[8];
+/* World-switch buffers (s31_vcpu_world.S). 33 words: f0-f31, fcsr; the IDF
+ * side has a 34th, FreeRTOS's mstatus.FS. The coprocessor block has the
+ * layout OpenSBI and the kernel share (HWLoop 0x00, PIE 0x20, 0xf8 bytes). */
+uint32_t s31_vcpu_guest_fp[34], s31_vcpu_idf_fp[34];
+uint8_t s31_vcpu_guest_cp[256] __attribute__((aligned(16)));
+uint8_t s31_vcpu_idf_cp[256] __attribute__((aligned(16)));
+uint32_t s31_vcpu_guest_cpst[2], s31_vcpu_idf_cpst[2];	/* HWLP, PIE state CSRs */
 volatile uint32_t s31_vcpu_probe[12];	/* stage 2b-0 reach probe results */
 static volatile uint32_t guest_counters[4];	/* [0] loops, written by the guest */
 
@@ -249,7 +265,7 @@ int IRAM_ATTR s31_vcpu_trap(uint32_t *area)
 		 */
 		if (linux_mode && insn == 0x10500073u) {
 			area[31] += 4;
-			s31_vcpu_crumbs[14]++;
+			s31_vcpu_lx[14]++;
 			vcpu_inject(area, 1);
 			return 0;
 		}
@@ -272,7 +288,7 @@ int IRAM_ATTR s31_vcpu_trap(uint32_t *area)
 				if (rd)
 					area[rd - 1] = old;
 				area[31] += 4;
-				s31_vcpu_crumbs[7]++;		/* shadowed CSR accesses */
+				s31_vcpu_lx[7]++;		/* shadowed CSR accesses */
 				return 0;
 			}
 		}
@@ -301,11 +317,59 @@ int IRAM_ATTR s31_vcpu_trap(uint32_t *area)
 				return 4;
 			return 0;
 		}
+		/*
+		 * Vendor coprocessor extension (arch/riscv/kernel/esp32s31-ext.c;
+		 * hart1's copy is in our OpenSBI). The guest's HWLoop/PIE state
+		 * is already swapped out to s31_vcpu_guest_cp by world_out, so
+		 * these are copies; world_in loads the result. RESTORE turns the
+		 * units on (CLEAN), as the OpenSBI routine leaves them.
+		 */
+		if (linux_mode && area[16] == 0x09000002u && area[15] <= 2) {
+			uint32_t fid = area[15], a = area[9], b = area[10];
+			int bad = (a & 0xf) || a < 0x50000000u || a > 0x50fe0000u - 0x100;
+
+			if (fid == 0)
+				bad |= (b & 0xf) || b < 0x50000000u || b > 0x50fe0000u - 0x100;
+			s31_vcpu_lx[8]++;
+			((volatile uint32_t *)0x50FEFFD0u)[1] = fid + 1;
+			s31_vcpu_trace[1] = fid + 1;
+			s31_vcpu_trace[2]++;
+			((volatile uint32_t *)0x50FEFFD0u)[2]++;
+			if (bad) {
+				area[9] = (uint32_t)-5;		/* SBI_ERR_INVALID_ADDRESS */
+				return 0;
+			}
+			if (fid == 0 || fid == 1)
+				memcpy((void *)(uintptr_t)a, s31_vcpu_guest_cp, 0xf8);
+			if (fid == 0 || fid == 2) {
+				memcpy(s31_vcpu_guest_cp, (void *)(uintptr_t)(fid ? a : b), 0xf8);
+				s31_vcpu_guest_cpst[0] = 2;
+				s31_vcpu_guest_cpst[1] = 0;	/* no PIE on hart0; see s31_vcpu_world.S */
+			}
+			area[9] = 0;
+			area[10] = 0;
+			return 0;
+		}
+		/*
+		 * SBI IPI send_ipi from the lent CPU: the only other hart is
+		 * hart 1, whose Linux IPI is a software-set pending bit on its
+		 * CLIC slot 47 (patches/0051). Set it from M-mode through the
+		 * cross-hart alias of the M window.
+		 */
+		if (linux_mode && area[16] == 0x735049u && area[15] == 0) {
+			if (area[9] & 2u) {
+				*(volatile uint8_t *)(uintptr_t)(0x20801000u + 0x10000u + 47u * 4u) = 1;
+				s31_vcpu_lx[9]++;
+			}
+			area[9] = 0;
+			area[10] = 0;
+			return 0;
+		}
 		if (linux_mode) {
 			/* The mini-SBI of a Linux CPU on hart0: TIME above, and
 			 * an honest "no" to everything else. Remember who asked. */
-			s31_vcpu_crumbs[5] = area[16];	/* last refused EID */
-			s31_vcpu_crumbs[6]++;
+			s31_vcpu_lx[5] = area[16];	/* last refused EID */
+			s31_vcpu_lx[6]++;
 			area[9] = (uint32_t)-2;		/* SBI_ERR_NOT_SUPPORTED */
 			area[10] = 0;
 			return 0;
@@ -372,8 +436,20 @@ int IRAM_ATTR s31_vcpu_trap(uint32_t *area)
 		mst |= MST_MPP_S;
 		area[32] = mst;
 		area[31] = RV_READ_CSR(stvec) & ~0x3fu;
-		s31_vcpu_crumbs[3]++;			/* redirected exceptions */
-		s31_vcpu_crumbs[2] = cause;
+		if (cause == 2) {	/* what did the units look like when it faulted? */
+			/* IDF's handler always clears EXT_ILL (0x7F0, the reason an
+			 * extension instruction was refused: 1 FPU, 2 HWLP, 4 PIE).
+			 * We never did. Clear it, and remember what it said. */
+			uint32_t ext_ill = RV_READ_CSR(0x7F0);
+
+			RV_WRITE_CSR(0x7F0, 0);
+			s31_vcpu_lx[12] = ext_ill;
+			s31_vcpu_lx[10] = s31_vcpu_guest_cpst[0] | (s31_vcpu_guest_cpst[1] << 8) |
+					  ((area[32] & 0x6000u) << 3) | 0x80000000u;
+			s31_vcpu_lx[11] = RV_READ_CSR(mtval);
+		}
+		s31_vcpu_lx[3]++;			/* redirected exceptions */
+		s31_vcpu_lx[2] = cause;
 		return 0;
 	}
 	s31_vcpu_crumbs[8] = cause;
@@ -400,6 +476,7 @@ static void vcpu_task(void *arg)
 	 * FreeRTOS whenever it idles (WFI traps); this stub never idles.
 	 */
 	vTaskDelay(pdMS_TO_TICKS(1000));
+#if !CONFIG_S31_VCPU_LINUX
 	ESP_LOGW(TAG, "pmpcfg %08" PRIx32 " %08" PRIx32 " %08" PRIx32 " %08" PRIx32,
 		 (uint32_t)RV_READ_CSR(pmpcfg0), (uint32_t)RV_READ_CSR(pmpcfg1),
 		 (uint32_t)RV_READ_CSR(pmpcfg2), (uint32_t)RV_READ_CSR(pmpcfg3));
@@ -409,6 +486,7 @@ static void vcpu_task(void *arg)
 		 (uint32_t)RV_READ_CSR(pmpaddr2), (uint32_t)RV_READ_CSR(pmpaddr3),
 		 (uint32_t)RV_READ_CSR(pmpaddr12), (uint32_t)RV_READ_CSR(pmpaddr13),
 		 (uint32_t)RV_READ_CSR(pmpaddr14), (uint32_t)RV_READ_CSR(pmpaddr15));
+#endif
 
 	/* Our vector table: IDF's, with every ordinary slot entering through us. */
 	for (i = 0; i < 48; i++)
@@ -428,9 +506,11 @@ static void vcpu_task(void *arg)
 		while (mb[0] != S31_HART0_START_MAGIC)
 			vTaskDelay(pdMS_TO_TICKS(20));
 		linux_mode = 1;
+		memset((void *)s31_vcpu_trace, 0, sizeof(s31_vcpu_trace));
+		s31_vcpu_trace[7] = 0x54524143;	/* "TRAC" */
 		/* Exceptions Linux handles itself: everything but ecall-from-S. */
 		RV_WRITE_CSR(medeleg, 0xb1ff);
-		s31_vcpu_crumbs[4] = RV_READ_CSR(medeleg);
+		s31_vcpu_lx[4] = RV_READ_CSR(medeleg);
 		RV_WRITE_CSR(satp, 0);
 		memset(s31_vcpu_area, 0, sizeof(s31_vcpu_area));
 		s31_vcpu_area[9] = 0;			/* a0 = hartid */
@@ -442,6 +522,31 @@ static void vcpu_task(void *arg)
 		goto enter;
 	}
 #endif
+	{
+		/* 2b-1: does a PIE / HWLoop enable STICK on hart0, in M-mode,
+		 * and does mstatus.FS matter? (Linux mode read PIE back as 0.) */
+		uint32_t r[8], fs = RV_READ_CSR(mstatus) & 0x6000u;
+
+		RV_CLEAR_CSR(mstatus, 0x6000);
+		RV_WRITE_CSR(0x7F2, 1); r[0] = RV_READ_CSR(0x7F2);
+		RV_WRITE_CSR(0x7F2, 2); r[1] = RV_READ_CSR(0x7F2);
+		RV_WRITE_CSR(0x7F2, 3); r[2] = RV_READ_CSR(0x7F2);
+		RV_WRITE_CSR(0x7F2, 0);
+		RV_SET_CSR(mstatus, 0x2000);
+		RV_WRITE_CSR(0x7F2, 1); r[3] = RV_READ_CSR(0x7F2);
+		RV_WRITE_CSR(0x7F2, 2); r[4] = RV_READ_CSR(0x7F2);
+		RV_WRITE_CSR(0x7F2, 0);
+		RV_WRITE_CSR(0x7F1, 1); r[5] = RV_READ_CSR(0x7F1);
+		RV_WRITE_CSR(0x7F1, 2); r[6] = RV_READ_CSR(0x7F1);
+		RV_CLEAR_CSR(mstatus, 0x6000);
+		RV_SET_CSR(mstatus, fs);
+		ESP_LOGW(TAG, "2b-1 M-mode: PIE w1->%" PRIx32 " w2->%" PRIx32 " w3->%" PRIx32
+			 " | FS on: w1->%" PRIx32 " w2->%" PRIx32 " | HWLP w1->%" PRIx32 " w2->%" PRIx32,
+			 r[0], r[1], r[2], r[3], r[4], r[5], r[6]);
+		/* and let the S-mode guest try them: both units INITIAL */
+		s31_vcpu_guest_cpst[0] = 1;
+		s31_vcpu_guest_cpst[1] = 1;
+	}
 	memset(s31_vcpu_area, 0, sizeof(s31_vcpu_area));
 	s31_vcpu_area[1] = (uint32_t)(uintptr_t)(guest_stack + sizeof(guest_stack)); /* x2 */
 	s31_vcpu_area[9] = (uint32_t)(uintptr_t)guest_counters;			     /* a0 */
@@ -457,8 +562,10 @@ enter:
 	RV_WRITE_CSR(0x307 /* mtvt */, (uint32_t)(uintptr_t)my_mtvt);
 	RV_WRITE_CSR(mtvec, ((uint32_t)(uintptr_t)s31_vcpu_mtvec) | 3);
 	portENABLE_INTERRUPTS();
+#if !CONFIG_S31_VCPU_LINUX
 	ESP_LOGW(TAG, "vectors installed; entering the S-mode guest at %p, crumbs at %p",
 		 (void *)s31_vcpu_guest, (void *)s31_vcpu_crumbs);
+#endif
 
 #ifdef S31_VCPU_VECTORS_ONLY		/* bisect: our vectors, no guest at all */
 	ESP_LOGW(TAG, "VECTORS ONLY: not entering the guest");
@@ -499,7 +606,30 @@ static void report_task(void *arg)
 	int n;
 
 	(void)arg;
-	for (n = 0; n < 4; n++) {
+#if CONFIG_S31_VCPU_LINUX
+	/*
+	 * SILENT. hart0's log and Linux's console share one UART, Linux drives
+	 * it through UHCI DMA, and a hart0 line landing while Linux prints has
+	 * twice left Linux's console dead after its first line (2026-09-20).
+	 * The counters go to the PSRAM words after the start mailbox; Linux's
+	 * s31-smp heartbeat prints them.
+	 */
+	for (;;) {
+		volatile uint32_t *m = (volatile uint32_t *)0x50FEFFD0u;
+
+		m[3] = s31_vcpu_lx[8];			/* coproc ecalls */
+		m[4] = s31_vcpu_lx[3];			/* redirected exceptions */
+		m[5] = s31_vcpu_lx[2];			/* ... last cause */
+		m[6] = s31_vcpu_guest_cpst[0] | (s31_vcpu_guest_cpst[1] << 8);
+		m[7] = inj_timer;
+		m[8] = inj_ipi;
+		m[9] = inj_deferred;
+		/* m[10] is written by world_in: readback of the enables */
+		m[11] = (s31_vcpu_lx[12] << 24) | (s31_vcpu_lx[10] & 0xffffffu);	/* EXT_ILL | state at last illegal */
+		vTaskDelay(pdMS_TO_TICKS(500));
+	}
+#endif
+	for (n = 0; n < 8; n++) {
 		vTaskDelay(pdMS_TO_TICKS(n < 2 ? 5000 : 30000));
 		ESP_LOGW(TAG, "2a: guest timer irqs %" PRIu32 " ipis %" PRIu32 " | injected t %" PRIu32
 			 " i %" PRIu32 " deferred %" PRIu32 " | rdtime emulated %" PRIu32 " sbi %" PRIu32
@@ -507,19 +637,26 @@ static void report_task(void *arg)
 			 s31_vcpu_g2_counters[1], s31_vcpu_g2_counters[2], inj_timer, inj_ipi,
 			 inj_deferred, emul_rdtime, sbi_calls, s31_vcpu_g2_counters[0],
 			 (void *)s31_vcpu_g2_counters);
+		REG_WRITE(0x2d0020cc, 3);	/* bus monitor: record hart1's PC/SP */
+		ESP_LOGW(TAG, "hart1 pc %08" PRIx32 " sp %08" PRIx32 " | coproc ecalls %" PRIu32
+			 " ipi->hart1 %" PRIu32 " wfi %" PRIu32 " redirected %" PRIu32 " (last cause %" PRIu32 ") guest cpst %"
+			 PRIu32 "/%" PRIu32,
+			 (uint32_t)REG_READ(0x2d0020d0), (uint32_t)REG_READ(0x2d0020d4),
+			 s31_vcpu_lx[8], s31_vcpu_lx[9], s31_vcpu_lx[14], s31_vcpu_lx[3], s31_vcpu_lx[2],
+			 s31_vcpu_guest_cpst[0], s31_vcpu_guest_cpst[1]);
 		ESP_LOGW(TAG, "guest pc %08" PRIx32 " ra %08" PRIx32 " sp %08" PRIx32 " mstatus %08" PRIx32
 			 " vpending %" PRIu32 " medeleg %08" PRIx32 " shadowed-csr %" PRIu32
 			 " refused-eid %08" PRIx32 " x%" PRIu32,
 			 s31_vcpu_area[31], s31_vcpu_area[0], s31_vcpu_area[1], s31_vcpu_area[32],
-			 (uint32_t)s31_vcpu_vpending, s31_vcpu_crumbs[4], s31_vcpu_crumbs[7],
-			 s31_vcpu_crumbs[5], s31_vcpu_crumbs[6]);
+			 (uint32_t)s31_vcpu_vpending, s31_vcpu_lx[4], s31_vcpu_lx[7],
+			 s31_vcpu_lx[5], s31_vcpu_lx[6]);
 		ESP_LOGW(TAG, "2b-0 reach: psram %08" PRIx32 " xipflash %08" PRIx32 " sclic %08" PRIx32
 			 " sclic+64k %08" PRIx32 " uart %08" PRIx32 " fromcpu1 %08" PRIx32
 			 " mtime %08" PRIx32 " | psram-w %08" PRIx32 " flash-x %08" PRIx32
-			 " done %08" PRIx32,
+			 " done %08" PRIx32 " | ext step %" PRIu32,
 			 s31_vcpu_probe[0], s31_vcpu_probe[1], s31_vcpu_probe[2], s31_vcpu_probe[3],
 			 s31_vcpu_probe[4], s31_vcpu_probe[5], s31_vcpu_probe[6], s31_vcpu_probe[7],
-			 s31_vcpu_probe[8], s31_vcpu_probe[9]);
+			 s31_vcpu_probe[8], s31_vcpu_probe[9], s31_vcpu_probe[10]);
 		ESP_LOGW(TAG, "guest loops %" PRIu32 " ecalls %" PRIu32
 			 " preempted by %" PRIu32 " M-mode interrupts, other traps %" PRIu32
 			 " (last cause %" PRIu32 " epc %08" PRIx32 " tval %08" PRIx32 ")",
@@ -528,6 +665,9 @@ static void report_task(void *arg)
 	}
 	vTaskDelete(NULL);
 }
+
+extern void s31_vcpu_bisect_pad(void);
+void (*s31_vcpu_bisect_keep)(void) = s31_vcpu_bisect_pad;
 
 void s31_vcpu_start(void)
 {

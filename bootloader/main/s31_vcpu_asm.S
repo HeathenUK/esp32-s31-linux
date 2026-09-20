@@ -108,6 +108,7 @@ s31_vcpu_mtvec:
 	lw	tp, A_MTP(a0)
 	lw	gp, A_MGP(a0)
 	lw	sp, A_MSP(a0)
+	call	s31_vcpu_world_out	/* FPU/HWLoop/PIE back to FreeRTOS's; a0 kept */
 	call	s31_vcpu_trap		/* C; returns 0 = resume, else leave */
 	bnez	a0, s31_vcpu_do_leave
 	j	s31_vcpu_resume
@@ -138,6 +139,8 @@ s31_vcpu_irq_entry:
 	lw	gp, A_MGP(sp)
 	lw	t2, A_MSP(sp)
 	mv	sp, t2
+	la	a0, s31_vcpu_area
+	call	s31_vcpu_world_out
 	la	t0, s31_vcpu_resume	/* where IDF will "return" to */
 	csrw	mepc, t0
 	/*
@@ -186,6 +189,8 @@ s31_vcpu_mtimer_entry:
 	lw	gp, A_MGP(sp)
 	lw	t2, A_MSP(sp)
 	mv	sp, t2
+	la	a0, s31_vcpu_area
+	call	s31_vcpu_world_out
 	li	t0, 0x10004000
 	li	t1, -1
 	sw	t1, 4(t0)
@@ -211,6 +216,8 @@ s31_vcpu_resume:
 	la	a0, s31_vcpu_area
 	call	s31_vcpu_inject		/* C: deliver a pending virtual interrupt
 					 * by rewriting the saved guest state */
+	la	a0, s31_vcpu_area
+	call	s31_vcpu_world_in	/* and the guest's own back in */
 	la	t6, s31_vcpu_area
 	lw	t0, A_MEPC(t6)
 	csrw	mepc, t0
@@ -430,6 +437,26 @@ s31_vcpu_g3_last:
 	sw	a0, 4(s1)
 	li	a0, 0x600D600D
 	sw	a0, 8(s1)		/* "probe finished" */
+	/*
+	 * 2b-1: can S-mode on hart0 EXECUTE the Espressif extensions once the
+	 * monitor has enabled them (state CSRs = INITIAL, as IDF does)? Linux
+	 * userspace on the lent CPU takes plain illegal-instruction traps on
+	 * them (EXT_ILL = 0) while hart1 runs the same code. A fault here ends
+	 * the guest and report_task prints cause/epc; the markers say how far.
+	 */
+	li	a0, 0x00000001
+	sw	a0, 12(s1)		/* about to try PIE */
+	.word	0x80c0219b		/* esp.movx.r.sar a1 - reads a PIE register */
+	li	a0, 0x00000002
+	sw	a0, 12(s1)		/* PIE worked; about to try a hardware loop */
+	li	t0, 1
+	.option	push
+	.option	arch, +xesploop
+	esp.lp.setup	0, t0, 1f	/* one pass over one instruction */
+	nop
+	.option	pop
+1:	li	a0, 0x00000003
+	sw	a0, 12(s1)		/* both worked */
 	j	s31_vcpu_guest2
 	.option	pop
 
@@ -457,3 +484,12 @@ s31_vcpu_guest:				/* a0 = &counters[0] */
 	ecall
 	j	1b
 	.option pop
+
+	/* BISECT ONLY: pad IRAM by 1.5 KB to test a size threshold */
+	.section .iram1, "ax"
+	.global s31_vcpu_bisect_pad
+s31_vcpu_bisect_pad:
+	.rept 375
+	.word 0x00000013
+	.endr
+	ret
