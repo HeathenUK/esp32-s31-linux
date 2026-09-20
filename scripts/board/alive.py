@@ -37,6 +37,8 @@ import subprocess
 import sys
 import time
 
+import re
+
 import serial
 
 import console
@@ -52,12 +54,23 @@ STAGES = [
     ("DISPLAY_UP",   ("scanout started",)),
     ("ROOT_MOUNTED", ("Mounted root", "Run /init", "VFS: Pivoted")),
     ("USERSPACE",    ("Starting syslogd", "Growing root", "Starting udevd")),
-    ("LOGIN",        ("login:",)),
-    ("SHELL",        ("~ #", "# ")),
+    ("LOGIN",        (re.compile(r"login:\s*$", re.M),)),
+    # A PROMPT, at the end of a line - not the substring "# ". hart0's loader
+    # prints "## Label            Usage ..." above its partition table on every
+    # boot, so the old needle called any board that reached the second-stage
+    # loader SHELL, with Linux dead. It lied three times on 2026-09-20 and the
+    # last one ("booted cleanly") went to the user while the panel sat on the
+    # loader's splash.
+    ("SHELL",        (re.compile(r"(^|\s)(~|/[\w/.-]*) #\s*$", re.M),)),
 ]
 
+PROMPT_LINE = re.compile(r"^(~|/[\w/.-]*) #$")
 
-def furthest(text):
+# Stages hart0's own output may prove. Everything later must come from Linux.
+HART0_STAGES = ("HART0_ROM", "HART0_APP", "HANDOFF")
+
+
+def furthest(text, only=None):
     """Classify on the FILTERED lines, never the raw buffer: framing garbage
     from reading one baud at another contains '# ' often enough that the raw
     match declared STAGE SHELL on a board that never left the loader - an
@@ -65,7 +78,10 @@ def furthest(text):
     clean = "\n".join(readable_lines(text))
     seen = None
     for name, needles in STAGES:
-        if any(n in clean for n in needles):
+        if only is not None and name not in only:
+            continue
+        if any((n.search(clean) if hasattr(n, "search") else n in clean)
+               for n in needles):
             seen = name
     return seen
 
@@ -98,7 +114,9 @@ def readable_lines(text):
         if not line:
             continue
         printable = sum(1 for c in line if 32 <= ord(c) < 127)
-        if printable >= max(4, int(len(line) * 0.8)):
+        # A bare busybox prompt is 3 characters; the 4-character floor below
+        # threw it away, and only the old sloppy '# ' needle ever "saw" a shell.
+        if PROMPT_LINE.match(line) or printable >= max(4, int(len(line) * 0.8)):
             out.append(line)
     return out
 
@@ -187,7 +205,7 @@ def watch_reset(timeout):
     # hart0 first, at its own baud.
     early, _ = read_for(115200, 12.0)
     early_lines = readable_lines(early)
-    early_stage = furthest(early)
+    early_stage = furthest(early, only=HART0_STAGES)
     print("--- hart0 phase (115200, %d raw bytes, %d readable lines) ---"
           % (len(early), len(early_lines)))
     for l in early_lines:
@@ -204,6 +222,17 @@ def watch_reset(timeout):
     late_lines = readable_lines(late)
     print("(%d raw bytes, %d readable lines)" % (len(late), len(late_lines)))
     stage = furthest(late) or early_stage
+    if stage in ("LOGIN", "SHELL"):
+        # Seeing a prompt scroll past is not the same as a board that answers.
+        nonce = "A%dZ" % (int(time.time() * 1000) % 100000000)
+        text, _ = read_for(1000000, 4.0, poke=("\r\necho %s\r\n" % nonce).encode())
+        if nonce in text or re.search(r"login:\s*$", text, re.M):
+            return report(stage, late_lines, "confirmed: the console answered a poke")
+        print("STAGE %s_SEEN_BUT_SILENT" % stage)
+        print("  a %s prompt went past during boot, but the console did NOT answer a" % stage.lower())
+        print("  poke afterwards. Do not call this board up.")
+        return 2
+    print("  (%d kernel lines seen)" % sum(1 for l in late_lines if l.startswith("[")))
     return report(stage, late_lines)
 
 
