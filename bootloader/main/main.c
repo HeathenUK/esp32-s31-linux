@@ -395,6 +395,16 @@ static RTC_NOINIT_ATTR struct {
 
 void app_main(void)
 {
+    /*
+     * FIRST THING: stop hart1. After a warm reset of hart0 (a panic, the
+     * interrupt watchdog, a CPU lockup) hart1 is still running the previous
+     * Linux - driving the UART, the display DMA and the hosted transport -
+     * and the boot that followed never got as far as printing anything, so
+     * the board hung until someone pulsed EN and the RTC death record below
+     * was lost with it (2026-09-20). start_linux_on_core1() resets and
+     * releases it properly later.
+     */
+    esp_cpu_stall(1);
     if (s_blackbox.magic == 0x48315043 && s_blackbox.n <= 6) {
         uint32_t k;
 
@@ -639,6 +649,15 @@ void app_main(void)
     }
 #endif
     ESP_LOGI(TAG, "hart1 released to OpenSBI; hart0 FreeRTOS continues");
+    /* At once: Linux asks for this CPU ~60 ms into its boot and waits. Started
+     * after USB init it cost every SMP boot ~3.9 s, which also let hart0's HID
+     * attach overtake Linux's HID bus (2026-09-20). */
+#if CONFIG_S31_VCPU_PROTOTYPE
+    /* docs/smp-plan.md stage 1. After everything else is up, so a failure
+     * here is attributable to this and nothing else. */
+#if !CONFIG_S31_VCPU_LINUX
+    vTaskDelay(pdMS_TO_TICKS(15000));   /* test guest: let the system settle first */
+#endif
 #if CONFIG_S31_USB_HID_ENABLE
     /*
      * DIAGNOSTIC ORDERING, 2026-09-19: started before the transport, the
@@ -652,14 +671,6 @@ void app_main(void)
     if (s31_usb_hid_start() != ESP_OK)
         ESP_LOGE(TAG, "USB HID host failed to start");
 #endif
-#endif
-    /* BEFORE the black box: that block waits up to 9 s for Linux, and Linux
-     * gives a secondary CPU 10 s to report in (2026-09-20: it arrived at 28 s). */
-#if CONFIG_S31_VCPU_PROTOTYPE
-    /* docs/smp-plan.md stage 1. After everything else is up, so a failure
-     * here is attributable to this and nothing else. */
-#if !CONFIG_S31_VCPU_LINUX
-    vTaskDelay(pdMS_TO_TICKS(15000));   /* test guest: let the system settle first */
 #endif
     s31_vcpu_start();
 #endif

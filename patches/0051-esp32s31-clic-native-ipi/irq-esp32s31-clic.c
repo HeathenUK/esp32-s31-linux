@@ -1203,17 +1203,7 @@ static int __init esp32s31_clic_probe(struct device_node *node,
 			riscv_ipi_set_virq_range(virq, BITS_PER_BYTE);
 			pr_info("CLIC: native IPIs on slot %d\n",
 				ESP32S31_CLIC_IPI_SLOT);
-			/*
-			 * An IPI is a pending bit written from the OTHER hart,
-			 * and on this silicon that does not wake a hart asleep
-			 * in wfi: the boot only advanced when hart 1's own tick
-			 * happened to wake it (2026-09-20; GrieferPig's tree
-			 * polls from idle for the same reason - "CLIC lockout").
-			 * Poll instead of sleeping while there is a second CPU
-			 * to hear from.
-			 */
-			if (num_possible_cpus() > 1)
-				cpu_idle_poll_ctrl(true);
+			/* Idle policy is per hart: arch_cpu_idle() in process.c. */
 		}
 	}
 #endif
@@ -1248,23 +1238,8 @@ static void __iomem *s31_busmon, *s31_h0trace;
 
 static void s31_smp_beat_fn(struct timer_list *t)
 {
-	if (s31_busmon && s31_h0trace) {
-		static u32 last_pc, last_sp;
-		u32 pc, sp;
-
-		writel(3, s31_busmon + 0x44);
-		pc = readl(s31_busmon + 0x48);
-		sp = readl(s31_busmon + 0x4c);
-		/* hart0 parked at one IDF address for 2 s while it should be
-		 * running a Linux CPU = frozen in the monitor. CPU1 may hold the
-		 * console lock, so only panic() can still speak. */
-		if (num_online_cpus() > 1 && pc == last_pc && sp == last_sp && (pc >> 24) == 0x2f)
-			panic("hart0 frozen: pc %08x sp %08x world step %02x coproc fid+1 %u ecalls %u",
-			      pc, sp, readl(s31_h0trace), readl(s31_h0trace + 4),
-			      readl(s31_h0trace + 8));
-		last_pc = pc;
-		last_sp = sp;
-	}
+	/* (A 'hart0 frozen' panic lived here. It is WRONG now that an idle CPU1
+	 * lets hart0 sleep in FreeRTOS's idle loop: a constant PC is the goal.) */
 	if (s31_busmon) {
 		writel(3, s31_busmon + 0x44);	/* hart0 record enable */
 		pr_info("s31-smp: hart0 pc %08x sp %08x\n",

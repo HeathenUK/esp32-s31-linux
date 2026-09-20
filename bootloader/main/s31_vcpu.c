@@ -144,10 +144,14 @@ static void IRAM_ATTR guest_set_timer(uint64_t when)
 }
 
 static void vcpu_inject(uint32_t *area, int force);
+static volatile uint32_t inject_force_next;
 
 void IRAM_ATTR s31_vcpu_inject(uint32_t *area)
 {
-	vcpu_inject(area, 0);
+	int force = inject_force_next;
+
+	inject_force_next = 0;
+	vcpu_inject(area, force);
 }
 
 static void IRAM_ATTR vcpu_inject(uint32_t *area, int force)
@@ -218,11 +222,49 @@ static void IRAM_ATTR vcpu_inject(uint32_t *area, int force)
 		area[31] = RV_READ_CSR(stvec) & ~0x3fu;
 }
 
+static TaskHandle_t vcpu_handle;
+
 static void IRAM_ATTR ipi_isr(void *arg)
 {
+	BaseType_t woken = pdFALSE;
+
 	(void)arg;
 	REG_WRITE(S31_FROM_CPU_1, 0);
 	s31_vcpu_vpending |= VIRQ_IPI;
+	if (vcpu_handle) {		/* it may be blocked in guest_idle() */
+		vTaskNotifyGiveFromISR(vcpu_handle, &woken);
+		if (woken)
+			portYIELD_FROM_ISR();
+	}
+}
+
+/*
+ * The guest executed wfi with nothing pending: LEND THE TIME BACK. Until this
+ * existed the idle CPU spun through the trap 460,000 times a second - hart0's
+ * IDLE task never ran, and the spinning (kernel text from flash, data from
+ * PSRAM, on the bus hart 1 shares) cost hart 1's benchmarks ~11% (gate canaries
+ * 16.3 vs 14.7 ms, 2026-09-20). We are the vCPU task here, in M-mode on its own
+ * stack with mscratch = 0 and FreeRTOS's coprocessor state already restored
+ * (world_out), so blocking is legal. An IPI notifies us from its ISR at once.
+ * The guest's timer is a raw vector and cannot notify, so: deadline far away
+ * -> block a tick at a time; deadline near -> sleep the hart in M-mode wfi with
+ * interrupts on, which the timer wakes to the microsecond.
+ */
+#define S31_GUEST_IDLE_BLOCKS	1
+#define GUEST_IDLE_NEAR_TICKS	(25u * 320000u)		/* 25 ms at 320 MHz */
+void IRAM_ATTR s31_vcpu_guest_idle(void)	/* from s31_vcpu_idle_stub: task context, MIE on */
+{
+	while (!s31_vcpu_vpending) {
+		uint64_t now = mtime_now();
+		int far = guest_deadline == ~0ull ||
+			  (guest_deadline > now && guest_deadline - now > GUEST_IDLE_NEAR_TICKS);
+
+		if (far)
+			ulTaskNotifyTake(pdTRUE, 1);
+		else
+			__asm__ volatile ("wfi");
+		s31_vcpu_lx[13]++;
+	}
 }
 
 static volatile uint32_t trap_ecalls, trap_other, last_cause, last_epc, last_tval;
@@ -266,8 +308,10 @@ int IRAM_ATTR s31_vcpu_trap(uint32_t *area)
 		if (linux_mode && insn == 0x10500073u) {
 			area[31] += 4;
 			s31_vcpu_lx[14]++;
-			vcpu_inject(area, 1);
-			return 0;
+			inject_force_next = 1;	/* whatever wakes it is taken AT the wfi */
+			if (S31_GUEST_IDLE_BLOCKS && !s31_vcpu_vpending)
+				return 5;	/* asm leaves the exception, then idles */
+			return 0;		/* resume -> s31_vcpu_inject, forced */
 		}
 		if ((insn & 0x7f) == 0x73 && (insn & 0x7000)) {
 			uint32_t csr = insn >> 20, f3 = (insn >> 12) & 7;
@@ -475,7 +519,11 @@ static void vcpu_task(void *arg)
 	 * (ESP_ERR_NO_MEM, seen 2026-09-20). Real Linux will return the hart to
 	 * FreeRTOS whenever it idles (WFI traps); this stub never idles.
 	 */
+#if CONFIG_S31_VCPU_LINUX
+	vTaskDelay(pdMS_TO_TICKS(50));	/* Linux is waiting for this CPU: be there */
+#else
 	vTaskDelay(pdMS_TO_TICKS(1000));
+#endif
 #if !CONFIG_S31_VCPU_LINUX
 	ESP_LOGW(TAG, "pmpcfg %08" PRIx32 " %08" PRIx32 " %08" PRIx32 " %08" PRIx32,
 		 (uint32_t)RV_READ_CSR(pmpcfg0), (uint32_t)RV_READ_CSR(pmpcfg1),
@@ -673,6 +721,6 @@ void s31_vcpu_start(void)
 {
 	/* Priority 1: above IDLE (whose hook sleeps the hart for a whole tick),
 	 * below every IDF system, radio and USB task. */
-	xTaskCreate(vcpu_task, "s31_vcpu", 2560, NULL, 1, NULL);
+	xTaskCreate(vcpu_task, "s31_vcpu", 4096, NULL, 1, &vcpu_handle);	/* blocks inside the trap path */
 	xTaskCreate(report_task, "s31_vcpu_rep", 2560, NULL, 2, NULL);
 }

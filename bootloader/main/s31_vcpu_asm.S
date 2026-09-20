@@ -96,9 +96,22 @@ s31_vcpu_mtvec:
 	sw	t1, 20(t0)
 	csrr	t1, mtval
 	sw	t1, 24(t0)
-	lw	t1, 28(t0)
-	csrrw	t0, mscratch, zero
-	j	_panic_handler
+	/*
+	 * DIAGNOSTIC (2026-09-20): an M-mode fault while the Linux guest exists
+	 * has so far ended in CPU_LOCKUP - IDF's panic handler faults in turn,
+	 * the chip resets, and the boot after that hangs in ROM, so nothing is
+	 * ever printed. Leave the facts where Linux's s31-smp heartbeat reads
+	 * them (it panic()s on a frozen hart0 and prints these three words),
+	 * and stop here instead.
+	 */
+	li	t1, 0x50FEFFD0
+	csrr	t0, mtval
+	sw	t0, 0(t1)
+	csrr	t0, mcause
+	sw	t0, 4(t1)
+	csrr	t0, mepc
+	sw	t0, 8(t1)
+9:	j	9b
 1:	save_guest_gprs
 	la	t0, s31_vcpu_crumbs
 	lw	t1, 8(t0)
@@ -109,8 +122,28 @@ s31_vcpu_mtvec:
 	lw	gp, A_MGP(a0)
 	lw	sp, A_MSP(a0)
 	call	s31_vcpu_world_out	/* FPU/HWLoop/PIE back to FreeRTOS's; a0 kept */
-	call	s31_vcpu_trap		/* C; returns 0 = resume, else leave */
-	bnez	a0, s31_vcpu_do_leave
+	call	s31_vcpu_trap		/* C; 0 = resume, 5 = idle, else leave */
+	beqz	a0, s31_vcpu_resume
+	li	t0, 5
+	bne	a0, t0, s31_vcpu_do_leave
+	/*
+	 * The guest is idle (wfi, nothing pending). We must NOT wait here: this
+	 * is still the exception, and on this core ANY further trap taken before
+	 * the first one is returned from is a double trap - the chip resets with
+	 * CPU_LOCKUP and never reaches a handler (2026-09-20: enabling MIE here,
+	 * to block in FreeRTOS or merely to wfi, reset it every time). So return
+	 * from the exception properly, into an ordinary M-mode stub on this
+	 * task's stack - the trick the interrupt path uses to come back through
+	 * s31_vcpu_resume. MPP = M, MPIE = 1, mscratch already 0.
+	 */
+	la	t0, s31_vcpu_idle_stub
+	csrw	mepc, t0
+	li	t0, 0x1880
+	csrs	mstatus, t0
+	mret
+	.balign	4
+s31_vcpu_idle_stub:			/* M-mode task code, interrupts on */
+	call	s31_vcpu_guest_idle	/* C: until something is pending */
 	j	s31_vcpu_resume
 
 	/* ---- vectored interrupts that IDF routes to _interrupt_handler -- */
@@ -489,7 +522,7 @@ s31_vcpu_guest:				/* a0 = &counters[0] */
 	.section .iram1, "ax"
 	.global s31_vcpu_bisect_pad
 s31_vcpu_bisect_pad:
-	.rept 375
+	.rept 391
 	.word 0x00000013
 	.endr
 	ret
