@@ -357,16 +357,46 @@ USB_NOSUSPEND ?= 1
 # with no device attached, 2026-09-19). The dwc2 command-line options are
 # harmless without the driver and are left alone. THE TWO SIDES MUST AGREE:
 # a kernel with dwc2 and a loader with the HID host would fight over one
-# block. docs/usb-on-hart0-plan.md.
+# block. docs/usb-on-hart0-plan.md. USB_SUPPORT goes too (2026-09-20): with no
+# controller, the 128 KB USB core was dead weight in a full partition.
 # DEFAULT 1 since 2026-09-20 (user decision): hart0 owns USB. The loader's
 # sdkconfig.defaults carries CONFIG_S31_USB_HID_ENABLE=y to match; building
 # USB_HART0=0 needs that flipped to n AND the loader reflashed, or both
 # harts drive one controller.
 USB_HART0 ?= 1
 ifeq ($(USB_HART0),1)
-USB_TWEAKS := --disable USB_DWC2 --disable USB_DWC2_HOST --disable USB_HID --disable USB_MON --disable PHY_ESP32S31_USB --enable ESP32S31_HOSTED_HID
+USB_TWEAKS := --disable USB_DWC2 --disable USB_DWC2_HOST --disable USB_HID --disable USB_MON --disable PHY_ESP32S31_USB --enable ESP32S31_HOSTED_HID --disable USB_SUPPORT
 else
 USB_TWEAKS := --enable USB_DWC2 --enable USB_DWC2_HOST --enable USB_HID --enable USB_MON --enable PHY_ESP32S31_USB
+endif
+# SMP=1: docs/smp-plan.md. The kernel gains CONFIG_SMP for two CPUs (boot CPU
+# = physical hart1; the second is hart0, LENT by FreeRTOS - see
+# bootloader/main/s31_vcpu*). HOTPLUG_CPU so the second CPU is brought online
+# and taken offline at runtime: `echo 1 > /sys/devices/system/cpu/cpu1/online`.
+# Default 0 until the bring-up is proven.
+SMP ?= 0
+SLIM ?= 0
+SLIM_TWEAKS := --disable CPU_FREQ_STAT --disable CPU_FREQ_GOV_ONDEMAND --enable CPU_FREQ_DEFAULT_GOV_PERFORMANCE \
+	--disable SUSPEND --disable HIBERNATION --disable CPU_ISOLATION \
+	--disable SCHED_MC --disable RPS --disable XPS --disable RFS_ACCEL \
+	--disable RISCV_ISA_VENDOR_EXT_ANDES --disable RISCV_ISA_VENDOR_EXT_MIPS \
+	--disable RISCV_ISA_VENDOR_EXT_SIFIVE --disable RISCV_ISA_VENDOR_EXT_THEAD
+ifeq ($(SMP),1)
+# SMP costs ~420 KB of XIP image and the partition had 290 KB spare, so the
+# SMP build drops what this board cannot use: cpufreq's governors and stats
+# (measured inert - hart0 holds 320 MHz whatever Linux asks; the core stays
+# because the hosted driver registers with it), system suspend
+# (never entered; hart0 would not survive it), multi-queue network steering
+# and scheduler topology levels that mean nothing on two identical harts.
+SMP_TWEAKS := --enable SMP --set-val NR_CPUS 2 --enable HOTPLUG_CPU --disable RISCV_BOOT_SPINWAIT $(SLIM_TWEAKS)
+else
+# SLIM=1 applies the SMP build's size diet to a uniprocessor kernel: the
+# bisection arm that says whether SMP or the diet broke a boot (2026-09-20).
+ifeq ($(SLIM),1)
+SMP_TWEAKS := --disable SMP $(SLIM_TWEAKS)
+else
+SMP_TWEAKS := --disable SMP
+endif
 endif
 ifeq ($(USB_FS),1)
 CMDLINE_ADD += dwc2.host_full_speed=1
@@ -509,6 +539,7 @@ linux: toolchain | $(LINUX_OUT)
 		--enable HID \
 		--enable HID_GENERIC \
 		$(USB_TWEAKS) \
+		$(SMP_TWEAKS) \
 		--enable HIDRAW \
 		--enable UHID \
 		--enable SND_ALOOP \

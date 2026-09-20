@@ -1,0 +1,31 @@
+riscv XIP: place .data..percpu before .text.fast (and therefore before BSS)
+
+File: arch/riscv/kernel/vmlinux-xip.lds.S (whole file, as the other
+directory-style patches here).
+
+An SMP=1 XIP kernel died before it had a console. Two independent faults in
+the linker script, both invisible on UP because UP folds per-CPU data into
+.data:
+
+1. PERCPU_SECTION sat after BSS_SECTION (where upstream's XIP script had it).
+   __copy_data() copies [_sdata, __bss_start) from flash and memset()s
+   [__bss_start, _end), so the per-CPU template was zeroed.
+2. S31_FAST_OBJS expands to BARE file names inside .text.fast, and a bare
+   `*foo.o` claims every not-yet-placed section of foo.o. On SMP that put
+   runqueues, hrtimer_bases, tick_cpu_device ... INSIDE .text.fast, outside
+   [__per_cpu_start, __per_cpu_end). First this_cpu access read PSRAM fill:
+   "Unable to handle kernel paging request at aaaaab1a", epc in
+   tick_check_replacement, s2=aaaaaaaa.
+
+Fix: emit PERCPU_SECTION immediately before .text.fast. Verify in System.map:
+runqueues and tick_cpu_device must lie in [__per_cpu_start, __per_cpu_end) and
+__per_cpu_end < __bss_start. Side effect: the image no longer carries the BSS
+gap in flash (SMP image 6,118,412 -> 6,015,917 bytes).
+
+NOT fixed: the same bare glob still takes those objects' .bss/.sbss/.init.*
+into .text.fast (init text never freed). Harmless, wasteful.
+
+How it was found (2026-09-20): hart0's black box in bootloader/main/main.c
+samples hart1's PC from the bus monitor and dumps the dead kernel's printk
+ring out of live PSRAM. READ IT AT 115200 - Linux never got to switch the
+UART to 1 Mbps.

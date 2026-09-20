@@ -380,8 +380,29 @@ static void prepare_linux_uart0(void)
                                  UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
 }
 
+/* PSRAM is cached on hart0: push one word out so it survives the reset. */
+static void shared_writeback_word(volatile uint32_t *w)
+{
+    Cache_WriteBack_Addr(CACHE_MAP_L1_DCACHE, (uint32_t)(uintptr_t)w, 4);
+}
+
+/* Survives a reset (not a power cycle): where hart1 was when Linux failed to
+ * come up, reported at the top of the next boot while the UART still works. */
+static RTC_NOINIT_ATTR struct {
+    uint32_t magic, n, pc[6], sp[6];
+} s_blackbox;
+
 void app_main(void)
 {
+    if (s_blackbox.magic == 0x48315043 && s_blackbox.n <= 6) {
+        uint32_t k;
+
+        for (k = 0; k < s_blackbox.n; k++)
+            ESP_LOGE(TAG, "PREVIOUS BOOT: hart1 never came up, pc=%08" PRIx32 " sp=%08" PRIx32,
+                     s_blackbox.pc[k], s_blackbox.sp[k]);
+    }
+    s_blackbox.magic = 0;
+
 #ifndef CONFIG_S31_DISPLAY_ENABLE
     /* Allow the USB Serial/JTAG device to enumerate before loader output. */
     vTaskDelay(pdMS_TO_TICKS(5000));
@@ -601,6 +622,64 @@ void app_main(void)
         ESP_LOGE(TAG, "USB HID host failed to start");
 #endif
 #endif
+    /*
+     * HART1 BLACK BOX. A kernel that dies before its console exists leaves
+     * nothing on the wire (2026-09-20: the first SMP kernel, silent even
+     * with earlycon). The bus monitor records hart1's PC and SP, so if
+     * Linux's hosted driver has not announced itself ~12 s after release -
+     * a healthy boot does by ~4 s - say where hart1 is. Costs nothing on a
+     * good boot. Resolve the PC against images/System.map.
+     */
+    {
+        const volatile uint32_t *hosted_state =
+            (const volatile uint32_t *)(uintptr_t)(S31_HOSTED_SRAM_BASE + 12);
+        int waited, k;
+
+        for (waited = 0; waited < 9 && !(*hosted_state & (1U << 1)); waited++)
+            vTaskDelay(pdMS_TO_TICKS(1000));
+        if (!(*hosted_state & (1U << 1))) {
+            REG_WRITE(0x2d0020cc, 3);           /* CORE_1 RCD_EN: record + pdebug */
+            s_blackbox.magic = 0x48315043;      /* "H1PC": report on the NEXT boot too - */
+            s_blackbox.n = 0;                   /* the UART may be the thing that died */
+            for (k = 0; k < 6; k++) {
+                s_blackbox.pc[k] = REG_READ(0x2d0020d0);
+                s_blackbox.sp[k] = REG_READ(0x2d0020d4);
+                s_blackbox.n = k + 1;
+                ESP_LOGE(TAG, "hart1 has not come up: pc=%08" PRIx32 " sp=%08" PRIx32
+                         " lastpc_before_exc=%08" PRIx32,
+                         (uint32_t)REG_READ(0x2d0020d0), (uint32_t)REG_READ(0x2d0020d4),
+                         (uint32_t)REG_READ(0x2d0020e8));
+                vTaskDelay(pdMS_TO_TICKS(300));
+            }
+            /*
+             * The dead kernel's last words. Its printk text ring is in PSRAM,
+             * which hart0 can read while hart1 spins (it does NOT survive a
+             * reset - 0x55 fill). We cannot know __log_buf without the
+             * System.map, so print every printable run in the 128 KiB that
+             * holds the kernel's BSS. READ THIS AT 115200, not 1 Mbps: that
+             * mistake is why this box looked mute on 2026-09-20.
+             */
+            {
+                const volatile uint8_t *m =
+                    (const volatile uint8_t *)(uintptr_t)(S31_PSRAM_BASE + 0x90000);
+                char line[121];
+                uint32_t i, n = 0;
+
+                for (i = 0; i < 0x20000; i++) {
+                    uint8_t c = m[i];
+                    if (c >= 32 && c < 127 && n < sizeof(line) - 1) {
+                        line[n++] = (char)c;
+                        continue;
+                    }
+                    if (n >= 12) {
+                        line[n] = 0;
+                        esp_rom_printf("K| %s\n", line);
+                    }
+                    n = 0;
+                }
+            }
+        }
+    }
 #if CONFIG_S31_VCPU_PROTOTYPE
     /* docs/smp-plan.md stage 1. After everything else is up, so a failure
      * here is attributable to this and nothing else. */
