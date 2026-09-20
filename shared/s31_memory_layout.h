@@ -57,8 +57,18 @@
  * allocate inside our DMA ring. That is silent memory corruption, not a boot
  * failure. Loader, OpenSBI and kernel all carry this map.
  */
-#define S31_AUDIO_DMA_BASE             0x2F05A000U
-#define S31_AUDIO_DMA_SIZE             0x00010000U
+/*
+ * 32 KiB again from 2026-09-20, OUTPUT ONLY (user decision: the microphone is
+ * not wanted, the playback ring must not shrink). The pool is now exactly one
+ * 32 KiB ring; the PCM core preallocates playback first, so it takes all of
+ * it, and a capture stream - if anything ever opens one - falls back to
+ * ordinary memory. The capture stream itself stays on the DAI: removing it
+ * was tried and cost playback quality (see esp32s31-i2s.c). The 32 KiB goes
+ * back to hart0's heap, which had 4-12 KiB free once the USB host moved
+ * there and failed Wi-Fi init with ESP_ERR_NO_MEM under any extra load.
+ */
+#define S31_AUDIO_DMA_BASE             0x2F062000U
+#define S31_AUDIO_DMA_SIZE             0x00008000U
 
 /* Compact internal HP-SRAM transport and Linux DMA reservation. */
 #define S31_HP_SHARED_BASE             0x2F06AF80U

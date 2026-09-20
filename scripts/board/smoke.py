@@ -79,6 +79,12 @@ for c in xclock xcalc xfiles; do
 		ok "$c maps a window" "${n}s"
 	else
 		no "$c maps a window" "no window after ${n}s"
+		# EVIDENCE, because this failed once (2026-09-20) and passed on
+		# the rerun with nothing to look at: is the client alive, what
+		# did the desktop say, how much memory was there. The host side
+		# adds a panel screenshot.
+		echo "EVID|$c alive=$(pidof $c) memavail=$(awk '/MemAvailable/{print $2}' /proc/meminfo) cmafree=$(awk '/CmaFree/{print $2}' /proc/meminfo)"
+		tail -12 /var/log/lvdesk.log | sed "s/^/EVID|log: /"
 	fi
 done
 
@@ -180,6 +186,16 @@ def main() -> int:
         print("smoke: the board did not finish - console output follows")
         print(out[-600:])
         return 2
+    evid = re.findall(r"^EVID\|(.*)$", out, re.M)
+    if evid:
+        import os, time
+        d = pathlib.Path(os.environ.get("SMOKE_EVIDENCE_DIR", "/tmp"))
+        shot = d / ("smoke-fail-%s.jpg" % time.strftime("%H%M%S"))
+        subprocess.run([sys.executable, str(HERE / "screenshot-hw.py"), str(shot)],
+                       capture_output=True, text=True)
+        print("  evidence (screenshot: %s):" % shot)
+        for e in evid:
+            print("    " + e)
     bad = 0
     for name, status, detail in rows:
         if name == "END":

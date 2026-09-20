@@ -404,21 +404,22 @@
 		 * internal RAM is not cached on this SoC, so no flushing is
 		 * needed between the CPU writing and the DMA reading.
 		 */
-		audio_sram: sram@2f05a000 {
+		audio_sram: sram@2f062000 {
 			compatible = "mmio-sram";
 			/*
-			 * 64 KiB, grown from 32 KiB by moving the base down.
+			 * 32 KiB from 2026-09-20: the playback ring only (no mic
+			 * wanted); was 64 KiB. hart0's heap needed the rest.
 			 * Must match S31_AUDIO_DMA_BASE/SIZE in
 			 * shared/s31_memory_layout.h AND the loader's
 			 * reservation - see the comment there.
 			 */
-			reg = <0x2f05a000 0x10000>;
+			reg = <0x2f062000 0x8000>;
 			#address-cells = <1>;
 			#size-cells = <1>;
-			ranges = <0x0 0x2f05a000 0x10000>;
+			ranges = <0x0 0x2f062000 0x8000>;
 
 			audio_dma_pool: pool@0 {
-				reg = <0x0 0x10000>;
+				reg = <0x0 0x8000>;
 				label = "audio-dma";
 				pool;
 				export;

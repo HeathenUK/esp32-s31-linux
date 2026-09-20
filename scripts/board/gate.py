@@ -168,7 +168,9 @@ def stage_contract(out, results):
 
 
 def stage_smoke(out, results):
-    r = subprocess.run([sys.executable, str(HERE / "smoke.py")], text=True, capture_output=True)
+    import os
+    r = subprocess.run([sys.executable, str(HERE / "smoke.py")], text=True, capture_output=True,
+                       env=dict(os.environ, SMOKE_EVIDENCE_DIR=str(out)))
     (out / "smoke.log").write_text(r.stdout + r.stderr)
     for line in r.stdout.splitlines():
         m = re.match(r"\s+(PASS|FAIL)\s+(.*?)(?:\s{3}(.*))?$", line)
