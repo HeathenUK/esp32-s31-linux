@@ -341,6 +341,26 @@ static bool process_mem_stats_control(const struct s31_hosted_control_msg *msg)
 	if (msg->type != S31_HOSTED_CTRL_MEM_STATS_REQUEST)
 		return false;
 
+	/*
+	 * SMP plan, stage 0 (docs/smp-plan.md): how idle is hart0? Reported on
+	 * the console per request - the share of the interval since the last
+	 * request that the FreeRTOS idle task ran. No ABI change: the numbers
+	 * ride the log, the response below is untouched.
+	 */
+#if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
+	{
+		static uint64_t last_idle, last_now;
+		uint64_t idle = ulTaskGetIdleRunTimeCounter();
+		uint64_t now = (uint64_t)esp_timer_get_time();
+
+		if (last_now && now > last_now)
+			ESP_LOGW(TAG, "hart0 idle %u%% over %u ms",
+				 (unsigned)((idle - last_idle) * 100 / (now - last_now)),
+				 (unsigned)((now - last_now) / 1000));
+		last_idle = idle;
+		last_now = now;
+	}
+#endif
 	/* MALLOC_CAP_DMA excludes LP RAM and PSRAM on ESP32-S31. */
 	stats.total_bytes = heap_caps_get_total_size(caps);
 	stats.free_bytes = heap_caps_get_free_size(caps);
