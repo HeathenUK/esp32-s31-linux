@@ -26,8 +26,11 @@
  * XLITE_RING=0 (client) or XSHIM_RING=0 (server) turns it off.
  *
  * DOORBELLS. Eventfds are O_NONBLOCK and are polled, never read blocking.
- * A writer rings after advancing head and then sets `sig`; a reader that
- * finds `sig` set clears it and drains the eventfd. A stale count only costs
+ * A writer advances head, then - only if `sig` is clear - sets `sig` and
+ * writes the eventfd. A reader that finds `sig` set DRAINS THE EVENTFD FIRST
+ * and clears `sig` second, then drains the ring. The reader's order is
+ * load-bearing: clear-then-drain lets a writer's bell be swallowed while
+ * `sig` stays set, and its next message is then never announced. A stale count only costs
  * one spurious wake-up, and an empty-ring check costs no syscall at all -
  * which is what makes XPending() free. `full` is set by a writer that ran
  * out of room; the reader clears it after consuming and rings the writer's

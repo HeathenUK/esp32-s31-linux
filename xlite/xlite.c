@@ -381,11 +381,13 @@ static int xlite_ring_read_more(struct xdpy *x, int block)
 
 		/* Acknowledge BEFORE looking: a writer that then adds bytes
 		 * sees sig clear and rings again, so nothing is slept past. */
+		/* Drain the eventfd BEFORE clearing sig (see xshim.c client_data:
+		 * the other order loses a wake-up). */
 		if (XR_LOAD(d->sig)) {
 			uint64_t v;
 
-			XR_STORE(d->sig, 0);
 			if (read(x->efd_in, &v, sizeof(v)) < 0) { /* empty */ }
+			XR_STORE(d->sig, 0);
 		}
 		used = xring_used(d);
 		if (used > XRING_S2C_SIZE)

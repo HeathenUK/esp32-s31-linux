@@ -153,6 +153,51 @@ s31_vcpu_irq_entry:
 	csrs	mstatus, t0
 	j	_interrupt_handler
 
+	/* ---- hart0's own machine timer (CLIC id 7): the GUEST's clock ----- */
+	/* Never chained to IDF, which would panic on a system interrupt id.
+	 * From the guest: save it, note the tick, resume (which injects it).
+	 * From M-mode (the vCPU task is descheduled, or we are in an ISR):
+	 * note the tick and return, touching nothing but t0/t1. */
+	.balign	4
+	.global	s31_vcpu_mtimer_entry
+s31_vcpu_mtimer_entry:
+	csrrw	sp, mscratch, sp
+	bnez	sp, 1f
+	csrrw	sp, mscratch, sp
+	addi	sp, sp, -16
+	sw	t0, 0(sp)
+	sw	t1, 4(sp)
+	li	t0, 0x10004000		/* mtimecmp: park it */
+	li	t1, -1
+	sw	t1, 4(t0)
+	sw	t1, 0(t0)
+	li	t0, 0x1080101c		/* CLIC id 7: clear the edge latch */
+	sb	zero, 0(t0)
+	la	t0, s31_vcpu_vpending
+	lw	t1, 0(t0)
+	ori	t1, t1, 1
+	sw	t1, 0(t0)
+	lw	t0, 0(sp)
+	lw	t1, 4(sp)
+	addi	sp, sp, 16
+	mret
+1:	save_guest_gprs
+	lw	tp, A_MTP(sp)
+	lw	gp, A_MGP(sp)
+	lw	t2, A_MSP(sp)
+	mv	sp, t2
+	li	t0, 0x10004000
+	li	t1, -1
+	sw	t1, 4(t0)
+	sw	t1, 0(t0)
+	li	t0, 0x1080101c
+	sb	zero, 0(t0)
+	la	t0, s31_vcpu_vpending
+	lw	t1, 0(t0)
+	ori	t1, t1, 1
+	sw	t1, 0(t0)
+	j	s31_vcpu_resume
+
 	/* ---- back into the guest. M-mode, MIE = 0, sp = M stack --------- */
 	.balign	4
 	.global	s31_vcpu_resume
@@ -163,6 +208,9 @@ s31_vcpu_resume:
 	lw	t0, 4(t6)
 	addi	t0, t0, 1
 	sw	t0, 4(t6)		/* [1] times the guest was (re)entered */
+	la	a0, s31_vcpu_area
+	call	s31_vcpu_inject		/* C: deliver a pending virtual interrupt
+					 * by rewriting the saved guest state */
 	la	t6, s31_vcpu_area
 	lw	t0, A_MEPC(t6)
 	csrw	mepc, t0
@@ -247,6 +295,98 @@ s31_vcpu_do_leave:			/* a0 = reason, sp = M stack, MIE = 0 */
 	csrs	mstatus, t0		/* back to being an M-mode task */
 	csrsi	mstatus, 8
 	ret
+
+	/* ---- the stage-2a guest: S-mode with its OWN interrupt vectors ---- */
+	/* a0 = &counters: [0] loops [1] timer irqs taken [2] IPIs taken
+	 * [3] last rdtime low word. Arms a 1 ms timer through the SBI TIME
+	 * call, re-arms it from its handler, and counts what it is given. */
+	.balign	64
+s31_vcpu_guest2_vectors:		/* stvt: one word per CLIC id */
+	.rept	3
+	.word	g2_spurious
+	.endr
+	.word	g2_ipi			/* id 3 */
+	.rept	3
+	.word	g2_spurious
+	.endr
+	.word	g2_timer		/* id 7 */
+	.rept	40
+	.word	g2_spurious
+	.endr
+	.balign	64
+g2_trap:				/* stvec base: exceptions */
+	j	g2_trap
+	.balign	4
+g2_spurious:
+	sret
+g2_timer:
+	addi	sp, sp, -32
+	sw	a0, 0(sp)
+	sw	a1, 4(sp)
+	sw	a6, 8(sp)
+	sw	a7, 12(sp)
+	sw	t0, 16(sp)
+	la	t0, s31_vcpu_g2_counters
+	lw	a0, 4(t0)
+	addi	a0, a0, 1
+	sw	a0, 4(t0)
+2:	rdtimeh	a1			/* 64-bit now: hi, lo, hi again */
+	rdtime	a0
+	rdtimeh	a6
+	bne	a1, a6, 2b
+	sw	a0, 12(t0)
+	li	a6, 320000		/* + 1 ms at 320 MHz */
+	add	a6, a0, a6
+	sltu	a0, a6, a0		/* carry */
+	add	a1, a1, a0
+	mv	a0, a6
+	li	a6, 0
+	li	a7, 0x54494D45		/* SBI TIME, set_timer */
+	ecall
+	lw	a0, 0(sp)
+	lw	a1, 4(sp)
+	lw	a6, 8(sp)
+	lw	a7, 12(sp)
+	lw	t0, 16(sp)
+	addi	sp, sp, 32
+	sret
+g2_ipi:
+	addi	sp, sp, -16
+	sw	t0, 0(sp)
+	sw	t1, 4(sp)
+	la	t0, s31_vcpu_g2_counters
+	lw	t1, 8(t0)
+	addi	t1, t1, 1
+	sw	t1, 8(t0)
+	lw	t0, 0(sp)
+	lw	t1, 4(sp)
+	addi	sp, sp, 16
+	sret
+	.global	s31_vcpu_guest2
+s31_vcpu_guest2:
+	la	t0, g2_trap
+	ori	t0, t0, 3		/* CLIC mode */
+	csrw	stvec, t0
+	la	t0, s31_vcpu_guest2_vectors
+	csrw	0x107, t0		/* stvt */
+3:	rdtimeh	a1
+	rdtime	a0
+	rdtimeh	a6
+	bne	a1, a6, 3b
+	li	a6, 320000
+	add	a6, a0, a6
+	sltu	a0, a6, a0
+	add	a1, a1, a0
+	mv	a0, a6
+	li	a6, 0
+	li	a7, 0x54494D45
+	ecall
+	csrsi	sstatus, 2		/* SIE */
+	la	a0, s31_vcpu_g2_counters
+1:	lw	t0, 0(a0)
+	addi	t0, t0, 1
+	sw	t0, 0(a0)
+	j	1b
 
 	/* ---- the stage-1 guest: S-mode, counts, makes a call now and then */
 	.balign	4

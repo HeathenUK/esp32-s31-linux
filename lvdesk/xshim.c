@@ -9269,11 +9269,22 @@ static void client_data(struct cli *c)
 		return;
 	}
 	d = &c->ring->c2s;
+	/*
+	 * DRAIN THE EVENTFD, THEN CLEAR sig - never the other way round.
+	 * The writer does "sig = 1; write(efd)" and skips both when sig is
+	 * already 1. Clearing sig first let a writer slip in between the two
+	 * steps: it set sig and wrote, our read() then swallowed THAT bell
+	 * too, and sig was left at 1 with nothing pending - so the writer's
+	 * next request skipped the bell and we slept on 20 unread bytes for
+	 * ever. Caught 2026-09-20, 1 run in ~50 of sdlbench2 --timers, by
+	 * reading the ring header out of the hung client's /proc/PID/fd.
+	 * With read-then-clear, sig = 1 with an empty eventfd is impossible.
+	 */
 	if (XR_LOAD(d->sig)) {
 		uint64_t v;
 
-		XR_STORE(d->sig, 0);
 		if (read(c->efd_rd, &v, sizeof(v)) < 0) { /* empty */ }
+		XR_STORE(d->sig, 0);
 	}
 	{
 		char junk[64];
@@ -9524,6 +9535,13 @@ void xshim_flush(void)
 
 		if (c->fd < 0)
 			continue;
+		/* A ring with unread requests is work whether or not a bell
+		 * got us here; one load per client per pass. */
+		if (c->ring && xring_used(&c->ring->c2s)) {
+			client_data(c);
+			if (c->fd < 0)
+				continue;
+		}
 		if (c->outn || c->pendn)
 			out_flush(c);
 		if (c->pendn > PEND_MAX) {
