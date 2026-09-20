@@ -9646,6 +9646,8 @@ void xshim_poll_ready(const int *ready, int nready)
 			client_data(&cli[map[i]]);
 		}
 	}
+	if (xsp_on > 0)
+		xsp_dump();	/* the ready-list path never reached the dump in poll() */
 	expose_flush();
 }
 
