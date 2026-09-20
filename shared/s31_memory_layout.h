@@ -21,6 +21,16 @@
 /* Keep all non-Linux PSRAM in the final two 64-KiB MMU pages. */
 #define S31_AUDIO_PSRAM_BASE           0x50FE0000U
 #define S31_AUDIO_PSRAM_SIZE           0x00010000U
+/*
+ * hart0 start mailbox (SMP): OpenSBI's HSM hart_start(0) on hart1 fills it
+ * and rings CPU_INTR_FROM_CPU_1; the FreeRTOS vCPU task on hart0 enters Linux
+ * from it. Last 64 bytes of the audio PSRAM reservation - the hosted audio
+ * device maps only its first 0xC000 (esp32s31.dtsi), and the region is
+ * reserved from Linux. Words: magic "H0GO", start address (physical),
+ * opaque (a1), and a count hart0 increments when it has entered.
+ */
+#define S31_HART0_START_MAILBOX        0x50FEFFC0U
+#define S31_HART0_START_MAGIC          0x48304F47U
 #define S31_OPENSBI_RW_BASE            0x50FF0000U
 #define S31_OPENSBI_RW_SIZE            0x00010000U
 

@@ -175,7 +175,7 @@ s31_vcpu_mtimer_entry:
 	sb	zero, 0(t0)
 	la	t0, s31_vcpu_vpending
 	lw	t1, 0(t0)
-	ori	t1, t1, 1
+	ori	t1, t1, 4		/* VIRQ_MTIMER_RAW: C decides what it meant */
 	sw	t1, 0(t0)
 	lw	t0, 0(sp)
 	lw	t1, 4(sp)
@@ -194,7 +194,7 @@ s31_vcpu_mtimer_entry:
 	sb	zero, 0(t0)
 	la	t0, s31_vcpu_vpending
 	lw	t1, 0(t0)
-	ori	t1, t1, 1
+	ori	t1, t1, 4		/* VIRQ_MTIMER_RAW: C decides what it meant */
 	sw	t1, 0(t0)
 	j	s31_vcpu_resume
 

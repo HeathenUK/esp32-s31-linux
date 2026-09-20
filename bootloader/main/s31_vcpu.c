@@ -9,6 +9,7 @@
  * reports counters. The guest here is a counting loop, not Linux: the exit
  * test is `make gate` passing while it runs.
  */
+#include "s31_memory_layout.h"
 #include <inttypes.h>
 #include <stdint.h>
 #include <string.h>
@@ -59,8 +60,10 @@ static volatile uint32_t guest_counters[4];	/* [0] loops, written by the guest *
  */
 #define VIRQ_TIMER	1u
 #define VIRQ_IPI	2u
+#define VIRQ_MTIMER_RAW 4u	/* hart0's mtimecmp fired: guest deadline, or our retry */
+#define INJECT_RETRY_TICKS 6400u	/* 20 us at 320 MHz */
 #define GUEST_ID_TIMER	7u	/* what our kernel's CLIC driver expects */
-#define GUEST_ID_IPI	3u
+#define GUEST_ID_IPI	47u	/* patches/0051: the kernel's IPI slot */
 #define MST_SIE		(1u << 1)
 #define MST_SPIE	(1u << 5)
 #define MST_SPP		(1u << 8)
@@ -90,35 +93,6 @@ static uint32_t IRAM_ATTR guest_load32(uint32_t vaddr)
 	return v;
 }
 
-void IRAM_ATTR s31_vcpu_inject(uint32_t *area)
-{
-	uint32_t pend = s31_vcpu_vpending, mst = area[32], id, bit;
-
-	if (!pend)
-		return;
-	if (!(mst & MST_SIE)) {		/* guest has interrupts off: next crossing */
-		inj_deferred++;
-		return;
-	}
-	if (pend & VIRQ_TIMER) {
-		bit = VIRQ_TIMER; id = GUEST_ID_TIMER; inj_timer++;
-	} else {
-		bit = VIRQ_IPI; id = GUEST_ID_IPI; inj_ipi++;
-	}
-	s31_vcpu_vpending = pend & ~bit;
-
-	RV_WRITE_CSR(sepc, area[31]);
-	RV_WRITE_CSR(scause, 0x80000000u | id);
-	/* SPP = the mode we interrupted, SPIE = 1 (SIE was set), SIE = 0,
-	 * and the handler itself runs in S-mode. */
-	mst &= ~(MST_SPP | MST_SIE | MST_MPP_MASK);
-	if ((area[32] & MST_MPP_MASK) == MST_MPP_S)
-		mst |= MST_SPP;
-	mst |= MST_SPIE | MST_MPP_S;
-	area[32] = mst;
-	area[31] = guest_load32(RV_READ_CSR(0x107 /* stvt */) + 4u * id) & ~1u;
-}
-
 static uint64_t IRAM_ATTR mtime_now(void)
 {
 	uint32_t hi, lo, t;
@@ -131,11 +105,12 @@ static uint64_t IRAM_ATTR mtime_now(void)
 	return ((uint64_t)hi << 32) | lo;
 }
 
-static void IRAM_ATTR guest_set_timer(uint64_t when)
+static volatile uint64_t guest_deadline = ~0ull;
+
+static void IRAM_ATTR mtimer_arm(uint64_t when)
 {
 	volatile uint8_t *c = (volatile uint8_t *)S31_CLIC_ID7;
 
-	s31_vcpu_vpending &= ~VIRQ_TIMER;
 	REG_WRITE(S31_MTIMECMP_HI, 0xffffffffu);
 	c[0] = 0;			/* clear the edge latch */
 	c[2] = 0xc3;			/* M-mode, edge, hardware vectored */
@@ -143,6 +118,88 @@ static void IRAM_ATTR guest_set_timer(uint64_t when)
 	c[1] = 1;
 	REG_WRITE(S31_MTIMECMP_LO, (uint32_t)when);
 	REG_WRITE(S31_MTIMECMP_HI, (uint32_t)(when >> 32));
+}
+
+static void IRAM_ATTR guest_set_timer(uint64_t when)
+{
+	s31_vcpu_vpending &= ~VIRQ_TIMER;
+	guest_deadline = when;
+	mtimer_arm(when);
+}
+
+static void vcpu_inject(uint32_t *area, int force);
+
+void IRAM_ATTR s31_vcpu_inject(uint32_t *area)
+{
+	vcpu_inject(area, 0);
+}
+
+static void IRAM_ATTR vcpu_inject(uint32_t *area, int force)
+{
+	uint32_t pend = s31_vcpu_vpending, mst = area[32], id, bit;
+
+	/* hart0's one mtimecmp serves two masters: the guest's deadline and
+	 * our own injection retry. Sort out which this was. */
+	if (pend & VIRQ_MTIMER_RAW) {
+		pend &= ~VIRQ_MTIMER_RAW;
+		if (mtime_now() >= guest_deadline) {
+			guest_deadline = ~0ull;
+			pend |= VIRQ_TIMER;
+		} else if (guest_deadline != ~0ull) {
+			mtimer_arm(guest_deadline);
+		}
+		s31_vcpu_vpending = pend;
+	}
+	if (!pend)
+		return;
+	/* In U-mode supervisor interrupts are always deliverable. */
+	if (!force && !(mst & MST_SIE) && (mst & MST_MPP_MASK) == MST_MPP_S) {
+		/*
+		 * Linux idles in wfi with interrupts OFF and expects the
+		 * hardware to take the pending one the instant it turns them
+		 * back on. We only get to look when an M-mode interrupt
+		 * crosses, and those all land inside the wfi - so without this
+		 * every crossing deferred and the CPU never took an IPI
+		 * (2026-09-20: hart1 stuck in smp_call_function_many_cond).
+		 * Look again in 20 us.
+		 */
+		uint64_t retry = mtime_now() + INJECT_RETRY_TICKS;
+
+		mtimer_arm(retry < guest_deadline ? retry : guest_deadline);
+		inj_deferred++;
+		return;
+	}
+	if (pend & VIRQ_TIMER) {
+		bit = VIRQ_TIMER; id = GUEST_ID_TIMER; inj_timer++;
+	} else {
+		bit = VIRQ_IPI; id = GUEST_ID_IPI; inj_ipi++;
+	}
+	s31_vcpu_vpending = pend & ~bit;
+	if (pend & ~bit) {		/* another is waiting behind this one */
+		uint64_t retry = mtime_now() + INJECT_RETRY_TICKS;
+
+		mtimer_arm(retry < guest_deadline ? retry : guest_deadline);
+	}
+
+	RV_WRITE_CSR(sepc, area[31]);
+	RV_WRITE_CSR(scause, 0x80000000u | id);
+	/* SPP = the mode we interrupted, SPIE = 1 (SIE was set), SIE = 0,
+	 * and the handler itself runs in S-mode. */
+	mst &= ~(MST_SPP | MST_SIE | MST_MPP_MASK);
+	if ((area[32] & MST_MPP_MASK) == MST_MPP_S)
+		mst |= MST_SPP;
+	if (area[32] & MST_SIE)
+		mst |= MST_SPIE;
+	else
+		mst &= ~MST_SPIE;
+	mst |= MST_MPP_S;
+	area[32] = mst;
+	/* Linux runs the CLIC non-vectored (no stvt, SHV clear): everything
+	 * enters at stvec's base. The test guest has a vector table. */
+	if (RV_READ_CSR(0x107 /* stvt */))
+		area[31] = guest_load32(RV_READ_CSR(0x107) + 4u * id) & ~1u;
+	else
+		area[31] = RV_READ_CSR(stvec) & ~0x3fu;
 }
 
 static void IRAM_ATTR ipi_isr(void *arg)
@@ -156,6 +213,7 @@ static volatile uint32_t trap_ecalls, trap_other, last_cause, last_epc, last_tva
 static uint32_t my_mtvt[48] __attribute__((aligned(64)));
 static uint8_t guest_stack[1024];
 static uint32_t leave_after = 0;
+static volatile uint32_t linux_mode;
 static volatile uint32_t snap_mintstatus, snap_mintthresh, snap_mstatus, snap_mcause;
 
 /* Called from s31_vcpu_mtvec with the guest's state saved in `area`.
@@ -169,6 +227,55 @@ int IRAM_ATTR s31_vcpu_trap(uint32_t *area)
 
 		if (!insn)
 			insn = guest_load32(area[31]);
+		/*
+		 * sie/sip (and the h halves) do not exist on this CLIC-only
+		 * core, and Linux's entry code touches them before it knows
+		 * anything (secondary_start_sbi opens with csrw sie, zero).
+		 * Our OpenSBI shadows them in software for hart1
+		 * (sbi_emulate_csr.c); do the same here. Interrupt delivery on
+		 * this hart is emulated and gated on sstatus.SIE alone.
+		 */
+		/*
+		 * WFI, trapped by mstatus.TW. Linux idles in wfi with
+		 * interrupts OFF and opens them for a few microseconds after it
+		 * returns; a CPU whose interrupts are injected only when an
+		 * M-mode interrupt crosses is then always sampled INSIDE the wfi
+		 * with SIE = 0 and never takes anything (2026-09-20: 437,988
+		 * deferrals, zero progress). So wfi is where an idle CPU takes
+		 * its pending interrupt: the handler's sret comes back to the
+		 * instruction after the wfi with interrupts still off, exactly
+		 * the state the idle loop expects. Nothing pending: return at
+		 * once (a polling idle) - TODO lend the time to FreeRTOS.
+		 */
+		if (linux_mode && insn == 0x10500073u) {
+			area[31] += 4;
+			s31_vcpu_crumbs[14]++;
+			vcpu_inject(area, 1);
+			return 0;
+		}
+		if ((insn & 0x7f) == 0x73 && (insn & 0x7000)) {
+			uint32_t csr = insn >> 20, f3 = (insn >> 12) & 7;
+			uint32_t rd = (insn >> 7) & 31, rs = (insn >> 15) & 31;
+			static uint32_t shadow[4];
+			int k = csr == 0x104 ? 0 : csr == 0x144 ? 1 :
+				csr == 0x114 ? 2 : csr == 0x154 ? 3 : -1;
+
+			if (k >= 0) {
+				uint32_t old = shadow[k];
+				uint32_t src = (f3 & 4) ? rs : (rs ? area[rs - 1] : 0);
+
+				switch (f3 & 3) {
+				case 1: shadow[k] = src; break;			/* csrrw */
+				case 2: if (rs) shadow[k] = old | src; break;	/* csrrs */
+				case 3: if (rs) shadow[k] = old & ~src; break;	/* csrrc */
+				}
+				if (rd)
+					area[rd - 1] = old;
+				area[31] += 4;
+				s31_vcpu_crumbs[7]++;		/* shadowed CSR accesses */
+				return 0;
+			}
+		}
 		if ((insn & 0xfff0707fu) == 0xc0102073u ||	/* csrrs rd, time, x0 */
 		    (insn & 0xfff0707fu) == 0xc8102073u) {	/* ... timeh */
 			uint32_t rd = (insn >> 7) & 31;
@@ -192,6 +299,15 @@ int IRAM_ATTR s31_vcpu_trap(uint32_t *area)
 			area[10] = 0;
 			if (s31_vcpu_crumbs[15])
 				return 4;
+			return 0;
+		}
+		if (linux_mode) {
+			/* The mini-SBI of a Linux CPU on hart0: TIME above, and
+			 * an honest "no" to everything else. Remember who asked. */
+			s31_vcpu_crumbs[5] = area[16];	/* last refused EID */
+			s31_vcpu_crumbs[6]++;
+			area[9] = (uint32_t)-2;		/* SBI_ERR_NOT_SUPPORTED */
+			area[10] = 0;
 			return 0;
 		}
 		/* Bisect step A: three calls prove S-mode runs and the
@@ -226,13 +342,43 @@ int IRAM_ATTR s31_vcpu_trap(uint32_t *area)
 		return 0;
 	}
 	/* Stage 2b-0 reach probe: report the fault in a0 and carry on. */
-	if ((cause == 1 || cause == 5 || cause == 7) &&
+	if (!linux_mode && (cause == 1 || cause == 5 || cause == 7) &&
 	    ((area[31] >= (uint32_t)(uintptr_t)s31_vcpu_g3_first &&
 	      area[31] <= (uint32_t)(uintptr_t)s31_vcpu_g3_last) || cause == 1)) {
 		area[9] = 0xFA170000u | cause;
 		area[31] = cause == 1 ? area[0] : area[31] + 4;	/* ra, or skip */
 		return 0;
 	}
+	/*
+	 * medeleg reads back 0xb100 on this core: causes 0-7 (misaligned, access
+	 * faults, illegal instruction, BREAKPOINT) cannot be delegated, so they
+	 * arrive here even though they are Linux's to handle - a WARN() on this
+	 * CPU is an ebreak. Do what OpenSBI's sbi_trap_redirect() does for
+	 * hart1: perform the S-mode trap entry by hand. Exceptions always enter
+	 * at stvec's base.
+	 */
+	if (linux_mode && cause < 8) {
+		uint32_t mst = area[32];
+
+		RV_WRITE_CSR(sepc, area[31]);
+		RV_WRITE_CSR(scause, cause);
+		RV_WRITE_CSR(stval, RV_READ_CSR(mtval));
+		mst &= ~(MST_SPP | MST_SPIE | MST_MPP_MASK);
+		if ((area[32] & MST_MPP_MASK) == MST_MPP_S)
+			mst |= MST_SPP;
+		if (area[32] & MST_SIE)
+			mst |= MST_SPIE;
+		mst &= ~MST_SIE;
+		mst |= MST_MPP_S;
+		area[32] = mst;
+		area[31] = RV_READ_CSR(stvec) & ~0x3fu;
+		s31_vcpu_crumbs[3]++;			/* redirected exceptions */
+		s31_vcpu_crumbs[2] = cause;
+		return 0;
+	}
+	s31_vcpu_crumbs[8] = cause;
+	s31_vcpu_crumbs[9] = area[31];
+	s31_vcpu_crumbs[10] = RV_READ_CSR(mtval);
 	trap_other++;
 	last_cause = cause;
 	last_epc = area[31];
@@ -274,6 +420,28 @@ static void vcpu_task(void *arg)
 		ESP_LOGE(TAG, "could not take the FROM_CPU_1 doorbell");
 	RV_SET_CSR(mcounteren, 2);	/* let S-mode try rdtime natively */
 
+#if CONFIG_S31_VCPU_LINUX
+	{
+		volatile uint32_t *mb = (volatile uint32_t *)(uintptr_t)S31_HART0_START_MAILBOX;
+
+		/* Nothing to do until Linux on hart1 asks OpenSBI for hart 0. */
+		while (mb[0] != S31_HART0_START_MAGIC)
+			vTaskDelay(pdMS_TO_TICKS(20));
+		linux_mode = 1;
+		/* Exceptions Linux handles itself: everything but ecall-from-S. */
+		RV_WRITE_CSR(medeleg, 0xb1ff);
+		s31_vcpu_crumbs[4] = RV_READ_CSR(medeleg);
+		RV_WRITE_CSR(satp, 0);
+		memset(s31_vcpu_area, 0, sizeof(s31_vcpu_area));
+		s31_vcpu_area[9] = 0;			/* a0 = hartid */
+		s31_vcpu_area[10] = mb[2];		/* a1 = opaque */
+		s31_vcpu_area[31] = mb[1];		/* mepc = secondary_start_sbi */
+		s31_vcpu_area[32] = (RV_READ_CSR(mstatus) & ~0x1888u) | 0x0880u | (1u << 21); /* TW */
+		mb[0] = 0;
+		mb[3]++;
+		goto enter;
+	}
+#endif
 	memset(s31_vcpu_area, 0, sizeof(s31_vcpu_area));
 	s31_vcpu_area[1] = (uint32_t)(uintptr_t)(guest_stack + sizeof(guest_stack)); /* x2 */
 	s31_vcpu_area[9] = (uint32_t)(uintptr_t)guest_counters;			     /* a0 */
@@ -281,6 +449,9 @@ static void vcpu_task(void *arg)
 	/* mstatus for the guest: MPP = S (01), MPIE = 1, everything else as now. */
 	s31_vcpu_area[32] = (RV_READ_CSR(mstatus) & ~0x1888u) | 0x0880u;
 
+#if CONFIG_S31_VCPU_LINUX
+enter:
+#endif
 	portDISABLE_INTERRUPTS();
 	RV_WRITE_CSR(mscratch, 0);
 	RV_WRITE_CSR(0x307 /* mtvt */, (uint32_t)(uintptr_t)my_mtvt);
@@ -328,7 +499,7 @@ static void report_task(void *arg)
 	int n;
 
 	(void)arg;
-	for (n = 0; n < 2; n++) {
+	for (n = 0; n < 4; n++) {
 		vTaskDelay(pdMS_TO_TICKS(n < 2 ? 5000 : 30000));
 		ESP_LOGW(TAG, "2a: guest timer irqs %" PRIu32 " ipis %" PRIu32 " | injected t %" PRIu32
 			 " i %" PRIu32 " deferred %" PRIu32 " | rdtime emulated %" PRIu32 " sbi %" PRIu32
@@ -336,6 +507,12 @@ static void report_task(void *arg)
 			 s31_vcpu_g2_counters[1], s31_vcpu_g2_counters[2], inj_timer, inj_ipi,
 			 inj_deferred, emul_rdtime, sbi_calls, s31_vcpu_g2_counters[0],
 			 (void *)s31_vcpu_g2_counters);
+		ESP_LOGW(TAG, "guest pc %08" PRIx32 " ra %08" PRIx32 " sp %08" PRIx32 " mstatus %08" PRIx32
+			 " vpending %" PRIu32 " medeleg %08" PRIx32 " shadowed-csr %" PRIu32
+			 " refused-eid %08" PRIx32 " x%" PRIu32,
+			 s31_vcpu_area[31], s31_vcpu_area[0], s31_vcpu_area[1], s31_vcpu_area[32],
+			 (uint32_t)s31_vcpu_vpending, s31_vcpu_crumbs[4], s31_vcpu_crumbs[7],
+			 s31_vcpu_crumbs[5], s31_vcpu_crumbs[6]);
 		ESP_LOGW(TAG, "2b-0 reach: psram %08" PRIx32 " xipflash %08" PRIx32 " sclic %08" PRIx32
 			 " sclic+64k %08" PRIx32 " uart %08" PRIx32 " fromcpu1 %08" PRIx32
 			 " mtime %08" PRIx32 " | psram-w %08" PRIx32 " flash-x %08" PRIx32

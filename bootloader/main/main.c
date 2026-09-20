@@ -622,6 +622,16 @@ void app_main(void)
         ESP_LOGE(TAG, "USB HID host failed to start");
 #endif
 #endif
+    /* BEFORE the black box: that block waits up to 9 s for Linux, and Linux
+     * gives a secondary CPU 10 s to report in (2026-09-20: it arrived at 28 s). */
+#if CONFIG_S31_VCPU_PROTOTYPE
+    /* docs/smp-plan.md stage 1. After everything else is up, so a failure
+     * here is attributable to this and nothing else. */
+#if !CONFIG_S31_VCPU_LINUX
+    vTaskDelay(pdMS_TO_TICKS(15000));   /* test guest: let the system settle first */
+#endif
+    s31_vcpu_start();
+#endif
     /*
      * HART1 BLACK BOX. A kernel that dies before its console exists leaves
      * nothing on the wire (2026-09-20: the first SMP kernel, silent even
@@ -680,10 +690,4 @@ void app_main(void)
             }
         }
     }
-#if CONFIG_S31_VCPU_PROTOTYPE
-    /* docs/smp-plan.md stage 1. After everything else is up, so a failure
-     * here is attributable to this and nothing else. */
-    vTaskDelay(pdMS_TO_TICKS(15000));
-    s31_vcpu_start();
-#endif
 }

@@ -1,0 +1,31 @@
+riscv XIP + SMP: make the secondary-CPU start path work on rv32 XIP; describe hart 0
+
+Files (whole files, like the other directory patches):
+  arch/riscv/kernel/cpu_ops_sbi.c
+  arch/riscv/kernel/head.S
+  arch/riscv/boot/dts/espressif/esp32s31.dtsi
+  arch/riscv/boot/dts/espressif/esp32s31_generic.dts
+(and patches/0051's irq-esp32s31-clic.c was refreshed at the same time)
+
+1. cpu_ops_sbi.c: __pa_symbol(secondary_start_sbi) is WRONG on rv32 XIP. The
+   kernel image lies inside the linear-map range, so __va_to_pa takes the
+   linear branch and applies the RAM offset to a TEXT symbol that lives in
+   flash: the firmware was told 0x4f8000de, the hart took an instruction
+   access fault. Now CONFIG_XIP_PHYS_ADDR + (sym - _xiprom) = 0x404000de.
+2. head.S secondary_start_sbi: XIP_FIXUP_OFFSET was applied to offsets that
+   are then added to a1 - which is already the PHYSICAL address of
+   boot_data[cpu]. +0x0f400000 sent the first load to 0x5f499064. Removed.
+3. dtsi: cpu@0 (label cpu1) = physical hart 0, lent by FreeRTOS. MUST stay
+   after cpu@1: OpenSBI's hart index 0 has to be the hart that runs OpenSBI.
+4. generic.dts: /chosen/opensbi-config heap-size = 0x8000. OpenSBI sits in the
+   last 64 KiB of PSRAM; with two harts the default heap ran 8 KiB off the
+   end of memory and hart0's MSPI error ISR abort()ed IDF.
+5. CLIC driver (0051): IPI send is per target hart - a CPU on hart 0 is kicked
+   through CPU_INTR_FROM_CPU_1 (its interrupts are emulated by the hart0
+   monitor, including its self-IPI); hart 1 keeps CLIC slot 47, reached from
+   hart 0 through +0x10000. clic_per_cpu is set for every possible CPU (the
+   lent CPU never runs the init; its first IPI hit WARN_ON(!clic)).
+
+Result 2026-09-20: "smp: Brought up 1 node, 2 CPUs", boot continues to a
+shell. NOT usable yet - see docs/worklog: the lent CPU has no HWLoop/PIE
+(vendor coproc ecall) and no FPU world switch.

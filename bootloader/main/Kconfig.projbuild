@@ -146,6 +146,17 @@ config S31_VCPU_PROTOTYPE
 	  docs/smp-plan.md. Installs our own mtvec/mtvt on hart0 and runs a
 	  counting S-mode guest at FreeRTOS priority 1. Experimental.
 
+config S31_VCPU_LINUX
+	bool "SMP plan stage 2b: lend hart0 to Linux as a second CPU"
+	depends on S31_VCPU_PROTOTYPE
+	default n
+	help
+	  The vCPU task waits for OpenSBI's hart_start(0) mailbox
+	  (S31_HART0_START_MAILBOX) and enters the kernel's secondary entry in
+	  S-mode instead of running the test guest. Needs an SMP=1 kernel and
+	  an OpenSBI with the hart0 HSM device; harmless without them (the
+	  task just sleeps).
+
 config S31_USB_HID_ENABLE
 	bool "Own the USB controller on hart0 and enumerate HID devices"
 	default y

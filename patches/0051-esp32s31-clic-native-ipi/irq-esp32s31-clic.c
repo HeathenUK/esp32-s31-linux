@@ -240,12 +240,28 @@ static inline void clic_write_threshold(struct esp32s31_clic *clic, u8 level)
 #define ESP32S31_CLIC_IPI_SLOT	47
 static struct esp32s31_clic *esp32s31_ipi_clic __ro_after_init;
 
+/*
+ * A CPU on physical hart 0 is a guest of FreeRTOS: its interrupts are
+ * emulated by the hart0 monitor (bootloader/main/s31_vcpu.c), which takes the
+ * CPU_INTR_FROM_CPU_1 doorbell and injects cause 47. A write to hart0's real
+ * slot 47 would reach IDF's interrupt, not Linux - so ANY send to that CPU,
+ * including its own self-IPI, rings the doorbell. hart 1 has the real slot:
+ * own window from hart 1, +0x10000 from hart 0 (readable from S-mode on
+ * hart0, measured 2026-09-20).
+ */
+#define ESP32S31_LENT_HARTID	0
+static void __iomem *esp32s31_ipi_doorbell __ro_after_init;
+
 static void esp32s31_clic_ipi_send(unsigned int cpu)
 {
 	struct esp32s31_clic *clic = esp32s31_ipi_clic;
-	unsigned int other = cpu == smp_processor_id() ? 0 :
-			     ESP32S31_CLIC_DUALCORE_OFF;
+	unsigned int other;
 
+	if (cpuid_to_hartid_map(cpu) == ESP32S31_LENT_HARTID) {
+		writel(1, esp32s31_ipi_doorbell);
+		return;
+	}
+	other = cpu == smp_processor_id() ? 0 : ESP32S31_CLIC_DUALCORE_OFF;
 	writeb(1, clic->regs + other + ESP32S31_CLIC_CTRL_BASE -
 	       ESP32S31_CLIC_BASE +
 	       ESP32S31_CLIC_IPI_SLOT * ESP32S31_CLIC_INT_STRIDE +
@@ -886,6 +902,20 @@ static void __init esp32s31_clic_init_hart(struct esp32s31_clic *clic, int hart)
 	}
 
 	per_cpu(clic_per_cpu, hart) = clic;
+#ifdef CONFIG_SMP
+	{
+		/*
+		 * One CLIC instance serves every CPU (the S window virtualises
+		 * per hart), and a CPU lent by hart0 never runs this init - its
+		 * interrupts are injected by the hart0 monitor. Without this
+		 * its first IPI tripped WARN_ON(!clic) (2026-09-20).
+		 */
+		int cpu;
+
+		for_each_possible_cpu(cpu)
+			per_cpu(clic_per_cpu, cpu) = clic;
+	}
+#endif
 
 	pr_debug("CLIC: S31 hart %d using S-mode sclicbase window\n", hart);
 	return;
@@ -1110,6 +1140,7 @@ static int __init esp32s31_clic_probe(struct device_node *node,
 			pr_err("CLIC: ipi_mux_create failed (%d)\n", virq);
 		} else {
 			esp32s31_ipi_clic = clic;
+			esp32s31_ipi_doorbell = ioremap(0x20586014, 4);
 			esp32s31_clic_ipi_local_init(clic);
 			/* Before sbi_ipi_init(), which then stands down. */
 			riscv_ipi_set_virq_range(virq, BITS_PER_BYTE);
