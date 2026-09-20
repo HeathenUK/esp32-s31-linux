@@ -130,6 +130,11 @@ def report(stage, lines, extra=""):
     return 0 if stage in ("SHELL", "LOGIN") else 1
 
 
+def nonce_output(text, nonce):
+    """Require command output, never the tty echo of `echo <nonce>`."""
+    return any(line.strip() == nonce for line in text.splitlines())
+
+
 def passive():
     """Is it alive right now? Poke it, because idle is silent.
 
@@ -148,7 +153,7 @@ def passive():
     wedge, then a CMA wedge - four wrong causes, a kernel change and a
     DTS revert - and the board was reachable by runsh.py the whole time.
 
-    Echoing a nonce fixes both halves. It cannot be forged by framing
+    Matching the nonce on its own output line fixes both halves. It cannot be forged by framing
     garbage, so it can be matched against the RAW text without
     reintroducing the false-SHELL problem the filter exists for; and a
     shell that echoes it is provably executing commands, which is a
@@ -166,9 +171,9 @@ def passive():
             print(err)
             return 2
         lines = readable_lines(text)
-        # The nonce comes back twice (echo of the typed line, then its
-        # output); either occurrence proves a live shell.
-        if nonce in text:
+        # Terminal echo also occurs at login/password prompts. Only the
+        # command OUTPUT proves that a shell executed it.
+        if nonce_output(text, nonce):
             return report("SHELL", lines,
                           "shell echoed the nonce %s (attempt %d)"
                           % (nonce, attempt))
@@ -226,7 +231,7 @@ def watch_reset(timeout):
         # Seeing a prompt scroll past is not the same as a board that answers.
         nonce = "A%dZ" % (int(time.time() * 1000) % 100000000)
         text, _ = read_for(1000000, 4.0, poke=("\r\necho %s\r\n" % nonce).encode())
-        if nonce in text or re.search(r"login:\s*$", text, re.M):
+        if nonce_output(text, nonce) or re.search(r"login:\s*$", text, re.M):
             return report(stage, late_lines, "confirmed: the console answered a poke")
         print("STAGE %s_SEEN_BUT_SILENT" % stage)
         print("  a %s prompt went past during boot, but the console did NOT answer a" % stage.lower())
