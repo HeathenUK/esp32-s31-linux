@@ -236,9 +236,15 @@ int kms_open(const char *path)
 	kms_h = mode.vdisplay;
 
 	/*
-	 * DIRECT SCANOUT (LVDESK_DIRECT=1): ask the driver for a handle to its
-	 * permanent scanout buffer and render straight into it, instead of a
-	 * dumb buffer the driver copies from on every DIRTYFB. Everything
+	 * DIRECT SCANOUT - THE DEFAULT (LVDESK_DIRECT=0 opts out): ask the driver
+	 * for a handle to its permanent scanout buffer and render straight into
+	 * it, instead of a dumb buffer the driver copies from on every DIRTYFB.
+	 *
+	 * It used to be opt-in through /etc/lvdesk.env on the card, which made
+	 * it fragile: verify-sdl.sh/ab.sh REWRITE that file for every run and
+	 * their stock arm empties it, silently turning direct scanout off; a
+	 * re-imaged card lost it too. The default now lives in the binary
+	 * (user, 2026-09-21: "permanently default"). Everything
 	 * downstream is identical - ADDFB, MAP_DUMB, mmap, SETCRTC - only the
 	 * handle's origin differs. Falls back to CREATE_DUMB on any refusal
 	 * (older kernel: ENOTTY/EINVAL), so one lvdesk binary runs both arms.
@@ -249,7 +255,7 @@ int kms_open(const char *path)
 	creq.width = kms_w;
 	creq.height = kms_h;
 	creq.bpp = 16;
-	if (getenv("LVDESK_DIRECT") && !strcmp(getenv("LVDESK_DIRECT"), "1")) {
+	if (!getenv("LVDESK_DIRECT") || strcmp(getenv("LVDESK_DIRECT"), "0")) {
 		struct drm_esp32s31_scanout sc;
 
 		memset(&sc, 0, sizeof(sc));
