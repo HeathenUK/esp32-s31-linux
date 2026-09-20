@@ -1,5 +1,16 @@
 # Where this work stands
 
+## SMP / IPI work in progress
+
+Both Linux CPUs are online. Hardware doorbells now carry IPIs in both
+directions; hart0 still requires monitor delivery into Linux. WFI is under
+validation. Kernel #290 fixes a concrete deferred-timer rearm omission on the
+lent CPU that matches the recurring vblank/nanosleep stalls; reboot and timer
+stress checks are running, so stability is not yet signed off. See
+`docs/smp-ipi-plan.md` and the latest `docs/worklog-2026-09-19.md` entries.
+PIE SIMD remains hart1-only; permanent trap-induced CPU0 affinity is still
+pending replacement after the IPI/timer work.
+
 ## 2026-09-20: X transport in shared memory, SPACE-as-Caps_Lock fixed, CMA 3 MiB
 
 - **XLITE-RING** (xlite/xring.h): xlite<->xshim byte stream in a memfd ring

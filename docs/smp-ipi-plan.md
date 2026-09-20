@@ -1,12 +1,17 @@
 # Cross-hart IPIs on real doorbell lines - plan (2026-09-21)
 
-Status: step 0 DONE - premise PROVEN. Step 1 IN VALIDATION: inherited
-#283 used the shared doorbell; the counter serialization fix is under test.
-Steps 2-4 remain open. See docs/worklog-2026-09-19.md for evidence.
+Status (current): steps 1 and 2 IMPLEMENTED and committed (`2001d02`,
+`b890ea3`, `8eb5410`): shared FROM_CPU_3 into hart0, dedicated hardware-level
+FROM_CPU_1 into hart1. The old software-pending IPI send path is removed.
+Step 3 (WFI) is deployed under validation. That exposed/reproduced the
+recurring CPU1 timer/vblank stall: deferred hrtimer rearm was skipped when
+returning from the monitor's forced WFI interrupt with saved SIE clear.
+Kernel #290 tests an explicit rearm in the S31 CLIC handler for that path.
+Step 4 diagnostic cleanup remains. See docs/worklog-2026-09-19.md for evidence.
 
 ## Why
 
-Today a Linux IPI to hart 1 is a software-set pending bit on CLIC slot 47,
+Before this migration a Linux IPI to hart 1 was a software-set pending bit on CLIC slot 47,
 written through the +0x10000 cross-hart alias (patches/0051). It delivers, but:
 
 - It does **not wake a hart asleep in `wfi`.** So with a second CPU online hart
@@ -26,7 +31,7 @@ Linux. Level semantics also mean an IPI cannot be lost between send and take.
 
 ## Facts the plan rests on (all read from source, 2026-09-21)
 
-| register | addr | matrix source | today |
+| register | addr | matrix source | before migration |
 |---|---|---|---|
 | FROM_CPU_0 | 0x20586010 | 65 | IDF FreeRTOS yield on hart0 - untouchable |
 | FROM_CPU_1 | 0x20586014 | 66 | hart1 -> hart0: vCPU doorbell (s31_vcpu.c `ipi_isr`) |

@@ -44,20 +44,8 @@ extern asmlinkage void ret_from_fork_user_asm(void);
 
 void noinstr arch_cpu_idle(void)
 {
-#if defined(CONFIG_SMP) && defined(CONFIG_SOC_ESP32S31)
-	/*
-	 * An IPI here is a pending bit written by the OTHER hart, and that does
-	 * not wake hart 1 out of wfi (2026-09-20: the boot advanced only when
-	 * hart 1's own tick woke it; GrieferPig's tree polls from idle for the
-	 * same reason). So with a second CPU online hart 1 does not sleep: it
-	 * returns and the idle loop comes straight back. The CPU lent by hart 0
-	 * DOES execute wfi - it traps to the hart0 monitor, which takes a pending
-	 * injected interrupt there or gives the time back to FreeRTOS.
-	 */
-	if (num_online_cpus() > 1 &&
-	    cpuid_to_hartid_map(raw_smp_processor_id()) != 0)
-		return;
-#endif
+	/* The hardware FROM_CPU_1 IPI wakes hart1; hart0 traps WFI to its
+	 * monitor, which lends idle time back to FreeRTOS. */
 	cpu_do_idle();
 }
 

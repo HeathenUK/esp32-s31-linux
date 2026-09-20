@@ -1,14 +1,19 @@
 # A second hart for Linux: scope and plan (2026-09-20)
 
-Status: PLAN. Nothing here is built. Written because the measurement that gated
-it came in: windowed prboom with sound is 60% of the core, lvdesk 35%, all else
+Status (current): SMP is built and running with both Linux CPUs online.
+Hardware IPI migration is implemented; WFI and the recurring deferred-timer
+rearm fault are under validation in #290. See `smp-ipi-plan.md` and the latest
+`worklog-2026-09-19.md` entries. PIE SIMD exists only on hart1 (Linux CPU0):
+removing permanent whole-thread affinity pinning is the next scheduling task.
+The original plan below predates implementation. Its motivating measurement
+was: windowed prboom with sound is 60% of the core, lvdesk 35%, all else
 ~3% (cpushare, 2026-09-20). `scripts/board/cpushare.sh` set the bar itself:
 "above ~30% non-game CPU a second hart is the next big project".
 
 ## 1. What is true today
 
 Hardware (vendor `soc_caps.h`, `/opt/esp-idf` in the build container): two
-identical HP cores, `rv32imafc` + Zba/Zbb/Zbc/Zbs + Zaamo/Zalrsc (atomics are
+HP cores (PIE SIMD is available only on hart1), `rv32imafc` + Zba/Zbb/Zbc/Zbs + Zaamo/Zalrsc (atomics are
 there, the kernel already reports them), a CLIC per core, one interrupt matrix,
 one shared external-memory cache with write-back.
 
