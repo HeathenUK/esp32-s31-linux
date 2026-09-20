@@ -233,6 +233,7 @@ def main():
     ap.add_argument("--output", type=pathlib.Path)
     a = ap.parse_args()
     out = a.output or ROOT / "artifacts" / "gate" / time.strftime("%Y%m%d-%H%M%S")
+    out = out.resolve()
     out.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
     if a.reset:
@@ -257,7 +258,7 @@ def main():
             bad += st == "FAIL"
         say(f"  {st:4}  [{stage}] {name}" + (f"   {detail}" if detail else ""))
     n = sum(1 for _, _, s, _ in results if s != "INFO")
-    say(f"GATE {'FAIL' if bad else 'PASS'}: {n - bad}/{n} in {time.time() - t0:.0f}s  ({out.relative_to(ROOT)})")
+    say(f"GATE {'FAIL' if bad else 'PASS'}: {n - bad}/{n} in {time.time() - t0:.0f}s  ({out})")
     (out / "verdict.json").write_text(json.dumps([dict(stage=s, name=n, status=st, detail=d) for s, n, st, d in results], indent=1))
     return 1 if bad else 0
 
