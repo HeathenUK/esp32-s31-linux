@@ -12,6 +12,7 @@
 #include "sdkconfig.h"
 #include "s31_wifi_config.h"
 #include "esp_log.h"
+void s31_vcpu_start(void);
 #include "esp_err.h"
 #include "esp_system.h"
 #include "esp_cpu.h"
@@ -599,5 +600,11 @@ void app_main(void)
     if (s31_usb_hid_start() != ESP_OK)
         ESP_LOGE(TAG, "USB HID host failed to start");
 #endif
+#endif
+#if CONFIG_S31_VCPU_PROTOTYPE
+    /* docs/smp-plan.md stage 1. After everything else is up, so a failure
+     * here is attributable to this and nothing else. */
+    vTaskDelay(pdMS_TO_TICKS(15000));
+    s31_vcpu_start();
 #endif
 }

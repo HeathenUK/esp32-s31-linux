@@ -186,7 +186,40 @@ irqchip with native IPIs, SYSTIMER clockevent, DTS) and
    download: **82% over 16 s**. So ~0.8 of a core is there to lend. (The 16%
    floor at rest is itself worth a look: something on hart0 is busy.)
    Still to measure: during A2DP streaming and under USB input.
-1. **Trap forwarding prototype**: a FreeRTOS task on hart0 drops to S-mode,
+1. **Trap forwarding prototype** - DONE 2026-09-20, exit test PASSED: `make
+   gate` 24/24 with an S-mode guest running on hart0 (Wi-Fi associated, USB
+   HID attached, audio, desktop, SDL canaries all normal). The guest ran
+   ~40 M loops/s, was preempted ~160 times/s by FreeRTOS's M-mode
+   interrupts, and made ~40 ecalls/s through our trap path.
+   Code: `bootloader/main/s31_vcpu_asm.S`, `s31_vcpu.c`,
+   `CONFIG_S31_VCPU_PROTOTYPE` (off in the default build; the tested image is
+   `images/hello_world-vcpu-stage1.bin`). What it taught us:
+   - mscratch is free in ESP-IDF; our mtvec + a copy of its mtvt with the
+     ordinary slots pointed at our entry is all the interposition needed.
+     Vectors installed with no guest change nothing (Wi-Fi + Linux normal).
+   - IDF's interrupt exit restores mstatus from the HANDLER'S ENTRY SNAPSHOT
+     into whichever task it resumes (`a0 = s2`, vectors.S). Fabricating the
+     guest's resume context with MPIE=0 therefore left an innocent task
+     running with interrupts off, spinning in vPortYield. Fabricate an
+     ordinary MPP=M/MPIE=1 context; the resume path disables MIE itself.
+   - S-mode runs on hart0 under IDF's PMP as-is for IRAM/DRAM addresses.
+     mintthresh arrives as 0x0f (IDF's open value), not a sentinel.
+   - Instruments that found it: the bus-monitor PC/SP record registers
+     (0x2d002048/4c, hart0's live PC readable from Linux with devmem),
+     breadcrumbs in SRAM, and FreeRTOS variables via the ELF's symbols.
+   - HART0'S HEAP IS THE REAL CONSTRAINT: 180 KB total, ~10 KB free, largest
+     block 4 KB before this work. A guest that never idles starves IDLE, and
+     with the prototype's stacks Wi-Fi init failed with ESP_ERR_NO_MEM.
+     Moved unused light-sleep and Wi-Fi sleep/extra code out of IRAM (+8 KB).
+     Still only ~4 KB free with everything running: needs a real rebalance
+     (audio DMA pool 2 x 32 KB, BT controller mode, Wi-Fi buffers).
+   - OPEN: Linux's console (possibly Linux) stops ~100 ms after the guest is
+     told to LEAVE, while hart0 is demonstrably idle and ticking. Prime
+     suspect: hart0's log line colliding with Linux on the shared UART. The
+     silent-leave retest was not completed. Leaving is a test path only.
+   - The HW stack guard must be off while a guest runs (guest sp is outside
+     the task's stack bounds); stage 2 should stop/start it around the guest.
+1b. (was 1): a FreeRTOS task on hart0 drops to S-mode,
    runs a 20-line S-mode stub that makes an SBI call and loops, while Wi-Fi
    and USB keep working. Exit test: `make gate` passes with the stub running.
 2. **OpenSBI two-hart**: HSM start, IPI device, per-hart timer. Exit test: the

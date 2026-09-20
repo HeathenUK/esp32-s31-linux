@@ -9,6 +9,10 @@ if(CONFIG_S31_USB_HID_ENABLE)
     list(APPEND srcs s31_usb_hid.c)
 endif()
 
+if(CONFIG_S31_VCPU_PROTOTYPE)
+    list(APPEND srcs s31_vcpu.c s31_vcpu_asm.S)
+endif()
+
 if(CONFIG_S31_DISPLAY_ENABLE)
     list(APPEND srcs s31_display.c)
 endif()

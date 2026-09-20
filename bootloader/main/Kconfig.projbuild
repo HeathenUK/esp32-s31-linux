@@ -139,6 +139,13 @@ endif
 
 endmenu
 
+config S31_VCPU_PROTOTYPE
+	bool "SMP plan stage 1: run an S-mode guest from a FreeRTOS task on hart0"
+	default n
+	help
+	  docs/smp-plan.md. Installs our own mtvec/mtvt on hart0 and runs a
+	  counting S-mode guest at FreeRTOS priority 1. Experimental.
+
 config S31_USB_HID_ENABLE
 	bool "Own the USB controller on hart0 and enumerate HID devices"
 	default y
