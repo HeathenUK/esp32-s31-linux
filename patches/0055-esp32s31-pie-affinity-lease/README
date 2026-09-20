@@ -1,0 +1,8 @@
+Temporary kernel compatibility affinity for PIE on asymmetric S31 SMP.
+Whole-file snapshots: arch/riscv/include/asm/{processor.h,mmu_context.h},
+arch/riscv/kernel/esp32s31-ext.c. Apply after0053/0054.
+
+Uses force/relax_compatible_cpus_allowed_ptr to preserve user affinity and
+fork inheritance; releases after100ms by default. Runtime rollback:
+s31_pie_affinity_ms=0 keeps restrictions permanent. Stats: s31_pie_stats.
+Under validation; do not treat as accepted until the worklog says so.

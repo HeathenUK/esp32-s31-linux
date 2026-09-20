@@ -1,10 +1,29 @@
 # A second hart for Linux: scope and plan (2026-09-20)
 
-Status (current): SMP is built and running with both Linux CPUs online.
-Hardware IPI migration is implemented; WFI and the recurring deferred-timer
-rearm fault are under validation in #290. See `smp-ipi-plan.md` and the latest
-`worklog-2026-09-19.md` entries. PIE SIMD exists only on hart1 (Linux CPU0):
-removing permanent whole-thread affinity pinning is the next scheduling task.
+Status (current): SMP/doorbell IPIs/WFI are implemented. Kernel #291 is the
+validated checkpoint (three #290 reset/stress cycles plus #291 full gate).
+The vblank timer bug is fixed; SDL canaries still6–11% slower than UP.
+
+Active step: #294 temporary PIE affinity experiment (patch0055), not accepted
+until regression and workload tests pass. Only hart1/Linux CPU0 has PIE SIMD.
+The generic scheduler compatibility-affinity API saves/restores user masks;
+100ms lease is an initial tunable policy, not a proven optimum.
+
+Next steps, in order:
+1. Validate stock-memcpy restoration, fork, explicit user affinity, and live
+   vector state across migration with pie-affinity-test. Preserve #291 rollback.
+2. Measure usefulCPU1 execution and frame/audio results in stock SDL apps,
+   especially Tyrian synthesis versus game/render threads. Frequent libc
+   calls may defeat a coarse lease; mask restoration alone is not acceptance.
+3. Compare automatic placement with measured per-thread affinity experiments
+   for synthesis/game/lvdesk. s31route executes on the app's audio thread.
+4. Measure hart0 monitor IPI/wake overhead and effective CPU capacity; expose
+   useful constraints to Linux rather than permanently pinning whole apps.
+
+Open unrelated reports: user-observed Quake crash (deferred at their request)
+and an uncaptured 'unexpected interrupt latency' boot hang, likely the known
+SD/MMC warning string. Preserve recurrence; do not call these fixed.
+
 The original plan below predates implementation. Its motivating measurement
 was: windowed prboom with sound is 60% of the core, lvdesk 35%, all else
 ~3% (cpushare, 2026-09-20). `scripts/board/cpushare.sh` set the bar itself:

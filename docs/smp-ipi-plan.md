@@ -1,13 +1,19 @@
 # Cross-hart IPIs on real doorbell lines - plan (2026-09-21)
 
-Status (current): steps 1 and 2 IMPLEMENTED and committed (`2001d02`,
-`b890ea3`, `8eb5410`): shared FROM_CPU_3 into hart0, dedicated hardware-level
-FROM_CPU_1 into hart1. The old software-pending IPI send path is removed.
-Step 3 (WFI) is deployed under validation. That exposed/reproduced the
-recurring CPU1 timer/vblank stall: deferred hrtimer rearm was skipped when
-returning from the monitor's forced WFI interrupt with saved SIE clear.
-Kernel #290 tests an explicit rearm in the S31 CLIC handler for that path.
-Step 4 diagnostic cleanup remains. See docs/worklog-2026-09-19.md for evidence.
+Status (current): migration IMPLEMENTED and validated through #291.
+- Steps1–2: shared FROM_CPU_3 into hart0, dedicated level FROM_CPU_1 into
+  hart1 (`2001d02`, `b890ea3`, `8eb5410`). Old software-pending send path removed.
+- Step3: WFI restored (`08afa53`). Found/fixed missing deferred hrtimer rearm
+  on lent-hart IRQ-disabled idle return (`a5db88a`); three reset/stress cycles
+  passed without vblank warnings, then quiet #291 full gate24/24.
+- Step4: routine heartbeat opt-in, unused legacy SBI pending-bit path switched
+  to hardware too (`783cc67`). Diagnostic tools remain available.
+
+Remaining optimisation: measure and reduce hart0 monitor dispatch/wake costs.
+Delivery is already hardware-signalled; final Linux IRQ injection remains
+software because FreeRTOS owns hart0's M-mode interrupts. No native guest IRQ
+claim is made. Current main work has moved to PIE affinity/task placement;
+see smp-plan.md and worklog-2026-09-19.md. #291 is a rollback checkpoint.
 
 ## Why
 

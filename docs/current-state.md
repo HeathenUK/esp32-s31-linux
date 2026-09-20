@@ -1,15 +1,25 @@
 # Where this work stands
 
-## SMP / IPI work in progress
+## SMP / IPI current checkpoint
 
-Both Linux CPUs are online. Hardware doorbells now carry IPIs in both
-directions; hart0 still requires monitor delivery into Linux. WFI is under
-validation. Kernel #290 fixes a concrete deferred-timer rearm omission on the
-lent CPU that matches the recurring vblank/nanosleep stalls; reboot and timer
-stress checks are running, so stability is not yet signed off. See
-`docs/smp-ipi-plan.md` and the latest `docs/worklog-2026-09-19.md` entries.
-PIE SIMD remains hart1-only; permanent trap-induced CPU0 affinity is still
-pending replacement after the IPI/timer work.
+Validated checkpoint: kernel #291 and matching loader. Hardware doorbells
+carry IPIs in both directions; hart0 still requires monitor injection into
+Linux. WFI polling is removed. The recurring vblank/nanosleep stall was a
+missing deferred hrtimer rearm on the monitor's IRQ-disabled idle return:
+fixed in `a5db88a`. Three #290 reset/stress cycles passed; quiet #291 passed
+all24 gate checks and all12 desktop smoke checks. SDL canaries remain6–11%
+slower than the UP reference, so this is stability progress, not a speed win.
+Routine diagnostics are now opt-in. Commits: `08afa53` (WFI), `783cc67`
+(cleanup); full evidence in `docs/worklog-2026-09-19.md`.
+
+In flight: #294 temporary PIE compatibility-affinity experiment (patch0055),
+flashing/testing. Not accepted yet. Uses generic Linux affinity preservation
+and restoration, without changing apps or libraries. New CLI regression test
+fails the expected restoration tests on #291. Frequent libc calls might still
+keep threads mostly onCPU0; actualCPU1 execution and workload performance must
+be measured. See `docs/smp-plan.md` for the next steps. User also reported a
+Quake crash (deferred) and an uncaptured SD interrupt-latency boot hang; neither
+is claimed fixed by the vblank change.
 
 ## 2026-09-20: X transport in shared memory, SPACE-as-Caps_Lock fixed, CMA 3 MiB
 
