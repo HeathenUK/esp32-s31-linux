@@ -388,14 +388,17 @@ ifeq ($(SMP),1)
 # because the hosted driver registers with it), system suspend
 # (never entered; hart0 would not survive it), multi-queue network steering
 # and scheduler topology levels that mean nothing on two identical harts.
-SMP_TWEAKS := --enable SMP --set-val NR_CPUS 2 --enable HOTPLUG_CPU --disable RISCV_BOOT_SPINWAIT $(SLIM_TWEAKS)
-# The lent CPU is OPT-IN. It is preemptible by FreeRTOS, its interrupts are
-# injected, it has no PIE unit and its firmware refuses the flash/reset calls -
-# general work landing there gave console deaths (1 boot in 3), codec I2C
-# timeouts and a 59 s boot against 33 s (2026-09-20). isolcpus keeps the
-# scheduler off it unless a task is placed there with taskset, which is how we
-# mean to use it anyway (docs/smp-plan.md stage 5).
-CMDLINE_ADD += isolcpus=1
+SMP_TWEAKS := --enable SMP --set-val NR_CPUS 2 --enable HOTPLUG_CPU --disable RISCV_BOOT_SPINWAIT $(SLIM_TWEAKS) \
+	--enable RPS
+# RPS back ON for SMP, after the diet that turns it off: it is THE standard knob
+# for moving network receive processing to another CPU (rx-0/rps_cpus), i.e.
+# step 2 of docs/smp-finish-plan.md, and it is a few kB of a 140 kB margin. On a
+# uniprocessor kernel it is dead weight, which is why the diet drops it.
+# CPU_ISOLATION stays off deliberately: the scheduler is MEANT to use CPU1 now
+# (and with it off, isolcpus= is ignored - it never did anything here).
+# (An `isolcpus=1` lived here from 2026-09-20. It NEVER took effect: the diet
+# disables CONFIG_CPU_ISOLATION and the kernel logged it as an unknown parameter.
+# Removed rather than left to mislead - CPU1 has always been schedulable.)
 # NOT maxcpus=1 + online-later. Tried 2026-09-21 to hide a boot-dependent dead
 # interrupt (initcalls run on CPU1 on some boots despite isolcpus): it is a
 # workaround for code of ours that is wrong from the lent CPU, a normal Linux
