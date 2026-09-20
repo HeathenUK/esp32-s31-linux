@@ -1255,6 +1255,10 @@ err_free:
 #include <linux/kernel_stat.h>
 #include <linux/sched/stat.h>
 #include <linux/sched/debug.h>
+#include <linux/hrtimer.h>
+static unsigned long s31_timer_probe;
+core_param(s31_timer_probe, s31_timer_probe, ulong, 0400);
+static void __iomem *s31_timer_trace;
 static unsigned int s31_smp_dump_after;
 core_param(s31_smp_dump_after, s31_smp_dump_after, uint, 0400);
 static unsigned long s31_smp_dump_at;
@@ -1269,7 +1273,15 @@ static void s31_smp_beat_fn(struct timer_list *t)
 		s31_smp_dump_done = true;
 		pr_info("s31-smp: one-shot task snapshot (diagnostic boot)\n");
 		show_state_filter(0);
+		sysrq_timer_list_show();
 	}
+	if (s31_timer_trace)
+		pr_info("s31-timer: now %08x:%08x cmp %08x:%08x deadline %08x:%08x clic %08x pending %x ctl %x\n",
+			readl(s31_timer_trace + 4), readl(s31_timer_trace),
+			readl(s31_timer_trace + 12), readl(s31_timer_trace + 8),
+			readl(s31_timer_trace + 20), readl(s31_timer_trace + 16),
+			readl(s31_timer_trace + 24), readl(s31_timer_trace + 28),
+			readl(s31_timer_trace + 40));
 	/* (A 'hart0 frozen' panic lived here. It is WRONG now that an idle CPU1
 	 * lets hart0 sleep in FreeRTOS's idle loop: a constant PC is the goal.) */
 	if (s31_busmon) {
@@ -1295,6 +1307,8 @@ static void s31_smp_beat_fn(struct timer_list *t)
 
 static int __init s31_smp_beat_init(void)
 {
+	if (s31_timer_probe)
+		s31_timer_trace = ioremap(s31_timer_probe, 48);
 	s31_smp_dump_at = jiffies + s31_smp_dump_after * HZ;
 	s31_busmon = ioremap(0x2d002000, 0x100);
 	s31_h0trace = ioremap(0x50fef000, 0x1000);

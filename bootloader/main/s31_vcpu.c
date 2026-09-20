@@ -679,6 +679,21 @@ static void report_task(void *arg)
 	 */
 	for (;;) {
 		volatile uint32_t *m = (volatile uint32_t *)0x50FEFFD0u;
+		/* Read-only timer snapshot in the existing, otherwise unused Linux
+		 * probe array. Resolve its address from the matching loader ELF. */
+		uint64_t now = mtime_now(), deadline = guest_deadline;
+		s31_vcpu_probe[0] = (uint32_t)now;
+		s31_vcpu_probe[1] = now >> 32;
+		s31_vcpu_probe[2] = REG_READ(S31_MTIMECMP_LO);
+		s31_vcpu_probe[3] = REG_READ(S31_MTIMECMP_HI);
+		s31_vcpu_probe[4] = (uint32_t)deadline;
+		s31_vcpu_probe[5] = deadline >> 32;
+		s31_vcpu_probe[6] = REG_READ(S31_CLIC_ID7);
+		s31_vcpu_probe[7] = s31_vcpu_vpending;
+		s31_vcpu_probe[8] = inj_timer;
+		s31_vcpu_probe[9] = inj_deferred;
+		s31_vcpu_probe[10] = REG_READ(0x10004010u);
+		s31_vcpu_probe[11] = s31_vcpu_area[31];
 
 		/* 2026-09-21: CPU1 found spinning in do_raw_spin_lock on stalled boots.
 		 * Which lock, and who called? The heartbeat prints these three as
