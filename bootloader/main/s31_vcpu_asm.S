@@ -388,6 +388,59 @@ s31_vcpu_guest2:
 	sw	t0, 0(a0)
 	j	1b
 
+	/*
+	 * ---- stage 2b-0: WHAT CAN S-MODE REACH ON HART0? A Linux CPU here needs
+	 * PSRAM (rw), the XIP kernel text in flash (r+x), its S-mode CLIC window,
+	 * hart1's CLIC through +0x10000 (to IPI it), and the UART. Every probe
+	 * is one uncompressed instruction inside [g3_first, g3_last]; a fault
+	 * there comes back from s31_vcpu_trap with a0 = 0xFA170000 | cause.
+	 */
+	.option	push
+	.option	norvc
+	.balign	4
+g3_table:
+	.word	0x50000000		/* PSRAM: the kernel's data */
+	.word	0x40400000		/* flash: the kernel's XIP text */
+	.word	0x10a01000		/* S-mode CLIC window, this hart */
+	.word	0x10a110bc		/* ... hart1's slot 47 (the Linux IPI) */
+	.word	0x2038a000		/* console UART */
+	.word	0x20586014		/* FROM_CPU_1 doorbell */
+	/* mtime (0x1000bff8) faults from S-mode - M-only, and rdtime works.
+	 * NOTE bus faults are IMPRECISE here: mepc was 2 instructions late. */
+	.word	0
+	.global	s31_vcpu_guest3, s31_vcpu_g3_first, s31_vcpu_g3_last
+s31_vcpu_guest3:
+	la	s0, g3_table
+	la	s1, s31_vcpu_probe
+1:	lw	t0, 0(s0)
+	beqz	t0, 2f
+s31_vcpu_g3_first:
+	lw	a0, 0(t0)
+	sw	a0, 0(s1)
+	addi	s0, s0, 4
+	addi	s1, s1, 4
+	j	1b
+2:	li	t0, 0x50fe0000		/* PSRAM write: store back what we read */
+	lw	a0, 0(t0)
+	sw	a0, 0(t0)
+	sw	a0, 0(s1)
+	la	t0, s31_vcpu_flashfn	/* execute from flash */
+	jalr	ra, t0, 0
+s31_vcpu_g3_last:
+	sw	a0, 4(s1)
+	li	a0, 0x600D600D
+	sw	a0, 8(s1)		/* "probe finished" */
+	j	s31_vcpu_guest2
+	.option	pop
+
+	.section .text.s31_vcpu_flashfn, "ax"	/* NOT iram: this must live in flash */
+	.balign	4
+	.global	s31_vcpu_flashfn
+s31_vcpu_flashfn:
+	li	a0, 0x0F1A5400
+	ret
+	.section .iram1, "ax"
+
 	/* ---- the stage-1 guest: S-mode, counts, makes a call now and then */
 	.balign	4
 	.global	s31_vcpu_guest

@@ -32,11 +32,14 @@ extern void s31_vcpu_irq_entry(void);
 extern int s31_vcpu_enter(void);
 extern void s31_vcpu_guest(void);
 extern void s31_vcpu_guest2(void);
+extern void s31_vcpu_guest3(void);
+extern char s31_vcpu_g3_first[], s31_vcpu_g3_last[];
 extern void s31_vcpu_mtimer_entry(void);
 
 uint32_t s31_vcpu_area[64];
 volatile uint32_t s31_vcpu_irq_count;
 volatile uint32_t s31_vcpu_crumbs[16];	/* see s31_vcpu_asm.S; read with devmem */
+volatile uint32_t s31_vcpu_probe[12];	/* stage 2b-0 reach probe results */
 static volatile uint32_t guest_counters[4];	/* [0] loops, written by the guest */
 
 /*
@@ -222,6 +225,14 @@ int IRAM_ATTR s31_vcpu_trap(uint32_t *area)
 		}
 		return 0;
 	}
+	/* Stage 2b-0 reach probe: report the fault in a0 and carry on. */
+	if ((cause == 1 || cause == 5 || cause == 7) &&
+	    ((area[31] >= (uint32_t)(uintptr_t)s31_vcpu_g3_first &&
+	      area[31] <= (uint32_t)(uintptr_t)s31_vcpu_g3_last) || cause == 1)) {
+		area[9] = 0xFA170000u | cause;
+		area[31] = cause == 1 ? area[0] : area[31] + 4;	/* ra, or skip */
+		return 0;
+	}
 	trap_other++;
 	last_cause = cause;
 	last_epc = area[31];
@@ -266,7 +277,7 @@ static void vcpu_task(void *arg)
 	memset(s31_vcpu_area, 0, sizeof(s31_vcpu_area));
 	s31_vcpu_area[1] = (uint32_t)(uintptr_t)(guest_stack + sizeof(guest_stack)); /* x2 */
 	s31_vcpu_area[9] = (uint32_t)(uintptr_t)guest_counters;			     /* a0 */
-	s31_vcpu_area[31] = (uint32_t)(uintptr_t)s31_vcpu_guest2;		     /* mepc */
+	s31_vcpu_area[31] = (uint32_t)(uintptr_t)s31_vcpu_guest3;		     /* mepc */
 	/* mstatus for the guest: MPP = S (01), MPIE = 1, everything else as now. */
 	s31_vcpu_area[32] = (RV_READ_CSR(mstatus) & ~0x1888u) | 0x0880u;
 
@@ -325,9 +336,18 @@ static void report_task(void *arg)
 			 s31_vcpu_g2_counters[1], s31_vcpu_g2_counters[2], inj_timer, inj_ipi,
 			 inj_deferred, emul_rdtime, sbi_calls, s31_vcpu_g2_counters[0],
 			 (void *)s31_vcpu_g2_counters);
+		ESP_LOGW(TAG, "2b-0 reach: psram %08" PRIx32 " xipflash %08" PRIx32 " sclic %08" PRIx32
+			 " sclic+64k %08" PRIx32 " uart %08" PRIx32 " fromcpu1 %08" PRIx32
+			 " mtime %08" PRIx32 " | psram-w %08" PRIx32 " flash-x %08" PRIx32
+			 " done %08" PRIx32,
+			 s31_vcpu_probe[0], s31_vcpu_probe[1], s31_vcpu_probe[2], s31_vcpu_probe[3],
+			 s31_vcpu_probe[4], s31_vcpu_probe[5], s31_vcpu_probe[6], s31_vcpu_probe[7],
+			 s31_vcpu_probe[8], s31_vcpu_probe[9]);
 		ESP_LOGW(TAG, "guest loops %" PRIu32 " ecalls %" PRIu32
-			 " preempted by %" PRIu32 " M-mode interrupts, other traps %" PRIu32,
-			 guest_counters[0], trap_ecalls, s31_vcpu_irq_count, trap_other);
+			 " preempted by %" PRIu32 " M-mode interrupts, other traps %" PRIu32
+			 " (last cause %" PRIu32 " epc %08" PRIx32 " tval %08" PRIx32 ")",
+			 guest_counters[0], trap_ecalls, s31_vcpu_irq_count, trap_other,
+			 last_cause, last_epc, last_tval);
 	}
 	vTaskDelete(NULL);
 }
