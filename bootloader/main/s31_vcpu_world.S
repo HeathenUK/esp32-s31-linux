@@ -14,9 +14,10 @@
  *                            FreeRTOS had live, with its enable states.
  *   world_in  (M -> guest):  remember what FreeRTOS has live, load the guest's.
  *
- * Nothing is touched for a unit the guest has off, so a guest that never uses
- * them costs three loads per crossing. The register save/restore for HWLoop
- * and PIE is OpenSBI's own routine (the file hart1 uses), assembled unchanged.
+ * The physical FPU bank is always swapped: Linux may change FS while running,
+ * and IDF keeps lazy-owned registers live even when the current task has FS
+ * off. Hardware loops are swapped through their six CSRs; PIE is absent on
+ * hart0 (see the measured restriction below).
  *
  * Callable from assembly with a valid M-mode stack, interrupts off.
  * Clobbers t0-t2, a0-a2, ra's caller must have saved it. a0 = area.
@@ -142,10 +143,9 @@ s31_vcpu_world_out:			/* a0 = area; the guest's mstatus is saved in it */
 	lw	t1, 24(t0)
 	addi	t1, t1, 1
 	sw	t1, 24(t0)		/* [6] exits */
-	lw	t0, A_MSTATUS(s0)
+	/* FS=OFF at exit can follow Linux using then disabling the FPU.
+	 * Save the physical bank and restore IDF regardless of that snapshot. */
 	li	t1, MST_FS
-	and	t0, t0, t1
-	beqz	t0, 1f			/* guest FPU off: it cannot have touched it */
 	csrs	mstatus, t1
 	mark	0x12
 	la	t2, s31_vcpu_guest_fp
@@ -200,10 +200,9 @@ s31_vcpu_world_in:			/* a0 = area, about to be resumed */
 	sw	s0, 4(sp)
 	mv	s0, a0
 	mark	0x21
-	lw	t0, A_MSTATUS(s0)
+	/* FS=OFF at entry does not stop Linux enabling it without a trap.
+	 * Also preserve IDF lazy owners when its own FS happens to be OFF. */
 	li	t1, MST_FS
-	and	t0, t0, t1
-	beqz	t0, 1f
 	la	t2, s31_vcpu_idf_fp
 	csrr	t0, mstatus
 	and	t0, t0, t1
@@ -261,5 +260,77 @@ s31_vcpu_world_in:			/* a0 = area, about to be resumed */
 	lw	ra, 0(sp)
 	lw	s0, 4(sp)
 	addi	sp, sp, 16
+	ret
+	/* Boot-only regression: a guest may change FS without trapping to us.
+	 * Preserve the caller's entire physical FP bank, even when IDF's FS is
+	 * OFF (lazy ownership can leave another task's live values there).
+	 * Returns bit 0 for OFF->ON corruption, bit 1 for ON->OFF corruption. */
+	.balign 4
+	.global s31_vcpu_fpu_check
+s31_vcpu_fpu_check:
+	addi sp, sp, -160
+	sw ra, 140(sp)
+	sw s0, 144(sp)
+	sw s1, 148(sp)
+	csrr t0, mstatus
+	sw t0, 136(sp)
+	li t1, MST_FS
+	csrs mstatus, t1
+	fp_all fsw, sp
+	csrr t0, fcsr
+	sw t0, 128(sp)
+	li s1, 0
+	la s0, s31_vcpu_area
+	lw t0, A_MSTATUS(s0)
+	sw t0, 132(sp)
+	/* Guest starts OFF and enables the FPU while running. */
+	li t0, 0x3f400000
+	fmv.w.x f0, t0
+	sw zero, A_MSTATUS(s0)
+	mv a0, s0
+	call s31_vcpu_world_in
+	li t0, MST_FS
+	csrs mstatus, t0
+	sw t0, A_MSTATUS(s0)
+	li t0, 0x3f800000
+	fmv.w.x f0, t0
+	mv a0, s0
+	call s31_vcpu_world_out
+	li t0, MST_FS
+	csrs mstatus, t0
+	fmv.x.w t0, f0
+	li t1, 0x3f400000
+	beq t0, t1, 7f
+	ori s1, s1, 1
+7:	/* Guest starts ON and disables FS before returning (kernel entry). */
+	li t0, 0x3f400000
+	fmv.w.x f0, t0
+	li t0, MST_FS
+	sw t0, A_MSTATUS(s0)
+	mv a0, s0
+	call s31_vcpu_world_in
+	li t0, MST_FS
+	csrc mstatus, t0
+	sw zero, A_MSTATUS(s0)
+	mv a0, s0
+	call s31_vcpu_world_out
+	li t0, MST_FS
+	csrs mstatus, t0
+	fmv.x.w t0, f0
+	li t1, 0x3f400000
+	beq t0, t1, 8f
+	ori s1, s1, 2
+8:	lw t0, 132(sp)
+	sw t0, A_MSTATUS(s0)
+	lw t0, 128(sp)
+	csrw fcsr, t0
+	fp_all flw, sp
+	lw t0, 136(sp)
+	csrw mstatus, t0
+	mv a0, s1
+	lw ra, 140(sp)
+	lw s0, 144(sp)
+	lw s1, 148(sp)
+	addi sp, sp, 160
 	ret
 	.option	pop

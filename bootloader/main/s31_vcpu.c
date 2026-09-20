@@ -36,6 +36,7 @@ extern void s31_vcpu_guest2(void);
 extern void s31_vcpu_guest3(void);
 extern char s31_vcpu_g3_first[], s31_vcpu_g3_last[];
 extern void s31_vcpu_mtimer_entry(void);
+extern unsigned s31_vcpu_fpu_check(void);
 
 uint32_t s31_vcpu_area[64];
 volatile uint32_t s31_vcpu_irq_count;
@@ -524,6 +525,19 @@ static void vcpu_task(void *arg)
 	 */
 #if CONFIG_S31_VCPU_LINUX
 	vTaskDelay(pdMS_TO_TICKS(50));	/* Linux is waiting for this CPU: be there */
+	{
+		unsigned failed;
+
+		portDISABLE_INTERRUPTS();
+		failed = s31_vcpu_fpu_check();
+		s31_vcpu_crumbs[14] = 0x46500000u | failed;
+		portENABLE_INTERRUPTS();
+		ESP_LOGI(TAG, "FPU world-switch FS transitions: %s (mask=%u)",
+			 failed ? "FAIL" : "PASS", failed);
+		memset(s31_vcpu_guest_fp, 0, sizeof(s31_vcpu_guest_fp));
+		if (failed)
+			vTaskDelete(NULL); /* never lend a CPU with a corrupt world switch */
+	}
 #else
 	vTaskDelay(pdMS_TO_TICKS(1000));
 #endif

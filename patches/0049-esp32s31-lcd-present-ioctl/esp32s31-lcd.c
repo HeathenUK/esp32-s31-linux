@@ -4359,6 +4359,9 @@ static int esp32s31_lcd_probe(struct platform_device *pdev)
 	hrtimer_setup(&lcd->vblank_timer, esp32s31_lcd_vblank_tick,
 		      CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 
+	/* DIAGNOSTIC 2026-09-21 (read-only, one line): vblank interrupts are dead
+	 * on some SMP boots. Does that follow WHICH CPU runs this probe? */
+	dev_info(dev, "probe running on CPU%d\n", raw_smp_processor_id());
 	lcd->irq = platform_get_irq(pdev, 0);
 	if (lcd->irq < 0)
 		return lcd->irq;
