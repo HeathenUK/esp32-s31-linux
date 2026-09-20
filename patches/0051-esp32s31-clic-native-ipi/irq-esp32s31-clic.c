@@ -278,6 +278,7 @@ static DEFINE_RAW_SPINLOCK(esp32s31_ipi_req_lock);
 
 /* DIAGNOSTIC (smp bring-up): who sent what to whom, and who took it. */
 static atomic_t s31_ipi_sent[2][2], s31_ipi_taken[2];
+static void s31_smp_stall_probe(struct pt_regs *regs);
 
 static void esp32s31_clic_ipi_send(unsigned int cpu)
 {
@@ -872,8 +873,12 @@ void esp32s31_clic_handle_irq(struct pt_regs *regs)
 		 * S31's physical compare source is local ID7.  The generic timer
 		 * is registered on architectural supervisor timer IRQ5.
 		 */
-		if (irq_id == CLIC_CLINT_TIMER_ID)
+		if (irq_id == CLIC_CLINT_TIMER_ID) {
+#ifdef CONFIG_SMP
+			s31_smp_stall_probe(regs);
+#endif
 			linux_irq_id = CLIC_S_TIMER_ID;
+		}
 #endif
 		regs->cause = CAUSE_IRQ_FLAG | linux_irq_id;
 #ifdef CONFIG_SOC_ESP32S31
@@ -1274,8 +1279,35 @@ static bool s31_smp_dump_done;
 static struct timer_list s31_smp_beat;
 static void __iomem *s31_busmon, *s31_h0trace;
 
+/* Diagnostic only: softirq lockups can stop the normal heartbeat before RCU
+ * can print a stack. Sample once from the still-running CPU0 timer IRQ, before
+ * the generic timer handler enters RCU stall reporting and its node locks. */
+static unsigned long s31_smp_last_beat;
+static bool s31_smp_beat_started, s31_smp_stall_reported;
+
+static void s31_smp_stall_probe(struct pt_regs *regs)
+{
+	if (!s31_smp_diag || smp_processor_id() != 0 ||
+	    !s31_smp_beat_started || s31_smp_stall_reported ||
+	    !time_after(jiffies, s31_smp_last_beat + 6 * HZ))
+		return;
+	s31_smp_stall_reported = true;
+	if (s31_busmon)
+		writel(3, s31_busmon + 0x44);
+	pr_emerg("s31-stall: cpu0 pc %08lx ra %08lx sp %08lx a0 %08lx status %08lx pid %d comm %s | hart0 pc %08x sp %08x guest pc %08x ra %08x a0 %08x\n",
+		regs->epc, regs->ra, regs->sp, regs->a0, regs->status,
+		current->pid, current->comm,
+		s31_busmon ? readl(s31_busmon + 0x48) : 0,
+		s31_busmon ? readl(s31_busmon + 0x4c) : 0,
+		s31_h0trace ? readl(s31_h0trace + 20) : 0,
+		s31_h0trace ? readl(s31_h0trace + 16) : 0,
+		s31_h0trace ? readl(s31_h0trace + 12) : 0);
+}
+
 static void s31_smp_beat_fn(struct timer_list *t)
 {
+	s31_smp_last_beat = jiffies;
+	s31_smp_beat_started = true;
 	if (s31_smp_dump_after && !s31_smp_dump_done &&
 	    time_after_eq(jiffies, s31_smp_dump_at)) {
 		s31_smp_dump_done = true;

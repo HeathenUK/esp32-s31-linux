@@ -8,7 +8,10 @@ Active step: #294 temporary PIE affinity experiment (patch0055) FAILED its
 first boot with an RCU stall during service startup. Capture diagnostic core
 state before proceeding to regression/workload tests. Only hart1/Linux CPU0 has PIE SIMD.
 The generic scheduler compatibility-affinity API saves/restores user masks;
-100ms lease is an initial tunable policy, not a proven optimum.
+The source default is now0 (restoration off). Warm100ms opt-in passed seven
+affinity suites and2000 timed cross-core handoffs on#296; startup stalls remain
+unresolved. A hard-timer one-shot capture is the next diagnostic.
+100ms remains an experimental policy, not a proven optimum.
 
 Next steps, in order:
 1. Validate stock-memcpy restoration, fork, explicit user affinity, and live

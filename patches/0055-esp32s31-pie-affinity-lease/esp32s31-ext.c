@@ -333,7 +333,8 @@ const struct cpumask *task_cpu_fallback_mask(struct task_struct *p)
 }
 
 static DEFINE_MUTEX(s31_pie_affinity_lock);
-static unsigned int s31_pie_affinity_ms = 100;
+/* Experimental: boot-time restoration exposed RCU stalls. Opt in only. */
+static unsigned int s31_pie_affinity_ms;
 core_param(s31_pie_affinity_ms, s31_pie_affinity_ms, uint, 0644);
 static atomic_t s31_pie_moves, s31_pie_restores;
 

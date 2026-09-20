@@ -14,7 +14,9 @@ Routine diagnostics are now opt-in. Commits: `08afa53` (WFI), `783cc67`
 
 In flight: #294 temporary PIE compatibility-affinity experiment (patch0055),
 first boot FAILED with an RCU stall during service startup. Not accepted;
-diagnostic capture is next. Uses generic Linux affinity preservation
+diagnostic #295 also stalled. #296 boots with restoration off; warm opt-in
+passed seven affinity suites and2000 cross-core timed handoffs. Source default
+is now off; one-shot hard-timer stall capture is being tested. Uses generic Linux affinity preservation
 and restoration, without changing apps or libraries. New CLI regression test
 fails the expected restoration tests on #291. Frequent libc calls might still
 keep threads mostly onCPU0; actualCPU1 execution and workload performance must
