@@ -58,3 +58,22 @@ Rejected, measured: page-cluster 3 (did not finish the demo in 170 s, vs 167 s
 at 0 - agrees with the recorded desktop result). dw_mmc lost_irq_poll was
 already A/B'd in August (no effect; interrupts are not being lost - CMD_DONE
 genuinely takes ~2 ms); GrieferPig's equivalent quirk therefore does not help.
+
+**Heap size is not the lever (fresh boot per arm, scripts/board/quake-timedemo.sh):**
+
+| -mem | fps | major faults | Quake VmSwap |
+|---|---|---|---|
+| 12 | 9.8 | 5,543 | 10.5 MB |
+| 10 | 10.9 | 4,474 | 7.4 MB |
+| 9 | 10.1 | 5,741 | 6.9 MB |
+| 8 | fails - Hunk_AllocName mid-load | | |
+
+All inside the 9.5-11 fps band seen earlier; faults do not fall monotonically
+with the heap, so the thrashing set is the map's content, not the hunk size.
+-mem 10 is a sensible default (works, least swap for the fps). The demo ran to
+the end on screen each time with 0 scanout failures (GDMA fix holding).
+
+Harness bug of mine, recorded so it is not repeated: the early-exit check
+matched "Error" inside xlite's harmless "UNIMPLEMENTED
+XSetExtensionErrorHandler()" line, so the first two runs quit before the demo
+loaded. Quake's real errors begin "Error:" at the start of a line.
