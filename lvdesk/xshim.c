@@ -515,6 +515,73 @@ static void vidmode_request(struct cli *c, const uint8_t *r, int len);
 static void randr_request(struct cli *c, const uint8_t *r, int len);
 static void out_push(struct cli *c, const void *p, size_t n);
 static void notify_draw(struct res *d);
+
+/*
+ * LATE PRESENT (XSHIM_LATEPRESENT=1): answer the client BEFORE painting.
+ *
+ * A windowed SDL frame is ShmPutImage + XSync in one write. Requests are
+ * handled in order and the replies only leave at the end of client_data(), so
+ * the client's XSync used to return after copy -> palette expansion -> PRESENT
+ * ioctl: the client sat idle while we painted, then we sat idle while it drew.
+ * With a second CPU that alternation is the waste (2026-09-21: the sdl1 canary
+ * is 6% slower when the two processes land on different CPUs, because each
+ * frame is a cross-CPU wake and nothing overlaps).
+ *
+ * The copy out of the segment is what the client is entitled to wait for - the
+ * segment is consumed, it may draw the next frame into it. The expansion and
+ * the present work on OUR plane. So ShmPutImage only queues the drawable here,
+ * client_data() flushes the replies, and THEN the queue is drained: the
+ * client's next frame and our present of this one run side by side. No
+ * thread, no hand-off, and on one CPU the order of work is unchanged.
+ *
+ * Ids, not pointers: a later request in the same batch may free the drawable.
+ */
+static int late_present_on(void)
+{
+	static int v = -1;
+
+	if (v < 0)
+		v = getenv("XSHIM_LATEPRESENT") != NULL &&
+		    strcmp(getenv("XSHIM_LATEPRESENT"), "0") != 0;
+	return v;
+}
+
+static struct res *res_find(uint32_t id);
+static uint32_t late_q[8];
+static int late_n;
+
+static void late_present_queue(uint32_t id)
+{
+	int i;
+
+	for (i = 0; i < late_n; i++)
+		if (late_q[i] == id)
+			return;
+	if (late_n == (int)(sizeof(late_q) / sizeof(late_q[0]))) {
+		struct res *d = res_find(late_q[0]);	/* full: paint the oldest now */
+
+		if (d)
+			notify_draw(d);
+		memmove(late_q, late_q + 1, sizeof(late_q) - sizeof(late_q[0]));
+		late_n--;
+	}
+	late_q[late_n++] = id;
+}
+
+static void late_present_drain(void)
+{
+	int i, n = late_n;
+	uint32_t q[8];
+
+	memcpy(q, late_q, sizeof(q));
+	late_n = 0;
+	for (i = 0; i < n; i++) {
+		struct res *d = res_find(q[i]);
+
+		if (d)
+			notify_draw(d);
+	}
+}
 static int trace_on(void);
 static void px_release(struct res *r);
 static int px_share(struct res *r);
@@ -5483,7 +5550,10 @@ static void HOTTEXT mitshm_request(struct cli *c, const uint8_t *r, int len)
 		if (d->buf)
 			d->buf->dirty = 1;
 		d->hole = 0;
-		notify_draw(d);
+		if (late_present_on())
+			late_present_queue(d->id);
+		else
+			notify_draw(d);
 		break;
 	}
 	case 6: {				/* ShmAttachFd (1.2) */
@@ -9521,6 +9591,8 @@ static void client_data_once(struct cli *c)
 		c->n -= off;
 	}
 	out_flush(c);
+	if (late_n)		/* replies are on the wire: now paint */
+		late_present_drain();
 }
 
 /* Flush every client with buffered output. Called by lvdesk once per loop

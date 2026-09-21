@@ -46,15 +46,29 @@ qualifies on the numbers, pending the gate on #314.
 
 - 2026-09-21 **IN PROGRESS - closing the windowed-path gap** (sdl1 canary
   +14.1% vs UP = ~6% placement + ~10% SMP kernel cost, A/B/A measured).
-  - Lever A, kernel cost: profiled batch into .text..fast (kernel #316:
-    sched/build_policy.o = PELT + dl/rt, sched_clock, div64, timerqueue,
-    fs/select, riscv uaccess - 45 kB, all seven hot symbols verified in RAM).
-    Measuring: gate canaries + Doom idle, fresh boots. Helps UP too if it pays.
+  - Lever A, kernel cost: profiled batch into .text..fast. #316 (with
+    time/sched_clock.o) DOES NOT BOOT - bisected to that one object, a
+    bootstrap self-reference like memcpy (early printk timestamps call
+    sched_clock before the XIP copy runs); recorded in the .lds.S.
+    **#320** = PELT (sched/build_policy.o) + div64 + timerqueue + fs/select +
+    riscv uaccess, +43 kB, eight hot symbols verified in RAM, boots. Measuring:
+    gate canaries + Doom idle. New tool: scripts/board/fastarm.sh (one arm end
+    to end, aborts rather than flashing a stale image after a failed build).
     Then, separately: retry locking/spinlock.o in RAM (its old no-boot predates
     the CLIC level fix and was never explained).
-  - Lever B, placement (plan step 5): map lvdesk/xshim's windowed present path
-    and find the work that can OVERLAP the client's next frame on the other
-    CPU, instead of the two alternating and paying a cross-CPU wake per frame.
+  - Lever B, placement (plan step 5): **LATE PRESENT**, built, staged, not yet
+    measured. The survey found no thread to add and no thread needed: lvdesk is
+    one poll() loop, and a windowed SDL frame is ShmPutImage + XSync in ONE
+    write, handled in order, with the replies flushed only at the end of
+    client_data(). So the client's XSync returned after copy -> palette
+    expansion -> PRESENT ioctl: the two processes alternate, and on two CPUs
+    every frame pays a cross-CPU wake with nothing overlapping. The copy out of
+    the client's segment is all the client is entitled to wait for (xshim never
+    adopts the segment). So ShmPutImage now QUEUES the drawable, client_data()
+    flushes the replies, and only then is the queue drained: the client's next
+    frame and our present of this one run side by side. No thread, no hand-off,
+    identical order of work on one CPU. `XSHIM_LATEPRESENT=1` in
+    /etc/lvdesk.env, default off. Arm: sdl1 canary off vs on, warm board.
 - 2026-09-21 gate 24/24 on SMP #314; sdl2 canary -3.9% (ahead of UP for the
   first time), sdl1 canary +14.1% (NOT parity) -> SMP stays a build option.
 - 2026-09-21 fair table: SMP #314 beats UP #315 on fullscreen Doom, idle +4.4%
