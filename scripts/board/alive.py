@@ -249,7 +249,55 @@ def watch_reset(timeout):
         print("  poke afterwards. Do not call this board up.")
         return 2
     print("  (%d kernel lines seen)" % sum(1 for l in late_lines if l.startswith("[")))
+    blackbox_verdict()
     return report(stage, late_lines)
+
+
+def blackbox_verdict():
+    """A boot that produced no Linux console: say WHOSE fault it is.
+
+    Three different things have been reported as one string all along - "no
+    shell" / "board never came up" - and only the third is the board's fault:
+
+      1. the kernel that was just flashed does not boot;
+      2. a harness bug (a script still holding the login shell, a window that
+         was too short) - runsh.py and the port flock cover those;
+      3. the board is actually dead.
+
+    Case 1 announces itself, and has since the loader got its watchdog: hart0
+    survives a dead Linux and prints "hart1 has not come up: pc=..." every
+    300 ms at 115200, plus the dead kernel's own last lines as "K|". At the
+    console's 1 Mbps those bytes are unreadable, so nobody ever saw them
+    unless they went looking - which is why a kernel of MINE that could not
+    boot read, for most of a day, as a flaky board (2026-09-21).
+    """
+    # It must be read FROM A RESET: the loader's watchdog prints its report
+    # ~13 s in and then gives up, so by the time a failed boot watch is over
+    # there is nothing left on the wire (caught doing exactly that, 2026-09-21).
+    # ...and the lock has to be DROPPED for it: reset.py is a subprocess and
+    # takes the same advisory flock, so a reset fired while we still hold it
+    # fails silently (check=False) and the read then finds a board that is
+    # long past its report. Same trap as everything else this session: the
+    # tool investigating the board was the thing holding the board.
+    console.release_port_lock()
+    subprocess.run([sys.executable,
+                    os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                 "reset.py")],
+                   check=False, capture_output=True)
+    text, _ = read_for(115200, 22.0)
+    pcs = re.findall(r"hart1 has not come up: pc=([0-9a-f]+)", text)
+    klines = [l for l in readable_lines(text) if l.startswith("K|")]
+    if not pcs and not klines:
+        return
+    print()
+    print("  --- the loader's black box (115200, from its own reset) ---")
+    if pcs:
+        print("  THE FLASHED KERNEL DOES NOT BOOT. This is NOT a flaky board:")
+        print("  hart0 is alive and reporting hart 1's PC: %s" % " ".join(pcs[:4]))
+        print("  Resolve it: python3 scripts/board/pm-resolve.py images/System.map <a recording>")
+    for l in klines[-6:]:
+        print("  %s" % l)
+    print("  Full capture: python3 scripts/board/conlog.py out.log 30 115200")
 
 
 def main():
