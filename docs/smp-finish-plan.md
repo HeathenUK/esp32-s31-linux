@@ -42,6 +42,29 @@ rare); 4 done differently (migrate, no hold timer needed); 5 open - now worth
 doing, since work given its own thread really can land on CPU1; 6 - SMP
 qualifies on the numbers, pending the gate on #314.
 
+## Progress log (newest first; numbers live in worklog-2026-09-19.md)
+
+- 2026-09-21 **IN PROGRESS - closing the windowed-path gap** (sdl1 canary
+  +14.1% vs UP = ~6% placement + ~10% SMP kernel cost, A/B/A measured).
+  - Lever A, kernel cost: profiled batch into .text..fast (kernel #316:
+    sched/build_policy.o = PELT + dl/rt, sched_clock, div64, timerqueue,
+    fs/select, riscv uaccess - 45 kB, all seven hot symbols verified in RAM).
+    Measuring: gate canaries + Doom idle, fresh boots. Helps UP too if it pays.
+    Then, separately: retry locking/spinlock.o in RAM (its old no-boot predates
+    the CLIC level fix and was never explained).
+  - Lever B, placement (plan step 5): map lvdesk/xshim's windowed present path
+    and find the work that can OVERLAP the client's next frame on the other
+    CPU, instead of the two alternating and paying a cross-CPU wake per frame.
+- 2026-09-21 gate 24/24 on SMP #314; sdl2 canary -3.9% (ahead of UP for the
+  first time), sdl1 canary +14.1% (NOT parity) -> SMP stays a build option.
+- 2026-09-21 fair table: SMP #314 beats UP #315 on fullscreen Doom, idle +4.4%
+  and under a 400 KB/s load +7.9%, ranges disjoint. Affinity knobs rejected.
+- 2026-09-21 root cause of every SMP stall fixed (CLIC level, patches/0057);
+  migrate-on-PIE (patches/0056); soak 5/5.
+
+Owed measurements: repeat the SMP load arm with rx recorded (n=3, one
+unexplained 23.3 fps run); exercise a flash write on SMP (work_on_cpu path).
+
 ## Principles (the user's, binding)
 
 1. Stock behaviour first: prefer mechanisms any Linux has (sysfs knobs, IRQ /
