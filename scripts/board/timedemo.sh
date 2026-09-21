@@ -91,6 +91,10 @@ echo "TD_STILL_RUNNING $(ps | grep -c '[p]rboom')"
 echo "TD_FAULTS $(dmesg | grep -aicE 'oops|unhandled signal|rcu:.*(stall|starved)|vblank wait timed out|Out of memory|BUG:')"
 echo "TD_PRE $(head -c 300 /root/doom/td.pre 2>/dev/null | tr '\n' ' ')"
 echo "TD_PINNED $(dmesg | grep -ac 'pinned to CPU0')"
+# The load an arm asked for is not evidence of the load it got (the load arm
+# is bimodal, 2026-09-21): total bytes received since boot, and PIE bounces.
+echo "TD_RX $(cat /sys/class/net/wlan0/statistics/rx_bytes 2>/dev/null)"
+echo "TD_BOUNCES $(cat /sys/module/kernel/parameters/esp32s31_pie_bounces 2>/dev/null) sil_stuck=$(cat /sys/module/kernel/parameters/esp32s31_sil_stuck 2>/dev/null)"
 amixer -q sset 'DACL' 178 2>/dev/null; amixer -q sset 'DACR' 178 2>/dev/null
 echo TD_COLLECTED
 E
@@ -101,8 +105,9 @@ E
 	# No result: say whether the board is there at all BEFORE the next reset
 	# erases the answer. console-$r.log already holds what it printed on the way.
 	[ -z "$fps" ] && { python3 scripts/board/alive.py --timeout 20 --log "$OUT/nofps-$r.raw" > "$OUT/nofps-$r.txt" 2>&1; echo "    run $r: no fps - alive.py says: $(tail -1 "$OUT/nofps-$r.txt")"; }
-	echo "$r|${fps:-NA}|faults=${faults:-?} still_running=${still:-?}|$kver" >> "$OUT/results.psv"
-	echo "    run $r: ${fps:-NA} fps  faults=${faults:-?} still_running=${still:-?}  [$kver]"
+	rx=$(sed -n 's/^TD_RX \([0-9]*\).*/\1/p' "$OUT/collect-$r.log" | tail -1)
+	echo "$r|${fps:-NA}|faults=${faults:-?} still_running=${still:-?} rx=${rx:-?}|$kver" >> "$OUT/results.psv"
+	echo "    run $r: ${fps:-NA} fps  faults=${faults:-?} still_running=${still:-?} rx_MB=$(( ${rx:-0} / 1048576 ))  [$kver]"
 done
 
 echo; echo "=== $NAME: ${W}x${H} $MODE, fresh boot per run ==="

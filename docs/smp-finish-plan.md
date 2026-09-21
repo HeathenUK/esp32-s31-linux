@@ -4,27 +4,43 @@ Supersedes the "next" notes scattered through worklog-2026-09-19.md. Read
 smp-plan.md for the architecture and smp-ipi-plan.md for the (finished) IPI
 migration.
 
-## Where we stand (measured, not hoped)
+## Where we stand (measured 2026-09-21, kernels #314 SMP / #315 UP)
 
-- **Stable:** kernel #301 (= the #291 state): hardware doorbell IPIs both ways,
-  hart 1 sleeps in wfi again, deferred-hrtimer rearm fix, full FPU world switch.
-  smp-soak 5 boots of 5; #291 gate 24/24.
-- **Not yet a win.** SDL canaries vs UP: +6..11% (#291: 16.31 vs 14.73 ms,
-  32.80 vs 30.82). UP + the size diet is -2% and should ship whatever happens.
-- **Why it is not a win:** the second core is nearly idle. PIE (the vector
-  unit) exists only on hart 1; musl's strcmp/memcmp/memchr/memrchr are PIE code;
-  the kernel pins a task to CPU0 for good the first time it traps on CPU1. So
-  all of userspace still shares CPU0, and pays SMP's kernel overhead on top
-  (Tree-RCU context tracking on every idle transition, real spinlocks, load
-  tracking - profiled 2026-09-21 with the hart0 PC sampler).
-- **Closed, do not re-open:** cross-hart atomics are sound (amostore: 0 erased
-  in 5M, positive control 755k). The CLIC +0x10000 alias is sound for all four
-  bytes. A FROM_CPU line wakes wfi in ~1 us. Relocating SMP objects into
-  .text..fast buys <= 2% (context_tracking, ipi-mux, smp.o measured; spinlock.o
-  in RAM does not boot).
-- **Failed, in the attic:** the PIE lease prototype (patches/attic/0055). Its
-  "lease=0" still overrode task_cpu_possible_mask for every task; kernels
-  carrying it stalled at boot and froze at random.
+**SMP beats UP for the first time**, both kernels carrying the same fixes,
+fresh boot per run, fullscreen Doom timedemo, 0 faults throughout:
+
+| | UP+diet #315 | SMP #314 | |
+|---|---|---|---|
+| idle system | 32.80 (32.4-33.1, n=4) | **34.25** (34.1-34.7, n=4) | +4.4%, ranges disjoint |
+| 400 KB/s Wi-Fi load | 18.25 (18.1-18.8, n=4) | **19.70** (19.4-23.3, n=3) | +7.9%, ranges disjoint |
+
+(before: SMP #301 29.50 idle, SMP #303 16.30 under load.) smp-soak 5/5.
+
+What changed it - two things, and neither was a tuning knob:
+1. **The CLIC interrupt level was never left** (patches/0057). Every "random"
+   SMP stall since #294 was this; SMP only ever looked stable because the PIE
+   pin kept all of userspace on CPU0.
+2. **Migrate on a PIE trap, do not pin** (patches/0056, `PIE_BOUNCE=20`).
+   Steady-state PIE use is rare (wget: 0 traps in 2 s of CPU; idle lvdesk: 1
+   in 7.5 s); the permanent pin, inherited through fork, had put EVERY
+   process on CPU0. Now the stock scheduler places work; 924 bounces in a
+   boot, nobody pinned.
+
+- **Closed, do not re-open:** cross-hart atomics are sound (amostore). The CLIC
+  +0x10000 alias is sound for all four bytes. A FROM_CPU line wakes wfi in
+  ~1 us. Relocating SMP objects into .text..fast buys <= 2%. An OpenSBI MPIL
+  mask for M-mode interrupts changes nothing (tried, reverted).
+- **Step 2 verdict: do not ship the affinity knobs.** Workqueue mask + RPS on
+  CPU1 were +5.5% only while userspace was stuck on CPU0 (#303: 17.20 vs
+  16.30); with tasks free to migrate they COST ~7% (#314: 18.40 vs 19.70).
+- **Failed, in the attic:** the PIE lease prototype (patches/attic/0055) - it
+  overrode task_cpu_possible_mask for every task. (Its stalls, though, were
+  the CLIC level bug, not the lease.)
+
+Status of the steps below: 1 done; 2 done (rejected); 3 done (PIE use is
+rare); 4 done differently (migrate, no hold timer needed); 5 open - now worth
+doing, since work given its own thread really can land on CPU1; 6 - SMP
+qualifies on the numbers, pending the gate on #314.
 
 ## Principles (the user's, binding)
 
