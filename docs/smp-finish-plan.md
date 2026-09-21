@@ -84,6 +84,53 @@ qualifies on the numbers, pending the gate on #314.
    interrupt ran deaf to every device until something sret'd - and may simply
    be gone. Same for the deferred Quake crash.
 
+## Taking maximal advantage of SMP (2026-09-21, after the fixes)
+
+**The constraint first.** accel-plan.md measures PSRAM as the shared ceiling
+(CPU copy 102 MB/s, PPA 153, kernel fill 192) while a 32 kB memcpy reaches
+177 MB/s because it never leaves cache. Two harts share one PSRAM and one
+D-cache, and during the desktop workload both CPUs are ALREADY ~55% busy. So
+the second core is not idle capacity waiting to be found - and work that is
+bandwidth-bound cannot be helped by moving it. performance-opportunities
+-2026-09-13.md says the same: do not move work onto hart 0 without a cost
+model. That rules out the obvious idea, splitting per-frame palette expansion
+across both CPUs: it reads 64 kB and writes 768 kB straight to PSRAM. One
+cheap expbench two-thread scaling test settles it; do that before building.
+
+Ranked, highest leverage first:
+
+1. **Stop CPU1 being second-class.** smp-ipi-plan.md already names it: take
+   the doorbell as a RAW VECTOR instead of through IDF's dispatch. Every
+   interrupt delivered to the lent CPU is emulated through FreeRTOS today, and
+   everything that ever runs there pays it - so this makes all existing
+   parallelism cheaper rather than adding new work. Adjacent: the vCPU task
+   runs at FreeRTOS priority 1, below every radio task; measure whether that
+   starves it.
+2. **Parallelise boot.** ~50 s to desktop, mostly serial, user-visible, and
+   NOT bandwidth-bound: the crypto self-test burns 6.2 s of a 26 s boot in
+   hardware timeouts, Wi-Fi associates at ~41 s, udev coldplug and X startup
+   are independent. The recorded objection ("backgrounded udev coldplug
+   starved the network script") was a ONE-CORE objection - re-test it.
+3. **RCU callback offload (rcu_nocbs).** Listed in step 2 as "if the config
+   has it, else skip" and never actually checked. Stock mechanism, free
+   parallelism for kernel housekeeping, no policy of ours.
+4. **Latency-hiding rather than throughput.** Memory is the binding
+   constraint and clients page out - that is what makes clicks and app
+   launches slow. Reclaim and readahead on CPU1 while CPU0 runs the app
+   attacks the actual complaint; SD is 2.49 ms + size/48 MB/s with
+   copy_to_user at 2.4x the read. zram is a real candidate again (it already
+   flipped once when its underlying problem was fixed).
+5. **Our own daemons off the critical path:** A2DP SBC encode, audio mixing -
+   ours, PIE-free, genuinely parallel. Small (~0.6% of a core) but free.
+
+**Do NOT spend more on affinity policy.** Forced placement, capacity hints and
+RPS/workqueue steering all measured WORSE today. The stock scheduler beat
+every manual placement tried.
+
+**Fix the boot lottery first.** ~1 boot in 4 is ~17% slow, proven fixed at
+boot (a runtime placement reset does not recover it), so until it is found
+every SMP number carries a 17% lottery.
+
 ## Progress log (newest first; numbers live in worklog-2026-09-19.md)
 
 - 2026-09-21 **IN PROGRESS - closing the windowed-path gap** (sdl1 canary
