@@ -26,6 +26,14 @@ echo "STATE lvdesk_mask=$(/root/oncpu -p $L | awk '{print $2}') pinned=$(dmesg |
 # Bluetooth is busier hands Linux less of it - a per-boot, whole-run difference.
 grep -E "^cpu[01] " /proc/stat | sed 's/^/STAT0 /'
 echo "WIFI $(cat /sys/class/net/wlan0/operstate 2>/dev/null) $(cat /sys/class/net/wlan0/statistics/rx_packets 2>/dev/null)"
+# WHICH PRESENT PATH did lvdesk get this boot? Direct scanout means it paints
+# into the driver's own scanout buffer; if CMA was tight when it started it
+# falls back to a dumb buffer and a copy. That is a whole-boot state change in
+# exactly the path the bimodality lives in - fullscreen Doom, which bypasses
+# it, is NOT bimodal.
+echo "SCANOUT $(grep -ah 'DIRECT scanout\|direct scanout refused' /var/log/lvdesk.log /tmp/lvdesk.log 2>/dev/null | tail -1 | cut -c1-70)"
+echo "DRM $(dmesg | grep -a 'scanout started' | tail -1 | sed 's/.*scanout started: //' | cut -c1-40) | $(dmesg | grep -ac 'no scanout buffer')"
+echo "CMA $(grep -E 'Cma' /proc/meminfo | tr -d '\n')"
 cd /root; i=0
 while [ $i -lt REPS ]; do
 	DISPLAY=:0 /root/sdlbench1 --case indexed_frame --frames 60 --warmup 5 2>/dev/null | grep -a '"type":"measure"'
@@ -40,7 +48,7 @@ sed -i '' "s/REPS/$REP/" "$S" 2>/dev/null || sed -i "s/REPS/$REP/" "$S"
 echo "canary-boots: $N fresh boots x $REP runs -> $OUT"
 for ((b = 1; b <= N; b++)); do
 	python3 scripts/board/reset.py >/dev/null 2>&1
-	python3 scripts/board/runsh.py "$S" 150 110 > "$OUT/boot-$b.log" 2>&1
+	python3 scripts/board/runsh.py "$S" 150 170 > "$OUT/boot-$b.log" 2>&1
 	python3 - "$OUT/boot-$b.log" "$b" <<'PY'
 import json, re, statistics, sys
 txt = open(sys.argv[1], errors='replace').read()
@@ -57,6 +65,10 @@ if a0 and b0 and a1 and b1:
     busy = " cpu0_busy=%d%% cpu1_busy=%d%% cpu1_ticks=%d" % (
         100 * (t0 - d0[3]) / t0 if t0 else 0,
         100 * (t1 - d1[3]) / t1 if t1 else 0, t1)
+for tag in ('SCANOUT', 'DRM', 'CMA'):
+    m = re.search(r'%s ([^\n]*)' % tag, txt)
+    if m and m.group(1).strip():
+        busy += "\n      %-7s %s" % (tag, m.group(1).strip())
 rx = re.findall(r'WIFI2? \S*\s*(\d+)', txt)
 if len(rx) >= 2:
     busy += " wifi_rx=%d" % (int(rx[1]) - int(rx[0]))

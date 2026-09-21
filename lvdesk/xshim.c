@@ -535,6 +535,18 @@ static void notify_draw(struct res *d);
  * thread, no hand-off, and on one CPU the order of work is unchanged.
  *
  * Ids, not pointers: a later request in the same batch may free the drawable.
+ *
+ * MEASURED 2026-09-21 AND NEUTRAL - kept off, kept here so the idea is not
+ * re-invented. Windowed SDL canary, 5 fresh boots per arm, toggled through
+ * /etc/lvdesk.env on one board with one binary: off 13.758 13.898 13.859
+ * 13.984 13.728 (median 13.859), on 13.877 13.755 16.719 13.892 17.992
+ * (fast-regime median 13.892). 0.2% apart, inside a ~1% floor.
+ *
+ * Why the reasoning failed: it assumed the client sits idle while we paint.
+ * With two CPUs both already ~55% busy there is no idle to fill - the
+ * scheduler was overlapping them anyway - so removing the serialisation buys
+ * nothing. It would be worth retrying on a UP kernel, or if the frame ever
+ * becomes latency-bound rather than throughput-bound.
  */
 static int late_present_on(void)
 {

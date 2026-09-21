@@ -257,21 +257,44 @@ int kms_open(const char *path)
 	creq.bpp = 16;
 	if (!getenv("LVDESK_DIRECT") || strcmp(getenv("LVDESK_DIRECT"), "0")) {
 		struct drm_esp32s31_scanout sc;
+		int tries;
 
-		memset(&sc, 0, sizeof(sc));
-		if (ioctl(kms_fd, DRM_IOCTL_ESP32S31_SCANOUT_GET, &sc) == 0 &&
-		    sc.width == kms_w && sc.height == kms_h) {
-			kms_direct = 1;
-			creq.handle = sc.handle;
-			creq.pitch = sc.pitch;
-			creq.size = sc.size;
-			printf("kms: DIRECT scanout: handle %u, %ux%u pitch %u "
-			       "(%u bytes) - no per-frame copy\n", sc.handle,
-			       sc.width, sc.height, sc.pitch, sc.size);
-		} else {
-			printf("kms: direct scanout refused (%s) - dumb buffer\n",
-			       strerror(errno));
+		/*
+		 * RETRY, for the same reason CREATE_DUMB does below - and it is
+		 * the same race. Taking DRM master makes the driver release
+		 * fbdev emulation's framebuffer from a WORK ITEM, so for a
+		 * moment after master the panel's worth of memory is still
+		 * gone. This ioctl can also arrive before the driver knows the
+		 * native mode (-EAGAIN) or before master is fully ours
+		 * (-EACCES). Losing any of those races used to be permanent:
+		 * one attempt, then a dumb buffer and a per-frame copy FOR THE
+		 * WHOLE BOOT, announced by a single line in a log nobody reads.
+		 * That is a performance cliff disguised as a message.
+		 * -ENOTTY is a real refusal (old kernel, or the driver fell
+		 * back to a bare allocation) and is not worth retrying.
+		 */
+		for (tries = 0; tries < 20; tries++) {
+			memset(&sc, 0, sizeof(sc));
+			if (ioctl(kms_fd, DRM_IOCTL_ESP32S31_SCANOUT_GET, &sc) == 0 &&
+			    sc.width == kms_w && sc.height == kms_h) {
+				kms_direct = 1;
+				creq.handle = sc.handle;
+				creq.pitch = sc.pitch;
+				creq.size = sc.size;
+				printf("kms: DIRECT scanout: handle %u, %ux%u pitch %u "
+				       "(%u bytes) - no per-frame copy%s\n", sc.handle,
+				       sc.width, sc.height, sc.pitch, sc.size,
+				       tries ? " [after a retry]" : "");
+				break;
+			}
+			if (errno != EAGAIN && errno != EACCES && errno != ENOMEM)
+				break;
+			usleep(20000);
 		}
+		if (!kms_direct)
+			fprintf(stderr, "kms: WARNING: direct scanout refused after %d tries (%s)"
+				" - falling back to a dumb buffer and a COPY EVERY FRAME\n",
+				tries + 1, strerror(errno));
 	}
 	/*
 	 * Retry briefly. Taking DRM master makes the driver release fbdev

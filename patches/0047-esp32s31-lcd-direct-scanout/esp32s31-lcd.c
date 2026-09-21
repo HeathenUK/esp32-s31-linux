@@ -398,6 +398,7 @@ struct esp32s31_lcd {
 	void *scan_cpu;
 	dma_addr_t scan_phys;
 	size_t scan_size;
+	u32 scan_reserved_w, scan_reserved_h;	/* espressif,scanout-size, if any */
 	/*
 	 * The scanout buffer as a GEM object, so a client can be handed a
 	 * handle to it (DRM_IOCTL_ESP32S31_SCANOUT_GET) and paint straight
@@ -821,8 +822,14 @@ static void esp32s31_lcd_test_pattern(void *vaddr, u32 w, u32 h, u32 pitch)
  * would make the compositor pace its repaints against a clock that does not
  * exist.
  */
-/* Defined below; get_modes is the first point the scanout size is known. */
+/*
+ * get_modes is the first point the panel's size is known from the panel
+ * itself - but NOT the first point it is knowable. See the probe-time
+ * reservation: on a board whose DT states the size, the buffer is already
+ * taken by the time any of this runs and these calls are no-ops.
+ */
 static int esp32s31_lcd_alloc_scanout(struct esp32s31_lcd *lcd);
+static int esp32s31_lcd_alloc_scanout_size(struct esp32s31_lcd *lcd, size_t size);
 
 static int esp32s31_lcd_get_modes(struct drm_connector *connector)
 {
@@ -874,6 +881,18 @@ static int esp32s31_lcd_get_modes(struct drm_connector *connector)
 	if (esp32s31_lcd_alloc_scanout(lcd))
 		drm_warn(&lcd->drm,
 			 "scanout buffer not reserved (CMA busy already); scaling may be lost\n");
+	/*
+	 * If the DT reserved a size at probe, it has to be the size the panel
+	 * actually reports, or the reservation covered the wrong thing and the
+	 * buffer is too small for the mode we are about to drive.
+	 */
+	if (lcd->scan_reserved_w &&
+	    (lcd->scan_reserved_w != lcd->native.hdisplay ||
+	     lcd->scan_reserved_h != lcd->native.vdisplay))
+		drm_warn(&lcd->drm,
+			 "scanout: DT reserved %ux%u but the panel is %ux%u - fix espressif,scanout-size\n",
+			 lcd->scan_reserved_w, lcd->scan_reserved_h,
+			 lcd->native.hdisplay, lcd->native.vdisplay);
 
 	if (esp32s31_lcd_render_is_native(native) ||
 	    !esp32s31_lcd_parse_render(native, &pl)) {
@@ -974,14 +993,11 @@ static int esp32s31_lcd_get_modes(struct drm_connector *connector)
  * cannot be a plane framebuffer: those are the small ones the compositor
  * draws into. Allocated from the same reserved pool, once, on first enable.
  */
-static int esp32s31_lcd_alloc_scanout(struct esp32s31_lcd *lcd)
+static int esp32s31_lcd_alloc_scanout_size(struct esp32s31_lcd *lcd, size_t size)
 {
-	size_t size;
-
 	if (lcd->scan_cpu)
 		return 0;
 
-	size = (size_t)lcd->native.hdisplay * lcd->native.vdisplay * 2;
 	/*
 	 * A GEM object rather than a bare dma_alloc_coherent(): same pool,
 	 * same cached memory, same address for the life of the driver - but
@@ -1007,6 +1023,20 @@ static int esp32s31_lcd_alloc_scanout(struct esp32s31_lcd *lcd)
 							   GFP_KERNEL);
 			if (!lcd->scan_cpu)
 				return -ENOMEM;
+			/*
+			 * LOUD, because this is permanent and expensive. The
+			 * allocation happens once (scan_cpu above short-
+			 * circuits), so a GEM failure here costs direct
+			 * scanout - and a full-screen copy every frame - for
+			 * the life of the driver, on this boot only. It used
+			 * to be invisible: SCANOUT_GET simply answered -ENOTTY
+			 * and the desktop quietly ran slower. If this ever
+			 * appears, the scanout buffer lost a race for CMA and
+			 * the fix belongs at the allocation, not here.
+			 */
+			drm_warn(&lcd->drm,
+				 "scanout: GEM allocation failed, using a bare buffer - "
+				 "DIRECT SCANOUT IS OFF for this boot (a copy per frame)\n");
 		}
 	}
 
@@ -1025,6 +1055,48 @@ static int esp32s31_lcd_alloc_scanout(struct esp32s31_lcd *lcd)
 	drm_info(&lcd->drm, "scaling: scanout buffer %zu bytes at %pad\n",
 		 size, &lcd->scan_phys);
 	return 0;
+}
+
+static int esp32s31_lcd_alloc_scanout(struct esp32s31_lcd *lcd)
+{
+	return esp32s31_lcd_alloc_scanout_size(lcd,
+			(size_t)lcd->native.hdisplay * lcd->native.vdisplay * 2);
+}
+
+/*
+ * RESERVE THE SCANOUT BUFFER AT PROBE, so losing it becomes impossible rather
+ * than unlikely.
+ *
+ * The buffer is ~750 KB of `reusable` CMA, and reusable means the kernel packs
+ * that region with movable pages whenever the display is not using it. A
+ * contiguous request therefore has to MIGRATE those pages out, and migration
+ * can fail. Taken at get_modes time that is a gamble played once per boot: if
+ * it loses, the driver keeps a bare buffer, SCANOUT_GET answers -ENOTTY for
+ * the life of the driver, and the desktop copies the whole screen every frame
+ * for that boot. A performance cliff decided by luck is worse than a slow
+ * machine, because every measurement taken after it is quietly wrong.
+ *
+ * Probe cannot ask the PANEL how big it is - get_modes has not run - but the
+ * size is a property of the board, not a discovery: `espressif,scanout-size =
+ * <w h>` states it, and probe runs before anything else can take CMA. Boards
+ * without the property keep the old behaviour, so this is additive.
+ */
+static void esp32s31_lcd_reserve_scanout(struct esp32s31_lcd *lcd,
+					 struct device *dev)
+{
+	u32 wh[2];
+
+	if (of_property_read_u32_array(dev->of_node, "espressif,scanout-size",
+				       wh, 2))
+		return;
+	if (!wh[0] || !wh[1])
+		return;
+	if (esp32s31_lcd_alloc_scanout_size(lcd, (size_t)wh[0] * wh[1] * 2))
+		drm_warn(&lcd->drm,
+			 "scanout: could not reserve %ux%u at probe - direct scanout is at risk this boot\n",
+			 wh[0], wh[1]);
+	else
+		lcd->scan_reserved_w = wh[0], lcd->scan_reserved_h = wh[1];
 }
 
 static bool esp32s31_lcd_scaling(struct esp32s31_lcd *lcd)
@@ -3875,7 +3947,53 @@ static int esp32s31_lcd_scanout_get_ioctl(struct drm_device *dev, void *data,
 	return 0;
 }
 
+/*
+ * PRESENT: cache writeback of one rectangle of the scanout buffer, without an
+ * atomic commit. See the uapi header for why. The rectangle's own columns are
+ * written back row by row when that is under half of full rows; otherwise one
+ * call covers the row range, as the DIRTYFB direct path does.
+ */
+static int esp32s31_lcd_present_ioctl(struct drm_device *dev, void *data,
+				      struct drm_file *file)
+{
+	struct esp32s31_lcd *lcd = to_esp32s31_lcd(dev);
+	struct drm_esp32s31_present *a = data;
+	struct drm_plane_state *ps;
+	unsigned int w = lcd->native.hdisplay, h = lcd->native.vdisplay;
+	unsigned int pitch = w * 2, x1, y1, x2, y2, y;
+	bool ours;
+
+	/* The plane's fb is only stable under its lock; a mode switch to a
+	 * fullscreen client's buffer must not be raced. */
+	drm_modeset_lock(&lcd->pipe.plane.mutex, NULL);
+	ps = lcd->pipe.plane.state;
+	ours = lcd->scan_gem && ps && ps->fb &&
+	       drm_fb_dma_get_gem_obj(ps->fb, 0) == lcd->scan_gem;
+	drm_modeset_unlock(&lcd->pipe.plane.mutex);
+	if (!ours)
+		return -EINVAL;
+	x1 = min(a->x1, w); x2 = min(a->x2, w);
+	y1 = min(a->y1, h); y2 = min(a->y2, h);
+	if (x2 <= x1 || y2 <= y1)
+		return 0;
+	if ((x2 - x1) * 2 * 2 < pitch) {
+		for (y = y1; y < y2; y++)
+			esp32s31_lcd_flush_range(lcd, lcd->scan_gem->dma_addr +
+						 y * pitch + x1 * 2,
+						 (x2 - x1) * 2);
+	} else {
+		esp32s31_lcd_flush_range(lcd, lcd->scan_gem->dma_addr +
+					 y1 * pitch, (y2 - y1) * pitch);
+	}
+	lcd->dbg_path_direct++;
+	esp32s31_jpeg_rec_notify(lower_32_bits(lcd->scan_phys),
+				 lcd->native.hdisplay, lcd->native.vdisplay);
+	return 0;
+}
+
 static const struct drm_ioctl_desc esp32s31_lcd_ioctls[] = {
+	DRM_IOCTL_DEF_DRV(ESP32S31_PRESENT, esp32s31_lcd_present_ioctl,
+			  DRM_MASTER),
 	DRM_IOCTL_DEF_DRV(ESP32S31_SCANOUT_GET, esp32s31_lcd_scanout_get_ioctl,
 			  DRM_MASTER),
 	DRM_IOCTL_DEF_DRV(ESP32S31_PPA_BLEND, esp32s31_lcd_ppa_blend_ioctl,
@@ -4213,6 +4331,7 @@ static int esp32s31_lcd_probe(struct platform_device *pdev)
 	drm = &lcd->drm;
 	platform_set_drvdata(pdev, lcd);
 
+
 	lcd->base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(lcd->base))
 		return PTR_ERR(lcd->base);
@@ -4313,6 +4432,9 @@ static int esp32s31_lcd_probe(struct platform_device *pdev)
 	hrtimer_setup(&lcd->vblank_timer, esp32s31_lcd_vblank_tick,
 		      CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 
+	/* DIAGNOSTIC 2026-09-21 (read-only, one line): vblank interrupts are dead
+	 * on some SMP boots. Does that follow WHICH CPU runs this probe? */
+	dev_info(dev, "probe running on CPU%d\n", raw_smp_processor_id());
 	lcd->irq = platform_get_irq(pdev, 0);
 	if (lcd->irq < 0)
 		return lcd->irq;
@@ -4381,6 +4503,17 @@ static int esp32s31_lcd_probe(struct platform_device *pdev)
 	ret = drm_simple_display_pipe_attach_bridge(&lcd->pipe, lcd->bridge);
 	if (ret)
 		return ret;
+
+	/*
+	 * Take the scanout buffer HERE: past every -EPROBE_DEFER site (the
+	 * panel/bridge lookup above is the last one), so it is allocated once
+	 * rather than once per probe attempt - the first placement did it at
+	 * the top of probe and a deferred probe then allocated twice, 768 kB
+	 * each, out of a 3072 kB pool. Still before drm_dev_register() and
+	 * fbdev emulation, which is what matters: nothing else has put a
+	 * movable page in CMA yet. See esp32s31_lcd_reserve_scanout().
+	 */
+	esp32s31_lcd_reserve_scanout(lcd, dev);
 
 	/*
 	 * Do NOT create a connector here. drm_simple_display_pipe_attach_bridge()
