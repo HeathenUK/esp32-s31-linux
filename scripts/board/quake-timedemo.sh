@@ -15,29 +15,34 @@
 # swallowed as a game directory, so -basedir goes first; -condebug logs to
 # /root/-basedir/qconsole.log; the default heap is 128 MB and cannot start.
 # Everything after <label> is passed to Quake before the fixed resolution.
+# QUAKE_BIN picks the binary: ./name (in /root/quake, i.e. on SD) or an absolute
+# path such as /usr/bin/tyrquake (in XIP flash). Default ./tiopex-quake.
 #
 # ~1 min boot + ~100-170 s demo. Checks the panel is not black afterwards.
 set -u
 cd "$(dirname "$0")/../.."
 L=${1:?label}; shift
 ARGS="$*"
+PRE=${PRE:-:}	# a board-side command run before Quake starts, e.g. a sysctl
 OUT=artifacts/quake/td-$L-$(date +%H%M%S); mkdir -p "$OUT"
 S=$OUT/run.sh
 cat > "$S" <<EOF
 cd /root/quake
-rm -f /root/-basedir/qconsole.log
+$PRE
+echo "PRE_APPLIED watermark_scale_factor=\$(cat /proc/sys/vm/watermark_scale_factor) page-cluster=\$(cat /proc/sys/vm/page-cluster)"
+rm -f /root/-basedir/qconsole.log /root/quake/id1/qconsole.log
 amixer -q sset 'DACL' 110 2>/dev/null; amixer -q sset 'DACR' 110 2>/dev/null
-setsid sh -c 'DISPLAY=:0 exec ./tiopex-quake -basedir /root/quake $ARGS -width 320 -height 240 -fullscreen -condebug +timedemo demo1 >/root/quake/td.log 2>&1' </dev/null >/dev/null 2>&1 &
-i=0; while [ \$i -lt 200 ]; do grep -aqE "[0-9]+ frames" /root/-basedir/qconsole.log 2>/dev/null && break; grep -aq "^Error:" /root/quake/td.log 2>/dev/null && break; sleep 1; i=\$((i+1)); done
-P=\$(ps | awk '/[t]iopex/ {print \$1}' | head -1)
-echo "RESULT \$(grep -aE '[0-9]+ frames' /root/-basedir/qconsole.log 2>/dev/null | head -1)"
+setsid sh -c 'DISPLAY=:0 exec ${QUAKE_BIN:-./tiopex-quake} -basedir /root/quake $ARGS -width 320 -height 240 -fullscreen -condebug +timedemo demo1 >/root/quake/td.log 2>&1' </dev/null >/dev/null 2>&1 &
+i=0; while [ \$i -lt 200 ]; do grep -aqE "[0-9]+ frames" /root/-basedir/qconsole.log /root/quake/id1/qconsole.log 2>/dev/null && break; grep -aq "^Error:" /root/quake/td.log 2>/dev/null && break; sleep 1; i=\$((i+1)); done
+P=\$(ps | awk '/[t]iopex|[t]yr-quake|[t]yrquake/ {print \$1}' | head -1)
+echo "RESULT \$(grep -ahE '[0-9]+ frames' /root/-basedir/qconsole.log /root/quake/id1/qconsole.log 2>/dev/null | head -1)"
 echo "ERROR \$(grep -a '^Error:' /root/quake/td.log 2>/dev/null | head -1)"
 echo "QUAKE majflt=\$(awk '{print \$12}' /proc/\$P/stat 2>/dev/null) \$(grep -aE 'VmRSS|VmSwap' /proc/\$P/status 2>/dev/null | tr -s ' ' | tr '\n' ' ')"
 echo "MEM \$(grep -aE 'MemAvailable|SwapFree' /proc/meminfo | tr -s ' ' | tr '\n' ' ')"
 echo "SCANOUT_FAIL \$(dmesg | grep -ac 'failed to start scanout')"
 EOF
 cat > "$OUT/clean.sh" <<'EOF'
-for p in $(ps | awk '/[t]iopex|[s]dlquake/ {print $1}'); do kill -9 $p 2>/dev/null; done
+for p in $(ps | awk '/[t]iopex|[s]dlquake|[t]yr-quake|[t]yrquake/ {print $1}'); do kill -9 $p 2>/dev/null; done
 amixer -q sset 'DACL' 178 2>/dev/null; amixer -q sset 'DACR' 178 2>/dev/null
 echo CLEAN
 EOF
@@ -49,5 +54,5 @@ python3 scripts/board/runsh.py "$OUT/clean.sh" 20 20 > /dev/null 2>&1
 fps=$(sed -n 's/.* \([0-9.]*\) fps.*/\1/p' "$OUT/run.log" | head -1)
 echo "[$L] fps=${fps:-NONE}  $(grep -a '^RESULT' "$OUT/run.log" | cut -c8-)"
 grep -a '^ERROR [^ ]' "$OUT/run.log" | sed 's/^/     /'
-grep -aE '^(QUAKE|MEM|SCANOUT_FAIL)' "$OUT/run.log" | sed 's/^/     /'
+grep -aE '^(PRE_APPLIED|QUAKE|MEM|SCANOUT_FAIL)' "$OUT/run.log" | sed 's/^/     /'
 echo "     panel: $OUT/panel.png"

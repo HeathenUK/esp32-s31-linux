@@ -77,3 +77,44 @@ Harness bug of mine, recorded so it is not repeated: the early-exit check
 matched "Error" inside xlite's harmless "UNIMPLEMENTED
 XSetExtensionErrorHandler()" line, so the first two runs quit before the demo
 loaded. Quake's real errors begin "Error:" at the start of a line.
+
+## Quake: +41% with sound on, from the audio path (2026-09-21 late)
+
+Every memory knob landed in the same 9.8-11.0 fps band, even when faults
+fell 18-25% - so paging was NOT the bottleneck I had called it. Re-reading the
+gameplay profile honestly: do_swap_page 0.9%, handle_mm_fault 0.8%; the "74%
+kernel" was scheduling, interrupts and timekeeping - a high WAKEUP rate. The
+discriminator was sound off: **14.0 fps vs 10.7, and 868 faults vs 3,674.**
+
+Cause: this TyrQuake build hard-codes a 48 kHz request (snd_sdl.c:
+`desired_speed = 48000`) but mixes at the rate it is GRANTED (`shm->speed =
+obtained.freq`) and resamples every cached sound to that rate - so at 48 kHz
+its sound cache is ~4.4x Quake's native 11 kHz data, and mixing does ~4.4x
+the work. SDL 1.2's ALSA backend takes its device from AUDIODEV and
+negotiates with snd_pcm_hw_params_set_rate_near().
+
+Fix, entirely on our side: s31route gained an optional `max_rate` field
+(default 48000, so the default device is byte-for-byte unchanged); asound.conf
+defines `pcm.s31route_11k { type s31route max_rate 11025 }`; the desktop menu
+launches Quake with AUDIODEV=s31route_11k. Quake is offered only 11025 - its
+own original default - is granted it, and nothing in the game changes. The
+plugin's existing "plug" slave upsamples to the sink once.
+
+| XIP TyrQuake, -mem 10, fresh boot | fps | major faults |
+|---|---|---|
+| sound at 48 kHz | 10.7 | 3,674 |
+| sound OFF | 14.0 | 868 |
+| **sound at 11 kHz (s31route_11k)** | **15.1** | 1,107 |
+
+"Sound sampling rate: 11025" confirmed in Quake's own console; 0 ALSA errors
+in the run. **NOT yet verified by ear** - project rule; instruments have
+called audio working while it played noise.
+
+Also shipped with it: TyrQuake 0.62 (the card's tiopex-quake, md5 85e6e0ab,
+unmodified) now lives in XIP flash as /usr/bin/tyrquake - fps-neutral (10.7
+vs 10.9 from SD) but 18% fewer major faults and no RAM for its code. The
+menu's three Quake entries now use it; sdlquake (COM_FileBase crash) is gone
+from the menu. Rejected, measured: TyrQuake 0.71 on SDL2 - built cleanly from
+unmodified upstream (needs -std=gnu11 for GCC 15), but >2x slower: SDL2
+presents through 32-bit surfaces and the binary is 2.4x larger.
+vm.watermark_scale_factor 500: 11.0 fps, inside noise.

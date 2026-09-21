@@ -48,6 +48,7 @@
 #include <sys/stat.h>
 #include <poll.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 #include <stdint.h>
 #include <sys/resource.h>
@@ -504,7 +505,7 @@ static const snd_pcm_ioplug_callback_t route_cb = {
 	.close		= route_close,
 };
 
-static int route_constraints(snd_pcm_ioplug_t *io)
+static int route_constraints(snd_pcm_ioplug_t *io, unsigned int max_rate)
 {
 	static const unsigned int accesses[] = {
 		SND_PCM_ACCESS_RW_INTERLEAVED,
@@ -526,8 +527,23 @@ static int route_constraints(snd_pcm_ioplug_t *io)
 					      1, 2);
 	if (err < 0)
 		return err;
+	/*
+	 * max_rate (asound.conf, default 48000) caps the rate this device
+	 * OFFERS. That matters because a client negotiates with
+	 * snd_pcm_hw_params_set_rate_near(): it asks for a rate and takes the
+	 * nearest one offered. TyrQuake hard-codes a 48 kHz request, then mixes
+	 * at whatever rate it is GRANTED (shm->speed = obtained.freq) and
+	 * resamples every cached sound to it - so at 48 kHz its sound cache is
+	 * ~4.4x the size of the native 11 kHz data. Offered only 11025, it is
+	 * granted 11025 and nothing in the game changes. The "plug" slave below
+	 * resamples up to whatever the sink wants, once, on our side.
+	 * Measured 2026-09-21: sound OFF ran the Quake timedemo at 14.0 fps
+	 * against 10.7 with sound at 48 kHz, with 868 major faults vs 3,674.
+	 * Point one application at a capped device with AUDIODEV=<pcm>; the
+	 * default device is unchanged.
+	 */
 	err = snd_pcm_ioplug_set_param_minmax(io, SND_PCM_IOPLUG_HW_RATE,
-					      8000, 48000);
+					      8000, max_rate);
 	if (err < 0)
 		return err;
 	err = snd_pcm_ioplug_set_param_minmax(io, SND_PCM_IOPLUG_HW_PERIOD_BYTES,
@@ -563,12 +579,35 @@ SND_PCM_PLUGIN_DEFINE_FUNC(s31route)
 {
 	struct route *r;
 	uint64_t one = 1;
+	unsigned int max_rate = 48000;
+	snd_config_iterator_t it, next;
 	int err;
 
-	(void)conf;
 	(void)root;
 	if (stream != SND_PCM_STREAM_PLAYBACK)
 		return -EINVAL;
+	snd_config_for_each(it, next, conf) {
+		snd_config_t *n = snd_config_iterator_entry(it);
+		const char *id;
+		long v;
+
+		if (snd_config_get_id(n, &id) < 0)
+			continue;
+		if (!strcmp(id, "comment") || !strcmp(id, "type") ||
+		    !strcmp(id, "hint"))
+			continue;
+		if (!strcmp(id, "max_rate")) {
+			if (snd_config_get_integer(n, &v) < 0 ||
+			    v < 8000 || v > 48000) {
+				SNDERR("s31route: max_rate must be 8000..48000");
+				return -EINVAL;
+			}
+			max_rate = (unsigned int)v;
+			continue;
+		}
+		SNDERR("s31route: unknown field %s", id);
+		return -EINVAL;
+	}
 	r = calloc(1, sizeof(*r));
 	if (!r)
 		return -ENOMEM;
@@ -604,7 +643,7 @@ SND_PCM_PLUGIN_DEFINE_FUNC(s31route)
 		free(r);
 		return err;
 	}
-	err = route_constraints(&r->io);
+	err = route_constraints(&r->io, max_rate);
 	if (err < 0) {
 		snd_pcm_ioplug_delete(&r->io);
 		return err;
