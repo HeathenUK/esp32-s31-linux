@@ -75,7 +75,11 @@ for ((r = 1; r <= REP; r++)); do
 	# Hands off. The settle and the whole demo happen with nobody watching.
 	sleep $((SETTLE_S + DEMO_WAIT - 40))
 	cat > "$OUT/collect.sh" <<'E'
-n=0; while ps | grep -q "[p]rboom" && [ $n -lt 40 ]; do sleep 3; n=$((n+1)); done
+# Bounded by the CLOCK, not an iteration count: on a loaded board one ps|grep
+# turn took >3.4 s, 40 turns outlived runsh's window and the run reported
+# nothing at all (2026-09-21). A slow arm needs a larger DEMO_WAIT instead.
+read u _ < /proc/uptime; end=$((${u%.*} + 100))
+while ps | grep -q "[p]rboom"; do read u _ < /proc/uptime; [ ${u%.*} -ge $end ] && break; sleep 3; done
 echo "TD_FPS $(grep -a 'frames per second' /root/doom/td.log | tail -1)"
 echo "TD_STILL_RUNNING $(ps | grep -c '[p]rboom')"
 echo "TD_FAULTS $(dmesg | grep -aicE 'oops|unhandled signal|rcu:.*(stall|starved)|vblank wait timed out|Out of memory|BUG:')"
