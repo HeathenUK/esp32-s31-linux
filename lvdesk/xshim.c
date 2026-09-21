@@ -517,7 +517,10 @@ static void out_push(struct cli *c, const void *p, size_t n);
 static void notify_draw(struct res *d);
 
 /*
- * LATE PRESENT (XSHIM_LATEPRESENT=1): answer the client BEFORE painting.
+ * LATE PRESENT - ON BY DEFAULT: answer the client BEFORE painting.
+ * `export XSHIM_LATEPRESENT=0` (in /etc/lvdesk.env) is the only way to turn it
+ * off. Default-on since 2026-09-21 (user: "make late present the default to be
+ * disabled only via an env var"), after the measurement below.
  *
  * A windowed SDL frame is ShmPutImage + XSync in one write. Requests are
  * handled in order and the replies only leave at the end of client_data(), so
@@ -546,16 +549,21 @@ static void notify_draw(struct res *d);
  * AN EARLIER "NEUTRAL" VERDICT HERE WAS WRONG - the flag never reached this
  * process. S40lvdesk SOURCES /etc/lvdesk.env, so a bare XSHIM_LATEPRESENT=1
  * line set a shell variable that lvdesk never inherited; every A/B that day
- * compared off with off. The file needs `export XSHIM_LATEPRESENT=1`, and a
- * test of any env toggle must check /proc/<lvdesk pid>/environ first.
+ * compared off with off. Any env toggle needs `export` in that file, and a test
+ * of one must check /proc/<lvdesk pid>/environ before believing a result -
+ * which is also why the startup line below says which way it went.
  */
 static int late_present_on(void)
 {
 	static int v = -1;
 
-	if (v < 0)
-		v = getenv("XSHIM_LATEPRESENT") != NULL &&
-		    strcmp(getenv("XSHIM_LATEPRESENT"), "0") != 0;
+	if (v < 0) {
+		const char *e = getenv("XSHIM_LATEPRESENT");
+
+		v = !(e && strcmp(e, "0") == 0);
+		fprintf(stderr, "xshim: late present %s\n",
+			v ? "ON" : "OFF (XSHIM_LATEPRESENT=0)");
+	}
 	return v;
 }
 
@@ -8278,6 +8286,7 @@ int xshim_init(void (*on_window)(uint32_t, int, int),
 	draw_cb = on_draw;
 	close_cb = on_close;
 	pal8_init();
+	(void)late_present_on();	/* decide now, so the log states it at startup */
 	for (i = 0; i < MAXCLI; i++)
 		cli[i].fd = -1;
 
