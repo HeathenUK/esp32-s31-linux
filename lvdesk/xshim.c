@@ -536,17 +536,18 @@ static void notify_draw(struct res *d);
  *
  * Ids, not pointers: a later request in the same batch may free the drawable.
  *
- * MEASURED 2026-09-21 AND NEUTRAL - kept off, kept here so the idea is not
- * re-invented. Windowed SDL canary, 5 fresh boots per arm, toggled through
- * /etc/lvdesk.env on one board with one binary: off 13.758 13.898 13.859
- * 13.984 13.728 (median 13.859), on 13.877 13.755 16.719 13.892 17.992
- * (fast-regime median 13.892). 0.2% apart, inside a ~1% floor.
+ * MEASURED 2026-09-21: +13% AND FAR SMOOTHER ON DOOM. Fullscreen prboom
+ * timedemo, lvdesk frame-gap histogram (SIGUSR1), same boot state:
+ *   off: 34.6 fps  gaps <25:1219 <50:3729 <100:74 <200:4 <400:2 >=400:1
+ *   on:  39.1 fps  gaps <25:2626 <50:2359 <100:39 <200:3 <400:1 >=400:1
+ * Frames under 25 ms more than doubled; 50-100 ms stutters nearly halved.
+ * (Timedemo spread across four boots is 34.2-34.7, so this is not noise.)
  *
- * Why the reasoning failed: it assumed the client sits idle while we paint.
- * With two CPUs both already ~55% busy there is no idle to fill - the
- * scheduler was overlapping them anyway - so removing the serialisation buys
- * nothing. It would be worth retrying on a UP kernel, or if the frame ever
- * becomes latency-bound rather than throughput-bound.
+ * AN EARLIER "NEUTRAL" VERDICT HERE WAS WRONG - the flag never reached this
+ * process. S40lvdesk SOURCES /etc/lvdesk.env, so a bare XSHIM_LATEPRESENT=1
+ * line set a shell variable that lvdesk never inherited; every A/B that day
+ * compared off with off. The file needs `export XSHIM_LATEPRESENT=1`, and a
+ * test of any env toggle must check /proc/<lvdesk pid>/environ first.
  */
 static int late_present_on(void)
 {
