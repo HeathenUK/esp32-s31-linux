@@ -44,13 +44,17 @@ ALARM = re.compile(
 
 def main() -> int:
     if len(sys.argv) < 2:
-        print("usage: conlog.py <out.log> [seconds]", file=sys.stderr)
+        print("usage: conlog.py <out.log> [seconds] [baud]   (baud 115200 reads the loader's black box)", file=sys.stderr)
         return 2
     out = sys.argv[1]
     secs = float(sys.argv[2]) if len(sys.argv) > 2 else 600.0
 
     try:
         ser = open_port(timeout=0.5, what='conlog.py (recording)')
+        if len(sys.argv) > 3:
+            # A kernel that dies before its console exists is reported by the
+            # loader at 115200, which reads as NULs at the console's 1 Mbps.
+            ser.baudrate = int(sys.argv[3])
     except Exception as e:                          # noqa: BLE001
         print(f"conlog: cannot open {PORT}: {e}", file=sys.stderr)
         return 1

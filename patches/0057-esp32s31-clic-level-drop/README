@@ -1,0 +1,51 @@
+esp32s31: leave the CLIC interrupt level before softirqs and schedule()
+
+Files (whole files): arch/riscv/kernel/traps.c, arch/riscv/kernel/process.c,
+arch/riscv/include/asm/esp32s31_ext.h (the copies in 0053/0054 are refreshed
+to match). entry.S is unchanged.
+
+THE BUG. The CLIC keeps a current interrupt level per hart (sintstatus.sil).
+Taking an interrupt raises it - to 0xff, because cliccfg is 0 and every
+interrupt therefore has level 255 - and only an xret lowers it. Nothing at or
+below the current level is taken, whatever SIE says. Linux runs softirqs and,
+on return to user with need_resched, schedule() - inside irqentry_exit(), i.e.
+inside do_irq() - BEFORE that sret. The task switched in runs deaf to every
+interrupt until something on the hart srets through an exception frame.
+
+One CPU survives it: the preempted task stays runnable on that CPU and its
+sret comes round (it still costs latency - kernel threads woken from an
+interrupt run with the tick and every device interrupt blocked). With two
+CPUs the preempted task can migrate; the hart is left with kernel threads and
+idle, which never sret, and is deaf for good. Seen as: hart 1 circling the
+idle loop with timer + IPI + device interrupts pending and enabled; or hart 1
+spinning on a page-table lock held by CPU1, which is waiting for hart 1 to
+acknowledge a TLB-flush IPI. This was EVERY "random" SMP stall: #294-#300
+(blamed on the affinity prototype, patches/attic/0055), and #305-#312, which
+died on 12 boots of 12 once tasks were allowed to migrate. Kernels up to #303
+only survived because the permanent PIE pin kept all of userspace on CPU0.
+
+THE FIX. s31_clic_level_drop(), called in handle_riscv_irq() right after the
+hard handler: an sret to the next instruction. Measured details:
+  - scause must carry the INTERRUPT flag with SPIL=0. With scause=0 the sret
+    is an "exception return" and the level stays 0xff (25 M failed attempts
+    in one idle loop).
+  - scause aliases sstatus.SPP/SPIE: write scause FIRST, then set SPP and
+    clear SPIE. The other order srets into U-mode on a kernel address; #307
+    died 16 ms into boot (read from the loader black box at 115200).
+  - it must sit inside do_irq(), not after `call do_irq` in entry.S: generic
+    entry schedules from irqentry_exit(). (#308-#312 had it in entry.S.)
+Verified on #313 with counters since removed: 47,530 drops, level raised
+before every one and after none; 0 of 22,361 context switches entered with a
+raised level (12-69 per boot before).
+
+TRIPWIRE kept in process.c: the idle path reads sintstatus on the boot CPU;
+non-zero is counted (esp32s31_sil_stuck / _last in
+/sys/module/kernel/parameters) and dropped. Must read 0.
+
+HOW IT WAS FOUND: the hart0 post-mortem in bootloader/main/s31_vcpu.c (hart0
+reads hart 1's PC/SP from the bus monitor, both stacks and kernel arrays
+straight out of PSRAM, and hart 1's CLIC through the cross-hart alias) plus
+scripts/board/pm-resolve.py. A dead Linux cannot print; hart0 can.
+
+Tried and reverted: masking MPIL in OpenSBI's trap exit for M-mode interrupts
+too (it already masks synchronous traps). Made no difference; not needed.

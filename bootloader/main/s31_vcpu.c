@@ -18,6 +18,7 @@
 #include "freertos/task.h"
 #include "esp_attr.h"
 #include "esp_log.h"
+#include "esp_rom_sys.h"
 #include "riscv/csr.h"
 #include "riscv/rv_utils.h"
 #include "esp_intr_alloc.h"
@@ -708,6 +709,163 @@ static void report_task(void *arg)
 		m[9] = inj_deferred;
 		/* m[10] is written by world_in: readback of the enables */
 		m[11] = (s31_vcpu_lx[12] << 24) | (s31_vcpu_lx[10] & 0xffffffu);	/* EXT_ILL | state at last illegal */
+
+		/*
+		 * POST-MORTEM. A Linux that stalls hard takes its console with it
+		 * and dmesg cannot be read from a dead board, so every SMP stall
+		 * so far was diagnosed blind. hart0 is still alive then: watch hart
+		 * 1's PC (one bus-monitor read per pass, free) and when it has sat
+		 * in a <= 256-byte window with MORE THAN ONE distinct value for
+		 * 20 s - a spin, not a wfi sleep, which is a single PC - say where
+		 * both CPUs are. Once. The UART is Linux's, but Linux is dead.
+		 */
+#ifdef S31_PM_AT_S
+		/* Investigation only (-DS31_PM_AT_S=45): dump both CPUs at a fixed
+		 * uptime whatever they are doing - for a kernel that stalls on every
+		 * boot with hart 1 still moving. Garbles a live console; never ship. */
+		{
+			static uint32_t pm_pass;
+			int k;
+
+			pm_pass++;
+			if (pm_pass == S31_PM_AT_S * 2) {
+				esp_rom_printf("\r\n*** S31 TIMED DUMP pass %u\r\n", (unsigned)pm_pass);
+				REG_WRITE(0x2d0020cc, 3);
+				for (k = 0; k < 8; k++) {
+					esp_rom_printf(" h1 %08x/%08x", (unsigned)REG_READ(0x2d0020d0), (unsigned)REG_READ(0x2d0020d4));
+					if ((k & 3) == 3)
+						esp_rom_printf("\r\n");
+					esp_rom_delay_us(1500);
+				}
+				/* hart 1's stack, read straight out of PSRAM: return addresses
+				 * (c00xxxxx / c08xxxxx) give its call chain, and the spinlock it
+				 * wants is on there too. Two candidate VA->PA maps; the right
+				 * one is the one that looks like a stack. */
+				{
+					uint32_t sp = REG_READ(0x2d0020d4), cand[2], c;
+
+					cand[0] = sp - 0xc0800000u + 0x50000000u;
+					cand[1] = sp - 0xc0000000u + 0x50000000u;
+					for (c = 0; c < 1; c++) {
+						const volatile uint32_t *w = (const volatile uint32_t *)(uintptr_t)(cand[c] & ~3u);
+
+						if (cand[c] < 0x50000000u || cand[c] >= 0x50fe0000u)
+							continue;
+						esp_rom_printf("  h1 stack sp %08x @pa %08x:\r\n", (unsigned)sp, (unsigned)cand[c]);
+						for (k = 0; k < 96; k++) {
+							esp_rom_printf(" %08x", (unsigned)w[k]);
+							if ((k & 7) == 7)
+								esp_rom_printf("\r\n");
+						}
+					}
+				}
+				esp_rom_printf("  cpu1 pc %08x ra %08x sp %08x a0 %08x a1 %08x mstatus %08x\r\n",
+					       (unsigned)s31_vcpu_area[31], (unsigned)s31_vcpu_area[0], (unsigned)s31_vcpu_area[1],
+					       (unsigned)s31_vcpu_area[9], (unsigned)s31_vcpu_area[10], (unsigned)s31_vcpu_area[32]);
+				esp_rom_printf("  vpending %08x inj timer %u ipi %u deferred %u | now %08x%08x deadline %08x%08x | F1 %x F3 %x ipi_req %u\r\n*** end\r\n",
+					       (unsigned)s31_vcpu_vpending, (unsigned)inj_timer, (unsigned)inj_ipi, (unsigned)inj_deferred,
+					       (unsigned)(now >> 32), (unsigned)now, (unsigned)(deadline >> 32), (unsigned)deadline,
+					       (unsigned)REG_READ(0x20586014), (unsigned)REG_READ(0x2058601c),
+					       (unsigned)*(volatile uint32_t *)0x2F06AFBCu);
+				{
+					uint32_t pa = s31_vcpu_area[1] - 0xc0800000u + 0x50000000u;
+					const volatile uint32_t *w = (const volatile uint32_t *)(uintptr_t)(pa & ~3u);
+
+					if (pa >= 0x50000000u && pa < 0x50fe0000u) {
+						esp_rom_printf("  cpu1 stack sp %08x @pa %08x:\r\n", (unsigned)s31_vcpu_area[1], (unsigned)pa);
+						for (k = 0; k < 128; k++) {
+							esp_rom_printf(" %08x", (unsigned)w[k]);
+							if ((k & 7) == 7)
+								esp_rom_printf("\r\n");
+						}
+					}
+				}
+#ifdef S31_PM_PEEK_PA
+				{	/* a kernel array chosen per investigation (System.map -> PA) */
+					const volatile uint32_t *w = (const volatile uint32_t *)(uintptr_t)S31_PM_PEEK_PA;
+
+					esp_rom_printf("  peek @%08x:", (unsigned)S31_PM_PEEK_PA);
+					for (k = 0; k < 8; k++)
+						esp_rom_printf(" %08x", (unsigned)w[k]);
+					esp_rom_printf("\r\n");
+#ifdef S31_PM_PEEK2_PA
+					w = (const volatile uint32_t *)(uintptr_t)S31_PM_PEEK2_PA;
+					esp_rom_printf("  peek2 @%08x:", (unsigned)S31_PM_PEEK2_PA);
+					for (k = 0; k < 16; k++)
+						esp_rom_printf(" %08x", (unsigned)w[k]);
+					esp_rom_printf("\r\n");
+#endif
+				}
+#endif
+				/* hart 1's S-mode CLIC as seen through the cross-hart alias:
+				 * every enabled slot (ip ie attr ctl), then config/threshold
+				 * LAST - those two have never been read through the alias. */
+				for (k = 0; k < 48; k++) {
+					uint32_t w = REG_READ(0x10a11000u + 4u * (uint32_t)k);
+
+					if (w & 0x0000ff00u)
+						esp_rom_printf("  h1 sclic id %d: %08x\r\n", k, (unsigned)w);
+				}
+				esp_rom_printf("  h1 sclic cfg %08x", (unsigned)REG_READ(0x10a10000u));
+				esp_rom_printf(" thresh %08x\r\n*** end2\r\n", (unsigned)REG_READ(0x10a10008u));
+			}
+		}
+#endif
+		{
+			static uint32_t lo = 0xffffffffu, hi, first, distinct, passes, reported;
+			uint32_t pc;
+
+			REG_WRITE(0x2d0020cc, 3);
+			pc = REG_READ(0x2d0020d0);
+			if (!passes)
+				first = pc;
+			if (pc != first)
+				distinct = 1;
+			if (pc < lo)
+				lo = pc;
+			if (pc > hi)
+				hi = pc;
+			if (hi - lo > 256) {
+				lo = 0xffffffffu; hi = 0; passes = 0; distinct = 0;
+			} else if (++passes >= 40 && !reported) {
+				int k, out = 0;
+
+				/* A sleeping hart 1 also shows one PC for 20 s. Tell a live
+				 * sleeper from a dead one: a live one leaves wfi for its tick
+				 * every 10 ms, so a 300 ms burst at 1 ms catches it outside
+				 * the window several times; a dead one never leaves. */
+				for (k = 0; k < 300; k++) {
+					pc = REG_READ(0x2d0020d0);
+					if (pc < lo - 64 || pc > hi + 64)
+						out++;
+					esp_rom_delay_us(1000);
+				}
+				if (out) {
+					lo = 0xffffffffu; hi = 0; passes = 0; distinct = 0;
+					vTaskDelay(pdMS_TO_TICKS(500));
+					continue;
+				}
+				reported = 1;
+				esp_rom_printf("\r\n(distinct pcs in window: %u)", (unsigned)distinct);
+				esp_rom_printf("\r\n\r\n*** S31 POST-MORTEM: hart1 never left %08x..%08x for 20 s\r\n",
+					       (unsigned)lo, (unsigned)hi);
+				for (k = 0; k < 12; k++) {
+					esp_rom_printf("  hart1 pc %08x sp %08x\r\n",
+						       (unsigned)REG_READ(0x2d0020d0), (unsigned)REG_READ(0x2d0020d4));
+					esp_rom_delay_us(777);
+				}
+				esp_rom_printf("  cpu1(guest) pc %08x ra %08x sp %08x a0 %08x a1 %08x mstatus %08x\r\n",
+					       (unsigned)s31_vcpu_area[31], (unsigned)s31_vcpu_area[0], (unsigned)s31_vcpu_area[1],
+					       (unsigned)s31_vcpu_area[9], (unsigned)s31_vcpu_area[10], (unsigned)s31_vcpu_area[32]);
+				esp_rom_printf("  vpending %08x inj timer %u ipi %u deferred %u | now %08x%08x deadline %08x%08x\r\n",
+					       (unsigned)s31_vcpu_vpending, (unsigned)inj_timer, (unsigned)inj_ipi, (unsigned)inj_deferred,
+					       (unsigned)(now >> 32), (unsigned)now, (unsigned)(deadline >> 32), (unsigned)deadline);
+				vTaskDelay(pdMS_TO_TICKS(1000));
+				esp_rom_printf("  1 s later: cpu1(guest) pc %08x ra %08x | inj timer %u ipi %u | FROM_CPU_1 %x FROM_CPU_3 %x\r\n*** end\r\n",
+					       (unsigned)s31_vcpu_area[31], (unsigned)s31_vcpu_area[0], (unsigned)inj_timer, (unsigned)inj_ipi,
+					       (unsigned)REG_READ(0x20586014), (unsigned)REG_READ(0x2058601c));
+			}
+		}
 		vTaskDelay(pdMS_TO_TICKS(500));
 	}
 #endif
