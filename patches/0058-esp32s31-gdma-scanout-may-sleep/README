@@ -1,0 +1,33 @@
+esp32s31 GDMA: let the LCD scanout ring allocate with reclaim (fixes a black
+screen behind a running game)
+
+Files (whole files): drivers/dma/esp32s31-axi-gdma.c,
+include/linux/dma/esp32s31-axi-gdma.h, drivers/gpu/drm/espressif/esp32s31-lcd.c
+
+SYMPTOM (2026-09-21): TyrQuake fullscreen with a 12 MB heap - panel BLACK,
+audio still playing, game still running. dmesg:
+    [drm] *ERROR* failed to start scanout DMA: -12
+The display mode switch re-prepares the cyclic scanout ring, and every GDMA
+descriptor allocation was GFP_NOWAIT, which fails outright when memory is
+tight rather than reclaiming. Quake had ~1.3 MB MemAvailable.
+
+FIX: a per-channel opt-in, esp32s31_axi_gdma_set_may_sleep(chan, true). Only
+the LCD channel sets it; its prep then allocates GFP_KERNEL. Every other GDMA
+user keeps GFP_NOWAIT, correct for atomic callers. Verified there is exactly
+ONE prep site on that channel (esp32s31_lcd_start_scanout) and ONE caller
+(esp32s31_lcd_pipe_enable, the DRM plane-enable callback: process context
+under the modeset mutexes, no spinlock on the path). Also: a log line naming
+SRAM-descriptor-pool exhaustion, the one case GFP flags cannot fix.
+
+VERIFIED: same scenario after the fix - picture on screen through the second
+mode switch, gameplay rendering, 0 "failed to start scanout" in dmesg.
+
+DOWNSIDES, stated: a fullscreen switch under memory pressure may now stall for
+reclaim (once, at the switch, never per frame); in the extreme GFP_KERNEL can
+invoke the OOM killer instead of failing; the SRAM pool can still run out
+(now loudly).
+
+NOTE: an intermediate kernel (#334) panicked at boot. That was NOT this change -
+a stale fastarm.sh experiment (irq-esp32s31-clic.o in .text..fast) was still in
+the tree's linker script; the panic was the known illegal instruction at
+riscv_intc_irq_unmask+0x28, badaddr bfc51047. Restored the committed script.
