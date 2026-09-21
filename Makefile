@@ -394,7 +394,14 @@ ifeq ($(SMP),1)
 # because the hosted driver registers with it), system suspend
 # (never entered; hart0 would not survive it), multi-queue network steering
 # and scheduler topology levels that mean nothing on two identical harts.
-SMP_TWEAKS := --enable SMP --set-val NR_CPUS 2 --enable HOTPLUG_CPU --disable RISCV_BOOT_SPINWAIT $(SLIM_TWEAKS) \
+# RCU_NOCB_CPU needs RCU_EXPERT to be offerable at all. Enabling the config
+# alone changes nothing at runtime: a CPU only offloads when it is named in
+# rcu_nocbs= on the command line (NOCB=<list> below). This is the one piece of
+# "give the second core kernel work" that is a stock mechanism rather than an
+# affinity policy of ours - the callback kthreads are placed by the scheduler,
+# which beat every manual placement tried on 2026-09-21.
+SMP_TWEAKS := --enable SMP --set-val NR_CPUS 2 --enable HOTPLUG_CPU --disable RISCV_BOOT_SPINWAIT \
+	--enable RCU_EXPERT --enable RCU_NOCB_CPU $(SLIM_TWEAKS) \
 	--enable RPS
 # RPS back ON for SMP, after the diet that turns it off: it is THE standard knob
 # for moving network receive processing to another CPU (rx-0/rps_cpus), i.e.
@@ -421,6 +428,12 @@ SMP_TWEAKS := --enable SMP --set-val NR_CPUS 2 --enable HOTPLUG_CPU --disable RI
 # kernel read 12.7-16.8 ms depending on the boot. Steady-state PIE use is rare
 # (rootfs/pieprobe.c), so the pin was guarding a case that does not occur.
 PIE_BOUNCE ?= 1000
+# NOCB=0 offloads the BOOT CPU's RCU callbacks to kthreads the scheduler may
+# run on either hart - i.e. it moves housekeeping off the CPU the desktop is
+# on, without pinning anything.
+ifneq ($(NOCB),)
+CMDLINE_ADD += rcu_nocbs=$(NOCB)
+endif
 ifneq ($(PIE_BOUNCE),)
 CMDLINE_ADD += esp32s31_pie_bounce=$(PIE_BOUNCE)
 endif

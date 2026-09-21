@@ -971,9 +971,39 @@ static void h1s_task(void *arg)
 
 void s31_vcpu_start(void)
 {
-	/* Priority 1: above IDLE (whose hook sleeps the hart for a whole tick),
-	 * below every IDF system, radio and USB task. */
-	xTaskCreate(vcpu_task, "s31_vcpu", 4096, NULL, 1, &vcpu_handle);	/* blocks inside the trap path */
+	/*
+	 * S31_VCPU_PRIO: this task IS Linux's second CPU, so its priority is
+	 * how much of hart 0 Linux gets and how fast a cross-hart wake lands.
+	 *
+	 * It was 1 - above IDLE, below every IDF system, radio and USB task -
+	 * which meant a wake-up for Linux queued behind anything runnable.
+	 * MEASURED 2026-09-21 with rootfs/pingpong (futex round trip, threads
+	 * pinned): same hart 519-522 us, across harts 846-885 us, i.e. ~165 us
+	 * per crossing. The doorbell itself is ~1 us (docs/smp-ipi-plan.md), so
+	 * the cost is the path around it: ISR -> IDF dispatch -> yield -> this
+	 * task being scheduled -> world_in -> guest entry.
+	 *
+	 * RAISING IT DOES NOTHING - tried 10 (still below the radio tasks) and
+	 * the cross-hart penalty did not move. Absolute times all rose that
+	 * boot (same 555-579, cross 921-945) but SO DID THE SAME-HART CASE,
+	 * which runs entirely on hart 1 and cannot care about hart 0 task
+	 * priorities - i.e. boot-level variance, not the change. The control
+	 * is the RATIO cross/same within one boot: 1.62, 1.71 at priority 1
+	 * against 1.63, 1.66 at priority 10. So the wake is not queued behind
+	 * other tasks, and the ~165 us lives in the crossing itself: ISR ->
+	 * IDF dispatch -> yield -> world_in (32 FP registers + fcsr every
+	 * time) -> guest entry. Attack that, not the scheduling.
+	 *
+	 * Left at 1, which is also the safest for the radios - they are never
+	 * traded for performance here.
+	 *
+	 * ALWAYS quote the ratio for this measurement, never the absolute:
+	 * pingpong's same-hart figure moved 519 -> 579 us between two boots.
+	 */
+#ifndef S31_VCPU_PRIO
+#define S31_VCPU_PRIO 1
+#endif
+	xTaskCreate(vcpu_task, "s31_vcpu", 4096, NULL, S31_VCPU_PRIO, &vcpu_handle);	/* blocks inside the trap path */
 	xTaskCreate(h1s_task, "s31_h1s", 3072, NULL, 3, NULL);
 	xTaskCreate(report_task, "s31_vcpu_rep", 2560, NULL, 2, NULL);
 }
