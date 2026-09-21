@@ -62,14 +62,17 @@ qualifies on the numbers, pending the gate on #314.
    that much, so it is not believed until `scripts/board/canary-aba.sh` has
    run #314 / #320 / #314 across fresh flashes. A and A2 give the noise floor;
    if they disagree, B means nothing.
-2. **If it holds, re-baseline UP with the SAME batch.** PELT, div64,
-   timerqueue, fs/select and uaccess are not SMP-specific - a UP kernel gets
-   the same win, and comparing SMP-with-fast-text against UP-without is
-   exactly the unfair comparison this plan exists to avoid. Build UP #321 with
-   S31_FAST_PROFILED, re-run canaries + Doom idle + Doom under load.
-3. **Ship decision (step 6).** SMP becomes the default build only if it still
-   wins with both kernels carrying the same fixes. If it does: `SMP=1
-   PIE_BOUNCE=20` becomes the Makefile default, docs and memory follow.
+2. ~~Re-baseline UP~~ **DROPPED 2026-09-21, and the ship decision with it.**
+   The user settled it: "Why do you keep re-baselining with UP? ... SMP
+   sounds like it should be here to stay, so the only question is how we make
+   it as reliable and performant as possible." SMP=1 is now the Makefile
+   default. UP (`SMP=0`) is kept as a BISECTION TOOL for "is this bug
+   SMP-specific?", not as a baseline to re-measure. Three UP baselines were
+   built in one day (#302, #315, #326) chasing a comparison that was already
+   decided - that was a loop, not diligence.
+
+3. ~~Ship decision~~ - made, see above.
+
 4. **Late present (lever B, step 5).** Built and staged, not yet measured;
    A/B on a warm board via /etc/lvdesk.env, no reflash between arms. Aimed at
    the ~6% placement cost specifically, which is the part of the windowed gap

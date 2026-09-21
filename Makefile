@@ -373,8 +373,14 @@ endif
 # = physical hart1; the second is hart0, LENT by FreeRTOS - see
 # bootloader/main/s31_vcpu*). HOTPLUG_CPU so the second CPU is brought online
 # and taken offline at runtime: `echo 1 > /sys/devices/system/cpu/cpu1/online`.
-# Default 0 until the bring-up is proven.
-SMP ?= 0
+# DEFAULT ON since 2026-09-21 (user: "SMP sounds like it should be here to
+# stay"). It is proven: smp-soak 5 boots of 5, gate 24/24, and it beats the
+# uniprocessor kernel on every workload measured - fullscreen Doom 34.25 vs
+# 32.80 fps idle and 19.70 vs 18.25 under a 400 KB/s Wi-Fi load, the windowed
+# SDL canary ~13.8 vs 14.7 ms. `make linux SMP=0` still builds a
+# uniprocessor kernel and is kept as a BISECTION TOOL - "is this bug
+# SMP-specific?" - not as a baseline to keep re-measuring.
+SMP ?= 1
 SLIM ?= 0
 SLIM_TWEAKS := --disable CPU_FREQ_STAT --disable CPU_FREQ_GOV_ONDEMAND --enable CPU_FREQ_DEFAULT_GOV_PERFORMANCE \
 	--disable SUSPEND --disable HIBERNATION --disable CPU_ISOLATION \
