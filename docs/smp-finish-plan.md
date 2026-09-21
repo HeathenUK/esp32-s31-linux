@@ -42,6 +42,36 @@ rare); 4 done differently (migrate, no hold timer needed); 5 open - now worth
 doing, since work given its own thread really can land on CPU1; 6 - SMP
 qualifies on the numbers, pending the gate on #314.
 
+## What happens next, in order (2026-09-21)
+
+1. **Confirm or kill the #320 canary result.** One gate run put the windowed
+   sdl1 canary at 12.685 ms against the 14.725 UP baseline - a 24% swing from
+   #314 out of 43 kB of RAM text. The mechanism does not obviously account for
+   that much, so it is not believed until `scripts/board/canary-aba.sh` has
+   run #314 / #320 / #314 across fresh flashes. A and A2 give the noise floor;
+   if they disagree, B means nothing.
+2. **If it holds, re-baseline UP with the SAME batch.** PELT, div64,
+   timerqueue, fs/select and uaccess are not SMP-specific - a UP kernel gets
+   the same win, and comparing SMP-with-fast-text against UP-without is
+   exactly the unfair comparison this plan exists to avoid. Build UP #321 with
+   S31_FAST_PROFILED, re-run canaries + Doom idle + Doom under load.
+3. **Ship decision (step 6).** SMP becomes the default build only if it still
+   wins with both kernels carrying the same fixes. If it does: `SMP=1
+   PIE_BOUNCE=20` becomes the Makefile default, docs and memory follow.
+4. **Late present (lever B, step 5).** Built and staged, not yet measured;
+   A/B on a warm board via /etc/lvdesk.env, no reflash between arms. Aimed at
+   the ~6% placement cost specifically, which is the part of the windowed gap
+   that .text..fast cannot touch.
+5. **Owed hygiene, in value order:** repeat the SMP load arm with rx recorded
+   (n=3, one unexplained 23.3 fps run); exercise a flash write on SMP to prove
+   the work_on_cpu path in patches/0056; retry locking/spinlock.o in RAM now
+   the CLIC level bug is gone; make the loader's test sdkconfig a named
+   committed config; find the loader's layout sensitivity (the `.rept 391` pad).
+6. **Re-test the dw_mmc "Unexpected interrupt latency" hang.** It is a
+   plausible victim of the CLIC level bug ON UP - a kthread woken from an
+   interrupt ran deaf to every device until something sret'd - and may simply
+   be gone. Same for the deferred Quake crash.
+
 ## Progress log (newest first; numbers live in worklog-2026-09-19.md)
 
 - 2026-09-21 **IN PROGRESS - closing the windowed-path gap** (sdl1 canary
