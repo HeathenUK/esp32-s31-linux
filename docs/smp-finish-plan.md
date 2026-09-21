@@ -44,7 +44,19 @@ qualifies on the numbers, pending the gate on #314.
 
 ## What happens next, in order (2026-09-21)
 
-1. **Confirm or kill the #320 canary result.** One gate run put the windowed
+0. **DONE 2026-09-21 - and it killed three ideas.** The #320 result was not
+   real: A/B/A across flashes made the batch a 5% regression, and it is
+   reverted. The canary turned out to be bimodal ACROSS boots (~17%) while
+   ~1% repeatable within a session, which invalidates every single-gate-run
+   comparison made before today - including "SMP is 14% off parity". Two
+   causes found (the PIE pin, now defaulting to never pin; asymmetric CPU
+   capacity, tried and reverted), one still OPEN: ~1 boot in 4 is ~17% slow
+   with nothing pinned. **Shipping kernel #323 is ~6% FASTER than UP on the
+   windowed canary on 3 boots in 4.** Next: chase the open bimodality by
+   recording the scanout and SHM segment addresses per boot (shared D-cache
+   aliasing is the leading suspect), then re-baseline UP and decide shipping.
+
+1. ~~Confirm or kill the #320 canary result.~~ One gate run put the windowed
    sdl1 canary at 12.685 ms against the 14.725 UP baseline - a 24% swing from
    #314 out of 43 kB of RAM text. The mechanism does not obviously account for
    that much, so it is not believed until `scripts/board/canary-aba.sh` has
