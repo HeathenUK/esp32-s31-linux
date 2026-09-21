@@ -1,0 +1,28 @@
+esp32s31 SMP: migrate on a PIE trap instead of pinning; flash ROM calls on the boot CPU
+
+Files (whole files): arch/riscv/kernel/esp32s31-ext.c (supersedes the copy in
+0053, which is refreshed to match), drivers/mtd/devices/esp32s31_flash.c.
+
+1. esp32s31-ext.c: core_param esp32s31_pie_bounce (default 0 = the old
+   behaviour, pin to CPU0 for good). N > 0: the trapping task is moved to the
+   boot CPU by narrowing its mask and the mask it had is restored at once, so
+   nothing stays narrowed and fork() inherits nothing. A task trapping more
+   than N times a second, or whose own mask excludes the boot CPU, is pinned
+   as before. Counter: /sys/module/kernel/parameters/esp32s31_pie_bounces.
+   Build with `make linux SMP=1 PIE_BOUNCE=20` to have it on the command line -
+   it must act before the boot shell's first trap (~6 s) to matter.
+
+   WHY (measured 2026-09-21 with rootfs/pieprobe.c on #303): a running wget
+   got 2 s of CPU over 7.5 s confined to CPU1 without one PIE instruction;
+   idle lvdesk trapped once in 7.5 s; yet EVERY process had affinity {0},
+   because musl's string routines trap once during start-up and the narrowed
+   mask is inherited. The permanent pin, not PIE itself, emptied CPU1.
+
+   This is NOT patches/attic/0055: no task_cpu_possible_mask override, no
+   lease, no scheduler hook, no task_struct field - only set_cpus_allowed_ptr()
+   from the trapping task's own context.
+
+2. esp32s31_flash.c: the ROM write/erase firmware calls go through
+   work_on_cpu(boot CPU) under SMP. OpenSBI is hart 1's firmware; the hart0
+   monitor refuses the extension. (Reboot/power-off already migrate via the
+   stock migrate_to_reboot_cpu().) NOT yet exercised on hardware.

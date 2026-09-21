@@ -47,6 +47,7 @@ for ((r = 1; r <= REP; r++)); do
 		echo 'uname -v; cat /sys/devices/system/cpu/online 2>/dev/null'
 		echo 'for p in $(ps | awk "/prboom/ && !/awk/ {print \$1}"); do kill -9 $p 2>/dev/null; done'
 		echo 'rm -f /root/doom/td.log /root/doom/td.pre'
+		echo 'dmesg -n 4'
 		echo "amixer -q sset 'DACL' 110 2>/dev/null; amixer -q sset 'DACR' 110 2>/dev/null"
 		if [ -n "$PRE" ]; then
 			echo "cat > /root/doom/td-pre.sh <<'TDPRE_EOF'"; cat "$PRE"; echo 'TDPRE_EOF'
@@ -72,8 +73,13 @@ for ((r = 1; r <= REP; r++)); do
 		fi
 	fi
 	kver=$(grep -m1 -o "#[0-9]* [A-Z].*" "$OUT/launch-$r.log" | cut -c1-40)
-	# Hands off. The settle and the whole demo happen with nobody watching.
-	sleep $((SETTLE_S + DEMO_WAIT - 40))
+	# Hands off - but LISTENING. conlog is read-only (it sends the board nothing,
+	# so it costs the game nothing) and keeps every console byte: 2026-09-21 a
+	# knobs-arm run ended with "not one byte in 25s" at collect and there was
+	# nothing to say why. The launch script raised the console to KERN_ERR so an
+	# RCU stall or oops is actually printed.
+	python3 scripts/board/conlog.py "$OUT/console-$r.log" $((SETTLE_S + DEMO_WAIT - 40)) > "$OUT/conlog-$r.out" 2>&1
+	grep -a "ALARM" "$OUT/conlog-$r.out" | head -3 | sed 's/^/    run '"$r"' console: /'
 	cat > "$OUT/collect.sh" <<'E'
 # Bounded by the CLOCK, not an iteration count: on a loaded board one ps|grep
 # turn took >3.4 s, 40 turns outlived runsh's window and the run reported
@@ -92,6 +98,9 @@ E
 	fps=$(sed -n 's/^TD_FPS .*= \([0-9.]*\) frames per second.*/\1/p' "$OUT/collect-$r.log" | tail -1)
 	faults=$(sed -n 's/^TD_FAULTS \([0-9]*\).*/\1/p' "$OUT/collect-$r.log" | tail -1)
 	still=$(sed -n 's/^TD_STILL_RUNNING \([0-9]*\).*/\1/p' "$OUT/collect-$r.log" | tail -1)
+	# No result: say whether the board is there at all BEFORE the next reset
+	# erases the answer. console-$r.log already holds what it printed on the way.
+	[ -z "$fps" ] && { python3 scripts/board/alive.py --timeout 20 --log "$OUT/nofps-$r.raw" > "$OUT/nofps-$r.txt" 2>&1; echo "    run $r: no fps - alive.py says: $(tail -1 "$OUT/nofps-$r.txt")"; }
 	echo "$r|${fps:-NA}|faults=${faults:-?} still_running=${still:-?}|$kver" >> "$OUT/results.psv"
 	echo "    run $r: ${fps:-NA} fps  faults=${faults:-?} still_running=${still:-?}  [$kver]"
 done

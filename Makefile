@@ -403,6 +403,15 @@ SMP_TWEAKS := --enable SMP --set-val NR_CPUS 2 --enable HOTPLUG_CPU --disable RI
 # interrupt (initcalls run on CPU1 on some boots despite isolcpus): it is a
 # workaround for code of ours that is wrong from the lent CPU, a normal Linux
 # does not need it, and one boot in five still failed with it. Fix the code.
+# PIE_BOUNCE=N boots with esp32s31_pie_bounce=N: a task that executes a PIE
+# instruction on the lent CPU is MIGRATED to the boot CPU instead of pinned
+# there for good (arch/riscv/kernel/esp32s31-ext.c has the measurements). It
+# has to be on the command line to matter: the boot shell traps ~6 s in and
+# every child inherits whatever mask it is left with. Runtime knob for
+# experiments: /sys/module/kernel/parameters/esp32s31_pie_bounce.
+ifneq ($(PIE_BOUNCE),)
+CMDLINE_ADD += esp32s31_pie_bounce=$(PIE_BOUNCE)
+endif
 ifeq ($(SMP_ONE),1)
 # Control arm: the SMP kernel on one CPU.
 CMDLINE_ADD += maxcpus=1
