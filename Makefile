@@ -409,6 +409,12 @@ SMP_TWEAKS := --enable SMP --set-val NR_CPUS 2 --enable HOTPLUG_CPU --disable RI
 # has to be on the command line to matter: the boot shell traps ~6 s in and
 # every child inherits whatever mask it is left with. Runtime knob for
 # experiments: /sys/module/kernel/parameters/esp32s31_pie_bounce.
+# Default 1000, i.e. effectively "never pin permanently". At 20 the pin caught
+# lvdesk on some boots and not others, and a pinned lvdesk measured 15.3%
+# slower on the windowed canary (scripts/board/canary-pin.sh) - so the same
+# kernel read 12.7-16.8 ms depending on the boot. Steady-state PIE use is rare
+# (rootfs/pieprobe.c), so the pin was guarding a case that does not occur.
+PIE_BOUNCE ?= 1000
 ifneq ($(PIE_BOUNCE),)
 CMDLINE_ADD += esp32s31_pie_bounce=$(PIE_BOUNCE)
 endif

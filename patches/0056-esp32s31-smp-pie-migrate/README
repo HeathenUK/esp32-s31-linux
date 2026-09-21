@@ -9,8 +9,14 @@ Files (whole files): arch/riscv/kernel/esp32s31-ext.c (supersedes the copy in
    nothing stays narrowed and fork() inherits nothing. A task trapping more
    than N times a second, or whose own mask excludes the boot CPU, is pinned
    as before. Counter: /sys/module/kernel/parameters/esp32s31_pie_bounces.
-   Build with `make linux SMP=1 PIE_BOUNCE=20` to have it on the command line -
-   it must act before the boot shell's first trap (~6 s) to matter.
+   The Makefile default is now PIE_BOUNCE=1000, i.e. effectively never pin.
+   It must be on the command line to act before the boot shell's first trap
+   (~6 s). MEASURED 2026-09-21: at 20 the pin caught lvdesk on some boots and
+   not others, and a pinned lvdesk is 15.3% slower on the windowed canary
+   (13.86/13.65 free vs 15.81/15.98 pinned, A/B/A/B on one boot,
+   scripts/board/canary-pin.sh) - because forced placement of ANY kind
+   measured ~15% worse than letting the scheduler choose. So the pin was both
+   guarding a case that does not occur and creating a per-boot lottery.
 
    WHY (measured 2026-09-21 with rootfs/pieprobe.c on #303): a running wget
    got 2 s of CPU over 7.5 s confined to CPU1 without one PIE instruction;
