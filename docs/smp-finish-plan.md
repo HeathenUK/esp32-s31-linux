@@ -140,6 +140,46 @@ Ranked, highest leverage first:
   Candidates: major faults (1,296 in a demo, about 3 ms each, so about 7%) and
   the per-frame XSync round trip to lvdesk on the other hart.
 
+### Quake, where CPU0 goes and what it waits on (2026-09-22)
+- **hart0 PC sampler on CPU0, 12,000 samples mid-timedemo**
+  (artifacts/quake/h1s-062518): user 59% (program 51, libs 8), kernel 32%,
+  idle 9%, M-mode 1%. The kernel share is flat. By subsystem: IRQ/CLIC/entry
+  6.4%, scheduler 5.1%, timers/clock 4.8%, mm/faults 1.7%, poll/fs 1.3%. The
+  tick-based /proc/stat said sys 14%, so it undercounts kernel time here.
+- **waitsamp (rootfs/waitsamp.c), Quake's main thread**: running 86%. Short
+  sleeps (under a few ms, which read "running" by the time /proc/<tid>/syscall
+  is read) make ~10%. Page faults in Quake code are ~2% (D state, PC in the
+  program). ppoll (the xlite ring wait for lvdesk's reply) is 1.8%. No single
+  wait is worth chasing.
+- Timer interrupts on CPU0 run at ~227/s under Quake (HZ=100). timer_list
+  shows hrtimer_wakeup, tick_nohz_handler, hrtick, dl_task_timer (the fair
+  deadline server), and our esp32s31_lcd_vblank_tick. **hw_vblank=1
+  (a runtime knob) changed nothing measurable**: 119-136/s either way at an
+  idle desktop. Not a lever.
+- **Quake pinned to CPU1: 15.9 / 15.7 fps. INCONCLUSIVE**, not "worse". The
+  same-day control on the shipped kernel was 14.4 / 16.2.
+- **The Quake per-boot lottery is +-10%**. Shipped kernel, fresh boots, same
+  invocation: 17.3, 17.1, 14.4, 16.2. Paging does not explain it (majflt
+  1,302-1,556, about 0.5 s of a 60 s demo). This swing is larger than every
+  lever tried, so two Quake boots cannot judge anything under ~10%.
+
+### OpenSBI half-skipped 32-bit CSR instructions (FIXED 2026-09-22)
+sbi_illegal_insn_handler skipped EVERY trap at a 2-mod-4 PC by 2 bytes,
+assuming it was a 16-bit instruction. With RVC a 32-bit csrs can sit there.
+That is the "irq/chip.o cannot go to RAM" fault (illegal instruction at
+riscv_intc_irq_unmask+0x28, badaddr bfc51047): the csrs at +0x26 was
+half-skipped. Fixed in opensbi-esp32-s31 09fdd42c: a SYSTEM instruction at a
+2-mod-4 PC now dispatches normally. The shipped kernel's csrs is also 2 mod 4
+(c01e7472) but that path is not reached at runtime there. Moving chip.o made
+it reachable. After the fix:
+- kernel #337 (softirq + irq/chip.o in RAM, csrs at c01e6212) BOOTS to login.
+  Quake 15.8 / 16.1 fps, which is inside the lottery. Not shipped: the chip.o
+  symbols are ~0.8% of CPU0, so even 6x faster they save under 1%, and RAM
+  text costs shared D-cache.
+- #336 (+ the CLIC driver in RAM) gets past the illegal instruction and then
+  floods "riscv-intc: Failed to handle interrupt (cause: 7)". A separate,
+  unexplained fault. The CLIC handler is ~0.8% of CPU0, so it is low value.
+
 **Do NOT spend more on affinity policy.** Forced placement, capacity hints and
 RPS/workqueue steering all measured WORSE today. The stock scheduler beat
 every manual placement tried.
