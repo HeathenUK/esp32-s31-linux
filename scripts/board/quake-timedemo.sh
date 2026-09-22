@@ -12,8 +12,8 @@
 # majflt and VmSwap does not say why a run was fast or slow.
 #
 # Invocation facts (tiopex-quake = TyrQuake 0.62): the FIRST argument is
-# swallowed as a game directory, so -basedir goes first; -condebug logs to
-# /root/-basedir/qconsole.log; the default heap is 128 MB and cannot start.
+# taken as the writable game dir $HOME/<argv1>, so "id1" + HOME=/root/quake puts
+# saves and qconsole.log in /root/quake/id1; the default 128 MB heap cannot start.
 # Everything after <label> is passed to Quake before the fixed resolution.
 # QUAKE_BIN picks the binary: ./name (in /root/quake, i.e. on SD) or an absolute
 # path such as /usr/bin/tyrquake (in XIP flash). Default ./tiopex-quake.
@@ -32,7 +32,7 @@ $PRE
 echo "PRE_APPLIED watermark_scale_factor=\$(cat /proc/sys/vm/watermark_scale_factor) page-cluster=\$(cat /proc/sys/vm/page-cluster)"
 rm -f /root/-basedir/qconsole.log /root/quake/id1/qconsole.log
 amixer -q sset 'DACL' 110 2>/dev/null; amixer -q sset 'DACR' 110 2>/dev/null
-setsid sh -c 'DISPLAY=:0 exec ${QUAKE_BIN:-./tiopex-quake} -basedir /root/quake $ARGS -width 320 -height 240 -fullscreen -condebug +timedemo demo1 >/root/quake/td.log 2>&1' </dev/null >/dev/null 2>&1 &
+setsid sh -c 'DISPLAY=:0 HOME=/root/quake exec ${QUAKE_BIN:-./tiopex-quake} id1 -basedir /root/quake $ARGS -width 320 -height 240 -fullscreen -condebug +timedemo demo1 >/root/quake/td.log 2>&1' </dev/null >/dev/null 2>&1 &
 i=0; while [ \$i -lt 200 ]; do grep -aqE "[0-9]+ frames" /root/-basedir/qconsole.log /root/quake/id1/qconsole.log 2>/dev/null && break; grep -aq "^Error:" /root/quake/td.log 2>/dev/null && break; sleep 1; i=\$((i+1)); done
 P=\$(ps | awk '/[t]iopex|[t]yr-quake|[t]yrquake/ {print \$1}' | head -1)
 echo "RESULT \$(grep -ahE '[0-9]+ frames' /root/-basedir/qconsole.log /root/quake/id1/qconsole.log 2>/dev/null | head -1)"
