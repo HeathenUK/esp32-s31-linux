@@ -125,3 +125,5 @@ overlay; the XIP image is back to its original 5,828,608 bytes; the menu runs
 the SD copy (/root/quake/tiopex-quake, same md5 85e6e0ab). The 11 kHz audio
 device is unaffected - that is platform code (the s31route plugin), not an
 app. The XIP run's numbers above stand as a measurement only.
+
+**Shipping config re-measured (Quake from SD, 11 kHz device, -mem 10): 16.6 fps** (969 frames, 58.5 s; 1,296 major faults) vs 10.9 fps for the same SD binary at 48 kHz - about +52%. Flash placement was never the source of the gain.
