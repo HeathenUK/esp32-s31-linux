@@ -118,3 +118,10 @@ from the menu. Rejected, measured: TyrQuake 0.71 on SDL2 - built cleanly from
 unmodified upstream (needs -std=gnu11 for GCC 15), but >2x slower: SDL2
 presents through 32-bit surfaces and the binary is 2.4x larger.
 vm.watermark_scale_factor 500: 11.0 fps, inside noise.
+
+**REVERTED 2026-09-22: Quake is NOT in flash.** User: "Do not place Quake or
+any other app in flash." /usr/bin/tyrquake removed from XIP_ROOTS and the
+overlay; the XIP image is back to its original 5,828,608 bytes; the menu runs
+the SD copy (/root/quake/tiopex-quake, same md5 85e6e0ab). The 11 kHz audio
+device is unaffected - that is platform code (the s31route plugin), not an
+app. The XIP run's numbers above stand as a measurement only.

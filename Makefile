@@ -825,13 +825,7 @@ XIP_ROOTFS_IMG := $(BUILD_DIR)/rootfs-xip.cramfs
 # matched the target tree (b7d1d1d8) before this was shipped.
 # libpng16 and libz join for prboom's screenshots and xcalc for the menu -
 # 290 KB of text off the card on every use, measured as churn in smaps.
-# usr/bin/tyrquake is TyrQuake 0.62 (the card's /root/quake/tiopex-quake,
-# md5 85e6e0ab, UNMODIFIED - copied byte for byte). It is here because Quake on
-# this board is paging-bound: ~74% of CPU0 goes to faulting pages back in, and
-# a binary run from SD has its own code pages evicted and re-read too. From
-# XIP flash its 430 kB of code costs no RAM and never pages. Its libraries
-# (SDL 1.2, ALSA, X11, libc) were already in this image.
-XIP_ROOTS ?= bin/busybox usr/sbin/wpa_supplicant usr/sbin/iw usr/bin/lvdesk usr/bin/tyrquake \
+XIP_ROOTS ?= bin/busybox usr/sbin/wpa_supplicant usr/sbin/iw usr/bin/lvdesk \
 	usr/lib/alsa-lib/libasound_module_pcm_s31route.so \
 	usr/bin/s31-coex usr/bin/s31swapon usr/lib/libSDL-1.2.so.0.11.4 \
 	usr/lib/libSDL2-2.0.so.0.3200.10 usr/lib/libSDL2_mixer-2.0.so.0.600.3 \
