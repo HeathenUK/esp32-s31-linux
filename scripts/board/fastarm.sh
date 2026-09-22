@@ -37,7 +37,7 @@ open(path, 'w').write('\n'.join(out))
 PY
 echo "--- arm $L: S31_FAST_PROFILED = ${OBJS:-<empty>}"
 
-./docker/build.sh "cd /src && \$S31_MAKE linux SMP=1 PIE_BOUNCE=20 > /src/$OUT/build-fast-$L.log 2>&1; echo BUILD_EXIT=\$?" | tail -1 | tee /tmp/fastarm.exit
+./docker/build.sh "cd /src && \$S31_MAKE linux SMP=1 > /src/$OUT/build-fast-$L.log 2>&1; echo BUILD_EXIT=\$?" | tail -1 | tee /tmp/fastarm.exit
 grep -q "BUILD_EXIT=0" /tmp/fastarm.exit || {
 	echo "BUILD FAILED - not flashing (images/ still holds the previous kernel):"
 	grep -aiE "error|syntax" "$OUT/build-fast-$L.log" | head -5
