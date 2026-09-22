@@ -126,6 +126,20 @@ Ranked, highest leverage first:
 5. **Our own daemons off the critical path:** A2DP SBC encode, audio mixing -
    ours, PIE-free, genuinely parallel. Small (~0.6% of a core) but free.
 
+### Quake placement, measured 2026-09-22 (fresh boot, 11 kHz, 17.3 fps)
+15 s window mid-timedemo (artifacts/quake/placement-061521):
+- Quake main thread busy **84%** of a core (user 1202 + sys 144 ticks), on
+  CPU0 at one sample and CPU1 at the other; CPU0's user ticks (1195) say it
+  spent nearly all of the window on CPU0. The SDL audio thread is ~1.5%.
+- lvdesk ~30% of a core, mostly on CPU1. The present is already parallel.
+- CPU0: user 75%, sys 14%, idle 8%, iowait 2%. **CPU1: 64% idle.**
+- Every device IRQ lands on CPU0 (lcd 52/s, dw-mci 50/s, i2c 44/s, dma 27/s,
+  ppa 19/s). The total is ~1% of a core. It is not the lever.
+- **The ceiling is removing Quake's waits: 17.3 / 0.84 = 20.6 fps.** The 20 fps
+  goal is the 16% Quake spends not running. It is not more parallel work.
+  Candidates: major faults (1,296 in a demo, about 3 ms each, so about 7%) and
+  the per-frame XSync round trip to lvdesk on the other hart.
+
 **Do NOT spend more on affinity policy.** Forced placement, capacity hints and
 RPS/workqueue steering all measured WORSE today. The stock scheduler beat
 every manual placement tried.
