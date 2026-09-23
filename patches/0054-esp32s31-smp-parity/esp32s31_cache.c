@@ -62,6 +62,22 @@
 #define ESP32S31_ICACHE1_PRELOAD_ADDR		0x0bc
 #define ESP32S31_ICACHE1_PRELOAD_SIZE		0x0c0
 
+/*
+ * The manual lock/unlock OPERATION block, distinct from the prelock sections
+ * above. Clearing a section's enable bit only stops it pinning new lines; the
+ * lines it already pinned stay marked locked until an unlock operation is
+ * run over that range. Measured 2026-09-23 (perf-plan C23): a 2 kB x 2 prelock
+ * took same-hart pingpong 432 -> 718 us and "releasing" it by the enable bit
+ * alone left it at 708 - the cache stayed part-locked until reboot.
+ */
+#define ESP32S31_CACHE_LOCK_CTRL		0x08c
+#define ESP32S31_CACHE_LOCK_MAP			0x090
+#define ESP32S31_CACHE_LOCK_ADDR		0x094
+#define ESP32S31_CACHE_LOCK_SIZE		0x098
+#define ESP32S31_CACHE_LOCK_ENA			BIT(0)
+#define ESP32S31_CACHE_UNLOCK_ENA		BIT(1)
+#define ESP32S31_CACHE_LOCK_DONE		BIT(2)
+
 #define ESP32S31_PRELOCK_SCT0_EN		BIT(0)
 #define ESP32S31_PRELOCK_SCT1_EN		BIT(1)
 #define ESP32S31_PRELOCK_SCT0_SIZE_S		0
@@ -268,6 +284,37 @@ static int esp32s31_icache_prelock(unsigned int sct, u32 addr, u32 size)
 	/* Drop the lock before moving it, so no stale range stays pinned. */
 	writel_relaxed(conf & ~en,
 		       esp32s31_cache_base + ESP32S31_ICACHE1_PRELOCK_CONF);
+
+	/*
+	 * Unlock whatever the section had pinned before it is released or
+	 * moved: an unlock operation over the old range, on I-cache1's map
+	 * bit (the same bit the sync map uses for it).
+	 */
+	{
+		u32 old_addr = readl_relaxed(esp32s31_cache_base +
+			(sct ? ESP32S31_ICACHE1_PRELOCK_SCT1_ADDR :
+			       ESP32S31_ICACHE1_PRELOCK_SCT0_ADDR));
+		u32 old_sizes = readl_relaxed(esp32s31_cache_base +
+					      ESP32S31_ICACHE1_PRELOCK_SCT_SIZE);
+		u32 old_size = (old_sizes >> (sct ? ESP32S31_PRELOCK_SCT1_SIZE_S :
+						    ESP32S31_PRELOCK_SCT0_SIZE_S)) &
+			       ESP32S31_PRELOCK_SIZE_MAX;
+
+		if ((conf & en) && old_size) {
+			writel_relaxed(ESP32S31_CACHE_MAP_ICACHE1,
+				       esp32s31_cache_base + ESP32S31_CACHE_LOCK_MAP);
+			writel_relaxed(old_addr,
+				       esp32s31_cache_base + ESP32S31_CACHE_LOCK_ADDR);
+			writel_relaxed(old_size,
+				       esp32s31_cache_base + ESP32S31_CACHE_LOCK_SIZE);
+			writel_relaxed(ESP32S31_CACHE_UNLOCK_ENA,
+				       esp32s31_cache_base + ESP32S31_CACHE_LOCK_CTRL);
+			while (!(readl_relaxed(esp32s31_cache_base +
+					       ESP32S31_CACHE_LOCK_CTRL) &
+				 ESP32S31_CACHE_LOCK_DONE))
+				cpu_relax();
+		}
+	}
 
 	if (!size) {
 		raw_spin_unlock_irqrestore(&esp32s31_cache_lock, flags);
