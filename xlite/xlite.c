@@ -960,14 +960,43 @@ char *XSetIMValues(XIM im, ...)
 XLITE_IMPL(XFlush)
 int XFlush(Display *d) { return xlite_flush(XD(d)); }
 
+/*
+ * XLITE_NOSYNCWAIT=1: XSync flushes and returns WITHOUT waiting for the
+ * server. A MEASUREMENT KNOB, never a default: an SDL client draws its next
+ * frame into the shared segment the compositor may still be reading, so it
+ * tears. It exists to bound the whole "last X round trip per frame" family
+ * (docs/perf-review-2026-09-23.md T2.4) in one boot - if deleting the wait
+ * outright is worth X, no cheaper scheme can be worth more than X.
+ */
+static int xlite_nosyncwait(void)
+{
+	static int v = -1;
+
+	if (v < 0)
+		v = getenv("XLITE_NOSYNCWAIT") != NULL;
+	return v;
+}
+
 XLITE_IMPL(XSync)
 int XSync(Display *d, Bool discard)
 {
 	struct xdpy *x = XD(d);
 	unsigned char hdr[32], *extra = NULL;
 	size_t nextra = 0;
-	unsigned char *r = xlite_req(x, 43, 0, 1);	/* GetInputFocus */
-	uint32_t seq = x->pub.request;
+	unsigned char *r;
+	uint32_t seq;
+
+	if (xlite_nosyncwait()) {
+		xlite_flush(x);
+		x->shm_seq = x->pub.request;
+		if (discard) {
+			x->qhead = x->qtail = 0;
+			x->pub.qlen = 0;
+		}
+		return 0;
+	}
+	r = xlite_req(x, 43, 0, 1);	/* GetInputFocus */
+	seq = x->pub.request;
 
 	xlite_send(x, r);
 	if (xlite_reply(x, seq, hdr, &extra, &nextra))
