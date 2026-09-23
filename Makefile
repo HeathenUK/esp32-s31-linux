@@ -508,8 +508,11 @@ FP_TWEAK += --disable ESP32S31_SYSTIMER_CLOCKSOURCE
 # -fdata-sections, ld --gc-sections). Perf-plan 2026-09-23 Phase 3b arm: fewer
 # bytes in flash and better locality; the .text.fast collector in
 # vmlinux-xip.lds.S uses TEXT_MAIN so the fast objects' per-function sections
-# still land in RAM. Off until measured.
-DCE ?= 0
+# still land in RAM. ON by default since 2026-09-23 (#356): -496 kB, same-hart
+# pingpong 381-397 us vs 444-449, Quake 20.0/20.1 vs 19.5, gate 22/22, 12 of
+# 13 boots clean (the one NO_SHELL emitted 3 bytes - a reset that did not
+# take, not a recorded kernel death; 6/6 recorded boots after it).
+DCE ?= 1
 ifeq ($(DCE),1)
 FP_TWEAK += --enable LD_DEAD_CODE_DATA_ELIMINATION
 else
