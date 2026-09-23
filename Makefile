@@ -470,6 +470,27 @@ else
 DIAG_TWEAKS := --enable DEBUG_FS
 endif
 
+# FRAME_POINTER was on in every shipped kernel by accident. arch/riscv/Kconfig
+# selects it under PERF_EVENTS and it is `default y` under
+# ARCH_WANT_FRAME_POINTERS, so clearing PERF_EVENTS above never cleared it and
+# olddefconfig kept it: every object was built -fno-omit-frame-pointer
+# -fno-optimize-sibling-calls. The defconfig says "not set". Cost: ~187 kB of
+# XIP text and 1.5-2.5% of CPU0 (docs/perf-review-2026-09-23.md, T1.3).
+# Kept for diagnostic builds, where oops backtraces are worth it.
+ifeq ($(filter 1,$(PROF) $(DIAG)),)
+FP_TWEAK := --disable FRAME_POINTER
+else
+FP_TWEAK := --enable FRAME_POINTER
+endif
+
+# The SYSTIMER clocksource (rating 450, MMIO latch + two reads, not safe with
+# two harts) had been INERT since .text..fast was introduced: bare file globs
+# in vmlinux-xip.lds.S swallowed its TIMER_OF_DECLARE entry into RAM text, so
+# it never registered and the board ran on riscv_clocksource (rating 400).
+# Fixing the globs (2026-09-23) resurrected it and kernel #339 switched to it.
+# Keep the shipped behaviour explicitly.
+FP_TWEAK += --disable ESP32S31_SYSTIMER_CLOCKSOURCE
+
 # Slab accounting OFF by default, because the thing that reports it is also the
 # thing that costs memory. The shipping kernel sets CONFIG_SLUB_TINY, which is
 # what a 15.4 MB machine wants - but SLUB_DEBUG depends on !SLUB_TINY, and
@@ -632,6 +653,7 @@ linux: toolchain | $(LINUX_OUT)
 		$(PROF_TWEAKS) \
 		$(LOCKUP_TWEAKS) \
 		$(TICK_TWEAKS) \
+		$(FP_TWEAK) \
 		--disable BPF_SYSCALL \
 		--disable BPF_JIT \
 		--disable PREEMPT_LAZY \

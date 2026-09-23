@@ -364,7 +364,7 @@ SECTIONS
 		ALIGN_FUNCTION();					\
 		*(EXCLUDE_FILE(S31_FAST_OBJS) .text.hot)		\
 		*(.text.hot.*)						\
-		*(EXCLUDE_FILE(S31_FAST_OBJS) TEXT_MAIN)		\
+		EXCLUDE_FILE(S31_FAST_OBJS) *(TEXT_MAIN)		\
 		*(.text.fixup)						\
 		*(EXCLUDE_FILE(S31_FAST_OBJS) .text.unlikely)		\
 		*(.text.unlikely.*)					\
@@ -423,8 +423,9 @@ SECTIONS
 	 *    so runqueues, hrtimer_bases and tick_cpu_device were linked INTO
 	 *    .text.fast, outside [__per_cpu_start, __per_cpu_end), and the first
 	 *    this_cpu access read PSRAM fill (2026-09-20: oops at aaaaab1a in
-	 *    tick_check_replacement). The same glob still takes those objects'
-	 *    .bss and .init.* - harmless, wasteful, not yet fixed.
+	 *    tick_check_replacement). Fixed 2026-09-23: .text.fast no longer
+	 *    uses file globs at all (see its comment), so .bss and .init.*
+	 *    stay where they belong; this ordering is kept as belt and braces.
 	 */
 	PERCPU_SECTION(L1_CACHE_BYTES)
 
@@ -459,7 +460,25 @@ SECTIONS
 	 */
 	.text.fast : AT(ADDR(.text.fast) - LOAD_OFFSET) {
 		*(.text..fast)
-		S31_FAST_OBJS(.text .text.* .sched.text .noinstr.text .spinlock.text .cpuidle.text)
+		/*
+		 * NO FILE GLOBS HERE. This used to read
+		 *     S31_FAST_OBJS(.text .text.* ...)
+		 * but the macro expands to many bare file names and ld binds a
+		 * section list to the LAST pattern only: every other object was
+		 * a bare `*foo.o`, which claims EVERY section of foo.o not yet
+		 * placed - its .bss, .sbss, .init.data (TIMER_OF_TABLES:
+		 * __of_table_esp32s31_systimer sat at c084102c inside RAM text)
+		 * and ~22 kB of never-executed bytes, all copied to RAM at boot
+		 * (2026-09-23, docs/perf-review-2026-09-23.md C18).
+		 *
+		 * Instead, collect by SECTION NAME with no file pattern. Every
+		 * text section of every object not in S31_FAST_OBJS has already
+		 * been placed by the flash .text above (its collectors carry
+		 * EXCLUDE_FILE(S31_FAST_OBJS)), and INIT_TEXT/EXIT_TEXT sit at
+		 * the top of flash, so what is left with these names is exactly
+		 * the listed objects' text and nothing else.
+		 */
+		*(.text .text.hot .text.unlikely .sched.text .noinstr.text .spinlock.text .cpuidle.text)
 		/*
 		 * Whole objects, by name, rather than an attribute sprinkled
 		 * through generic kernel code. Measured with a 72 KB body on
@@ -482,11 +501,6 @@ SECTIONS
 		 * drivers/base/core.o, net/core/*.o and a dozen others, and
 		 * silently drags them in.
 		 */
-		*hrtimer.o(.text .text.*)
-		*tick-sched.o(.text .text.*)
-		*timer.o(.text .text.*)
-		*entry.o(.text .text.*)
-		*irq-esp32s31-clic.o(.text .text.*)
 	}
 	. = ALIGN(16);
 	__text_fast_end = .;
