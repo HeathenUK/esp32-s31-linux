@@ -15,6 +15,11 @@
 # hands the damage copy to a workqueue (the 7.4 ms arm), 0 does it inline.
 # A/B/A: the A-to-A gap is the error bar (dead-end #19: same-boot arms are
 # position-biased). ~2 min. The panel goes dark while lvdesk is down.
+#
+# LVDESK_DIRECT=0 LVDESK_NOPRESENT=1 is load-bearing: kms.c now defaults to
+# direct scanout + the PRESENT ioctl, where there is no per-frame copy at all
+# and defer_copy never engages (first run 2026-09-23: every arm 0.05-0.4 ms).
+# The 7.4 ms was measured on the dumb-buffer DIRTYFB copy path; this forces it.
 set -u
 cd "$(dirname "$0")/../.."
 REPS=${1:-40}
@@ -28,7 +33,7 @@ echo "PARAMS defer_copy=\$(cat \$P/defer_copy) ppa_async=\$(cat \$P/ppa_async) f
 for arm in A1 B A2; do
 	case \$arm in B) echo 1 > \$P/defer_copy;; *) echo 0 > \$P/defer_copy;; esac
 	echo "ARM \$arm defer_copy=\$(cat \$P/defer_copy)"
-	/root/dirtybench $REPS 2>&1 | sed "s/^/  \$arm /"
+	LVDESK_DIRECT=0 LVDESK_NOPRESENT=1 /root/dirtybench $REPS 2>&1 | sed "s/^/  \$arm /"
 done
 echo 0 > \$P/defer_copy
 /etc/init.d/S40lvdesk start >/dev/null 2>&1
