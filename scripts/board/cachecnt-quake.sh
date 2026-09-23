@@ -23,7 +23,9 @@ setsid sh -c 'DISPLAY=:0 HOME=/root/quake AUDIODEV=s31route_11k exec ./tiopex-qu
 echo LAUNCHED
 EOF
 cat > "$OUT/finish.sh" <<'EOF'
-i=0; while [ $i -lt 120 ]; do grep -aqE "[0-9]+ frames" /root/quake/id1/qconsole.log 2>/dev/null && break; sleep 1; i=$((i+1)); done
+# Slow poll: a 1 s poll loop is three forks a second and cost ~17% of fps on
+# this board (docs/perf-plan-2026-09-23.md, the harness correction).
+i=0; while [ $i -lt 40 ]; do grep -aqE "[0-9]+ frames" /root/quake/id1/qconsole.log 2>/dev/null && break; sleep 3; i=$((i+1)); done
 echo "RESULT $(grep -ahE '[0-9]+ frames' /root/quake/id1/qconsole.log 2>/dev/null | head -1)"
 P=$(ps | awk '/[t]iopex/ {print $1}' | head -1); echo "QUAKE majflt=$(awk '{print $12}' /proc/$P/stat 2>/dev/null)"
 for p in $(ps | awk '/[t]iopex/ {print $1}'); do kill -9 $p; done
