@@ -491,6 +491,14 @@ endif
 # Keep the shipped behaviour explicitly.
 FP_TWEAK += --disable ESP32S31_SYSTIMER_CLOCKSOURCE
 
+# SAVERESTORE=0 builds with -mno-save-restore (the upstream default) for an A/B.
+SAVERESTORE ?= 1
+ifeq ($(SAVERESTORE),1)
+FP_TWEAK += --enable ESP32S31_SAVE_RESTORE
+else
+FP_TWEAK += --disable ESP32S31_SAVE_RESTORE
+endif
+
 # Slab accounting OFF by default, because the thing that reports it is also the
 # thing that costs memory. The shipping kernel sets CONFIG_SLUB_TINY, which is
 # what a 15.4 MB machine wants - but SLUB_DEBUG depends on !SLUB_TINY, and

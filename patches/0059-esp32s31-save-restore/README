@@ -1,0 +1,19 @@
+0059 - build the kernel with -msave-restore (2026-09-23)
+
+Files (the port tree is untracked; apply by hand):
+  arch/riscv/lib/save-restore.S      NEW - this directory's copy
+  arch/riscv/lib/Makefile            + lib-$(CONFIG_ESP32S31_SAVE_RESTORE) += save-restore.o
+  arch/riscv/Makefile                KBUILD_CFLAGS += -mno-save-restore  becomes
+                                     ifeq ($(CONFIG_ESP32S31_SAVE_RESTORE),y) -msave-restore else -mno-save-restore
+  arch/riscv/Kconfig.socs            config ESP32S31_SAVE_RESTORE, bool, depends on SOC_ESP32S31, default y
+  top-level Makefile                 SAVERESTORE ?= 1 -> --enable/--disable ESP32S31_SAVE_RESTORE (FP_TWEAK)
+
+Why: the cache counters put the XIP kernel path at 91% fetch-stalled, so bytes
+fetched from flash are time. Frame pointers off (Phase 0) cut 9% of text and
+gave -9.4% on the same-hart futex round trip. -msave-restore folds every
+prologue into `jal t0, __riscv_save_N` and every epilogue into
+`tail __riscv_restore_N`: xipImage 5,537,557 -> 5,349,141 bytes (-3.4%).
+The routines are transcribed from GCC 15.2's libgcc save-restore.o for rv32
+(same frame sizes, register order and fall-through) and stay in flash .text
+because setup_vm() calls them before .text..fast is in RAM.
+Result: see docs/perf-plan-2026-09-23.md.

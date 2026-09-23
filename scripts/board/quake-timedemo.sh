@@ -33,7 +33,15 @@ echo "PRE_APPLIED watermark_scale_factor=\$(cat /proc/sys/vm/watermark_scale_fac
 rm -f /root/-basedir/qconsole.log /root/quake/id1/qconsole.log
 amixer -q sset 'DACL' 110 2>/dev/null; amixer -q sset 'DACR' 110 2>/dev/null
 setsid sh -c 'DISPLAY=:0 HOME=/root/quake exec ${QUAKE_BIN:-./tiopex-quake} id1 -basedir /root/quake $ARGS -width 320 -height 240 -fullscreen -condebug +timedemo demo1 >/root/quake/td.log 2>&1' </dev/null >/dev/null 2>&1 &
-i=0; while [ \$i -lt 200 ]; do grep -aqE "[0-9]+ frames" /root/-basedir/qconsole.log /root/quake/id1/qconsole.log 2>/dev/null && break; grep -aq "^Error:" /root/quake/td.log 2>/dev/null && break; sleep 1; i=\$((i+1)); done
+# QUIET WAIT. This loop used to poll every second - three busybox forks a
+# second for the whole demo, on a board at 300-700 kB MemAvailable where a
+# fork can evict a Quake page. Measured 2026-09-23: the same kernel read
+# 15.9 fps through this harness and 18.5-18.9 with the demo left alone
+# (cachecnt-quake.sh polls only after 40 s). The harness was the lottery.
+# So: one long sleep that covers the load and most of the demo, then a slow
+# poll. Error exit stays quick because it is checked once before the sleep.
+sleep 8; grep -aq "^Error:" /root/quake/td.log 2>/dev/null || sleep 42
+i=0; while [ \$i -lt 60 ]; do grep -aqE "[0-9]+ frames" /root/quake/id1/qconsole.log 2>/dev/null && break; grep -aq "^Error:" /root/quake/td.log 2>/dev/null && break; sleep 3; i=\$((i+1)); done
 P=\$(ps | awk '/[t]iopex|[t]yr-quake|[t]yrquake/ {print \$1}' | head -1)
 echo "RESULT \$(grep -ahE '[0-9]+ frames' /root/-basedir/qconsole.log /root/quake/id1/qconsole.log 2>/dev/null | head -1)"
 echo "ERROR \$(grep -a '^Error:' /root/quake/td.log 2>/dev/null | head -1)"
