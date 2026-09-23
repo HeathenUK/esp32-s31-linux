@@ -17,6 +17,8 @@ void s31_vcpu_start(void);
 #include "esp_err.h"
 #include "esp_system.h"
 #include "esp_cpu.h"
+#include "soc/rtc.h"
+#include "s31_oc.h"
 #include "esp_flash.h"
 #include "esp_partition.h"
 #include "spi_flash_mmap.h"
@@ -413,6 +415,26 @@ void app_main(void)
                      s_blackbox.pc[k], s_blackbox.sp[k]);
     }
     s_blackbox.magic = 0;
+#if S31_CPU_OC_MHZ
+    {
+        /*
+         * OVERCLOCK ARM. Switch the CPU PLL now, before anything timing-
+         * sensitive and before hart1 is released: Linux boots on this clock
+         * and its DTS timebase must say the same number. The console UART
+         * runs from REF_F80M, not APB, so it survives the switch. MEM_CLK is
+         * CPU/2 and the vendor ceiling is 160 MHz - at 360 the cache and
+         * memory domain run 12.5% over it; run memtest before trusting it.
+         */
+        rtc_cpu_freq_config_t oc;
+        if (rtc_clk_cpu_freq_mhz_to_config(S31_CPU_OC_MHZ, &oc)) {
+            rtc_clk_cpu_freq_set_config(&oc);
+            ESP_LOGW(TAG, "OVERCLOCK: CPU %u MHz (source %u MHz / div %u)",
+                     (unsigned)oc.freq_mhz, (unsigned)oc.source_freq_mhz, (unsigned)oc.div);
+        } else {
+            ESP_LOGE(TAG, "OVERCLOCK: %u MHz refused by rtc_clk_cpu_freq_mhz_to_config - vendor patch missing", (unsigned)S31_CPU_OC_MHZ);
+        }
+    }
+#endif
 
 #ifndef CONFIG_S31_DISPLAY_ENABLE
     /* Allow the USB Serial/JTAG device to enumerate before loader output. */
