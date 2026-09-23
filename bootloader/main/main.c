@@ -19,6 +19,8 @@ void s31_vcpu_start(void);
 #include "esp_cpu.h"
 #include "soc/rtc.h"
 #include "s31_oc.h"
+#include "esp_pm.h"
+#include "esp_private/esp_clk.h"
 #include "esp_flash.h"
 #include "esp_partition.h"
 #include "spi_flash_mmap.h"
@@ -427,9 +429,20 @@ void app_main(void)
          */
         rtc_cpu_freq_config_t oc;
         if (rtc_clk_cpu_freq_mhz_to_config(S31_CPU_OC_MHZ, &oc)) {
+            /*
+             * CONFIG_PM_ENABLE is on: esp_pm owns the CPU clock and puts it
+             * back to its own max (the sdkconfig 320) the moment it applies a
+             * configuration - the first 360 build switched here, booted, and
+             * the host/board ratio read 0.887 = 320/360. So set the clock
+             * THROUGH esp_pm, max and min both, which is also what the hosted
+             * transport reads back when it lowers the floor (hosted_sram.c).
+             */
+            esp_pm_config_t pm = { .max_freq_mhz = S31_CPU_OC_MHZ, .min_freq_mhz = S31_CPU_OC_MHZ, .light_sleep_enable = false };
+            esp_err_t pe = esp_pm_configure(&pm);
             rtc_clk_cpu_freq_set_config(&oc);
-            ESP_LOGW(TAG, "OVERCLOCK: CPU %u MHz (source %u MHz / div %u)",
-                     (unsigned)oc.freq_mhz, (unsigned)oc.source_freq_mhz, (unsigned)oc.div.integer);
+            ESP_LOGW(TAG, "OVERCLOCK: CPU %u MHz (source %u MHz / div %u), esp_pm_configure=%d, now %u MHz",
+                     (unsigned)oc.freq_mhz, (unsigned)oc.source_freq_mhz, (unsigned)oc.div.integer,
+                     (int)pe, (unsigned)esp_clk_cpu_freq() / 1000000u);
         } else {
             ESP_LOGE(TAG, "OVERCLOCK: %u MHz refused by rtc_clk_cpu_freq_mhz_to_config - vendor patch missing", (unsigned)S31_CPU_OC_MHZ);
         }
