@@ -542,6 +542,9 @@ endif
 # control moved the same bytes for -14% / no Quake gain.
 # Default: the shipped list (patches/0062). FASTFN= (empty) builds without it.
 FASTFN ?= patches/0062-esp32s31-fastfn-list/agg-hot.list
+# HOTFN=<list> packs the listed functions hot-first at the head of FLASH .text
+# (they stay in flash). C39's flash half; empty until measured.
+HOTFN ?=
 # O2OBJS="kernel/sched/core.o ..." compiles those objects at -O2 in the -Os
 # kernel (hook in scripts/Makefile.lib, patches/0060). A measurement knob for
 # the perf plan's "selective -O2 on hot objects" arm; empty by default.
@@ -733,8 +736,9 @@ linux: toolchain | $(LINUX_OUT)
 	@# C39: the list's lds fragment (written beside it by fastfn-pick.py) is what
 	@# orders the renamed functions; install it, or an empty one, every build.
 	@if [ -n "$(FASTFN)" ]; then cp "$(patsubst %.list,%.lds.h,$(FASTFN))" $(LINUX_DIR)/arch/riscv/kernel/s31-fastfn.lds.h && echo "--- FASTFN $(FASTFN): $$(grep -c 'text..fast' $(LINUX_DIR)/arch/riscv/kernel/s31-fastfn.lds.h) functions"; else echo "/* no FASTFN list */" > $(LINUX_DIR)/arch/riscv/kernel/s31-fastfn.lds.h; fi
+	@if [ -n "$(HOTFN)" ]; then cp "$(patsubst %.list,%.lds.h,$(HOTFN))" $(LINUX_DIR)/arch/riscv/kernel/s31-hotfn.lds.h && echo "--- HOTFN $(HOTFN): $$(grep -c 'text..hot' $(LINUX_DIR)/arch/riscv/kernel/s31-hotfn.lds.h) functions"; else echo "/* no HOTFN list */" > $(LINUX_DIR)/arch/riscv/kernel/s31-hotfn.lds.h; fi
 	$(MAKE) -C $(LINUX_DIR) O=$(LINUX_OUT) ARCH=riscv CROSS_COMPILE="$(CROSS_COMPILE)" \
-		KCFLAGS="-march=$(S31_SAFE_ISA) $(S31_COMMON_FLAGS)" S31_O2_OBJS="$(O2OBJS)" $(if $(FASTFN),S31_FASTFN_LIST="$(CURDIR)/$(FASTFN)") -j$(JOBS) $(LINUX_TARGET) dtbs
+		KCFLAGS="-march=$(S31_SAFE_ISA) $(S31_COMMON_FLAGS)" S31_O2_OBJS="$(O2OBJS)" $(if $(FASTFN),S31_FASTFN_LIST="$(CURDIR)/$(FASTFN)") $(if $(HOTFN),S31_HOTFN_LIST="$(CURDIR)/$(HOTFN)") -j$(JOBS) $(LINUX_TARGET) dtbs
 	cp -v $(LINUX_OUT)/arch/riscv/boot/$(LINUX_TARGET) $(XIP_IMAGE)
 	cp -v $(LINUX_OUT)/arch/riscv/boot/dts/espressif/esp32s31_generic.dtb $(FDT_DTB)
 	cp -v $(LINUX_OUT)/System.map $(BUILD_DIR)/System.map

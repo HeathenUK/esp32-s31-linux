@@ -260,11 +260,17 @@ endif
 # Objects not in the list keep an unchanged command line, so they do not rebuild.
 s31-fastfn-names = $(if $(S31_FASTFN_LIST),$(shell awk -v o=$(obj)/$(target-stem).o '$$1==o {print $$2}' $(S31_FASTFN_LIST)))
 cmd_s31_fastfn = $(if $(s31-fastfn-names),; $(OBJCOPY) $(foreach f,$(s31-fastfn-names),--rename-section .text.$(f)=.text..fast.$(f)) $@)
+# Same again for S31_HOTFN_LIST: functions that STAY in flash but are packed
+# hot-first at the head of flash .text (.text..hot.<fn>), so the hottest
+# remaining flash code shares cache lines with itself rather than with cold
+# neighbours (perf-plan 2026-09-23 C39, flash half).
+s31-hotfn-names = $(if $(S31_HOTFN_LIST),$(shell awk -v o=$(obj)/$(target-stem).o '$$1==o {print $$2}' $(S31_HOTFN_LIST)))
+cmd_s31_hotfn = $(if $(s31-hotfn-names),; $(OBJCOPY) $(foreach f,$(s31-hotfn-names),--rename-section .text.$(f)=.text..hot.$(f)) $@)
 
 quiet_cmd_cc_o_c = CC $(quiet_modtag)  $@
       cmd_cc_o_c = $(CC) $(c_flags) -c -o $@ $< \
 		$(cmd_ld_single) \
-		$(cmd_objtool) $(cmd_s31_fastfn)
+		$(cmd_objtool) $(cmd_s31_fastfn) $(cmd_s31_hotfn)
 
 define rule_cc_o_c
 	$(call cmd_and_fixdep,cc_o_c)
