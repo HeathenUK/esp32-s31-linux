@@ -18,6 +18,16 @@
 # QUAKE_BIN picks the binary: ./name (in /root/quake, i.e. on SD) or an absolute
 # path such as /usr/bin/tyrquake (in XIP flash). Default ./tiopex-quake.
 #
+# SOUND RATE IS THE BIGGEST CONFOUND. The menu launches Quake with
+# AUDIODEV=s31route_11k (mixes at its native 11025 Hz); through "default" it
+# is granted 48 kHz, mixes 4.4x the samples and pages a 4.4x sound cache.
+# Same kernel, same day (2026-09-23, #353): 19.8 fps at 11 kHz, 14.2 at
+# 48 kHz, 20.6 with -nosound. Runs made before this default were passed
+# PRE='export AUDIODEV=s31route_11k'; after a context reset that was dropped
+# and 14 fps was chased as a kernel regression for an hour. So the harness
+# now sets it itself and prints AUDIO=<device>. QUAKE_AUDIODEV=default
+# measures the 48 kHz arm on purpose.
+#
 # ~1 min boot + ~100-170 s demo. Checks the panel is not black afterwards.
 set -u
 cd "$(dirname "$0")/../.."
@@ -26,8 +36,10 @@ ARGS="$*"
 PRE=${PRE:-:}	# a board-side command run before Quake starts, e.g. a sysctl
 OUT=artifacts/quake/td-$L-$(date +%H%M%S); mkdir -p "$OUT"
 S=$OUT/run.sh
+AUDIODEV_ON_BOARD=${QUAKE_AUDIODEV:-s31route_11k}
 cat > "$S" <<EOF
 cd /root/quake
+export AUDIODEV=$AUDIODEV_ON_BOARD; echo "AUDIO=\$AUDIODEV"
 $PRE
 echo "PRE_APPLIED watermark_scale_factor=\$(cat /proc/sys/vm/watermark_scale_factor) page-cluster=\$(cat /proc/sys/vm/page-cluster)"
 rm -f /root/-basedir/qconsole.log /root/quake/id1/qconsole.log
@@ -64,5 +76,5 @@ python3 scripts/board/runsh.py "$OUT/clean.sh" 20 20 > /dev/null 2>&1
 fps=$(sed -n 's/.* \([0-9.]*\) fps.*/\1/p' "$OUT/run.log" | head -1)
 echo "[$L] fps=${fps:-NONE}  $(grep -a '^RESULT' "$OUT/run.log" | cut -c8-)"
 grep -a '^ERROR [^ ]' "$OUT/run.log" | sed 's/^/     /'
-grep -aE '^(PRE_APPLIED|QUAKE|MEM|SCANOUT_FAIL|SDSTAT|KNOBS)' "$OUT/run.log" | sed 's/^/     /'
+grep -aE '^(AUDIO=|PRE_APPLIED|QUAKE|MEM|SCANOUT_FAIL|SDSTAT|KNOBS)' "$OUT/run.log" | sed 's/^/     /'
 echo "     panel: $OUT/panel.png"
