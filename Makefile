@@ -18,7 +18,16 @@ JOBS ?= $(shell nproc)
 # S31 supports F and the stateful Espressif HWLoop/PIE extensions, but firmware
 # and kernel C code must not borrow task coprocessor state.  Use every safe
 # integer code-generation extension there.
+# ZC=1 adds Zcb + Zcmp to the kernel's ISA. Both execute on BOTH harts
+# (rootfs/zcprobe.c, 2026-09-23) although the ISA string omits them. With
+# SAVERESTORE=1, GCC folds every prologue/epilogue into cm.push/cm.pop - the
+# byte saving of -msave-restore without its call redirect, which is what made
+# #341 slower. docs/perf-plan-2026-09-23.md Phase 3b.
+ZC ?= 0
 S31_SAFE_ISA := rv32imabc_zicsr_zifencei_zaamo_zalrsc_zba_zbb_zbc_zbs
+ifeq ($(ZC),1)
+S31_SAFE_ISA := $(S31_SAFE_ISA)_zcb_zcmp
+endif
 # Userspace keeps F and PIE, but NOT xesploop. Linux does save the hardware-loop
 # CSRs across a context switch, yet they are M-mode only, so any trap that
 # reaches hart0 - which saves coprocessor state per trap, not per task - can
@@ -491,6 +500,16 @@ endif
 # Keep the shipped behaviour explicitly.
 FP_TWEAK += --disable ESP32S31_SYSTIMER_CLOCKSOURCE
 
+# KALLSYMS=1: symbol names in /proc/<pid>/wchan, /proc/<pid>/stack and oops
+# backtraces (~200 kB of flash, ~0 RAM under XIP - the tables are rodata).
+# Off in the shipped defconfig; the review's flash headroom pays for it and
+# waitsamp read every wait as "?" without it (2026-09-23, Phase 3c).
+KALLSYMS ?= 0
+ifeq ($(KALLSYMS),1)
+FP_TWEAK += --enable KALLSYMS
+else
+FP_TWEAK += --disable KALLSYMS
+endif
 # SAVERESTORE=1 builds with -msave-restore (patches/0059). MEASURED WORSE
 # 2026-09-23: kernel #341 was 188 kB smaller but same-hart pingpong went
 # 491 -> 529 us and Quake 19.1 -> 17.7 fps. The jal/jr redirect on every
