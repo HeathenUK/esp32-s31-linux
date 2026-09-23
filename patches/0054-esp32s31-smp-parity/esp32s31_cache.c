@@ -13,6 +13,7 @@
 #include <linux/ktime.h>
 #include <linux/math64.h>
 #include <linux/seq_file.h>
+#include <linux/moduleparam.h>
 #include <linux/debugfs.h>
 #include <linux/of_address.h>
 #include <linux/spinlock.h>
@@ -337,6 +338,62 @@ static ssize_t esp32s31_prelock_write(struct file *file,
 		sct, size ? "locked" : "released", addr, size);
 	return len;
 }
+
+/*
+ * The same control as a module parameter, so the shipping kernel (DIAG=0,
+ * no debugfs) can be driven from userspace:
+ *   echo "<sct> <hex addr> <size>" > /sys/module/esp32s31_cache/parameters/icache_prelock
+ * Reading it back gives the two sections' current state. Perf-plan
+ * 2026-09-23 C23: the prelock had only ever been reachable through debugfs
+ * and had never been measured.
+ */
+static int esp32s31_prelock_param_set(const char *val,
+				      const struct kernel_param *kp)
+{
+	unsigned int sct;
+	u32 addr, size;
+	int ret;
+
+	if (!esp32s31_cache_base)
+		return -ENODEV;
+	if (sscanf(val, "%u %x %u", &sct, &addr, &size) != 3)
+		return -EINVAL;
+	ret = esp32s31_icache_prelock(sct, addr, size);
+	if (ret)
+		return ret;
+	pr_info("ESP32-S31 cache: I-cache1 section %u %s 0x%08x+%u\n",
+		sct, size ? "locked" : "released", addr, size);
+	return 0;
+}
+
+static int esp32s31_prelock_param_get(char *buf, const struct kernel_param *kp)
+{
+	u32 conf, sizes;
+
+	if (!esp32s31_cache_base)
+		return sysfs_emit(buf, "no cache controller\n");
+	conf = readl_relaxed(esp32s31_cache_base + ESP32S31_ICACHE1_PRELOCK_CONF);
+	sizes = readl_relaxed(esp32s31_cache_base +
+			      ESP32S31_ICACHE1_PRELOCK_SCT_SIZE);
+	return sysfs_emit(buf, "sct0 en=%u addr=0x%08x size=%lu\nsct1 en=%u addr=0x%08x size=%lu\n",
+			  !!(conf & ESP32S31_PRELOCK_SCT0_EN),
+			  readl_relaxed(esp32s31_cache_base +
+					ESP32S31_ICACHE1_PRELOCK_SCT0_ADDR),
+			  (unsigned long)((sizes >> ESP32S31_PRELOCK_SCT0_SIZE_S) &
+					  ESP32S31_PRELOCK_SIZE_MAX),
+			  !!(conf & ESP32S31_PRELOCK_SCT1_EN),
+			  readl_relaxed(esp32s31_cache_base +
+					ESP32S31_ICACHE1_PRELOCK_SCT1_ADDR),
+			  (unsigned long)((sizes >> ESP32S31_PRELOCK_SCT1_SIZE_S) &
+					  ESP32S31_PRELOCK_SIZE_MAX));
+}
+
+static const struct kernel_param_ops esp32s31_prelock_param_ops = {
+	.set = esp32s31_prelock_param_set,
+	.get = esp32s31_prelock_param_get,
+};
+module_param_cb(icache_prelock, &esp32s31_prelock_param_ops, NULL, 0644);
+MODULE_PARM_DESC(icache_prelock, "\"<sct 0|1> <hex addr> <size>\" pins and preloads an I-cache1 range; size 0 releases");
 
 static int esp32s31_prelock_show(struct seq_file *m, void *v)
 {
