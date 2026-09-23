@@ -13,7 +13,6 @@ Uses deploy.py's helpers for the board/host addresses and the throwaway HTTP
 server. Output goes to artifacts/perf-plan/radio-<label>-<time>/.
 """
 import os
-import subprocess
 import sys
 import time
 
@@ -26,7 +25,7 @@ out = os.path.join(HERE, "..", "..", "artifacts", "perf-plan", "radio-%s-%s" % (
 os.makedirs(out, exist_ok=True)
 blob = os.path.join(out, "blob.bin")
 with open(blob, "wb") as f:
-    f.write(os.urandom(3 * 1024 * 1024))
+    f.write(os.urandom(2 * 1024 * 1024))
 
 ip = deploy.board_ip()
 if not ip:
@@ -34,21 +33,38 @@ if not ip:
 httpd, port = deploy.serve_dir(out)
 host = deploy.host_ip_for(ip)
 url = "http://%s:%d/blob.bin" % (host, port)
+# Self-test from the host first: if the host cannot fetch its own server the
+# board never could, and the failure is ours, not the radio's.
+import urllib.request  # noqa: E402
+try:
+    n = len(urllib.request.urlopen(url, timeout=5).read())
+    print("  host self-fetch: %d bytes from %s" % (n, url))
+except Exception as e:  # noqa: BLE001
+    print("  host self-fetch FAILED: %s (%s)" % (e, url))
 script = os.path.join(out, "run.sh")
 open(script, "w").write("""
-echo "LINK $(iw wlan0 link 2>/dev/null | grep -aE 'signal|bitrate' | tr -s ' ' | tr '\\n' ' ')"
-T0=$(cut -d' ' -f1 /proc/uptime); wget -q %s -O /tmp/blob.bin; T1=$(cut -d' ' -f1 /proc/uptime)
-S=$(stat -c %%s /tmp/blob.bin 2>/dev/null || echo 0); rm -f /tmp/blob.bin
+echo "LINK $(iw wlan0 link 2>/dev/null | grep -aiE 'signal|bitrate' | tr -s ' \t' ' ' | tr '\\n' ' ')"
+# /root, not /tmp: tmpfs on a 15 MB box cannot hold the blob. And wc, not
+# stat: busybox here has no `stat -c`, which read every download as 0 bytes.
+T0=$(cut -d' ' -f1 /proc/uptime); wget %s -O /root/blob.bin >/root/wget.err 2>&1; T1=$(cut -d' ' -f1 /proc/uptime)
+S=$(wc -c < /root/blob.bin 2>/dev/null | tr -d " "); S=${S:-0}; [ "$S" = 0 ] && echo "WGET_ERR $(head -c 200 /root/wget.err)"; rm -f /root/blob.bin /root/wget.err
 echo "WGET bytes=$S secs=$(echo "$T1 - $T0" | bc 2>/dev/null || awk -v a=$T0 -v b=$T1 'BEGIN{print b-a}') kBps=$(awk -v s=$S -v a=$T0 -v b=$T1 'BEGIN{ if (b>a) printf "%%.0f", s/1024/(b-a); else print 0 }')"
 echo "PING $(ping -c 30 -i 0.2 -W 1 %s 2>/dev/null | grep -aE 'packet loss|round-trip|rtt' | tr '\\n' ' ')"
-echo "BT $(timeout 14 bluetoothctl --timeout 10 scan on 2>/dev/null | grep -ac 'Device') devices in a 10 s scan; powered=$(bluetoothctl show 2>/dev/null | grep -a Powered | tr -s ' ')"
+P0=$(bluetoothctl show 2>/dev/null | grep -a Powered | awk '{print $2}')
+[ "$P0" = yes ] || bluetoothctl power on >/dev/null 2>&1; sleep 2
+echo "BT $(timeout 16 bluetoothctl --timeout 10 scan on 2>/dev/null | grep -ac 'Device') devices in a 10 s scan; powered_before=$P0 powered_now=$(bluetoothctl show 2>/dev/null | grep -a Powered | awk '{print $2}')"
+[ "$P0" = yes ] || bluetoothctl power off >/dev/null 2>&1
 echo RC_DONE
 """ % (url, host))
+import runsh  # noqa: E402
+# In-process, like deploy.py: a subprocess runsh collided with the port lock
+# this process already used for board_ip() and reported SERIAL PORT BUSY.
 try:
-    r = subprocess.run([sys.executable, os.path.join(HERE, "runsh.py"), script, "120", "60"], capture_output=True, text=True)
+    txt = (runsh.run(script, timeout=120) or "").replace("\r", "")
+except Exception as e:  # noqa: BLE001
+    txt = "Error: %s" % e
 finally:
     httpd.shutdown()
-txt = (r.stdout + "\n[stderr]\n" + r.stderr).replace("\r", "")
 open(os.path.join(out, "run.log"), "w").write(txt)
 for line in txt.split("\n"):
     if line.startswith(("LINK", "WGET", "PING", "BT ", "RC_DONE")) or "NO_SHELL" in line or "BUSY" in line or "Error" in line or "Traceback" in line:
