@@ -23,17 +23,32 @@ static int probe_zcb(void)
 	return x == 0x34;
 }
 
-static int probe_zcmp(void)
+/*
+ * EFFECT-CHECKED, at both PC alignments. A surviving push/pop proves nothing:
+ * OpenSBI's illegal-instruction handler skips a 16-bit instruction at a
+ * 2-mod-4 PC (a trapped push and a trapped pop cancel out and "pass"), and
+ * at a 4-aligned PC it raises SIGILL. So: read sp, cm.push {ra,s0},-16, read
+ * sp, cm.pop; real only if sp moved by exactly 16. `.balign 4` then an
+ * optional c.nop puts the push at each alignment in turn.
+ */
+static int zcmp_at(int odd)
 {
+	unsigned long before = 0, during = 0;
 	if (sigsetjmp(jb, 1)) return 0;
-	__asm__ volatile("cm.push {ra}, -16\n\tcm.pop {ra}, 16" ::: "memory");
-	return 1;
+	if (odd)
+		__asm__ volatile(".balign 4\n\tc.nop\n\tmv %0, sp\n\tcm.push {ra,s0}, -16\n\tmv %1, sp\n\tcm.pop {ra,s0}, 16" : "=r"(before), "=r"(during) :: "memory");
+	else
+		__asm__ volatile(".balign 4\n\tmv %0, sp\n\tcm.push {ra,s0}, -16\n\tmv %1, sp\n\tcm.pop {ra,s0}, 16" : "=r"(before), "=r"(during) :: "memory");
+	return (before - during) == 16 ? 1 : (before == during ? -1 : -2);
 }
+
+static const char *verdict(int v) { return v == 1 ? "OK (sp moved 16)" : v == 0 ? "SIGILL" : v == -1 ? "SKIPPED BY THE M-MODE HANDLER (sp unchanged, no signal)" : "WRONG sp delta"; }
 
 int main(void)
 {
 	signal(SIGILL, on_ill);
 	printf("zcb  (c.zext.b): %s\n", probe_zcb() ? "OK" : "SIGILL");
-	printf("zcmp (cm.push/pop): %s\n", probe_zcmp() ? "OK" : "SIGILL");
+	printf("zcmp (cm.push/pop) at a 4-aligned PC: %s\n", verdict(zcmp_at(0)));
+	printf("zcmp (cm.push/pop) at a 2-mod-4 PC:  %s\n", verdict(zcmp_at(1)));
 	return 0;
 }
