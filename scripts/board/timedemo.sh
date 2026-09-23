@@ -88,7 +88,7 @@ read u _ < /proc/uptime; end=$((${u%.*} + 100))
 while ps | grep -q "[p]rboom"; do read u _ < /proc/uptime; [ ${u%.*} -ge $end ] && break; sleep 3; done
 echo "TD_FPS $(grep -a 'frames per second' /root/doom/td.log | tail -1)"
 echo "TD_STILL_RUNNING $(ps | grep -c '[p]rboom')"
-echo "TD_FAULTS $(dmesg | grep -aicE 'oops|unhandled signal|rcu:.*(stall|starved)|vblank wait timed out|Out of memory|BUG:')"
+echo "TD_ALARMS $(dmesg | grep -aicE 'oops|unhandled signal|rcu:.*(stall|starved)|vblank wait timed out|Out of memory|BUG:')"
 echo "TD_PRE $(head -c 300 /root/doom/td.pre 2>/dev/null | tr '\n' ' ')"
 echo "TD_PINNED $(dmesg | grep -ac 'pinned to CPU0')"
 # The load an arm asked for is not evidence of the load it got (the load arm
@@ -100,14 +100,15 @@ echo TD_COLLECTED
 E
 	python3 scripts/board/runsh.py "$OUT/collect.sh" 140 10 > "$OUT/collect-$r.log" 2>&1
 	fps=$(sed -n 's/^TD_FPS .*= \([0-9.]*\) frames per second.*/\1/p' "$OUT/collect-$r.log" | tail -1)
-	faults=$(sed -n 's/^TD_FAULTS \([0-9]*\).*/\1/p' "$OUT/collect-$r.log" | tail -1)
+	# dmesg oops/BUG/OOM/stall count, NOT page faults - it read as "faults=0" and was taken for majflt (2026-09-23)
+	faults=$(sed -n 's/^TD_ALARMS \([0-9]*\).*/\1/p' "$OUT/collect-$r.log" | tail -1)
 	still=$(sed -n 's/^TD_STILL_RUNNING \([0-9]*\).*/\1/p' "$OUT/collect-$r.log" | tail -1)
 	# No result: say whether the board is there at all BEFORE the next reset
 	# erases the answer. console-$r.log already holds what it printed on the way.
 	[ -z "$fps" ] && { python3 scripts/board/alive.py --timeout 20 --log "$OUT/nofps-$r.raw" > "$OUT/nofps-$r.txt" 2>&1; echo "    run $r: no fps - alive.py says: $(tail -1 "$OUT/nofps-$r.txt")"; }
 	rx=$(sed -n 's/^TD_RX \([0-9]*\).*/\1/p' "$OUT/collect-$r.log" | tail -1)
-	echo "$r|${fps:-NA}|faults=${faults:-?} still_running=${still:-?} rx=${rx:-?}|$kver" >> "$OUT/results.psv"
-	echo "    run $r: ${fps:-NA} fps  faults=${faults:-?} still_running=${still:-?} rx_MB=$(( ${rx:-0} / 1048576 ))  [$kver]"
+	echo "$r|${fps:-NA}|alarms=${faults:-?} still_running=${still:-?} rx=${rx:-?}|$kver" >> "$OUT/results.psv"
+	echo "    run $r: ${fps:-NA} fps  alarms=${faults:-?} still_running=${still:-?} rx_MB=$(( ${rx:-0} / 1048576 ))  [$kver]"
 done
 
 echo; echo "=== $NAME: ${W}x${H} $MODE, fresh boot per run ==="
