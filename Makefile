@@ -520,6 +520,10 @@ endif
 # 2026-09-23: #353, ZC=1 SAVERESTORE=1, -475 kB, Quake 19.6/19.8 vs 19.2-19.4,
 # gate 22/22, pingpong inside the per-boot band). Without Zcmp, -msave-restore
 # alone was SLOWER (#341) - so the default follows ZC.
+# O2OBJS="kernel/sched/core.o ..." compiles those objects at -O2 in the -Os
+# kernel (hook in scripts/Makefile.lib, patches/0060). A measurement knob for
+# the perf plan's "selective -O2 on hot objects" arm; empty by default.
+O2OBJS ?=
 SAVERESTORE ?= $(ZC)
 ifeq ($(SAVERESTORE),1)
 FP_TWEAK += --enable ESP32S31_SAVE_RESTORE
@@ -705,7 +709,7 @@ linux: toolchain | $(LINUX_OUT)
 	@# Stock musl/SDL need blocking waits; ENOSYS turns contention into spinning.
 	@grep -qx 'CONFIG_FUTEX=y' $(LINUX_OUT)/.config || { echo "ERROR: stock threaded userspace requires CONFIG_FUTEX=y"; exit 1; }
 	$(MAKE) -C $(LINUX_DIR) O=$(LINUX_OUT) ARCH=riscv CROSS_COMPILE="$(CROSS_COMPILE)" \
-		KCFLAGS="-march=$(S31_SAFE_ISA) $(S31_COMMON_FLAGS)" -j$(JOBS) $(LINUX_TARGET) dtbs
+		KCFLAGS="-march=$(S31_SAFE_ISA) $(S31_COMMON_FLAGS)" S31_O2_OBJS="$(O2OBJS)" -j$(JOBS) $(LINUX_TARGET) dtbs
 	cp -v $(LINUX_OUT)/arch/riscv/boot/$(LINUX_TARGET) $(XIP_IMAGE)
 	cp -v $(LINUX_OUT)/arch/riscv/boot/dts/espressif/esp32s31_generic.dtb $(FDT_DTB)
 	cp -v $(LINUX_OUT)/System.map $(BUILD_DIR)/System.map
