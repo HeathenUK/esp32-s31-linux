@@ -33,7 +33,13 @@ FORBID_PREFIX = ("memcpy", "memset", "memmove", "arch_sync_dma", "esp32s31_cache
                  "riscv_fill_hwcap", "sbi_", "clear_bss", "early_", "kernel_init",
                  "esp32s31_flush", "esp32s31_dcache", "esp32s31_icache")
 FORBID_OBJ_PREFIX = ("arch/riscv/mm/init.o", "arch/riscv/kernel/head.o",
-                     "drivers/cache/", "arch/riscv/lib/", "init/")
+                     "drivers/cache/", "arch/riscv/lib/", "init/",
+                     # assembly has no per-function sections to rename
+                     "arch/riscv/kernel/entry.o", "arch/riscv/kernel/fpu.o",
+                     "arch/riscv/kernel/mcount.o", "arch/riscv/kernel/sbi_ecall.o")
+# __lockfunc (.spinlock.text), __exit and __sched code are not split either
+FORBID_NAME_PREFIX = ("_raw_", "ldsem_", "__se_sys_", "__do_sys_")
+FORBID_NAME_SUFFIX = ("_exit",)
 
 # <System.map> may be an `nm -nS vmlinux` listing (addr size type name): sizes
 # make attribution exact. A plain System.map (no sizes) blames every PC in a
@@ -82,7 +88,7 @@ for sp in samples:
                 hits["<unattributed>"] += 1
 
 def allowed(name, obj):
-    if name.startswith(FORBID_PREFIX):
+    if name.startswith(FORBID_PREFIX) or name.startswith(FORBID_NAME_PREFIX) or name.endswith(FORBID_NAME_SUFFIX):
         return False
     if obj.startswith(FORBID_OBJ_PREFIX):
         return False
