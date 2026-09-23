@@ -18,15 +18,12 @@
 # QUAKE_BIN picks the binary: ./name (in /root/quake, i.e. on SD) or an absolute
 # path such as /usr/bin/tyrquake (in XIP flash). Default ./tiopex-quake.
 #
-# SOUND RATE IS THE BIGGEST CONFOUND. The menu launches Quake with
-# AUDIODEV=s31route_11k (mixes at its native 11025 Hz); through "default" it
-# is granted 48 kHz, mixes 4.4x the samples and pages a 4.4x sound cache.
-# Same kernel, same day (2026-09-23, #353): 19.8 fps at 11 kHz, 14.2 at
-# 48 kHz, 20.6 with -nosound. Runs made before this default were passed
-# PRE='export AUDIODEV=s31route_11k'; after a context reset that was dropped
-# and 14 fps was chased as a kernel regression for an hour. So the harness
-# now sets it itself and prints AUDIO=<device>. QUAKE_AUDIODEV=default
-# measures the 48 kHz arm on purpose.
+# SOUND: Quake runs through the DEFAULT device at the 48 kHz it asks for.
+# HARD RULE (user, 2026-09-23): never force a rate the app does not
+# explicitly support. From 09-21 to 09-23 this harness (and the menu) capped
+# Quake at 11025 Hz via AUDIODEV=s31route_11k for +40% fps; the sound was
+# wrong by ear. Those numbers (19.5-21.6 fps) are forced-rate numbers; the
+# honest series is the 48 kHz one. The AUDIO= line records the device.
 #
 # ~1 min boot + ~100-170 s demo. Checks the panel is not black afterwards.
 set -u
@@ -36,7 +33,7 @@ ARGS="$*"
 PRE=${PRE:-:}	# a board-side command run before Quake starts, e.g. a sysctl
 OUT=artifacts/quake/td-$L-$(date +%H%M%S); mkdir -p "$OUT"
 S=$OUT/run.sh
-AUDIODEV_ON_BOARD=${QUAKE_AUDIODEV:-s31route_11k}
+AUDIODEV_ON_BOARD=${QUAKE_AUDIODEV:-default}
 cat > "$S" <<EOF
 cd /root/quake
 export AUDIODEV=$AUDIODEV_ON_BOARD; echo "AUDIO=\$AUDIODEV"
