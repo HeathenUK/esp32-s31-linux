@@ -459,6 +459,15 @@ SECTIONS
 	 * it.
 	 */
 	.text.fast : AT(ADDR(.text.fast) - LOAD_OFFSET) {
+		/*
+		 * Function-granular, profile-ordered RAM text (C39): the
+		 * generated fragment lists *(.text..fast.<fn>) hot-first for
+		 * the functions scripts/Makefile.lib renamed from
+		 * S31_FASTFN_LIST. Empty by default. The catch-all after it
+		 * takes any renamed function the fragment does not order.
+		 */
+#include "s31-fastfn.lds.h"
+		*(.text..fast.*)
 		*(.text..fast)
 		/*
 		 * NO FILE GLOBS HERE. This used to read

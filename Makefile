@@ -534,6 +534,11 @@ endif
 # 2026-09-23: #353, ZC=1 SAVERESTORE=1, -475 kB, Quake 19.6/19.8 vs 19.2-19.4,
 # gate 22/22, pingpong inside the per-boot band). Without Zcmp, -msave-restore
 # alone was SLOWER (#341) - so the default follows ZC.
+# FASTFN=<list file, repo-relative> moves the listed functions ("<obj> <fn>"
+# per line, from scripts/board/fastfn-pick.py) into RAM text by name, hot-first
+# (perf-plan 2026-09-23 C39: scripts/Makefile.lib renames their sections,
+# arch/riscv/kernel/s31-fastfn.lds.h orders them). Empty by default.
+FASTFN ?=
 # O2OBJS="kernel/sched/core.o ..." compiles those objects at -O2 in the -Os
 # kernel (hook in scripts/Makefile.lib, patches/0060). A measurement knob for
 # the perf plan's "selective -O2 on hot objects" arm; empty by default.
@@ -722,8 +727,11 @@ linux: toolchain | $(LINUX_OUT)
 	$(MAKE) -C $(LINUX_DIR) O=$(LINUX_OUT) ARCH=riscv CROSS_COMPILE="$(CROSS_COMPILE)" olddefconfig
 	@# Stock musl/SDL need blocking waits; ENOSYS turns contention into spinning.
 	@grep -qx 'CONFIG_FUTEX=y' $(LINUX_OUT)/.config || { echo "ERROR: stock threaded userspace requires CONFIG_FUTEX=y"; exit 1; }
+	@# C39: the list's lds fragment (written beside it by fastfn-pick.py) is what
+	@# orders the renamed functions; install it, or an empty one, every build.
+	@if [ -n "$(FASTFN)" ]; then cp "$(patsubst %.list,%.lds.h,$(FASTFN))" $(LINUX_DIR)/arch/riscv/kernel/s31-fastfn.lds.h && echo "--- FASTFN $(FASTFN): $$(grep -c 'text..fast' $(LINUX_DIR)/arch/riscv/kernel/s31-fastfn.lds.h) functions"; else echo "/* no FASTFN list */" > $(LINUX_DIR)/arch/riscv/kernel/s31-fastfn.lds.h; fi
 	$(MAKE) -C $(LINUX_DIR) O=$(LINUX_OUT) ARCH=riscv CROSS_COMPILE="$(CROSS_COMPILE)" \
-		KCFLAGS="-march=$(S31_SAFE_ISA) $(S31_COMMON_FLAGS)" S31_O2_OBJS="$(O2OBJS)" -j$(JOBS) $(LINUX_TARGET) dtbs
+		KCFLAGS="-march=$(S31_SAFE_ISA) $(S31_COMMON_FLAGS)" S31_O2_OBJS="$(O2OBJS)" $(if $(FASTFN),S31_FASTFN_LIST="$(CURDIR)/$(FASTFN)") -j$(JOBS) $(LINUX_TARGET) dtbs
 	cp -v $(LINUX_OUT)/arch/riscv/boot/$(LINUX_TARGET) $(XIP_IMAGE)
 	cp -v $(LINUX_OUT)/arch/riscv/boot/dts/espressif/esp32s31_generic.dtb $(FDT_DTB)
 	cp -v $(LINUX_OUT)/System.map $(BUILD_DIR)/System.map

@@ -253,10 +253,18 @@ ifdef CONFIG_LTO_CLANG
 cmd_ld_single = $(if $(objtool-enabled)$(is-single-obj-m), ; $(LD) $(ld_flags) -r -o $(tmp-target) $@; mv $(tmp-target) $@)
 endif
 
+# esp32s31: S31_FASTFN_LIST=<file> holds lines "<obj> <function>". Each listed
+# function's -ffunction-sections output (.text.<fn>) is renamed to
+# .text..fast.<fn> right after compiling, so arch/riscv/kernel/vmlinux-xip.lds.S
+# can place it in RAM text BY NAME and hot-first (perf-plan 2026-09-23 C39).
+# Objects not in the list keep an unchanged command line, so they do not rebuild.
+s31-fastfn-names = $(if $(S31_FASTFN_LIST),$(shell awk -v o=$(obj)/$(target-stem).o '$$1==o {print $$2}' $(S31_FASTFN_LIST)))
+cmd_s31_fastfn = $(if $(s31-fastfn-names),; $(OBJCOPY) $(foreach f,$(s31-fastfn-names),--rename-section .text.$(f)=.text..fast.$(f)) $@)
+
 quiet_cmd_cc_o_c = CC $(quiet_modtag)  $@
       cmd_cc_o_c = $(CC) $(c_flags) -c -o $@ $< \
 		$(cmd_ld_single) \
-		$(cmd_objtool)
+		$(cmd_objtool) $(cmd_s31_fastfn)
 
 define rule_cc_o_c
 	$(call cmd_and_fixdep,cc_o_c)
