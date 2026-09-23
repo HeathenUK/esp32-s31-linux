@@ -448,6 +448,17 @@ void app_main(void)
              */
             esp_pm_config_t pm = { .max_freq_mhz = S31_CPU_OC_MHZ, .min_freq_mhz = S31_CPU_OC_MHZ, .light_sleep_enable = false };
             esp_err_t pe = esp_pm_configure(&pm);
+            /*
+             * Third attempt's lesson (#350): the CPLL->CPLL path wrote the
+             * new feedback divider while the CPU was running from that PLL,
+             * software then REPORTED 360 (esp_clk_cpu_freq is a variable,
+             * not a measurement) and the host/board ratio still read
+             * 320/360. Detour through the crystal so the PLL is reconfigured
+             * and relocked with nothing running from it, then switch back.
+             */
+            rtc_cpu_freq_config_t xt;
+            if (rtc_clk_cpu_freq_mhz_to_config(40, &xt))
+                rtc_clk_cpu_freq_set_config(&xt);
             rtc_clk_cpu_freq_set_config(&oc);
             ESP_LOGW(TAG, "OVERCLOCK: CPU %u MHz (source %u MHz / div %u), esp_pm_configure=%d, now %u MHz",
                      (unsigned)oc.freq_mhz, (unsigned)oc.source_freq_mhz, (unsigned)oc.div.integer,
