@@ -397,6 +397,10 @@ static RTC_NOINIT_ATTR struct {
     uint32_t magic, n, pc[6], sp[6];
 } s_blackbox;
 
+#if S31_CPU_OC_MHZ
+volatile uint32_t s31_oc_status[2];
+#endif
+
 void app_main(void)
 {
     /*
@@ -419,6 +423,11 @@ void app_main(void)
     s_blackbox.magic = 0;
 #if S31_CPU_OC_MHZ
     {
+        /* Readable from Linux with devmem (address from nm: s31_oc_status):
+         * [0] = 0x0c0c0000 | outcome (1 configured, 2 refused), [1] = the
+         * CPU frequency esp_clk reports afterwards, in MHz. The loader's
+         * 115200 console cannot be captured around a reset by our tools. */
+        extern volatile uint32_t s31_oc_status[2];
         /*
          * OVERCLOCK ARM. Switch the CPU PLL now, before anything timing-
          * sensitive and before hart1 is released: Linux boots on this clock
@@ -443,7 +452,11 @@ void app_main(void)
             ESP_LOGW(TAG, "OVERCLOCK: CPU %u MHz (source %u MHz / div %u), esp_pm_configure=%d, now %u MHz",
                      (unsigned)oc.freq_mhz, (unsigned)oc.source_freq_mhz, (unsigned)oc.div.integer,
                      (int)pe, (unsigned)esp_clk_cpu_freq() / 1000000u);
+            s31_oc_status[0] = 0x0c0c0000u | 1u | ((uint32_t)(pe & 0xff) << 8);
+            s31_oc_status[1] = (uint32_t)esp_clk_cpu_freq() / 1000000u;
         } else {
+            s31_oc_status[0] = 0x0c0c0000u | 2u;
+            s31_oc_status[1] = (uint32_t)esp_clk_cpu_freq() / 1000000u;
             ESP_LOGE(TAG, "OVERCLOCK: %u MHz refused by rtc_clk_cpu_freq_mhz_to_config - vendor patch missing", (unsigned)S31_CPU_OC_MHZ);
         }
     }
