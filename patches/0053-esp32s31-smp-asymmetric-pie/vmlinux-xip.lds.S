@@ -478,7 +478,13 @@ SECTIONS
 		 * the top of flash, so what is left with these names is exactly
 		 * the listed objects' text and nothing else.
 		 */
-		*(.text .text.hot .text.unlikely .sched.text .noinstr.text .spinlock.text .cpuidle.text)
+		/*
+		 * TEXT_MAIN, not .text: under LD_DEAD_CODE_DATA_ELIMINATION every
+		 * function is its own .text.<name> section and a bare .text here
+		 * would leave the fast objects' code as orphans for ld to place
+		 * wherever it likes. Without it TEXT_MAIN is just .text.
+		 */
+		*(TEXT_MAIN .text.hot .text.unlikely .sched.text .noinstr.text .spinlock.text .cpuidle.text)
 		/*
 		 * Whole objects, by name, rather than an attribute sprinkled
 		 * through generic kernel code. Measured with a 72 KB body on

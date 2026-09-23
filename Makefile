@@ -504,6 +504,17 @@ FP_TWEAK += --disable ESP32S31_SYSTIMER_CLOCKSOURCE
 # backtraces (~200 kB of flash, ~0 RAM under XIP - the tables are rodata).
 # Off in the shipped defconfig; the review's flash headroom pays for it and
 # waitsamp read every wait as "?" without it (2026-09-23, Phase 3c).
+# DCE=1 builds with CONFIG_LD_DEAD_CODE_DATA_ELIMINATION (-ffunction-sections
+# -fdata-sections, ld --gc-sections). Perf-plan 2026-09-23 Phase 3b arm: fewer
+# bytes in flash and better locality; the .text.fast collector in
+# vmlinux-xip.lds.S uses TEXT_MAIN so the fast objects' per-function sections
+# still land in RAM. Off until measured.
+DCE ?= 0
+ifeq ($(DCE),1)
+FP_TWEAK += --enable LD_DEAD_CODE_DATA_ELIMINATION
+else
+FP_TWEAK += --disable LD_DEAD_CODE_DATA_ELIMINATION
+endif
 KALLSYMS ?= 1
 ifeq ($(KALLSYMS),1)
 FP_TWEAK += --enable KALLSYMS
