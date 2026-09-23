@@ -23,7 +23,7 @@ JOBS ?= $(shell nproc)
 # SAVERESTORE=1, GCC folds every prologue/epilogue into cm.push/cm.pop - the
 # byte saving of -msave-restore without its call redirect, which is what made
 # #341 slower. docs/perf-plan-2026-09-23.md Phase 3b.
-ZC ?= 0
+ZC ?= 1
 S31_SAFE_ISA := rv32imabc_zicsr_zifencei_zaamo_zalrsc_zba_zbb_zbc_zbs
 ifeq ($(ZC),1)
 S31_SAFE_ISA := $(S31_SAFE_ISA)_zcb_zcmp
@@ -516,7 +516,11 @@ endif
 # prologue and epilogue costs more than the bytes it saves. Off by default;
 # kept as a knob because the size result is real and a Zcmp core would change
 # the trade.
-SAVERESTORE ?= 0
+# ZC=1 needs -msave-restore for GCC to emit cm.push/cm.pop at all (measured
+# 2026-09-23: #353, ZC=1 SAVERESTORE=1, -475 kB, Quake 19.6/19.8 vs 19.2-19.4,
+# gate 22/22, pingpong inside the per-boot band). Without Zcmp, -msave-restore
+# alone was SLOWER (#341) - so the default follows ZC.
+SAVERESTORE ?= $(ZC)
 ifeq ($(SAVERESTORE),1)
 FP_TWEAK += --enable ESP32S31_SAVE_RESTORE
 else
