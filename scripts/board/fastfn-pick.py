@@ -38,7 +38,10 @@ FORBID_OBJ_PREFIX = ("arch/riscv/mm/init.o", "arch/riscv/kernel/head.o",
                      "arch/riscv/kernel/entry.o", "arch/riscv/kernel/fpu.o",
                      "arch/riscv/kernel/mcount.o", "arch/riscv/kernel/sbi_ecall.o")
 # __lockfunc (.spinlock.text), __exit and __sched code are not split either
-FORBID_NAME_PREFIX = ("_raw_", "ldsem_", "__se_sys_", "__do_sys_")
+FORBID_NAME_PREFIX = ("_raw_", "ldsem_", "__se_sys_", "__do_sys_",
+                      # idle: samples there are WFI stalls, not fetches
+                      "arch_cpu_idle", "default_idle_call", "cpu_idle_poll", "do_idle",
+                      "s31_idle_check_level", "cpuidle_")
 FORBID_NAME_SUFFIX = ("_exit",)
 
 # <System.map> may be an `nm -nS vmlinux` listing (addr size type name): sizes
@@ -106,7 +109,8 @@ for name in flash_names:
     cands.append((hits[name] / size, hits[name], size, obj, name))
 
 if cold:
-    pool = [c for c in cands if c[1] == 0]
+    # >= 32 B so the control moves code of the hot list's shape, not stubs
+    pool = [c for c in cands if c[1] == 0 and c[2] >= 32]
     hot = sorted([c for c in cands if c[1] > 0], reverse=True)
     hot_objs = Counter()
     for c in hot:
