@@ -45,11 +45,15 @@ s=s.replace('    } else if (freq_mhz == 320) {','    } else if (freq_mhz == %d) 
 open(R,'w').write(s)
 print('vendor patched for', mhz, 'fb_div', fb, ':', s.count('freq_mhz == %d' % mhz), open(H).read().count('case %d:' % mhz))
 PY
-cd /src && \$S31_MAKE bootloader > /src/$OUT/build-loader.log 2>&1 && echo LOADER_OK || echo LOADER_FAIL
-\$S31_MAKE opensbi > /src/$OUT/build-opensbi.log 2>&1 && echo OPENSBI_OK || echo OPENSBI_FAIL
-\$S31_MAKE linux > /src/$OUT/build-linux.log 2>&1 && echo LINUX_OK || echo LINUX_FAIL
+cd /src && rm -f /src/bootloader/build/hello_world.bin /src/build/fw_payload.bin /src/build/xipImage
+\$S31_MAKE bootloader > /src/$OUT/build-loader.log 2>&1 && echo LOADER_OK || { echo LOADER_FAIL; exit 1; }
+\$S31_MAKE opensbi > /src/$OUT/build-opensbi.log 2>&1 && echo OPENSBI_OK || { echo OPENSBI_FAIL; exit 1; }
+\$S31_MAKE linux > /src/$OUT/build-linux.log 2>&1 && echo LINUX_OK || { echo LINUX_FAIL; exit 1; }
+# A failed build must leave no image to flash: the outputs were deleted first,
+# so a stale loader cannot be copied into the trio (it was, once).
 cp /src/bootloader/build/hello_world.bin /src/build/fw_payload.bin /src/build/xipImage /src/build/System.map /src/$OUT/ && ls -la /src/$OUT | awk '{print \$5, \$9}'
 grep -c 'OVERCLOCK' /src/bootloader/main/main.c
 strings /src/$OUT/xipImage | grep -ao '#3[0-9][0-9] SMP' | head -1"
+for f in hello_world.bin fw_payload.bin xipImage; do [ -s "$OUT/$f" ] || { echo "BUILD FAILED - $OUT/$f missing; trio NOT assembled"; grep -aE "error:" "$OUT"/build-*.log | head -5; rm -f "$OUT"/hello_world.bin "$OUT"/fw_payload.bin "$OUT"/xipImage; exit 1; }; done
 grep -aiE "error" "$OUT"/build-*.log | grep -v "Werror\|error-inject\|fserror\|fdt_strerror\|-Wno-error" | head -5 || true
 echo "trio in $OUT (loader/opensbi/kernel at $MHZ MHz). Flash with scripts/board/flash-trio.sh $OUT"

@@ -429,7 +429,7 @@ void app_main(void)
         if (rtc_clk_cpu_freq_mhz_to_config(S31_CPU_OC_MHZ, &oc)) {
             rtc_clk_cpu_freq_set_config(&oc);
             ESP_LOGW(TAG, "OVERCLOCK: CPU %u MHz (source %u MHz / div %u)",
-                     (unsigned)oc.freq_mhz, (unsigned)oc.source_freq_mhz, (unsigned)oc.div);
+                     (unsigned)oc.freq_mhz, (unsigned)oc.source_freq_mhz, (unsigned)oc.div.integer);
         } else {
             ESP_LOGE(TAG, "OVERCLOCK: %u MHz refused by rtc_clk_cpu_freq_mhz_to_config - vendor patch missing", (unsigned)S31_CPU_OC_MHZ);
         }
