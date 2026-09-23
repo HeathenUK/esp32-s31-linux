@@ -491,8 +491,13 @@ endif
 # Keep the shipped behaviour explicitly.
 FP_TWEAK += --disable ESP32S31_SYSTIMER_CLOCKSOURCE
 
-# SAVERESTORE=0 builds with -mno-save-restore (the upstream default) for an A/B.
-SAVERESTORE ?= 1
+# SAVERESTORE=1 builds with -msave-restore (patches/0059). MEASURED WORSE
+# 2026-09-23: kernel #341 was 188 kB smaller but same-hart pingpong went
+# 491 -> 529 us and Quake 19.1 -> 17.7 fps. The jal/jr redirect on every
+# prologue and epilogue costs more than the bytes it saves. Off by default;
+# kept as a knob because the size result is real and a Zcmp core would change
+# the trade.
+SAVERESTORE ?= 0
 ifeq ($(SAVERESTORE),1)
 FP_TWEAK += --enable ESP32S31_SAVE_RESTORE
 else
