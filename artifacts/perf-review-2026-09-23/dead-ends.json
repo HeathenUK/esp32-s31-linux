@@ -1,0 +1,504 @@
+{
+"dead_end_register": [
+{
+"idea": "Reclaim/swap/rmap/page_io/lzo code in .text..fast",
+"result": "33 kB gave 17.1 vs 17.6 kswapd ticks/s; 97 kB gave no measurable effect. Reclaim is data-bound, not fetch-bound.",
+"source": "docs/current-state.md:307-311,1536; vmlinux-xip.lds.S:78-97"
+},
+{
+"idea": "zram in any form (24 MB, 4 MB, 512 kB mem_limit; Weston/X/lvdesk eras)",
+"result": "Weston: median 13 s -> 60 s. X era: 2.8-3.2 MB pool, xcalc 16 kB resident. The 4 MB device filled 3,484 kB, spilled 1,808 kB to SD anyway, and the desktop stopped repainting. Capped: MemAvailable 476 vs 2,932 kB. Capped zram can never fall through: at the limit it returns -ENOMEM and the folio is re-dirtied. zram compaction freed 0 kB.",
+"source": "overlay/etc/s31-swap.conf; current-state.md:1975-1995,312-313; zram_drv.c:2241-2243; page_io.c:34-47"
+},
+{
+"idea": "Xorg era levers (Xorg from SD, extension pruning, native 800x480, X software cursor)",
+"result": "Xorg from SD: 4x worse (4.7 fps). Extension pruning: 6,040 -> 6,028 kB. Native mode: +553 kB. SW cursor: 19 ms per move, and the HW plane took pointer motion 17.3-25.7 -> 43.1-45.2 fps. All superseded by lvdesk.",
+"source": "docs/current-state.md:274-322"
+},
+{
+"idea": "vm.vfs_cache_pressure=500",
+"result": "Worse, and it wedged the board: every dentry dropped is re-read from the slow card.",
+"source": "docs/current-state.md:320-322"
+},
+{
+"idea": "Slab as a memory lever (SLUB_DEBUG, kernfs, SLUB_TINY off, vfs_cache_pressure)",
+"result": "CLOSED. kernfs_node 838 kB (real devices), kmalloc spread thin; 300-500 kB recoverable only by deleting functionality. SReclaimable 0 is a SLUB_TINY artefact. SLUB_TINY off costs ~390 kB.",
+"source": "docs/current-state.md:2191-2264,3294-3332; memory s31-slab-is-not-a-lever"
+},
+{
+"idea": "PPA completion waiting (sleep in wait_for_completion; poll PPA_INT_RAW)",
+"result": "FIXED. Spinning 300 us took 14,527 -> 276 us per op. Completion on 2D-DMA RX EOF: 1,322 -> 169 us per 64x64 blend, which moved the blend crossover from ~18 KB to ~2 KB.",
+"source": "docs/current-state.md:269-273; accel-plan.md 2026-08-30"
+},
+{
+"idea": "PPA as an offload for ops below ~128 KB; ppa_min_bytes sweeps",
+"result": "Sleeping costs 0.7-1.1 ms against ~160 us of engine time (spin 423/839 vs sleep 1,455/1,529 us). ppa_min 65536 under Quake: lvdesk +27%, 13.3 vs 14.8 fps. The ppa_min=99999999 arm still ran PPA ops. Desktop knob sweeps were null or withdrawn (identical arms differed 9x across boots).",
+"source": "memory s31-offload-not-purchasable; current-state.md:7738-7743; accel-plan; cursor-latency.md"
+},
+{
+"idea": "LVGL/LVPROF instruments (LV_USE_PROFILER, CLOCK_MONOTONIC stage timing)",
+"result": "The profiler inflates refresh 2372 -> 5517 ms. Monotonic timing summed to 101% of wall time; DIRTYFB was 3.40 ms CPU vs 7.7 ms wall.",
+"source": "docs/current-state.md:340-343,464-507"
+},
+{
+"idea": "Palette expansion micro-optimisations (serial-chain theory, word vs halfword, xespv vector stores, 64-bit FNV, row-skip)",
+"result": "Chain theory refuted: dep 49-51 vs nodep 60-66 ns/px; only word8 (~8%) was real and shipped. Word vs halfword: 4941 vs 5014 us. Vector stores: 4550/6149 vs 3062 us scalar. 64-bit FNV: 29.7 vs 30.5 fps (32-bit shipped). Row-skip kept 59 of 2,031,184 rows.",
+"source": "current-state.md:582-585,886-903,973-1017; lvdesk.c:4768-4812"
+},
+{
+"idea": "Uncached PSRAM alias (0xC0000000) / 'write-combined' kms_map for framebuffer writes or bounce buffers",
+"result": "The alias is unbuffered at 7.6 MB/s, slower than cached writes plus a clean. expbench showed no difference for KMS dumb buffers. (C68 argues WC is a no-op on rv32.)",
+"source": "current-state.md:564-580,2994-2998,7038-7055"
+},
+{
+"idea": "PPA CLUT palette expansion (XSHIM_PPACLUT), windowed and fullscreen",
+"result": "320x200: 27.2 vs CPU 29.4/29.9/29.0 fps (-7.5%). 640x400: parity. Under adaptive dispatch: 22.8 vs 23.7 fps (-4%). From a copied GEM plane: 29.6 vs 30.5. The SHM segment is not GEM-backed. Fullscreen was rejected without building the chained form. All measured single-core.",
+"source": "xshim.c:934-985; current-state.md:1019-1063,7006-7036,7521-7545; frame-path-plan.md section 3"
+},
+{
+"idea": "GDMA for the DRM damage copy",
+"result": "DIRTYFB 10.6 ms vs 7.9 (CPU) / 7.8 (PPA); pre-empted other engines. gdma_copy off: DIRTYFB -27%, Doom +~2%. The busy-wait once hung the board for 5 s; it is now bounded. 640x384 needs 384 descriptors at ~479 us each.",
+"source": "current-state.md:641-663; native-800x480.md bug 4; accel-plan GDMA section"
+},
+{
+"idea": "Lower panel refresh to free memory bandwidth",
+"result": "59/50/42/35 Hz = 45.3/38.4/32.3/26.9 MB/s scanout; fps 31.3-32.0/31.3/32.6/32.5, inside the spread (windowed Doom, UP). 60 vs 42 Hz: CoreMark 950 vs 949, latency null.",
+"source": "docs/current-state.md:680-702; lvgl-bringup.md:568-583"
+},
+{
+"idea": "Retarget the cyclic scanout DMA at lvdesk's buffer / double-buffered lvdesk / scan out the client buffer",
+"result": "-ENXIO at the time, and an lvdesk restart would read freed memory. Superseded by direct scanout (lvdesk paints into the driver's buffer). retarget_cyclic now works for flips, so the -ENXIO premise is stale.",
+"source": "current-state.md:727-746; native-800x480.md 'Rejected'; esp32s31-axi-gdma.c:209-244"
+},
+{
+"idea": "MIT-SHM adoption (client segment as the window's pixels) / removing the request-boundary copy",
+"result": "31.7 fps adopted but flickering (weapon sprite) vs 29.4 copying vs 28.6 MIT-SHM off. Illegal. The windowed copy is irreducible (late read flickers; kms_map writes break z-order). MIT-SHM 1.2: 31.6 fps inside the band (SDL1 only calls XShmAttach).",
+"source": "current-state.md:1096-1205,1025-1036; xshim.c:5404-5430"
+},
+{
+"idea": "af_unix path and network spine in .text..fast",
+"result": "af_unix objects: 32.2 vs 32.2 fps (a 12,184 B arm matched nothing at first). Net spine ~70 KB: loopback 237 -> 219 KB/s, Wi-Fi blast 385 -> 354, TCP identical; reverted. tcp_rmem at 1 MB no better. Measured before softirq moved to RAM.",
+"source": "current-state.md:830-868,3950-3967; vmlinux-xip.lds.S:180-200"
+},
+{
+"idea": "Syscall entry / vDSO / clock_gettime as a tax",
+"result": "getpid 1.5-1.6 us, clock_gettime 2.8 us. lvdesk ~600 syscalls/s (0.09%) and ~200 clock_gettime/s (0.06%). The vDSO time path is 64BIT-only upstream, and musl riscv32 has VDSO_CGT_SYM commented out. Estimated <0.5% of the machine for Doom.",
+"source": "current-state.md:905-936,3258-3292; big-ideas.md feature 7; musl arch/riscv32/syscall_arch.h:75-78"
+},
+{
+"idea": "I-cache autoload via devmem from Linux, or via cache_ll_l1_enable_icache in the loader",
+"result": "From Linux: the hart died instantly, twice. From the loader: a no-op, the register still reads 0x2, because the flag only applies when the cache is enabled and it is already on. Rollback image hello_world.PRE-AUTOLOAD.bin.",
+"source": "current-state.md:938-967,4810-4830; memory s31-icache-autoload-wedges"
+},
+{
+"idea": "Single cold runs and same-boot A/B arms as evidence",
+"result": "Cold 29.1 vs warm 30.6 fps in one boot (+5.2%). Same-boot arms are position-biased (ON 211->614, OFF 285->781 ms). Rule: fresh boot per arm, discard warm-up.",
+"source": "current-state.md:1065-1094,4128-4129"
+},
+{
+"idea": "vm.swappiness=0 (with or without min_free 512)",
+"result": "OOM-killed Quake with 62-63 MB of swap free. Run D cut SD reads 14-15 -> 3.2 MB/60 s, but p90/p99 went 0.52/0.72 -> 0.55/0.93 s. Never leave it on.",
+"source": "worklog-2026-09-19.md:283-293; current-state.md:39-40"
+},
+{
+"idea": "Running without CONFIG_FUTEX",
+"result": "musl primitives spin: SDL2 indexed 101.962 vs 45.216 ms with FUTEX restored; SDL1 with timers 59.072 vs 54.415 ms; codec underran 40/40.",
+"source": "current-state.md:187-193,755-769"
+},
+{
+"idea": "s31route buffer negotiation and poll/pacing mistakes",
+"result": "Fixed. set_params(200 ms) gave XRUN 40/40 (fixed by buffer_size_near). A permanently signalled poll fd caused 20,153 ctx switches (fixed ~1,200; Doom 15.1 -> 27.1). Per-pointer snd_pcm_delay fixed: 10.3 -> 19.1 fps. avail_min = app period fixed: 228/165 -> 102/40 ticks.",
+"source": "current-state.md:755-773,7351-7409,7559-7646"
+},
+{
+"idea": "s31route deep buffering (staging ring + drain worker); growing the audio DMA ring",
+"result": "The staging ring underran at start, EPIPE killed sound, 'avail 4335' vs 4096; reverted. The ring is 85 ms and at most 128 ms without a layout move, which cannot cover ~350 ms dd bursts. It was later grown to 64 KiB by dropping capture.",
+"source": "current-state.md:3733-3766,8106-8154; commit 9dd1848"
+},
+{
+"idea": "Remove the 22050->44100 resampler; force 44100 via prboom config; S31ROUTE_NICE",
+"result": "Closed: frame repeat 28 vs 26 ticks; prboom now native 11025; Quake 11 kHz +41% (10.7 -> 15.1). prboom 2.5.0 ignored the config key, and that is app steering anyway. NICE=-10: the audio thread took 92-100% of the core and the game fell to 7%.",
+"source": "current-state.md:7648-7659; worklog-2026-09-19.md:468-469; s31route.c:432-451"
+},
+{
+"idea": "Weston/Wayland-era levers (smaller surfaces, RGB565 wl_shm, <565 depths, render below panel, PPA blend as the fix, bring-up theories, weston-terminal benchmarks)",
+"result": "Closed or obsolete. The wl_shm formats are hardcoded, so it is patch-only. The render-below curve flattened (-36% pixels bought -7%). The PPA was not the fix (CPU 0.4 s of 13.7 s). weston-terminal was a demo: 3462 ms vs foot 237.7 ms. Keystroke numbers were withdrawn (detector latched on repaints).",
+"source": "current-state.md:1244-1302,1417-1556,2423-2543,2964-2982; memory s31-measure-a-real-client"
+},
+{
+"idea": "Timer and storage subsystems in .text.fast (113 KB)",
+"result": "Mechanism real: 5.98x faster from RAM. Timer IRQ 0.864 -> 0.465 ms; SD 12.07 -> 8.05 ms per request. The end-to-end latency claim is unproven.",
+"source": "current-state.md:1304-1324"
+},
+{
+"idea": "Flash mode/clock as a lever",
+"result": "Harvested. DIO -> QIO gave SD 4k -46% and CoreMark +17%. Flash is already QIO-80 (22-32 MB/s measured). 80 MHz is the S31 IDF maximum, with no timing-tuning port. OPI/DTR need other silicon. The header 'dio' string is stale.",
+"source": "current-state.md:1346-1364,4668-4700; memory s31-flash-already-qio"
+},
+{
+"idea": "Userspace library text XIP; LD_LIBRARY_PATH instead of the overlay",
+"result": "XIP harvested: libpixman Rss 16 vs 388 kB. LD_LIBRARY_PATH misses libc and absolute dlopens: 2586 vs 2237 ms; xfiles 276 vs 208 kB.",
+"source": "current-state.md:1366-1402,2612-2621; xlite.md:403-408"
+},
+{
+"idea": "Hot userspace text copied from XIP into RAM (footprintbench, lvdesk HOTTEXT)",
+"result": "footprintbench 33.14 vs 32.66 ns/call (null) for ~600 kB RSS. lvdesk HOTTEXT 23.1/23.5 vs 24.3 fps in flash. ramtext: a 322 B loop is equal; 41 KB straight-line is 4.8x.",
+"source": "current-state.md:2562-2587; lvdesk/hottext.c:143-160; commit a77a357"
+},
+{
+"idea": "CMA reusable pool instead of a no-map coherent pool; shrinking CMA",
+"result": "Reusable shipped: MemTotal 12844 -> 14888 kB, foot keystroke 193.8 -> 20.7 ms. Shrinking CMA 4 -> 2 MiB gave only +136 kB (already lent out). 6 MiB pool: 8964K available and native still hung.",
+"source": "memory s31-cma-not-coherent-pool; kernel-upgrade.md; native-800x480.md"
+},
+{
+"idea": "SD controller/card causes and per-request decomposition (pre-SRAM)",
+"result": "Eliminated: second card, MINTSTS poll, clock gating (3.781 vs 3.778 ms), BIU/CIU clocks, IRQ loss (3.0 per request), edge vs level, CONFIG_PREEMPT (no SD change, -3-5% CoreMark), lost_irq_poll, runtime PM, card busy 0. The pre-SRAM ~6.5 ms was CPU-bound.",
+"source": "current-state.md:1570-1628,1689-1707"
+},
+{
+"idea": "work_pending() guard on dw_mmc queue_work; MMC HSQ",
+"result": "Guard: 2.793/2.812/2.804 vs 2.789/2.747/2.843 ms, nothing. HSQ: 4K -12% but 256K +26% and 1M +86%; desktop repaint 20.2 vs 25.0 ms; OFF.",
+"source": "current-state.md:1737-1751; patches/0039-dw-mmc-sdprobe/dw_mmc.c:40-75"
+},
+{
+"idea": "HZ as a lever (250 vs 100; below 100)",
+"result": "HZ=100 is better on 7.1: SD 4k p50 3.76 vs 4.00 ms, DIRTYFB 1.62 vs 2.08 ms. The kworker wait is not tick-quantised (7.4 vs 8.0 ms). Kconfig offers nothing below 100.",
+"source": "current-state.md:1680-1687,1861-1883; kernel/Kconfig.hz"
+},
+{
+"idea": "vm.page-cluster > 0 (VMA readahead mode)",
+"result": "Xorg era: 201.1/198.8/203.5 CoreMark and worst exec 4.92/6.20/5.42 s (noise). Weston era: pc3 best (2985-3133 vs 4354 ms). Quake at 48 kHz, pc3: did not finish in 170 s vs 167 s. Physical-slot mode (vma_ra_enabled=0) has never been tried.",
+"source": "99-s31-memory.conf:67-93; current-state.md:2702-2705; worklog-latepresent:57"
+},
+{
+"idea": "SD bandwidth, bus and buffered-read tuning (readahead, max_sectors_kb, bs, streams, scheduler; faster bus/UHS; SRAM IDMAC ring; CMD23 in stock dw_mmc)",
+"result": "512 KiB sustains 38.7 MB/s; model 2.49 ms + size/48 MB/s. All buffered-read arms 12-14 MB/s with the device 37-46% busy. No S18A and a 4-bit bus, so no UHS. The IDMAC ring in SRAM is ~0.3%. CMD23 trades one IRQ round for another.",
+"source": "current-state.md:1905-1958,1997-2020; lens:storage"
+},
+{
+"idea": "Deferring the DRM damage copy to a kworker (defer_copy)",
+"result": "2.15-2.26x worse: 3.66 vs 1.62 ms for a single 64x16 commit; 107 flush_work waits at 7.4 ms each. Measured before the CLIC-level fix.",
+"source": "current-state.md:1807-1848; memory s31-deferred-work-costs-more"
+},
+{
+"idea": "dwc2 deferral and USB root-port experiments",
+"result": "defer_irq_reenable off: ctxt 1601 -> 21/s, SD 14.51 -> 10.14 ms. Removing the _dwc2_hcd_irq deferral: 7.3% -> 21%. HS root port: 8541 irq/s, CoreMark 599. DDMA splits impossible. SOF irq fix ~6%. HS rebind 11k irq/s. All moot since USB moved to hart0.",
+"source": "current-state.md:4973-5209,7225-7349; memory s31-usb-*"
+},
+{
+"idea": "OpenSBI trap path into internal SRAM / into PSRAM",
+"result": "SRAM shipped: context switch 280.7 -> 57.2 us, SD 4k p50 3.79 -> 2.21 ms. PSRAM does not boot (hart1 M-mode cannot fetch from it).",
+"source": "current-state.md:1885-1922; hot-text-plan.md"
+},
+{
+"idea": "Qt from SD; lazy PLT binding in musl; -Bsymbolic-functions",
+"result": "Qt removed (>120 s to a window, 14x over flash). Lazy PLT closed: the whole client chain dlopens in 10-20 ms; the 73-78% figure came from Qt's 45,430 relocations. -Bsymbolic-functions kept: Qt relocations -23%, ours 542 -> 458.",
+"source": "current-state.md:2034-2177,6097-6145"
+},
+{
+"idea": "MGLRU / THP / mTHP swap on this kernel",
+"result": "Unavailable as configured. LRU_GEN needs 64BIT, !SPARSEMEM or VMEMMAP, and this is SPARSEMEM_STATIC. THP is 64BIT-only on riscv. The FLATMEM route (C54) is untested.",
+"source": "mm/Kconfig:1370-1374; arch/riscv/Kconfig:148"
+},
+{
+"idea": "Zero-page handling via zram same_pages",
+"result": "Already free: the 7.1 swap zeromap never writes zero folios to SD.",
+"source": "mm/page_io.c:174-264"
+},
+{
+"idea": "Measurement traps",
+"result": "dd startup ~150 ms; dd ignores iflag=direct; profile=2 allocates ~4 MB; /sys/block stat field 4 sums in-flight time; 200 Hz SIGPROF wedges the board; swapoff wedges with swap in use; /proc/stat over-counts 2.7x; a screenshot inside a timed window costs 26%; membw before the canary shifts the boot; deskbench costs 53% of a core; the xsetroot loop costs 236 vs 4.6 ms; in_lag was broken before 09-01; upd_ns was uninitialised.",
+"source": "current-state.md:1613-1621,1945-1958,2709-2713,4130-4134,7113-7137; worklog:1752-1755; lvgl-bringup.md:187-209"
+},
+{
+"idea": "Kernel static RAM and debug trims",
+"result": "Done: FTRACE off -1,056,072 B; LOG_BUF 16 -> 14 saved 264 KiB; ext4 -b 4096 952 -> 61 groups (64 KiB); DEBUG_FS off 1.14 MB (DIAG=0). Hardening, debug, accounting and tracing are all already off (audit). MAX_NR_CONSOLES needs an upstream header change, and the saving is slab.",
+"source": "current-state.md:2749-2791,8290-8304; memory s31-debugfs-costs-ram; lens:kconfig"
+},
+{
+"idea": "Shrink or free fbcon's buffer",
+"result": "video=400x240 costs about 190 KiB MORE. Unbinding vtcon gives ~20 KiB. Solved by the console-client handover.",
+"source": "current-state.md:2793-2829; lvgl-bringup.md:251-257"
+},
+{
+"idea": "DMA bounce buffers, BitScrambler, EXA, per-window planes for display or SD",
+"result": "The uncached alias runs at 7.6 MB/s. BitScrambler cannot attach to SDMMC and has no LUT. EXA ceiling is 1.2-1.7x and glyphs are 30x below the crossover. Per-window planes: ~13% ceiling for ~1 MB. SD cache maintenance is 1% of wall.",
+"source": "current-state.md:2994-2998; accel-plan 'Ruled out'; PERFORMANCE-ROADMAP.md section 1"
+},
+{
+"idea": "Wi-Fi throughput causes (transport copies, coex, DFS, loss)",
+"result": "It was power save. PS_NONE took TCP from 290 to 680 KB/s. Copies are <1% (loopback costs the same CPU). BT coex, DFS and loss were eliminated. hosted_wifi.c is dead code.",
+"source": "current-state.md:3905-3930,2999-3003; PERFORMANCE-ROADMAP.md section 2"
+},
+{
+"idea": "Boot-time levers (udev coldplug backgrounding, vfork, static busybox, XIP daemons, S11modules)",
+"result": "Backgrounded coldplug starved S40network. nice 19: rcS 84.35 -> 42.97 s (37.13 with no udev). vfork 12.6 vs 13 ms. Static busybox: spawn 53.6 -> 29.4 ms. XIP daemons are a memory win only (rcS 43.29 vs 43.79 s). Removing S11modules saved 0.49 s.",
+"source": "current-state.md:3334-3520,4234-4250; memory s31-deferring-is-not-removing"
+},
+{
+"idea": "mmc DRTO/CRC errors and the 139 s Oops as causes",
+"result": "Not reproduced: 192 MB of sustained reads gave zero errors, and the Oops did not recur in 5 clean boots.",
+"source": "current-state.md:3409-3415,3524-3537"
+},
+{
+"idea": "mlockall on lvdesk; MAP_POPULATE in px_share",
+"result": "mlockall: lag 367/411 vs 170/313 ms, worst 1163/1270 vs 610/996 (MCL_FUTURE pinned client pixmaps). MAP_POPULATE: 3149/3623 vs 2549/2722 ms per maximise.",
+"source": "current-state.md:4158-4200,4287-4292; lvdesk.c:9672-9690"
+},
+{
+"idea": "Watermark tuning (watermark_scale_factor 500; watermark_boost_factor default)",
+"result": "wsf 500: 11.0 fps, in noise. Default boost caused an OOM with 6 MB 'free' (3,624 kB of it CMA); boost 0 shipped (20.5 vs 17.8 fps).",
+"source": "worklog-latepresent:120; current-state.md:8053-8078"
+},
+{
+"idea": "bluealsa; evicting bluetoothd/glib from XIP; Bluedroid carve-out",
+"result": "bluealsa's glib pool spawner spun at 92% of the core (lag 170-411 vs 25 ms), replaced by s31-bt at 0.6% idle. Evicting bluetoothd/glib from XIP let a stale SD copy run and break A2DP. Two host stacks cannot share one HCI.",
+"source": "current-state.md:4202-4259,4303-4327; memory s31-bluealsa-spins"
+},
+{
+"idea": "A2DP daemon tuning and hosted-IRQ blame",
+"result": "musl sched_setscheduler is an ENOSYS stub; the raw syscall took write 3.7 -> 0.76 ms. There is no hardware SBC. The '~4 ms per hosted IRQ' figure was retracted (bluealsa confound); a download costs 43% of the core, unattributed. One read per packet: 50.1 -> 20.4%.",
+"source": "current-state.md:4459-4529,5332-5336; memory s31-hosted-irq-cost"
+},
+{
+"idea": "napi_defer_hard_irqs / gro_flush_timeout on wlan0",
+"result": "Inert: 155-168 irq/s at any setting. 15-25% worse on cpubench (31.0/34.0 vs 40.8 M/s). Restored to 0/0.",
+"source": "current-state.md:5690-5704"
+},
+{
+"idea": "Coex tuning and BT discovery during A2DP",
+"result": "PREFER_BT was worse (0/8 vs 4/8 connects). The A2DP bit set at boot does nothing; set while the link exists, late_max 2832 -> 0 ms. Discovery during playback: late_max 4987 ms / 298 stalls vs 10-15 ms.",
+"source": "current-state.md:4329-4336,4531-4566,5258-5270"
+},
+{
+"idea": "cpufreq governor as a lever",
+"result": "hart0 holds 320 MHz always (4,388 transitions, nothing changed). The performance governor was shipped for jitter only (27 -> 0.13 us). scaling_cur_freq lies. (C08 argues the 320 MHz reading is an observer artefact.)",
+"source": "current-state.md:4742-4754,5522-5537; memory s31-cpufreq-inert"
+},
+{
+"idea": "Whole interrupt spine / chip.o / handle+irqdesc / CLIC driver in RAM",
+"result": "Three spine arms emitted 0 bytes or did not boot (chip.o, the OpenSBI 2-mod-4 bug). softirq.o alone -19.7% (675 -> 542 us), shipped. chip.o after the fix: boots, <1% (#337 Quake 15.8/16.1). handle+irqdesc 605 vs 542 us. CLIC driver in RAM: cause-7 flood (#336). 10 kB dispatch pre-fix: switch 107.8 -> 171.3 us.",
+"source": "memory s31-irq-spine-in-ram-no-boot; current-state.md:4920-4950,5883-5918; smp-finish-plan.md:166-181"
+},
+{
+"idea": "sched_clock.o, spinlock.o, memcpy/memset, arch_sync_dma_for_device, libgcc shifts in .text..fast",
+"result": "sched_clock.o, spinlock.o and memcpy: no boot, blamed on bootstrap self-reference (C18 argues the early NX mapping and linker globs). arch_sync_dma_for_device: SD sequential 4.0-5.3 vs 10.1-12.7 MB/s. libgcc shifts: sched_clock calls __lshrdi3 before the copy.",
+"source": "vmlinux-xip.lds.S:120-157,210-254; worklog-2026-09-19.md:1526-1557; memory s31-cache-maint-stays-in-flash"
+},
+{
+"idea": "Object-granular .text..fast batches (profiled #320, rcu/tree, SMP objects, DRM commit, cold layout control)",
+"result": "#320 43 kB: sdl1 14.018/14.771/13.968 ms (-5%). rcu/tree.o: -1.7%/+4%. SMP objects: 15.75 -> 15.79. DRM commit 26.8 kB: 5095 vs 5146 us (<1% of wall). Cold xattr.o: -7.1%. input+evdev: +3.8%. __fasttext callee: +576 B, no change. sbitmap/blk-mq-tag: no gain.",
+"source": "vmlinux-xip.lds.S:41-97,208-293; memory s31-fasttext-candidates; hot-text-plan.md"
+},
+{
+"idea": "Touch-poll and hw_vblank as wakeup/CPU levers",
+"result": "I2C IRQ plus a 60 ms backoff: timer 669 -> 125-154/s, busy ticks unchanged. idle_poll 500 ms: cpubench +3.8%, withdrawn (first-touch latency; INT not wired). hw_vblank=1: 1412 -> 1377 per 10 s, later 119-136/s either way.",
+"source": "current-state.md:4770-4890,5438-5550; smp-finish-plan.md:154-158"
+},
+{
+"idea": "BLE LE encryption fixed host-side",
+"result": "The controller blob is at fault (MIC failure; Espressif's own host fails too). The quirk is kept off.",
+"source": "current-state.md:5211-5306"
+},
+{
+"idea": "Frozen full-screen drag backdrop (5 attempts)",
+"result": "42.8 / 58.6 / 52.8 / 37.6 / 43.1 ms per frame vs a 33 ms baseline. CLOSED: 'do not replace a fill with a copy'.",
+"source": "current-state.md:5395-5749"
+},
+{
+"idea": "Crypto self-test boot stall",
+"result": "FIXED: desktop 26.43 -> 21.00 s. AES/SHA offload stays unregistered (unused).",
+"source": "current-state.md:4853-4877"
+},
+{
+"idea": "PIE/HWLoop coprocessor hook: default off, lazy save, expensive save",
+"result": "Hook off: bluetoothd SIGSEGV (musl strcmp/memcmp are PIE). Lazy save: 162 vs 155 us. The save itself is <100 cycles; the cost was the cold ecall into flash OpenSBI (1.8 vs 16-18 us).",
+"source": "current-state.md:5488-5520,5926-6003; esp32s31-ext.c:40-84"
+},
+{
+"idea": "TLB/ASID; __switch_to flash fetch; the faster switch as a user-visible win",
+"result": "There is a 9-bit ASID allocator. Under 1 kB of switch code cannot explain the cost (it was OpenSBI). The 2.6x switch gave spawn -8% and input lag 22 -> 18 ms.",
+"source": "example_boot_log.txt; current-state.md:5832-5881"
+},
+{
+"idea": "X/xshim protocol-path levers",
+"result": "'46% of maximise is syscalls' was false (1.4%). Hoisting the sort changed nothing. The 'lost Expose' bug was not a bug (505/330 ms honest). XLITE-SHM answer cache: nothing (9/9/4 vs 7/10/9 fps). Shared window buffers: +5.6% (predicted +20-25%). Four-request budget: reverted. Per-frame GetInputFocus batching: little recoverable.",
+"source": "current-state.md:357-372,6388-6399,6519-6545,6659-6697,131-133"
+},
+{
+"idea": "Game config/binary changes (Doom -mb 4, Quake -mem, compiler flags, XIP/locked Quake text, TyrQuake 0.71/sdlquake, 640x480 Doom, chocolate-doom)",
+"result": "-mb 4: 15.4 vs 16.2 fps. -mem 12/10/9: 9.8/10.9/10.1 fps (non-monotonic). -O3 died. XIP Quake: 10.7 vs 10.9 fps, 18% fewer faults. locktext: 863 vs 825 faults, 15.4 vs 15.1 fps. TyrQuake 0.71: >2x slower. sdlquake crashes. 640x480 Doom: 4 fps. chocolate-doom needs 4 MB (wedged the board). Most are forbidden now anyway.",
+"source": "current-state.md:6625-6629,6712-6717,7712-7728,8177-8210,8394-8426; worklog-latepresent; frame-path-plan.md section 2"
+},
+{
+"idea": "'Fps dips are swap' / page-cache warming / readahead as a Quake lever",
+"result": "Dips are CPU contention (no positional correlation, r=0.04-0.33; half the slow intervals had zero faults). Quake's faults are heap swap, not readahead (16 KB: 11 faults/s). read_ahead 512 KB read 98 MB vs 5.4 MB per demo; 128 KB ships; 1024 is a cliff.",
+"source": "worklog-2026-09-19.md:283-337; current-state.md:6719-6724,8270-8288; S02s31-blockdev"
+},
+{
+"idea": "Scheduler tunables (RUN_TO_PARITY, base_slice_ns, DELAY_DEQUEUE) and preemption model",
+"result": "The 31% 'win' was a spinning st client, so VOID (not negative). PREEMPT_NONE vs LAZY: 399/412/265 vs 366/386/372 ms, nothing.",
+"source": "kernel-upgrade.md:822-829,952-956; memory s31-spinning-client-invalidates"
+},
+{
+"idea": "Tickless idle (NO_HZ_IDLE); NO_HZ_FULL",
+"result": "NO_HZ_IDLE lost a timer wake: silent hang, ~1 death per 2 runs vs 7/8 + 5/5 on the periodic tick. It also broke /proc/stat. NO_HZ_FULL needs VIRT_CPU_ACCOUNTING_GEN (64BIT).",
+"source": "current-state.md:7501-7519; Makefile:513-531; kernel/time/Kconfig:130-142"
+},
+{
+"idea": "Forced placement, pinning, capacity, RPS/wq steering, isolcpus",
+"result": "Pinned lvdesk +15.3% (15.812/15.977 vs 13.862/13.645). Co/split placement 16.43/16.13 vs 13.83 free. capacity-dmips 1024/512 worse. wq+RPS on CPU1 -7% with free migration. isolcpus not built (CPU_ISOLATION=n). PIE pin emptied CPU1; PIE_BOUNCE now 1000.",
+"source": "worklog-2026-09-19.md:1453-1592; smp-finish-plan.md:184-187; Makefile:419-429"
+},
+{
+"idea": "Per-boot lottery eliminations",
+"result": "Not placement (a reset leaves slow boots slow: 16.371 -> 16.761). Not an lvdesk restart (17.034 -> 16.598). Not the scanout buffer (0x50800000 constant). Not CMA. Not PSRAM chase latency (a slow boot at 274.8 ns, fast boots at 316 ns). The cpu1_busy correlation was retracted as an effect. Quake paging does not explain it (majflt 1,302-1,556).",
+"source": "worklog-2026-09-19.md:1609-1767; smp-finish-plan.md:161-165"
+},
+{
+"idea": "Cheapening the cross-hart crossing inside hart0 (raw-vector doorbell, vCPU priority, conditional FPU save, rcu_nocbs)",
+"result": "Doorbell ISR to running vCPU is 0.66 us of 165 us. Priority 1 -> 10: ratio 1.63/1.66 vs 1.62/1.71. The FPU world swap is ~0.2 us. rcu_nocbs ~524 vs 542 us and does not compound with softirq.o.",
+"source": "worklog-2026-09-19.md:1796-1855; s31_vcpu_world.S:128-263"
+},
+{
+"idea": "Polling idle on the lent CPU via trapped wfi",
+"result": "Canaries +11% (16.3 vs 14.7 ms): 460k M-mode traps/s on the shared bus, and hart0 IDLE starved. Replaced by a real FreeRTOS-blocking idle.",
+"source": "worklog-2026-09-19.md:890-894; s31_vcpu.c:283-297"
+},
+{
+"idea": "Hardware S-mode interrupts on hart0; routing IPIs through M-mode; MPIL mask",
+"result": "Impossible: a 0xff level sentinel, and FreeRTOS takes M interrupts ~160/s. Emulation costs 1.14 us. An IPI routed via M-mode never woke hart1. MPIL changed nothing.",
+"source": "worklog-2026-09-19.md:583-650,803-804,1433-1435"
+},
+{
+"idea": "PIE lease prototype; cross-hart AMO lost unlocks",
+"result": "The lease stalled at boot (#294-#300), moved to the attic; the real cause was the CLIC-level bug. AMOs: 0 erased in 5M cross-hart amoadd vs plain store. CLOSED.",
+"source": "worklog-2026-09-19.md:1246-1285"
+},
+{
+"idea": "Late present measured neutral on the canary",
+"result": "INVALID: the flag was never exported. Properly enabled: +13% Doom (34.6 -> 39.1 fps). The windowed canary has not been validly re-measured.",
+"source": "worklog-latepresent:1-18"
+},
+{
+"idea": "XLITE-RING, PRESENT ioctl, fast present as fps/tail levers",
+"result": "Ring +5.5% (31.2/32.0 -> 33.3/33.4). PRESENT fps-neutral (lvdesk -3%). Fast present: lvdesk -9%, fps in noise. The p99 dip block was unchanged (0.692 -> 0.709 s).",
+"source": "worklog-2026-09-19.md:401-417"
+},
+{
+"idea": "s31fp soft-double interception on one core; SDL1 timer-thread fix for our games",
+"result": "s31fp: mul 2.5x and bit-exact, but OpenTyrian underruns only 102 -> 73-77 per 10 s (the synth needs ~0.9 of a core even with it). Not enabled. mpg123 unchanged. prboom, TyrQuake and OpenTyrian never request SDL_INIT_TIMER.",
+"source": "worklog-2026-09-19.md:455-541; sdlbench-results-2026-09-13.md:59-79"
+},
+{
+"idea": "XEspV (PIE) memcpy/memset in musl; faster libc mem*",
+"result": "memset 1.00x, memcpy 1.10-1.11x on 256-512 KB. musl memset is already 8x sw. libc mem* is 0.73% of Quake's CPU0. memcpy delegates to __riscv32_xespv_memcpy64 (8 esp.* insns) for aligned copies of 64 B or more, which bounces CPU1 callers.",
+"source": "docs/xespv-libc.md:1-20; lens:libs objdump"
+},
+{
+"idea": "libSDL into XIP / bespoke SDL build; -O2 for SDL/asound",
+"result": "XIP: timedemo 16.2 -> 16.0 fps, unchanged (RSS 204 -> 0 kB). The -fno-unwind build worked and was rejected as bespoke. All non-libc shared libraries are 1.4% of Quake's CPU0 and ~2.5% of Doom's.",
+"source": "sdl-acceleration-plan.md Part 1; lens:libs"
+},
+{
+"idea": "Windowed 32-bit SDL2 visual with CPU conversion; hide the cursor in fullscreen",
+"result": "chocolate-doom 10.7 -> 5.5 fps (lvdesk converts 32 -> 16). Hiding the cursor: 20.9 -> 21.3 fps, in noise.",
+"source": "current-state.md:8212-8223,8378-8386"
+},
+{
+"idea": "Moving JPEG work (encode to hart0, concurrent encode+decode, persistent decode buffers, timer-driven capture)",
+"result": "Moving encode to hart0 gains nothing (the engine and PSRAM reads do not move). Concurrent encode and decode hard-wedges the SoC (now -EBUSY). 915 KB of persistent buffers reverted. Capture harness costs: shell loop -42%, damage recorder 2.4%.",
+"source": "jpeg-encoder.md; memory s31-jpeg-decode; current-state.md:4051-4146"
+},
+{
+"idea": "Desktop LVGL experiments (config knobs, PARTIAL/SRAM buffers, canvas terminal, glyph atlas, per-glyph model, PPA cursor blend, legacy cursor ioctl)",
+"result": "STYLE_CACHE and CACHE_DEF_SIZE: noise. PARTIAL buffers get monotonically worse as they shrink. Canvas terminal 3230 -> 3410 ms (+6%), reverted. Atlas: 3 wrong-bitmap attempts. The 21 us/glyph model does not hold. PPA cursor 407-491 vs CPU 241-315 us. Unpaced cursor ioctl ~1 ms each (settle bug cost 81%).",
+"source": "accel-plan.md; cursor-latency.md"
+},
+{
+"idea": "X server / stock X library alternatives",
+"result": "Xfbdev 2,876 kB, Xorg ~4.7 MB: replaced by the xshim window at 53 kB. Stock closure 3,657 kB vs ~1,158 kB of flash. Static xcalc 1.7 MB. Replaced by xlite (xcalc 2,104 -> 180 kB), xtlite (747,572 -> 26,092 B) and xftlite (xclock 1,976 -> 352 kB).",
+"source": "x11-shim.md:6-423; xlite.md; xtlite.md; xftlite.md"
+},
+{
+"idea": "xshim internals already fixed or rejected",
+"result": "Refusing RENDER breaks xfiles. XPM per-run requests: 10,577 -> 1,001 after batching. Sharing every pixmap costs more than it saves. The X-window drag ghost was removed (majflt 439 -> 21). Whole-window invalidation fixed (-52%). One write per reply fixed. The 2 s /dev/input rescan was ~2.6% idle and was replaced by inotify. The PPA on scattered shim pages would need a bounce copy.",
+"source": "x11-shim.md; x11-review.md:17-202"
+},
+{
+"idea": "LVGL/lvdesk bring-up choices",
+"result": "LVGL's DRM backend blocks forever. fbdev emulation 83.1 ms vs KMS 23.3-25.6 ms. A usleep loop costs 18% of a core idle. fbcon blink 50 -> 1 updates. lvdesk from SD vs XIP: 2.3 ms for 572 kB (keep XIP). Native 800x480 render null. LVGL evdev pointer dead. A cheaper deskbench broke detection.",
+"source": "lvgl-bringup.md:24-492"
+},
+{
+"idea": "hart0 audio pipeline, GDMA mem2mem ring copies, aloop unconditional encode, bluetoothctl/libdbus",
+"result": "GDMA mem2mem stalled after 15 blocks. The hart0 engine is written for ES8311 and superseded (Linux drives the ES8389). Unconditional encode ~30% of a core (gated ~2%). bluetoothctl fork+exec and libdbus blocking were rejected in favour of s31-bt.",
+"source": "S31_audio_subsystem.md:82-85; bluetooth-tray-plan.md:43-254"
+},
+{
+"idea": "Moving work to hart0 beyond radios (SD, display/vblank, device-IRQ offload, Wi-Fi broadcast filter, palette split, radio blobs as kthreads)",
+"result": "SD proxy adds a 165 us crossing to 2.49 ms. Display ~1% of CPU0. Device IRQs total ~1% of a core. Wi-Fi RX 0.13% of CPU0 during Quake. The palette split is bandwidth-bound. Option A (blobs as kthreads) rewrites what works; SBI RFENCE deadlocked.",
+"source": "lens:hart0; smp-finish-plan.md:88-141; smp-plan.md"
+},
+{
+"idea": "Small kernel-side costs judged not levers",
+"result": "RSEQ/MM_CID: 0 samples. Barrier/AMO relaxation <=0.6% of CPU0. SLUB_TINY fast paths 0.2%. dw_mmc always-on instrumentation ~0.1%. TLB-shootdown IPIs ~0.1%. futex/poll for Quake ~0.6%. Fault-path objects in RAM ~0.5%. Systimer clocksource not running (riscv_clocksource, 0 samples). Whole-kernel -O2 does not fit (119,803 B slack). JUMP_LABEL/ALTERNATIVE impossible on XIP.",
+"source": "lens:kconfig; lens:ipc; lens:storage"
+},
+{
+"idea": "Hardware that is not available (bigger I-cache, L2, TCM, whole kernel in RAM, 64 KB SRAM hot-text window)",
+"result": "The cache geometry is fixed, with no L2 (CACHE_LL_LEVEL_NUMS 1). LP SRAM is hart0 heap. Flash text is 4.38 MB against 15.4 MB of RAM. The hart0 heap is 4-12 KiB free, so the only free SRAM is 6,360 B in the OpenSBI window.",
+"source": "IDF cache_ll.h:30-33; Kconfig.cache; lens:xip; hot-text-plan.md"
+},
+{
+"idea": "Paging ideas rejected on reasoning (KSM, huge pages for heaps, CPU1 prefetch daemon, SD write/read contention, compressed app FS, ext4 mount options, large folios, raw swap partition on the stock stack)",
+"result": "KSM: ~130 kB of rmap slab plus COW faults. hugetlbfs pins 12 MB. A prefetch daemon has no predictor at 316 kB free. Writes occupy ~1% of the card. EROFS/squashfs break even. Journal writes <0.3%. Folios off without THP. A partition equals a swapfile on the same stack.",
+"source": "lens:paging; lens:storage"
+},
+{
+"idea": "XSync pipelining / client-side copy in xlite (counter-arguments to C94)",
+"result": "Not measured; rejected on arithmetic. ppoll is only 1.8% of Quake's main thread (~1.05 ms per frame). A client-side 77 KB copy costs 0.45-0.75 ms on CPU0 and races late present, so the net is ~0.3 ms (0.5%) Quake, 2-3% Doom, at +64-77 KB of RAM.",
+"source": "lens:libs; lens:crosslayer"
+},
+{
+"idea": "Audio chain collapse / hart0 ASRC / userspace rdtime / routing all IRQs to CPU1 / scatter-gather line-doubling (crosslayer reasoning)",
+"result": "snd_* is 0.46% of CPU0. ASRC buys nothing at native 11025. rdtime clock_gettime 0.06%. After the IRQ diet the remaining IRQs are ~0.5-1.5%. Line-doubling was judged not a constraint, with a descriptor budget concern.",
+"source": "lens:crosslayer"
+},
+{
+"idea": "Diagnostics left on control-flow paths",
+"result": "Three times a diagnostic was itself the failure being chased: the maxcpus=1 heartbeat panic, a false 'hart0 frozen', and a j . spin in the M-mode fault path.",
+"source": "worklog-2026-09-19.md:910-934"
+},
+{
+"idea": "Route all I/O through FreeRTOS by mailbox; maxcpus=1 then online CPU1",
+"result": "A mailbox round trip costs tens to hundreds of us, ruinous for DMA paths. maxcpus=1 was a workaround, and 1 boot in 5 still failed.",
+"source": "worklog-2026-09-19.md:872-875; Makefile:411-414"
+},
+{
+"idea": "Enlarge or reconfigure the caches from the loader",
+"result": "Not available: L1 I is 16 KB, D is 64 KB, lines 64 B, all fixed; no L2.",
+"source": "/opt/esp-idf/components/esp_system/port/soc/esp32s31/Kconfig.cache"
+},
+{
+"idea": "Evicting a daemon from XIP to pay for flash; udevd into XIP",
+"result": "XIP_SKIP left a stale SD copy running. udevd needs 264 KB against 57 KB free in xip2, and its SD pages are clean and evictable, so it is the wrong trade.",
+"source": "current-state.md:3383-3491,6471-6492; memory s31-xip-is-for-things-that-run"
+},
+{
+"idea": "OpenTyrian rate cap like s31route_11k",
+"result": "Does not help: the OPL synth runs at a fixed 44100 and converts afterwards.",
+"source": "opentyrian loudness.c:45-77, opl.h:47"
+}
+],
+"dropped_as_dead": [
+{
+"title": "Open audio-path items: s31route staging queue, SDL1 callback jitter, native 11025 codec rate (docs:cs-1)",
+"why": "This repeats measured work with no new argument. The deep-buffering staging ring in s31route was built and failed: it underran at start, EPIPE killed sound, and it reported 'avail 4335' against a 4,096-frame buffer. It was reverted and has since been superseded by the 64 KiB I2S ring. Native 11025 is already done: prboom runs at 11025 with no conversion anywhere, Quake gets s31route_11k (+41%), and the codec supports 11025 natively. The audio thread is ~1.5% of a core."
+},
+{
+"title": "Read the real SD bus mode from dw_mmc registers and raise it (docs:cs-2)",
+"why": "This is already closed. The bus is 4-bit and the card reports no S18A, so UHS-I is impossible. The marginal rate is already 48-51.6 MB/s (DDR-equivalent). 4 KiB faults are bound by the ~2.0 ms floor, of which wire time is ~80 us, so a faster size term changes almost nothing."
+}
+]
+}
