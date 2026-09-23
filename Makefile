@@ -504,7 +504,7 @@ FP_TWEAK += --disable ESP32S31_SYSTIMER_CLOCKSOURCE
 # backtraces (~200 kB of flash, ~0 RAM under XIP - the tables are rodata).
 # Off in the shipped defconfig; the review's flash headroom pays for it and
 # waitsamp read every wait as "?" without it (2026-09-23, Phase 3c).
-KALLSYMS ?= 0
+KALLSYMS ?= 1
 ifeq ($(KALLSYMS),1)
 FP_TWEAK += --enable KALLSYMS
 else
