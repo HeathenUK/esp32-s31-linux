@@ -48,9 +48,9 @@ try:
     r = subprocess.run([sys.executable, os.path.join(HERE, "runsh.py"), script, "120", "60"], capture_output=True, text=True)
 finally:
     httpd.shutdown()
-txt = r.stdout.replace("\r", "")
+txt = (r.stdout + "\n[stderr]\n" + r.stderr).replace("\r", "")
 open(os.path.join(out, "run.log"), "w").write(txt)
 for line in txt.split("\n"):
-    if line.startswith(("LINK", "WGET", "PING", "BT ", "RC_DONE")) or "NO_SHELL" in line:
+    if line.startswith(("LINK", "WGET", "PING", "BT ", "RC_DONE")) or "NO_SHELL" in line or "BUSY" in line or "Error" in line or "Traceback" in line:
         print("  " + line.strip())
 print("log:", os.path.join(out, "run.log"))
