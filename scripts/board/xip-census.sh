@@ -2,9 +2,12 @@
 # xip-census.sh - which platform code still executes from the SD card?
 #
 # Walks every process's /proc/<pid>/maps and groups the file-backed mappings
-# by device: 00:19 is the XIP overlay (cramfs, zero RSS, a page is a cache
-# fill), b3:xx is the card (a cold page is a 2.5 ms request and it competes
-# for the 15 MB). Reports each SD-resident file with its mapped size and, if
+# by device: b3:xx is mmcblk0, the SD card (a cold page is a 2.5 ms request
+# and it competes for the 15 MB); every 00:xx device is a memory-backed or
+# XIP mount - the two cramfs images (00:19 and friends), tmpfs, the overlay
+# (a page there is a cache fill, zero RSS). The first version of this script
+# called everything but 00:19 "SD" and reported busybox and lvdesk on the
+# card; they are on 00:2b and 00:1e, XIP mounts. Reports each SD-resident file with its mapped size and, if
 # the kernel exposes smaps, its resident bytes - the bill for keeping it on
 # the card. Apps stay on SD by rule; the list is for PLATFORM pieces that
 # should not be there (docs/perf-plan-2026-09-23.md, Phase 3c). ~30 s.
@@ -43,12 +46,12 @@ for l in body.strip().split('\n'):
     p = l.split()
     if len(p) < 6: continue
     pid, comm, dev, perms, sz, path = p[0], p[1], p[2], p[3], int(p[4]), p[5]
-    (xip if dev.startswith('00:19') else sd)[path].add(comm)
+    (sd if dev.startswith('b3:') else xip)[path].add(comm)
     if 'x' in perms: size[path] = max(size.get(path, 0), sz)
 rss = collections.defaultdict(int)
 for m in re.finditer(r'^RSS (\S+) (\S+) (\d+) (\S+)$', t, re.M):
     rss[m.group(4)] += int(m.group(3))
-print("executables/libraries mapped from the SD CARD (dev != 00:19), text size, resident kB if known, users:")
+print("executables/libraries mapped from the SD CARD (dev b3:xx = mmcblk0), text size, resident kB if known, users:")
 tot = 0
 for path in sorted(sd, key=lambda k: -size.get(k, 0)):
     tot += size.get(path, 0)
