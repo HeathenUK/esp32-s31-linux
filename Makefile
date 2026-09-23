@@ -537,8 +537,11 @@ endif
 # FASTFN=<list file, repo-relative> moves the listed functions ("<obj> <fn>"
 # per line, from scripts/board/fastfn-pick.py) into RAM text by name, hot-first
 # (perf-plan 2026-09-23 C39: scripts/Makefile.lib renames their sections,
-# arch/riscv/kernel/s31-fastfn.lds.h orders them). Empty by default.
-FASTFN ?=
+# arch/riscv/kernel/s31-fastfn.lds.h orders them). SHIPPED 2026-09-23 with
+# the aggregate hot list: pingpong -29%, Quake 20.0 -> 21.3/21.6; the cold
+# control moved the same bytes for -14% / no Quake gain.
+# Default: the shipped list (patches/0062). FASTFN= (empty) builds without it.
+FASTFN ?= patches/0062-esp32s31-fastfn-list/agg-hot.list
 # O2OBJS="kernel/sched/core.o ..." compiles those objects at -O2 in the -Os
 # kernel (hook in scripts/Makefile.lib, patches/0060). A measurement knob for
 # the perf plan's "selective -O2 on hot objects" arm; empty by default.

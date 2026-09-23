@@ -1,0 +1,14 @@
+The shipped function-granular RAM text list (perf-plan 2026-09-23 C39).
+
+agg-hot.list: 137 flash-text functions, 24,320 B, chosen by hart-1 PC samples
+per byte over Doom + Quake + the SDL canary on kernel #358 (idle excluded),
+built with FASTFN=patches/0062-esp32s31-fastfn-list/agg-hot.list (the Makefile
+default). Measured on fresh boots against #358: same-hart pingpong 342/330/333
+vs 466-484 us (-29%), Quake 21.3/21.6 vs 20.0/20.1 fps, gate 22/22.
+agg-cold.list: the same-size layout control (182 zero-sample functions from the
+same objects): pingpong 404 (-14%, layout), Quake 18.5/19.7 (no gain). The
+Quake gain is the functions; about half the pingpong gain is packing.
+
+Regenerate after a layout change with scripts/board/fastfn-pick.py from fresh
+profile-apps.sh captures resolved against `nm -nS vmlinux` of the kernel they
+were taken on; verify with scripts/board/fastfn-verify.py after the build.
