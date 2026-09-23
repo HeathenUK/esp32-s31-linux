@@ -34,6 +34,19 @@ start_init() {
 	mkdir -m 0700 /run/seedrng 2>/dev/null || true
 	mkdir -p /etc/s31-conf 2>/dev/null || true
 
+	# PID 1 from XIP, not from the card. Until 2026-09-23 this exec'd the
+	# root's own /sbin/init - the SD card's DYNAMIC busybox with its own
+	# libc.so - and S05xip stacked the XIP overlays only afterwards, so every
+	# later process ran the XIP busybox at zero RSS while PID 1 kept ~476 kB
+	# (256 kB busybox + 220 kB libc) of SD-resident duplicate text for the
+	# life of the system (scripts/board/xip-census.sh). Mount the XIP image
+	# here and exec ITS busybox as init; S05xip finds it mounted and carries
+	# on. Anything failing falls through to the old path.
+	if mkdir -p /mnt/xip 2>/dev/null && \
+	   { grep -q ' /mnt/xip ' /proc/mounts || mount -t cramfs -o ro mtd:rootfs /mnt/xip 2>/dev/null; } && \
+	   [ -x /mnt/xip/bin/busybox ]; then
+		exec /mnt/xip/bin/busybox init
+	fi
 	exec /sbin/init
 }
 
