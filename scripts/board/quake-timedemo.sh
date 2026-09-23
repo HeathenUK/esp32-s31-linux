@@ -40,6 +40,8 @@ echo "ERROR \$(grep -a '^Error:' /root/quake/td.log 2>/dev/null | head -1)"
 echo "QUAKE majflt=\$(awk '{print \$12}' /proc/\$P/stat 2>/dev/null) \$(grep -aE 'VmRSS|VmSwap' /proc/\$P/status 2>/dev/null | tr -s ' ' | tr '\n' ' ')"
 echo "MEM \$(grep -aE 'MemAvailable|SwapFree' /proc/meminfo | tr -s ' ' | tr '\n' ' ')"
 echo "SCANOUT_FAIL \$(dmesg | grep -ac 'failed to start scanout')"
+echo "SDSTAT \$(cat /sys/block/mmcblk0/stat | tr -s ' ')"
+echo "KNOBS vma_ra=\$(cat /sys/kernel/mm/swap/vma_ra_enabled 2>/dev/null) page-cluster=\$(cat /proc/sys/vm/page-cluster)"
 EOF
 cat > "$OUT/clean.sh" <<'EOF'
 for p in $(ps | awk '/[t]iopex|[s]dlquake|[t]yr-quake|[t]yrquake/ {print $1}'); do kill -9 $p 2>/dev/null; done
@@ -54,5 +56,5 @@ python3 scripts/board/runsh.py "$OUT/clean.sh" 20 20 > /dev/null 2>&1
 fps=$(sed -n 's/.* \([0-9.]*\) fps.*/\1/p' "$OUT/run.log" | head -1)
 echo "[$L] fps=${fps:-NONE}  $(grep -a '^RESULT' "$OUT/run.log" | cut -c8-)"
 grep -a '^ERROR [^ ]' "$OUT/run.log" | sed 's/^/     /'
-grep -aE '^(PRE_APPLIED|QUAKE|MEM|SCANOUT_FAIL)' "$OUT/run.log" | sed 's/^/     /'
+grep -aE '^(PRE_APPLIED|QUAKE|MEM|SCANOUT_FAIL|SDSTAT|KNOBS)' "$OUT/run.log" | sed 's/^/     /'
 echo "     panel: $OUT/panel.png"
