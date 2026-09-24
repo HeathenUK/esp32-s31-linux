@@ -45,7 +45,11 @@
 # Traps this encodes (all recorded in memory/docs): uinject costs ~2.6 s per
 # invocation (device settle), so taps go in the background and one run
 # carries all four codes (90 ms apart); `xlite: queue event type` never
-# lists MotionNotify - count `xlite: motion` lines; XLITE_TRACE_INPUT must
+# lists MotionNotify - count `xlite: motion` lines; KeyPress is counted
+# with `queue event type 2$` ANCHORED: unanchored it also counts type 22
+# (ConfigureNotify, 3 per Chocolate Doom launch and 5 per OpenTyrian on
+# #377), so keys>=2 passed with no key delivered (the first shipped-image
+# run, 2026-09-24, read keys=7 and 9 for 4 real presses each); XLITE_TRACE_INPUT must
 # be in the app's OWN environment (xlite reads getenv once per process), so
 # it is set inside the setsid sh -c string; fullscreen entry is proven by
 # the log, not the panel; the screenshot after cdoomfs-a is 320x240 (the
@@ -98,7 +102,7 @@ cd /root/doom && setsid sh -c 'XLITE_TRACE_INPUT=1 exec ./chocolate-doom -fullsc
 sleep 28; a=$(pidof chocolate-doom | wc -w)
 f1=$(grep -ac 'kms: fullscreen [0-9]' /var/log/lvdesk.log); mode=$(grep -a 'lvdesk: fullscreen [0-9]' /var/log/lvdesk.log | tail -n 1 | awk '{print $3}')
 kill -USR1 $L; sleep 1; n1=$(grep -a 'MIT-SHM ShmPutImage' /var/log/lvdesk.log | tail -n 1 | awk '{print $2}')
-setsid sh -c '/root/uinject key 1 1 1 1' </dev/null >/dev/null 2>&1 & sleep 6; k=$(grep -ac 'queue event type 2' /tmp/cdoomfs.log)
+setsid sh -c '/root/uinject key 1 1 1 1' </dev/null >/dev/null 2>&1 & sleep 6; k=$(grep -ac 'queue event type 2$' /tmp/cdoomfs.log)
 echo "cdoomfs alive=$a fs=$((f1-f0)) mode=${mode:-NONE} puts=$((n1-n0)) keys=$k"
 EOF
 step cdoomfs-a 70 2; verdict cdoomfs-a "alive=1 fs=[1-9] mode=320x240 puts=[1-9][0-9][0-9][0-9]* keys=\([2-9]\|[1-9][0-9]\)"
@@ -132,7 +136,7 @@ cd /root/oty/usr/share/opentyrian/data && setsid sh -c 'HOME=/root XLITE_TRACE_I
 sleep 25; a=$(pidof opentyrian | wc -w)
 f1=$(grep -ac 'kms: fullscreen [0-9]' /var/log/lvdesk.log); mode=$(grep -a 'kms: fullscreen [0-9]' /var/log/lvdesk.log | tail -n 1 | awk '{print $3}' | tr -d ,)
 setsid sh -c '/root/uinject park' </dev/null >/dev/null 2>&1 & sleep 5; m=$(grep -ac 'xlite: motion' /root/oty.log); for p in $(pidof uinject); do kill $p; done
-setsid sh -c '/root/uinject key 108 108 108 108' </dev/null >/dev/null 2>&1 & sleep 6; k=$(grep -ac 'queue event type 2' /root/oty.log)
+setsid sh -c '/root/uinject key 108 108 108 108' </dev/null >/dev/null 2>&1 & sleep 6; k=$(grep -ac 'queue event type 2$' /root/oty.log)
 kill -USR1 $L; sleep 1; n1=$(grep -a 'MIT-SHM ShmPutImage' /var/log/lvdesk.log | tail -n 1 | awk '{print $2}')
 echo "tyrian alive=$a fs=$((f1-f0)) mode=${mode:-NONE} puts=$((n1-n0)) motion=$m keys=$k"
 EOF
@@ -151,10 +155,10 @@ echo "tyrian-close idx=${idx:-NONE} ctl=$((c1-c0)) asked=$((w1-w0)) dropped=$((d
 EOF
 step tyrian-b 30 2; verdict tyrian-b "asked=1 .*fsoff=[1-9] after8s=0"
 
-# --- clean: nothing left running, DAC back where apps-smoke leaves it -----
+# --- clean: nothing left running, DAC back to 143 (-24 dB), where apps-smoke leaves it -----
 cat > "$S" <<'EOF'
 for p in $(pidof opentyrian) $(pidof chocolate-doom) $(pidof uinject); do kill -9 $p; done
-amixer -q sset 'DACL' 178 2>/dev/null; amixer -q sset 'DACR' 178 2>/dev/null
+amixer -q sset 'DACL' 143 2>/dev/null; amixer -q sset 'DACR' 143 2>/dev/null
 echo CLEAN
 EOF
 python3 scripts/board/runsh.py "$S" 20 2 >/dev/null 2>&1
