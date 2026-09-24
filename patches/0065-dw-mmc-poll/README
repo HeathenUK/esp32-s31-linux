@@ -1,0 +1,168 @@
+0065 - dw_mmc: polled completion for small reads (poll_bytes / poll_ns),
+       default ON at 16 KiB; hardware CMD12 (auto_stop) priced and NOT built
+=========================================================================
+
+Full copy of drivers/mmc/host/dw_mmc.c from linux-71-port (it includes 0012,
+0014, 0039, 0063 and 0064's sdtrace). No dw_mmc.h, dw_mmc-pltfm.c, block.c
+or defconfig change. Apply by copying over the port tree's file, then
+`./docker/build.sh 'cd /src && $S31_MAKE linux'`, `make sync-images &&
+make flash-linux`, confirm with `uname -a` (#377 or later), and grep the
+build log case-insensitively for `warning:` - the only two in dw_mmc.c
+(`dw_mci_ns_worst` / `dw_mci_ns_total` unused) predate 0039 and are not new.
+
+Companions: rootfs/sdlat.c gained a BYTES form (`512b`, `1024b`; `4`, `4k`,
+`1m` unchanged; the report prints `512B`) and rootfs/build-sdlat.sh builds
+it in the container; board/ holds the A/B scripts, each with its runsh
+timeout and its pass/kill rule in the header. The working copies live in
+artifacts/tracks/polled/.
+
+STATUS: SHIPPED 2026-09-24, kernel #377 (poll_bytes=16384 default). The
+knob stays runtime: `echo 0 > /sys/module/dw_mmc/parameters/poll_bytes`
+is the old kernel, no rebuild.
+
+WHAT IT DOES
+
+Kernel #373 (0063 mode 2 + sdtrace) completes a 4 KiB swap-in in the
+host's BH and hands the faulter one wake-up. With the `none` scheduler the
+faulting task IS the issuing task (blk_finish_plug -> blk_mq_flush_plug_list
+issues directly; mmc's queue is BLK_MQ_F_BLOCKING; dw_mci_request() runs in
+the faulter under spin_lock_bh - 02-preflight confirms: sdlat pinned to
+CPU0 min 1.00 / p50 1.50 with 1.9 ctxt per request, to CPU1 1.19 / 1.31
+with 2.6). So after dw_mci_start_request() the driver drops host->lock with
+spin_unlock() - NOT _bh, the same split dw_mci_request_end() uses - and
+dw_mci_poll_request() spins for up to poll_ns: read MINTSTS / IDSTS&IDINTEN,
+call dw_mci_interrupt() when set (legal from non-IRQ context, the lost-irq
+hrtimer already does), and run dw_mci_work_func() inline whenever
+pending_events is non-zero. With the DONE_COMPLETE cap the request
+completes inside that inline work_func: mmc_request_done ->
+mmc_blk_mq_req_done -> blk_mq_complete_request -> blk_mq_raise_softirq, and
+raise_softirq_irqoff() does not wake ksoftirqd because BH-disabled counts
+as in_interrupt(). The BLOCK_SOFTIRQ then drains at dw_mci_request()'s
+spin_unlock_bh, in the faulter, before do_swap_page reaches
+folio_lock_or_retry: the folio is already unlocked, no sleep, no wake-up,
+no VM_FAULT_RETRY second walk.
+
+Gates: reads only, in_task() and IRQs enabled, no sbc, the cap set for this
+request (mode 2 sets it per read; mode 0 never polls), data <= poll_bytes.
+Every queue_work(system_bh_wq) site is untouched, so a redundant bh_work
+runs at the unlock (finds STATE_IDLE, no events, one same-CPU dispatch, no
+switch) and budget expiry can never lose a completion - that safety net is
+what turned the bug below into a tail instead of a hang.
+
+sdprobe gained `poll n/hit/expired/avg_ns`.
+
+THE BUG THE FIRST CUT HAD (kernel #374, fixed in #375)
+
+The loop ran work_func only when pending_events CHANGED since the last
+pass, with the `seen` snapshot taken AFTER the pass. When the card answered
+fast (c2d ~100 us) the DTO/XFER hardirq landed inside the CMD_COMPLETE pass
+after its XFER check, so the new DATA|XFER bits equalled `seen` and the
+loop spun until the budget expired. Visible three ways: p90 tracked the
+budget (poll_ns 500000 -> 1.8-2.1 ms, 1500000 -> 2.5, 3000000 -> 4.06-4.10
+= budget + 1.1 ms); expired 17-27% of reads pinned to CPU0 vs 0.3% on
+CPU1 (there the real BH on CPU0 rescued them); and the sdtrace ring rows
+read c2d 86-110 / x2bh 2984-3013 / nbh 3. Fix: call work_func whenever
+pending_events is non-zero (idempotent under host->lock; a bit that cannot
+be consumed yet - DATA_COMPLETE before XFER_COMPLETE, d2x 7-31 us - costs
+one lock/unlock per iteration until it can). On #375 expired is 1-2 of 300
+at 1.5 ms (the card's genuine tail) and p90 no longer follows the budget.
+
+A2 / B3: HARDWARE CMD12 PRICED AND KILLED (no build)
+
+sdlat bytes form, kernel #373, 3 rounds x 300 random, idle desktop:
+    512 B  = CMD17 alone       cmds_all 1/req, last_opcode 17, ~1.8 IRQ/req
+             min 0.929 / 0.929 / 0.932   p50 1.233 / 1.246 / 1.100 ms
+    1024 B = CMD18 + sw CMD12  cmds_all 2/req, last_opcode 12, ~2.8 IRQ/req
+             min 0.999 / 1.061 / 1.027   p50 1.282 / 1.285 / 1.295 ms
+    stop_leg = 0.999 - 0.929 - 0.013 = 0.057 ms (0.054 / 0.119 / 0.085 by
+    round), under the 0.10 ms kill line and consistent with sdtrace's
+    `stop` hop (42/54 us). A1: issue2cmd 65 us + cmd2data 225 us per 4 KiB
+    request = 0.29 ms, under the 1.0 ms family kill.
+The auto_stop implementation (SDMMC_CMD_SEND_STOP for CMD18/25, request
+ended at DATA_OVER in the sunxi form, ACD cleared beside the RXDR/TXDR
+quirk) is preserved unbuilt in
+artifacts/tracks/polled/patches/0064-dw-mmc-poll-autostop/ with its own
+README; it is NOT in this driver. Recorded next to send_stop_abort().
+
+MEASURED (all kernel #375 unless stated; sdlat 4 KiB x 300 random, ms;
+done_complete=2, scheduler none, dw-mci IRQ 32 on CPU0)
+
+  B4 unpinned, same boot, arms 4096 0 4096 16384 0 (04-b4-poll-aba.sh):
+    poll 0     min 1.000/0.998/0.998 1.005/1.000/1.070
+               p50 1.499/1.481/1.904 1.552/1.477/2.147
+               p90 2.60/2.47/2.90 2.80/2.37/2.99   p99 3.7-5.5
+               ctxt/req 2.21/2.67/2.58 2.65/2.35/2.83   irq/req 2.97
+    poll 4096  min 0.993/0.986/0.994 0.998/0.995/0.996
+               p50 1.137/1.137/1.141 1.137/1.137/1.247
+               p90 1.70/1.71/1.86 1.68/1.66/2.42   p99 2.4-3.6
+               ctxt/req 0.81/0.68/0.71 0.67/0.68/0.78   irq/req 2.99
+               poll hit 299/300 per run, expired 1-2, avg spin 268-274 us
+    poll 16384 4k: min 0.992/0.991/1.002  p50 1.136/1.133/1.140
+               p90 1.65/1.73/1.67  ctxt/req 0.72/0.65/0.63
+               16k (n=200): min 1.261 p50 1.404 p90 2.02 ctxt/req 0.59
+               vs poll 0 16k: min 1.407/1.524 p50 1.797/1.681 ctxt 1.97/1.82
+  B4 pinned (04d-b4-poll-pinned.sh), arms 0 4096 0 4096 per CPU, x2 each:
+    CPU0 poll 0    min 0.998/0.992 0.995/0.996  p50 1.471/1.461 1.471/1.473
+                   p90 2.05/1.98 2.00/2.43  ctxt/req 1.94/1.92 1.90/2.09
+    CPU0 poll 4096 min 1.003/0.996 0.988/0.994  p50 1.141/1.138 1.141/1.135
+                   p90 1.75/1.69 1.73/1.66  ctxt/req 0.61/0.65 0.66/0.62
+    CPU1 poll 0    min 1.181/1.189 1.173/1.177  p50 2.196/1.851 2.022/2.181
+                   ctxt/req 2.92/2.79 2.80/2.84
+    CPU1 poll 4096 min 0.976/0.994 0.956/0.993  p50 1.847/1.455 1.346/1.662
+                   ctxt/req 1.12/0.96 1.02/0.91
+    (this boot's CPU1 p50s were noisy in both arms; the #374 pinned run
+    read CPU1 poll 0 p50 1.29-1.31 vs 4096 1.12-1.13, p90 1.75-1.84 vs
+    1.48-1.52, p99 2.5-2.9 vs 1.9-2.5.)
+  poll_ns sweep at 4096 (04c): 500000 expired 5-10/300, 1500000 and
+    3000000 1/300; p90 no longer tracks the budget. Default stays 1500000.
+  Rule verdict: ctxt/req <= 1 in every poll arm (pass); p50 -0.33 ms on
+    CPU0 (1.47 -> 1.14, six runs within 0.006), -0.17 on CPU1 (#374);
+    p99 not above the 0 arm. The 4 KiB MIN moves only ~0.01 ms unpinned
+    because the unpinned min already IS the CPU0 placement (1.00), where
+    the fastest request has no wake to delete; the -0.20 ms the rule
+    asked for (from the 1.17 baseline) is exactly the CPU1 placement's
+    1.18 -> 0.97. 16 KiB min -0.15 to -0.27 on the 16384 arm.
+  Knobs-0 no-op check on #374 and #375 (03-knobs0-sanity.sh): min
+    1.007/1.005 and 0.998/0.997, ctxt/req 2.2-2.4, idle dw-mci IRQs over
+    3 s = 0, no data error / did not quiesce.
+
+  timedemo -mem 20, tyr-quake-x11, fresh boot per run, interleaved, 5 each
+  (scripts/board/quake-timedemo.sh with PRE= setting the knob and POST=
+  reading sdprobe/sdtrace; first run after the flash discarded):
+
+    arm          fps (5 fresh boots)        mean  worst  majflt mean
+    poll 16384   8.9  8.1  9.4  7.9  9.3    8.72  7.9    6,446
+    poll 0       8.5  8.2  8.7  7.8  9.0    8.44  7.8    7,511
+  Inside the -mem 20 boot band (7.8-9.4) - not claimed as an fps win;
+  the guard (worst-of-5 not lower) passes. Hop ring since reset, run 5 of
+  each (avg us): total 2526 vs 2871, po2bl 140 vs 244, bl2end 194 vs 242,
+  indrv 1824 vs 2006. Under this load 19-23% of polled reads EXPIRE (a
+  read queued behind a swap-out write outruns 1.5 ms): poll n/hit/expired
+  6202/4769/1433 .. 8725/7072/1653 per run, avg spin 613-678 us, i.e.
+  ~64 polls/s x 0.64 ms = ~4% of CPU0 spent spinning that the faulter used
+  to sleep through. Net still positive on every judge above. A shorter
+  budget under write load, or not polling while a write is in flight, is
+  the obvious next arm (phase 2, item 5 is the same queue-behind-write
+  tail from the other side).
+
+COST: the spin is CPU on the issuing hart with BH disabled for the length
+of the read (avg 270 us at 4 KiB; up to poll_ns). Under the timedemo see
+the table; the guard was the worst-of-5 fps.
+
+WRITE CHECK: scripts/board/sd-write-check.sh with poll_bytes=16384 -
+kernel #375, poll_bytes=16384 set at runtime: 24 MB O_DIRECT
+  write, drop_caches, sha256 MATCH (74052d2439af4c66), sdprobe busy n 13016
+  waited 0, no MMC lines in dmesg (the three DMESG_ERRORS are the boot-time
+  crypto self-test and regulatory.db, pre-existing). During the read-back
+  16 of 26 polled reads expired - the card still programming the writes.
+
+AFTER THE DEFAULT FLIP, kernel #377 (poll_bytes=16384 from boot), idle:
+  sdlat 4 KiB x 300 random: min 1.001/0.986  p50 1.133/1.134
+  p90 1.60/1.79  p99 2.46/3.74 ms, ctxt/request ~0 (was 3-4 this morning).
+  poll n 1455 hit 1208 expired 247 over the two runs.
+
+TODAY'S 4 KiB RANDOM READ, END TO END (idle, p50 / min, ms):
+  #365 morning       1.85 / 1.38   mq-deadline, stock completion
+  #365 none          1.80 / 1.29
+  #369 0063 reads    1.28 / 1.17
+  #377 0065 poll     1.13 / 0.99

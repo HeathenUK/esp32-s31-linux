@@ -23,7 +23,21 @@
  * and reports the distribution rather than a mean, because the tail is what an
  * interactive workload feels.
  *
- * Usage: sdlat <device> [request_kb] [count] [seq|rand]
+ * Usage: sdlat <device> [request_size] [count] [seq|rand]
+ *
+ * request_size is KiB by default ("4", "4k"); a 'b' suffix means BYTES
+ * ("512b", "1024b"). The bytes form exists to price one SD command leg by
+ * contrast (docs/sd-paging-programme-2026-09-24.md, A2): the mmc block
+ * layer issues a 512 B request as CMD17 (READ_SINGLE_BLOCK, no stop) and a
+ * 1024 B request as CMD18 (READ_MULTIPLE_BLOCK) + a SOFTWARE CMD12 from the
+ * dw_mmc BH (block.c:1700-1712 picks the opcode on data.blocks > 1; dw_mmc
+ * never sets MMC_CAP_CMD23, so the stop is never folded into a CMD23). So
+ *
+ *     min(1024b) - min(512b) - ~13 us of extra wire
+ *
+ * is the whole cost of the stop leg: one more CMD write, one more IRQ, one
+ * more BH pass. O_DIRECT needs a 512-multiple, so the smallest legal
+ * request is 512b; the buffer is 4096-aligned whatever the size.
  */
 
 #define _GNU_SOURCE
@@ -51,18 +65,59 @@ static int cmp(const void *a, const void *b)
 	return x < y ? -1 : x > y;
 }
 
+/*
+ * "4" or "4k" -> 4096; "512b" -> 512; "1m" -> 1048576. Sets *bytes_form so
+ * the report line says "512B" rather than "0k" and old "4k" logs still
+ * parse the same way.
+ */
+static size_t parse_size(const char *s, int *bytes_form)
+{
+	char *end;
+	unsigned long v = strtoul(s, &end, 10);
+
+	*bytes_form = 0;
+	if (end == s)
+		return 0;
+	switch (*end) {
+	case 'b':
+	case 'B':
+		*bytes_form = 1;
+		return v;
+	case 'm':
+	case 'M':
+		return v * 1024 * 1024;
+	case 'k':
+	case 'K':
+	case '\0':
+		return v * 1024;
+	default:
+		return 0;
+	}
+}
+
 int main(int argc, char **argv)
 {
 	const char *dev = argc > 1 ? argv[1] : "/dev/mmcblk0";
-	size_t kb = argc > 2 ? (size_t)atoi(argv[2]) : 4;
 	int count = argc > 3 ? atoi(argv[3]) : 200;
 	int rnd = argc > 4 && !strcmp(argv[4], "rand");
-	size_t len = kb * 1024;
+	int bytes_form = 0;
+	size_t len = argc > 2 ? parse_size(argv[2], &bytes_form) : 4096;
 	unsigned long long devsz = 0;
 	void *buf;
 	double *lat;
 	int fd, i, flags;
 	unsigned long long span;
+
+	if (!len || (len & 511)) {
+		fprintf(stderr,
+			"bad request size '%s': KiB ('4', '4k'), MiB ('1m') or bytes ('512b'), a multiple of 512\n",
+			argc > 2 ? argv[2] : "");
+		return 1;
+	}
+	if (count < 1) {
+		fprintf(stderr, "bad count\n");
+		return 1;
+	}
 
 	fd = open(dev, O_RDONLY | O_DIRECT);
 	if (fd < 0) {
@@ -110,8 +165,12 @@ int main(int argc, char **argv)
 	}
 
 	qsort(lat, count, sizeof(*lat), cmp);
-	printf("%s %zuk %s n=%d: min %.3f  p50 %.3f  p90 %.3f  p99 %.3f  max %.3f ms",
-	       dev, kb, rnd ? "rand" : "seq", count,
+	if (bytes_form)
+		printf("%s %zuB %s n=%d:", dev, len, rnd ? "rand" : "seq", count);
+	else
+		printf("%s %zuk %s n=%d:", dev, len / 1024, rnd ? "rand" : "seq",
+		       count);
+	printf(" min %.3f  p50 %.3f  p90 %.3f  p99 %.3f  max %.3f ms",
 	       lat[0], lat[count / 2], lat[count * 9 / 10],
 	       lat[count * 99 / 100], lat[count - 1]);
 	printf("   -> %.2f MB/s at p50\n", (double)len / 1024.0 / 1024.0 /

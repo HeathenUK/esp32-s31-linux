@@ -397,4 +397,9 @@ showing the CMD12 leg under 0.1 ms.
   of this, kernel #365: 4k random p50 1.85, min 1.38. Tier A items not yet
   run: CMD12 pricing (512 B vs 1 KiB), real card clock via devmem, CPU pin
   arms, filefrag /swapfile, early-vs-late write window.
+- 2026-09-24 late: B4 polled reads SHIPPED, kernel #377, patches/0065
+  (default poll_bytes 16384, poll_ns 1.5 ms): idle p50 1.13 ms, min 0.99,
+  ctxt/request ~0. Under -mem 20 play ~20% of polls expire behind writes
+  (~4% of CPU0). B3 hardware CMD12 CLOSED: the stop leg prices 0.05-0.12
+  ms two independent ways. 2a sdtrace SHIPPED earlier (#373, 0064).
 
