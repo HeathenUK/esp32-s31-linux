@@ -11,6 +11,9 @@
 
 #include <errno.h>
 #include <poll.h>
+#ifndef POLLRDHUP
+#define POLLRDHUP 0x2000	/* peer shut down its side (Linux) */
+#endif
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
@@ -190,6 +193,41 @@ static void trace_input(int type, const unsigned char *e)
 		fprintf(stderr, " b=%u", e[1]);
 	fprintf(stderr, " state=0x%x\n", g16(e + 28));
 }
+
+/*
+ * Error handlers. Process-wide, like Xlib's _XErrorFunction, and NEVER NULL:
+ * a client that installs its own handler tail-calls whatever XSetErrorHandler
+ * returned, unconditionally. SDL 1.2's x_errhandler ends
+ * `return(X_handler(d, e))` (SDL-1.2.15 src/video/x11/SDL_x11video.c:232),
+ * its xio_errhandler does the same with XIO_handler (:249), and SDL2's
+ * shm_errhandler chains to X_handler too (SDL_x11framebuffer.c:39). With the
+ * old NULL default, the first delivered error was a jump through 0 inside
+ * prboom; with no handler delivered at all, SDL's MIT-SHM probes
+ * (SDL_x11image.c:36-43 try_mitshm, SDL_x11framebuffer.c:95-101) never saw
+ * the BadAccess they test for, so a failed ShmAttach read as success.
+ *
+ * The defaults print and CONTINUE. Xlib's _XDefaultError exits; that is the
+ * one Xlib behaviour deliberately not copied, because a BadImplementation for
+ * an opcode xshim lacks is a to-do, not a reason to take the app down.
+ */
+static int xlite_default_error(Display *d, XErrorEvent *e)
+{
+	(void)d;
+	fprintf(stderr, "xlite: X error %d on request %d.%d (resource 0x%lx)\n",
+		e->error_code, e->request_code, e->minor_code,
+		(unsigned long)e->resourceid);
+	return 0;
+}
+
+static int xlite_default_ioerror(Display *d)
+{
+	(void)d;
+	fprintf(stderr, "xlite: connection to the X server was lost\n");
+	return 0;
+}
+
+int (*xlite_errh)(Display *, XErrorEvent *) = xlite_default_error;
+int (*xlite_ioerrh)(Display *) = xlite_default_ioerror;
 
 static void decode(struct xdpy *x, const unsigned char *e, XEvent *ev)
 {
@@ -381,12 +419,12 @@ static void deliver_error(struct xdpy *x, const unsigned char *e)
 	ee.resourceid = g32(e + 4);
 	ee.minor_code = g16(e + 8);
 	ee.request_code = e[10];
-	if (x->errh)
-		x->errh(&x->pub, &ee);
-	else
-		fprintf(stderr, "xlite: X error %d on request %d (resource "
-			"0x%lx)\n", ee.error_code, ee.request_code,
-			(unsigned long)ee.resourceid);
+	if (xlite_tr())
+		fprintf(stderr, "xlite: ERROR code %d req %d.%d res 0x%lx seq %lu"
+			" -> handler\n", ee.error_code, ee.request_code,
+			ee.minor_code, (unsigned long)ee.resourceid,
+			(unsigned long)ee.serial);
+	xlite_errh(&x->pub, &ee);
 }
 
 /*
@@ -413,10 +451,12 @@ int xlite_ingrow(struct xdpy *x, size_t need)
 
 static void xlite_conn_lost(struct xdpy *x)
 {
-	if (x->ioerrh)
-		x->ioerrh(&x->pub);
-	else
-		fprintf(stderr, "xlite: connection to the X server was lost\n");
+	/*
+	 * Xlib exits after the IO handler returns, and SDL 1.2's
+	 * xio_errhandler (SDL_x11video.c:240-249) NULLs its display on that
+	 * assumption - so exit, always. The default handler prints.
+	 */
+	xlite_ioerrh(&x->pub);
 	_exit(1);
 }
 
@@ -442,6 +482,10 @@ static int xlite_ring_read_more(struct xdpy *x, int block)
 
 	for (;;) {
 		uint32_t used;
+
+		/* The server dropped us (xring.h `closed`): fatal, as in Xlib. */
+		if (XR_LOAD(x->ring->closed) && !xring_used(d))
+			xlite_conn_lost(x);
 
 		/* Acknowledge BEFORE looking: a writer that then adds bytes
 		 * sees sig clear and rings again, so nothing is slept past. */
@@ -470,13 +514,21 @@ static int xlite_ring_read_more(struct xdpy *x, int block)
 		if (!block)
 			return 0;
 		{
+			/*
+			 * POLLRDHUP, not a bare HUP: an AF_UNIX stream whose
+			 * PEER closed reports POLLIN (EOF) and POLLRDHUP;
+			 * POLLHUP needs both directions shut, which never
+			 * happens here. With events = 0 a dropped client
+			 * (xshim's 3 s WM_DELETE_WINDOW grace) sat in this
+			 * poll for ever - prboom, 2026-09-24.
+			 */
 			struct pollfd p[2] = {
 				{ x->efd_in, POLLIN, 0 },
-				{ x->fd, 0, 0 },	/* HUP/ERR only */
+				{ x->fd, POLLRDHUP, 0 },
 			};
 
 			poll(p, 2, 1000);
-			if ((p[1].revents & (POLLHUP | POLLERR)) &&
+			if ((p[1].revents & (POLLHUP | POLLERR | POLLRDHUP)) &&
 			    !xring_used(d))
 				xlite_conn_lost(x);
 		}
@@ -1418,25 +1470,68 @@ Bool XCheckTypedEvent(Display *d, int type, XEvent *ev)
 	return take_check(XD(d), pred_type, type, ev);
 }
 
+/*
+ * Both setters return the handler that was live, never NULL, and a NULL
+ * argument reinstalls the default - exactly Xlib's contract, and the one the
+ * SDL handlers above rely on when they chain to the previous handler.
+ */
 XLITE_IMPL(XSetErrorHandler)
 int (*XSetErrorHandler(int (*h)(Display *, XErrorEvent *)))(Display *,
 							    XErrorEvent *)
 {
-	static int (*cur)(Display *, XErrorEvent *);
-	int (*old)(Display *, XErrorEvent *) = cur;
+	int (*old)(Display *, XErrorEvent *) = xlite_errh;
 
-	cur = h;
+	xlite_errh = h ? h : xlite_default_error;
 	return old;
 }
 
 XLITE_IMPL(XSetIOErrorHandler)
 int (*XSetIOErrorHandler(int (*h)(Display *)))(Display *)
 {
-	static int (*cur)(Display *);
-	int (*old)(Display *) = cur;
+	int (*old)(Display *) = xlite_ioerrh;
 
-	cur = h;
+	xlite_ioerrh = h ? h : xlite_default_ioerror;
 	return old;
+}
+
+/*
+ * The core error names. SDL 1.2's x_errhandler formats every delivered error
+ * with XGetErrorText into a char errmsg[1024] on its stack
+ * (SDL_x11video.c:210, under X11_DEBUG) and prints it; a stub that returns
+ * without writing leaves that buffer uninitialised. Extension errors have no
+ * table here - xshim's MIT-SHM and RENDER errors all use core codes.
+ */
+static const char *const xlite_errnames[] = {
+	"Success", "BadRequest", "BadValue", "BadWindow", "BadPixmap",
+	"BadAtom", "BadCursor", "BadFont", "BadMatch", "BadDrawable",
+	"BadAccess", "BadAlloc", "BadColor", "BadGC", "BadIDChoice",
+	"BadName", "BadLength", "BadImplementation",
+};
+
+XLITE_IMPL(XGetErrorText)
+int XGetErrorText(Display *d, int code, char *buf, int len)
+{
+	(void)d;
+	if (!buf || len <= 0)
+		return 0;
+	if (code >= 0 &&
+	    code < (int)(sizeof(xlite_errnames) / sizeof(xlite_errnames[0])))
+		snprintf(buf, (size_t)len, "%s", xlite_errnames[code]);
+	else
+		snprintf(buf, (size_t)len, "extension error %d", code);
+	return 0;
+}
+
+/* No error database is shipped: the caller's default string is the text. */
+XLITE_IMPL(XGetErrorDatabaseText)
+int XGetErrorDatabaseText(Display *d, const char *name, const char *msg,
+			  const char *def, char *buf, int len)
+{
+	(void)d; (void)name; (void)msg;
+	if (!buf || len <= 0)
+		return 0;
+	snprintf(buf, (size_t)len, "%s", def ? def : "");
+	return 0;
 }
 
 XLITE_IMPL(XFree)

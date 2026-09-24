@@ -2715,6 +2715,14 @@ struct winrec {
 	 * about lvdesk learns the user closed it.
 	 */
 	uint32_t xid;
+	/*
+	 * A WM_DELETE_WINDOW has been sent and the client is being given up
+	 * to 3 s to exit on its own. The frame stays (title dimmed) until
+	 * xwin_on_close() tears it down; a second close while set is the
+	 * hard drop. Cleared with the rest of the record when the slot is
+	 * reused by make_window().
+	 */
+	uint8_t closing;
 };
 
 static struct winrec wins[MAXWIN];
@@ -3268,6 +3276,28 @@ static void win_close(struct winrec *w)
 	 * is a close, not a switch.
 	 */
 	switcher_cancel();
+	/*
+	 * Ask first. A stock client that registered WM_DELETE_WINDOW (SDL2
+	 * SDL_x11events.c:1337-1345, SDL 1.2, st x.c:1221, xcalc xcalc.c:151)
+	 * runs its own shutdown - config saves, Host_Shutdown, ttyhangup -
+	 * only if it is told; cutting the socket is fatal in xlite
+	 * (xlite.c:414-421) and skips all of it. The client destroys its
+	 * window and disconnects, and xwin_on_close() (from close_cb or the
+	 * HUP) lands back here with xid already 0 to finish the teardown.
+	 * A client that ignores the message is dropped by xshim_close_tick()
+	 * 3 s later; a second click on the button while `closing` drops it
+	 * now. A window that never asked (TyrQuake's X11 target sets no
+	 * WM_PROTOCOLS, vid_x.c) returns 0 here and is cut instantly as before.
+	 */
+	if (w->xid && !w->closing &&
+	    xshim_window_request_close(w->xid, lv_tick_get())) {
+		w->closing = 1;
+		if (w->hlabel)
+			lv_obj_set_style_text_opa(w->hlabel, LV_OPA_50, 0);
+		printf("lvdesk: asked 0x%x to close\n", w->xid);
+		fflush(stdout);
+		return;
+	}
 	if (w->xid) {
 		uint32_t id = w->xid;
 
@@ -3706,6 +3736,7 @@ static lv_obj_t *make_window(const char *title, int x, int y, int w, int h)
 		}
 		rec = &wins[win_n++];
 	}
+	/* Clears `closing` too; the title label is new, so its opacity is. */
 	memset(rec, 0, sizeof(*rec));
 	rec->win = win;
 
@@ -9559,26 +9590,43 @@ static int mouse_poll(void)
 		if (getenv("LVDESK_AIMDBG"))
 			printf("lvdesk: btn%d at %d,%d\n", btn_extra,
 			       (int)ptr_x, (int)ptr_y), fflush(stdout);
-		if (!xwin_send_button(btn_extra, btn_extra_act) &&
-		    btn_extra == 3 && btn_extra_act == 1 && !fs_active &&
-		    ptr_y < h - TASKBAR_H) {
-			/*
-			 * No X window took it: a right-click on the bare
-			 * desktop (or on one of our own windows' chrome)
-			 * opens the application menu. Not over the terminal
-			 * body, which may want its own selection some day.
-			 */
-			lv_area_t ta;
-			int over_term = 0;
+		if (!xwin_send_button(btn_extra, btn_extra_act)) {
+			if (btn_extra_act == 2) {
+				/*
+				 * A release that hit no X window. If the
+				 * press DID land on one (pressed inside,
+				 * dragged off, released), the shim still
+				 * holds that button and XQueryPointer keeps
+				 * reporting it - TyrQuake's mouse-look gate
+				 * (in_x11.c:479-510) waits on that. Button1
+				 * gets PRESS_LOST from LVGL; 2 and 3 need
+				 * this.
+				 */
+				xshim_pointer_lost(btn_extra);
+			} else if (btn_extra == 3 && !fs_active &&
+				   ptr_y < h - TASKBAR_H) {
+				/*
+				 * No X window took it: a right-click on the
+				 * bare desktop (or on one of our own windows'
+				 * chrome) opens the application menu. Not
+				 * over the terminal body, which may want its
+				 * own selection some day.
+				 */
+				lv_area_t ta;
+				int over_term = 0;
 
-			if (term.win && !lv_obj_has_flag(term.win,
-							  LV_OBJ_FLAG_HIDDEN)) {
-				lv_obj_get_coords(term.win, &ta);
-				over_term = ptr_x >= ta.x1 && ptr_x <= ta.x2 &&
-					    ptr_y >= ta.y1 && ptr_y <= ta.y2;
+				if (term.win &&
+				    !lv_obj_has_flag(term.win,
+						     LV_OBJ_FLAG_HIDDEN)) {
+					lv_obj_get_coords(term.win, &ta);
+					over_term = ptr_x >= ta.x1 &&
+						    ptr_x <= ta.x2 &&
+						    ptr_y >= ta.y1 &&
+						    ptr_y <= ta.y2;
+				}
+				if (!over_term)
+					appmenu_open(-1);
 			}
-			if (!over_term)
-				appmenu_open(-1);
 		}
 		btn_extra = 0;
 	}
@@ -10418,6 +10466,7 @@ int main(void)
 		 * timing matters.
 		 */
 		ms = (int)next;
+		xshim_close_tick(lv_tick_get());	/* WM_DELETE_WINDOW deadlines */
 		xshim_flush();		/* deferred client output, before we sleep */
 		{
 			struct timespec a, b;

@@ -118,9 +118,6 @@ struct xdpy {
 	XEvent *q;
 	int qcap, qhead, qtail;
 
-	int (*errh)(Display *, XErrorEvent *);
-	int (*ioerrh)(Display *);
-
 	char name[64];
 	Screen screen;
 	Visual visual;		/* depth 16, the root visual */
@@ -142,7 +139,12 @@ KeySym xlite_kc2ks(unsigned int kc, int level);
 int xlite_tracing(void);
 extern const int xlite_nstubs;
 
-/* Core, in xlite.c. */
+/*
+ * Core, in xlite.c. The error handlers are process-wide and never NULL; see
+ * xlite_default_error there for the SDL idiom that needs it.
+ */
+extern int (*xlite_errh)(Display *, XErrorEvent *);
+extern int (*xlite_ioerrh)(Display *);
 int xlite_flush(struct xdpy *x);
 unsigned char *xlite_req(struct xdpy *x, int opcode, int detail, int words);
 int xlite_reply(struct xdpy *x, uint32_t seq, unsigned char *hdr,

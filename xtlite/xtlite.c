@@ -850,6 +850,16 @@ static void parse_line(struct wid *w, const char *line)
 		t->detail = XStringToKeysym(detail);
 		if (!t->detail && detail[0])
 			t->detail = (unsigned char)detail[0];
+	} else if (!strcmp(ev, "Message")) {
+		/*
+		 * `<Message>WM_PROTOCOLS: quit()` - the detail names the
+		 * message_type atom. xcalc binds it (xcalc.c:151) and lists
+		 * WM_DELETE_WINDOW in WM_PROTOCOLS (xcalc.c:157), so the
+		 * desktop's close button reaches quit() instead of xcalc
+		 * sitting there until the server gives up and drops it.
+		 */
+		t->type = ClientMessage;
+		t->detail = xt_dpy ? (unsigned)XInternAtom(xt_dpy, detail, False) : 0;
 	} else {
 		xt_ignored("translation event", ev);
 		return;
@@ -966,6 +976,8 @@ static void dispatch(struct wid *w, XEvent *ev)
 	} else if (type == KeyPress) {
 		detail = xlw_widen(ev->xkey.keycode);
 		mods = ev->xkey.state & (ControlMask | ShiftMask);
+	} else if (type == ClientMessage) {
+		detail = (unsigned)ev->xclient.message_type;
 	}
 	xt_note("dispatch type=%d detail=%u mods=%u to %s (%d trans)", type,
 		detail, mods, w->name, w->ntrans);
@@ -1330,6 +1342,10 @@ void XtAppMainLoop(XtAppContext app)
 			break;
 		case ButtonPress:
 		case ButtonRelease:
+			dispatch(w, &ev);
+			break;
+		case ClientMessage:
+			/* WM_DELETE_WINDOW -> xcalc's <Message> translation */
 			dispatch(w, &ev);
 			break;
 		case KeyPress:

@@ -51,6 +51,12 @@ int xshim_fds(int *out, int max);
  * a toolkit's buttons work without the desktop knowing anything about widgets.
  */
 void xshim_pointer(uint32_t id, int x, int y, int button, int act);
+/*
+ * A release of `button` (2 or 3) that landed on no X window: if the shim still
+ * holds that button pressed, deliver the release to the window that took the
+ * press so the held-button mask QueryPointer reports goes back to 0.
+ */
+void xshim_pointer_lost(int button);
 /* sym: Latin-1 char or XLW_ code; mods: Shift=1 Lock=2 Ctrl=4 Mod1=8 */
 void xshim_key(uint32_t id, int sym, int press, unsigned int mods);
 
@@ -120,6 +126,17 @@ uint32_t xshim_mode_window(int w, int h);
  * for a program that knows nothing about lvdesk.
  */
 void xshim_window_close(uint32_t id);
+
+/*
+ * Ask the client to close this window with WM_DELETE_WINDOW instead, if its
+ * WM_PROTOCOLS said it wants that. Returns 1 if asked - the client will then
+ * destroy the window and disconnect itself, reaching on_close, or be dropped
+ * by xshim_close_tick() 3 s later - and 0 if the window never asked, in which
+ * case use xshim_window_close(). `now_ms` is any monotonic millisecond clock.
+ */
+int xshim_window_request_close(uint32_t id, uint32_t now_ms);
+/* Once per desktop loop pass: drop clients past their close deadline. */
+void xshim_close_tick(uint32_t now_ms);
 
 /* The RGB565 pixels of a client window, or NULL. Not copied. */
 const uint16_t *xshim_window_pixels(uint32_t id, int *w, int *h);

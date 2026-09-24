@@ -94,6 +94,32 @@ static void pal8_init(void)
 
 enum { R_FREE = 0, R_WINDOW, R_PIXMAP, R_GC, R_FONT, R_COLORMAP, R_CURSOR };
 
+/*
+ * One stored window property. Properties used to be accepted and DROPPED,
+ * with GetProperty answering None for everything - and the stock clients do
+ * read them back: st's xseturgency() does `h = XGetWMHints(); h->flags |= ..`
+ * (st x.c:1750-1756, from xbell() on a BEL while unfocused, and from the
+ * FocusIn handler at x.c:1779-1783), a NULL dereference when the getter is a
+ * stub; SDL2 does get/modify/set on WM_NORMAL_HINTS four times per window
+ * (SDL_x11window.c:863-872, :886-895, :923-932, :1098-1115) and lost the
+ * earlier fields on every round trip; xfiles' XEmbed, selection and DnD reads
+ * saw nothing (widget.c:1975, control/selection.c:133/159). The store is
+ * per window, lazily allocated, and bounded: PROP_MAX bytes per property and
+ * PROP_WIN_MAX per window, MAXPROP entries. A write over budget is dropped
+ * (logged once per window) rather than refused with BadAlloc - SDL2's
+ * _NET_WM_ICON is the only client property that trips it and it is
+ * write-only. Data is kept exactly as sent, in the client's own byte order.
+ */
+struct prop {
+	uint32_t atom, type;
+	uint8_t fmt;			/* 8, 16 or 32 */
+	uint32_t n;			/* bytes in data */
+	uint8_t *data;
+};
+#define MAXPROP		20
+#define PROP_MAX	1024
+#define PROP_WIN_MAX	8192
+
 struct res {
 	uint32_t id;
 	int type;
@@ -225,8 +251,17 @@ struct res {
 	uint32_t cursor;		/* windows: CWCursor, 0 = inherit */
 	uint8_t cur_hidden;		/* cursors: mask all zero, draws nothing */
 	uint8_t want_fs;		/* _NET_WM_STATE_FULLSCREEN set on the window */
+	/*
+	 * WM_PROTOCOLS lists WM_DELETE_WINDOW (ICCCM 4.1.2.7): the client
+	 * wants to be ASKED to close, not have its connection cut. See
+	 * xshim_window_request_close().
+	 */
+	uint8_t wm_delete;
 	uint8_t canary;		/* px is a heap block; hdr holds its allocator header */
 	uint32_t hdr;
+	struct prop *props;		/* windows: stored properties, see struct prop */
+	int nprops;
+	uint8_t prop_over;		/* an over-budget write was already logged */
 };
 
 /*
@@ -340,6 +375,12 @@ struct cli {
 	 */
 	uint16_t nunimpl[128];
 	uint16_t nrender[64];		/* the same, per RENDER minor opcode */
+	/*
+	 * When to stop waiting for this client to act on the WM_DELETE_WINDOW
+	 * we sent it and cut the connection instead. 0 = nothing pending.
+	 * Set by xshim_window_request_close(), checked by xshim_close_tick().
+	 */
+	uint32_t close_deadline;
 };
 
 static struct res res[MAXRES];
@@ -373,6 +414,17 @@ static const char *atom_name(uint32_t id)
 	if (id <= ATOM_BASE || id - ATOM_BASE - 1 >= (uint32_t)natom)
 		return NULL;
 	return atom[id - ATOM_BASE - 1];
+}
+
+/* The id an already-interned name answers to, or 0. Never interns. */
+static uint32_t atom_find(const char *name)
+{
+	int i;
+
+	for (i = 0; i < natom; i++)
+		if (atom[i] && !strcmp(atom[i], name))
+			return (uint32_t)i + 1 + ATOM_BASE;
+	return 0;
 }
 
 static int cur_owner;			/* client whose request is in flight */
@@ -776,6 +828,146 @@ static struct res *res_new(uint32_t id, int type)
 	return NULL;
 }
 
+/* ------------------------------------------------------------ properties */
+
+static struct prop *prop_find(struct res *w, uint32_t atom)
+{
+	int i;
+
+	for (i = 0; i < w->nprops; i++)
+		if (w->props[i].atom == atom)
+			return &w->props[i];
+	return NULL;
+}
+
+static size_t prop_bytes(const struct res *w)
+{
+	size_t n = 0;
+	int i;
+
+	for (i = 0; i < w->nprops; i++)
+		n += w->props[i].n;
+	return n;
+}
+
+static void prop_free_all(struct res *w)
+{
+	int i;
+
+	for (i = 0; i < w->nprops; i++)
+		free(w->props[i].data);
+	free(w->props);
+	w->props = NULL;
+	w->nprops = 0;
+}
+
+static void prop_del(struct res *w, uint32_t atom)
+{
+	struct prop *p = prop_find(w, atom);
+
+	if (!p)
+		return;
+	free(p->data);
+	*p = w->props[--w->nprops];
+}
+
+/*
+ * ChangeProperty's store step. mode is the wire value: 0 Replace, 1 Prepend,
+ * 2 Append. A Prepend/Append onto a property of another type or format is
+ * treated as Replace and logged once - the protocol says BadMatch, but a
+ * client that gets one has a bug this shim gains nothing by amplifying.
+ * Returns 0 when the write was dropped for budget.
+ */
+static int prop_set(struct res *w, uint32_t atom, uint32_t type, uint8_t fmt,
+		    int mode, const uint8_t *data, uint32_t n)
+{
+	struct prop *p = prop_find(w, atom);
+	static int mismatch_logged;
+	uint8_t *nd;
+	uint32_t total;
+	int fresh = 0;
+
+	if (fmt != 8 && fmt != 16 && fmt != 32)
+		return 0;
+	if (p && mode && (p->type != type || p->fmt != fmt)) {
+		if (!mismatch_logged++)
+			fprintf(stderr, "xshim: ChangeProperty %s on %s with "
+				"type %u/%u fmt %u/%u - treating as Replace\n",
+				mode == 1 ? "Prepend" : "Append",
+				atom_name(atom) ? atom_name(atom) : "?",
+				type, p->type, fmt, p->fmt);
+		mode = 0;
+	}
+	if (!p)
+		mode = 0;
+	total = n + (mode ? p->n : 0);
+	if (total > PROP_MAX ||
+	    prop_bytes(w) - (p ? p->n : 0) + total > PROP_WIN_MAX ||
+	    (!p && w->nprops >= MAXPROP)) {
+		if (!w->prop_over++)
+			fprintf(stderr, "xshim: property %s (%u bytes) on 0x%x "
+				"over budget - dropped\n",
+				atom_name(atom) ? atom_name(atom) :
+				atom == 39 ? "WM_NAME" : "?", total, w->id);
+		return 0;
+	}
+	if (!p) {
+		if (!w->props) {
+			w->props = calloc(MAXPROP, sizeof(*w->props));
+			if (!w->props)
+				return 0;
+		}
+		p = &w->props[w->nprops];
+		memset(p, 0, sizeof(*p));
+		fresh = 1;
+	}
+	nd = malloc(total ? total : 1);
+	if (!nd)
+		return 0;
+	if (mode == 1) {			/* Prepend */
+		memcpy(nd, data, n);
+		memcpy(nd + n, p->data, p->n);
+	} else if (mode == 2) {			/* Append */
+		memcpy(nd, p->data, p->n);
+		memcpy(nd + p->n, data, n);
+	} else {
+		memcpy(nd, data, n);
+	}
+	free(p->data);
+	if (fresh)
+		w->nprops++;
+	p->atom = atom;
+	p->type = type;
+	p->fmt = fmt;
+	p->n = total;
+	p->data = nd;
+	return 1;
+}
+
+/*
+ * Keep the stored _NET_WM_STATE atom list in step with want_fs when the
+ * state changes through a ClientMessage rather than a ChangeProperty, so
+ * a later GetProperty (SDL2's X11_GetNetWMState, SDL_x11window.c) agrees
+ * with what the desktop is actually doing.
+ */
+static void prop_state_fs(struct res *w, uint32_t state_atom, uint32_t fs_atom,
+			  int on)
+{
+	struct prop *p = prop_find(w, state_atom);
+	uint32_t list[MAXPROP * 2], k = 0, i, v;
+
+	if (p && p->fmt == 32)
+		for (i = 0; i + 4 <= p->n && k < MAXPROP * 2 - 1; i += 4) {
+			memcpy(&v, p->data + i, 4);
+			if (v != fs_atom)
+				list[k++] = v;
+		}
+	if (on)
+		list[k++] = fs_atom;
+	prop_set(w, state_atom, 4 /* XA_ATOM */, 32, 0, (const uint8_t *)list,
+		 k * 4);
+}
+
 static void res_free(uint32_t id)
 {
 	struct res *r = res_find(id);
@@ -783,6 +975,11 @@ static void res_free(uint32_t id)
 
 	if (!r)
 		return;
+	/*
+	 * Here, not only in res_free_tree(): the client-exit sweep in
+	 * client_drop() frees every resource of a client directly.
+	 */
+	prop_free_all(r);
 	if (trace_on())
 		fprintf(stderr, "xshim: res_free 0x%x type %d %dx%d bpp %d px %p "
 			"alias 0x%x adopted %d gem %u shm %d buf %p parent 0x%x "
@@ -1324,6 +1521,20 @@ void xshim_mem_report(void)
 		(mem_win + mem_pix + mem_glyph) / 1024);
 	fprintf(stderr, "xshim: %lu whole-surface clears punched to holes\n",
 		n_punch);
+	{
+		int np = 0, nw = 0;
+		size_t pb = 0;
+
+		for (i = 0; i < MAXRES; i++)
+			if (res[i].type == R_WINDOW && res[i].nprops) {
+				nw++;
+				np += res[i].nprops;
+				pb += prop_bytes(&res[i]) +
+				      MAXPROP * sizeof(struct prop);
+			}
+		fprintf(stderr, "xshim: %d properties on %d windows, %zu bytes\n",
+			np, nw, pb);
+	}
 
 	/*
 	 * The census that decides what to do about it. Totals say the pixmaps
@@ -3053,6 +3264,7 @@ static void send_reply(struct cli *c, uint8_t detail, const uint8_t *d24,
 #define X_BAD_VALUE		2
 #define X_BAD_WINDOW		3
 #define X_BAD_DRAWABLE		9
+#define X_BAD_ACCESS		10
 #define X_BAD_ALLOC		11
 #define X_BAD_GC		13
 #define X_BAD_IMPLEMENTATION	17
@@ -5383,9 +5595,19 @@ static void HOTTEXT mitshm_request(struct cli *c, const uint8_t *r, int len)
 		ro = r[12] ? 1 : 0;
 		a = shmat(shmid, NULL, ro ? SHM_RDONLY : 0);
 		if (a == (void *)-1) {
+			/*
+			 * BadAccess, as the real server sends when it cannot
+			 * attach the client's segment - and the ONLY code the
+			 * SDL MIT-SHM probes trap: SDL 1.2 try_mitshm's
+			 * shm_errhandler (SDL_x11image.c:36-43) and SDL2's
+			 * (SDL_x11framebuffer.c:35) both test
+			 * `error_code == BadAccess` and fall back to plain
+			 * PutImage. A BadValue here passed through them
+			 * unnoticed and the first ShmPutImage then failed.
+			 */
 			fprintf(stderr, "xshim: ShmAttach shmid %d: %s\n",
 				shmid, strerror(errno));
-			send_error(c, X_BAD_VALUE, seg, MITSHM_MAJOR);
+			send_error(c, X_BAD_ACCESS, seg, MITSHM_MAJOR);
 			break;
 		}
 		{
@@ -5451,6 +5673,17 @@ static void HOTTEXT mitshm_request(struct cli *c, const uint8_t *r, int len)
 		need = (size_t)sstride * th;
 		if (off + need > sg->len)
 			break;			/* would read off the end */
+		/*
+		 * The sub-rectangle has to lie inside the image the client
+		 * declared, or the row reads below run off the segment even
+		 * though the segment itself is big enough. A stock server
+		 * answers BadValue here; the completion still goes out below
+		 * so a sendEvent client is not left spinning on it.
+		 */
+		if ((int)sx + sw > tw || (int)sy + sh > th) {
+			send_error(c, X_BAD_VALUE, 0, MITSHM_MAJOR);
+			goto put_complete;
+		}
 
 		/*
 		 * COPY. Always. Do not adopt the client's segment.
@@ -5484,6 +5717,54 @@ static void HOTTEXT mitshm_request(struct cli *c, const uint8_t *r, int len)
 			const uint8_t *src = (const uint8_t *)sg->addr + off;
 			struct res *b = d->buf;
 			int y, cy0 = -1, cy1 = -1;
+			int x0, x1, y0, y1, sxo = 0, syo = 0, cw, ch;
+
+			/*
+			 * CLIP TO THE DRAWABLE, exactly as PutImage does via
+			 * span_clip(). This path used to clamp only ty against
+			 * b->h and then wrote sw*bpp bytes at dx with no
+			 * right-edge test and without the window's origin -
+			 * invisible while every SDL child sat at 0,0 in a
+			 * window exactly its own size, and a heap overrun the
+			 * moment the desktop's grip shrank the frame.
+			 *
+			 * That shrink is ordinary: win_resize() re-backs the
+			 * top-level at the new size and only THEN sends
+			 * ConfigureNotify, and a stock client keeps putting at
+			 * its old size until it has processed that event.
+			 * TyrQuake's X11 driver puts the whole framebuffer
+			 * (vid_x.c:1042) and, when it does react, clamps its
+			 * output to MINWIDTH x MINHEIGHT = 320x200
+			 * (vid_x.c:1011-1012, r_shared.h:44-45) - so a frame
+			 * dragged narrower than 320 is put oversize on every
+			 * frame from then on, not just during the race. SDL2
+			 * recreates its shm framebuffer only after it has seen
+			 * the ConfigureNotify, and its frame races the resize
+			 * the same way.
+			 *
+			 * The drawable clip is a rectangle (geom_update sets
+			 * cx/cy within the buffer), and gcclip_on is always 0
+			 * for an extension opcode (the GC clip is installed
+			 * only for core ops 62-77), so one rectangle clip
+			 * before the loop is span_clip() per row exactly.
+			 * sxo/syo are what came off the left and top, so the
+			 * source advances with the destination.
+			 */
+			x0 = dx + d->ax; x1 = x0 + sw;
+			y0 = dy + d->ay; y1 = y0 + sh;
+			if (x0 < d->cx0) { sxo = d->cx0 - x0; x0 = d->cx0; }
+			if (x1 > d->cx1) x1 = d->cx1;
+			if (y0 < d->cy0) { syo = d->cy0 - y0; y0 = d->cy0; }
+			if (y1 > d->cy1) y1 = d->cy1;
+			/*
+			 * Entirely outside: nothing to copy, hash, dirty or
+			 * damage - and nothing was written, so the rowhash
+			 * generation below must not be advanced either. The
+			 * completion still goes out.
+			 */
+			if (x0 >= x1 || y0 >= y1)
+				goto put_complete;
+			cw = x1 - x0; ch = y1 - y0;
 
 			/*
 			 * COPY AND HASH IN ONE PASS, and damage only the rows
@@ -5538,22 +5819,20 @@ static void HOTTEXT mitshm_request(struct cli *c, const uint8_t *r, int len)
 			hforce = (b->rowhash_gen != b->wrgen) || b->hole;
 			b->rowhash_gen = b->wrgen;
 
-			for (y = 0; y < sh; y++) {
-				int ty = dy + y;
+			for (y = 0; y < ch; y++) {
+				int ty = y0 + y;	/* within b->h: clipped */
 				const uint8_t *sp;
 				uint8_t *dp;
 				size_t n, k;
 				uint32_t hv = 2166136261u;
 				int changed = 1;
 
-				if (ty < 0 || ty >= b->h)
-					continue;
-				sp = src + (size_t)(sy + y) * sstride +
-				     (size_t)sx * bpp;
+				sp = src + (size_t)(sy + syo + y) * sstride +
+				     (size_t)(sx + sxo) * bpp;
 				dp = (uint8_t *)b->px +
 				     (size_t)ty * b->w * bpp +
-				     (size_t)dx * bpp;
-				n = (size_t)sw * bpp;
+				     (size_t)x0 * bpp;
+				n = (size_t)cw * bpp;
 
 				if (!b->rowhash || !rowdmg_on()) {
 					memcpy(dp, sp, n);
@@ -5598,12 +5877,13 @@ static void HOTTEXT mitshm_request(struct cli *c, const uint8_t *r, int len)
 			}
 			/*
 			 * Damage in DRAWABLE coordinates - damage_add()
-			 * translates to the buffer owner itself. Nothing
+			 * translates to the buffer owner itself - so the
+			 * clipped rect goes back through ax/ay once. Nothing
 			 * changed means nothing to report, and the desktop
 			 * then does no expansion and no scanout copy at all.
 			 */
 			if (cy0 >= 0) {
-				damage_add(d, dx, dy + cy0, sw,
+				damage_add(d, x0 - d->ax, y0 - d->ay + cy0, cw,
 					   cy1 - cy0 + 1);
 			} else {
 				/*
@@ -6305,9 +6585,66 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		send_reply(c, 0, d24, NULL, 0);
 		break;
 	}
-	case 20:					/* GetProperty: None */
-		send_reply(c, 0, d24, NULL, 0);
+	case 20: {					/* GetProperty */
+		/*
+		 * From the per-window store (see struct prop). Nothing was
+		 * ever stored on the root (res_find(ROOT_ID) is NULL), so a
+		 * root read still answers None: SDL2 must keep taking its
+		 * no-WM path (_NET_SUPPORTING_WM_CHECK absent), which is
+		 * where its forced XSetInputFocus and hence its FocusIn come
+		 * from (SDL_x11window.c:1173-1178).
+		 */
+		struct res *w = res_find(get32(r + 4));
+		uint32_t prop = get32(r + 8), rtype = get32(r + 12);
+		uint32_t off = get32(r + 16) * 4, want = get32(r + 20);
+		struct prop *p = w && w->type == R_WINDOW ?
+				 prop_find(w, prop) : NULL;
+		uint8_t ex[PROP_MAX + 4];
+		uint32_t take, avail;
+
+		if (!p) {
+			send_reply(c, 0, d24, NULL, 0);
+			break;
+		}
+		put32(d24, p->type);
+		if (rtype && rtype != p->type) {
+			put32(d24 + 4, p->n);	/* bytes_after: the whole thing */
+			send_reply(c, p->fmt, d24, NULL, 0);
+			break;
+		}
+		if (off > p->n) {
+			send_error(c, X_BAD_VALUE, get32(r + 16), op);
+			break;
+		}
+		avail = p->n - off;
+		take = want > 0x3fffffff ? avail : want * 4;
+		if (take > avail)
+			take = avail;
+		put32(d24 + 4, avail - take);
+		put32(d24 + 8, take / (p->fmt / 8));
+		memcpy(ex, p->data + off, take);
+		memset(ex + take, 0, 4);
+		if (trace_on())
+			fprintf(stderr, "xshim:   GetProperty %s on 0x%x: fmt %u "
+				"%u bytes (+%u after)\n",
+				atom_name(prop) ? atom_name(prop) : "?", w->id,
+				p->fmt, take, avail - take);
+		send_reply(c, p->fmt, d24, ex, (take + 3) & ~3u);
+		if (detail && avail == take)	/* delete, once fully read */
+			prop_del(w, prop);
 		break;
+	}
+	case 21: {					/* ListProperties */
+		struct res *w = res_find(get32(r + 4));
+		uint8_t ex[MAXPROP * 4];
+		int i, n = w && w->type == R_WINDOW ? w->nprops : 0;
+
+		for (i = 0; i < n; i++)
+			put32(ex + i * 4, w->props[i].atom);
+		put16(d24, n);
+		send_reply(c, 0, d24, ex, n * 4);
+		break;
+	}
 	case 43:					/* GetInputFocus */
 		put32(d24, ROOT_ID);
 		send_reply(c, 1, d24, NULL, 0);
@@ -7152,14 +7489,27 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		 * would put every popup in the corner.
 		 */
 		struct res *w = res_find(get32(r + 4));
+		int ox = 0, oy = 0;
 
+		/*
+		 * win-x/y are relative to the queried window's ABSOLUTE
+		 * origin. A child's x,y are parent-relative; its root
+		 * position is its top-level's (buf) x,y plus its offset
+		 * into that buffer (ax,ay, see geom_update). Subtracting
+		 * a bare w->x answered a child query (TyrQuake queries its
+		 * game window, in_x11.c:479) in the wrong frame.
+		 */
+		if (w && w->type == R_WINDOW) {
+			ox = (w->buf ? w->buf->x : w->x) + w->ax;
+			oy = (w->buf ? w->buf->y : w->y) + w->ay;
+		}
 		memset(d24, 0, sizeof d24);
 		put32(d24 + 0, ROOT_ID);
 		put32(d24 + 4, 0);			/* child: None */
 		put16(d24 + 8, (uint16_t)ptr_root_x);
 		put16(d24 + 10, (uint16_t)ptr_root_y);
-		put16(d24 + 12, (uint16_t)(ptr_root_x - (w ? w->x : 0)));
-		put16(d24 + 14, (uint16_t)(ptr_root_y - (w ? w->y : 0)));
+		put16(d24 + 12, (uint16_t)(ptr_root_x - ox));
+		put16(d24 + 14, (uint16_t)(ptr_root_y - oy));
 		put16(d24 + 16, ptr_btn_state);
 		send_reply(c, 1 /* same-screen */, d24, NULL, 0);
 		break;
@@ -7691,6 +8041,31 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 				if (w->mapped)
 					ewmh_fullscreen(w, fs);
 			}
+			/*
+			 * WM_PROTOCOLS (ICCCM 4.1.2.7). A window that lists
+			 * WM_DELETE_WINDOW is asking to be TOLD about a close
+			 * so it can save state and exit on its own terms:
+			 * SDL2 turns the message into SDL_QUIT
+			 * (SDL_x11events.c:1337-1345), st exits cleanly
+			 * (x.c:1221), xcalc runs quit() (xcalc.c:151). The
+			 * only alternative here is cutting the socket, which
+			 * xlite treats as fatal (xlite.c:414-421) and skips
+			 * every shutdown path the program has. Remembered
+			 * per window; xshim_window_request_close() reads it.
+			 * r[1] is the mode: 0 Replace, 1 Prepend, 2 Append.
+			 */
+			if (w && w->type == R_WINDOW && pn &&
+			    !strcmp(pn, "WM_PROTOCOLS") && r[16] == 32) {
+				uint32_t k, del = 0;
+
+				for (k = 0; k < nch && 24 + k * 4 + 4 <= (uint32_t)len; k++) {
+					const char *an = atom_name(get32(r + 24 + k * 4));
+
+					if (an && !strcmp(an, "WM_DELETE_WINDOW"))
+						del = 1;
+				}
+				w->wm_delete = r[1] == 0 ? del : (w->wm_delete | del);
+			}
 		}
 		if (w && w->type == R_WINDOW && is_name && r[16] == 8) {
 			if (nch > sizeof(w->title) - 1)
@@ -7729,6 +8104,22 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 					"min %ux%u max %ux%u\n", w->id, fl,
 					w->min_w, w->min_h, w->max_w, w->max_h);
 		}
+		/*
+		 * Then keep it, so GetProperty can hand it back (see struct
+		 * prop). r[1] is the mode; the unit is the format's byte
+		 * width. No PropertyNotify is emitted - this shim never has,
+		 * and SDL2 selects PropertyChangeMask, so starting now would
+		 * make it re-read _NET_WM_STATE on every one of its own
+		 * writes.
+		 */
+		if (w && w->type == R_WINDOW && (r[16] == 8 || r[16] == 16 ||
+						 r[16] == 32)) {
+			uint32_t nb = nch * (r[16] / 8);
+
+			if (24 + nb <= (uint32_t)len)
+				prop_set(w, prop, get32(r + 12), r[16], r[1],
+					 r + 24, nb);
+		}
 		break;
 	}
 	/*
@@ -7748,10 +8139,34 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 	 * DeleteProperty genuinely has nothing to do; the rest are server-wide
 	 * state this shim does not keep. Ignore them explicitly.
 	 */
-	case 19:					/* DeleteProperty */
+	case 19: {					/* DeleteProperty */
+		struct res *w = res_find(get32(r + 4));
+		uint32_t prop = get32(r + 8);
+		const char *pn = atom_name(prop);
+
+		if (!w || w->type != R_WINDOW)
+			break;
 		if (trace_on())
-			fprintf(stderr, "xshim: ignoring DeleteProperty (19)\n");
+			fprintf(stderr, "xshim:   DeleteProperty %s on 0x%x\n",
+				pn ? pn : "?", w->id);
+		prop_del(w, prop);
+		/* WM_PROTOCOLS deleted: the client no longer asks to be told. */
+		if (pn && !strcmp(pn, "WM_PROTOCOLS"))
+			w->wm_delete = 0;
+		/*
+		 * SDL2's X11_SetNetWMState DELETES _NET_WM_STATE when no
+		 * flags remain (SDL_x11window.c:160-166), and that is how an
+		 * UNMAPPED window leaves fullscreen (the unmapped branch of
+		 * X11_SetWindowFullscreenViaWM, :165). Ignoring it left
+		 * want_fs set, so the next MapWindow re-entered fullscreen.
+		 */
+		if (pn && !strcmp(pn, "_NET_WM_STATE") && w->want_fs) {
+			w->want_fs = 0;
+			if (w->mapped)
+				ewmh_fullscreen(w, 0);
+		}
 		break;
+	}
 	case 25: {					/* SendEvent      */
 		/*
 		 * The one client message that matters here: the EWMH
@@ -7785,6 +8200,9 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 					act = vm_cur ? 0 : 1;
 				w->want_fs = act == 1;
 				ewmh_fullscreen(w, act == 1);
+				prop_state_fs(w, mtype,
+					      n1 && !strcmp(n1, "_NET_WM_STATE_FULLSCREEN")
+					      ? a1 : a2, act == 1);
 				break;
 			}
 		}
@@ -8099,7 +8517,17 @@ static void vm_mode_record(uint8_t *m, int i)
 	unsigned ht = w + 24, vt = h + 8;
 
 	memset(m, 0, 48);
-	put32(m + 0, ht * vt * 60 / 1000);	/* dotclock, kHz */
+	/*
+	 * dotclock in kHz, rounded UP. Clients compute the refresh rate in
+	 * integers as 1000*dotclock/htotal/vtotal (TyrQuake
+	 * vid_x11_common.c:173, SDL 1.2 SDL_x11modes.c) and a floored
+	 * dotclock reads as 59 Hz for every mode here - which TyrQuake's
+	 * VID_FindMode(..., 60) (vid_mode.c:491, vid_refreshrate defaults to
+	 * "60" at vid_mode.c:62) then rejects and NULL-derefs on. The ceiling
+	 * gives exactly 60 for all nine modes (checked), matching
+	 * randr_mode_record, which emits Hz exactly.
+	 */
+	put32(m + 0, (ht * vt * 60 + 999) / 1000);
 	put16(m + 4, w);
 	put16(m + 6, w + 8);
 	put16(m + 8, w + 16);
@@ -9131,6 +9559,33 @@ void xshim_pointer(uint32_t id, int x, int y, int button, int act)
 }
 
 /*
+ * A button release the desktop could not route to a window.
+ *
+ * A press on an X window goes to it through xwin_send_button; if the pointer
+ * is dragged off the window before the release, the release hit-tests to
+ * nothing and the press stays latched in ptr_btn_state. Nobody could see
+ * that while XQueryPointer was a zeroed stub; now that it answers for real,
+ * TyrQuake's IN_X11_MouseButtonState (in_x11.c:479-510) would wait forever
+ * for a button that is not held. Button1 already gets LV_EVENT_PRESS_LOST
+ * from LVGL (xwin_ptr_cb); this is the same repair for buttons 2 and 3:
+ * deliver the release to the top-level that took the press, in its own
+ * coordinates, which clears the bit.
+ */
+void xshim_pointer_lost(int button)
+{
+	struct res *top;
+
+	if (button < 1 || button > 5 ||
+	    !(ptr_btn_state & (0x100u << (button - 1))))
+		return;
+	top = res_find(ptr_last_top);
+	if (!top || top->type != R_WINDOW)
+		return;
+	xshim_pointer(ptr_last_top, ptr_root_x - top->x, ptr_root_y - top->y,
+		      button, 2);
+}
+
+/*
  * A key for the client owning top-level `id`. `sym` is already translated by
  * the desktop - a Latin-1 character as itself, or an XLW_ wire code (see
  * xlite/xlite_wirekeys.h). Keys go where the pointer last was inside this
@@ -9203,6 +9658,7 @@ static void client_drop(struct cli *c, int notify)
 	c->pendn = c->pendcap = 0;
 	c->outn = 0;
 	c->mot_valid = 0;		/* no foldable motion in a reset client */
+	c->close_deadline = 0;		/* a dropped client owes no reply */
 
 	if (grab_cli == owner) {
 		grab_win = 0;
@@ -9216,6 +9672,22 @@ static void client_drop(struct cli *c, int notify)
 		vm_switch(0, -1);
 
 	if (c->ring) {
+		uint64_t one = 1;
+
+		/*
+		 * Say goodbye where the client will look. `closed` is what
+		 * xlite acts on; the doorbell is what gets it to look: SDL 1.2
+		 * decides whether anything is pending by select()ing on the
+		 * descriptor XConnectionNumber() hands out, which in ring mode
+		 * is this eventfd, and never calls XPending() otherwise. With
+		 * no bell the dropped control connection sat unread while the
+		 * graphics connection went on presenting into a window that no
+		 * longer existed (prboom, 2026-09-24). The eventfd is shared,
+		 * so its count survives our close().
+		 */
+		XR_STORE(c->ring->closed, 1);	/* the client reads this (xring.h) */
+		XR_STORE(c->ring->s2c.sig, 1);
+		if (write(c->efd_wr, &one, sizeof(one)) < 0) { /* up already */ }
 		munmap(c->ring, XRING_TOTAL);
 		c->ring = NULL;
 		close(c->efd_rd);
@@ -9288,6 +9760,74 @@ void xshim_window_close(uint32_t id)
 
 	if (r && r->type == R_WINDOW)
 		client_drop(&cli[r->owner], 0);
+}
+
+/*
+ * The polite close: a WM_DELETE_WINDOW ClientMessage (ICCCM 4.2.8.1) to a
+ * window whose WM_PROTOCOLS asked for one, instead of cutting the socket.
+ *
+ * What it buys is every shutdown path a stock program runs on a normal quit
+ * and never ran from the desktop's X button: Chocolate Doom's M_SaveDefaults,
+ * OpenTyrian's config save, tyr-quake's Host_Shutdown, st's ttyhangup. SDL2
+ * makes it SDL_WINDOWEVENT_CLOSE then SDL_QUIT (SDL_x11events.c:1337-1345),
+ * SDL 1.2 SDL_QUIT, xcalc quit() through its "<Message>WM_PROTOCOLS"
+ * translation (xcalc.c:151), whose action checks data.l[0] against
+ * WM_DELETE_WINDOW (actions.c:415) - so data[0] is the protocol atom and
+ * data[1] the timestamp, exactly as the ICCCM lays them out. Event 33 with
+ * the 0x80 send_event bit, which xlite masks off (xlite.c:144); the detail
+ * byte is the format, 32, which xlite hands back as xclient.format
+ * (xlite.c:234).
+ *
+ * The client then destroys its window (DestroyWindow reaches close_cb) and
+ * closes the socket (client_drop on HUP). One that does neither by the
+ * deadline is dropped by xshim_close_tick(), so a hung program still goes.
+ *
+ * Returns 1 if the message went, 0 if the window never asked for one - the
+ * caller then cuts the connection as before, with no wait. TyrQuake's X11
+ * target sets no WM_PROTOCOLS at all (vid_x.c) and takes that path.
+ */
+int xshim_window_request_close(uint32_t id, uint32_t now_ms)
+{
+	struct res *r = res_find(id);
+	uint32_t proto, del;
+	uint8_t d[28];
+
+	if (!r || r->type != R_WINDOW || !r->wm_delete ||
+	    r->owner < 0 || r->owner >= MAXCLI || cli[r->owner].fd < 0)
+		return 0;
+	/* Both exist: the property that set wm_delete was built from them. */
+	proto = atom_find("WM_PROTOCOLS");
+	del = atom_find("WM_DELETE_WINDOW");
+	if (!proto || !del)
+		return 0;
+	memset(d, 0, sizeof(d));
+	put32(d, id);			/* window */
+	put32(d + 4, proto);		/* message_type */
+	put32(d + 8, del);		/* data[0]: the protocol */
+	put32(d + 12, now_ms);		/* data[1]: timestamp */
+	send_event_d(&cli[r->owner], 33 | 0x80, 32, d, 28);
+	out_flush(&cli[r->owner]);
+	cli[r->owner].close_deadline = (now_ms + 3000) | 1;	/* never 0 */
+	fprintf(stderr, "xshim: sent WM_DELETE_WINDOW to 0x%x (client %d)\n",
+		id, r->owner);
+	return 1;
+}
+
+/* Drop any client that has let a WM_DELETE_WINDOW go unanswered for 3 s. */
+void xshim_close_tick(uint32_t now_ms)
+{
+	int i;
+
+	for (i = 0; i < MAXCLI; i++) {
+		struct cli *c = &cli[i];
+
+		if (c->fd < 0 || !c->close_deadline ||
+		    (int32_t)(now_ms - c->close_deadline) < 0)
+			continue;
+		fprintf(stderr, "xshim: client %d ignored WM_DELETE_WINDOW "
+			"for 3 s - dropping it\n", i);
+		client_drop(c, 1);
+	}
 }
 
 void xshim_on_title(void (*cb)(uint32_t id))

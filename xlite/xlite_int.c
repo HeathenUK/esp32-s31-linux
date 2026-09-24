@@ -26,6 +26,9 @@
 
 #include <errno.h>
 #include <poll.h>
+#ifndef POLLRDHUP
+#define POLLRDHUP 0x2000	/* peer shut down its side (Linux) */
+#endif
 #include <unistd.h>
 
 /* --------------------------------------------------------------- output */
@@ -65,16 +68,24 @@ int xlite_flush(struct xdpy *x)
 		if (n) {
 			struct pollfd pf[2] = {
 				{ x->efd_in, POLLIN, 0 },
-				{ x->fd, 0, 0 },
+				{ x->fd, POLLRDHUP, 0 },	/* see xlite.c */
 			};
 
 			if (xring_used(d) > XRING_C2S_SIZE ||
 			    (poll(pf, 2, 5) >= 0 &&
-			     (pf[1].revents & (POLLHUP | POLLERR)))) {
-				if (x->ioerrh)
-					x->ioerrh(&x->pub);
-				rc = -1;
-				break;
+			     (pf[1].revents & (POLLHUP | POLLERR | POLLRDHUP)))) {
+				/*
+				 * The server closed our socket: an IO error,
+				 * and in Xlib an IO error is FATAL - the
+				 * handler is called and the process exits.
+				 * Returning -1 here instead let xlite_reply()
+				 * skip its wait, so a dropped ring client
+				 * (prboom, after ignoring WM_DELETE_WINDOW for
+				 * 3 s) went on rendering at full speed into a
+				 * ring nobody drained, forever (2026-09-24).
+				 */
+				xlite_ioerrh(&x->pub);
+				_exit(1);
 			}
 			/* The doorbell belongs to the reader; if it is up and
 			 * nobody is reading, do not spin on it. */
@@ -88,10 +99,16 @@ int xlite_flush(struct xdpy *x)
 		if (w < 0) {
 			if (errno == EINTR)
 				continue;
-			if (x->ioerrh)
-				x->ioerrh(&x->pub);
-			rc = -1;
-			break;
+			/*
+			 * The socket is blocking, so a failed write is a dead
+			 * server. Xlib exits once the IO handler returns and
+			 * SDL 1.2's xio_errhandler (SDL_x11video.c:240-249)
+			 * NULLs its display expecting exactly that; carrying
+			 * on with rc = -1 left the client issuing requests
+			 * into a display SDL had already discarded.
+			 */
+			xlite_ioerrh(&x->pub);
+			_exit(1);
 		}
 		p += w; n -= w;
 	}

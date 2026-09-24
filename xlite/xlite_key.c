@@ -202,9 +202,18 @@ XLITE_IMPL(XkbSetDetectableAutoRepeat)
 Bool XkbSetDetectableAutoRepeat(Display *dpy, Bool detectable, Bool *supported)
 {
 	(void)dpy; (void)detectable;
-	/* Not supported: the caller must expect a KeyRelease for every repeat. */
-	if (supported) *supported = False;
-	return False;
+	/*
+	 * Supported, because it is: the desktop forwards evdev value 2 as a
+	 * KeyPress and sends KeyRelease only on value 0 (lvdesk.c key
+	 * forwarding, "release; 2 is autorepeat"), and xshim_key never
+	 * synthesises a release - a held key arrives press,press,...,release,
+	 * which IS detectable autorepeat. No client on the card changes
+	 * behaviour on this answer (SDL2's X11_KeyRepeat, SDL_x11events.c:172,
+	 * and SDL 1.2's peek run regardless); it is corrected for honesty.
+	 * XkbQueryExtension above stays False: there is still no keymap.
+	 */
+	if (supported) *supported = True;
+	return True;
 }
 
 XLITE_IMPL(XkbGetState)

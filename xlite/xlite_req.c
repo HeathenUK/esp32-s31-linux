@@ -2605,17 +2605,79 @@ Pixmap XCreateBitmapFromData(Display *dpy, Drawable d, const char *data,
 	return XCreatePixmapFromBitmapData(dpy, d, (char *)data, w, h, 1, 0, 1);
 }
 
-/* WM_NORMAL_HINTS is never stored server-side here; say so honestly. */
+/*
+ * WM_NORMAL_HINTS, read back from the server's property store. SDL2 does
+ * get/modify/set on it four times per window (SDL_x11window.c:863-872,
+ * :886-895, :923-932, :1098-1115); the zeroed answer this used to give threw
+ * away the earlier fields on each round. XSetWMNormalHints (xlite_key.c)
+ * sends the XSizeHints struct raw as 18 longs, and on ilp32 that is exactly
+ * the 72-byte wire layout, so the reply copies straight back into it.
+ */
 XLITE_IMPL(XGetWMNormalHints)
 Status XGetWMNormalHints(Display *dpy, Window w, XSizeHints *hints,
 			 long *supplied)
 {
-	(void)dpy; (void)w;
+	Atom type = None;
+	int fmt = 0;
+	unsigned long n = 0, after = 0;
+	unsigned char *data = NULL;
+
 	if (hints)
 		memset(hints, 0, sizeof(*hints));
 	if (supplied)
 		*supplied = 0;
-	return 0;
+	if (XGetWindowProperty(dpy, w, XA_WM_NORMAL_HINTS, 0, 18, False,
+			       XA_WM_SIZE_HINTS, &type, &fmt, &n, &after,
+			       &data) != Success)
+		return 0;
+	if (type != XA_WM_SIZE_HINTS || fmt != 32 || n < 18 || !data) {
+		XFree(data);
+		return 0;
+	}
+	if (hints)
+		memcpy(hints, data, 18 * sizeof(long));
+	XFree(data);
+	/* The mask Xlib reports for an 18-long property. */
+	if (supplied)
+		*supplied = USPosition | USSize | PPosition | PSize | PMinSize |
+			    PMaxSize | PResizeInc | PAspect | PBaseSize |
+			    PWinGravity;
+	return 1;
+}
+
+/*
+ * WM_HINTS, read back the same way. st's xseturgency() dereferences the
+ * result without a NULL check (st x.c:1750-1756, reached from xbell() on a
+ * BEL while unfocused and from the FocusIn handler at x.c:1779-1783), and
+ * SDL2's SDL_FlashWindow does the same - so with the stub this was a
+ * segfault on focus. XSetWMHints sends the XWMHints struct raw as 9 longs
+ * (36 bytes on ilp32: flags, input, initial_state, icon_pixmap, icon_window,
+ * icon_x, icon_y, icon_mask, window_group), which is the wire order too.
+ * Absent -> NULL, as Xlib.
+ */
+XLITE_IMPL(XGetWMHints)
+XWMHints *XGetWMHints(Display *dpy, Window w)
+{
+	Atom type = None;
+	int fmt = 0;
+	unsigned long n = 0, after = 0;
+	unsigned char *data = NULL;
+	XWMHints *h;
+
+	if (XGetWindowProperty(dpy, w, XA_WM_HINTS, 0, 9, False, XA_WM_HINTS,
+			       &type, &fmt, &n, &after, &data) != Success)
+		return NULL;
+	if (type != XA_WM_HINTS || fmt != 32 || n < 9 || !data) {
+		XFree(data);
+		return NULL;
+	}
+	h = malloc(sizeof(*h));
+	if (h) {
+		memset(h, 0, sizeof(*h));
+		memcpy(h, data, 9 * sizeof(long));
+	}
+	XFree(data);
+	return h;
 }
 
 XLITE_IMPL(XGetGCValues)
@@ -3213,24 +3275,43 @@ int Xutf8TextListToTextProperty(Display *dpy, char **list, int count,
 }
 
 /*
- * The shim answers QueryPointer for real, but nothing here needs the answer
- * badly enough to pay a round trip on a path SDL calls per frame. Zeroed and
- * honest beats uninitialised: the caller gets a valid, if uninteresting,
- * pointer position rather than stack contents.
+ * QueryPointer (38): the real request. The shim answers it (position in root
+ * and window coordinates, held-button mask) and the ring makes the round trip
+ * cheap. The old zeroed stub was "honest" only in the sense of being
+ * initialised: TyrQuake's IN_X11_MouseButtonState (in_x11.c:479) gates its
+ * mouse-look grab on "no button held" and always read 0, so it grabbed
+ * mid-click; SDL 1.2 decides initial mouse focus and posts the first motion
+ * from this at SDL_SetVideoMode (SDL_x11video.c:1284-1293), always 0,0 with no
+ * focus; SDL2's X11_GetGlobalMouseState and its modifier reconcile on FocusIn
+ * saw zeros. Nothing on the card calls it per frame - TyrQuake's gate stops
+ * after the first buttonless frame - so there is no path here to keep cheap
+ * by lying.
  */
 XLITE_IMPL(XQueryPointer)
 Bool XQueryPointer(Display *dpy, Window w, Window *root, Window *child,
 		   int *rx, int *ry, int *wx, int *wy, unsigned int *mask)
 {
-	(void)dpy; (void)w;
-	if (root)  *root = 0;
-	if (child) *child = 0;
-	if (rx) *rx = 0;
-	if (ry) *ry = 0;
-	if (wx) *wx = 0;
-	if (wy) *wy = 0;
-	if (mask) *mask = 0;
-	return True;
+	unsigned char hdr[32], *extra = NULL;
+	size_t nextra = 0;
+	uint32_t seq;
+
+	{
+		REQ(dpy, 38, 0, 2);
+		p32(r + 4, w);
+		seq = x->pub.request;
+		xlite_send(x, r);
+		if (!xlite_reply(x, seq, hdr, &extra, &nextra))
+			return False;
+	}
+	free(extra);
+	if (root)  *root  = g32(hdr + 8);
+	if (child) *child = g32(hdr + 12);
+	if (rx) *rx = (short)g16(hdr + 16);
+	if (ry) *ry = (short)g16(hdr + 18);
+	if (wx) *wx = (short)g16(hdr + 20);
+	if (wy) *wy = (short)g16(hdr + 22);
+	if (mask) *mask = g16(hdr + 24);
+	return hdr[1] ? True : False;		/* same-screen */
 }
 
 /* 32 bytes of keyboard state; no key held is the truthful answer here. */

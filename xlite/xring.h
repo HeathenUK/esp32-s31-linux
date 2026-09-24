@@ -66,7 +66,17 @@ struct xring_dir {
 struct xring_hdr {
 	uint32_t magic;
 	uint32_t version;
-	uint32_t pad[14];
+	/*
+	 * Set by the SERVER just before it unmaps the ring and closes the
+	 * socket. A client that only ever polls the ring without blocking -
+	 * SDL 1.2's control connection, whose XPending() never touches the
+	 * socket - has no other way to learn that it was dropped: a peer
+	 * close shows up as POLLIN/POLLRDHUP on a socket nobody polls.
+	 * xlite checks this on every ring read (one load) and treats it as
+	 * an IO error. 2026-09-24: prboom rendered for ever into a dead ring.
+	 */
+	uint32_t closed;
+	uint32_t pad[13];
 	struct xring_dir c2s;
 	struct xring_dir s2c;
 };
