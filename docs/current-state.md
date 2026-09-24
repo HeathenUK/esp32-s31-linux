@@ -24,6 +24,77 @@ be measured. See `docs/smp-plan.md` for the next steps. User also reported a
 Quake crash (deferred) and an uncaptured SD interrupt-latency boot hang; neither
 is claimed fixed by the vblank change.
 
+## tiopex-quake has no mouse, by construction - CLOSED, not ours (2026-09-24)
+
+**Symptom** (2026-09-23, XLITE_TRACE_INPUT=1): TyrQuake fullscreen 320x240
+(the menu's Quake, `rootfs/tiopex-quake`, SDL 1.2) traces `XWarpPointer ->
+root 0,0`, `XUngrabPointer`, `XGrabPointer(window owner=1 confine=window)
+-> 0`, then nothing: no XDefineCursor, no recentring warps, and the view
+never turns for real or injected (`uinject move`) motion. Keys work (arrow
+KeyPress storms reach the window). prboom under the same shim recentres and
+its mouse works. It looked like a shim fault - a missing "mouse presence"
+declaration, or lvdesk's `is_mouse()` routing the Logitech elsewhere.
+
+**Cause: the application has no mouse code.** tiopex-quake is TyrQuake's
+engine linked with sdlquake-master's generic handheld glue
+(`rootfs/build-tiopex.sh:19`, `source/vid_sdl.c`, written for MIPS
+handhelds with no pointer). In that file:
+
+- `mouse_avail` (`vid_sdl.c:36`) is only ever written to 0 - by `IN_Init`
+  (`:635`) and `IN_Shutdown` (`:640`); `IN_Commands` is empty (`:643`) and
+  `IN_Move` returns at once (`:647-650`).
+- `Sys_SendKeyEvents` (`:224-630`) drains every SDL event but acts only on
+  `SDL_KEYDOWN`/`SDL_KEYUP` (`:233-234`) and `SDL_QUIT` (`:623`); every
+  `SDL_MOUSEMOTION`/`SDL_MOUSEBUTTON*` falls into `default: break` (`:626`).
+- It never calls `SDL_WM_GrabInput`, and `SDL_WM_GrabInputRaw` is the only
+  writer of `video->input_grab` (SDL 1.2 `SDL_video.c:1832-1863`), so
+  input_grab stays `SDL_GRAB_OFF` for the life of the process.
+
+That explains the trace exactly. Fullscreen entry grabs anyway -
+`X11_EnterFullScreen` calls `X11_GrabInputNoLock(this, input_grab |
+SDL_GRAB_FULLSCREEN)` (`SDL_x11modes.c:1067` -> `SDL_x11wm.c:341-354`:
+XUngrabPointer + XGrabPointer(SDL_Window, owner=True, confine=SDL_Window))
+and warps the root pointer three times (`SDL_x11modes.c:336-339, 952-963`;
+xlite prints every 50th warp, `xlite_req.c:2403-2411`, hence one `#1 ->
+root 0,0` line). But `X11_CheckMouseModeNoLock` enters relative mode only
+when `input_grab != SDL_GRAB_OFF` (`SDL_x11mouse.c:246-250`), so
+`mouse_relative` never becomes 1, `X11_WarpedMotion` never runs, no
+recentring warp is ever issued, and each MotionNotify is posted as absolute
+motion (`SDL_x11events.c:519-541`) that the game dequeues and discards.
+xshim and lvdesk deliver the motion and buttons; nothing consumes them.
+
+**What is NOT involved.** There is no "mouse presence" declaration in the
+core protocol; SDL 1.2 never asks for one; SDL2 asks only through XInput2,
+which xshim's QueryExtension does not advertise (`lvdesk/xshim.c:6132-6191`,
+yes only for RENDER/RANDR/MIT-SHM); lvdesk's `is_mouse()`
+(`lvdesk/lvdesk.c:8919-8935`) only picks which evdev fds lvdesk reads. The
+`XWarpPointer -> root 0,0` signature also proves the observed process was
+this SDL 1.2 binary and not `rootfs/tyr-quake` - SDL2 only ever warps to a
+window (`SDL_x11mouse.c:351` in sdl2).
+
+**Unexplained and immaterial:** the missing XDefineCursor. `SDL_SetVideoMode`
+(`SDL_video.c:760` -> `SDL_cursor.c:168` -> `SDL_x11mouse.c:155-162`) and
+`vid_sdl.c:145 SDL_ShowCursor(0)` should each have printed one, under the
+same `input_trace()` gate that printed the grab (`xlite_req.c:2243-2245` vs
+`2344-2348`). Not found from code. Cursor visibility does not gate motion
+delivery, and relative mode fails first on input_grab, so it does not change
+the verdict.
+
+**Verdict.** No change in xlite/xshim/lvdesk can give this binary a mouse,
+and the apps are off the shelf, so the tiopex mouse observation is closed
+as "application feature absent". Do not chase it in the shim again. The
+mouse-capable Quake is `rootfs/tyr-quake` (SDL2, `tyrquake-0.71/common/
+in_sdl.c:65, 551-583`, uses SDL_SetRelativeMouseMode), which has its own
+memory verdict (see "TyrQuake 0.71 on SDL2" below) and is subject to the
+SDL2 keyboard findings; judge it separately, never by tiopex's behaviour.
+
+**Board control, when the board is free:** `rootfs/sdlkeys.c` (SDL 1.2,
+`SDL_ShowCursor(0)` + `SDL_WM_GrabInput(ON)`, prints `SDL_MOUSEMOTION`)
+run fullscreen at 320x240 with `uinject move` should print motion and, with
+XLITE_TRACE_INPUT=1, recentring `XWarpPointer -> window` lines. If it does,
+the shim delivers motion to a grabbing SDL 1.2 client and tiopex's silence
+is the application's alone.
+
 ## 2026-09-20: X transport in shared memory, SPACE-as-Caps_Lock fixed, CMA 3 MiB
 
 - **XLITE-RING** (xlite/xring.h): xlite<->xshim byte stream in a memfd ring

@@ -2561,7 +2561,27 @@ static void send_setup(struct cli *c)
 	*p++ = 0;				/* bitmap bit order */
 	*p++ = 32;				/* scanline unit */
 	*p++ = 32;				/* scanline pad */
-	*p++ = 8;				/* min keycode */
+	/*
+	 * Min keycode is 1, NOT the protocol's customary 8. Our wire contract
+	 * (xlite/xlite_wirekeys.h) puts Return, BackSpace, Tab, Escape, Delete,
+	 * Left and Up at keycodes 1..7, and that byte goes out verbatim as the
+	 * KeyPress detail below. SDL2 builds its keycode->scancode table ONCE,
+	 * at init, and only for keycodes in [min, max] as XDisplayKeycodes
+	 * reports them (sdl2-2.32.10 src/video/x11/SDL_x11keyboard.c:227,
+	 * 308-325); the table is calloc'd, and a KeyPress whose keycode was
+	 * never filled in is delivered as SDL_SCANCODE_UNKNOWN, which
+	 * SDL_SendKeyboardKey drops without posting anything
+	 * (SDL_x11events.c:1150, src/events/SDL_keyboard.c:824). With 8 here
+	 * every SDL2 client lost exactly those seven keys - Chocolate Doom
+	 * could not open a menu (Escape), confirm one (Return), move forward
+	 * (Up) or turn left (Left), while Right/Down/letters/space worked,
+	 * which read as "the keyboard does not work at all". SDL 1.2 and
+	 * xtlite translate per event and never read this byte, which is why
+	 * prboom and xcalc were fine on the same desktop. 1 keeps SDL2 in its
+	 * "layout unknown" branch (the fingerprint values 9,11,6,5,4,14 match
+	 * none of its tables) and makes that branch cover 1..255.
+	 */
+	*p++ = 1;				/* min keycode */
 	*p++ = 255;				/* max keycode */
 	put32(p, 0);            p += 4;		/* unused */
 

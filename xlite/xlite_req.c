@@ -2032,19 +2032,24 @@ XLITE_IMPL(XGetKeyboardMapping)
 KeySym *XGetKeyboardMapping(Display *dpy, KeyCode first, int count,
 			    int *per_code)
 {
-	KeySym *k = calloc(count > 0 ? count : 1, sizeof(KeySym));
+	KeySym *k = calloc(count > 0 ? 2 * count : 1, sizeof(KeySym));
 	int i;
 
 	(void)dpy;
 	if (per_code)
-		*per_code = 1;
+		*per_code = 2;
 	/*
-	 * Latin-1 identity for the printable range. The server here has no
-	 * keymap of its own and lvdesk sends keycodes that are already
-	 * characters, so this is the mapping that makes them arrive.
+	 * Two levels per keycode, from the same US table XKeycodeToKeysym
+	 * answers from (xlite_key.c): the server has no keymap of its own and
+	 * lvdesk sends keycodes that are already characters with Shift folded
+	 * in, so level 0 is the unshifted symbol of that key ('A' -> 'a',
+	 * '!' -> '1') and level 1 the shifted one. This used to be a per_code=1
+	 * identity, which told a client that Shift+w was a key called 'W'.
 	 */
-	for (i = 0; k && i < count; i++)
-		k[i] = first + i;
+	for (i = 0; k && i < count; i++) {
+		k[2 * i]     = xlite_kc2ks(first + i, 0);
+		k[2 * i + 1] = xlite_kc2ks(first + i, 1);
+	}
 	return k;
 }
 
@@ -2405,9 +2410,20 @@ int XWarpPointer(Display *dpy, Window src, Window dst, int sx, int sy,
 	if (input_trace()) {
 		static unsigned n;
 
-		if (n++ % 50 == 0)
-			fprintf(stderr, "xlite: XWarpPointer #%u -> 0x%lx %d,%d\n",
-				n, (unsigned long)dst, dx, dy);
+		/*
+		 * Every warp, not 1 in 50. The sampled version printed #1
+		 * (SDL 1.2's fullscreen-entry warp to the root) and then
+		 * nothing until #51, while XDefineCursor/XGrabPointer above
+		 * print on every call - so the log looked complete and was
+		 * not. SDL 1.2 recentres only when the pointer comes within
+		 * 8 px of the window edge (SDL_x11events.c:331-368), so a
+		 * 320x240 session with 1-49 recentring warps printed exactly
+		 * like one with none, and "TyrQuake never recentres" was
+		 * read off that gap (2026-09-23). Warps are rare enough that
+		 * the full record costs nothing.
+		 */
+		fprintf(stderr, "xlite: XWarpPointer #%u -> 0x%lx %d,%d\n",
+			++n, (unsigned long)dst, dx, dy);
 	}
 	xlite_send(x, r);
 	return 1;

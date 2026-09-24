@@ -140,6 +140,46 @@ static int xlite_tr(void)
 	return v;
 }
 
+/*
+ * XLITE_TRACE_INPUT=1: what the server DELIVERED, on stderr, to set against
+ * the XGrabPointer/XWarpPointer/XDefineCursor lines xlite_req.c prints for
+ * what the client ASKED. Until 2026-09-23 this printed keys only, so "mouse
+ * motion and buttons: nothing" for TyrQuake was never observable from the
+ * trace - it could not separate "the server never sent MotionNotify" from
+ * "sent, and the client discarded it" (SDL 1.2 drops motion while
+ * mouse_last.x/y are being re-centred, SDL_x11events.c:331-368). Pointer
+ * events are traced by COUNT, not sampled: the first TRACE_PTR_FULL print in
+ * full so a short session is recorded whole, then one line per
+ * TRACE_PTR_EVERY with the running number, so the gap is visible in the log
+ * instead of looking like silence. Keys always print - they are rare.
+ */
+#define TRACE_PTR_FULL	256
+#define TRACE_PTR_EVERY	256
+
+static void trace_input(int type, const unsigned char *e)
+{
+	static unsigned nptr;
+
+	if (type == KeyPress || type == KeyRelease) {
+		fprintf(stderr, "xlite: key %s kc=%u win=0x%lx\n",
+			type == KeyPress ? "press" : "release",
+			e[1], (unsigned long)g32(e + 12));
+		return;
+	}
+	nptr++;
+	if (nptr > TRACE_PTR_FULL && nptr % TRACE_PTR_EVERY)
+		return;
+	fprintf(stderr, "xlite: %s #%u win=0x%lx %d,%d root %d,%d",
+		type == MotionNotify ? "motion" :
+		type == ButtonPress ? "button press" : "button release",
+		nptr, (unsigned long)g32(e + 12),
+		(short)g16(e + 24), (short)g16(e + 26),
+		(short)g16(e + 20), (short)g16(e + 22));
+	if (type != MotionNotify)
+		fprintf(stderr, " b=%u", e[1]);
+	fprintf(stderr, " state=0x%x\n", g16(e + 28));
+}
+
 static void decode(struct xdpy *x, const unsigned char *e, XEvent *ev)
 {
 	int type = e[0] & 0x7F;
@@ -166,15 +206,13 @@ static void decode(struct xdpy *x, const unsigned char *e, XEvent *ev)
 		ev->xbutton.time = g32(e + 4);
 		ev->xbutton.root = g32(e + 8);
 		ev->xbutton.window = g32(e + 12);
-		if (type == KeyPress || type == KeyRelease) {
+		{
 			static int tr = -1;	/* XLITE_TRACE_INPUT */
 
 			if (tr < 0)
 				tr = getenv("XLITE_TRACE_INPUT") != NULL;
 			if (tr)
-				fprintf(stderr, "xlite: key %s kc=%u win=0x%lx\n",
-					type == KeyPress ? "press" : "release",
-					e[1], (unsigned long)g32(e + 12));
+				trace_input(type, e);
 		}
 		ev->xbutton.subwindow = g32(e + 16);
 		ev->xbutton.x_root = (short)g16(e + 20);

@@ -7,6 +7,16 @@
 #
 #   tyrquake/sdlquake-master/   the unpacked GitHub master tarball (gitignored)
 #   rootfs/tiopex-quake         the output binary (+ .dbg unstripped)
+#
+# NO MOUSE, BY CONSTRUCTION. That handheld glue has no pointer consumer:
+# vid_sdl.c:36 mouse_avail is only ever set to 0 (IN_Init :635, IN_Shutdown
+# :640), IN_Move returns at once (:647-650), Sys_SendKeyEvents (:224-630)
+# handles KEYDOWN/KEYUP/QUIT only and drops SDL_MOUSE* at `default:` (:626),
+# and it never calls SDL_WM_GrabInput, so SDL 1.2 never enters relative
+# mode (SDL_x11mouse.c:246-250). The fullscreen trace (XWarpPointer -> root
+# 0,0, XUngrabPointer, XGrabPointer, then no recentring warps and a view
+# that never turns) is that, not xshim/xlite/lvdesk. Closed 2026-09-24 in
+# docs/current-state.md; the mouse-capable Quake is rootfs/tyr-quake (SDL2).
 set -e
 SRC=/src/tyrquake/sdlquake-master
 OUT=/src/rootfs/tiopex-quake

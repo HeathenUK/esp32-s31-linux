@@ -94,23 +94,82 @@ char *XKeysymToString(KeySym ks)
 
 /*
  * The server here has no keymap of its own: lvdesk delivers keycodes that are
- * already Latin-1 character codes, and XGetKeyboardMapping reports that
- * identity. So a keycode IS its keysym.
+ * already Latin-1 character codes, with the Shift and Caps Lock state current
+ * at the event ALREADY folded in (lvdesk.c xkey_sym(): keymap[code][shift],
+ * then Caps inverts letter case) - on press and on release alike. So the
+ * keycode for Shift+w is 'W', for Shift+1 is '!', for Shift+. is '>', and
+ * while Caps Lock is on every letter arrives uppercase.
+ *
+ * That is fine for the text APIs (XLookupString and friends return the folded
+ * character, which is what typing wants) but NOT for the keycode->keysym APIs
+ * a real X server answers from a physical keymap. Their level 0 is the
+ * UNSHIFTED symbol of the key, whatever the modifiers were, and clients rely
+ * on it:
+ *
+ *  - SDL 1.2 (prboom, tiopex-quake, sdlkeys) translates EVERY press and
+ *    release with XKeycodeToKeysym(kc, 0) and takes the low byte as the
+ *    SDLKey (SDL_x11events.c:1124, 1141-1142). SDLKey has no members 65-90
+ *    (SDL_keysym.h "Skip uppercase letters"), so Shift+letter - and every
+ *    letter while Caps Lock is on - was an unbound key (Quake: K_UNKNOWN).
+ *    Worse, SDL_KeyState[] is indexed by sym and drops a release that does
+ *    not change state (SDL_keyboard.c:537-546): a 'w' pressed, then Shift
+ *    (run) pressed, then released as 'W' never got its SDL_KEYUP and the
+ *    player kept walking. Same for ',' '.' strafe released as '<' '>'.
+ *  - SDL2 (Chocolate Doom, sdl2keys) builds key_layout[keycode] ONCE at init
+ *    from X11_KeyCodeToSym(kc) -> SDL_GetScancodeFromKeySym
+ *    (SDL_x11keyboard.c:125, 305-324). That lowercases 0x41-0x5A so letters
+ *    survived, but no shifted punctuation is in its tables, so '!' '@' '<'
+ *    '>' '?' '_' '+' ... were SDL_SCANCODE_UNKNOWN: dropped presses
+ *    (SDL_keyboard.c:824), and a '.' released as '>' left SCANCODE_PERIOD
+ *    held.
+ *
+ * So index/level 0 reports the US level-0 keysym of the key ('A'->'a',
+ * '!'->'1', '>'->'.'), index 1 the shifted one, and the folded character
+ * stays where text is asked for. SDL 1.2 then sees SDLK_w plus KMOD_SHIFT
+ * (its modstate comes from the XLW_SHIFT_L/R key events, not from this) with
+ * press and release agreeing on the sym; SDL2 gets key_layout['!'] =
+ * SCANCODE_1 alongside key_layout['1'], and X11_UpdateKeymap fills
+ * keymap[SCANCODE_1] with the level-0 '1' from both.
  */
+static const char us_level0[] = "`1234567890-=[]\\;',./";
+static const char us_level1[] = "~!@#$%^&*()_+{}|:\"<>?";
+
+static KeySym us_level(KeySym ks, int level)
+{
+	const char *from = level ? us_level0 : us_level1;
+	const char *to   = level ? us_level1 : us_level0;
+	const char *p;
+
+	if (ks < 0x20 || ks >= 0x7F)
+		return ks;		/* not a printable ASCII key */
+	if (ks >= 'A' && ks <= 'Z')
+		return level ? ks : ks + 32;
+	if (ks >= 'a' && ks <= 'z')
+		return level ? ks - 32 : ks;
+	p = strchr(from, (int)ks);
+	return p ? (KeySym)(unsigned char)to[p - from] : ks;
+}
+
+/* Internal entry, so the callers below avoid Xlib's deprecation attribute. */
+KeySym xlite_kc2ks(unsigned int kc, int level)
+{
+	return us_level(xlw_widen(kc), level != 0);
+}
+
 XLITE_IMPL(XKeycodeToKeysym)
 KeySym XKeycodeToKeysym(Display *dpy, KeyCode kc, int index)
 {
-	(void)dpy; (void)index;
-	return xlw_widen(kc);
+	(void)dpy;
+	return xlite_kc2ks(kc, index);
 }
 
 /*
  * Xkb: answer "this server has no Xkb", honestly and completely.
  *
  * The shim has no keymap - lvdesk delivers keycodes that ARE Latin-1 keysyms,
- * which XKeycodeToKeysym above reports as an identity - so there is nothing
- * for Xkb to describe and XkbQueryExtension returning False is the truthful
- * answer. A caller told that then uses the core protocol, which works here.
+ * which XKeycodeToKeysym above reports through a fixed two-level US table - so
+ * there is nothing for Xkb to describe and XkbQueryExtension returning False
+ * is the truthful answer. A caller told that then uses the core protocol, which works here.
  *
  * These exist because absence is not the same answer as False. SDL2 resolves
  * every Xlib name it might use with dlsym at startup and stores the result in
@@ -158,8 +217,8 @@ Status XkbGetState(Display *dpy, unsigned int spec, void *state)
 XLITE_IMPL(XkbKeycodeToKeysym)
 KeySym XkbKeycodeToKeysym(Display *dpy, KeyCode kc, int group, int level)
 {
-	(void)group; (void)level;
-	return XKeycodeToKeysym(dpy, kc, 0);
+	(void)dpy; (void)group;		/* one group: US */
+	return xlite_kc2ks(kc, level);
 }
 
 XLITE_IMPL(XkbFreeClientMap)
@@ -174,11 +233,15 @@ void XkbFreeKeyboard(void *xkb, unsigned int which, Bool free_all)
 	(void)xkb; (void)which; (void)free_all;
 }
 
+/*
+ * Same table as XKeycodeToKeysym - this is Xlib's "look the keycode up
+ * ignoring the event's modifier state" call, so it widens the specials and
+ * reports the requested level, not the raw wire byte it used to hand back.
+ */
 XLITE_IMPL(XLookupKeysym)
 KeySym XLookupKeysym(XKeyEvent *ev, int index)
 {
-	(void)index;
-	return ev ? ev->keycode : NoSymbol;
+	return ev ? xlite_kc2ks(ev->keycode, index) : NoSymbol;
 }
 
 XLITE_IMPL(XLookupString)

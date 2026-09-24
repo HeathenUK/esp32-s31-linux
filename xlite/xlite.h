@@ -137,6 +137,8 @@ void xlite_missing(int idx, const char *name);
 /* Ensure the input buffer can hold `need` bytes. Returns 0 if it cannot. */
 int xlite_ingrow(struct xdpy *x, size_t need);
 void xlite_note(const char *fmt, ...);
+/* Wire keycode -> keysym at a shift level; what XKeycodeToKeysym answers. */
+KeySym xlite_kc2ks(unsigned int kc, int level);
 int xlite_tracing(void);
 extern const int xlite_nstubs;
 

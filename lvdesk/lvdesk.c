@@ -3823,6 +3823,7 @@ static int win_is_xclient(lv_obj_t *win)
  * maximised XFiles.
  */
 static int32_t ptr_x, ptr_y;	/* pointer state, defined below */
+static int ptr_pressed;		/* Button1/BTN_TOUCH down, defined below */
 /*
  * A client's video mode is on the panel (XFree86-VidMode): the top-level
  * covering it is scanned out directly, scaled by the driver, and LVGL is
@@ -3844,8 +3845,31 @@ static int32_t ptr_x, ptr_y;	/* pointer state, defined below */
  * Routed directly rather than through LVGL on purpose: feeding a right-click
  * into the indev would make lvdesk's own buttons treat it as an activation.
  */
+/*
+ * The X client whose image is under the pointer, or -1, with its image's
+ * screen rectangle in *a. Shared by the direct button path and the hover path
+ * below so the two cannot disagree about which window the pointer is in.
+ */
+static int xwin_under_pointer(lv_area_t *a)
+{
+	int i;
+
+	for (i = 0; i < xwin_n; i++) {
+		if (!xwins[i].img || !xwins[i].win ||
+		    lv_obj_has_flag(xwins[i].win, LV_OBJ_FLAG_HIDDEN))
+			continue;
+		lv_obj_get_coords(xwins[i].img, a);
+		if (ptr_x < a->x1 || ptr_x > a->x2 ||
+		    ptr_y < a->y1 || ptr_y > a->y2)
+			continue;
+		return i;
+	}
+	return -1;
+}
+
 static int xwin_send_button(int button, int act)
 {
+	lv_area_t a;
 	int i;
 
 	/*
@@ -3864,34 +3888,106 @@ static int xwin_send_button(int button, int act)
 	if (fs_active)
 		return 0;
 
-	for (i = 0; i < xwin_n; i++) {
-		lv_area_t a;
+	i = xwin_under_pointer(&a);
+	if (i < 0)
+		return 0;
+	/*
+	 * A press in a window's CONTENT is a claim on the keyboard,
+	 * same as a press on its title bar - every other focus path
+	 * already agreed. Without this, click-into-xcalc-and-type
+	 * typed into whichever window was focused last.
+	 */
+	if (act == 1) {
+		struct winrec *r = win_find(xwins[i].win);
 
-		if (!xwins[i].img || !xwins[i].win ||
-		    lv_obj_has_flag(xwins[i].win, LV_OBJ_FLAG_HIDDEN))
-			continue;
-		lv_obj_get_coords(xwins[i].img, &a);
-		if (ptr_x < a.x1 || ptr_x > a.x2 || ptr_y < a.y1 || ptr_y > a.y2)
-			continue;
-		/*
-		 * A press in a window's CONTENT is a claim on the keyboard,
-		 * same as a press on its title bar - every other focus path
-		 * already agreed. Without this, click-into-xcalc-and-type
-		 * typed into whichever window was focused last.
-		 */
-		if (act == 1) {
-			struct winrec *r = win_find(xwins[i].win);
-
-			if (r) {
-				lv_obj_move_foreground(xwins[i].win);
-				win_set_focus(r);
-			}
+		if (r) {
+			lv_obj_move_foreground(xwins[i].win);
+			win_set_focus(r);
 		}
-		xshim_pointer(xwins[i].id, ptr_x - a.x1, ptr_y - a.y1,
-			      button, act);
-		return 1;
 	}
-	return 0;
+	xshim_pointer(xwins[i].id, ptr_x - a.x1, ptr_y - a.y1, button, act);
+	return 1;
+}
+
+/*
+ * Button-free pointer motion into the client under the pointer while NO grab
+ * is held.
+ *
+ * Until 2026-09-24 an ungrabbed X window got MotionNotify only while Button1
+ * was down. The pointer reached a client either through a grab (mouse_poll's
+ * grab block, which reports motion regardless of buttons but only to the grab
+ * holder) or through LVGL, and the client image is subscribed to
+ * PRESSED/RELEASED/PRESS_LOST/PRESSING only (xwin_on_window, the
+ * lv_obj_add_event_cb calls after LV_OBJ_FLAG_CLICKABLE) - LVGL raises
+ * PRESSING solely while the indev is pressed (lvgl/src/indev/lv_indev.c:896,
+ * indev_proc_press) and its HOVER_OVER/HOVER_LEAVE (lv_indev.c:1476-1485)
+ * fire only when the hovered OBJECT changes, never per move. So
+ * xshim_pointer(id, x, y, 1, 0), the sole source of MotionNotify and of the
+ * EnterNotify/LeaveNotify that xshim_pointer() derives from crossings, ran
+ * only during a Button1 drag.
+ * Real X delivers PointerMotion and Enter/Leave to whatever selected them
+ * under the pointer, button state notwithstanding, and clients assume it:
+ * SDL 1.2 selects PointerMotionMask on its window (sdl-1.2.15
+ * src/video/x11/SDL_x11video.c:1058-1061) and posts absolute
+ * SDL_MOUSEMOTION from every MotionNotify while not in relative mode
+ * (SDL_x11events.c:519-541); OpenTyrian steers its menus from that
+ * (src/keyboard.c:147-149) and so showed a frozen pointer between a focus
+ * loss and the next click; Xaw's Command binds <EnterWindow>:highlight()
+ * (Command.c:105-109) and never highlighted until clicked.
+ *
+ * Button1 stays on the LVGL path, so desktop chrome, raise-on-press and
+ * click-to-focus are untouched; while it is down LVGL's PRESSING already
+ * carries the drag to the object that took the press (X's implicit grab), so
+ * this path stands aside then. Deduped on position like the grab block's
+ * g_x/g_y; xshim folds anything left per loop pass in send_event_d(). A
+ * fullscreen client that holds no grab is served in mode coordinates, the way
+ * the grab block does for fs_win - before this it got no pointer events at
+ * all, because mouse_read_cb() withholds the press from LVGL while fs_active
+ * and xwin_send_button() refuses to hit-test frames then. Its Button1 is
+ * delivered here for the same reason.
+ */
+static void xwin_hover(void)
+{
+	static uint32_t h_id;
+	static int h_x, h_y, h_pressed;
+	lv_area_t a;
+	uint32_t id;
+	int rx, ry;
+
+	if (fs_active) {
+		if (!fs_win)
+			return;
+		a.x1 = 0; a.y1 = 0;
+		a.x2 = fs_w - 1; a.y2 = fs_h - 1;
+		id = fs_win;
+	} else {
+		int i;
+
+		if (ptr_pressed)	/* LVGL PRESSING carries the drag */
+			return;
+		i = xwin_under_pointer(&a);
+		if (i < 0) {
+			h_id = 0;
+			return;
+		}
+		id = xwins[i].id;
+	}
+	rx = ptr_x - a.x1;
+	ry = ptr_y - a.y1;
+	if (id != h_id) {
+		h_x = h_y = -1;
+		h_pressed = 0;
+		h_id = id;
+	}
+	if (rx != h_x || ry != h_y) {
+		xshim_pointer(id, rx, ry, 0, 0);
+		h_x = rx;
+		h_y = ry;
+	}
+	if (fs_active && !!ptr_pressed != h_pressed) {
+		h_pressed = !!ptr_pressed;
+		xshim_pointer(id, rx, ry, 1, h_pressed ? 1 : 2);
+	}
 }
 
 /*
@@ -9405,6 +9501,7 @@ static int mouse_poll(void)
 			g_last = g;
 		} else {
 			g_last = 0;
+			xwin_hover();	/* no grab: motion still reaches the client */
 		}
 	}
 	if (hw_cursor) {
