@@ -77,10 +77,25 @@
 # today, 244 KB resident competing for the same cache) and the WAD itself
 # in XIP flash, which needs a repartition - xip1 has 790 KB spare.
 
+#
+# I/O scheduler: none. The card is one queue with no seek cost, and every
+# swap-in is a single small read that nothing can merge or reorder; the
+# scheduler's dispatch path is pure per-request overhead. Measured 2026-09-24
+# (rootfs/sdlat, 4 KiB random reads, n=300, two runs per arm, kernel #365):
+#
+#                       min      p50      p90      p99
+#     mq-deadline     1.40/1.59  2.12/1.92  3.08/2.93  9.84/6.64 ms
+#     none            1.30/1.29  1.90/1.80  2.85/2.67  5.15/4.49 ms
+#
+# p50 is inside the run-to-run noise; the minimum (the scheduler's own cost,
+# ~0.1 ms) and the p99 tail (halved) are not. rq_affinity=2 on top of it
+# changed nothing (1.99/1.78 p50) and is left at the default.
+
 case "$1" in
 	start)
 		for q in /sys/block/mmcblk*/queue; do
 			[ -w "$q/read_ahead_kb" ] && echo 128 > "$q/read_ahead_kb"
+			[ -w "$q/scheduler" ] && echo none > "$q/scheduler"
 		done
 		;;
 	stop|restart|reload)
