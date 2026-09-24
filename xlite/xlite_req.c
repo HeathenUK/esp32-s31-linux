@@ -2713,10 +2713,11 @@ typedef struct {
 	int readOnly;
 } XliteShmSegmentInfo;
 
+static int mitshm_event;
 static int mitshm_major(Display *dpy)
 {
 	static int major = -1;
-	int ev, er;
+	int ev = 0, er;
 
 	if (major < 0) {
 		/* XLITE_NOMITSHM forces clients back onto XPutImage, so the
@@ -2724,8 +2725,21 @@ static int mitshm_major(Display *dpy)
 		if (getenv("XLITE_NOMITSHM") ||
 		    !XQueryExtension(dpy, "MIT-SHM", &major, &ev, &er))
 			major = 0;
+		mitshm_event = major ? ev : 0;
 	}
 	return major;
+}
+
+/*
+ * The MIT-SHM event base, for the ShmCompletion a client asks for with
+ * sendEvent=True. xshim answers 104 (MITSHM_EVENT); stock TyrQuake's X11
+ * driver waits for base+ShmCompletion after every XShmPutImage.
+ */
+XLITE_IMPL(XShmGetEventBase)
+int XShmGetEventBase(Display *dpy)
+{
+	mitshm_major(dpy);
+	return mitshm_event;
 }
 
 XLITE_IMPL(XShmQueryExtension)
@@ -2829,7 +2843,7 @@ Status XShmPutImage(Display *dpy, Drawable d, GC gc, XImage *im,
 	int major = mitshm_major(dpy);
 	XliteShmSegmentInfo *si;
 
-	(void)gc; (void)send_event;
+	(void)gc;
 	if (!major || !im)
 		return 0;
 	si = (XliteShmSegmentInfo *)im->obdata;
@@ -2853,9 +2867,16 @@ Status XShmPutImage(Display *dpy, Drawable d, GC gc, XImage *im,
 		p16(r + 26, dst_y);
 		r[28] = (uint8_t)im->depth;
 		r[29] = (uint8_t)(im->format == XYPixmap ? 1 : 2);
-		r[30] = 0;			/* sendEvent: no completion */
 		r[31] = 0;
 		p32(r + 32, (uint32_t)si->shmseg);
+		/*
+		 * sendEvent: the client wants a ShmCompletion when the server has
+		 * consumed the segment. xshim sends MITSHM_EVENT (104) after the
+		 * copy; stock TyrQuake's X11 driver waits for it after EVERY
+		 * put (vid_x.c: oktodraw loop). This byte used to be dropped,
+		 * and that client hung on its first frame (2026-09-24).
+		 */
+		r[30] = send_event ? 1 : 0;
 		p32(r + 36, 0);			/* offset into the segment */
 		xlite_send(x, r);
 	}

@@ -3090,6 +3090,15 @@ static void send_event_d(struct cli *c, uint8_t type, uint8_t detail,
 	memcpy(e + 4, d, n > 28 ? 28 : n);
 	if (xsp_on > 0 && type < 64)
 		xsp_ev[type]++;
+	{
+		static int tr = -1;
+
+		if (tr < 0)
+			tr = getenv("XSHIM_TRACE_SHM") != NULL;
+		if (tr && type != 6)
+			fprintf(stderr, "xshim: -> event type %u win 0x%x (outn %zu)\n",
+				type, get32(e + 4), c->outn);
+	}
 	/*
 	 * MOTION COMPRESSION, which every real X server does and this did not.
 	 *
@@ -3252,6 +3261,21 @@ static void expose_window(struct cli *c, struct res *w)
 	send_event(c, 19, d, 28);		/* MapNotify */
 	xshim_canary_check("expose_window:MapNotify");
 	/*
+	 * Expose on map, for a window that selected ExposureMask. A real
+	 * server sends one when a window becomes viewable; here the whole-
+	 * window expose was only QUEUED by paint_subtree() and flushed with
+	 * the desktop's refresh - which fs_render_set(0) disables for a
+	 * fullscreen VidMode client, so that client never got it. Stock
+	 * TyrQuake's X11 driver (vid_x.c: "Wait for first expose event")
+	 * spun for ever after XMapWindow (2026-09-24). Count 0, whole window;
+	 * a second Expose from the queued path is harmless.
+	 */
+	if (getenv("XSHIM_TRACE_SHM"))
+		fprintf(stderr, "xshim: map 0x%x mask 0x%x -> %s\n", w->id,
+			w->event_mask, (w->event_mask & (1u << 15)) ? "Expose" : "no Expose");
+	if (w->event_mask & (1u << 15))			/* ExposureMask */
+		send_expose(c, w, 0, 0, w->w, w->h);
+	/*
 	 * VisibilityNotify, Unobscured, for a client that asked for it. st
 	 * refuses to draw at all until one arrives (WIN_VISIBLE is set only
 	 * in its visibility handler), so without this it forked its shell
@@ -3329,6 +3353,14 @@ static void expose_window(struct cli *c, struct res *w)
 #define RANDR_OUTPUT	0x2f000002u
 #define RANDR_MODE0	0x2f000100u	/* + index into vm_modes */
 #define MITSHM_ERROR		144
+/*
+ * ShmCompletion (MIT-SHM event 0). Sent after a ShmPutImage whose sendEvent
+ * byte is set, once the pixels have been copied out of the segment - which
+ * is when the segment is free again, the thing the event promises. Stock
+ * TyrQuake's X11 driver (vid_x.c) blocks in its event loop after every put
+ * until this arrives; SDL passes sendEvent=False and never sees it.
+ */
+#define MITSHM_EVENT		104
 
 /* Segments a client has attached. Small: a client has one or two. */
 #define MAXSHMSEG 8
@@ -5582,9 +5614,21 @@ static void HOTTEXT mitshm_request(struct cli *c, const uint8_t *r, int len)
 				 * window, so reporting an empty change here
 				 * would trigger a full repaint - precisely the
 				 * opposite of the point.
+				 *
+				 * But the request still has to COMPLETE. A
+				 * client that asked for ShmCompletion is
+				 * waiting on it before it touches the segment
+				 * again: stock TyrQuake's X11 driver spins in
+				 * `while (!oktodraw) VID_ProcessEvents()` after
+				 * every put, and a `break` here left it there
+				 * for ever on its first static frame - the
+				 * loading screen after a map spawn (2026-09-24,
+				 * h1s sampler: 100% in XEventsQueued and
+				 * xlite_read_more). SDL never waits, which is
+				 * why this hid for so long.
 				 */
 				nrow_skip++;
-				break;
+				goto put_complete;
 			}
 		}
 		d->dirty = 1;
@@ -5595,6 +5639,27 @@ static void HOTTEXT mitshm_request(struct cli *c, const uint8_t *r, int len)
 			late_present_queue(d->id);
 		else
 			notify_draw(d);
+		if (getenv("XSHIM_TRACE_SHM")) {
+			static int n;
+
+			if (n++ < 5)
+				fprintf(stderr, "xshim: ShmPutImage #%d sendEvent=%u len=%d seg=0x%x\n",
+					n, r[30], len, seg);
+		}
+put_complete:
+		if (r[30]) {			/* sendEvent: ShmCompletion */
+			uint8_t ev[16];
+
+			/* xShmCompletionEvent after the 4-byte head: drawable,
+			 * minorEvent, majorEvent, pad, shmseg, offset. */
+			put32(ev + 0, did);
+			put16(ev + 4, 3);
+			ev[6] = MITSHM_MAJOR;
+			ev[7] = 0;
+			put32(ev + 8, seg);
+			put32(ev + 12, off);
+			send_event(c, MITSHM_EVENT, ev, sizeof ev);
+		}
 		break;
 	}
 	case 6: {				/* ShmAttachFd (1.2) */
@@ -6206,9 +6271,7 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		if (n == 7 && !memcmp(r + 8, "MIT-SHM", 7)) {
 			d24[0] = 1;
 			d24[1] = MITSHM_MAJOR;
-			d24[2] = 0;		/* no events: we never
-						 * ShmCompletion, and nothing
-						 * asks us to */
+			d24[2] = MITSHM_EVENT;	/* ShmCompletion, on request */
 			d24[3] = MITSHM_ERROR;
 		}
 		send_reply(c, 0, d24, NULL, 0);

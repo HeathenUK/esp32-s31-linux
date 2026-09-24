@@ -42,3 +42,16 @@ $CC -O2 -fPIC -shared -Wall -Wno-unused-parameter \
 	-o "$RR" /src/xlite/randr/xrandr.c "$OUT"
 ${CC%gcc}strip "$RR"
 ls -l "$RR"
+
+# libXxf86vm.so.1: the XFree86-VidMode client a stock X11 application links
+# (TyrQuake 0.71's default Linux target). Same shape as libXrandr above; see
+# xlite/vidmode/xf86vm.c for why the real library cannot be used.
+VM=/src/images/libXxf86vm.so.1.0.0
+rm -f "$VM"
+$CC -O2 -fPIC -shared -Wall -Wno-unused-parameter \
+	-I"$SYSROOT/usr/include" -I/src/xlite \
+	$LDHARD \
+	-Wl,-soname,libXxf86vm.so.1 \
+	-o "$VM" /src/xlite/vidmode/xf86vm.c "$OUT"
+${CC%gcc}strip "$VM"
+ls -l "$VM"

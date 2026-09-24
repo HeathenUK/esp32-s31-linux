@@ -166,6 +166,17 @@ static void trace_input(int type, const unsigned char *e)
 			e[1], (unsigned long)g32(e + 12));
 		return;
 	}
+	if (type == Expose || type == MapNotify || type == VisibilityNotify ||
+	    type == ConfigureNotify) {
+		fprintf(stderr, "xlite: event type %d win=0x%lx (expose count %u)\n",
+			type, (unsigned long)g32(e + 4), g16(e + 16));
+		return;
+	}
+	if (type >= 64) {		/* extension event, e.g. ShmCompletion */
+		fprintf(stderr, "xlite: extension event type %d win=0x%lx\n",
+			type, (unsigned long)g32(e + 4));
+		return;
+	}
 	nptr++;
 	if (nptr > TRACE_PTR_FULL && nptr % TRACE_PTR_EVERY)
 		return;
@@ -276,6 +287,15 @@ static void decode(struct xdpy *x, const unsigned char *e, XEvent *ev)
 		break;
 	default:
 		ev->xany.window = g32(e + 4);
+		{
+			static int tr = -1;	/* XLITE_TRACE_INPUT */
+
+			if (tr < 0)
+				tr = getenv("XLITE_TRACE_INPUT") != NULL;
+			if (tr && (type >= 64 || type == Expose || type == MapNotify ||
+				   type == VisibilityNotify || type == ConfigureNotify))
+				trace_input(type, e);
+		}
 		break;
 	}
 }
@@ -306,6 +326,12 @@ static int queue_grow(struct xdpy *x)
 void xlite_queue(struct xdpy *x, const unsigned char *e)
 {
 	int next;
+	static int tr = -1;
+
+	if (tr < 0)
+		tr = getenv("XLITE_TRACE_INPUT") != NULL;
+	if (tr && (e[0] & 0x7F) != MotionNotify)
+		fprintf(stderr, "xlite: queue event type %d\n", e[0] & 0x7F);
 
 	if (!x->qcap && !queue_grow(x))
 		return;
@@ -1060,6 +1086,18 @@ int XEventsQueued(Display *d, int mode)
 	}
 	if (mode == QueuedAlready)
 		return 0;
+	/*
+	 * QueuedAfterFlush - the mode XPending() uses - FLUSHES first, as in
+	 * Xlib. A client that writes a request and then polls XPending() for
+	 * the server's answer to it is relying on exactly that: stock TyrQuake
+	 * 0.71's X11 driver does XShmPutImage(sendEvent) and then spins in
+	 * `while (!oktodraw) VID_ProcessEvents()` (vid_x.c:1050), which is
+	 * XPending()+XNextEvent(); with no flush here the put sat in our output
+	 * buffer for ever and the game never drew its second frame (2026-09-24).
+	 * SDL never noticed because it XSyncs after every put.
+	 */
+	if (mode == QueuedAfterFlush)
+		xlite_flush(x);
 	/*
 	 * NON-BLOCKING, and that is the whole point of this call.
 	 *

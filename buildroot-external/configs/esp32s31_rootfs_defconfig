@@ -422,6 +422,7 @@ BR2_PACKAGE_SDL2_MIXER=y
 # which speaks the RANDR protocol to xshim and lists the same modes VidMode
 # does. SDL2 dlopens "libXrandr.so.2" by name, so nothing links to it.
 BR2_PACKAGE_XLIB_LIBXRANDR=y
+BR2_PACKAGE_XLIB_LIBXXF86VM=y
 BR2_PACKAGE_CHOCOLATE_DOOM=y
 # A SECOND SDL 1.2 client, to find out whether Doom's speed is the stack's
 # or whether we tuned for one program. OpenTyrian is 320x200 and
