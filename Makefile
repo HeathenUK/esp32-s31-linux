@@ -647,6 +647,7 @@ linux: toolchain | $(LINUX_OUT)
 		--set-str BUILTIN_DTB_NAME "espressif/esp32s31_generic" \
 		--enable RISCV_ISA_C \
 		--enable PROFILING \
+		--enable VM_EVENT_COUNTERS \
 		$(PROF_CMDLINE_TWEAK) \
 		$(EARLYCON_TWEAK) \
 		$(HZ_TWEAKS) \

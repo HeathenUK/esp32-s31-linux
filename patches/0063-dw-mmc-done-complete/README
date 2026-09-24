@@ -1,0 +1,44 @@
+0063 - dw_mmc: MMC_CAP_DONE_COMPLETE as a runtime knob, reads only by default
+=============================================================================
+
+Full copies of drivers/mmc/host/dw_mmc.c, dw_mmc.h and dw_mmc-pltfm.c from
+linux-71-port (they include 0012, 0014 and 0039). Apply by copying over the
+port tree's files.
+
+What it does
+------------
+A 4 KiB swap-in on this board used to complete through THREE thread hops
+after the card was done: the host's BH worker -> the mmc block layer's
+complete_wq kworker -> blk_mq_raise_softirq from process context, which
+wakes ksoftirqd -> the faulting task. MMC_CAP_DONE_COMPLETE lets the block
+layer complete the request inside mmc_request_done(), in the BH, deleting
+the middle hops. No host in the tree sets it; ours sets it per request from
+dw_mci_request() when the request is a READ (mode 2), or always (mode 1),
+or never (0):
+
+    /sys/module/dw_mmc_pltfm/parameters/done_complete   (0644, default 2)
+
+Writes keep the stock path on purpose: with the cap a write skips
+mmc_blk_card_busy()'s CMD13 poll, so the card's program time would be
+absorbed by dw_mci_wait_while_busy()'s atomic spin in the NEXT issue and
+R1 error bits would go unreported (docs/sd-paging-programme-2026-09-24.md,
+B1 ship gate). Queue depth is 1, so the cap seen at completion is the one
+set at issue.
+
+Measured 2026-09-24 (rootfs/sdlat 4 KiB random n=300, none scheduler,
+same boot, /proc/stat ctxt per request):
+
+    kernel #368  mode 0: min 1.34/1.33  p50 1.47/1.48  ctxt 4
+                 mode 1: min 0.93/0.93/1.16  p50 1.42/1.44/1.27  ctxt 1-2
+    kernel #369  mode 0: min 1.32  p50 1.60  p99 8.5   ctxt 3
+                 mode 2: min 1.17/1.17  p50 1.28/1.28  p99 3.0/9.0  ctxt 2
+    write check (mode 2): 24 MB O_DIRECT write, drop_caches, sha256 of the
+    read-back MATCH, sdprobe busy waited 0, no dmesg errors.
+
+The min is the per-request path with nothing else running; the p50 gain
+is what a lone faulter sees. The timedemo gain is ~1% (2,329 faults x
+~0.3 ms in 90 s) and is not measurable against the boot lottery - this is
+a latency and hitch change, claimed from sdlat and ctxt only.
+
+Also in this set: dw_mci_set_cap() helper (dw_mmc.c), the mode variable,
+and the per-request hook at the top of dw_mci_request().
