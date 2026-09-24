@@ -35,7 +35,7 @@ echo TY_DONE
 EOS
 cat > "$OUT/clean.sh" <<'EOS'
 for p in $(ps | awk '/[o]pentyrian|[x]calc/ {print $1}'); do kill -9 $p; done
-amixer -q sset 'DACL' 178 2>/dev/null; amixer -q sset 'DACR' 178 2>/dev/null
+amixer -q sset 'DACL' 143 2>/dev/null; amixer -q sset 'DACR' 143 2>/dev/null
 echo CL_DONE
 EOS
 python3 scripts/board/runsh.py "$OUT/xcalc.sh" 40 20 2>&1 | tr -d '\r' | grep -aE "^XCALC|NO_SHELL"

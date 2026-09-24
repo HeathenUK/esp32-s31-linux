@@ -23,7 +23,7 @@
 #   - fresh boot per run (performance decays run-over-run as memory fills);
 #   - the board SETTLES first: the run starts when uptime reaches SETTLE_S
 #     (default 75 s - Wi-Fi associates at ~41 s and rcS ends at ~32 s);
-#   - sound ON, volume at the floor (DACL/DACR 110), restored (178) at collect;
+#   - sound ON, volume at the floor (DACL/DACR 110), restored (143, about -24 dB; the user asked for it much quieter 2026-09-24) at collect;
 #   - the spread is printed with the median; overlapping ranges = no difference.
 #
 # [prelaunch-script]: a file of shell commands run on the board after the
@@ -95,7 +95,7 @@ echo "TD_PINNED $(dmesg | grep -ac 'pinned to CPU0')"
 # is bimodal, 2026-09-21): total bytes received since boot, and PIE bounces.
 echo "TD_RX $(cat /sys/class/net/wlan0/statistics/rx_bytes 2>/dev/null)"
 echo "TD_BOUNCES $(cat /sys/module/kernel/parameters/esp32s31_pie_bounces 2>/dev/null) sil_stuck=$(cat /sys/module/kernel/parameters/esp32s31_sil_stuck 2>/dev/null)"
-amixer -q sset 'DACL' 178 2>/dev/null; amixer -q sset 'DACR' 178 2>/dev/null
+amixer -q sset 'DACL' 143 2>/dev/null; amixer -q sset 'DACR' 143 2>/dev/null
 echo TD_COLLECTED
 E
 	python3 scripts/board/runsh.py "$OUT/collect.sh" 140 10 > "$OUT/collect-$r.log" 2>&1

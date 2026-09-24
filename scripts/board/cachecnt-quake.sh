@@ -29,7 +29,7 @@ i=0; while [ $i -lt 40 ]; do grep -aqE "[0-9]+ frames" /root/quake/id1/qconsole.
 echo "RESULT $(grep -ahE '[0-9]+ frames' /root/quake/id1/qconsole.log 2>/dev/null | head -1)"
 P=$(ps | awk '/[t]iopex/ {print $1}' | head -1); echo "QUAKE majflt=$(awk '{print $12}' /proc/$P/stat 2>/dev/null)"
 for p in $(ps | awk '/[t]iopex/ {print $1}'); do kill -9 $p; done
-amixer -q sset 'DACL' 178 2>/dev/null; amixer -q sset 'DACR' 178 2>/dev/null
+amixer -q sset 'DACL' 143 2>/dev/null; amixer -q sset 'DACR' 143 2>/dev/null
 echo FIN_DONE
 EOF
 python3 scripts/board/reset.py >/dev/null 2>&1

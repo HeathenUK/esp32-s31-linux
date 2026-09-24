@@ -169,7 +169,7 @@ if [ -n "\$P" ]; then
 fi
 echo "MEM \$(grep -aE 'MemAvailable|SwapFree' /proc/meminfo | tr -s ' ' | tr '\n' ' ')"
 echo "SCANOUT_FAIL \$(dmesg | grep -ac 'failed to start scanout')"
-amixer -q sset 'DACL' 178 2>/dev/null; amixer -q sset 'DACR' 178 2>/dev/null
+amixer -q sset 'DACL' 143 2>/dev/null; amixer -q sset 'DACR' 143 2>/dev/null
 for s in A B; do echo "SNAP_BEGIN \$s"; for f in /tmp/churn-\$s/*; do echo "==> \${f##*/} <=="; cat \$f; done; echo "SNAP_END \$s"; done
 echo PROF_BEGIN; cat /root/prof.txt 2>/dev/null; echo PROF_END
 echo PROFPIN_BEGIN; cat /root/prof-pinned.txt 2>/dev/null; echo PROFPIN_END
