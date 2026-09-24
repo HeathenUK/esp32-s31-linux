@@ -7408,6 +7408,42 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 			geom_update(w);
 		}
 		/*
+		 * Classify what actually changed, because most ConfigureWindows
+		 * a stock client sends change nothing worth repainting:
+		 *
+		 *  - restack_only: the mask carried only CWSibling/CWStackMode
+		 *    (bits 5-6), or the values it carried were already current.
+		 *    XRaiseWindow, XLowerWindow and XMapRaised on a mapped
+		 *    window all come through here (xlite/xlite_req.c:408-425).
+		 *    SDL2 raises after EVERY successful pointer grab
+		 *    (SDL_x11window.c:1724, "Raise the window if we grab the
+		 *    mouse") and re-grabs on each EnterNotify; SDL 1.2 raises
+		 *    on grab the same way; TyrQuake raises once at startup
+		 *    (vid_x.c:718). There is no stacking here to uncover, so a
+		 *    real server would send no Expose either - and the old
+		 *    unconditional paint_subtree below did a full-window
+		 *    win_fill (a per-pixel store loop over 320x240x16, ~307 kB
+		 *    at 32 bpp), draw_border, a queued Expose and a client
+		 *    repaint, once per raise. With direct scanout that fill
+		 *    lands in the scanout source between two puts: a visible
+		 *    black flash on every grab.
+		 *  - toplevel_move: x/y changed, size and border did not, and
+		 *    the window is a child of the root. A top-level owns its
+		 *    buffer (geom_update: ax = ay = 0), so its pixels do not
+		 *    move - only the ConfigureNotify matters. TyrQuake
+		 *    XMoveWindows at vid_x.c:123/717/723, SDL2 at
+		 *    SDL_x11window.c:818/1452, Xt shells via XtMoveWidget.
+		 *
+		 * Any size or border-width change, and any move of a CHILD
+		 * window (its pixels sit in the parent's buffer and must be
+		 * repainted at the new place), keeps the full path below.
+		 */
+		int size_changed = (w->w != ow || w->h != oh || w->bw != obw);
+		int moved = (w->x != ox || w->y != oy);
+		int restack_only = !size_changed && !moved;
+		int toplevel_move = moved && !size_changed &&
+				    w->parent == ROOT_ID;
+		/*
 		 * A border is drawn in the PARENT's pixels, so changing a
 		 * child's geometry - oclock reconfigures its border 1 -> 5 px
 		 * - leaves the old ring painted and the new one nonexistent
@@ -7416,7 +7452,7 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		 * how busy the desktop was. Repaint the union of the old and
 		 * new border-inclusive extents in the parent ourselves.
 		 */
-		if (w->parent != ROOT_ID && w->mapped) {
+		if (w->parent != ROOT_ID && w->mapped && !restack_only) {
 			struct res *par = res_find(w->parent);
 
 			if (par && par->type == R_WINDOW) {
@@ -7437,15 +7473,17 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 			}
 		}
 		if (trace_on())
-			fprintf(stderr, "       ~win 0x%x -> %dx%d+%d+%d (mask %04x)\n",
-				w->id, w->w, w->h, w->x, w->y, mask);
+			fprintf(stderr, "       ~win 0x%x -> %dx%d+%d+%d (mask %04x) %s\n",
+				w->id, w->w, w->h, w->x, w->y, mask,
+				restack_only ? "restack" :
+				toplevel_move ? "move" : "repaint");
 		/* Tell the client where it ended up, then make it repaint. */
 		memset(d, 0, sizeof(d));
 		put32(d, w->id); put32(d + 4, w->id);
 		put16(d + 12, w->x); put16(d + 14, w->y);
 		put16(d + 16, w->w); put16(d + 18, w->h);
 		send_event(c, 22, d, 28);		/* ConfigureNotify */
-		if (w->mapped) {
+		if (w->mapped && !restack_only && !toplevel_move) {
 			/*
 			 * Repaint and Expose - but NOT MapNotify.
 			 *
@@ -7470,6 +7508,13 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 			 * rather than empty. The trace shows the engine:
 			 * "~win 0x200002 -> 320x200+0+0 (mask 0040)" repeating,
 			 * mask 0040 being CWStackMode, i.e. XRaiseWindow.
+			 *
+			 * Cutting MapNotify closed the loop but left the fill
+			 * and the Expose behind on every raise; those are now
+			 * skipped too, by the restack_only/toplevel_move gate
+			 * above. A client that relied on an Expose after a
+			 * raise would already be broken on a real server with
+			 * nothing overlapping it.
 			 */
 			paint_subtree(c, w);
 			notify_draw(w);
