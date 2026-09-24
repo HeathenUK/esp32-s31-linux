@@ -366,6 +366,29 @@ showing the CMD12 leg under 0.1 ms.
 
 ## Status log
 
+- 2026-09-24 (evening): **sdtrace SHIPPED**, patches/0064-dw-mmc-sdtrace,
+  kernel #373; gate PASS on every rule (chain sums within 10% on 64/64
+  rows in every arm, max residual 7-8 us; sdlat min unmoved). Section 1's
+  hop list is now real: 4 KiB mode 2 idle, submitter on CPU0 / CPU1,
+  medians us: prep 53/52, i2c 60/36, c2d 327/202, i2bh 94/61, stop 46/43
+  (hw 23), rd2po 20/13, po2bl 85/104, bl2end 73/97, total 778/619, gap
+  820/784. **A2/B3 CLOSED**: the CMD12 leg is 43-50 us idle, 62 under
+  load, not the 0.15 ms the rule wanted - auto-stop is off the programme.
+  **B4**: rule met on the CPU0 placement (software legs 137 us,
+  above-driver+gap 1029) but `gap` (the
+  submit path, ~0.8 ms) dwarfs the legs polling removes; price the submit
+  path before writing the loop. Found and fixed on the way: 0039's issue
+  stamp was after the CMD write and raced the CMD_DONE hardirq on CPU0
+  (sdprobe issue_to_cmd polluted since 0039); 0039's gap accumulator was
+  dead; request_end's hsq_finalize braces. Load (-mem 20 X11 timedemo,
+  #371, 9876 requests): avg c2d 1642, indrv 2003, total 2872 us; 4 KiB
+  reads 1.08-1.31 ms end to end with bl2end 236-451 (2.5-4x idle); swap-
+  out writes still cross the kworker (B1 is reads-only) at 1.0-7.5 ms per
+  write under load - the number for the held-back mode 1. Placement is a
+  new finding: submitter on CPU0 reaches DATA_OVER ~160 us later than on
+  CPU1 (the CMD_DONE BH pass waits behind the submitter's spin_lock_bh),
+  floor 1.02 vs 1.18, p50 1.51 vs 1.31.
+
 - 2026-09-24: B1 SHIPPED as reads-only (mode 2 default) in kernel #369,
   commit 130c701, patches/0063-dw-mmc-done-complete: min 1.32 -> 1.17 ms,
   p50 1.60 -> 1.28, ctxt/request 3 -> 2; write check (24 MB O_DIRECT +

@@ -31,6 +31,10 @@ cd "$(dirname "$0")/../.."
 L=${1:?label}; shift
 ARGS="$*"
 PRE=${PRE:-:}	# a board-side command run before Quake starts, e.g. a sysctl
+POST=${POST:-:}	# a board-side command run after the demo, inside the same
+		# runsh window - the ONLY clean way to read a kernel instrument
+		# (sdtrace, sdprobe) from inside the run: a second runsh while
+		# the demo runs is two users on one console
 OUT=artifacts/quake/td-$L-$(date +%H%M%S); mkdir -p "$OUT"
 S=$OUT/run.sh
 AUDIODEV_ON_BOARD=${QUAKE_AUDIODEV:-default}
@@ -39,6 +43,10 @@ cd /root/quake
 export AUDIODEV=$AUDIODEV_ON_BOARD; echo "AUDIO=\$AUDIODEV"
 $PRE
 echo "PRE_APPLIED watermark_scale_factor=\$(cat /proc/sys/vm/watermark_scale_factor) page-cluster=\$(cat /proc/sys/vm/page-cluster)"
+# Companions the paging programme differences per run: block stats (fields 1
+# and 3 = read ios/sectors; never 4 or 10) and the swap event counters.
+echo "SDSTAT0 \$(cat /sys/block/mmcblk0/stat | tr -s ' ')"
+echo "VMSTAT0 \$(grep -E '^(pswpin|pswpout|swpin_zero|swpout_zero|allocstall_normal|swap_ra|swap_ra_hit|pgmajfault) ' /proc/vmstat | tr '\n' ' ')"
 rm -f /root/-basedir/qconsole.log /root/quake/id1/qconsole.log /root/quake/.tyrquake/id1/qconsole.log
 amixer -q sset 'DACL' 110 2>/dev/null; amixer -q sset 'DACR' 110 2>/dev/null
 setsid sh -c 'DISPLAY=:0 HOME=/root/quake exec ${QUAKE_BIN:-./tiopex-quake} id1 -basedir /root/quake $ARGS -width 320 -height 240 -fullscreen -condebug +timedemo demo1 >/root/quake/td.log 2>&1' </dev/null >/dev/null 2>&1 &
@@ -59,7 +67,11 @@ echo "QUAKE majflt=\$(awk '{print \$12}' /proc/\$P/stat 2>/dev/null) \$(grep -aE
 echo "MEM \$(grep -aE 'MemAvailable|SwapFree' /proc/meminfo | tr -s ' ' | tr '\n' ' ')"
 echo "SCANOUT_FAIL \$(dmesg | grep -ac 'failed to start scanout')"
 echo "SDSTAT \$(cat /sys/block/mmcblk0/stat | tr -s ' ')"
+echo "VMSTAT \$(grep -E '^(pswpin|pswpout|swpin_zero|swpout_zero|allocstall_normal|swap_ra|swap_ra_hit|pgmajfault) ' /proc/vmstat | tr '\n' ' ')"
 echo "KNOBS vma_ra=\$(cat /sys/kernel/mm/swap/vma_ra_enabled 2>/dev/null) page-cluster=\$(cat /proc/sys/vm/page-cluster)"
+echo "POST_BEGIN"
+$POST
+echo "POST_END"
 EOF
 cat > "$OUT/clean.sh" <<'EOF'
 for p in $(ps | awk '/[t]iopex|[s]dlquake|[t]yr-quake|[t]yrquake/ {print $1}'); do kill -9 $p 2>/dev/null; done
@@ -74,5 +86,6 @@ python3 scripts/board/runsh.py "$OUT/clean.sh" 20 20 > /dev/null 2>&1
 fps=$(sed -n 's/.* \([0-9.]*\) fps.*/\1/p' "$OUT/run.log" | head -1)
 echo "[$L] fps=${fps:-NONE}  $(grep -a '^RESULT' "$OUT/run.log" | cut -c8-)"
 grep -a '^ERROR [^ ]' "$OUT/run.log" | sed 's/^/     /'
-grep -aE '^(AUDIO=|PRE_APPLIED|QUAKE|MEM|SCANOUT_FAIL|SDSTAT|KNOBS)' "$OUT/run.log" | sed 's/^/     /'
+grep -aE '^(AUDIO=|PRE_APPLIED|QUAKE|MEM|SCANOUT_FAIL|SDSTAT0?|VMSTAT0?|KNOBS)' "$OUT/run.log" | sed 's/^/     /'
+grep -aq '^POST_END' "$OUT/run.log" || echo "     POST output missing: the demo outlived the runsh window - read $OUT/run.log, do not re-run blind"
 echo "     panel: $OUT/panel.png"

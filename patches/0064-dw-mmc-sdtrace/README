@@ -1,0 +1,255 @@
+0064 - dw_mmc: sdtrace, a per-request hop ring (plus three fixes found on the way)
+====================================================================================
+
+Full copies of drivers/mmc/host/dw_mmc.c (includes 0012, 0014, 0039, 0063)
+and, NEW to this series, drivers/mmc/core/block.c (three lines in
+mmc_blk_mq_complete_rq() plus a __weak stub above it). Apply by copying
+over the port tree's files:
+
+    cp patches/0064-dw-mmc-sdtrace/dw_mmc.c linux-71-port/drivers/mmc/host/dw_mmc.c
+    cp patches/0064-dw-mmc-sdtrace/block.c  linux-71-port/drivers/mmc/core/block.c
+
+No dw_mmc.h change, no defconfig change, no header, nothing app-side.
+Companions: scripts/board/sdtrace-idle.sh (board-side validation + idle hop
+table), scripts/board/sdtrace-check.py (host-side pass/kill gate for its
+output), scripts/board/sd-write-check.sh (the 0063 write check), and
+scripts/board/quake-timedemo.sh gained POST= (a board command run after the
+demo inside the same runsh window), SDSTAT0 / VMSTAT0 / VMSTAT lines and a
+"POST output missing" warning.
+
+STATUS: SHIPPED 2026-09-24, kernel #373 (commit below). Gate PASS on
+every rule with the chain monotonic on 64/64 rows in all five arms. The
+history is in the numbers: #370 found the issue-stamp race (fix 1), #371
+carried the load run, #372 added the verdict comments, #373 moved the BHX
+stamp (fix 4) after the chain rule flagged 3-9% of rows.
+
+WHY THIS EXISTS
+
+sdprobe (0039) averages one workload. It cannot say which leg of the p99
+request was slow, and three legs were never stamped at all: the CMD12 stop
+(issued from the BH after DATA_OVER, completed by a THIRD hardirq and BH
+pass), mmc_request_done() -> the block layer (a complete_wq kworker in
+done_complete mode 0, inline in mode 2), and the block layer's own end
+(blk_update_request, __blk_mq_end_request, bio_endio, the wake of the
+faulter, the cross-hart IPI). docs/sd-paging-programme-2026-09-24.md
+section 1 judges every remaining lever on these named hops.
+
+WHAT CHANGED
+
+dw_mmc.c (RAM text already: S31_FAST_OBJS lists dw_mmc.o)
+
+  - struct sdtrace_ent, 64-entry ring (6 KB .bss, nm: sdt_ring 0x1800),
+    16 stamp points per entry, every stamp a u32 NANOSECOND offset from
+    t_sub (0 = never seen, first-wins). No division on the hot path
+    (objdump: zero __udivdi3/__umoddi3 in dw_mmc.o); the printer divides.
+    Running sums since reset are 32-bit atomic_t in us (native AMO).
+  - stamps: SUB (dw_mci_request entry, shares the sdprobe req_enter read),
+    ISSUE (shares dw_mci_t_issue), IRQ0..2 (dw_mci_interrupt entry, one
+    read each), CMD / DTO / STOPC (share interrupt_once's `now`), XFER
+    (dw_mci_dmac_complete_dma), BH0 / BHX (dw_mci_work_func entry, one read
+    per pass), STOPI (send_stop_abort), STOPD (STATE_SENDING_STOP consumed),
+    REQDONE (request_end, shares the req_total read), POST (dw_mci_post_req),
+    BLK / END (block.c hook, by mrq). At most 8 new ktime_get_ns() per
+    request; sdlat's min did not move (below).
+  - slot pairing: driver-side stamps use the head slot (queue depth 1);
+    POST/BLK/END find their slot by mrq, OLDEST-first over the last four
+    entries that reached REQDONE, because in mode 0 the next request takes
+    the head before the kworker posts this one, and tags are reused.
+  - derived hops, all us, printed in this order:
+      prep    sub -> issue          dma_map_sg, IDMAC descriptors, DMA reset
+      i2c     issue -> CMD_DONE     (includes the hardirq's entry latency)
+      c2d     CMD_DONE -> DATA_OVER the card
+      d2x     DATA_OVER -> IDMAC transfer complete
+      i2bh    IRQ0 -> BH0           IRQ -> BH dispatch (overlaps c2d)
+      x2bh    max(DTO,XFER) -> BHX  the BH that handles the data
+      bh2st   BHX -> CMD12 written
+      stophw  CMD12 written -> its CMD_DONE hardirq
+      stop    CMD12 written -> consumed in the BH (the whole leg)
+      st2rd   stop consumed -> mmc_request_done
+      indrv   sub -> mmc_request_done (everything in this file)
+      rd2po   mmc_request_done -> post_req (THE kworker hop in mode 0)
+      po2bl   post_req -> mmc_blk_mq_complete_rq (unmap, softirq, IPI)
+      bl2end  blk_update_request + __blk_mq_end_request + wake
+      total   sub -> end
+      gap     previous end -> this sub (the submitter's own path)
+    prep+i2c+c2d+d2x+x2bh+bh2st+stop+st2rd+rd2po+po2bl+bl2end partitions
+    total; that is the instrument's pass rule (sdtrace-check.py).
+  - readout: /sys/module/dw_mmc/parameters/sdtrace (line 1 ring
+    med/p90/max, line 2 since-reset averages, line 3 nirq/nbh; any write
+    resets) and sdtrace_ring (32 entries newest-first with
+    seq/op/blk/RW/cpu(sub/bh/blk)/nirq/nbh; `echo 32 >` for the older half).
+
+  Four fixes; the first three in code that already existed:
+
+  1. dw_mci_start_command(): the issue stamp (dw_mci_t_issue, and now
+     SDT_ISSUE) was taken AFTER `mci_writel(host, CMD, ...)`. On the CPU
+     that takes the dw-mci hardirq (CPU0) the CMD_DONE interrupt landed
+     between the write and the stamp in about half of all requests
+     (kernel #370, sdlat pinned by chance to CPU0: prep 150 / i2c 0 on
+     those rows against 53 / 45 on the rest; never on CPU1). The hardirq
+     then paired its CMD_DONE with the PREVIOUS request's t_issue, so
+     sdprobe's issue_to_cmd carried a ~1.2 ms outlier per hit since 0039.
+     The stamp now precedes the write. #371: prep 52-54 on every 4 KiB
+     arm, repeat arms within 2%.
+  2. dw_mci_request_end(): dw_mci_t_prev_end is now written, so 0039's
+     `gap` accumulator (dead since it was added: nothing ever set its
+     input) reports.
+  3. dw_mci_request_end(): the missing braces - `if (!dw_mci_hsq_finalize())`
+     governed only the sdprobe pairing and mmc_request_done() ran
+     unconditionally. Harmless with CONFIG_MMC_HSQ off; with HSQ on every
+     request would have completed twice.
+  4. (sdtrace's own, #373) SDT_BHX was "the first BH pass entered after
+     XFER". When the DTO/DMA hardirq lands during the CMD_DONE pass that
+     pass consumes the data itself (nbh = 2, ~40% of idle rows), so the
+     CMD12's pass took the stamp and bh2st read 0 - the chain rule
+     flagged 2-6 of 64 rows per arm on #371/#372. BHX is now stamped
+     where EVENT_DATA_COMPLETE is consumed (STATE_DATA_BUSY), a few
+     lines above send_stop_abort() in the same pass: x2bh and bh2st are
+     monotonic by construction, 64/64 on every arm since.
+
+block.c
+
+  - `void __weak mmc_sdtrace_blk(struct mmc_request *, int)` no-op stub and
+    two calls bracketing mmc_blk_mq_complete_rq() (the one funnel for
+    BLOCK_SOFTIRQ, the complete_wq kworker and in_recovery). dw_mmc.c's
+    strong definition wins at the vmlinux link (nm: `T mmc_sdtrace_blk`).
+
+HOW TO BUILD, FLASH, VALIDATE
+
+  1. cp the two copies (above).
+  2. ./docker/build.sh 'cd /src && $S31_MAKE linux' 2>&1 | tee artifacts/perf-plan/build-sdtrace.log
+     Then, case-insensitively, `grep -in 'warning\|error' <log> | grep -i 'dw_mmc\|block.c'`
+     shows only the two pre-existing 0039 unused-variable lines.
+  3. Build-time kills: nm vmlinux | grep ' mmc_sdtrace_blk' -> one `T`;
+     nm vmlinux | grep -c ' [bBdD] sdt_ring$' -> 1;
+     riscv32-esp-elf-objdump -d drivers/mmc/host/dw_mmc.o | grep -c '__udivdi3\|__umoddi3' -> 0.
+  4. make sync-images && make flash-linux; `uname -a` on the board must
+     show the new #N.
+  5. python3 scripts/board/runsh.py scripts/board/sdtrace-idle.sh 60 20 | tee <dir>/idle.log
+     python3 scripts/board/sdtrace-check.py <dir>/idle.log --ref-min 1.17
+     Five arms on one boot, sdlat pinned per arm (rootfs/pin): done_complete
+     2 / 0 / 2 at 4 KiB x 300 on CPU0, mode 2 on CPU1, 64 KiB x 100 on
+     CPU0. Leaves done_complete = 2. ~20 s. Kill rules in the script's
+     docstring; the pass rule is the chain sum above on >= 95% of rows.
+  6. python3 scripts/board/runsh.py scripts/board/sd-write-check.sh 90 10
+     (24 MB O_DIRECT write, drop_caches, sha256 read-back MATCH, sdprobe
+     busy waited 0).
+  7. Under load, the ring read from inside the run:
+       PRE='echo 0 > /sys/module/dw_mmc/parameters/sdtrace' \
+       POST='echo SDTRACE; cat /sys/module/dw_mmc/parameters/sdtrace; cat /sys/module/dw_mmc/parameters/sdtrace_ring; echo 32 > /sys/module/dw_mmc/parameters/sdtrace_ring; cat /sys/module/dw_mmc/parameters/sdtrace_ring; echo 0 > /sys/module/dw_mmc/parameters/sdtrace_ring' \
+       QUAKE_BIN=./tyr-quake-x11 scripts/board/quake-timedemo.sh sdtrace-mem20 -mem 20
+
+WHAT IT MEASURED (kernel #373 unless stated, 2026-09-24,
+artifacts/perf-plan/sdtrace-191244/: idle.log #371, idle-372{,b}.log,
+idle-373.log + check-373.txt, write-check{,-373}.log, timedemo-host.log)
+
+  Validation gate, sdlat 4 KiB x 300 random, idle desktop, same boot, #373:
+      arm   mode cpu  sdlat min/p50 ms  ctxt/req  irq/req  nirq  nbh   rd2po
+      m2a    2    0     1.016 / 1.51      1.85     3.07   2.99  2.61    20
+      m0     0    0     1.59  / 1.88      3.01     3.00   2.99  2.58   341
+      m2b    2    0     1.016 / 1.51      1.93     3.00   3.00  2.58    20
+      m2c    2    1     1.183 / 1.31      2.67     2.98   2.98  2.86    13
+      k64    2    0     2.60  / 2.75 (64 KiB x 100)  3.25   3.00  3.00    21
+    Every rule PASS: chain sums to total within 10% on 64/64 rows in every
+    arm (max residual 7-8 us); BLK/END present 64/64; nirq agrees with
+    /proc/interrupts within 3%; mode-2 min within 0.03 ms of the #369
+    reference 1.17 (CPU0 placement 1.02 is below it; #371 read 0.98);
+    rd2po mode 0 341 vs mode 2 20 us (the 0063 kworker hop, 17x); the
+    m2a/m2b repeats agree within 1% on indrv/total/stop. #371 and the
+    settled #372 re-run read the same table within 3% on every hop.
+    (On #370, before fix 1, the same gate read m2a/m2b indrv 399 vs 554
+    because the arms had landed on different CPUs unpinned, and the CPU0
+    rows failed the chain rule 48/64 - that is how the issue race was
+    found. A #372 run started 20 s after boot read m2c p50 2.22 and min
+    1.203 - the desktop was still settling; run the gate on a settled
+    board.)
+
+  Idle hop table, #373, mode 2, ring med/p90 us:
+      hop       4k CPU0 (m2a)   4k CPU0 (m2b)   4k CPU1 (m2c)   64k CPU0    4k mode0 CPU0
+      prep         53/88           53/57           52/56         119/123       54/83
+      i2c          60/67           63/69           36/78          66/71        58/72
+      c2d         327/416         332/397         202/250      1257/1278      226/412
+      d2x          28/33           29/31           14/18          31/39        15/33
+      i2bh         94/148          96/137          61/108         94/104      142/189
+      x2bh         37/72           37/53           23/29          38/49        42/121
+      bh2st         4/5             4/5             3/5            4/5          3/6
+      stophw       23/31           23/29           23/32          24/30        26/33
+      stop         46/57           46/57           43/59          49/58        50/81
+      st2rd         2/3             2/3             2/3            3/3          2/3
+      indrv       569/702         567/685         408/455      1567/1628      445/767
+      rd2po        20/23           20/22           13/20          21/23       341/438
+      po2bl        85/291          87/150         104/152        145/154       42/46
+      bl2end       73/106          96/106          97/113        108/112       78/123
+      total       778/1064        777/929         619/809      1840/2070      962/1193
+      gap         820/1115        815/1350        784/1212      1007/1455      959/1347
+    64 KiB scales only c2d (+0.93 ms, 22.6 MB/s at p50) and prep (+66 us
+    of dma_map_sg); every software hop is flat, as expected.
+
+  Placement (new, not a lever yet): with the submitter on CPU0 - the CPU
+  that takes the dw-mci hardirq - the card legs read 415 us (i2c+c2d+d2x)
+  against 252 on CPU1, i2bh 94 vs 61, x2bh 37 vs 23, and nbh 2.6 vs 2.9
+  (the CMD_DONE BH pass is deferred behind the submitter's spin_lock_bh
+  region until DATA_OVER has also arrived). CPU0 wins the floor (min
+  1.02 vs 1.18: no cross-hart completion, po2bl 85 vs 104) and loses the
+  median (p50 1.51 vs 1.31). Quake's faulter runs on whichever CPU it was
+  on.
+
+  Write check: #371 24 MB O_DIRECT in 3.28 s (7.3 MB/s), #373 3.12 s;
+  sha256 MATCH both, busy n 3314 / 3298 waited 0, no MMC dmesg lines.
+
+  Load, -mem 20 X11 timedemo, fresh boot, #371 (artifacts/quake/
+  td-sdtrace-mem20-191651/): 9.3 fps, 969 frames in 104.2 s, majflt 6138,
+  VmRSS 4344 kB VmSwap 18432 kB; deltas over the run: SD read ios 8063
+  (188,872 sectors = 92 MiB), write ios 5334 (36,863 sectors = 18 MiB),
+  pswpin 5448, pswpout 5291 (x 4 KiB = 20.7 MiB, = the write bytes),
+  pgmajfault 6581, swap_ra 2283 (hit 1706), swpin_zero 458, swpout_zero
+  2474. POST_END present; since reset n = 9876 requests (>= 5000 rule).
+    since-reset averages us: prep 102 i2c 69 c2d 1642 d2x 34 i2bh 152
+      x2bh 74 bh2st 14 stophw 27 stop 62 st2rd 3 indrv 2003 rd2po 383
+      po2bl 239 bl2end 245 total 2872 gap 12822; nirq 2.99 nbh 2.85.
+    ring at the demo's end (36 complete of 64; the tail is swap-out, op
+      25 x 8 blocks, interleaved with CMD13 polls that never reach END):
+      c2d 553/6214/7660 med/p90/max (write program time), rd2po
+      1357/3885/7459, bl2end 244/410/1495, total 3288/11081/14233.
+    4 KiB reads in that ring (op 18 x 8): total 1077-1309, c2d 336-553,
+      i2bh 110-634, rd2po 27-38, po2bl 156-193, bl2end 236-451 (2.5-4x
+      idle: bio_endio + the wake with the CPU busy). Readahead reads of
+      16/48/56 KiB: c2d 4.1-7.7 ms behind the interleaved writes.
+    NEW: writes still take the kworker hop in mode 2 (B1 is reads-only)
+      and under load that hop is 1.0-7.5 ms per swap-out write - the
+      number B1's "mode 1 held back by the write hazard" never had.
+
+  VERDICT B3 (auto-stop; rule: stop >= 150 us proceeds, < 100 closed):
+      stop median 43-50 us on every 4 KiB arm (p90 48-81; hw 23-26 of it),
+      49 at 64 KiB, 62 average under load -> CLOSED. Recorded above
+      send_stop_abort() in dw_mmc.c (with the #371 numbers, 42/41).
+  VERDICT B4 (polled completion; rule: software legs >= 100 us AND
+  above-driver + gap >= 600 us):
+      CPU0: 94+37+4+2 = 137 us software, (778-569) + 820 = 1029 -> PROCEEDS
+      CPU1: 61+23+3+2 = 89 us software (below the rule), 211 + 784 = 995.
+      The largest software item in either placement is gap (~0.8 ms, the
+      submitter's own path: read() return, next read(), submit_bio,
+      blk-mq, mmc issue), which polling does not touch. Recorded above
+      dw_mci_request() in dw_mmc.c: price the submit path before the loop.
+  Cross-hart price: mode 2 CPU1 po2bl 104/152 vs CPU0 85/150 med/p90 -
+  the Function-call IPI is ~20 us at the median here, not the cost.
+
+Cost when not being read: <= 8 ktime_get_ns per request, 6 KB .bss, RAM
+text only; sdlat min unchanged (1.02/1.18 by placement vs 1.17 on #369).
+Left in the shipping kernel deliberately - a dead instrument is how the SD
+floor stayed "explained" for months (0039).
+
+RISKS CARRIED
+
+  - The sdtrace reset (.set) is not synchronised against an in-flight
+    request: reset from an idle board (`sync; sleep 1` first, as the
+    scripts do). A stamp landing on a zeroed slot is dropped by the t_sub
+    guard.
+  - The ring holds 64 requests; under the timedemo that is the last ~64
+    requests of I/O. The since-reset sums are the load-wide number; the
+    ring is the p99 attribution of whatever happened last.
+  - u32 ns offsets wrap at 4.29 s after t_sub; a request that long is a
+    timeout, not a measurement, and reads as a small wrong number.
+  - If MMC_BLOCK or MMC_DW ever became a module the __weak stub would win
+    silently and BLK/END would read 0 - the gate's "ring n=0" rule catches
+    that.
