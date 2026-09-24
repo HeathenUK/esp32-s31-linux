@@ -285,6 +285,32 @@ separate harness faults were diagnosed as desktop bugs that way, and a maximise
 that worked perfectly was reported broken for an hour. The control FIFO names
 the operation instead of approximating it.
 
+## The X11 compatibility gates - two scripts, each under 10 minutes
+
+    scripts/board/x11-compat-gate.sh  [libdir]   # one boot, ~7 min
+    scripts/board/x11-compat-gate2.sh [libdir]   # FRESH boot, ~5 min
+
+`x11-compat-gate.sh` runs every windowed stock client the card carries
+(xcalc, st, prboom -window, Chocolate Doom -window, X11 TyrQuake fullscreen)
+on the desktop as it stands: maps, keeps presenting (lvdesk's SIGUSR1
+ShmPutImage counter), one pointer action and one key through uinject, and
+the title-bar close (WM_DELETE_WINDOW ask, then the 3 s drop). Each step
+prints one line of numbers and a PASS/FAIL; artifacts (txt + png per step) go
+to `artifacts/x11-gate-<stamp>/`.
+
+`x11-compat-gate2.sh` is the fullscreen half, on a fresh boot: Chocolate Doom
+fullscreen 320x240 (RANDR + EWMH -> `kms: fullscreen 320x240`) and OpenTyrian
+(fullscreen at panel size), each with a key and a pointer action. A
+fullscreen window has no title bar, so the close is driven through the
+control FIFO above (`echo "close N" > /tmp/lvdesk.ctl`, N from `list`), which
+is the X button's exact code path. The boot step asserts the FIFO exists, so
+a card whose S40lvdesk lost `LVDESK_CTL=1` fails at minute 2, not minute 4.
+Artifacts go to `artifacts/x11-gate2-<stamp>/`. It is a second script
+because the first is already ~7 min on one boot and the 10-minute rule is a
+rule. Pass rules are in each script's header; the numbers go in
+`docs/perf-plan-2026-09-23.md`. Neither is run while a human is using the
+board.
+
 ## The console has three writers - do not frame data on it
 
 hart0's ESP-IDF logging, hart1's kernel printk and our own script all write to

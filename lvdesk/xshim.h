@@ -2,6 +2,7 @@
 #ifndef LVDESK_XSHIM_H
 #define LVDESK_XSHIM_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 /*
@@ -198,3 +199,16 @@ int xshim_window_resizable(uint32_t id);
 /* XSHIM_CANARY=1 heap guards; a no-op otherwise. Call it from the loop. */
 void xshim_canary_check(const char *when);
 const void *xshim_window_pixel_ptr(uint32_t id);
+
+/*
+ * Fullscreen scanout alias: point the window's pixels at the desktop's KMS
+ * mode buffer so the shim's ShmPutImage copy is the present (see xshim.c).
+ * alias returns 1 on success; the caller unaliases BEFORE the map goes
+ * away, with keep=1 to preserve the frame in a fresh memfd or keep=0 for a
+ * window that is being freed. scanout_ptr is the map while aliased, NULL
+ * otherwise (a resize drops the alias inside the shim).
+ */
+int xshim_window_alias_scanout(uint32_t id, void *map, size_t pitch,
+			       int mw, int mh, int mbpp);
+void xshim_window_unalias(uint32_t id, int keep);
+const void *xshim_window_scanout_ptr(uint32_t id);

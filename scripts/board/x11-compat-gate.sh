@@ -22,6 +22,9 @@
 #   quake      tyr-quake-x11 -fullscreen +map e1m1 -mem 20: alive at 48 s,
 #              puts advancing, >= 5 MotionNotify after `uinject park`,
 #              >= 2 KeyPress after 4 taps of W.
+#   Fullscreen Chocolate Doom and OpenTyrian are in x11-compat-gate2.sh
+#   (fresh boot, ~5 min); this script stays under the 10-minute rule on
+#   one boot.
 #
 # Traps this encodes (all recorded in memory/docs): uinject costs ~2 s per
 # invocation (device settle), so taps go in the background; `xlite: queue

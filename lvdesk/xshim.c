@@ -232,6 +232,20 @@ struct res {
 	 * own first.
 	 */
 	uint8_t px_adopted;
+	/*
+	 * px points INTO THE DESKTOP'S KMS MODE BUFFER (kms_fs_map): the
+	 * fullscreen window's ShmPutImage copy IS the present. Set by
+	 * xshim_window_alias_scanout(), cleared by xshim_window_unalias() or
+	 * px_release(). Like px_adopted the pixels are not ours to free or
+	 * munmap, and they were never charged to mem_win.
+	 */
+	uint8_t px_scanout;
+	/*
+	 * The memfd / dma-buf behind px has been HANDED TO A CLIENT
+	 * (xlite-SHM GetPixmapFd). The client writes those pages directly,
+	 * so px may never be moved out from under it: no scanout alias.
+	 */
+	uint8_t px_shared;
 	size_t shm_len;
 	int line_width;
 	int owner;			/* index into cli[] */
@@ -1410,6 +1424,20 @@ static void px_release(struct res *r)
 		r->alias = 0;
 		return;
 	}
+	/*
+	 * SCANOUT-ALIASED PIXELS ARE THE DESKTOP'S. The KMS map belongs to
+	 * lvdesk's kms_fs_enter()/kms_fs_leave() pair, was never charged to
+	 * mem_win, and is munmap'd by kms_fs_free() - exactly the adopted
+	 * shape below. win_resize() lands here too, so a client that resizes
+	 * while aliased simply gets a fresh memfd and the desktop's next
+	 * fs_present() notices the pointer moved.
+	 */
+	if (r->px_scanout) {
+		r->px = NULL;
+		r->canary = 0;
+		r->px_scanout = 0;
+		return;
+	}
 	size_t n = (size_t)r->w * r->h * (r->bpp ? r->bpp : 2);
 
 	if (!r->px)
@@ -1494,6 +1522,130 @@ const void *xshim_window_pixel_ptr(uint32_t id)
 	if (r->bpp == 4 || r->bpp == 1)
 		return r->shadow;
 	return r->px;
+}
+
+/*
+ * FULLSCREEN SCANOUT ALIAS.
+ *
+ * Point a fullscreen window's pixels at the desktop's KMS mode buffer, so
+ * the ShmPutImage copy above IS the present: one copy and one row hash per
+ * frame instead of two of each (the shim's into the memfd, then lvdesk's
+ * fs_present() from the memfd into the map - the same 153.6 kB twice for a
+ * 320x240x16 TyrQuake frame, 256 kB for a 320x200x32 chocolate-doom one).
+ * MEASURED 2026-09-24, kernel #377, X11 TyrQuake timedemo demo1 320x240
+ * fullscreen, lvdesk.new and the game both pinned to CPU0, XSHIM_FSALIAS
+ * 1 vs 0 on alternating fresh boots (1,0,1,0,1,0), LVDESK_FSGSTAGE=1 on
+ * both arms, a 20 s window at demo+40 s (artifacts/tracks/ab/):
+ *
+ *   lvdesk user CPU per present (/proc ticks)  ON 4.90 5.66 6.09 ms
+ *                                              OFF 8.52 8.54 9.15 ms
+ *   present us, 12 readings, one boot each     ON median 4.0 ms
+ *                                              OFF median 7.6 ms
+ *   expand (the desktop's copy)                ON 0, OFF 4.7-8.2 ms/frame
+ *   frames with a gap >= 100 ms                ON 25/47/61%, OFF 74/63/64%
+ *   timedemo fps (side note, both pinned)      ON 9.6 7.9 7.5, OFF 6.8 6.4 7.1
+ *
+ * Establishing costs one ~25 ms present per fullscreen launch (the frame
+ * copy plus releasing the memfd). The single "present us last" SIGUSR1
+ * reading and the whole-run "worst" did NOT separate the arms (ON last
+ * 24.7/11.1/28.6 vs OFF 11.0/6.8/11.2 ms; worst 39-52 vs 33-45 ms): under
+ * this memory pressure (MemAvailable ~1.6 MB) one frame's thread CPU time
+ * is dominated by fault and reclaim work, so judge on distributions.
+ * The h1s PC sampler cannot price this change: lvdesk's libc memcpy and the
+ * game's libc map overlapping ranges, and a capture is 4 s (4000 samples)
+ * whatever it is asked for. Chocolate Doom fullscreen puts per 10 s, same
+ * boot: OFF 88, 96; ON 107, 97. The earlier ceiling for dropping a copy -
+ * prboom 31.7 against 29.4 fps when the shim's 64 kB copy went - adopted
+ * the CLIENT's segment and was reverted as protocol-illegal
+ * (docs/current-state.md:1047-1081); this keeps the copy the protocol
+ * requires and drops the desktop's.
+ *
+ * Every server-side path keeps working unchanged because px is still the
+ * window's pixels: CopyArea from the window, Expose fills, win_fill, px_set,
+ * blend_px and the socket PutImage fallback all read and write the map, and
+ * each of them already calls wr_touch() or damage_add(), so the desktop's
+ * kms_fs_dirty() follows them. (GetImage, opcode 73, is not implemented here
+ * at all - it falls to the UNIMPLEMENTED default - so it neither reads the
+ * alias nor the memfd.) The KMS map is CACHED memory here (the driver flushes the
+ * dirty rows itself before the PPA reads them), so hashing and copying into
+ * it costs exactly what it costs into the memfd.
+ *
+ * Refused for anything whose pixels somebody else may be holding: an
+ * xlite-SHM client that has the memfd (px_shared), a GEM/dma-buf surface,
+ * an adopted MIT-SHM segment or a background-pixmap alias. Refused when the
+ * stride differs (an odd SDL2 width against the driver's pitch) or the
+ * depth is 8 - prboom's indices need the palette expansion and keep the
+ * old path. The caller must unalias BEFORE the map is torn down.
+ */
+int xshim_window_alias_scanout(uint32_t id, void *map, size_t pitch,
+			       int mw, int mh, int mbpp)
+{
+	struct res *r = res_find(id);
+	size_t n;
+
+	if (!r || r->type != R_WINDOW || r->buf != r || !r->px || !map)
+		return 0;
+	if (r->alias || r->px_adopted || r->gem_src || r->px_shared ||
+	    r->px_scanout)
+		return 0;
+	if (r->bpp != mbpp || (r->bpp != 2 && r->bpp != 4))
+		return 0;
+	if ((size_t)r->w * r->bpp != pitch || r->w > mw || r->h > mh ||
+	    r->w <= 0 || r->h <= 0)
+		return 0;
+	n = (size_t)r->w * r->h * r->bpp;
+	/*
+	 * Equal strides, so the whole frame is one memcpy: this is the copy
+	 * fs_present() would have made anyway, made once.
+	 */
+	memcpy(map, r->px, n);
+	px_release(r);			/* memfd, shadow and row hashes go */
+	r->px = map;
+	r->canary = 0;
+	r->px_scanout = 1;
+	r->hole = 0;
+	r->dirty = 1;
+	wr_touch(r);			/* every row re-hashed on the next put */
+	return 1;
+}
+
+/*
+ * Give the window its own pixels back. `keep` copies the current frame out
+ * of the map first (leaving fullscreen: the windowed view shows what the
+ * game last drew); a window about to be freed passes 0 and just lets go.
+ */
+void xshim_window_unalias(uint32_t id, int keep)
+{
+	struct res *r = res_find(id);
+	void *old;
+	size_t n;
+
+	if (!r || r->type != R_WINDOW || !r->px_scanout)
+		return;
+	old = r->px;
+	n = (size_t)r->w * r->h * (r->bpp ? r->bpp : 2);
+	r->px = NULL;
+	r->canary = 0;
+	r->px_scanout = 0;
+	if (!keep)
+		return;
+	if (!px_alloc(r, r->w, r->h)) {
+		r->w = r->h = 0;	/* nothing to draw */
+		return;
+	}
+	memcpy(r->px, old, n);
+	r->hole = 0;
+	r->dirty = 1;
+	wr_touch(r);
+}
+
+/* The map this window is aliased to, or NULL: lets lvdesk notice a resize
+ * that gave the window a memfd again (px_release() drops the alias). */
+const void *xshim_window_scanout_ptr(uint32_t id)
+{
+	struct res *r = res_find(id);
+
+	return (r && r->type == R_WINDOW && r->px_scanout) ? r->px : NULL;
 }
 
 void xshim_mem_report(void)
@@ -5748,7 +5900,9 @@ static void HOTTEXT mitshm_request(struct cli *c, const uint8_t *r, int len)
 			 * only for core ops 62-77), so one rectangle clip
 			 * before the loop is span_clip() per row exactly.
 			 * sxo/syo are what came off the left and top, so the
-			 * source advances with the destination.
+			 * source advances with the destination. With the
+			 * fullscreen alias b->px is the KMS map, so this clip
+			 * is also what keeps a put inside the mode buffer.
 			 */
 			x0 = dx + d->ax; x1 = x0 + sw;
 			y0 = dy + d->ay; y1 = y0 + sh;
@@ -6270,6 +6424,7 @@ static void HOTTEXT xshm_request(struct cli *c, const uint8_t *r, int len)
 				      (((size_t)oy * b->w + ox) * b->bpp));
 			}
 			send_reply_fd(c, d24, b->shm_fd);
+			b->px_shared = 1;	/* the client now writes px itself */
 			/*
 			 * Unconditional: a share is granted once per drawable,
 			 * never per frame, so this cannot flood the console -
@@ -8908,6 +9063,14 @@ static int px_share(struct res *r)
 	void *m;
 	int fd;
 
+	/*
+	 * Aliased to the scanout buffer: there is no descriptor to hand out
+	 * and the pixels must not move. "Not shareable" makes xlite fall
+	 * back to PutImage over the socket, which lands in the map like any
+	 * other server-side write.
+	 */
+	if (r->px_scanout)
+		return 0;
 	if (r->shm_fd >= 0)
 		return 1;
 	/*

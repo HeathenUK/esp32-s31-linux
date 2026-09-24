@@ -333,6 +333,9 @@ static int shift, mod_ctrl, mod_alt, mod_caps;
 static int fs_active, fs_w, fs_h;	/* fullscreen (direct scanout) state */
 static uint32_t fs_win;			/* the fullscreen client's top-level */
 static uint32_t fs_focused;		/* fs_win we have already handed focus to */
+static uint32_t fs_alias_id;		/* window whose pixels ARE kms_fs_map */
+static unsigned long fs_alias_presents, fs_alias_estab;	/* SIGUSR1 report */
+static void fs_unalias(int keep);
 static void cursor_vis_update(void);
 static int caps_led_seen;	/* the kernel drives the Caps Lock LED */
 
@@ -4246,6 +4249,7 @@ static void xwin_on_fsnative(int on)
 		return;
 	if (!on) {
 		if (fs_active) {
+			fs_unalias(1);		/* before the map is unmapped */
 			kms_fs_leave();
 			fs_active = 0;
 			fs_win = 0;
@@ -4259,6 +4263,7 @@ static void xwin_on_fsnative(int on)
 		return;
 	}
 	fs_render_set(0);
+	fs_unalias(1);			/* kms_fs_enter may recreate the map */
 	if (kms_fs_enter((int)kms_w, (int)kms_h, 16) < 0) {
 		fs_active = 0;
 		fs_render_set(1);
@@ -4279,6 +4284,7 @@ static void xwin_on_mode(int w, int h)
 		return;
 	if (w == (int)kms_w && h == (int)kms_h) {
 		if (fs_active) {
+			fs_unalias(1);		/* before the map is unmapped */
 			kms_fs_leave();
 			fs_active = 0;
 			fs_win = 0;
@@ -4292,6 +4298,7 @@ static void xwin_on_mode(int w, int h)
 		return;
 	}
 	fs_render_set(0);
+	fs_unalias(1);			/* kms_fs_enter may recreate the map */
 	if (kms_fs_enter(w, h, 16) < 0) {
 		fs_active = 0;
 		fs_render_set(1);
@@ -4614,6 +4621,8 @@ static void fsg_report(void)
 	printf("lvdesk: dirty ms <1:%u <3:%u <6:%u <12:%u >=12:%u\n",
 	       fsg_dirty_bucket[0], fsg_dirty_bucket[1], fsg_dirty_bucket[2],
 	       fsg_dirty_bucket[3], fsg_dirty_bucket[4]);
+	printf("lvdesk: alias presents %lu, established %lu, window 0x%x\n",
+	       fs_alias_presents, fs_alias_estab, (unsigned)fs_alias_id);
 	printf("lvdesk: rowskip presents %lu, rows %lu/%lu kept (%lu%%), "
 	       "frames forced %lu, skipped whole %lu\n",
 	       fsrh_presents, fsrh_rows_kept, fsrh_rows_seen,
@@ -4759,6 +4768,165 @@ static int fsrh_begin(uint32_t id, int h, const uint16_t *pal)
 	return FSRH_USE;
 }
 
+/*
+ * FULLSCREEN SCANOUT ALIAS - the fullscreen window's pixels ARE the mode
+ * buffer, so xshim's ShmPutImage copy is the present and the copy loops in
+ * fs_present() are skipped. See xshim_window_alias_scanout() for the
+ * accounting. The desktop's side of the contract is ordering: the alias is
+ * dropped BEFORE kms_fs_leave() munmaps the map and before any kms_fs_enter()
+ * that could recreate it, and the lv_image widget must never name the map
+ * (the widget is re-pointed at the window's own memfd when fullscreen ends).
+ *
+ * Serves the stock double-buffered TyrQuake client (tyrquake-0.71/common/
+ * vid_x.c:1042, XShmPutImage then a wait for ShmCompletion at 1050-1051) and
+ * every SDL client (SDL-1.2.15 src/video/x11/SDL_x11image.c:262 and SDL2-2.32.10
+ * src/video/x11/SDL_x11framebuffer.c:183, X11_UpdateWindowFramebuffer): none of
+ * them ever reads the window back. The server-side paths that do touch the
+ * window's pixels (an Expose fill, CopyArea, the socket PutImage fallback)
+ * read and write the alias, which is the same pixels; GetImage (opcode 73)
+ * is not implemented by xshim at all, alias or not, and answers
+ * BadImplementation from the UNIMPLEMENTED default.
+ *
+ * XSHIM_FSALIAS=0 keeps the two-copy path for a same-binary A/B (default ON;
+ * read once, and the startup line below says which way it went - S40lvdesk
+ * sources /etc/lvdesk.env, so a toggle there needs `export`, see
+ * late_present_on() in xshim.c for the day that lesson cost).
+ */
+static int fs_alias_on(void)
+{
+	static int v = -1;
+
+	if (v < 0) {
+		const char *e = getenv("XSHIM_FSALIAS");
+
+		v = !(e && strcmp(e, "0") == 0);
+		printf("lvdesk: fullscreen alias %s\n",
+		       v ? "ON" : "OFF (XSHIM_FSALIAS=0)");
+		fflush(stdout);
+	}
+	return v;
+}
+
+/*
+ * Self-identifying arms: the OFF arm must report `alias presents 0` and the
+ * ON arm a count that tracks the shim's ShmPutImage count minus identical
+ * frames, or an A/B between them measured nothing (validate silent
+ * instruments). estab counts (re-)establishments - one per fullscreen
+ * launch, plus one per resize while aliased. (Declared beside fs_alias_id
+ * at the top: fsg_report() prints them and sits above this block.)
+ */
+
+/* The widget must not draw from a memfd the alias just released. */
+static void fs_alias_repoint(uint32_t id, int attach)
+{
+	int i;
+
+	for (i = 0; i < xwin_n; i++) {
+		const uint16_t *px = NULL;
+		int w = 0, h = 0;
+
+		if (xwins[i].id != id || !xwins[i].img)
+			continue;
+		if (attach)
+			px = xshim_window_pixels(id, &w, &h);
+		xwins[i].dsc.data = (const uint8_t *)px;
+		if (px) {
+			xwins[i].dsc.header.w = w;
+			xwins[i].dsc.header.h = h;
+			xwins[i].dsc.header.stride = w * 2;
+			xwins[i].dsc.data_size = (uint32_t)w * h * 2;
+			lv_image_set_src(xwins[i].img, &xwins[i].dsc);
+			lv_obj_set_size(xwins[i].img, w, h);
+		} else {
+			/* the re-point test in xwin_on_draw() re-arms it */
+			lv_image_set_src(xwins[i].img, NULL);
+		}
+		lv_obj_invalidate(xwins[i].img);
+		break;
+	}
+}
+
+static void fs_unalias(int keep)
+{
+	uint32_t id = fs_alias_id;
+
+	if (!id)
+		return;
+	fs_alias_id = 0;
+	xshim_window_unalias(id, keep);
+	if (keep)
+		fs_alias_repoint(id, 1);
+}
+
+/*
+ * Present through the alias, establishing it on the first call. Returns 1
+ * when the frame has been dealt with, 0 to fall through to the copy path:
+ * the toggle is set, the window is not aliasable (depth 8, an odd stride, a
+ * memfd already handed to an xlite-SHM client), or the mode buffer is not at
+ * this window's depth.
+ */
+static int fs_alias_present(uint32_t id, int sw, int sh, int bpp)
+{
+	int dx, dy, dw, dh;
+	uint64_t t;
+
+	if (!fs_alias_on() || !kms_fs_map)
+		return 0;
+	/*
+	 * A resize while aliased gave the window a memfd again inside the
+	 * shim (px_release drops the alias): forget ours and re-establish it
+	 * below at the new geometry, if it still fits.
+	 */
+	if (fs_alias_id == id && xshim_window_scanout_ptr(id) != kms_fs_map)
+		fs_alias_id = 0;
+	if (fs_alias_id != id) {
+		if (fs_alias_id || (int)kms_fs_bpp != bpp * 8)
+			return 0;
+		if (!xshim_window_alias_scanout(id, kms_fs_map, kms_fs_pitch,
+						(int)kms_fs_w, (int)kms_fs_h,
+						bpp))
+			return 0;
+		fs_alias_id = id;
+		fs_alias_estab++;
+		fs_alias_repoint(id, 0);
+		kms_fs_dirty(0, 0, (int)kms_fs_w - 1, (int)kms_fs_h - 1);
+		printf("lvdesk: fullscreen alias 0x%x %dx%dx%d\n", id, sw, sh,
+		       bpp * 8);
+		fflush(stdout);
+		return 1;
+	}
+	/*
+	 * The pixels are already in the map; xshim's row hash trimmed the
+	 * damage to the rows that changed, so the fsrh scan is not needed.
+	 */
+	if (!xshim_window_take_damage(id, &dx, &dy, &dw, &dh)) {
+		dx = dy = 0;
+		dw = sw;
+		dh = sh;
+	}
+	if (dx < 0) { dw += dx; dx = 0; }
+	if (dy < 0) { dh += dy; dy = 0; }
+	if (dx + dw > fs_w) dw = fs_w - dx;
+	if (dy + dh > fs_h) dh = fs_h - dy;
+	if (dx + dw > sw) dw = sw - dx;
+	if (dy + dh > sh) dh = sh - dy;
+	if (dw <= 0 || dh <= 0)
+		return 1;
+	t = fsg_stage ? prof_ns() : 0;
+	kms_fs_dirty(dx, dy, dx + dw - 1, dy + dh - 1);
+	fs_alias_presents++;
+	fsg_expand_us = 0;
+	fsg_dirty_us = fsg_stage ? (uint32_t)((prof_ns() - t) / 1000u) : 0;
+	if (fsg_dirty_us > fsg_dirty_max)
+		fsg_dirty_max = fsg_dirty_us;
+	/* same buckets as the copy path, so `dirty ms` compares across arms */
+	fsg_dirty_bucket[fsg_dirty_us < 1000 ? 0 :
+			 fsg_dirty_us < 3000 ? 1 :
+			 fsg_dirty_us < 6000 ? 2 :
+			 fsg_dirty_us < 12000 ? 3 : 4]++;
+	return 1;
+}
+
 static void fs_present(uint32_t id)
 {
 	fsg_note();
@@ -4779,8 +4947,12 @@ static void fs_present(uint32_t id)
 		const void *raw = xshim_window_raw(id, &sw, &sh, &bpp);
 
 		if (raw && bpp == 4) {
-			if (kms_fs_bpp != 32 &&
-			    kms_fs_enter(fs_w, fs_h, 32) < 0)
+			if (kms_fs_bpp != 32) {
+				fs_unalias(1);	/* the map is recreated */
+				if (kms_fs_enter(fs_w, fs_h, 32) < 0)
+					return;
+			}
+			if (fs_alias_present(id, sw, sh, 4))
 				return;
 			if (!xshim_window_take_damage(id, &dx, &dy, &dw, &dh)) {
 				dx = dy = 0;
@@ -4825,6 +4997,8 @@ static void fs_present(uint32_t id)
 		 */
 		pal = NULL;
 		sstride = sw;
+		if (fs_alias_present(id, sw, sh, 2))
+			return;
 	}
 	if (!xshim_window_take_damage(id, &dx, &dy, &dw, &dh)) {
 		dx = dy = 0;
@@ -4862,9 +5036,14 @@ static void fs_present(uint32_t id)
 
 		/*
 		 * Hash first, expand second. Unchanged rows cost the read and
-		 * the multiplies and nothing else - no stores into uncached
-		 * scanout memory, and no rows added to the rectangle the
-		 * driver has to scale.
+		 * the multiplies and nothing else - no stores into the
+		 * scanout map (which is CACHED memory here; the driver flushes
+		 * the dirty rows before the PPA reads them), and no rows added
+		 * to the rectangle the driver has to scale.
+		 *
+		 * Not reached for a 16/32-bit window that fs_alias_present()
+		 * aliased to the map: xshim's own row hash did this work when
+		 * the client put the frame.
 		 */
 		if (fsrh && rmode == FSRH_USE) {
 			uint32_t hv = fsrh_hash(row, (size_t)dw * bpp1,
@@ -4896,9 +5075,11 @@ static void fs_present(uint32_t id)
 			 * per iteration; the windowed expander two screens up
 			 * has always combined two pixels into one 32-bit store
 			 * and this path never picked it up. The destination is
-			 * the scanout buffer - write-combining memory, where
-			 * the store count is what costs, not the arithmetic -
-			 * so halving the stores is the whole optimisation.
+			 * the scanout buffer - believed write-combining when
+			 * this was written; it is in fact a cached mapping
+			 * that the driver flushes (see the vector-store note
+			 * below for what that did to the theory) - and
+			 * halving the stores was the whole optimisation.
 			 * Measured 3.37 ms per 320x240 frame before.
 			 */
 			/*
@@ -5154,7 +5335,22 @@ static void xwin_on_close(uint32_t id)
 	 * then clamped to the dead mode's size rather than the panel's, which
 	 * reads as the cursor refusing to move past an invisible edge.
 	 */
+	/*
+	 * The aliased window is going: there is nobody to keep its frame for
+	 * (close_cb runs before res_free in xshim, and px_release() then finds
+	 * px already NULL). Done regardless of the fs_win test below - fs_win
+	 * is cleared and re-resolved on several paths, and a stale
+	 * fs_alias_id naming a freed window would make fs_alias_present()
+	 * refuse every later alias without a word.
+	 */
+	if (id == fs_alias_id)
+		fs_unalias(0);
 	if (fs_active && (id == fs_win || !fs_win)) {
+		/*
+		 * Any OTHER window still aliased to the map that is about to
+		 * go gets its frame copied back into a memfd of its own.
+		 */
+		fs_unalias(1);
 		kms_fs_leave();
 		fs_active = 0;
 		fs_win = 0;
@@ -9812,6 +10008,7 @@ int main(void)
 	fsg_clock_init();
 	fsg_on = getenv("LVDESK_NOFSG") == NULL;
 	fsg_stage = getenv("LVDESK_FSGSTAGE") != NULL;
+	(void)fs_alias_on();	/* decide now, so the log states it at startup */
 
 	/*
 	 * NO mlockall here, and this is measured, not assumed.
