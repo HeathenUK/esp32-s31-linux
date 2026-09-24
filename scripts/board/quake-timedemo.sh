@@ -39,7 +39,7 @@ cd /root/quake
 export AUDIODEV=$AUDIODEV_ON_BOARD; echo "AUDIO=\$AUDIODEV"
 $PRE
 echo "PRE_APPLIED watermark_scale_factor=\$(cat /proc/sys/vm/watermark_scale_factor) page-cluster=\$(cat /proc/sys/vm/page-cluster)"
-rm -f /root/-basedir/qconsole.log /root/quake/id1/qconsole.log
+rm -f /root/-basedir/qconsole.log /root/quake/id1/qconsole.log /root/quake/.tyrquake/id1/qconsole.log
 amixer -q sset 'DACL' 110 2>/dev/null; amixer -q sset 'DACR' 110 2>/dev/null
 setsid sh -c 'DISPLAY=:0 HOME=/root/quake exec ${QUAKE_BIN:-./tiopex-quake} id1 -basedir /root/quake $ARGS -width 320 -height 240 -fullscreen -condebug +timedemo demo1 >/root/quake/td.log 2>&1' </dev/null >/dev/null 2>&1 &
 # QUIET WAIT. This loop used to poll every second - three busybox forks a
@@ -50,9 +50,10 @@ setsid sh -c 'DISPLAY=:0 HOME=/root/quake exec ${QUAKE_BIN:-./tiopex-quake} id1 
 # So: one long sleep that covers the load and most of the demo, then a slow
 # poll. Error exit stays quick because it is checked once before the sleep.
 sleep 8; grep -aq "^Error:" /root/quake/td.log 2>/dev/null || sleep 42
-i=0; while [ \$i -lt 60 ]; do grep -aqE "[0-9]+ frames" /root/quake/id1/qconsole.log 2>/dev/null && break; grep -aq "^Error:" /root/quake/td.log 2>/dev/null && break; sleep 3; i=\$((i+1)); done
+# TyrQuake 0.71 (tyr-quake) logs to \$HOME/.tyrquake/id1/qconsole.log; the sdlquake-glue build (tiopex-quake) to id1/qconsole.log.
+i=0; while [ \$i -lt 60 ]; do grep -aqE "[0-9]+ frames" /root/quake/id1/qconsole.log /root/quake/.tyrquake/id1/qconsole.log 2>/dev/null && break; grep -aq "^Error:" /root/quake/td.log 2>/dev/null && break; sleep 3; i=\$((i+1)); done
 P=\$(ps | awk '/[t]iopex|[t]yr-quake|[t]yrquake/ {print \$1}' | head -1)
-echo "RESULT \$(grep -ahE '[0-9]+ frames' /root/-basedir/qconsole.log /root/quake/id1/qconsole.log 2>/dev/null | head -1)"
+echo "RESULT \$(grep -ahE '[0-9]+ frames' /root/-basedir/qconsole.log /root/quake/id1/qconsole.log /root/quake/.tyrquake/id1/qconsole.log 2>/dev/null | head -1)"
 echo "ERROR \$(grep -a '^Error:' /root/quake/td.log 2>/dev/null | head -1)"
 echo "QUAKE majflt=\$(awk '{print \$12}' /proc/\$P/stat 2>/dev/null) \$(grep -aE 'VmRSS|VmSwap' /proc/\$P/status 2>/dev/null | tr -s ' ' | tr '\n' ' ')"
 echo "MEM \$(grep -aE 'MemAvailable|SwapFree' /proc/meminfo | tr -s ' ' | tr '\n' ' ')"
