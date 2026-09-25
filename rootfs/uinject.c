@@ -102,6 +102,7 @@ static int make_touch(void)
 	ioctl(fd, UI_SET_KEYBIT, BTN_TOUCH);
 	ioctl(fd, UI_SET_KEYBIT, BTN_TOOL_FINGER);
 	ioctl(fd, UI_SET_KEYBIT, BTN_TOOL_DOUBLETAP);
+	ioctl(fd, UI_SET_KEYBIT, BTN_TOOL_TRIPLETAP);
 	ioctl(fd, UI_SET_PROPBIT, INPUT_PROP_DIRECT);
 	memset(&ab, 0, sizeof(ab));
 	ab.code = ABS_X; ab.absinfo.maximum = 799;
@@ -292,35 +293,15 @@ static void type(const char *s, int delay)
 	}
 }
 
-int main(int argc, char **argv)
+/*
+ * One command, as on the command line: argv[1] is the verb. Split out of
+ * main() so `script` mode can run many commands on ONE pair of uinput
+ * devices - each separate uinject run pays a ~2.6 s device settle, which was
+ * most of the time in every board test (2026-09-25).
+ */
+static void run_cmd(int argc, char **argv)
 {
 	const char *what = argc > 1 ? argv[1] : "demo";
-
-	mouse_fd = make_dev("uinject-mouse", 0);
-	kbd_fd = make_dev("uinject-kbd", 1);
-	if (!strncmp(what, "tap", 3))
-		touch_fd = make_touch();
-	/*
-	 * Settle time before the first event. Discovery is inotify-driven and
-	 * runs on an LVGL timer, so an event sent too early is delivered to a
-	 * device the desktop has not yet opened - which looks exactly like a
-	 * broken drag. Tunable because that race is the first thing to suspect.
-	 */
-	/*
-	 * MUST exceed the desktop's device-rescan period, which is 2000 ms
-	 * (lvdesk.c: `lv_tick_get() - kbd_scan_at > 2000`). Every run creates a
-	 * fresh uinput device, so a settle shorter than that races discovery
-	 * and the events go to a node nothing has opened yet.
-	 *
-	 * The old 1500 ms default lost that race for every run after the
-	 * first, and lost it SILENTLY: the first click of a test landed
-	 * exactly where it was aimed and every later one drifted 2-3 px from
-	 * wherever the pointer already was. Aimed 300,200 -> 300,200, then
-	 * aimed 650,400 -> 302,202. A harness that is accurate once and then
-	 * quietly stops moving is worse than one that never works.
-	 */
-	msleep(getenv("UINJECT_SETTLE") ? atoi(getenv("UINJECT_SETTLE")) : 2600);
-	home();
 
 	if (!strcmp(what, "key")) {
 		/*
@@ -435,6 +416,30 @@ int main(int argc, char **argv)
 		touch_at(x, y, 1, BTN_TOOL_FINGER);
 		msleep(ms);
 		touch_at(x, y, 0, BTN_TOOL_FINGER);
+		msleep(300);
+	} else if (!strcmp(what, "tap3")) {
+		/*
+		 * tap3 X Y - three-finger tap: the fingers land 20 ms apart
+		 * (one GT1158 poll), as the kernel's pointer emulation reports
+		 * them: FINGER, then DOUBLETAP, then TRIPLETAP; all lift
+		 * together 100 ms later.
+		 */
+		int x = argc > 2 ? atoi(argv[2]) : 400;
+		int y = argc > 3 ? atoi(argv[3]) : 240;
+
+		touch_at(x, y, 1, BTN_TOOL_FINGER);
+		msleep(20);
+		emit(touch_fd, EV_KEY, BTN_TOOL_FINGER, 0);
+		emit(touch_fd, EV_KEY, BTN_TOOL_DOUBLETAP, 1);
+		syn(touch_fd);
+		msleep(20);
+		emit(touch_fd, EV_KEY, BTN_TOOL_DOUBLETAP, 0);
+		emit(touch_fd, EV_KEY, BTN_TOOL_TRIPLETAP, 1);
+		syn(touch_fd);
+		msleep(100);
+		emit(touch_fd, EV_KEY, BTN_TOUCH, 0);
+		emit(touch_fd, EV_KEY, BTN_TOOL_TRIPLETAP, 0);
+		syn(touch_fd);
 		msleep(300);
 	} else if (!strcmp(what, "tap2")) {
 		/*
@@ -721,6 +726,82 @@ int main(int argc, char **argv)
 		move_to(420, 250, 12, 30);
 	}
 
+}
+
+int main(int argc, char **argv)
+{
+	const char *what = argc > 1 ? argv[1] : "demo";
+
+	mouse_fd = make_dev("uinject-mouse", 0);
+	kbd_fd = make_dev("uinject-kbd", 1);
+	if (!strncmp(what, "tap", 3) || !strcmp(what, "script"))
+		touch_fd = make_touch();
+	/*
+	 * Settle time before the first event. Discovery is inotify-driven and
+	 * runs on an LVGL timer, so an event sent too early is delivered to a
+	 * device the desktop has not yet opened - which looks exactly like a
+	 * broken drag. Tunable because that race is the first thing to suspect.
+	 */
+	/*
+	 * MUST exceed the desktop's device-rescan period, which is 2000 ms
+	 * (lvdesk.c: `lv_tick_get() - kbd_scan_at > 2000`). Every run creates a
+	 * fresh uinput device, so a settle shorter than that races discovery
+	 * and the events go to a node nothing has opened yet.
+	 *
+	 * The old 1500 ms default lost that race for every run after the
+	 * first, and lost it SILENTLY: the first click of a test landed
+	 * exactly where it was aimed and every later one drifted 2-3 px from
+	 * wherever the pointer already was. Aimed 300,200 -> 300,200, then
+	 * aimed 650,400 -> 302,202. A harness that is accurate once and then
+	 * quietly stops moving is worse than one that never works.
+	 */
+	msleep(getenv("UINJECT_SETTLE") ? atoi(getenv("UINJECT_SETTLE")) : 2600);
+	home();
+
+	if (!strcmp(what, "script")) {
+		/*
+		 * script: one command per stdin line, all on these devices,
+		 * after ONE settle. `sleep MS` pauses; `type TEXT...` takes
+		 * the rest of the line, with \n for Enter; # starts a comment.
+		 */
+		char line[256];
+
+		while (fgets(line, sizeof(line), stdin)) {
+			char *av[16], *tok;
+			int ac = 1;
+
+			av[0] = argv[0];
+			if (!strncmp(line, "type ", 5)) {
+				static char txt[256];
+				char *d = txt, *q;
+
+				for (q = line + 5; *q && *q != '\n' && d < txt + 254; q++) {
+					if (q[0] == '\\' && q[1] == 'n') {
+						*d++ = '\n';
+						q++;
+					} else {
+						*d++ = *q;
+					}
+				}
+				*d = 0;
+				type(txt, 90);
+				continue;
+			}
+			for (tok = strtok(line, " \t\n"); tok && ac < 15;
+			     tok = strtok(NULL, " \t\n"))
+				av[ac++] = tok;
+			av[ac] = NULL;
+			if (ac < 2 || av[1][0] == '#')
+				continue;
+			if (!strcmp(av[1], "sleep")) {
+				msleep(ac > 2 ? atoi(av[2]) : 100);
+				continue;
+			}
+			run_cmd(ac, av);
+		}
+	} else {
+		run_cmd(argc, argv);
+	}
 	msleep(300);
 	ioctl(mouse_fd, UI_DEV_DESTROY);
 	ioctl(kbd_fd, UI_DEV_DESTROY);

@@ -930,6 +930,10 @@ static void term_write(const char *buf, int n)
 static int fs_close_client(void);	/* with wm_shortcut() */
 static int switcher_key(int code);	/* Esc/arrows/Enter in Alt-Tab */
 static int sw_n, sw_by_super;		/* Alt-Tab switcher: rows up, by Super */
+static lv_obj_t *osk_obj;		/* on-screen keyboard (QoL D8) */
+static void osk_toggle(void);
+static void osk_hide(void);
+static lv_obj_t *pw_kb;			/* the passphrase prompt's keyboard */
 static void switcher_step(int back);
 
 static int kbd_key(int code)
@@ -3535,6 +3539,18 @@ static void ctl_line(char *buf)
 				else
 					win_snap(&wins[idx], w);
 			}
+		} else if (!strncmp(buf, "osk", 3)) {
+			/* osk [toggle|show|hide], then report (QoL D8) */
+			if (strstr(buf, "hide"))
+				osk_hide();
+			else if (strstr(buf, "show")) {
+				if (!osk_obj)
+					osk_toggle();
+			} else if (strstr(buf, "toggle")) {
+				osk_toggle();
+			}
+			printf("lvdesk: osk %s\n", osk_obj ? "shown" : "hidden");
+			fflush(stdout);
 		} else if (!strncmp(buf, "pop", 3) && (!buf[3] || buf[3] == '\n')) {
 			/* popover state, for the keyboard-menu tests (QoL B2) */
 			printf("lvdesk: pop %s rows=%d sel=%d cur=%d menu=%d\n",
@@ -5218,6 +5234,7 @@ static void xwin_on_fsnative(int on)
 	 * clicked away, and its keyboard rules could eat the game's keys.
 	 */
 	popover_close();
+	osk_hide();			/* never shown in fullscreen (QoL D8) */
 	fs_render_set(0);
 	fs_unalias(1);			/* kms_fs_enter may recreate the map */
 	if (kms_fs_enter((int)kms_w, (int)kms_h, 16) < 0) {
@@ -5279,6 +5296,7 @@ static void xwin_on_mode(int w, int h)
 	 * clicked away, and its keyboard rules could eat the game's keys.
 	 */
 	popover_close();
+	osk_hide();			/* never shown in fullscreen (QoL D8) */
 	fs_render_set(0);
 	fs_unalias(1);			/* kms_fs_enter may recreate the map */
 	if (kms_fs_enter(w, h, 16) < 0) {
@@ -6698,19 +6716,19 @@ static lv_obj_t *toast_objs[TOAST_MAX];	/* notification toasts (QoL D1) */
  */
 static int xwin_overlay_hole(int idx, const lv_area_t *a, lv_area_t *hole)
 {
-	lv_obj_t *ov[3 + TOAST_MAX] = { sw_panel, pop_obj, NULL };
+	lv_obj_t *ov[4 + TOAST_MAX] = { sw_panel, pop_obj, NULL, osk_obj };
 	lv_area_t b;
 	int k, n = 0;
 
 	for (k = 0; k < TOAST_MAX; k++)
-		ov[3 + k] = toast_objs[k];
+		ov[4 + k] = toast_objs[k];
 
 	if (term.win && lv_obj_is_valid(term.win) &&
 	    xwins[idx].win && lv_obj_is_valid(xwins[idx].win) &&
 	    lv_obj_get_parent(term.win) == lv_obj_get_parent(xwins[idx].win) &&
 	    lv_obj_get_index(term.win) > lv_obj_get_index(xwins[idx].win))
 		ov[2] = term.win;
-	for (k = 0; k < 3 + TOAST_MAX; k++) {
+	for (k = 0; k < 4 + TOAST_MAX; k++) {
 		if (!ov[k] || !lv_obj_is_valid(ov[k]) ||
 		    lv_obj_has_flag(ov[k], LV_OBJ_FLAG_HIDDEN))
 			continue;
@@ -7686,7 +7704,8 @@ static void toast_layout(void)
 		 */
 		lv_obj_t *o = toast_objs[order[i]];
 		int32_t x = sw - toasts[order[i]].w - 4;
-		int32_t y = sh - TASKBAR_H - (TOAST_H + 4) * (i + 1);
+		int32_t y = sh - TASKBAR_H - (TOAST_H + 4) * (i + 1) -
+			    (osk_obj ? lv_obj_get_height(osk_obj) : 0);
 
 		lv_obj_set_pos(o, x, y);
 	}
@@ -8568,6 +8587,107 @@ static void appmenu_open_at(int32_t x, int32_t y, lv_obj_t *owner)
 static lv_obj_t *start_btn;
 
 /*
+ * THE ON-SCREEN KEYBOARD (QoL D8): the passphrase prompt's lv_keyboard,
+ * for any window. It is attached to no textarea; each key is mapped to an
+ * evdev code and fed through kbd_key(), exactly as if typed, so the console,
+ * the terminal, menus and X clients all get it the same way - X clients a
+ * KeyPress and the matching KeyRelease. Tapping it moves no focus: it is on
+ * the top layer, and top-layer hits never reach a window (QoL A2).
+ * Summoned and dismissed by a three-finger tap, the tray glyph, its own
+ * keyboard key, or ctl `osk`. Never in fullscreen.
+ */
+static void osk_send(int code, int sh)
+{
+	int osh = shift;
+	uint32_t t;
+
+	shift = sh;
+	kbd_key(code);
+	/* the release, as kbd_poll()'s release path sends it */
+	t = xshim_grab_top();
+	if (con_mode && term_focused())
+		t = 0;
+	if (!t)
+		t = win_focus_xid();
+	if (!pw_ta && t) {
+		int sym = xkey_sym(code);
+
+		if (sym)
+			xshim_key(t, sym, 0, xkey_mods());
+	}
+	shift = osh;
+}
+
+static void osk_event_cb(lv_event_t *e)
+{
+	lv_obj_t *kb = lv_event_get_target(e);
+	uint32_t id = lv_buttonmatrix_get_selected_button(kb);
+	const char *t;
+	int code, sh;
+
+	if (id == LV_BUTTONMATRIX_BUTTON_NONE)
+		return;
+	t = lv_buttonmatrix_get_button_text(kb, id);
+	if (!t)
+		return;
+	if (!strcmp(t, LV_SYMBOL_KEYBOARD)) {
+		osk_hide();
+		return;
+	}
+	if (!strcmp(t, LV_SYMBOL_BACKSPACE)) { osk_send(KEY_BACKSPACE, 0); return; }
+	if (!strcmp(t, LV_SYMBOL_NEW_LINE) || !strcmp(t, LV_SYMBOL_OK)) {
+		osk_send(KEY_ENTER, 0);
+		return;
+	}
+	if (!strcmp(t, LV_SYMBOL_LEFT))  { osk_send(KEY_LEFT, 0); return; }
+	if (!strcmp(t, LV_SYMBOL_RIGHT)) { osk_send(KEY_RIGHT, 0); return; }
+	if (strlen(t) != 1)		/* ABC / abc / 1#: the widget's modes */
+		return;
+	for (code = 1; code < KEY_CNT; code++)
+		for (sh = 0; sh < 2; sh++)
+			if (keymap[code][sh] == t[0]) {
+				/* Caps Lock inverts letters downstream: undo it */
+				if (mod_caps && ((t[0] >= 'a' && t[0] <= 'z') ||
+						 (t[0] >= 'A' && t[0] <= 'Z')))
+					sh = !sh;
+				osk_send(code, sh);
+				return;
+			}
+}
+
+static void osk_hide(void)
+{
+	if (osk_obj) {
+		lv_obj_delete(osk_obj);
+		osk_obj = NULL;
+		toast_layout();
+	}
+}
+
+static void osk_toggle(void)
+{
+	if (osk_obj) {
+		osk_hide();
+		return;
+	}
+	if (fs_active || pw_kb)		/* no desktop / the prompt has its own */
+		return;
+	osk_obj = lv_keyboard_create(lv_layer_top());
+	lv_obj_set_size(osk_obj, lv_display_get_horizontal_resolution(NULL), 150);
+	lv_obj_align(osk_obj, LV_ALIGN_BOTTOM_MID, 0, -TASKBAR_H);
+	lv_obj_set_style_radius(osk_obj, 0, 0);
+	lv_keyboard_set_textarea(osk_obj, NULL);
+	lv_obj_add_event_cb(osk_obj, osk_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
+	toast_layout();
+}
+
+static void tray_osk_cb(lv_event_t *e)
+{
+	(void)e;
+	osk_toggle();
+}
+
+/*
  * Keys while a menu or tray panel is open (QoL B2). Returns 1: the key is
  * the desktop's, so its repeats and release are eaten (B0) - which is also
  * what stops a held Enter falling through into the next menu.
@@ -9000,7 +9120,7 @@ static int ap_sel = -1;	/* row the user has selected */
  * an index selects a different network the moment signal strengths shuffle.
  */
 static char ap_sel_ssid[33];
-static lv_obj_t *pw_box, *pw_kb;
+static lv_obj_t *pw_box;	/* pw_kb is declared with osk_obj */
 static int pw_target = -1;
 
 /*
@@ -9784,6 +9904,7 @@ static void pw_prompt(int idx)
 	lv_obj_t *kb, *b, *l;
 
 	pw_close();
+	osk_hide();			/* the prompt brings its own keyboard */
 	pw_box = lv_obj_create(lv_layer_top());
 	lv_obj_set_size(pw_box, 320, 116);
 	/* Sit clear of the keyboard below. */
@@ -11356,7 +11477,7 @@ static int btn_extra, btn_extra_act;
  * LVDESK_TOUCH2_MS=0 turns it off. Zero work when no finger is down.
  */
 static int touch2_ms = -1;
-static int t_pend, t_up_early, t_swallow, t_rrel, t_lrel, t_two;
+static int t_pend, t_up_early, t_swallow, t_rrel, t_lrel, t_two, t_three;
 static int t_press_live;		/* a released-late press LVGL may not have read */
 static uint32_t t_pend_ms, t_lrel_reads, t_press_reads, ptr_reads;
 static lv_obj_t *cursor_obj;
@@ -11778,8 +11899,21 @@ static int mouse_poll(void)
 				else if (ev.code == ABS_Y)
 					ptr_y = ev.value;
 			} else if (ev.type == EV_KEY && mouse_touch[i] &&
-				   ev.code == BTN_TOOL_DOUBLETAP) {
-				t_two = !!ev.value;
+				   (ev.code == BTN_TOOL_DOUBLETAP ||
+				    ev.code == BTN_TOOL_TRIPLETAP)) {
+				/*
+				 * LATCHED, not levels: a quick two-finger tap
+				 * lifts (DOUBLETAP 0) in the same poll it is
+				 * decided in, and the event can precede the
+				 * BTN_TOUCH that starts the hold. Cleared once
+				 * a decision is taken, or on a full lift.
+				 */
+				if (ev.value) {
+					if (ev.code == BTN_TOOL_DOUBLETAP)
+						t_two = 1;
+					else
+						t_three = 1;
+				}
 			} else if (ev.type == EV_KEY && mouse_touch[i] &&
 				   ev.code == BTN_TOUCH && touch2_ms > 0 &&
 				   (t_pend || t_swallow ||
@@ -11793,6 +11927,7 @@ static int mouse_poll(void)
 					}
 				} else if (t_swallow) {
 					t_swallow = 0;	/* last finger up */
+					t_two = t_three = 0;
 				} else if (t_pend) {
 					t_up_early = 1;
 				}
@@ -11813,8 +11948,11 @@ static int mouse_poll(void)
 				    ev.code == BTN_TOUCH)) {
 				int was = ptr_pressed;
 
-				if (!ev.value)
+				if (!ev.value) {
 					t_press_live = 0;
+					if (mouse_touch[i])
+						t_two = t_three = 0;
+				}
 
 				ptr_pressed = !!ev.value;
 				if (ptr_pressed && !was)
@@ -11845,9 +11983,25 @@ static int mouse_poll(void)
 		t_lrel = 0;
 	}
 	if (t_pend) {
-		if (t_two && !btn_extra) {
+		int due = t_up_early ||
+			  lv_tick_get() - t_pend_ms >= (uint32_t)touch2_ms;
+
+		if (t_three) {
+			/*
+			 * Three fingers: the on-screen keyboard (QoL D8).
+			 * Checked first, and two fingers wait for the window
+			 * to end, so a third finger landing a poll later still
+			 * counts as three.
+			 */
 			t_pend = 0;
 			t_swallow = !t_up_early;
+			t_two = t_three = 0;
+			osk_toggle();
+			busy = 1;
+		} else if (t_two && due && !btn_extra) {
+			t_pend = 0;
+			t_swallow = !t_up_early;
+			t_two = t_three = 0;
 			btn_extra = 3;
 			btn_extra_act = 1;
 			t_rrel = 1;
@@ -11855,8 +12009,7 @@ static int mouse_poll(void)
 			printf("lvdesk: two-finger tap -> right click at %d,%d\n",
 			       (int)ptr_x, (int)ptr_y);
 			fflush(stdout);
-		} else if (t_up_early ||
-			   lv_tick_get() - t_pend_ms >= (uint32_t)touch2_ms) {
+		} else if (due && !t_two) {
 			t_pend = 0;
 			ptr_pressed = 1;
 			press_edge = 1;
@@ -12729,6 +12882,15 @@ int main(void)
 		 * and a window that exists to show one number is a window that
 		 * costs a top-level buffer to show one number.
 		 */
+		/* the on-screen keyboard (QoL D8), leftmost in the tray */
+		l = lv_label_create(tray);
+		lv_label_set_text(l, LV_SYMBOL_KEYBOARD);
+		lv_obj_set_style_text_font(l, FONT_UI, 0);
+		lv_obj_set_style_text_color(l, lv_color_hex(COL_HDR_TEXT), 0);
+		lv_obj_add_flag(l, LV_OBJ_FLAG_CLICKABLE);
+		lv_obj_set_ext_click_area(l, TRAY_TOUCH_PAD);
+		lv_obj_add_event_cb(l, tray_osk_cb, LV_EVENT_CLICKED, NULL);
+
 		sysinfo = lv_label_create(tray);
 		lv_obj_set_style_text_font(sysinfo, FONT_UI, 0);
 		lv_obj_set_style_text_color(sysinfo,

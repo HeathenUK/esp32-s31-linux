@@ -1874,6 +1874,19 @@ cannot type into the Terminal, the console or an X client.
 checking each client's key trace. Check no desktop regression (idle,
 perframe).
 
+**Status 2026-09-25: shipped.**
+- A three-finger tap, the tray glyph, the keyboard's own key or ctl `osk`
+  toggles it. Two fingers now wait out the 60 ms window, with latched finger
+  counts, so a third finger can still land and a quick two-finger lift still
+  right-clicks.
+- `lvdesk-osk-test.sh` passes: tap3 shows it, q and w reach xcalc (2 KeyPress,
+  exactly what real keys give it: xcalc selects no KeyRelease), "touch oskok"
+  and Enter typed on it in the console create the file, and tap3 hides it.
+  The touch test still passes.
+- Not done: windows are not moved clear of it.
+- uinject gained `script` mode (one device settle for a whole sequence) and
+  `tap3`.
+
 ## E. Rejected ideas
 
 | Idea | Reason |
