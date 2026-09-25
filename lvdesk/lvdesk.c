@@ -103,9 +103,17 @@ struct drm_esp32s31_ppa_clut {
 #define COL_HDR_FOCUS	0x3a86c8	/* focused - the only "accent" */
 #define COL_HDR_TEXT	0xf2f6fa
 #define COL_HDR_TEXT_DIM 0xa9b8c6	/* unfocused title, 4.6:1 on COL_HDR */
-#define COL_PANEL	0xe9edf1
-#define COL_PANEL_TEXT	0x1b2838
-#define COL_PANEL_TEXT_DIM 0x5a6b7b	/* status lines, headers; 4.7:1 on COL_PANEL */
+/*
+ * Popovers, menus, toasts and sheets are DARK, the shell's own family
+ * (docs/lvdesk-colour-review-2026-09-25.md, direction A): the light panel
+ * was the brightest large area on screen and read as another toolkit's
+ * dialog. Every value sits exactly on the RGB565 grid; ratios are after it.
+ */
+#define COL_PANEL	0x203848	/* = how the OSK's dark keys already render */
+#define COL_PANEL_TEXT	0xe8ecf0	/* 10.3:1 on COL_PANEL */
+#define COL_PANEL_TEXT_DIM 0xb0c0d0	/* status, headings, hints; 6.6:1 */
+#define COL_PANEL_EDGE	0x486078	/* a neutral 1 px frame - not the accent */
+#define COL_ACCENT_TEXT	0x90c8f8	/* accent as TEXT (help keys, dot); 6.9:1 */
 /*
  * Tray popover geometry (QoL C4): a titled top row (switch, title, action),
  * a full-width status line, and 30 px list rows - finger-sized, and the
@@ -3888,6 +3896,14 @@ static void ctl_line(char *buf)
 				else
 					win_snap(&wins[idx], w);
 			}
+		} else if (!strncmp(buf, "redraw", 6)) {
+			/*
+			 * Repaint everything once. The screen recorder encodes
+			 * only on damage, so a still desktop gave screenshot-hw
+			 * nothing for seconds; this makes the frame now.
+			 */
+			lv_obj_invalidate(lv_screen_active());
+			lv_obj_invalidate(lv_layer_top());
 		} else if (!strncmp(buf, "winmem", 6)) {
 			/* winmem off|on: harnesses switch the memory off (QoL D5) */
 			if (strstr(buf, "off"))
@@ -4297,7 +4313,9 @@ static void switcher_paint(void)
 		lv_obj_set_style_bg_color(sw_rows[i],
 			lv_color_hex(on ? COL_HDR_FOCUS : COL_PANEL), 0);
 		lv_obj_set_style_text_color(sw_rows[i],
-			lv_color_hex(on ? COL_HDR_TEXT : COL_PANEL_TEXT), 0);
+			lv_color_hex(on ? COL_HDR_TEXT :
+				     sw_list[i]->minimised ? COL_PANEL_TEXT_DIM :
+				     COL_PANEL_TEXT), 0);
 	}
 	sw_painted = sw_i;
 }
@@ -4380,7 +4398,7 @@ static void switcher_open(void)
 	lv_obj_set_style_pad_all(sw_panel, 4, 0);
 	lv_obj_set_style_bg_color(sw_panel, lv_color_hex(COL_PANEL), 0);
 	lv_obj_set_style_border_width(sw_panel, 1, 0);
-	lv_obj_set_style_border_color(sw_panel, lv_color_hex(COL_HDR_FOCUS), 0);
+	lv_obj_set_style_border_color(sw_panel, lv_color_hex(COL_PANEL_EDGE), 0);
 	lv_obj_set_size(sw_panel, SW_W, h);
 	lv_obj_set_pos(sw_panel, (sw - SW_W) / 2, (sh - TASKBAR_H - h) / 2);
 
@@ -4405,7 +4423,7 @@ static void switcher_open(void)
 		if (sw_list[i]->minimised) {
 			/* a PREFIX: a suffix is what the dots eat */
 			lv_label_set_text_fmt(l, LV_SYMBOL_MINUS "  %s", t);
-			lv_obj_set_style_text_opa(l, LV_OPA_50, 0);
+			lv_obj_set_style_text_color(l, lv_color_hex(COL_PANEL_TEXT_DIM), 0);
 		} else {
 			lv_label_set_text(l, t);
 		}
@@ -8389,7 +8407,7 @@ static void toast_show_k(const char *key, const char *text, uint32_t ms)
 		lv_obj_set_style_radius(o, 0, 0);
 		lv_obj_set_style_bg_color(o, lv_color_hex(COL_PANEL), 0);
 		lv_obj_set_style_border_width(o, 1, 0);
-		lv_obj_set_style_border_color(o, lv_color_hex(COL_HDR_FOCUS), 0);
+		lv_obj_set_style_border_color(o, lv_color_hex(COL_PANEL_EDGE), 0);
 		lv_obj_set_style_pad_all(o, 6, 0);
 		lv_obj_set_style_text_font(o, FONT_UI, 0);
 		lv_obj_set_style_text_color(o, lv_color_hex(COL_PANEL_TEXT), 0);
@@ -8509,7 +8527,7 @@ static lv_obj_t *popover_open(lv_obj_t *anchor, int w, int h)
 	lv_obj_set_style_radius(pop_obj, 0, 0);
 	lv_obj_set_style_bg_color(pop_obj, lv_color_hex(COL_PANEL), 0);
 	lv_obj_set_style_border_width(pop_obj, 1, 0);
-	lv_obj_set_style_border_color(pop_obj, lv_color_hex(COL_HDR_FOCUS), 0);
+	lv_obj_set_style_border_color(pop_obj, lv_color_hex(COL_PANEL_EDGE), 0);
 	lv_obj_set_style_pad_all(pop_obj, 8, 0);
 	lv_obj_set_style_text_font(pop_obj, FONT_UI, 0);
 	lv_obj_set_style_text_color(pop_obj, lv_color_hex(COL_PANEL_TEXT), 0);
@@ -8631,7 +8649,7 @@ static void ctxmenu_open(const char *replyfifo, char *items)
  */
 static lv_style_t st_row, st_row_hov, st_row_prs, st_row_chk, st_row_chk_hov,
 		  st_row_chk_prs, st_btn_prs, st_kb, st_kb_it, st_kb_it_chk,
-		  st_kb_it_prs;
+		  st_kb_it_prs, st_sbar, st_ta, st_ta_cur, st_sl, st_sl_knob;
 
 static void desk_styles_init(void)
 {
@@ -8642,14 +8660,14 @@ static void desk_styles_init(void)
 	lv_style_set_bg_opa(&st_row, LV_OPA_COVER);
 	lv_style_set_text_color(&st_row, lv_color_hex(COL_PANEL_TEXT));
 	lv_style_init(&st_row_hov);
-	lv_style_set_bg_color(&st_row_hov, lv_color_mix(acc, pan, 40));
+	lv_style_set_bg_color(&st_row_hov, lv_color_hex(COL_HDR));	/* neutral */
 	lv_style_init(&st_row_prs);
 	lv_style_set_bg_color(&st_row_prs, lv_color_mix(acc, pan, 110));
 	lv_style_init(&st_row_chk);
 	lv_style_set_bg_color(&st_row_chk, acc);
 	lv_style_set_text_color(&st_row_chk, lv_color_hex(COL_HDR_TEXT));
 	lv_style_init(&st_row_chk_hov);
-	lv_style_set_bg_color(&st_row_chk_hov, lv_color_mix(lv_color_white(), acc, 30));
+	lv_style_set_bg_color(&st_row_chk_hov, lv_color_mix(lv_color_black(), acc, 25));
 	lv_style_set_text_color(&st_row_chk_hov, lv_color_hex(COL_HDR_TEXT));
 	lv_style_init(&st_row_chk_prs);
 	lv_style_set_bg_color(&st_row_chk_prs, lv_color_mix(lv_color_black(), acc, 50));
@@ -8667,9 +8685,27 @@ static void desk_styles_init(void)
 	lv_style_set_bg_opa(&st_kb_it, LV_OPA_COVER);
 	lv_style_set_text_color(&st_kb_it, lv_color_hex(COL_HDR_TEXT));
 	lv_style_init(&st_kb_it_chk);
-	lv_style_set_bg_color(&st_kb_it_chk, lv_color_hex(0x22384c));
+	lv_style_set_bg_color(&st_kb_it_chk, lv_color_hex(COL_PANEL));
 	lv_style_init(&st_kb_it_prs);
 	lv_style_set_bg_color(&st_kb_it_prs, acc);
+	/* the parts simple leaves in pure neutral greys (colour review, item 6) */
+	lv_style_init(&st_sbar);
+	lv_style_set_bg_color(&st_sbar, lv_color_hex(COL_PANEL_EDGE));
+	lv_style_set_bg_opa(&st_sbar, LV_OPA_COVER);
+	lv_style_init(&st_ta);
+	lv_style_set_bg_color(&st_ta, lv_color_hex(COL_TASKBAR));
+	lv_style_set_bg_opa(&st_ta, LV_OPA_COVER);
+	lv_style_set_text_color(&st_ta, lv_color_hex(COL_PANEL_TEXT));
+	lv_style_set_border_width(&st_ta, 1);
+	lv_style_set_border_color(&st_ta, acc);
+	lv_style_init(&st_ta_cur);
+	lv_style_set_border_color(&st_ta_cur, lv_color_hex(COL_PANEL_TEXT));
+	lv_style_init(&st_sl);
+	lv_style_set_bg_color(&st_sl, lv_color_hex(COL_TASKBAR));
+	lv_style_set_bg_opa(&st_sl, LV_OPA_COVER);
+	lv_style_init(&st_sl_knob);
+	lv_style_set_bg_color(&st_sl_knob, lv_color_hex(COL_HDR_TEXT));
+	lv_style_set_bg_opa(&st_sl_knob, LV_OPA_COVER);
 }
 
 static void desk_theme_apply(lv_theme_t *th, lv_obj_t *o)
@@ -8688,6 +8724,13 @@ static void desk_theme_apply(lv_theme_t *th, lv_obj_t *o)
 		   lv_obj_check_type(o, &lv_list_text_class)) {
 		/* the panel colour, not simple's grey slab under short lists */
 		lv_obj_add_style(o, &st_row, 0);
+		lv_obj_add_style(o, &st_sbar, LV_PART_SCROLLBAR);
+	} else if (lv_obj_check_type(o, &lv_textarea_class)) {
+		lv_obj_add_style(o, &st_ta, 0);
+		lv_obj_add_style(o, &st_ta_cur, LV_PART_CURSOR);
+	} else if (lv_obj_check_type(o, &lv_slider_class)) {
+		lv_obj_add_style(o, &st_sl, 0);
+		lv_obj_add_style(o, &st_sl_knob, LV_PART_KNOB);
 	} else if (lv_obj_check_type(o, &lv_button_class)) {
 		lv_obj_add_style(o, &st_btn_prs, LV_STATE_PRESSED);
 	} else if (lv_obj_check_type(o, &lv_keyboard_class)) {
@@ -8753,7 +8796,7 @@ static void menu_popover_build(char **labels, int n, size_t maxlen,
 	lv_obj_set_style_radius(pop_obj, 0, 0);
 	lv_obj_set_style_bg_color(pop_obj, lv_color_hex(COL_PANEL), 0);
 	lv_obj_set_style_border_width(pop_obj, 1, 0);
-	lv_obj_set_style_border_color(pop_obj, lv_color_hex(COL_HDR_FOCUS), 0);
+	lv_obj_set_style_border_color(pop_obj, lv_color_hex(COL_PANEL_EDGE), 0);
 	lv_obj_set_style_pad_all(pop_obj, 4, 0);
 	lv_obj_set_style_text_font(pop_obj, FONT_UI, 0);
 	lv_obj_set_style_text_color(pop_obj, lv_color_hex(COL_PANEL_TEXT), 0);
@@ -9359,7 +9402,10 @@ static void menu_num_hint(lv_obj_t *row, int n)
 	/* a dimmed column BEFORE the label; the right edge is the chevron's */
 	x = lv_label_create(row);
 	lv_label_set_text_fmt(x, "%d", n);
-	lv_obj_set_style_text_color(x, lv_color_hex(0x7a8896), 0);
+	lv_obj_set_style_text_color(x, lv_color_hex(COL_PANEL_TEXT_DIM), 0);
+	/* white on the selected row: it was 1.08:1 there (colour review) */
+	lv_obj_set_style_text_color(x, lv_color_hex(COL_HDR_TEXT), LV_STATE_CHECKED);
+	lv_obj_add_flag(row, LV_OBJ_FLAG_STATE_TRICKLE);
 	lv_obj_set_width(x, 14);
 	lv_obj_move_to_index(x, 0);
 }
@@ -9560,12 +9606,16 @@ static void appmenu_open(int parent)
 			x = lv_label_create(r);
 			lv_label_set_text(x, LV_SYMBOL_RIGHT);
 			lv_obj_set_style_text_color(x, lv_color_hex(COL_PANEL_TEXT_DIM), 0);
+			lv_obj_set_style_text_color(x, lv_color_hex(COL_HDR_TEXT), LV_STATE_CHECKED);
+			lv_obj_add_flag(r, LV_OBJ_FLAG_STATE_TRICKLE);
 			lv_obj_set_style_margin_right(x, 2, 0);
 		} else if (mitem_running(t)) {
 			/* a click will raise it, not start another */
 			x = lv_label_create(r);
 			lv_label_set_text(x, LV_SYMBOL_BULLET);
-			lv_obj_set_style_text_color(x, lv_color_hex(COL_HDR_FOCUS), 0);
+			lv_obj_set_style_text_color(x, lv_color_hex(COL_ACCENT_TEXT), 0);
+			lv_obj_set_style_text_color(x, lv_color_hex(COL_HDR_TEXT), LV_STATE_CHECKED);
+			lv_obj_add_flag(r, LV_OBJ_FLAG_STATE_TRICKLE);
 			lv_obj_set_style_margin_right(x, 2, 0);
 		}
 	}
@@ -9969,7 +10019,7 @@ static void help_toggle(void)
 	lv_obj_set_style_radius(pop_obj, 0, 0);
 	lv_obj_set_style_bg_color(pop_obj, lv_color_hex(COL_PANEL), 0);
 	lv_obj_set_style_border_width(pop_obj, 1, 0);
-	lv_obj_set_style_border_color(pop_obj, lv_color_hex(COL_HDR_FOCUS), 0);
+	lv_obj_set_style_border_color(pop_obj, lv_color_hex(COL_PANEL_EDGE), 0);
 	lv_obj_set_style_pad_all(pop_obj, 8, 0);
 	lv_obj_set_style_text_font(pop_obj, FONT_UI, 0);
 	lv_obj_set_style_text_color(pop_obj, lv_color_hex(COL_PANEL_TEXT), 0);
@@ -9977,7 +10027,7 @@ static void help_toggle(void)
 	lv_obj_remove_flag(pop_obj, LV_OBJ_FLAG_SCROLLABLE);
 	l = lv_label_create(pop_obj);
 	lv_label_set_text_static(l, help_keys);
-	lv_obj_set_style_text_color(l, lv_color_hex(COL_HDR_FOCUS), 0);
+	lv_obj_set_style_text_color(l, lv_color_hex(COL_ACCENT_TEXT), 0);
 	lv_obj_set_pos(l, 0, 0);
 	l = lv_label_create(pop_obj);
 	lv_label_set_text_static(l, help_what);
@@ -10441,13 +10491,13 @@ static lv_obj_t *radio_switch(lv_obj_t *parent, lv_event_cb_t cb, int on)
 
 	lv_obj_set_size(sw, 34, 18);
 	lv_obj_set_pos(sw, 2, 3);
-	lv_obj_set_style_bg_color(sw, lv_color_hex(COL_HDR), LV_PART_MAIN);
+	lv_obj_set_style_bg_color(sw, lv_color_hex(COL_TASKBAR), LV_PART_MAIN);
 	lv_obj_set_style_bg_opa(sw, LV_OPA_COVER, LV_PART_MAIN);
 	lv_obj_set_style_bg_color(sw, lv_color_hex(COL_HDR_FOCUS),
 				  LV_PART_INDICATOR | LV_STATE_CHECKED);
 	lv_obj_set_style_bg_opa(sw, LV_OPA_COVER,
 				LV_PART_INDICATOR | LV_STATE_CHECKED);
-	lv_obj_set_style_bg_color(sw, lv_color_hex(0xF0F0F0), LV_PART_KNOB);
+	lv_obj_set_style_bg_color(sw, lv_color_hex(COL_HDR_TEXT), LV_PART_KNOB);
 	lv_obj_set_style_shadow_width(sw, 0, LV_PART_KNOB);
 	/*
 	 * Round all three parts. Square, a switch reads as a coloured block
@@ -10457,7 +10507,8 @@ static lv_obj_t *radio_switch(lv_obj_t *parent, lv_event_cb_t cb, int on)
 	lv_obj_set_style_radius(sw, LV_RADIUS_CIRCLE, LV_PART_MAIN);
 	lv_obj_set_style_radius(sw, LV_RADIUS_CIRCLE, LV_PART_INDICATOR);
 	lv_obj_set_style_radius(sw, LV_RADIUS_CIRCLE, LV_PART_KNOB);
-	lv_obj_set_style_pad_all(sw, 2, LV_PART_KNOB);
+	/* -3: a 12 px knob INSIDE the 18 px track; +2 overhung it (review) */
+	lv_obj_set_style_pad_all(sw, -3, LV_PART_KNOB);
 	lv_obj_add_event_cb(sw, cb, LV_EVENT_VALUE_CHANGED, NULL);
 	if (on)
 		lv_obj_add_state(sw, LV_STATE_CHECKED);
@@ -11200,7 +11251,8 @@ static void pw_prompt(int idx)
 		       sh - TASKBAR_H - 150 - 116 - 10);
 	lv_obj_set_style_radius(pw_box, 0, 0);
 	lv_obj_set_style_bg_color(pw_box, lv_color_hex(COL_PANEL), 0);
-	lv_obj_set_style_border_color(pw_box, lv_color_hex(COL_HDR_FOCUS), 0);
+	lv_obj_set_style_border_color(pw_box, lv_color_hex(COL_PANEL_EDGE), 0);
+	lv_obj_set_style_text_color(pw_box, lv_color_hex(COL_PANEL_TEXT), 0);
 	lv_obj_set_style_border_width(pw_box, 1, 0);
 	lv_obj_set_style_pad_all(pw_box, 8, 0);
 	lv_obj_set_style_text_font(pw_box, FONT_UI, 0);
@@ -11383,7 +11435,9 @@ static void tray_wifi_cb(lv_event_t *e)
 	pop_title(pop, "Wi-Fi");
 	wifi_status = pop_status(pop);
 	lv_obj_set_style_radius(b, 0, 0);
-	lv_obj_set_style_bg_color(b, lv_color_hex(COL_HDR_FOCUS), 0);
+	/* a neutral button: the accent is for selection and the primary action */
+	lv_obj_set_style_bg_color(b, lv_color_hex(COL_HDR), 0);
+	lv_obj_set_style_text_color(b, lv_color_hex(COL_HDR_TEXT), 0);
 	lv_obj_set_style_shadow_width(b, 0, 0);
 	lv_obj_add_event_cb(b, wifi_scan_cb, LV_EVENT_CLICKED, NULL);
 	lv_obj_center(lv_label_create(b));
@@ -11821,7 +11875,7 @@ static void bt_render(void)
 				lv_obj_add_state(b, LV_STATE_CHECKED);
 			/* an unpaired row is a weaker offer, so say so */
 			if (pass == 1)
-				lv_obj_set_style_text_opa(b, LV_OPA_70, 0);
+				lv_obj_set_style_text_color(b, lv_color_hex(COL_PANEL_TEXT_DIM), 0);
 
 			/* class on the right, state inside it - the same
 			 * two-column idiom the Wi-Fi list uses. */
@@ -11836,8 +11890,8 @@ static void bt_render(void)
 				lv_label_set_text(mark, btdevs[i].conn ?
 						  LV_SYMBOL_OK : LV_SYMBOL_LOOP);
 				lv_obj_set_style_text_font(mark, FONT_UI, 0);
-				lv_obj_set_style_text_opa(mark, btdevs[i].conn ?
-							  LV_OPA_COVER : LV_OPA_50, 0);
+				lv_obj_set_style_text_color(mark, lv_color_hex(btdevs[i].conn ?
+							    COL_PANEL_TEXT : COL_PANEL_TEXT_DIM), 0);
 				lv_obj_add_flag(mark, LV_OBJ_FLAG_IGNORE_LAYOUT);
 				lv_obj_align(mark, LV_ALIGN_RIGHT_MID, -28, 0);
 				lv_obj_remove_flag(mark, LV_OBJ_FLAG_CLICKABLE);
@@ -11874,6 +11928,9 @@ static void bt_action_update(void)
 	lv_label_set_text(lv_obj_get_child(bt_action_btn, 0),
 			  bt_confirm_addr[0] ? "Confirm" :
 			  bt_scanning ? "Stop" : "Scan");
+	/* Confirm is the primary action and takes the accent; Scan/Stop not */
+	lv_obj_set_style_bg_color(bt_action_btn, lv_color_hex(bt_confirm_addr[0] ?
+				  COL_HDR_FOCUS : COL_HDR), 0);
 }
 
 static void tray_bt_cb(lv_event_t *e)
@@ -11890,7 +11947,8 @@ static void tray_bt_cb(lv_event_t *e)
 	lv_obj_set_pos(b, 158, 0);
 	lv_obj_set_size(b, 84, 22);
 	lv_obj_set_style_radius(b, 0, 0);
-	lv_obj_set_style_bg_color(b, lv_color_hex(COL_HDR_FOCUS), 0);
+	lv_obj_set_style_bg_color(b, lv_color_hex(COL_HDR), 0);
+	lv_obj_set_style_text_color(b, lv_color_hex(COL_HDR_TEXT), 0);
 	lv_obj_set_style_shadow_width(b, 0, 0);
 	lv_obj_add_event_cb(b, bt_action_cb, LV_EVENT_CLICKED, NULL);
 	lv_obj_center(lv_label_create(b));

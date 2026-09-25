@@ -45,7 +45,12 @@ REC=
 for c in /root/mjpegrec /usr/bin/mjpegrec; do [ -x $c ] && REC=$c && break; done
 [ -n "$REC" ] || { echo "NOREC"; exit 1; }
 rm -f /tmp/_shot.mjpeg
-$REC /tmp/_shot.mjpeg 2 2 %s 512 >/dev/null 2>&1
+# The recorder encodes only on DAMAGE, so a still desktop gave nothing for
+# seconds (21 s end to end, 2026-09-25). Ask lvdesk to repaint once while
+# it records, so the frame is made at once; the longer retry stays as the
+# fallback for a desktop without the verb.
+( sleep 0.3; [ -p /tmp/lvdesk.ctl ] && echo redraw > /tmp/lvdesk.ctl ) &
+$REC /tmp/_shot.mjpeg 1 4 %s 512 >/dev/null 2>&1
 [ -s /tmp/_shot.mjpeg ] || $REC /tmp/_shot.mjpeg 6 2 %s 512 >/dev/null 2>&1
 [ -s /tmp/_shot.mjpeg ] || { echo "NOFRAME"; exit 1; }
 echo "RECLEN $(busybox wc -c < /tmp/_shot.mjpeg) bytes"
@@ -115,7 +120,7 @@ IP=$(busybox ip -o -4 addr show wlan0 2>/dev/null | busybox awk '{print $4}' | c
 echo "NETIP $IP"
 echo "NETLEN $(busybox wc -c < /tmp/_shot.mjpeg)"
 setsid /root/s31-serve /tmp/_shot.mjpeg %d >/dev/null 2>&1 </dev/null &
-sleep 1
+sleep 0.2
 echo "SERVING"
 """
 
@@ -134,6 +139,18 @@ def fetch_over_wifi(quality, port=8137):
     if not ip:
         return None
     url = f"http://{ip[-1]}:{port}/shot"
+    try:
+        # curl FIRST: on macOS Python's own socket gets "No route to host" to
+        # the board's LAN address while the system curl does not, so trying
+        # urllib first only added a failed attempt to every capture.
+        fetched = subprocess.run(
+            ["curl", "--fail", "--silent", "--connect-timeout", "3",
+             "--max-time", "15", url], capture_output=True, timeout=17)
+        if fetched.returncode == 0 and fetched.stdout:
+            print(f"via wifi {ip[-1]} ({len(fetched.stdout)} bytes)")
+            return fetched.stdout
+    except (OSError, subprocess.TimeoutExpired):
+        pass
     try:
         with urllib.request.urlopen(url, timeout=30) as r:
             data = r.read()
