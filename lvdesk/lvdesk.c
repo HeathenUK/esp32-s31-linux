@@ -50,6 +50,7 @@
 #include <strings.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/utsname.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -98,6 +99,7 @@ struct drm_esp32s31_ppa_clut {
  * every window drag. Flat fills cost the same as the background they replace.
  */
 #define COL_DESK	0x1b2838	/* matches lvdesk_tile_img's base */
+static uint32_t desk_col = COL_DESK;	/* LVDESK_DESK overrides (C7) */
 #define COL_TASKBAR	0x101820
 #define COL_HDR		0x2c4a63	/* unfocused window title bar */
 #define COL_HDR_FOCUS	0x3a86c8	/* focused - the only "accent" */
@@ -14619,7 +14621,20 @@ int main(void)
 	 * 800x480 RGB565 image would be 768,000 bytes of RAM out of the ~3.9 MB
 	 * free, and would enlarge every repaint that uncovers desk.
 	 */
-	lv_obj_set_style_bg_color(scr, lv_color_hex(COL_DESK), 0);
+	/*
+	 * QoL C7, config only: LVDESK_DESK=0xRRGGBB in /etc/lvdesk.env (which
+	 * S40lvdesk sources) sets the desk colour. LVDESK_TILE ignores it -
+	 * the tile carries its own base colour.
+	 */
+	{
+		const char *e = getenv("LVDESK_DESK");
+		char *end;
+		unsigned long c = e ? strtoul(e, &end, 16) : 0;
+
+		desk_col = e && *e && !*end && c <= 0xffffff ? (uint32_t)c
+							    : COL_DESK;
+	}
+	lv_obj_set_style_bg_color(scr, lv_color_hex(desk_col), 0);
 	/*
 	 * Solid colour, not the 16x16 tile.
 	 *
@@ -14641,6 +14656,36 @@ int main(void)
 	}
 	lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 	lv_obj_set_scrollbar_mode(scr, LV_SCROLLBAR_MODE_OFF);
+	/*
+	 * LVDESK_MARK=1: an identity line, "host  Linux release #build",
+	 * bottom-left (right-snapped windows and the tray popovers are
+	 * bottom-right). Created before any window, so it is screen child 0
+	 * and every window covers it. Not clickable: a left click falls
+	 * through to the desk, and a right click is classified as bare desk
+	 * by obj_at_pointer(), so it opens the menu. The colour is the desk's,
+	 * moved toward white or black by its luminance, so a light desk keeps
+	 * it legible. Off by default: repaints uncovering it pay for its strip.
+	 */
+	if (getenv("LVDESK_MARK")) {
+		struct utsname u;
+		char t[96], b[24] = "";
+		lv_color_t dc = lv_color_hex(desk_col);
+		lv_obj_t *mk = lv_label_create(scr);
+
+		if (uname(&u) == 0) {
+			sscanf(u.version, "%23s", b);	/* "#391" */
+			snprintf(t, sizeof(t), "%s  Linux %s %s", u.nodename,
+				 u.release, b);
+		} else {
+			snprintf(t, sizeof(t), "lvdesk");
+		}
+		lv_label_set_text(mk, t);
+		lv_obj_remove_flag(mk, LV_OBJ_FLAG_CLICKABLE);
+		lv_obj_set_style_text_color(mk, lv_color_luminance(dc) < 128 ?
+			lv_color_mix(lv_color_white(), dc, 110) :
+			lv_color_mix(lv_color_black(), dc, 140), 0);
+		lv_obj_align(mk, LV_ALIGN_BOTTOM_LEFT, 8, -(TASKBAR_H + 6));
+	}
 
 	/* task bar, pinned to the bottom */
 	/*

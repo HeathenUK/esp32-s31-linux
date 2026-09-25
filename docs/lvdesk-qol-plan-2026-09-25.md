@@ -6,6 +6,25 @@ commit; line numbers below refer to it and drift by a few lines either way).
 Wherever a figure below is an estimate, it says so. It needs measuring on the
 board before anyone quotes it.
 
+## Status, 2026-09-25 evening (later): C7 shipped, config only
+
+- **C7.** Both settings are config only, in `/etc/lvdesk.env` (on the card;
+  S40lvdesk sources it). By decision there is no UI for the colour.
+  - `LVDESK_DESK=0xRRGGBB` sets the desk colour. An invalid value falls back
+    to 0x1b2838. `LVDESK_TILE` ignores it.
+  - `LVDESK_MARK=1` adds the identity line `esp32-s31  Linux 7.1.10 #391`
+    (from uname) at the bottom left.
+    - It is screen child 0 and not clickable. A right click on it opens the
+      app menu, which was tested.
+    - Its colour is the desk's, pushed toward white or black by luminance.
+      Screenshots: `artifacts/lvdesk-qol/c7-mark-*.jpg`, dark and light.
+  - Only the desk and the mark follow `LVDESK_DESK`. Panels, windows, the
+    taskbar and popovers keep the fixed direction-A palette. They are opaque,
+    so they read the same on any desk.
+  - With neither set, nothing changes: one getenv at start. The mark's
+    drag-frame arm (the kill rule) has not been run, because the mark is
+    opt-in. Run it before recommending that the mark be turned on.
+
 ## Status, 2026-09-25 evening (late): D4 X selections shipped, plus RAM cut 1
 
 - **D4, X copy and paste.** st to st, st to console and console to st, over
