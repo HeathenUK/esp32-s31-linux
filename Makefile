@@ -1381,6 +1381,13 @@ br-reconfigure-%: | $(BUILDROOT_OUT)
 	$(BUILDROOT_MAKE) $*-reconfigure
 	$(BUILDROOT_MAKE) target-finalize
 
+# One Buildroot package (or any Buildroot target) without the rootfs target's
+# toolchain rebuilds: `make br-mesa3d-demos`, `make br-sdl-reconfigure`.
+# Re-applies the defconfig first so a config change is seen. Never run two.
+br-%: | $(BUILDROOT_OUT)
+	$(BUILDROOT_MAKE) esp32s31_rootfs_defconfig
+	$(BUILDROOT_MAKE) $*
+
 buildroot-menuconfig: | $(BUILDROOT_OUT)
 	$(BUILDROOT_MAKE) esp32s31_rootfs_defconfig
 	$(BUILDROOT_MAKE) menuconfig

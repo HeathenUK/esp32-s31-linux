@@ -34,7 +34,10 @@ EXCLUDE = {
 GLEXT_SECTIONS = {'GL_VERSION_1_4', 'GL_VERSION_1_5', 'GL_VERSION_2_0',
                   'GL_EXT_texture_object', 'GL_EXT_vertex_array',
                   'GL_EXT_compiled_vertex_array', 'GL_EXT_polygon_offset',
-                  'GL_EXT_draw_range_elements'}
+                  'GL_EXT_draw_range_elements',
+                  # glWindowPos*ARB/MESA: mesa-demos' glxsnoop imports
+                  # glWindowPos2iARB (link failure otherwise).
+                  'GL_ARB_window_pos', 'GL_MESA_window_pos'}
 
 
 def parse(path, want_section):
