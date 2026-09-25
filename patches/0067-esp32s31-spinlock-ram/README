@@ -1,0 +1,18 @@
+0067 - esp32s31: locking/spinlock.o in RAM text; memory cgroups on
+===================================================================
+
+Full copy of arch/riscv/kernel/vmlinux-xip.lds.S (includes 0053/0060-0062).
+Makefile (committed in the repo) adds `--enable CGROUPS --enable MEMCG` and
+`cgroup.memory=nokmem,nosocket` to the command line.
+
+Adding CONFIG_MEMCG grew the image enough that the flash .spinlock.text's
+relaxable call to do_raw_spin_lock (moved to RAM by the 0062 FASTFN list)
+was shortened to a JAL during linker relaxation and then could not reach
+its final RAM address: "relocation truncated to fit: R_RISCV_JAL against
+do_raw_spin_lock". The object-wide fix is to put spinlock.o in
+S31_FAST_OBJS, so both halves live in RAM text. That was tried on
+2026-09-21 and did not boot (hart1 looping in handle_exception with sp
+below _sdata) - which is exactly the early-exec failure patches/0061 later
+fixed (RAM text non-executable before setup_vm_final). With 0061 in place
+it boots (#386). _raw_spin_lock_irqsave now at c08576fa in RAM beside
+do_raw_spin_lock; ~280 bytes of other __lockfunc code stay in flash.

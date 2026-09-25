@@ -1,0 +1,42 @@
+0066 - dw_mmc: SD card keepalive (ka_period_us / ka_window_ms), default 10 ms
+===========================================================================
+
+Full copies of drivers/mmc/host/dw_mmc.c and dw_mmc.h from linux-71-port;
+they include 0012, 0014, 0039, 0063, 0064 and 0065. Copy over the port tree.
+
+WHY. This board's card (SanDisk SK128, SDXC, A1) goes to sleep ~14-16 ms
+after its last DATA access and pays ~5.8 ms on the next read. Under a -mem
+20 Quake 30% of swap-in reads paid it. A data-less CMD13 does not keep it
+awake; a 512 B read does. There is no official control: the SCR has no
+CMD48/49, so the card has none of the SD power-management extension
+registers, and SD has no host-visible idle setting otherwise.
+
+WHAT. After a real READ completes, while the host is idle, one single-block
+CMD17 of block 0 every ka_period_us for ka_window_ms after the last real
+read, from a soft hrtimer, through the IRQ path, never through the block
+layer. A real request that arrives while a keepalive is on the wire is
+parked (one slot - the core issues one request at a time) and started the
+instant the keepalive ends. After a WRITE, or on any keepalive error, it
+stands down until the next real read. Only once host->mmc->card exists.
+
+    /sys/module/dw_mmc/parameters/ka_period_us   0 = off (default 10000)
+    /sys/module/dw_mmc/parameters/ka_window_ms   default 150
+    sdprobe: keepalive n / err / parked / busyskip
+
+MEASURED 2026-09-25:
+  idle, sdlat 4 KiB random, 30 ms gaps: p50 7.10 -> 1.27 ms.
+  sleep edge: with 60 ms gaps, 14 ms period holds (p50 1.28), 16 ms does not
+  (6.39); 10 and 12 ms hold.
+  CPU: ~350 us of CPU0 per keepalive (2.2 dw-mci IRQs + BH + soft timer):
+  cpubench pinned to CPU0 73.6 -> 67.6 M/s (-8.2%) at 4 ms, 72.3 at 8 ms.
+  -mem 20 X11 TyrQuake timedemo, interleaved fresh boots:
+    4 ms  x5 pairs: 9.3 vs 10.5 fps mean, lower in 5/5 - REJECTED (CPU cost)
+    10 ms x3 pairs: 10.7/10.4/10.9 vs 10.6/9.9/9.6 - mean +6%, 3/3 higher;
+                    request total 2.1 vs 2.5-3.1 ms, 0 errors.
+  Default therefore 10000.
+
+BUG FOUND WHEN THE DEFAULT WENT NON-ZERO (#382): the SD core's own
+initialisation reads (SCR, SD status) armed the keepalive before
+host->mmc->card existed; the first keepalive dereferenced NULL in
+mmc_set_data_timeout() 5 s into boot. Guarded in request_end and the timer.
+Kernel #386 boots clean with it.
