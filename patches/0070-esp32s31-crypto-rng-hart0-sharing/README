@@ -1,0 +1,34 @@
+0070 - esp32s31 crypto + TRNG: stop fighting hart0 for shared blocks
+=====================================================================
+
+Full copies of drivers/crypto/esp32s31-crypto.c and
+drivers/char/hw_random/esp32s31-rng.c. Both bugs were found by the ESP-IDF
+HEAD review (docs/esp-idf-toolchain-review-2026-09-25.md). They were fixed
+2026-09-25 and shipped in kernel #391.
+
+crypto
+1. AES and SHA are no longer registered. hart0's mbedtls clears
+   HP_SYS_CLKRST crypto_ctrl0 aes_clk_en and sha_clk_en (bits 4 and 6) on
+   every release, even with CLK_ON_DEMAND=n. It also pulses their resets on
+   every acquire. After hart0's first WPA handshake, a Linux ecb(aes) or
+   sha* request therefore polled a gated block. Nothing consumed them: there
+   is no AF_ALG user, and BlueZ SMP uses the library AES. The probe no
+   longer sets bits 4 and 6. The tables stay in the source, marked
+   __maybe_unused.
+2. The probe reads the crypto clock source mux (crypto_ctrl0 [21:20],
+   2 = PLL_F240M, owned by hart0). If it is anything else, the probe says so
+   and returns -ENODEV. It no longer spends 2 s per engine timing out. The
+   2026-09-03 boot lost 6.2 s to those timeouts.
+
+   On #391 the mux reads 2 and the probe completes by 4.07 s with no gap in
+   the log. The RSA/ECC self-test still FAILS, now with -EIO (a wrong
+   answer) rather than -110 (a timeout). So RSA and ECDH are not
+   registered either, exactly as before. Nothing on the board uses them.
+   That failure is a separate, pre-existing bug and is still open.
+
+rng
+3. enable() now sets only the clock and enable bits that are off. It no
+   longer pulses RNG_BUS_RST_EN, and the devm teardown that cleared the
+   enables is removed. hart0's esp_random() reads the same block, so a
+   Linux probe, unbind or reset had been able to stop hart0's entropy
+   source (Wi-Fi and BT key generation) underneath it.
