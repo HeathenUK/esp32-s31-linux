@@ -1,0 +1,146 @@
+diff --git a/../patches/0064-dw-mmc-sdtrace/block.c b/drivers/mmc/core/block.c
+index be2a227..d92377d 100644
+--- a/../patches/0064-dw-mmc-sdtrace/block.c
++++ b/drivers/mmc/core/block.c
+@@ -209,6 +209,10 @@ static inline int mmc_get_devidx(struct gendisk *disk)
+ 	return devidx;
+ }
+ 
++/* 0066 sync_swap: the main area's md, for the param's runtime re-evaluation */
++static struct mmc_blk_data *mmc_blk_sync_md;	/* the main area's md */
++static DEFINE_MUTEX(mmc_blk_sync_lock);
++
+ static void mmc_blk_kref_release(struct kref *ref)
+ {
+ 	struct mmc_blk_data *md = container_of(ref, struct mmc_blk_data, kref);
+@@ -217,6 +221,11 @@ static void mmc_blk_kref_release(struct kref *ref)
+ 	devidx = mmc_get_devidx(md->disk);
+ 	ida_free(&mmc_blk_ida, devidx);
+ 
++	mutex_lock(&mmc_blk_sync_lock);
++	if (mmc_blk_sync_md == md)
++		mmc_blk_sync_md = NULL;
++	mutex_unlock(&mmc_blk_sync_lock);
++
+ 	mutex_lock(&open_lock);
+ 	md->disk->private_data = NULL;
+ 	mutex_unlock(&open_lock);
+@@ -225,6 +234,72 @@ static void mmc_blk_kref_release(struct kref *ref)
+ 	kfree(md);
+ }
+ 
++/*
++ * sync_swap (patches/0066-mmc-sync-swap, paging plan item 4). Advertise
++ * BLK_FEAT_SYNCHRONOUS on the card's main disk, so that swapon() of a swap
++ * area on it sets SWP_SYNCHRONOUS_IO (mm/swapfile.c) and do_swap_page()
++ * takes the path meant for zram: no swap readahead, one folio read with
++ * submit_bio_wait(), and the swap slot freed on swap-in. Honest only while
++ * the host completes small reads in the submitter's own context - dw_mmc's
++ * polled reads (0065, poll_bytes) - so the flag is the AND of this knob and
++ * mmc_host_polls_reads(); the strong definition lives in dw_mmc.c (both are
++ * builtin here, the same weak/strong pattern as mmc_sdtrace_blk below).
++ *
++ *   echo 1 > /sys/module/mmcblk/parameters/sync_swap   re-evaluates the flag
++ *   swapoff /swapfile; swapon /swapfile                 applies it (swapon
++ *                                                       reads it once)
++ *
++ * The flag's state after each write is logged ("mmcblk: sync_swap ...").
++ * Default 0: stock swap behaviour until the measurement says otherwise.
++ */
++bool mmc_host_polls_reads(struct mmc_host *host);
++bool __weak mmc_host_polls_reads(struct mmc_host *host)
++{
++	return false;
++}
++
++static unsigned int sync_swap;
++
++static bool mmc_blk_sync_wanted(struct mmc_card *card)
++{
++	return READ_ONCE(sync_swap) && mmc_host_polls_reads(card->host);
++}
++
++static int mmc_blk_sync_swap_set(const char *val, const struct kernel_param *kp)
++{
++	struct mmc_blk_data *md;
++	int ret = param_set_uint(val, kp);
++
++	if (ret)
++		return ret;
++	mutex_lock(&mmc_blk_sync_lock);
++	md = mmc_blk_sync_md;
++	if (md) {
++		struct request_queue *q = md->queue.queue;
++		struct queue_limits lim = queue_limits_start_update(q);
++		bool on = mmc_blk_sync_wanted(md->queue.card);
++
++		if (on)
++			lim.features |= BLK_FEAT_SYNCHRONOUS;
++		else
++			lim.features &= ~BLK_FEAT_SYNCHRONOUS;
++		ret = queue_limits_commit_update(q, &lim);
++		pr_info("mmcblk: sync_swap=%u host_polls=%d -> %s BLK_FEAT_SYNCHRONOUS=%d (swapoff/swapon to apply)\n",
++			sync_swap, mmc_host_polls_reads(md->queue.card->host),
++			md->disk->disk_name, on);
++	}
++	mutex_unlock(&mmc_blk_sync_lock);
++	return ret;
++}
++
++static const struct kernel_param_ops mmc_blk_sync_swap_ops = {
++	.set = mmc_blk_sync_swap_set,
++	.get = param_get_uint,
++};
++module_param_cb(sync_swap, &mmc_blk_sync_swap_ops, &sync_swap, 0644);
++MODULE_PARM_DESC(sync_swap,
++		 "advertise BLK_FEAT_SYNCHRONOUS while the host polls reads (swapon reads it; 0 off)");
++
+ static void mmc_blk_put(struct mmc_blk_data *md)
+ {
+ 	kref_put(&md->kref, mmc_blk_kref_release);
+@@ -2547,6 +2622,10 @@ static struct mmc_blk_data *mmc_blk_alloc_req(struct mmc_card *card,
+ 		features |= BLK_FEAT_WRITE_CACHE;
+ 	}
+ 
++	/* 0066 sync_swap: see mmc_blk_sync_swap_set() */
++	if (area_type == MMC_BLK_DATA_AREA_MAIN && mmc_blk_sync_wanted(card))
++		features |= BLK_FEAT_SYNCHRONOUS;
++
+ 	md->disk = mmc_init_queue(&md->queue, card, features);
+ 	if (IS_ERR(md->disk)) {
+ 		ret = PTR_ERR(md->disk);
+@@ -2601,6 +2680,11 @@ static struct mmc_blk_data *mmc_blk_alloc_req(struct mmc_card *card,
+ 			      disk_fwnode);
+ 	if (ret)
+ 		goto err_put_disk;
++	if (area_type == MMC_BLK_DATA_AREA_MAIN) {	/* 0066 sync_swap */
++		mutex_lock(&mmc_blk_sync_lock);
++		mmc_blk_sync_md = md;
++		mutex_unlock(&mmc_blk_sync_lock);
++	}
+ 	return md;
+ 
+  err_put_disk:
+diff --git a/../patches/0065-dw-mmc-poll/dw_mmc.c b/drivers/mmc/host/dw_mmc.c
+index 364dc7c..602abba 100644
+--- a/../patches/0065-dw-mmc-poll/dw_mmc.c
++++ b/drivers/mmc/host/dw_mmc.c
+@@ -289,6 +289,18 @@ static unsigned int poll_ns = 1500000;
+ module_param(poll_ns, uint, 0644);
+ MODULE_PARM_DESC(poll_ns, "spin budget per polled read, ns");
+ 
++/*
++ * 0066 sync_swap: block.c's mmc_host_polls_reads() is __weak false; this is
++ * the strong one. True while a single-page read would be polled, i.e. would
++ * complete inside the submitter's dw_mci_request() - the condition under
++ * which BLK_FEAT_SYNCHRONOUS is honest. dw_mmc is the only host here.
++ */
++bool mmc_host_polls_reads(struct mmc_host *host);
++bool mmc_host_polls_reads(struct mmc_host *host)
++{
++	return READ_ONCE(poll_bytes) >= PAGE_SIZE;
++}
++
+ static atomic64_t dw_mci_poll_n, dw_mci_poll_hit, dw_mci_poll_expired;
+ static atomic64_t dw_mci_poll_ns_total;
+ 

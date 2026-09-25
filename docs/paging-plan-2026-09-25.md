@@ -280,3 +280,51 @@ fault reads it would speed up carry a 5.8 ms card wake it cannot touch.
 
 Board left as found: kernel #377, scheduler none, wsf 10, no keepalive
 running, kswapd unpinned (every arm was a fresh boot).
+
+### 2026-09-25, step P2: items 1 and 4, the kernel items
+
+**Item 1 (memcg) - not built.** Its first measurement KILLED it in P1
+(non-game swap 1.42-1.56 MB, under the 2 MB line); recorded above and in the
+perf-plan log. No CONFIG_MEMCG build, no cgroup2 mount, no lvdesk change.
+
+**Item 4 (synchronous swap-in) - first measurement PROCEED, build KILLED.**
+New probe rootfs/faultlat.c (build-faultlat.sh; /root/faultlat): 3 MB of
+anonymous memory pushed out with MADV_PAGEOUT plus a 4 MB hog (MADV_PAGEOUT
+alone leaves the folios clean in the swap cache - a touch is then a
+76-89 us swap-cache hit, no SD read), the sdtrace ring reset, then 60
+random-order majors back to back pinned to CPU0 (mincore before each touch
+separates majors from readahead hits). scripts/board/item4-p0.sh (no build)
+and item4-arms.sh (the build), parsed by item4-p0.py. Artifacts
+artifacts/perf-plan/item4-p0/, copies in patches/attic/item4-mmc-sync-swap/.
+
+First measurement, kernel #377, 3 runs each of page-cluster 2 / 0: fault
+p50 1.12-1.17 ms, ring read total p50 0.50-0.52 ms, **above the driver
+0.62-0.65 ms per fault** (median difference) - over the 0.15 ms line.
+page-cluster made no difference to this probe (swap_ra +0 in 360 faults:
+the adaptive window had closed to one page).
+
+The build, kernel #378: `mmcblk.sync_swap` (runtime, default 0) sets
+BLK_FEAT_SYNCHRONOUS - the 7.1 name, queue->limits.features - on the main
+disk while dw_mmc polls single-page reads (poll_bytes >= 4096); swapoff +
+swapon applies it. Same boot, sync_swap 0/1 alternating x3:
+
+| arm | fault p50 us | fault mean us | fault p99 ms | ring read total p50 us | above-driver p50 us |
+|---|---|---|---|---|---|
+| 0 | 1143 / 1172 / 1144 | 1339 / 1312 / 1272 | 7.4 / 2.5 / 2.2 | 516 / 523 / 516 | 627 / 649 / 628 |
+| 1 | 1091 / 1094 / 1101 | 1379 / 1329 / 1302 | 10.2 / 5.5 / 5.1 | 487 / 482 / 480 | 604 / 612 / 619 |
+
+Paired p50 -52 / -78 / -43 us, mean +40 / +17 / +30 us, p99 worse: **KILLED
+on "fault-to-run not down by 0.1 ms"**. About 35 us of the p50 saving is the
+driver itself (single-page reads only); the swap-cache/readahead logic the
+flag removes is ~25 us of the 0.62 ms. The tail is the other half of the
+flag: swap-out becomes swap_writepage_bdev_sync(), one blocking write per
+folio outside the reclaim plug. No timedemos (the rule failed on the
+instrument). Port tree restored to 0064/0065, rebuilt and flashed as #379
+(= images/, confirmed by uname); the diff is kept in patches/attic.
+
+What the number says instead: the 0.62 ms above the driver is what the
+synchronous and asynchronous paths share - trap entry, the fault walk, bio
+allocation, blk-mq and mmc_blk_mq_issue_rq up to dw_mci_request, and the
+return after the bio ends. A swap-cache hit (no I/O at all) costs 76-134 us
+p50. That is B5's swap-path FASTFN / submit-path question (the programme's
+"gap ~0.8 ms"), and faultlat is now its instrument.

@@ -1,0 +1,45 @@
+REJECTED 2026-09-25: paging plan item 4, the synchronous swap-in path
+(docs/paging-plan-2026-09-25.md, "Status log", step P2).
+
+WHAT IT WAS. sync-swap.diff (against patches/0064 block.c and patches/0065
+dw_mmc.c): a runtime knob mmcblk.sync_swap that sets BLK_FEAT_SYNCHRONOUS
+(the 7.1 name - QUEUE_FLAG_SYNCHRONOUS no longer exists; bdev_synchronous()
+reads queue->limits.features) on the card's main disk while dw_mmc polls
+single-page reads (mmc_host_polls_reads(): poll_bytes >= PAGE_SIZE, a strong
+symbol over a __weak false in block.c). swapon() then sets
+SWP_SYNCHRONOUS_IO and do_swap_page() takes the zram path: no swap
+readahead, swap_read_folio_bdev_sync() (submit_bio_wait), swap slot freed on
+swap-in - and swap-OUT becomes swap_writepage_bdev_sync(), one blocking
+write per folio. Built as kernel #378; worked as designed (dmesg
+"BLK_FEAT_SYNCHRONOUS=1", MADV_PAGEOUT pages left the swap cache at once).
+
+FIRST MEASUREMENT (no build, kernel #377, rootfs/faultlat pinned to CPU0,
+3 MB paged out, 60 random majors back to back, sdtrace ring reset before
+the touch phase; 3 runs each of page-cluster 2 and 0):
+  fault p50 1.12-1.17 ms, ring read total p50 0.50-0.52 ms,
+  above-driver 0.62-0.65 ms per fault (median difference) -> ceiling over
+  the 0.15 ms line, PROCEED. page-cluster 2 vs 0 made no difference here
+  (the adaptive window had shrunk to 1: swap_ra +0 over 360 faults).
+
+THE ARMS (kernel #378, one boot, sync_swap 0/1 alternating x3, swapoff +
+swapon between arms, same probe):
+  sync_swap 0: fault p50 1143 / 1172 / 1144 us, mean 1339 / 1312 / 1272,
+               p99 7.4 / 2.5 / 2.2 ms; ring read total p50 516-523
+  sync_swap 1: fault p50 1091 / 1094 / 1101 us, mean 1379 / 1329 / 1302,
+               p99 10.2 / 5.5 / 5.1 ms; ring read total p50 480-487
+  paired p50: -52 / -78 / -43 us; mean +40 / +17 / +30 us.
+  Of the ~50-70 us p50 saving, ~35 us is the driver (single-page reads
+  only); above-driver fell only 627-649 -> 604-619 us.
+
+VERDICT: KILLED on the rule "fault-to-run not down by 0.1 ms" (p50 down
+0.04-0.08 ms, mean UP, p99 worse - the synchronous writes are one
+blocking request per folio with no plug merging). No timedemos run: the
+rule is judged on the instrument, and it failed there. Port tree restored
+to 0064/0065 and rebuilt as #379 (= images/).
+
+WHAT IT SAYS INSTEAD. The 0.62 ms above the driver is NOT the swap-cache /
+readahead logic (that is the ~25 us the flag removed). It is what both
+paths share: trap entry, the fault walk, bio alloc, blk-mq and
+mmc_blk_mq_issue_rq up to dw_mci_request, and the return after bio end.
+For scale, a swap-cache HIT fault (no I/O) costs 76-134 us p50 in faultlat.
+That is the B5 swap-path FASTFN / submit-path question, not a flag.

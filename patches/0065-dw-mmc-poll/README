@@ -166,3 +166,9 @@ TODAY'S 4 KiB RANDOM READ, END TO END (idle, p50 / min, ms):
   #365 none          1.80 / 1.29
   #369 0063 reads    1.28 / 1.17
   #377 0065 poll     1.13 / 0.99
+
+BLK_FEAT_SYNCHRONOUS ON TOP OF THIS - REJECTED 2026-09-25 (paging plan item
+4, patches/attic/item4-mmc-sync-swap/): advertising the flag while this
+file polls 4 KiB reads makes swapon set SWP_SYNCHRONOUS_IO. faultlat, same
+boot, x3: swap-in fault p50 1143-1172 -> 1091-1101 us (needed -100), mean
+and p99 WORSE (synchronous swap-out writes). Not worth a flag.
