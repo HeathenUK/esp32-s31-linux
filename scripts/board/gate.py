@@ -183,6 +183,9 @@ def stage_smoke(out, results):
 def stage_canary(out, results, repeats, update):
     base = json.loads(BASELINE.read_text()) if BASELINE.exists() else {}
     fresh = {}
+    # The cascade, not a place a person once left the window (lvdesk window
+    # memory, QoL D5): arms must open the canary in the same spot every time.
+    run_board('[ -p /tmp/lvdesk.ctl ] && echo "winmem off" > /tmp/lvdesk.ctl\n', 20)
     for label, sdl, case, timers in CANARY:
         d = out / f"canary-{label}"
         cmd = [sys.executable, str(HERE / "sdlbench.py"), "--case", case, "--sdl", str(sdl), "--frames", "60",

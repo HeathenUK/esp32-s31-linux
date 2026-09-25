@@ -81,6 +81,7 @@ verdict() { if grep -aq "$2" "$OUT/$1.txt"; then echo "PASS $1"; else echo "FAIL
 python3 scripts/board/reset.py >/dev/null 2>&1
 cat > "$S" <<'EOF'
 i=0; while [ $i -lt 60 ]; do [ -n "$(pidof lvdesk)" ] && [ -p /tmp/lvdesk.ctl ] && grep -aq 'lvdesk: control fifo' /var/log/lvdesk.log && break; sleep 2; i=$((i+1)); done
+echo "winmem off" > /tmp/lvdesk.ctl	# the cascade, not a remembered place
 sleep 5
 L=$(pidof lvdesk | awk '{print $1}')
 nofs=0; [ -n "$L" ] && nofs=$(tr '\0' '\n' < /proc/$L/environ 2>/dev/null | grep -ac '^LVDESK_NOFULLSCREEN=')

@@ -37,6 +37,8 @@ export DOOMWADDIR=/root/doom/wads
 for p in \$(ps | awk '/prboom/ && !/awk/ {print \$1}'); do kill -9 \$p 2>/dev/null; done
 sleep 1
 : > /var/log/lvdesk.log 2>/dev/null
+# the cascade, not a remembered place: arms must put prboom in the same spot
+[ -p /tmp/lvdesk.ctl ] && echo "winmem off" > /tmp/lvdesk.ctl
 cd /root/doom/wads
 setsid /root/doom/prboom -width 320 -height 200 ${PB_ARGS:-} -nosound -timedemo demo1 \\
 	>/dev/null 2>&1 </dev/null &

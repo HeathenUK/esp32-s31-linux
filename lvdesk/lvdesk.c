@@ -322,6 +322,8 @@ static int super_chord;			/* Super was used as a modifier */
 static void super_shortcut(int code);	/* Super+arrows etc. (QoL B3) */
 static void console_resize(int delta);	/* Super+Up/Down on the console */
 static int menu_num_activate(int n);	/* Super+N on an open menu */
+static int winmem_off;			/* ctl `winmem off` (QoL D5) */
+static int winmem_on(void);
 struct winrec;
 static void task_toggle(struct winrec *w);
 static int help_up;			/* the shortcuts sheet is open (QoL B7) */
@@ -3378,6 +3380,8 @@ struct winrec {
 	uint8_t tb_state;		/* task button as last painted, 0 = never */
 	uint8_t desk_hid;		/* hidden by Super+D, restored by it */
 	lv_obj_t *closebtn;		/* armed (red) while a close is pending */
+	char wpkey[16];			/* geometry-memory key, from map (QoL D5) */
+	uint8_t user_moved;		/* a PERSON moved/resized/tiled it */
 };
 
 static struct winrec wins[MAXWIN];
@@ -3884,6 +3888,14 @@ static void ctl_line(char *buf)
 				else
 					win_snap(&wins[idx], w);
 			}
+		} else if (!strncmp(buf, "winmem", 6)) {
+			/* winmem off|on: harnesses switch the memory off (QoL D5) */
+			if (strstr(buf, "off"))
+				winmem_off = 1;
+			else if (strstr(buf, "on"))
+				winmem_off = 0;
+			printf("lvdesk: winmem %s\n", winmem_on() ? "on" : "off");
+			fflush(stdout);
 		} else if (!strncmp(buf, "clip", 4)) {
 			/* the terminal clip and selection, for tests (QoL A6) */
 			printf("lvdesk: clip len=%u sel=%d [%s]\n",
@@ -3994,6 +4006,8 @@ static void win_press_cb(lv_event_t *e)
 	 * be. Every desktop applies the same movement threshold.
 	 */
 	if (win == last_win && !drag_moved && now - last_ms < 400) {
+		if (win_find(win))
+			win_find(win)->user_moved = 1;
 		win_toggle_max(win_find(win));
 		last_win = NULL;	/* a third click is not a second one */
 	} else {
@@ -4023,6 +4037,8 @@ static void drag_release_cb(lv_event_t *e)
 	zone = snap_zone_at(p.x, p.y);
 	snap_hint_update(-1, NULL);
 	drag_ghost_end();		/* before win_snap, which sets a position */
+	if (drag_moved || zone >= 0)
+		w->user_moved = 1;
 	if (zone >= 0)
 		win_snap(w, zone);
 }
@@ -4057,10 +4073,121 @@ static void raise_cb(lv_event_t *e)
 
 static void switcher_cancel(void);
 
+/*
+ * WINDOW GEOMETRY MEMORY (QoL D5). An X client reopens where it was last
+ * closed - but only geometry a PERSON chose is remembered: a drag, the corner
+ * grip, tiling, maximise from the header or the keyboard. Moves made through
+ * the ctl FIFO (every test harness) never are, so the deterministic cascade
+ * the harnesses depend on survives. `winmem off` over ctl, or
+ * LVDESK_NOWINMEM=1, disables restoring as well; the X11 gates and perframe
+ * send it. Keyed by WM_CLASS, else the title's first word; one instance per
+ * key restores, the rest cascade. Saved on the 5 s tick to /etc/lvdesk/winpos.
+ */
+#define WINPOS_FILE "/etc/lvdesk/winpos"
+#define WINPOS_MAX 16
+static struct winpos {
+	char key[16];
+	int16_t x, y, w, h;
+	uint8_t mode;			/* 0 normal, 1 left, 2 right, 3 max */
+} winpos[WINPOS_MAX];
+static int winpos_n = -1, winpos_dirty;
+
+static int winmem_on(void)
+{
+	static int env = -1;
+
+	if (env < 0)
+		env = getenv("LVDESK_NOWINMEM") == NULL;
+	return env && !winmem_off;
+}
+
+static void winpos_load(void)
+{
+	FILE *f;
+	char line[80];
+
+	if (winpos_n >= 0)
+		return;
+	winpos_n = 0;
+	if (!(f = fopen(WINPOS_FILE, "r")))
+		return;
+	while (winpos_n < WINPOS_MAX && fgets(line, sizeof(line), f)) {
+		struct winpos *p = &winpos[winpos_n];
+		int x, y, w, h, m;
+
+		if (sscanf(line, "%15s %d %d %d %d %d", p->key, &x, &y, &w, &h, &m) == 6) {
+			p->x = (int16_t)x; p->y = (int16_t)y;
+			p->w = (int16_t)w; p->h = (int16_t)h;
+			p->mode = (uint8_t)m;
+			winpos_n++;
+		}
+	}
+	fclose(f);
+}
+
+static struct winpos *winpos_get(const char *key)
+{
+	int i;
+
+	winpos_load();
+	for (i = 0; i < winpos_n; i++)
+		if (!strcmp(winpos[i].key, key))
+			return &winpos[i];
+	return NULL;
+}
+
+/* From win_close(): remember what a person chose, if they chose anything. */
+static void winpos_note(struct winrec *w)
+{
+	struct winpos *p;
+
+	if (!w->wpkey[0] || !w->user_moved || !winmem_on() || w->minimised ||
+	    (fs_active && w->xid && w->xid == fs_win))
+		return;
+	if (!(p = winpos_get(w->wpkey))) {
+		if (winpos_n >= WINPOS_MAX)
+			return;
+		p = &winpos[winpos_n++];
+		snprintf(p->key, sizeof(p->key), "%s", w->wpkey);
+	}
+	if (w->maximised || w->snapped) {	/* home, plus the mode */
+		p->x = (int16_t)w->rx; p->y = (int16_t)w->ry;
+		p->w = (int16_t)w->rw; p->h = (int16_t)w->rh;
+		p->mode = w->maximised ? 3 :
+			  lv_obj_get_x(w->win) > 0 ? 2 : 1;
+	} else {
+		p->x = (int16_t)lv_obj_get_x(w->win);
+		p->y = (int16_t)lv_obj_get_y(w->win);
+		p->w = (int16_t)lv_obj_get_width(w->win);
+		p->h = (int16_t)lv_obj_get_height(w->win);
+		p->mode = 0;
+	}
+	winpos_dirty = 1;
+}
+
+/* On the 5 s tick: write the table if it changed (write .new, rename). */
+static void winpos_flush(void)
+{
+	FILE *f;
+	int i;
+
+	if (!winpos_dirty)
+		return;
+	winpos_dirty = 0;
+	if (!(f = fopen(WINPOS_FILE ".new", "w")))
+		return;
+	for (i = 0; i < winpos_n; i++)
+		fprintf(f, "%s %d %d %d %d %d\n", winpos[i].key, winpos[i].x,
+			winpos[i].y, winpos[i].w, winpos[i].h, winpos[i].mode);
+	fclose(f);
+	rename(WINPOS_FILE ".new", WINPOS_FILE);
+}
+
 static void win_close(struct winrec *w)
 {
 	if (!w || !w->win)
 		return;
+	winpos_note(w);
 	xshim_canary_check("win_close:start"); xwin_dsc_check("win_close:start");
 	/*
 	 * A switcher on screen holds pointers to windows, one of which may be
@@ -4453,7 +4580,11 @@ static void win_toggle_max(struct winrec *w)
 
 static void win_max_cb(lv_event_t *e)
 {
-	win_toggle_max(lv_event_get_user_data(e));
+	struct winrec *w = lv_event_get_user_data(e);
+
+	if (w)
+		w->user_moved = 1;
+	win_toggle_max(w);
 }
 
 /*
@@ -4579,6 +4710,10 @@ static void super_shortcut(int code)
 {
 	struct winrec *w = win_focus;
 
+	if (w && (code == KEY_LEFT || code == KEY_RIGHT || code == KEY_UP ||
+		  code == KEY_DOWN))
+		w->user_moved = 1;
+
 	switch (code) {
 	case KEY_LEFT:  win_snap(w, 0); break;
 	case KEY_RIGHT: win_snap(w, 1); break;
@@ -4685,6 +4820,7 @@ static void grip_cb(lv_event_t *e)
 
 	if (!w || !w->win || !indev)
 		return;
+	w->user_moved = 1;
 	console_leave(w);	/* the grip is hidden while docked; belt and braces */
 	lv_indev_get_vect(indev, &v);
 	nw = lv_obj_get_width(w->win) + v.x;
@@ -6794,6 +6930,8 @@ static void xwin_on_window(uint32_t id, int w, int h)
 	const uint16_t *px;
 	const char *title;
 	int pw, ph;
+	char wkey[16] = "";
+	struct winpos *wp = NULL;
 
 	(void)w; (void)h;
 	if (xwin_n >= MAXXWIN)
@@ -6847,6 +6985,39 @@ static void xwin_on_window(uint32_t id, int w, int h)
 		 * is in the same place both times, and "launch it, then move
 		 * it" is a race as well as a faff.
 		 */
+		/*
+		 * Geometry memory (QoL D5): where a person last left this
+		 * app, if nobody else of that app is open. Clamped like the
+		 * cascade; LVDESK_WINPOS still wins.
+		 */
+		{
+			int k = xshim_window_class(id, wkey, sizeof(wkey)), j;
+
+			if (k == -1) {
+				wkey[0] = 0;	/* transient: its parent's place */
+			} else if (k == 0 && title && strcmp(title, "X client")) {
+				size_t t = strcspn(title, " ");
+
+				if (t >= sizeof(wkey))
+					t = sizeof(wkey) - 1;
+				for (j = 0; j < (int)t; j++)
+					wkey[j] = (title[j] >= 'A' && title[j] <= 'Z') ?
+						  title[j] + 32 : title[j];
+				wkey[t] = 0;
+			}
+			for (j = 0; j < win_n && wkey[0]; j++)
+				if (wins[j].win && !strcmp(wins[j].wpkey, wkey))
+					wkey[0] = 0;	/* one instance restores */
+			if (wkey[0] && winmem_on() && !pos &&
+			    (wp = winpos_get(wkey))) {
+				wx = wp->x;
+				wy = wp->y;
+				if (wx + fw > (int)kms_w) wx = (int)kms_w - fw;
+				if (wy + fh > (int)kms_h) wy = (int)kms_h - fh;	/* as the cascade */
+				if (wx < 0) wx = 0;
+				if (wy < 0) wy = 0;
+			}
+		}
 		if (pos && sscanf(pos, "%d,%d", &px_, &py_) == 2) {
 			wx = px_;
 			wy = py_;
@@ -6858,6 +7029,7 @@ static void xwin_on_window(uint32_t id, int w, int h)
 	rec = win_find(win);
 	if (rec) {
 		rec->xid = id;
+		snprintf(rec->wpkey, sizeof(rec->wpkey), "%s", wkey);
 		/*
 		 * make_window() focused the frame before it had an X id, so
 		 * the FocusIn went nowhere. A newly opened client that is the
@@ -6964,6 +7136,21 @@ static void xwin_on_window(uint32_t id, int w, int h)
 	lv_obj_add_event_cb(x->img, xwin_ptr_cb, LV_EVENT_RELEASED, x);
 	lv_obj_add_event_cb(x->img, xwin_ptr_cb, LV_EVENT_PRESS_LOST, x);
 	lv_obj_add_event_cb(x->img, xwin_ptr_cb, LV_EVENT_PRESSING, x);
+	/*
+	 * The remembered size and mode (QoL D5), now the xwins[] entry exists
+	 * and while the window is still undrawn. Size only for a resizable
+	 * window; the tiling functions refuse a fixed-size one themselves.
+	 */
+	if (wp && rec && !getenv("LVDESK_WINPOS")) {
+		if (!rec->fixed_size && wp->w > 0 && wp->h > 0) {
+			lv_obj_set_size(win, wp->w, wp->h);
+			xwin_push_size(win);
+		}
+		if (wp->mode == 3)
+			win_snap(rec, 2);
+		else if (wp->mode == 1 || wp->mode == 2)
+			win_snap(rec, wp->mode - 1);
+	}
 }
 
 
@@ -14745,6 +14932,7 @@ int main(void)
 				prof_loops = prof_refrs = 0;
 			}
 			sysinfo_update();
+			winpos_flush();		/* geometry memory, if changed (QoL D5) */
 			/*
 			 * Checked on the existing 5 s tick rather than given a
 			 * timer of its own - it repaints only when HH:MM

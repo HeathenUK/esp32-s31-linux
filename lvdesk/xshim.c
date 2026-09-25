@@ -10202,6 +10202,46 @@ const char *xshim_window_title(uint32_t id)
 	return (r && r->type == R_WINDOW && r->title[0]) ? r->title : NULL;
 }
 
+/*
+ * The application key for lvdesk's window-geometry memory (QoL D5): the
+ * WM_CLASS class (else its instance name), lower-cased, into out. WM_CLASS
+ * is PREDEFINED atom 67, so it is looked up by number - an atom_find() of
+ * the name searches only interned atoms and always fails. Returns 1 with a
+ * key, 0 with none (Xt clients through xtlite set no WM_CLASS; lvdesk falls
+ * back to the title), -1 for a transient window (WM_TRANSIENT_FOR, atom
+ * 68), whose place belongs to its parent.
+ */
+int xshim_window_class(uint32_t id, char *out, size_t n)
+{
+	struct res *r = res_find(id);
+	struct prop *p;
+	const char *name, *cls = NULL;
+	size_t k, len;
+
+	if (!n)
+		return 0;
+	out[0] = 0;
+	if (!r || r->type != R_WINDOW)
+		return 0;
+	if (prop_find(r, 68))
+		return -1;
+	p = prop_find(r, 67);
+	if (!p || !p->n || p->fmt != 8)
+		return 0;
+	name = (const char *)p->data;
+	len = strnlen(name, p->n);
+	if (len + 1 < p->n && name[len + 1])
+		cls = name + len + 1;
+	if (cls && strnlen(cls, p->n - len - 1) < p->n - len - 1) {
+		name = cls;
+		len = strlen(cls);
+	}
+	for (k = 0; k < len && k + 1 < n; k++)
+		out[k] = (name[k] >= 'A' && name[k] <= 'Z') ? name[k] + 32 : name[k];
+	out[k] = 0;
+	return k > 0;
+}
+
 static void client_data_once(struct cli *c);
 
 /*

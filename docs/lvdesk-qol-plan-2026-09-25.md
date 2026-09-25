@@ -35,6 +35,26 @@ cdoom (883 puts) and quake (motion 12, keys 4).
 Still open from the programme: everything else, starting with A3 (the
 drop-down console, diff 01, which needs rebasing onto these fixes).
 
+## Status, 2026-09-25 night: D5 shipped (window geometry memory)
+
+- Keyed by WM_CLASS (predefined atom 67, via a new xshim_window_class();
+  transient windows, atom 68, are skipped), else the title's first word for
+  Xt clients that set none. One instance per key restores; others cascade.
+- **Only what a person chose is remembered:** a header drag, the corner grip,
+  a drag-to-edge or keyboard tile, maximise from the button or a double click.
+  Moves through the ctl FIFO are never recorded, so the harnesses' windows
+  cannot write the file.
+- Restoring is switched off by ctl `winmem off` (or LVDESK_NOWINMEM=1).
+  x11-compat-gate.sh, x11-compat-gate2.sh, perframe.sh and gate.py's canary
+  send it first. The X11 gate's close-button steps pass with a saved xcalc
+  entry present.
+- Held in RAM (16 entries, ~0.4 kB) and saved to /etc/lvdesk/winpos on the SD
+  card: written on the 5 s tick only after such a window closes, via .new and
+  rename. Read once, on first use.
+- A restored place is clamped onto the panel exactly as the cascade is.
+- `lvdesk-winmem-test.sh`: a dragged xcalc gets an entry and reopens there;
+  a ctl-only move of xclock records nothing; `winmem off` gives the cascade.
+
 ## Status, 2026-09-25 night: A6 shipped (console copy and paste)
 
 - Drag to select: it starts only once the pointer leaves its cell or moves

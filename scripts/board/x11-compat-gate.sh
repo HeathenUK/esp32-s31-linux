@@ -56,6 +56,8 @@ verdict() { want "$1" || return 0; if grep -aq "$2" "$OUT/$1.txt"; then echo "PA
 
 cat > "$S" <<EOF
 for p in \$(pidof xcalc) \$(pidof st) \$(pidof prboom) \$(pidof chocolate-doom) \$(pidof tyr-quake-x11) \$(pidof uinject); do kill -9 \$p; done
+# geometry memory off: the close-button pixels below assume the cascade
+echo "winmem off" > /tmp/lvdesk.ctl; sleep 1
 export $ENV; setsid sh -c 'exec xcalc >/tmp/xcalc.log 2>&1' </dev/null >/dev/null 2>&1 &
 sleep 6; a=\$(pidof xcalc | wc -w); /root/uinject dragto 220 367 220 367 >/dev/null 2>&1; sleep 1; b=\$(pidof xcalc | wc -w)
 /root/uinject dragto 368 70 368 70 >/dev/null 2>&1; sleep 4; c=\$(pidof xcalc | wc -w); echo "xcalc mapped=\$a afterclick=\$b afterclose=\$c"
