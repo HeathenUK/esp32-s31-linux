@@ -25,10 +25,12 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdarg.h>
+#include <stddef.h>
 #include <linux/input.h>
 #include <linux/kd.h>
 #include <sys/inotify.h>
 #include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <poll.h>
 #include <sys/stat.h>
 #include <time.h>
@@ -100,6 +102,7 @@ struct drm_esp32s31_ppa_clut {
 #define COL_HDR		0x2c4a63	/* unfocused window title bar */
 #define COL_HDR_FOCUS	0x3a86c8	/* focused - the only "accent" */
 #define COL_HDR_TEXT	0xf2f6fa
+#define COL_HDR_TEXT_DIM 0xa9b8c6	/* unfocused title, 4.6:1 on COL_HDR */
 #define COL_PANEL	0xe9edf1
 #define COL_PANEL_TEXT	0x1b2838
 #define COL_TERM_BG	0x0a0f14
@@ -239,6 +242,14 @@ struct term {
 	 * Scrollback. A ring of whole lines pushed off the top, so the cost is
 	 * fixed at TERM_SCROLLBACK * (TERM_MAXCOLS+1) bytes - about 24 kB -
 	 * rather than growing without bound on a board with ~3.9 MB free.
+	 *
+	 * sb and sbattr are .bss and are NEVER pre-filled: term_scroll() writes
+	 * a slot whole before sb_count admits it, and the only readers
+	 * (term_sb_line, term_sb_attr) are bounded by sb_count. So a page of
+	 * the 48 kB becomes resident only when scrollback reaches it, and the
+	 * first open costs ~16 kB of this struct rather than ~60 kB. Keep it
+	 * that way: a memset here touches every page, and with zram off the
+	 * only way out for a touched page is a write to swap on the SD card.
 	 */
 	char sb[TERM_SCROLLBACK][TERM_MAXCOLS + 1];
 	unsigned char sbattr[TERM_SCROLLBACK][TERM_MAXCOLS];
@@ -247,6 +258,15 @@ struct term {
 };
 
 static struct term term;
+/*
+ * Scrollback lines kept, <= TERM_SCROLLBACK. LVDESK_TERM_SB=n lowers it. It is
+ * read once, at the first terminal build, and never changed afterwards,
+ * because the ring index depends on it. The default keeps all 200 lines. Every
+ * 34 lines not kept is about 8 kB (one sb page plus one sbattr page) that a
+ * long-lived terminal never touches, and a cap is the only way the lazy
+ * scrollback's saving lasts once output has scrolled.
+ */
+static int term_sb_max = TERM_SCROLLBACK;
 
 /* Row r of the visible grid, through the ring. */
 #define TROW(r)  term.grid[(term.top + (r)) % TERM_MAXROWS]
@@ -283,8 +303,10 @@ static void toast_show(const char *text, uint32_t ms);	/* QoL D1 */
 static void toast_show_k(const char *key, const char *text, uint32_t ms);
 static void toast_flush_pending(void);	/* on leaving fullscreen */
 static void vol_key(int code, int value);	/* volume/mute keys (QoL D2) */
+static void tray_vol_update(void);	/* volume tray glyph (QoL C6) */
 static int menu_key(int code);		/* keyboard in an open menu (QoL B2) */
 static int popover_is_open(void);
+static void pw_debug(void);
 static void desk_menu_toggle(void);	/* Super tap / Start (QoL B1) */
 static int super_chord;			/* Super was used as a modifier */
 static void super_shortcut(int code);	/* Super+arrows etc. (QoL B3) */
@@ -906,9 +928,14 @@ static void term_write(const char *buf, int n)
  *     window, and must be taken before Alt becomes an ESC prefix.
  */
 static int fs_close_client(void);	/* with wm_shortcut() */
+static int switcher_key(int code);	/* Esc/arrows/Enter in Alt-Tab */
+static int sw_n, sw_by_super;		/* Alt-Tab switcher: rows up, by Super */
+static void switcher_step(int back);
 
 static int kbd_key(int code)
 {
+	if (!pw_ta && switcher_key(code))
+		return 1;
 	/*
 	 * Alt+F4 closes the fullscreen game too (2026-09-25, asked for: "Alt+F4
 	 * for any and all windows ... Doom running fullscreen"). Only F4: Alt
@@ -1304,7 +1331,9 @@ static int kbd_poll(void)
 				 * between, under 600 ms - this board can lose a
 				 * release, so a long hold must not count.
 				 */
-				if (!super_chord && !fs_active && !pw_ta &&
+				if (sw_by_super && sw_n)
+					switcher_end();	/* Super+Tab commits */
+				else if (!super_chord && !fs_active && !pw_ta &&
 				    lv_tick_get() - super_down_ms < 600)
 					desk_menu_toggle();
 				continue;
@@ -1431,8 +1460,8 @@ static void term_scroll(void)
 {
 	memcpy(term.sb[term.sb_head], TROW(0), TERM_MAXCOLS + 1);
 	memcpy(term.sbattr[term.sb_head], TATTR(0), TERM_MAXCOLS);
-	term.sb_head = (term.sb_head + 1) % TERM_SCROLLBACK;
-	if (term.sb_count < TERM_SCROLLBACK)
+	term.sb_head = (term.sb_head + 1) % term_sb_max;
+	if (term.sb_count < term_sb_max)
 		term.sb_count++;
 	if (term_log && term.sb_count < 3)
 		fprintf(stderr, "[scroll sb_count=%d]\n", term.sb_count);
@@ -1456,7 +1485,7 @@ static const char *term_sb_line(int back)
 
 	if (back < 1 || back > term.sb_count)
 		return NULL;
-	idx = (term.sb_head - back + TERM_SCROLLBACK * 2) % TERM_SCROLLBACK;
+	idx = (term.sb_head - back + term_sb_max * 2) % term_sb_max;
 	return term.sb[idx];
 }
 
@@ -1467,7 +1496,7 @@ static const unsigned char *term_sb_attr(int back)
 
 	if (back < 1 || back > term.sb_count)
 		return NULL;
-	idx = (term.sb_head - back + TERM_SCROLLBACK * 2) % TERM_SCROLLBACK;
+	idx = (term.sb_head - back + term_sb_max * 2) % term_sb_max;
 	return term.sbattr[idx];
 }
 
@@ -1706,6 +1735,26 @@ static void term_render_row(char *out, size_t outsz, const char *src,
 	out[n] = 0;
 }
 
+/*
+ * Whether terminal label text can reach the panel.
+ *
+ * A terminal can be minimised (HIDDEN), mid-drag (drag_ghost_begin hides the
+ * real window and drags a snapshot) or under a fullscreen client (nothing
+ * LVGL draws is scanned out). In all three cases every lv_label_set_text still
+ * costs a realloc and a recolor-parsing text walk per dirty row, up to 48 per
+ * output burst, for pixels nobody sees. lv_obj_invalidate already skips hidden
+ * objects, so the draw was free, but the layout was not. Deferred rows stay
+ * dirty and are drawn once, by term_render() when the window is shown or by
+ * the main loop's backstop.
+ */
+static int term_visible(void)
+{
+	return term.win && !lv_obj_has_flag(term.win, LV_OBJ_FLAG_HIDDEN) &&
+	       !fs_active;
+}
+
+static void term_render(void);
+
 static int term_poll(void)
 {
 	char buf[512];
@@ -1751,7 +1800,24 @@ static int term_poll(void)
 		close(term.fd);
 		term.fd = -1;
 	}
-	if (term.dirty) {
+	/* Always parse; lay out only what can be seen. See term_visible(). */
+	if (term.dirty && term_visible())
+		term_render();
+	return busy;
+}
+
+/*
+ * Push the dirty rows into their labels.
+ *
+ * This is split out of term_poll so that code showing the window can call it
+ * directly. A hidden terminal leaves rowdirty and dirty set instead of
+ * rendering, and term_poll runs only when the pty is readable. Leaving the
+ * repaint to term_poll would therefore show the stale screen until the shell
+ * next printed something.
+ */
+static void term_render(void)
+{
+	{
 		/*
 		 * Repaint only the rows that changed.
 		 *
@@ -1842,7 +1908,6 @@ static int term_poll(void)
 			TROW(term.cy)[term.cx] = saved;
 		term.dirty = 0;
 	}
-	return busy;
 }
 
 /*
@@ -2095,7 +2160,16 @@ static void sysinfo_update(void)
 			avail = fr;
 	}
 	(void)total; (void)up;
-	snprintf(buf, sizeof(buf), "M: %luKB", avail & ~15UL);
+	/*
+	 * "mem 4.2M" (QoL C6): tenths of a MB, integer maths only (double is a
+	 * library call here). A 0.1 MB step also repaints less often than the
+	 * 16 kB one it replaces. No harness parses the old "M: ...KB".
+	 */
+	{
+		unsigned long t = avail * 10UL / 1024UL;
+
+		snprintf(buf, sizeof(buf), "mem %lu.%luM", t / 10, t % 10);
+	}
 	/*
 	 * Only touch the label when the text actually changed. lv_label_set_text
 	 * invalidates unconditionally, and an unconditional periodic redraw is
@@ -2832,6 +2906,13 @@ static void drag_ghost_end(void)
 		lv_obj_set_pos(drag_ghost_win, lv_obj_get_x(drag_ghost),
 			       lv_obj_get_y(drag_ghost));
 		lv_obj_remove_flag(drag_ghost_win, LV_OBJ_FLAG_HIDDEN);
+		/*
+		 * Not win_unhide(): a drag never minimised anything. But the
+		 * terminal WAS hidden for the drag, so it deferred any
+		 * output that arrived meanwhile, and that output is drawn now.
+		 */
+		if (drag_ghost_win == term.win && term.dirty && term_visible())
+			term_render();
 	}
 	if (drag_ghost) {
 		lv_obj_delete(drag_ghost);
@@ -2947,6 +3028,7 @@ struct winrec {
 	uint8_t closing;
 	uint8_t tb_state;		/* task button as last painted, 0 = never */
 	uint8_t desk_hid;		/* hidden by Super+D, restored by it */
+	lv_obj_t *closebtn;		/* armed (red) while a close is pending */
 };
 
 static struct winrec wins[MAXWIN];
@@ -2972,6 +3054,21 @@ static struct winrec *win_find(lv_obj_t *win)
 		if (wins[i].win == win)
 			return &wins[i];
 	return NULL;
+}
+
+/*
+ * Restore a minimised window. Every restore path goes through here, so the
+ * terminal is caught every time (drag_ghost_end does its own check). Output
+ * that arrived while it was hidden has only been parsed (see term_visible), so
+ * the labels are brought up to date here. That happens before this pass's
+ * lv_refr_now, which avoids flashing the stale screen first.
+ */
+static void win_unhide(struct winrec *w)
+{
+	lv_obj_remove_flag(w->win, LV_OBJ_FLAG_HIDDEN);
+	w->minimised = 0;
+	if (w->win == term.win && term.dirty && term_visible())
+		term_render();
 }
 
 /*
@@ -3053,13 +3150,25 @@ static void win_set_focus(struct winrec *w)
 		if (t)
 			t->minimised = 1;
 	}
-	if (win_focus)
+	/*
+	 * The unfocused title dims (QoL C3), on the label only - text colour
+	 * set on the header would be inherited and refresh every child.
+	 */
+	if (win_focus) {
 		lv_obj_set_style_bg_color(win_focus->hdr,
 					  lv_color_hex(COL_HDR), 0);
+		if (win_focus->hlabel)
+			lv_obj_set_style_text_color(win_focus->hlabel,
+				lv_color_hex(COL_HDR_TEXT_DIM), 0);
+	}
 	win_focus = w;
-	if (w)
+	if (w) {
 		lv_obj_set_style_bg_color(w->hdr,
 					  lv_color_hex(COL_HDR_FOCUS), 0);
+		if (w->hlabel)
+			lv_obj_set_style_text_color(w->hlabel,
+				lv_color_hex(COL_HDR_TEXT), 0);
+	}
 	xshim_focus(w ? w->xid : 0);
 	mru_touch(w);
 }
@@ -3281,11 +3390,8 @@ static void ctl_line(char *buf)
 			fflush(stdout);
 		} else if (sscanf(buf, "raise %d", &idx) == 1) {
 			if (idx >= 0 && idx < win_n && wins[idx].win) {
-				if (wins[idx].minimised) {
-					lv_obj_remove_flag(wins[idx].win,
-							   LV_OBJ_FLAG_HIDDEN);
-					wins[idx].minimised = 0;
-				}
+				if (wins[idx].minimised)
+					win_unhide(&wins[idx]);
 				lv_obj_move_foreground(wins[idx].win);
 				win_set_focus(&wins[idx]);
 			}
@@ -3325,6 +3431,8 @@ static void ctl_line(char *buf)
 				icon = vol_tray_icon;
 			else if (strstr(buf, "bt") && bt_tray_icon)
 				icon = bt_tray_icon;
+			else if (strstr(buf, "clock") && clock_lbl)
+				icon = clock_lbl;
 			else if (strstr(buf, "wifi") && wifi_tray_clip)
 				/* the clip's parent IS the clickable icon */
 				icon = lv_obj_get_parent(wifi_tray_clip);
@@ -3432,6 +3540,7 @@ static void ctl_line(char *buf)
 			printf("lvdesk: pop %s rows=%d sel=%d cur=%d menu=%d\n",
 			       popover_is_open() ? "open" : "closed",
 			       menu_rows, menu_sel, menu_cur, menu_list != NULL);
+			pw_debug();
 			fflush(stdout);
 		} else if (!strncmp(buf, "run ", 4)) {
 			/* Type a command into the built-in terminal. */
@@ -3573,10 +3682,8 @@ static void raise_cb(lv_event_t *e)
 	lv_obj_t *win = lv_event_get_user_data(e);
 	struct winrec *w = win_find(win);
 
-	if (w && w->minimised) {		/* restore from the task bar */
-		lv_obj_remove_flag(win, LV_OBJ_FLAG_HIDDEN);
-		w->minimised = 0;
-	}
+	if (w && w->minimised)	/* restore from the task bar */
+		win_unhide(w);
 	lv_obj_move_foreground(win);
 	win_set_focus(w);
 }
@@ -3610,6 +3717,8 @@ static void win_close(struct winrec *w)
 	if (w->xid && !w->closing &&
 	    xshim_window_request_close(w->xid, lv_tick_get())) {
 		w->closing = 1;
+		if (w->closebtn)	/* stays red for the grace period */
+			lv_obj_add_state(w->closebtn, LV_STATE_CHECKED);
 		if (w->hlabel)
 			lv_obj_set_style_text_opa(w->hlabel, LV_OPA_50, 0);
 		printf("lvdesk: asked 0x%x to close\n", w->xid);
@@ -3659,8 +3768,8 @@ static void win_close_cb(lv_event_t *e)
  * repaint most of the screen four times to show a choice that had not been
  * made yet.
  */
-#define SW_W		240
-#define SW_ROW_H	18
+#define SW_W		300	/* QoL B4: 240 wrapped titles */
+#define SW_ROW_H	22	/* one 19 px line plus padding; 18 overlapped */
 
 /*
  * A switcher that can only be dismissed by the Alt release is a switcher that
@@ -3675,9 +3784,13 @@ static void win_close_cb(lv_event_t *e)
 static lv_obj_t *sw_panel;
 static lv_obj_t *sw_rows[MAXWIN];
 static struct winrec *sw_list[MAXWIN];
-static int sw_n, sw_i;
+/* sw_n, sw_i are declared with the other early state */
+static int sw_i;
 static uint32_t sw_ms;
 
+static int sw_painted = -1;
+
+/* Restyle only the row that lost the highlight and the one that gained it. */
 static void switcher_paint(void)
 {
 	int i;
@@ -3685,11 +3798,14 @@ static void switcher_paint(void)
 	for (i = 0; i < sw_n; i++) {
 		int on = (i == sw_i);
 
+		if (i != sw_i && i != sw_painted)
+			continue;
 		lv_obj_set_style_bg_color(sw_rows[i],
 			lv_color_hex(on ? COL_HDR_FOCUS : COL_PANEL), 0);
 		lv_obj_set_style_text_color(sw_rows[i],
 			lv_color_hex(on ? COL_HDR_TEXT : COL_PANEL_TEXT), 0);
 	}
+	sw_painted = sw_i;
 }
 
 static void switcher_cancel(void)
@@ -3699,6 +3815,30 @@ static void switcher_cancel(void)
 		sw_panel = NULL;
 	}
 	sw_n = 0;
+	sw_painted = -1;
+	sw_by_super = 0;
+}
+
+static void switcher_end(void);
+
+/* A click on a row commits it; a click anywhere on the panel is ours. */
+static void switcher_click_cb(lv_event_t *e)
+{
+	lv_indev_t *in = lv_indev_active();
+	lv_area_t a;
+	lv_point_t p;
+	int row;
+
+	(void)e;
+	if (!in || !sw_panel)
+		return;
+	lv_indev_get_point(in, &p);
+	lv_obj_get_coords(sw_panel, &a);
+	row = (p.y - a.y1 - 4) / SW_ROW_H;
+	if (row >= 0 && row < sw_n) {
+		sw_i = row;
+		switcher_end();
+	}
 }
 
 static void switcher_open(void)
@@ -3706,12 +3846,30 @@ static void switcher_open(void)
 	int32_t sw = lv_display_get_horizontal_resolution(NULL);
 	int32_t sh = lv_display_get_vertical_resolution(NULL);
 	int32_t h;
-	int i;
+	int i, pass;
 
 	sw_n = 0;
-	for (i = 0; i < mru_n && sw_n < MAXWIN; i++)
-		if (mru[i]->win && !mru[i]->minimised)
-			sw_list[sw_n++] = mru[i];
+	/*
+	 * Nothing LVGL draws reaches the panel in fullscreen: the switcher was
+	 * invisible there and still raised a frame behind the game (QoL B4).
+	 */
+	if (fs_active)
+		return;
+	/*
+	 * Visible windows in MRU order, then the minimised ones - which could
+	 * not be reached from Alt-Tab at all. A window hidden without being
+	 * minimised (not drawn yet, mid-drag) is left out.
+	 */
+	for (pass = 0; pass < 2; pass++)
+		for (i = 0; i < mru_n && sw_n < MAXWIN; i++) {
+			struct winrec *w = mru[i];
+
+			if (!w->win || !!w->minimised != pass)
+				continue;
+			if (!pass && lv_obj_has_flag(w->win, LV_OBJ_FLAG_HIDDEN))
+				continue;
+			sw_list[sw_n++] = w;
+		}
 	if (sw_n < 2) {			/* nothing to switch between */
 		sw_n = 0;
 		return;
@@ -3719,8 +3877,8 @@ static void switcher_open(void)
 
 	h = sw_n * SW_ROW_H + 8;
 	sw_panel = lv_obj_create(lv_screen_active());
-	lv_obj_remove_flag(sw_panel, LV_OBJ_FLAG_CLICKABLE);
 	lv_obj_remove_flag(sw_panel, LV_OBJ_FLAG_SCROLLABLE);
+	lv_obj_add_event_cb(sw_panel, switcher_click_cb, LV_EVENT_CLICKED, NULL);
 	lv_obj_set_style_radius(sw_panel, 0, 0);
 	lv_obj_set_style_pad_all(sw_panel, 4, 0);
 	lv_obj_set_style_bg_color(sw_panel, lv_color_hex(COL_PANEL), 0);
@@ -3731,18 +3889,32 @@ static void switcher_open(void)
 
 	for (i = 0; i < sw_n; i++) {
 		lv_obj_t *l = lv_label_create(sw_panel);
+		const char *t = sw_list[i]->tlabel ?
+				lv_label_get_text(sw_list[i]->tlabel) : "window";
 
 		sw_rows[i] = l;
 		lv_obj_set_style_text_font(l, FONT_UI, 0);
-		lv_obj_set_style_pad_all(l, 2, 0);
+		lv_obj_set_style_pad_hor(l, 4, 0);
+		lv_obj_set_style_pad_ver(l, 1, 0);
 		lv_obj_set_style_bg_opa(l, LV_OPA_COVER, 0);
-		lv_obj_set_width(l, SW_W - 10);
+		lv_obj_set_style_bg_color(l, lv_color_hex(COL_PANEL), 0);
+		lv_obj_set_style_text_color(l, lv_color_hex(COL_PANEL_TEXT), 0);
+		/* one line: DOTS needs a fixed height and max_lines, or it wraps */
+		lv_obj_set_size(l, SW_W - 10, SW_ROW_H);
+		lv_label_set_long_mode(l, LV_LABEL_LONG_MODE_DOTS);
+		lv_label_set_max_lines(l, 1);
 		lv_obj_set_pos(l, 0, i * SW_ROW_H);
-		lv_label_set_text(l, sw_list[i]->tlabel ?
-				  lv_label_get_text(sw_list[i]->tlabel) :
-				  "window");
+		lv_obj_add_flag(l, LV_OBJ_FLAG_EVENT_BUBBLE);
+		if (sw_list[i]->minimised) {
+			/* a PREFIX: a suffix is what the dots eat */
+			lv_label_set_text_fmt(l, LV_SYMBOL_MINUS "  %s", t);
+			lv_obj_set_style_text_opa(l, LV_OPA_50, 0);
+		} else {
+			lv_label_set_text(l, t);
+		}
 	}
 	sw_i = 0;
+	sw_painted = -1;
 	lv_obj_move_foreground(sw_panel);
 }
 
@@ -3754,7 +3926,12 @@ static void switcher_end(void)
 		return;
 	w = sw_list[sw_i];
 	switcher_cancel();
-	if (w && w->win && !w->minimised) {
+	if (w && w->win) {
+		if (w->minimised) {	/* un-hide before the focus hand-off */
+			lv_obj_remove_flag(w->win, LV_OBJ_FLAG_HIDDEN);
+			w->minimised = 0;
+			w->desk_hid = 0;
+		}
 		lv_obj_move_foreground(w->win);
 		win_set_focus(w);
 	}
@@ -3766,6 +3943,51 @@ static void switcher_timeout(void)
 		switcher_end();
 }
 
+/* Step the switcher (Alt/Super+Tab), opening it on the first step. */
+static void switcher_step(int back)
+{
+	if (!sw_n) {
+		switcher_open();
+		if (!sw_n)
+			return;		/* one window: nothing to do */
+		/* the one behind the current; the last on a first Shift+Tab */
+		sw_i = back ? sw_n - 1 : (sw_list[0] == win_focus ? 1 : 0);
+	} else {
+		sw_i += back ? -1 : 1;
+		if (sw_i < 0)
+			sw_i = sw_n - 1;
+		else if (sw_i >= sw_n)
+			sw_i = 0;
+	}
+	sw_ms = lv_tick_get();
+	switcher_paint();
+}
+
+/*
+ * Keys while the switcher is up (QoL B4), ahead of everything including a
+ * grab: Esc cancels, arrows move, Enter commits. Returns 1 if taken.
+ */
+static int switcher_key(int code)
+{
+	if (!sw_n)
+		return 0;
+	switch (code) {
+	case KEY_ESC:
+		switcher_cancel();
+		return 1;
+	case KEY_UP: case KEY_LEFT:
+		switcher_step(1);
+		return 1;
+	case KEY_DOWN: case KEY_RIGHT:
+		switcher_step(0);
+		return 1;
+	case KEY_ENTER: case KEY_KPENTER:
+		switcher_end();
+		return 1;
+	}
+	return 0;
+}
+
 /*
  * Returns 1 when the key belonged to the desktop rather than to a window.
  */
@@ -3775,20 +3997,7 @@ static int wm_shortcut(int code)
 		return 0;
 
 	if (code == KEY_TAB) {
-		if (!sw_n) {
-			switcher_open();
-			if (!sw_n)
-				return 1;	/* one window: nothing to do */
-			sw_i = 1;		/* the one behind the current */
-		} else {
-			sw_i += shift ? -1 : 1;
-			if (sw_i < 0)
-				sw_i = sw_n - 1;
-			else if (sw_i >= sw_n)
-				sw_i = 0;
-		}
-		sw_ms = lv_tick_get();
-		switcher_paint();
+		switcher_step(shift);
 		return 1;
 	}
 	if (code == KEY_F4) {
@@ -4013,6 +4222,11 @@ static void super_shortcut(int code)
 	case KEY_H:     if (w) win_minimise(w); break;
 	case KEY_Q:     if (w) win_close(w); break;
 	case KEY_D:     desk_show_toggle(); break;
+	case KEY_TAB:
+		/* Super+Tab walks the switcher; letting Super go commits */
+		switcher_step(shift);
+		sw_by_super = 1;
+		break;
 	}
 }
 
@@ -4097,19 +4311,65 @@ static void win_add_grip(struct winrec *w)
 	w->grip = g;
 }
 
-/* A title-bar button: square, flat, no radius - see the palette note. */
+/*
+ * Title-bar buttons (QoL C3): full-height 18 px cells with no gaps, so the
+ * targets are 18x20 and never overlap (an ext_click_area would make the edge
+ * pixel of maximise fire close). Transparent at rest - before, the
+ * UNFOCUSED window was the loud one, two accent squares on a dark header,
+ * while on the focused one they vanished into a header of the same colour.
+ * Hover shades min/max; pressed darkens all three; close goes red on hover
+ * and while a close is pending (CHECKED). A tapped cell drops its hover on
+ * release, since touch leaves the last tapped object hovered.
+ */
+static lv_style_t st_hdr_hov, st_hdr_prs, st_close_hot;
+static int ptr_is_touch;		/* the last pointer event was a touch */
+
+static void hdr_styles_init(void)
+{
+	static int done;
+
+	if (done)
+		return;
+	done = 1;
+	lv_style_init(&st_hdr_hov);
+	lv_style_set_bg_color(&st_hdr_hov, lv_color_white());
+	lv_style_set_bg_opa(&st_hdr_hov, 40);
+	lv_style_init(&st_hdr_prs);
+	lv_style_set_bg_color(&st_hdr_prs, lv_color_black());
+	lv_style_set_bg_opa(&st_hdr_prs, 80);
+	lv_style_init(&st_close_hot);
+	lv_style_set_bg_color(&st_close_hot, lv_color_hex(0xa33a3a));
+	lv_style_set_bg_opa(&st_close_hot, LV_OPA_COVER);
+}
+
+static void hdr_release_cb(lv_event_t *e)
+{
+	if (ptr_is_touch)
+		lv_obj_remove_state(lv_event_get_target(e), LV_STATE_HOVERED);
+}
+
 static lv_obj_t *hdr_button(lv_obj_t *hdr, const lv_image_dsc_t *icon,
 			    uint32_t col, lv_event_cb_t cb, void *user,
 			    lv_obj_t **iconout)
 {
 	lv_obj_t *b = lv_button_create(hdr);
 	lv_obj_t *im;
+	int close = (col == 0xa33a3a);
 
-	lv_obj_set_size(b, HDR_H - 6, HDR_H - 6);
+	hdr_styles_init();
+	lv_obj_set_size(b, 18, HDR_H);
 	lv_obj_set_style_radius(b, 0, 0);
 	lv_obj_set_style_pad_all(b, 0, 0);
-	lv_obj_set_style_bg_color(b, lv_color_hex(col), 0);
+	lv_obj_set_style_bg_opa(b, LV_OPA_TRANSP, 0);
 	lv_obj_set_style_shadow_width(b, 0, 0);
+	if (close) {
+		lv_obj_add_style(b, &st_close_hot, LV_STATE_HOVERED);
+		lv_obj_add_style(b, &st_close_hot, LV_STATE_CHECKED);
+	} else {
+		lv_obj_add_style(b, &st_hdr_hov, LV_STATE_HOVERED);
+	}
+	lv_obj_add_style(b, &st_hdr_prs, LV_STATE_PRESSED);
+	lv_obj_add_event_cb(b, hdr_release_cb, LV_EVENT_RELEASED, NULL);
 	lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, user);
 	im = lv_image_create(b);
 	lv_image_set_src(im, icon);
@@ -4141,9 +4401,10 @@ static void win_min_cb(lv_event_t *e)
 }
 
 /*
- * Task buttons show the window's state (QoL C1): the focused one in the
- * accent colour, a minimised one dimmed on the bar colour, the rest as
- * before. Run once per main-loop pass rather than from each of the half
+ * Task buttons show focus (QoL C1): the focused window in the accent colour,
+ * every other one - minimised or not - in the header colour. A third,
+ * dimmed "minimised" look was tried and dropped on review (2026-09-25):
+ * two states read more clearly than three. Run once per main-loop pass rather than from each of the half
  * dozen places that un-minimise a window, so none can be missed; it is a
  * compare per window and restyles (and so repaints) a button only when its
  * state actually changed.
@@ -4158,14 +4419,12 @@ static void tbtn_sync(void)
 
 		if (!w->win || !w->tbtn)
 			continue;
-		st = win_focus == w ? 3 : w->minimised ? 2 : 1;
+		st = win_focus == w ? 2 : 1;
 		if (st == w->tb_state)
 			continue;
 		w->tb_state = st;
-		lv_obj_set_style_bg_color(w->tbtn, lv_color_hex(st == 3 ?
-				COL_HDR_FOCUS : st == 2 ? COL_TASKBAR : COL_HDR), 0);
-		lv_obj_set_style_border_width(w->tbtn, st == 2 ? 1 : 0, 0);
-		lv_obj_set_style_border_color(w->tbtn, lv_color_hex(COL_HDR), 0);
+		lv_obj_set_style_bg_color(w->tbtn, lv_color_hex(st == 2 ?
+				COL_HDR_FOCUS : COL_HDR), 0);
 		if (w->tlabel) {
 			/*
 			 * The header text colour, explicitly: the theme's
@@ -4174,8 +4433,6 @@ static void tbtn_sync(void)
 			 */
 			lv_obj_set_style_text_color(w->tlabel,
 				lv_color_hex(COL_HDR_TEXT), 0);
-			lv_obj_set_style_text_opa(w->tlabel, st == 2 ?
-						  LV_OPA_60 : LV_OPA_COVER, 0);
 		}
 	}
 }
@@ -4194,8 +4451,7 @@ static void task_btn_cb(lv_event_t *e)
 	if (!w || !w->win)
 		return;
 	if (w->minimised) {
-		lv_obj_remove_flag(w->win, LV_OBJ_FLAG_HIDDEN);
-		w->minimised = 0;
+		win_unhide(w);
 	} else if (win_focus == w) {
 		win_minimise(w);
 		return;
@@ -4243,8 +4499,11 @@ static lv_obj_t *make_window(const char *title, int x, int y, int w, int h)
 	rec->hdr = hdr;
 	/* lv_win's default header is enormous on a 480 px tall screen */
 	lv_obj_set_height(hdr, HDR_H);
-	lv_obj_set_style_pad_all(hdr, 2, 0);
-	lv_obj_set_style_pad_column(hdr, 2, 0);
+	/* cells run the full header height, edge to edge (QoL C3) */
+	lv_obj_set_style_pad_ver(hdr, 0, 0);
+	lv_obj_set_style_pad_left(hdr, 4, 0);
+	lv_obj_set_style_pad_right(hdr, 0, 0);
+	lv_obj_set_style_pad_column(hdr, 0, 0);
 	lv_obj_set_style_text_font(hdr, FONT_UI, 0);
 	lv_obj_set_style_bg_color(hdr, lv_color_hex(COL_HDR), 0);
 	lv_obj_set_style_text_color(hdr, lv_color_hex(COL_HDR_TEXT), 0);
@@ -4278,7 +4537,8 @@ static lv_obj_t *make_window(const char *title, int x, int y, int w, int h)
 	hdr_button(hdr, &lvdesk_min_img, COL_HDR_FOCUS, win_min_cb, rec, NULL);
 	hdr_button(hdr, &lvdesk_max_img, COL_HDR_FOCUS, win_max_cb, rec,
 		   &rec->maxicon);
-	hdr_button(hdr, &lvdesk_close_img, 0xa33a3a, win_close_cb, rec, NULL);
+	rec->closebtn = hdr_button(hdr, &lvdesk_close_img, 0xa33a3a,
+				   win_close_cb, rec, NULL);
 
 	/* task bar entry */
 	btn = lv_button_create(taskbar);
@@ -4303,7 +4563,13 @@ static lv_obj_t *make_window(const char *title, int x, int y, int w, int h)
 		 */
 		lv_label_set_long_mode(l, LV_LABEL_LONG_MODE_CLIP);
 		lv_obj_set_width(l, LV_PCT(100));
-		lv_obj_align(l, LV_ALIGN_LEFT_MID, 3, 0);
+		/*
+		 * -1: centring the LINE box leaves room for descenders below
+		 * the baseline, so a title without any ("st", "xcalc") sat
+		 * 5 px from the top and 3 from the bottom. Measured on the
+		 * panel 2026-09-25; the tray clock is 6/6.
+		 */
+		lv_obj_align(l, LV_ALIGN_LEFT_MID, 3, -1);
 	}
 	rec->tb_state = 0;
 	win_set_focus(rec);
@@ -7651,11 +7917,19 @@ static lv_obj_t *popover_open(lv_obj_t *anchor, int w, int h)
  * which would have needed real grab semantics in xlite and its own text
  * stack. See docs/current-state.md (xfiles right-click).
  */
+/*
+ * The labels as the client sent them, by row. The reply must be exactly what
+ * was chosen; the row's label is DOTS now and would reply
+ * "A-very-long-lab..." (QoL C2's ship blocker).
+ */
+static char ctx_lbl[12][64];
+static int ctx_n;
+
 static void ctx_item_cb(lv_event_t *e)
 {
 	lv_obj_t *btn = lv_event_get_target(e);
-	lv_obj_t *list = lv_obj_get_parent(btn);
-	const char *txt = lv_list_get_button_text(list, btn);
+	int row = (int)lv_obj_get_index(btn);
+	const char *txt = row >= 0 && row < ctx_n ? ctx_lbl[row] : "";
 	char sel[64], path[sizeof(ctx_reply)];
 
 	/*
@@ -7699,6 +7973,9 @@ static void ctxmenu_open(const char *replyfifo, char *items)
 		return;
 
 	popover_close();	/* answers any pending menu with "" first */
+	for (i = 0; i < n; i++)
+		snprintf(ctx_lbl[i], sizeof(ctx_lbl[0]), "%s", labels[i]);
+	ctx_n = n;
 	snprintf(ctx_reply, sizeof(ctx_reply), "%s", replyfifo);
 	menu_popover_build(labels, n, maxlen, ptr_x, ptr_y, ctx_item_cb);
 	pop_owner = &owner_key;
@@ -7716,7 +7993,95 @@ static void ctxmenu_open(const char *replyfifo, char *items)
  * unlike DOTS, leaves the label's text untouched - the context menu replies
  * with the row's text, and DOTS would rewrite it to "A-very-long-lab...".
  */
-static lv_obj_t *list_row(lv_obj_t *list, const char *txt)
+/*
+ * The desktop theme's styles (QoL C2). Explicit colours, not LVGL's colour
+ * filter (compiled out on purpose: it would add a lookup to every colour
+ * fetch of every object every frame).
+ *   list rows  base panel colour; hover a pale accent; pressed a stronger
+ *              one; CHECKED (selected, connected, keyboard highlight) the
+ *              accent with white text, and explicit checked+hover and
+ *              checked+pressed, since HOVERED would otherwise win.
+ *              Hover on list rows ONLY: touch leaves the last tapped object
+ *              hovered, which is harmless here because a tap rebuilds or
+ *              closes the list.
+ *   buttons    pressed only - drawn at 65% over whatever is behind, which
+ *              darkens every flat button without knowing its colour.
+ *   keyboard   dark, with control keys still visible.
+ */
+static lv_style_t st_row, st_row_hov, st_row_prs, st_row_chk, st_row_chk_hov,
+		  st_row_chk_prs, st_btn_prs, st_kb, st_kb_it, st_kb_it_chk,
+		  st_kb_it_prs;
+
+static void desk_styles_init(void)
+{
+	lv_color_t acc = lv_color_hex(COL_HDR_FOCUS), pan = lv_color_hex(COL_PANEL);
+
+	lv_style_init(&st_row);
+	lv_style_set_bg_color(&st_row, pan);
+	lv_style_set_bg_opa(&st_row, LV_OPA_COVER);
+	lv_style_set_text_color(&st_row, lv_color_hex(COL_PANEL_TEXT));
+	lv_style_init(&st_row_hov);
+	lv_style_set_bg_color(&st_row_hov, lv_color_mix(acc, pan, 40));
+	lv_style_init(&st_row_prs);
+	lv_style_set_bg_color(&st_row_prs, lv_color_mix(acc, pan, 110));
+	lv_style_init(&st_row_chk);
+	lv_style_set_bg_color(&st_row_chk, acc);
+	lv_style_set_text_color(&st_row_chk, lv_color_hex(COL_HDR_TEXT));
+	lv_style_init(&st_row_chk_hov);
+	lv_style_set_bg_color(&st_row_chk_hov, lv_color_mix(lv_color_white(), acc, 30));
+	lv_style_set_text_color(&st_row_chk_hov, lv_color_hex(COL_HDR_TEXT));
+	lv_style_init(&st_row_chk_prs);
+	lv_style_set_bg_color(&st_row_chk_prs, lv_color_mix(lv_color_black(), acc, 50));
+	lv_style_set_text_color(&st_row_chk_prs, lv_color_hex(COL_HDR_TEXT));
+	lv_style_init(&st_btn_prs);
+	lv_style_set_bg_opa(&st_btn_prs, LV_OPA_60);
+	lv_style_init(&st_kb);
+	lv_style_set_bg_color(&st_kb, lv_color_hex(COL_TASKBAR));
+	lv_style_set_bg_opa(&st_kb, LV_OPA_COVER);
+	lv_style_set_pad_all(&st_kb, 3);
+	lv_style_set_pad_row(&st_kb, 3);	/* keys separate, not one slab */
+	lv_style_set_pad_column(&st_kb, 3);
+	lv_style_init(&st_kb_it);
+	lv_style_set_bg_color(&st_kb_it, lv_color_hex(COL_HDR));
+	lv_style_set_bg_opa(&st_kb_it, LV_OPA_COVER);
+	lv_style_set_text_color(&st_kb_it, lv_color_hex(COL_HDR_TEXT));
+	lv_style_init(&st_kb_it_chk);
+	lv_style_set_bg_color(&st_kb_it_chk, lv_color_hex(0x22384c));
+	lv_style_init(&st_kb_it_prs);
+	lv_style_set_bg_color(&st_kb_it_prs, acc);
+}
+
+static void desk_theme_apply(lv_theme_t *th, lv_obj_t *o)
+{
+	(void)th;
+	if (lv_obj_check_type(o, &lv_list_button_class)) {
+		lv_obj_add_style(o, &st_row, 0);
+		lv_obj_add_style(o, &st_row_hov, LV_STATE_HOVERED);
+		lv_obj_add_style(o, &st_row_prs, LV_STATE_PRESSED);
+		lv_obj_add_style(o, &st_row_chk, LV_STATE_CHECKED);
+		lv_obj_add_style(o, &st_row_chk_hov,
+				 LV_STATE_CHECKED | LV_STATE_HOVERED);
+		lv_obj_add_style(o, &st_row_chk_prs,
+				 LV_STATE_CHECKED | LV_STATE_PRESSED);
+	} else if (lv_obj_check_type(o, &lv_button_class)) {
+		lv_obj_add_style(o, &st_btn_prs, LV_STATE_PRESSED);
+	} else if (lv_obj_check_type(o, &lv_keyboard_class)) {
+		lv_obj_add_style(o, &st_kb, 0);
+		lv_obj_add_style(o, &st_kb_it, LV_PART_ITEMS);
+		lv_obj_add_style(o, &st_kb_it_chk, LV_PART_ITEMS | LV_STATE_CHECKED);
+		lv_obj_add_style(o, &st_kb_it_prs, LV_PART_ITEMS | LV_STATE_PRESSED);
+	}
+}
+
+/*
+ * QoL C2: DOTS on ONE line (DOTS without max_lines wraps), growing into the
+ * row's free width and stopping `reserve` px short of the right edge, where
+ * the Wi-Fi and Bluetooth glyph columns sit (they are IGNORE_LAYOUT at fixed
+ * offsets, so a margin on the label moves only the label). Nothing may read
+ * a row's text back after this: DOTS rewrites it. The context menu keeps
+ * its own copy (ctx_lbl) for that reason.
+ */
+static lv_obj_t *list_row_r(lv_obj_t *list, const char *txt, int32_t reserve)
 {
 	lv_obj_t *b = lv_list_add_button(list, NULL, txt);
 	uint32_t k;
@@ -7724,10 +8089,20 @@ static lv_obj_t *list_row(lv_obj_t *list, const char *txt)
 	for (k = 0; k < lv_obj_get_child_count(b); k++) {
 		lv_obj_t *c = lv_obj_get_child(b, (int32_t)k);
 
-		if (lv_obj_check_type(c, &lv_label_class))
-			lv_label_set_long_mode(c, LV_LABEL_LONG_MODE_CLIP);
+		if (lv_obj_check_type(c, &lv_label_class)) {
+			lv_label_set_long_mode(c, LV_LABEL_LONG_MODE_DOTS);
+			lv_label_set_max_lines(c, 1);
+			lv_obj_set_width(c, 1);		/* flex base; grows */
+			lv_obj_set_flex_grow(c, 1);
+			lv_obj_set_style_margin_right(c, reserve, 0);
+		}
 	}
 	return b;
+}
+
+static lv_obj_t *list_row(lv_obj_t *list, const char *txt)
+{
+	return list_row_r(list, txt, 0);
 }
 
 static void menu_popover_build(char **labels, int n, size_t maxlen,
@@ -7802,17 +8177,12 @@ static void menu_select(int sel)
 
 	if (!menu_list || sel >= menu_rows)
 		return;
-	if (menu_sel >= 0 && (r = lv_obj_get_child(menu_list, menu_sel))) {
-		/* back to the theme's own row style, not a guessed colour */
-		lv_obj_remove_local_style_prop(r, LV_STYLE_BG_COLOR, 0);
-		lv_obj_remove_local_style_prop(r, LV_STYLE_BG_OPA, 0);
-		lv_obj_remove_local_style_prop(r, LV_STYLE_TEXT_COLOR, 0);
-	}
+	/* the theme's CHECKED row style (QoL C2), so hover still shows */
+	if (menu_sel >= 0 && (r = lv_obj_get_child(menu_list, menu_sel)))
+		lv_obj_remove_state(r, LV_STATE_CHECKED);
 	menu_sel = sel;
 	if (sel >= 0 && (r = lv_obj_get_child(menu_list, sel))) {
-		lv_obj_set_style_bg_color(r, lv_color_hex(COL_HDR_FOCUS), 0);
-		lv_obj_set_style_bg_opa(r, LV_OPA_COVER, 0);
-		lv_obj_set_style_text_color(r, lv_color_hex(COL_HDR_TEXT), 0);
+		lv_obj_add_state(r, LV_STATE_CHECKED);
 		lv_obj_scroll_to_view(r, LV_ANIM_OFF);
 	}
 }
@@ -7979,10 +8349,8 @@ static int xwin_raise_by_name(const char *name)
 		r = win_find(xwins[i].win);
 		if (!r)
 			continue;
-		if (r->minimised) {
-			lv_obj_remove_flag(r->win, LV_OBJ_FLAG_HIDDEN);
-			r->minimised = 0;
-		}
+		if (r->minimised)
+			win_unhide(r);
 		lv_obj_move_foreground(r->win);
 		win_set_focus(r);
 		return 1;
@@ -8296,6 +8664,57 @@ static void start_btn_cb(lv_event_t *e)
 			start_btn);
 }
 
+/*
+ * The terminal window is being closed. win_close deletes the LVGL objects right
+ * after this returns.
+ *
+ * Hang up the shell, as closing any terminal emulator does. Closing the master
+ * delivers SIGHUP to the session, the SIGHUP here covers a shell that ignores
+ * the tty going away, and SIGCHLD reaps it. Then put the struct back into its
+ * start-up state, so every "term.win is NULL" test (term_focused,
+ * xwin_above_term, the pointer routing) is true again and the next !terminal
+ * or ctl run builds a fresh window and shell.
+ */
+static void term_on_close(void)
+{
+	pid_t child = term.child;
+
+	if (term.fd >= 0)
+		close(term.fd);
+	if (child > 0)
+		kill(child, SIGHUP);
+	/*
+	 * Everything up to the scrollback goes back to zero, as in .bss at
+	 * start-up: the object pointers, the grid, the cursor, the parser and
+	 * the size. The grid pages are resident anyway.
+	 */
+	memset(&term, 0, offsetof(struct term, sb));
+	term.fd = -1;
+	term.sb_head = term.sb_count = term.view = 0;
+	/*
+	 * Hand the scrollback pages back. This is safe only because nothing
+	 * pre-fills or reads the ring past sb_count, which is now 0: a page
+	 * dropped here comes back zero-filled the next time term_scroll writes
+	 * it. Only whole pages strictly inside sb..sbattr are dropped. They lie
+	 * past the end of .data, so they are anonymous memory and never the
+	 * file-backed tail page, which would come back as file contents. A
+	 * kernel without madvise just keeps the pages, which is harmless.
+	 */
+	{
+		long pg = sysconf(_SC_PAGESIZE);
+		uintptr_t a = (uintptr_t)term.sb;
+		uintptr_t b = (uintptr_t)&term.sbattr[TERM_SCROLLBACK];
+
+		if (pg > 0) {
+			a = (a + pg - 1) & ~(uintptr_t)(pg - 1);
+			b &= ~(uintptr_t)(pg - 1);
+			if (b > a)
+				madvise((void *)a, b - a, MADV_DONTNEED);
+		}
+	}
+	con_mode = 0;		/* a closed console is no longer docked */
+}
+
 /* Type one command line into the built-in terminal and bring it up front. */
 /*
  * Build the terminal window. Called the first time a terminal is actually
@@ -8307,54 +8726,6 @@ static void start_btn_cb(lv_event_t *e)
  * terminal with no prompt and no cursor, and anything typed into it sat in the
  * pty until /bin/sh started and echoed the lot back in one burst.
  */
-/*
- * The terminal window's teardown, run by win_close() before it deletes the
- * window - so the close button, Alt-F4 and ctl "close N" all reach it.
- *
- * Nothing set on_close before this, so closing the terminal deleted term.win
- * and its 48 row labels while term.win, term.content and term.rows[] went on
- * pointing into the freed LVGL pool, and the shell and pty stayed alive. The
- * next output from that shell (a ctl "run" from xfiles, say) went through
- * term_poll() into lv_label_set_text() on freed objects - and TLSF reuses
- * blocks, so that scribbled over whatever lived there next rather than
- * crashing cleanly. "System > Terminal" meanwhile did nothing at all:
- * term_build_window() saw a non-NULL term.win and returned.
- *
- * Deletes no objects itself; win_close() does that straight after.
- */
-static void term_on_close(void)
-{
-	/*
-	 * Closing the master hangs up the slave, and the kernel sends SIGHUP
-	 * to the session leader and the foreground process group. Background
-	 * "&" jobs sit in their own groups and survive, which is what every
-	 * terminal does. The kill() is belt and braces for a shell that
-	 * ignores the hangup; the SIGCHLD reaper collects it either way.
-	 */
-	if (term.fd >= 0) {
-		close(term.fd);
-		term.fd = -1;
-	}
-	if (term.child > 0)
-		kill(term.child, SIGHUP);
-	term.child = 0;		/* the reaper must not mistake it for a live shell */
-	term.win = term.content = NULL;
-	/*
-	 * A reopened terminal starts clean. term_build_window() blanks the
-	 * grid, attributes and scrollback, but not the cursor, the ring
-	 * origin, the scrollback indices or the CSI parser - left alone, a new
-	 * shell would open with a stale cursor, "scrollback" of blank lines,
-	 * and a half-parsed escape sequence eating its first bytes.
-	 */
-	memset(term.rows, 0, sizeof(term.rows));
-	memset(term.rowdirty, 0, sizeof(term.rowdirty));
-	term.top = term.cx = term.cy = 0;
-	term.sb_head = term.sb_count = term.view = 0;
-	term.esc = term.npar = term.bold = 0;
-	term.need_fit = term.dirty = 0;
-	con_mode = 0;		/* a closed console is no longer docked */
-}
-
 static void term_build_window(void)
 {
 	lv_obj_t *content;
@@ -8377,14 +8748,29 @@ static void term_build_window(void)
 	lv_obj_set_style_bg_color(content, lv_color_hex(COL_TERM_BG), 0);
 	lv_obj_set_style_pad_all(content, 4, 0);
 	lv_obj_remove_flag(content, LV_OBJ_FLAG_SCROLLABLE);
+	/*
+	 * Only the live grid is initialised. The scrollback is left alone on
+	 * purpose (see struct term): the old memsets, and the NUL written into
+	 * every sb row, touched ~48 kB of .bss that sb_count keeps unread
+	 * anyway, and term_render_row stops at cols and maps a 0 byte to a
+	 * space, so it needs no terminators.
+	 */
 	memset(term.grid, ' ', sizeof(term.grid));
-	memset(term.sb, ' ', sizeof(term.sb));
 	memset(term.attr, TERM_FG_DEFAULT, sizeof(term.attr));
-	memset(term.sbattr, TERM_FG_DEFAULT, sizeof(term.sbattr));
 	term.cur_fg = TERM_FG_DEFAULT;
+	{
+		static int sb_read;
+
+		if (!sb_read) {
+			const char *e = getenv("LVDESK_TERM_SB");
+
+			sb_read = 1;
+			if (e && atoi(e) >= 1 && atoi(e) <= TERM_SCROLLBACK)
+				term_sb_max = atoi(e);
+		}
+	}
 	for (int r = 0; r < TERM_MAXROWS; r++) {
 		term.grid[r][TERM_MAXCOLS] = 0;
-		term.sb[r % TERM_SCROLLBACK][TERM_MAXCOLS] = 0;
 		term.rows[r] = lv_label_create(content);
 		lv_obj_set_style_text_font(term.rows[r], FONT_TERM, 0);
 		lv_obj_set_style_text_color(term.rows[r],
@@ -8395,8 +8781,6 @@ static void term_build_window(void)
 		lv_label_set_text(term.rows[r], "");
 		lv_obj_add_flag(term.rows[r], LV_OBJ_FLAG_HIDDEN);
 	}
-	for (int r = 0; r < TERM_SCROLLBACK; r++)
-		term.sb[r][TERM_MAXCOLS] = 0;
 	term.cols = 0;
 	term.nrows = 0;
 	term_fit();
@@ -8427,10 +8811,8 @@ static void term_raise_and_run(const char *cmd)
 	}
 	w = win_find(term.win);
 	if (w) {
-		if (w->minimised) {
-			lv_obj_remove_flag(w->win, LV_OBJ_FLAG_HIDDEN);
-			w->minimised = 0;
-		}
+		if (w->minimised)
+			win_unhide(w);
 		lv_obj_move_foreground(w->win);
 		win_set_focus(w);
 	}
@@ -8914,7 +9296,7 @@ static void wifi_render(void)
 		lv_obj_t *b, *mark;
 		const char *glyph;
 
-		b = list_row(wifi_list, aps[i].ssid);
+		b = list_row_r(wifi_list, aps[i].ssid, 62);	/* tick, lock, bars */
 		lv_obj_set_style_text_font(b, FONT_UI, 0);
 		lv_obj_set_style_pad_ver(b, 2, 0);
 		/* The list sits flush with the popover edge, so the first
@@ -8933,8 +9315,7 @@ static void wifi_render(void)
 		lv_obj_add_event_cb(b, wifi_select_cb, LV_EVENT_CLICKED,
 				    (void *)(intptr_t)i);
 		if (i == ap_sel)
-			lv_obj_set_style_bg_color(b,
-						  lv_color_hex(COL_HDR_FOCUS), 0);
+			lv_obj_add_state(b, LV_STATE_CHECKED);	/* theme: accent */
 
 		if (i == ap_sel && !aps[i].current) {
 			lv_obj_t *cb = lv_button_create(b);
@@ -8989,7 +9370,18 @@ static void wifi_render(void)
 		{
 			lv_obj_t *ic = lv_image_create(b);
 
+			/*
+			 * The glyphs are drawn light, for the old grey rows; on
+			 * the panel-coloured rows (QoL C2) they vanished. Tint
+			 * them with the row's text colour - white on the
+			 * selected (accent) row.
+			 */
+			lv_color_t gc = lv_color_hex(i == ap_sel ? COL_HDR_TEXT
+							       : COL_PANEL_TEXT);
+
 			lv_image_set_src(ic, ap_bars_img(&aps[i]));
+			lv_obj_set_style_image_recolor(ic, gc, 0);
+			lv_obj_set_style_image_recolor_opa(ic, LV_OPA_COVER, 0);
 			lv_obj_add_flag(ic, LV_OBJ_FLAG_IGNORE_LAYOUT);
 			lv_obj_align(ic, LV_ALIGN_RIGHT_MID, -6, 0);
 			lv_obj_remove_flag(ic, LV_OBJ_FLAG_CLICKABLE);
@@ -8997,6 +9389,8 @@ static void wifi_render(void)
 				lv_obj_t *lk = lv_image_create(b);
 
 				lv_image_set_src(lk, &lvdesk_lock_img);
+				lv_obj_set_style_image_recolor(lk, gc, 0);
+				lv_obj_set_style_image_recolor_opa(lk, LV_OPA_COVER, 0);
 				lv_obj_add_flag(lk, LV_OBJ_FLAG_IGNORE_LAYOUT);
 				lv_obj_align(lk, LV_ALIGN_RIGHT_MID, -22, 0);
 				lv_obj_remove_flag(lk, LV_OBJ_FLAG_CLICKABLE);
@@ -9364,6 +9758,25 @@ static void pw_cancel_cb(lv_event_t *e) { (void)e; pw_close(); }
  * keyboard would be useless there. Physical keys are routed into the text area
  * by kbd_key() while this is up.
  */
+/* ctl `pop` also reports the passphrase keyboard, for its tests. */
+static void pw_debug(void)
+{
+	lv_area_t a;
+
+	if (!pw_kb) {
+		printf("lvdesk: pw_kb none\n");
+		return;
+	}
+	lv_obj_get_coords(pw_kb, &a);
+	printf("lvdesk: pw_kb %dx%d+%d+%d hidden=%d index=%d of %d valid=%d\n",
+	       (int)lv_area_get_width(&a), (int)lv_area_get_height(&a),
+	       (int)a.x1, (int)a.y1,
+	       lv_obj_has_flag(pw_kb, LV_OBJ_FLAG_HIDDEN),
+	       (int)lv_obj_get_index(pw_kb),
+	       (int)lv_obj_get_child_count(lv_obj_get_parent(pw_kb)),
+	       lv_obj_is_valid(pw_kb));
+}
+
 static void pw_prompt(int idx)
 {
 	int32_t sw = lv_display_get_horizontal_resolution(NULL);
@@ -9421,7 +9834,14 @@ static void pw_prompt(int idx)
 	 */
 	kb = lv_keyboard_create(lv_layer_top());
 	lv_obj_set_size(kb, sw, 150);
-	lv_obj_set_pos(kb, 0, sh - TASKBAR_H - 150);
+	/*
+	 * ALIGN, not set_pos. lv_keyboard aligns itself BOTTOM_MID when it is
+	 * created, so set_pos(0, 308) was an offset FROM THE BOTTOM and put the
+	 * keyboard at y = 638, off the 480 px panel - it has never been on
+	 * screen (found 2026-09-25 through ctl `pop`, QoL C2). Seated on the
+	 * task bar, where the prompt above it expects it.
+	 */
+	lv_obj_align(kb, LV_ALIGN_BOTTOM_MID, 0, -TASKBAR_H);
 	lv_obj_set_style_radius(kb, 0, 0);
 	lv_keyboard_set_textarea(kb, pw_ta);
 	pw_kb = kb;
@@ -9581,6 +10001,8 @@ struct btdev {
 static struct btdev btdevs[BT_MAXDEV];
 static int btdev_n;
 static int bt_fd = -1;
+
+static void tray_bt_update(void);	/* after bt_powered */
 static int bt_powered, bt_scanning;
 static char bt_prompt[64];		/* passkey / confirm text for the panel */
 static char bt_confirm_addr[18];
@@ -9642,6 +10064,33 @@ static struct btdev *btdev_find(const char *addr)
 static void audio_sink_lost(const char *addr);
 
 /* One DEV line: DEV <addr> paired=x conn=x trusted=x kind=k bearer=b rssi=n "name" */
+/*
+ * The Bluetooth tray glyph (QoL C6): off dim, powered bright, connected in
+ * the accent. Restyled only when that state changes - it used to be set on
+ * every batch of daemon lines, and each set invalidates and costs a commit,
+ * several a second during a scan.
+ */
+static int bt_icon_state = -1;
+
+static void tray_bt_update(void)
+{
+	int st = 0, i;
+
+	if (!bt_tray_icon)
+		return;
+	for (i = 0; i < btdev_n; i++)
+		if (btdevs[i].conn)
+			st = 2;
+	if (!st && bt_powered && bt_fd >= 0)
+		st = 1;
+	if (st == bt_icon_state)
+		return;
+	bt_icon_state = st;
+	lv_obj_set_style_text_color(bt_tray_icon, lv_color_hex(st == 2 ?
+				    COL_HDR_FOCUS : COL_HDR_TEXT), 0);
+	lv_obj_set_style_text_opa(bt_tray_icon, st ? LV_OPA_COVER : LV_OPA_40, 0);
+}
+
 static int audio_toasted;	/* audio_sink_lost() already said it */
 
 static void bt_dev_line(char *l)
@@ -9789,17 +10238,10 @@ static int bt_ev_poll(void)
 		bt_fd = -1;
 		btdev_n = 0;
 	}
-	if (busy) {
-		if (bt_tray_icon) {
-			int any = 0, i;
-
-			for (i = 0; i < btdev_n; i++)
-				any |= btdevs[i].conn;
-			lv_obj_set_style_text_opa(bt_tray_icon,
-						  any ? LV_OPA_COVER :
-						  bt_powered ? LV_OPA_70 :
-						  LV_OPA_40, 0);
-		}
+	if (n == 0)
+		bt_powered = 0;		/* the icon must not stay lit (QoL C6) */
+	if (busy || n == 0) {
+		tray_bt_update();
 		if (bt_list)
 			bt_render();
 	}
@@ -9923,9 +10365,9 @@ static void bt_render(void)
 				lv_obj_set_style_pad_left(h, 6, 0);
 				shown = 1;
 			}
-			b = list_row(bt_list,
-				     btdevs[i].name[0] ? btdevs[i].name :
-				     btdevs[i].addr);
+			b = list_row_r(bt_list,
+				       btdevs[i].name[0] ? btdevs[i].name :
+				       btdevs[i].addr, 48);	/* state, class */
 			lv_obj_set_style_text_font(b, FONT_UI, 0);
 			lv_obj_set_style_pad_ver(b, 2, 0);
 			lv_obj_set_style_pad_left(b, 6, 0);
@@ -9936,8 +10378,7 @@ static void bt_render(void)
 			lv_obj_add_event_cb(b, bt_row_cb, LV_EVENT_CLICKED,
 					    (void *)(intptr_t)i);
 			if (btdevs[i].conn)
-				lv_obj_set_style_bg_color(b,
-					lv_color_hex(COL_HDR_FOCUS), 0);
+				lv_obj_add_state(b, LV_STATE_CHECKED);
 			/* an unpaired row is a weaker offer, so say so */
 			if (pass == 1)
 				lv_obj_set_style_text_opa(b, LV_OPA_70, 0);
@@ -10133,6 +10574,7 @@ static void vol_key(int code, int value)
 		snprintf(t, sizeof(t), vol_muted ? "Muted" : "Volume %d%%",
 			 vol_level);
 		toast_show_k("volume", t, 1500);
+		tray_vol_update();
 		return;
 	}
 	v = vol_level + (code == KEY_VOLUMEUP ? 5 : -5);
@@ -10149,6 +10591,90 @@ static void vol_key(int code, int value)
 	}
 	snprintf(t, sizeof(t), "Volume %d%%", v);
 	toast_show_k("volume", t, 1500);
+	tray_vol_update();
+}
+
+/*
+ * The volume tray glyph follows the level (QoL C6): muted or 0 the MUTE
+ * glyph at 40%, low MID, high MAX; the accent when the output is Bluetooth.
+ * Only on a change of bucket or output. Levels changed outside lvdesk
+ * (amixer, the earpiece's own buttons) are knowingly not tracked: polling
+ * for them would add idle syscalls.
+ */
+/*
+ * The clock's popover (QoL C6): the date, uptime and load. Integers only -
+ * no %f, double is a library call on this board. "(not synced)" until ntpd
+ * has stepped the clock (S30clock writes /tmp/clock-stepped): there is no
+ * RTC, so before that the date is whatever the build left.
+ */
+static void tray_clock_cb(lv_event_t *e)
+{
+	lv_obj_t *pop = popover_open(lv_event_get_target(e), 230, 70);
+	lv_obj_t *l;
+	char date[48], line[80], ld[32] = "";
+	time_t t = time(NULL);
+	struct tm tm;
+	long up = -1;
+	FILE *f;
+
+	if (!pop)
+		return;
+	localtime_r(&t, &tm);
+	strftime(date, sizeof(date), "%A %e %B", &tm);
+	l = lv_label_create(pop);
+	lv_obj_set_style_text_font(l, FONT_UI_BIG, 0);
+	lv_label_set_text(l, date);
+	lv_obj_set_pos(l, 0, 0);
+	/*
+	 * /proc, read as text: `sysinfo` here is the task bar label, which
+	 * shadows the libc call, and the load is already decimal text there.
+	 */
+	if ((f = fopen("/proc/uptime", "r"))) {
+		if (fscanf(f, "%ld", &up) != 1)
+			up = -1;
+		fclose(f);
+	}
+	if ((f = fopen("/proc/loadavg", "r"))) {
+		if (fscanf(f, "%31s", ld) != 1)
+			ld[0] = 0;
+		fclose(f);
+	}
+	if (up >= 0)
+		snprintf(line, sizeof(line), "up %ldh %02ldm  load %s%s",
+			 up / 3600, (up / 60) % 60, ld,
+			 access("/tmp/clock-stepped", F_OK) ? "  (not synced)" : "");
+	else
+		snprintf(line, sizeof(line), "%s",
+			 access("/tmp/clock-stepped", F_OK) ? "(not synced)" : "");
+	l = lv_label_create(pop);
+	lv_label_set_text(l, line);
+	lv_obj_set_pos(l, 0, 26);
+}
+
+static int vol_icon_state = -1;
+
+static void tray_vol_update(void)
+{
+	int v, st;
+
+	if (!vol_tray_icon)
+		return;
+	if (vol_muted < 0)
+		vol_muted = state_get("muted", 0);
+	v = vol_level >= 0 ? vol_level :
+	    audio_out_bt ? state_get("volume_bt", 60) : state_get("volume", 40);
+	st = (vol_muted || v == 0) ? 0 : v < 50 ? 1 : 2;
+	st |= audio_out_bt ? 4 : 0;
+	if (st == vol_icon_state)
+		return;
+	vol_icon_state = st;
+	lv_label_set_text(vol_tray_icon, (st & 3) == 0 ? LV_SYMBOL_MUTE :
+			  (st & 3) == 1 ? LV_SYMBOL_VOLUME_MID :
+					  LV_SYMBOL_VOLUME_MAX);
+	lv_obj_set_style_text_opa(vol_tray_icon, (st & 3) ? LV_OPA_COVER :
+				  LV_OPA_40, 0);
+	lv_obj_set_style_text_color(vol_tray_icon, lv_color_hex(audio_out_bt ?
+				    COL_HDR_FOCUS : COL_HDR_TEXT), 0);
 }
 
 static void vol_set_cb(lv_event_t *e)
@@ -10167,6 +10693,7 @@ static void vol_set_cb(lv_event_t *e)
 	vol_level = v;			/* the keys step from here */
 	vol_muted = 0;
 	state_set("muted", 0);
+	tray_vol_update();
 	if (!audio_out_bt)
 		audio_bong();
 }
@@ -10235,6 +10762,7 @@ static void audio_out_cb(lv_event_t *e)
 
 	audio_out_bt = bt;
 	audio_route_write(bt);
+	vol_level = -1;			/* the other output's level applies */
 	if (bt) {
 		for (i = 0; i < btdev_n; i++)
 			if (btdevs[i].paired && !strcmp(btdevs[i].kind, "audio")) {
@@ -10249,6 +10777,7 @@ static void audio_out_cb(lv_event_t *e)
 		audio_set_pct(state_get("muted", 0) ? 0 :
 			      state_get("volume", audio_get_pct()));
 	}
+	tray_vol_update();
 	popover_close();
 }
 
@@ -10280,6 +10809,8 @@ static void audio_sink_lost(const char *addr)
 	audio_out_bt = 0;
 	audio_route_write(0);
 	bt_cmd("route off");
+	vol_level = -1;
+	tray_vol_update();
 	{
 		const struct btdev *d = btdev_find(addr);
 		char t[96];
@@ -11185,6 +11716,7 @@ static int mouse_poll(void)
 				continue;
 			}
 			if (ev.type == EV_REL) {
+				ptr_is_touch = 0;
 				if (ev.code == REL_X) {
 					if (mouse_raw[i]) vdx += ev.value;
 					else rdx += ev.value;
@@ -11234,6 +11766,7 @@ static int mouse_poll(void)
 						}
 					}
 			} else if (ev.type == EV_ABS && mouse_touch[i]) {
+				ptr_is_touch = 1;
 				/*
 				 * Absolute position, panel coordinates 1:1
 				 * with the screen. Assign, never accelerate:
@@ -11338,6 +11871,8 @@ static int mouse_poll(void)
 		}
 	}
 
+	if ((rdx || rdy || vdx || vdy) && sw_n)
+		sw_ms = lv_tick_get();	/* aiming at the switcher: no timeout */
 	if (rdx || rdy) {
 		uint32_t now = ev_ms ? ev_ms : lv_tick_get();
 		uint32_t dt = now - last_move_ms;
@@ -12060,8 +12595,25 @@ int main(void)
 	{
 		lv_theme_t *th = lv_theme_simple_init(disp);
 
-		if (th)
-			lv_display_set_theme(disp, th);
+		/*
+		 * The desktop's own child theme over simple (QoL C2): pressed,
+		 * hover and checked feedback, which simple has none of. No
+		 * transitions - a transition is an animation, and an animation
+		 * is a repaint every frame.
+		 */
+		if (th) {
+			static lv_theme_t *desk_th;
+
+			desk_th = lv_theme_create();
+			if (desk_th) {
+				lv_theme_set_parent(desk_th, th);
+				lv_theme_set_apply_cb(desk_th, desk_theme_apply);
+				desk_styles_init();
+				lv_display_set_theme(disp, desk_th);
+			} else {
+				lv_display_set_theme(disp, th);
+			}
+		}
 	}
 
 	scr = lv_screen_active();
@@ -12181,7 +12733,8 @@ int main(void)
 		lv_obj_set_style_text_font(sysinfo, FONT_UI, 0);
 		lv_obj_set_style_text_color(sysinfo,
 					   lv_color_hex(COL_HDR_TEXT), 0);
-		lv_label_set_text(sysinfo, "M: --KB");
+		/* the same form as the reading, "mem 3.9M", until it arrives */
+		lv_label_set_text(sysinfo, "mem --");
 
 		/*
 		 * Wi-Fi. Same glyph as ever, but layered so signal strength
@@ -12250,6 +12803,8 @@ int main(void)
 		audio_route_read();	/* where is the output pointing now? */
 		vol_tray_icon = l = lv_label_create(tray);
 		lv_label_set_text(l, LV_SYMBOL_VOLUME_MAX);
+		/* fixed width: the three glyphs differ, and the tray is flex-END */
+		lv_obj_set_width(l, 14);
 		lv_obj_set_style_text_font(l, FONT_UI, 0);
 		lv_obj_set_style_text_color(l, lv_color_hex(COL_HDR_TEXT), 0);
 		lv_obj_add_flag(l, LV_OBJ_FLAG_CLICKABLE);
@@ -12261,7 +12816,13 @@ int main(void)
 		lv_obj_set_style_text_color(clock_lbl,
 					    lv_color_hex(COL_HDR_TEXT), 0);
 		lv_label_set_text(clock_lbl, "--:--");
+		lv_obj_add_flag(clock_lbl, LV_OBJ_FLAG_CLICKABLE);
+		lv_obj_set_ext_click_area(clock_lbl, TRAY_TOUCH_PAD);
+		lv_obj_add_event_cb(clock_lbl, tray_clock_cb, LV_EVENT_CLICKED,
+				    NULL);
 		clock_update();
+		tray_vol_update();
+		tray_bt_update();
 	}
 
 	/*
@@ -12702,6 +13263,15 @@ int main(void)
 		 */
 		xshim_flush();
 
+		/*
+		 * Backstop for deferred terminal rendering (term_visible).
+		 * It catches the ways a terminal becomes visible, or dirty,
+		 * without the pty being readable: leaving fullscreen, and
+		 * PageUp/wheel scrollback from kbd_poll or mouse_poll. The
+		 * cost when there is nothing to draw is one test of an int.
+		 */
+		if (term.dirty && term_visible())
+			term_render();
 
 		/*
 		 * Redraw *now*, not when LVGL's refresh timer next comes round.

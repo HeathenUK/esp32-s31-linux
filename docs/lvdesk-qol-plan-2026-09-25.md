@@ -35,6 +35,66 @@ cdoom (883 puts) and quake (motion 12, keys 4).
 Still open from the programme: everything else, starting with A3 (the
 drop-down console, diff 01, which needs rebasing onto these fixes).
 
+## Status, 2026-09-25 night: M3 (C2, B4, C3, C6) and A4
+
+- **C2 theme.**
+  - A child theme over simple. List rows get base, hover, pressed and CHECKED
+    styles, with explicit checked+hover and checked+pressed combinations.
+    Buttons get a pressed style at 60% opacity.
+  - The selected Wi-Fi row, a connected BT row and the keyboard-menu highlight
+    are the CHECKED state, not local colours, so hover still shows on them.
+  - Rows are DOTS on one line, with a right margin clear of the glyph columns
+    (Wi-Fi 62 px, BT 48 px). Wi-Fi glyphs are tinted to the row text colour,
+    since they vanished on the panel colour.
+  - Context-menu replies come from the labels saved at open. A 61-char label
+    returns in full; the 63-byte limit is unchanged from before.
+  - **Found: the passphrase keyboard had never been on screen.** lv_keyboard
+    aligns BOTTOM_MID on creation, so `set_pos(0, 308)` was an offset from the
+    bottom and put it at y = 638. It is now aligned bottom, above the task bar,
+    dark-themed with 3 px key gaps. Found through ctl `pop`, which now also
+    prints the keyboard's geometry.
+- **B4 switcher.**
+  - It is not opened in fullscreen. Minimised windows come after the visible
+    ones, dimmed with a "-" prefix, and choosing one restores it.
+  - Rows are one line: 22 px rows, 300 px wide, DOTS.
+  - Esc cancels, arrows move, Enter commits, and a click on a row commits. The
+    panel is clickable, so clicks no longer fall through.
+  - Super+Tab walks and commits on Super release. Pointer motion holds off the
+    4 s timeout. Only the two changed rows repaint.
+  - `lvdesk-switcher-test.sh`: Esc keeps focus; Tab, Down, Enter restores and
+    focuses the minimised xclock.
+- **C3 title bars.**
+  - Full-height 18x20 cells with no gaps, transparent at rest. Min and max get
+    a white 40 hover, all three a black 80 press. Close goes red on hover and
+    stays red (CHECKED) for the 3 s close grace.
+  - A touch release clears hover. Unfocused titles dim to 0xa9b8c6, on the
+    label only.
+- **C6 tray.**
+  - The BT glyph is restyled only on a state change (off 40%, on, connected
+    accent). It used to be set on every batch of daemon lines, and a daemon
+    exit left it lit.
+  - The volume glyph follows the level (mute, mid, max), is 40% when muted,
+    accent on BT, and has a fixed 14 px width.
+  - Memory reads "mem 3.9M" in tenths of a MB, integer maths.
+  - The clock popover shows the date, uptime, load and "(not synced)" before
+    ntpd steps. There is a ctl `tray clock`.
+- **Task label centring** (asked about in review). Measured on the panel: 5 px
+  above and 3 below, because the line box includes descender room. Lifted
+  1 px, now 4/4; the tray clock is 6/6.
+- **Review changes.** The task buttons have two states, focused (accent) and
+  everything else (header colour). The dimmed "minimised" third state was
+  dropped. The memory placeholder is "mem --", the same form as the reading.
+- **Shipped** in XIP (lvdesk md5 cf76c943). All eleven feature tests pass on
+  this build. x11-compat-gate's close-button subset (xcalc, st, prboom) passes
+  after C3 moved the header cells. No perf arms: nothing here touches the
+  presenting path.
+- **A4 hidden terminal** (diff 04, merged). Its close handler releases the
+  scrollback pages with madvise, and the console reset was added to it.
+  - RssAnon is 180 kB at desktop up, 212 kB with the terminal open, and 256 kB
+    after `seq 1 400`. The 44 kB of scrollback is touched only once used.
+  - 0 px flushed while the hidden terminal streamed `seq 1 300`. Restored from
+    the task bar, it shows 300: not stale.
+
 ## Status, 2026-09-25 late: M2 built and tested (C1, B2, B1, D1, D2, B3) plus two-finger tap
 
 Each item has a board test in `scripts/board/`. All of them pass on one
@@ -1790,6 +1850,29 @@ for about 10-60 ms. The first shot of a boot may pay CMA migration.
   the item.
 
 ---
+
+### D8. On-screen keyboard for any window (added 2026-09-25, from review)
+
+**Why.** Today the on-screen keyboard exists only inside the Wi-Fi passphrase
+prompt, and until 2026-09-25 it was never even on screen. A touch-only user
+cannot type into the Terminal, the console or an X client.
+
+**Design.**
+- The same `lv_keyboard` (the C2 theme), docked bottom above the task bar. It
+  is not attached to an lv_textarea: its VALUE_CHANGED handler maps each key
+  to an evdev code and feeds it through the ordinary key path (`kbd_key`), so
+  the focused window receives it exactly as if typed. The console and
+  Terminal get it via `term_key`, and X clients via `xshim_key` with a real
+  keysym.
+- Summoned by a three-finger tap (BTN_TOOL_TRIPLETAP from the kernel's
+  INPUT_MT_POINTER emulation, the same path as the two-finger right-click) and
+  by a keyboard glyph in the tray. The same gesture or glyph dismisses it.
+- While it is up, windows are clamped above it rather than covered. It is
+  never shown in fullscreen.
+
+**Test.** Open by tap3 and by the glyph. Type into st, the console and xcalc,
+checking each client's key trace. Check no desktop regression (idle,
+perframe).
 
 ## E. Rejected ideas
 

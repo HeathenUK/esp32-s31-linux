@@ -413,6 +413,15 @@ int main(int argc, char **argv)
 			emit(kbd_fd, EV_KEY, KEY_LEFTALT, 0); syn(kbd_fd);
 			msleep(400);
 		}
+	} else if (!strcmp(what, "moveto")) {
+		/*
+		 * moveto X Y [MS] - move the pointer to X,Y precisely, press
+		 * nothing, and stay there MS ms (default 0) so a hover state
+		 * can be photographed (QoL T1b).
+		 */
+		move_to_precise(argc > 2 ? atoi(argv[2]) : 0,
+				argc > 3 ? atoi(argv[3]) : 0);
+		msleep(argc > 4 ? atoi(argv[4]) : 0);
 	} else if (!strcmp(what, "tap") || !strcmp(what, "taphold")) {
 		/*
 		 * tap X Y            - one finger, 100 ms

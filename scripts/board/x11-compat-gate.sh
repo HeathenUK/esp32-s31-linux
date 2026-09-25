@@ -33,19 +33,26 @@
 # xcalc's at 368,70, st's at 626,70 - the desktop places the first window at
 # 150,60; runsh windows are sized to each step; nothing here is run while a
 # human is using the board (NEVER inject into a board in use).
+#
+# GATE_STEPS="xcalc st" runs only the named steps (default: all five). Use
+# the subset that covers what changed - e.g. a title-bar change needs the
+# close-button steps (xcalc st prboom), not Quake's mouse-look.
 set -u
 cd "$(dirname "$0")/../.."
 LIBDIR=${1:-}
+STEPS=${GATE_STEPS:-xcalc st prboom cdoom quake}
+want() { case " $STEPS " in *" $1 "*) return 0;; esac; return 1; }
 OUT=artifacts/x11-gate-$(date +%Y%m%d-%H%M%S); mkdir -p "$OUT"
 S=$OUT/step.sh
 fail=0
 ENV="DISPLAY=:0"; [ -n "$LIBDIR" ] && ENV="LD_LIBRARY_PATH=$LIBDIR DISPLAY=:0"
 
 step() { # name timeout wait
+	want "$1" || { echo "skip $1"; return; }
 	python3 scripts/board/runsh.py "$S" "$2" "$3" 2>&1 | grep -av "^\s*$\|__rs_\|__rp\|RS_DONE\|Done(" | tee "$OUT/$1.txt"
 	python3 scripts/board/screenshot.py "$OUT/$1.png" >/dev/null 2>&1 || true
 }
-verdict() { if grep -aq "$2" "$OUT/$1.txt"; then echo "PASS $1"; else echo "FAIL $1 (wanted: $2)"; fail=1; fi; }
+verdict() { want "$1" || return 0; if grep -aq "$2" "$OUT/$1.txt"; then echo "PASS $1"; else echo "FAIL $1 (wanted: $2)"; fail=1; fi; }
 
 cat > "$S" <<EOF
 for p in \$(pidof xcalc) \$(pidof st) \$(pidof prboom) \$(pidof chocolate-doom) \$(pidof tyr-quake-x11) \$(pidof uinject); do kill -9 \$p; done
