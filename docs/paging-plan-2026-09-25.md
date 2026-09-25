@@ -171,3 +171,112 @@ the harness's SDSTAT/VMSTAT lines and sdtrace, and the compat gate still
 5/5. Frame rate is reported but is not the judge: at 35-60 faults/s the
 board's own accounting says the frames are lost to paging, so the fault
 rate is the metric that moves first.
+
+## Status log
+
+### 2026-09-25, step P1: the four no-build first measurements (kernel #377)
+
+Kernel #377 (= images/xipImage = patches/0065), scheduler none, poll_bytes
+16384, done_complete 2, fresh boot per window. Load: X11 TyrQuake
+`-mem 20 -fullscreen +timedemo demo1` at its 48 kHz; "play" = the same
+binary without `+timedemo` (its startdemos loop at real-time pace, no input
+injected). Tool: `scripts/board/paging-p1.sh` + `paging-p1.py` (new; one
+board window per boot, 60 s after a 35 s settle; the ring sampled every 3 s
+with shell builtins, deduped by seq on the host). Artifacts:
+`artifacts/perf-plan/paging-p1-*/`, the kswapd A/B in
+`artifacts/quake/td-kab-*` and `artifacts/perf-plan/paging-p1-kswapd-ab/`.
+
+**Item 5 - KILLED, and its premise was wrong.** The sdtrace ring has no
+queue-wait hop (SUB is dw_mci_request entry, after the block layer
+queues), so each arm was read three ways: the ring's per-request read
+service (850-870 fault reads per arm), rootfs/sdlat as a 5/s sampling probe
+(new gap_ms argument; latency includes any queue wait) and stat field 4 /
+field 1 (mean read latency from rq start_time_ns, queue included):
+
+| arm | ring read total p50/p90/p99 ms | probe p50/p99 ms | field4 mean | fps |
+|---|---|---|---|---|
+| none | 0.89/6.86/8.89 | 7.74/29.5 | 3.75 | 9.5 |
+| none (repeat) | 0.90/6.86/8.78 | 7.75/17.9 | 3.82 | 9.6 |
+| kyber, read_lat 1 ms | 0.98/6.85/9.11 | 7.97/20.0 | 3.63 | 8.7 |
+| mq-deadline, read_expire 100 | 0.89/6.79/9.40 | 7.83/18.6 | 3.47 | 9.3 |
+
+Read p99 not down by a third (up 2-6%); the probe p99s are inside none's
+own 17.9-29.5 band. Only 4-5% of reads are dispatched right after a write
+(CMD25 + its CMD13 busy polls), so there is nothing to reorder. Recorded
+next to the scheduler setting in S02s31-blockdev; stays none.
+
+**What the tail actually is: the card's idle wake.** Split by the gap in
+front of each read (ring `gap`, previous end -> this submit), all four arms
+agree: gap < 5 ms -> 1% of reads slow; 5-14 ms -> 24-30%; >= 14 ms ->
+93-96%, where "slow" is c2d (CMD_DONE -> DATA_OVER, the card's own access
+time) of 5.7-6.2 ms against 0.2-0.3 ms. That is 30-32% of all fault reads
+under play, 5.74-5.80 ms excess each, **1.72-1.85 ms per read on average -
+twice the driver's whole service time** (p50 0.89 ms). Idle, same boot,
+sdlat 4 KiB random pinned to CPU1 with a gap between reads:
+
+    gap ms    0-4        5          6     7-10              11-60
+    p50 ms    1.13-1.25  1.25       7.00  1.27-1.69         7.04-7.14
+    p90 ms    1.49-2.26  7.14       7.56  7.05-7.51         7.29-7.61
+
+(the edge is fuzzy between 5 and 12 ms; >= 14 ms it is every read, min
+6.99). It is the card, not the host: polling off 7.18, CMD17 512 B 7.09,
+a CPU spinner on CPU0 7.40, both CPUs busy 8.81 ms p50 at gap 30; clock
+gating is already off (`dw_mmc.low_pwr=0` on the command line, CLKENA
+0x00000001). A data-less CMD13 every 1 or 3 ms (rootfs/mmcka, MMC_IOC_CMD)
+does NOT keep it awake (p50 8.33/8.14). Any data read does: a 512 B read of
+block 0 every 3/4/5 ms -> probe p50 1.46/1.64/1.52 at gap 30; a random 512 B
+every 4 ms -> 1.44, p99 3.12 (better than back to back, 7.4-8.8). The card
+is a SanDisk (manfid 0x03, name SK128, 10/2025).
+
+Userspace keepalive under play, one boot (setsid sdlat 512b fixed 4 pinned
+to CPU1 through the whole timedemo): the mechanism holds - slow fault reads
+31% -> 8%, fault-read p90 6.86 -> 2.53 ms - but the frame rate fell to 6.8
+fps (every other window today 8.3-10.3), with 74 keepalive reads/s polled
+through the syscall path and kswapd pushed onto CPU0 (11.3%). REJECTED as a
+userspace daemon; cause of the fps loss not established. Proposed as
+**item 6** (a build): a driver-side keepalive - after a real read, while the
+queue is idle, one 512 B CMD17 every ~4 ms for a warm window (~100-200 ms),
+issued from a timer through the IRQ path (never polled). Kill rule to set
+when it is priced: slow reads not under 10%, or fps down, or the desktop
+idle current/CPU visibly up.
+
+**Item 2 - KILLED at its first measurement.** pgsteal_direct share per
+window: 1.7, 1.8, 0.7, 0.0, 1.9, 2.0% (play: 2.0%); pgscan direct 0-3.4%;
+allocstall_normal 0-4 per 60-113 s window. Under the 5% line. kswapd0 costs
+5.7% (timedemo) to 10.9% (play) of one CPU. Arms: kswapd0 pinned to CPU1 +
+watermark_scale_factor 150, one boot: direct share 1.9% (not halved), 10.0
+fps, majflt/s 60.6. kswapd0 pinned to CPU1 alone, 5 + 5 fresh boots
+interleaved (quake-timedemo.sh, -mem 20): stock 8.6/10.1/8.5/9.6/9.3 (mean
+9.22, worst 8.5), pinned 9.2/10.3/8.8/9.7/10.3 (mean 9.66, worst 8.8);
+paired +0.6/+0.2/+0.3/+0.1/+1.0; game majflt mean 7,892 vs 6,649 (-16%);
+allocstall 7.6 vs 7.6. The rule (direct share halved) cannot pass and the
+fps bands overlap, so nothing ships; the 5/5 paired sign is recorded as a
+candidate for a 10-pair re-test. wsf 50 not run: the only thing it could
+move is already ~1%.
+
+**Item 1 - KILLED at its first measurement.** VmRSS/VmSwap of every process
+every ~10 s (seven samples per window). Timedemo: game 4.2-5.2 MB RSS /
+17.7-18.6 MB swap; everything else 0.80-0.90 MB RSS / **1.42-1.51 MB
+swap**. Real-time play: game 3.8-5.4 / 17.3-19.1 MB; others 0.77-0.90 /
+**1.45-1.56 MB**. Under the 2 MB line, and ~0.7 MB of it is the two sh
+processes (console login shell and the harness's script shell); the rest is
+udevd 180-196 kB, bluetoothd 168-172, lvdesk 152-160, dbus 88-96. There is
+nothing to evict instead of the game: its own working set exceeds RAM.
+
+**Item 3 - PROCEED to the build.** X11 Quake fullscreen with the alias on:
+xshim holds 0 kB (window buffers 0, pixmaps 0, glyphs 0); lvdesk VmRSS 440
+kB (RssShmem 320 = the client's SHM + xlite ring, RssAnon 116), VmSwap 152.
+lvdesk maps two dumb buffers: the 800x480x16 desktop buffer (752 kB,
+954c5000-95581000, idle while fullscreen) and the 320x240x16 mode buffer
+(152 kB, in use). The driver's own scanout at 0x50800000 (768,000 bytes) is
+separate and stays. CmaFree 788 kB on the idle desktop, 1,344 kB fullscreen
+at the settle, 0 kB by the end of the window (movable pages fill it). The
+ceiling is the 752 kB desktop buffer, over the 300 kB line; the kill rule
+for the build stays 400 kB returned.
+
+**Item 4** - not part of P1 (its first measurement is the fault-to-run
+split); its prerequisite shipped in #377. Note for its pricing: 30% of the
+fault reads it would speed up carry a 5.8 ms card wake it cannot touch.
+
+Board left as found: kernel #377, scheduler none, wsf 10, no keepalive
+running, kswapd unpinned (every arm was a fresh boot).

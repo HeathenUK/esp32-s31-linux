@@ -23,7 +23,15 @@
  * and reports the distribution rather than a mean, because the tail is what an
  * interactive workload feels.
  *
- * Usage: sdlat <device> [request_size] [count] [seq|rand]
+ * Usage: sdlat <device> [request_size] [count] [seq|rand|fixed] [gap_ms]
+ *
+ * fixed re-reads block 0 every time (a keepalive that never leaves one
+ * sector: does the card count a cached re-read as activity?).
+ *
+ * gap_ms (default 0 = back to back) sleeps between reads, so the tool can
+ * SAMPLE the read latency of a loaded card instead of becoming its load:
+ * back to back at ~2-5 ms a read it would issue 200-500 reads/s against the
+ * ~70/s a -mem 20 Quake faults in (paging plan item 5, 2026-09-24).
  *
  * request_size is KiB by default ("4", "4k"); a 'b' suffix means BYTES
  * ("512b", "1024b"). The bytes form exists to price one SD command leg by
@@ -100,6 +108,8 @@ int main(int argc, char **argv)
 	const char *dev = argc > 1 ? argv[1] : "/dev/mmcblk0";
 	int count = argc > 3 ? atoi(argv[3]) : 200;
 	int rnd = argc > 4 && !strcmp(argv[4], "rand");
+	int fixed = argc > 4 && !strcmp(argv[4], "fixed");
+	int gap_ms = argc > 5 ? atoi(argv[5]) : 0;
 	int bytes_form = 0;
 	size_t len = argc > 2 ? parse_size(argv[2], &bytes_form) : 4096;
 	unsigned long long devsz = 0;
@@ -148,7 +158,7 @@ int main(int argc, char **argv)
 	for (i = 0; i < count; i++) {
 		unsigned long long blk = rnd
 			? ((unsigned long long)rand() * 2654435761ULL) % span
-			: (unsigned long long)i;
+			: fixed ? 0ULL : (unsigned long long)i;
 		double t0, t1;
 
 		if (lseek(fd, blk * len, SEEK_SET) < 0) {
@@ -162,6 +172,8 @@ int main(int argc, char **argv)
 		}
 		t1 = now_ms();
 		lat[i] = t1 - t0;
+		if (gap_ms > 0)
+			usleep(gap_ms * 1000);
 	}
 
 	qsort(lat, count, sizeof(*lat), cmp);
