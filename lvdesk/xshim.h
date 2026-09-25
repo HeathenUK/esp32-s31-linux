@@ -70,6 +70,10 @@ void xshim_key(uint32_t id, int sym, int press, unsigned int mods);
 /* The client's WM_NAME, or NULL if it never set one. */
 const char *xshim_window_title(uint32_t id);
 int xshim_window_class(uint32_t id, char *out, size_t n);
+/* The console as an X selection party (D4 phase 2). */
+void xshim_clip_offer(const char *buf, size_t n);
+void xshim_clip_set_cb(void (*cb)(const char *, size_t));
+int xshim_clip_fetch(int clipboard);
 
 /*
  * Be told when a window's title changes. lvdesk used to read the title once,

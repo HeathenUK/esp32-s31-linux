@@ -323,6 +323,28 @@ static void decode(struct xdpy *x, const unsigned char *e, XEvent *ev)
 		memcpy(ev->xclient.data.b, e + 12, 20);
 		ev->xany.window = ev->xclient.window;
 		break;
+	/* Xproto.h: time at 4 in all three; xany.window aliases the first
+	 * window field of each struct (window, owner, requestor). */
+	case SelectionClear:
+		ev->xselectionclear.time = g32(e + 4);
+		ev->xselectionclear.window = g32(e + 8);
+		ev->xselectionclear.selection = g32(e + 12);
+		break;
+	case SelectionRequest:
+		ev->xselectionrequest.time = g32(e + 4);
+		ev->xselectionrequest.owner = g32(e + 8);
+		ev->xselectionrequest.requestor = g32(e + 12);
+		ev->xselectionrequest.selection = g32(e + 16);
+		ev->xselectionrequest.target = g32(e + 20);
+		ev->xselectionrequest.property = g32(e + 24);
+		break;
+	case SelectionNotify:
+		ev->xselection.time = g32(e + 4);
+		ev->xselection.requestor = g32(e + 8);
+		ev->xselection.selection = g32(e + 12);
+		ev->xselection.target = g32(e + 16);
+		ev->xselection.property = g32(e + 20);
+		break;
 	default:
 		ev->xany.window = g32(e + 4);
 		{

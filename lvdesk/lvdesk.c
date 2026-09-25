@@ -1052,7 +1052,7 @@ static int kbd_key(int code)
  * focused window may or may not have a handler.
  */
 static void term_copy(void);
-static void term_paste(void);
+static void term_paste(int clipboard);
 static void term_sel_clear(void);
 static int sel_on;
 
@@ -1077,7 +1077,7 @@ static void term_key(int code)
 	}
 	if ((mod_ctrl && !mod_alt && code == KEY_V) ||
 	    (shift && code == KEY_INSERT)) {
-		term_paste();
+		term_paste(code == KEY_V);	/* Shift+Insert: PRIMARY */
 		return;
 	}
 
@@ -1867,6 +1867,14 @@ static int sel_ac, sel_bc;		/* columns */
 static int32_t sel_px, sel_py;
 static char *clip_buf;
 static size_t clip_len, paste_off, paste_len;
+/*
+ * What is being pasted: clip_buf, or xclip_buf - text an X client (st,
+ * xfiles) handed over through xshim_clip_fetch(). Kept apart so a paste FROM
+ * X never overwrites the console's own selection, which xshim may still be
+ * serving to X as PRIMARY or CLIPBOARD.
+ */
+static const char *paste_src;
+static char *xclip_buf;
 static lv_style_t st_term_sel;
 
 static void term_sel_style(lv_obj_t *row)
@@ -1941,7 +1949,8 @@ static void term_copy(void)
 	if (!sel_on)
 		return;
 	term_sel_norm(&l1, &c1, &l2, &c2);
-	b = realloc(clip_buf, CLIP_MAX + 1);
+	/* Allocated once: a paste in flight and xshim both hold the pointer. */
+	b = clip_buf ? clip_buf : malloc(CLIP_MAX + 1);
 	if (!b)
 		return;
 	clip_buf = b;
@@ -1962,15 +1971,17 @@ static void term_copy(void)
 	}
 	clip_buf[n] = 0;
 	clip_len = n;
+	xshim_clip_offer(clip_buf, clip_len);	/* X clients can paste it */
 }
 
 static void term_paste_step(void);
 
-static void term_paste(void)
+static void term_paste_buf(const char *b, size_t n)
 {
-	if (clip_len && term.fd >= 0) {
+	if (n && term.fd >= 0) {
+		paste_src = b;
 		paste_off = 0;
-		paste_len = clip_len;
+		paste_len = n;
 		/*
 		 * The first chunk NOW, in order with whatever is typed next;
 		 * the rest one write per main-loop pass. Waiting for term_poll
@@ -1979,6 +1990,34 @@ static void term_paste(void)
 		 */
 		term_paste_step();
 	}
+}
+
+/*
+ * X owns the selection when a client (st, xfiles) claimed it after the
+ * console last copied: ask it, and paste when the answer arrives.
+ */
+static void term_paste(int clipboard)
+{
+	if (!xshim_clip_fetch(clipboard))
+		term_paste_buf(clip_buf, clip_len);
+}
+
+/* xshim's clip_cb: the owner's answer to xshim_clip_fetch(). */
+static void term_paste_from_x(const char *d, size_t n)
+{
+	char *b;
+
+	if (!d || !n)
+		return;
+	if (n > CLIP_MAX)
+		n = CLIP_MAX;
+	b = xclip_buf ? xclip_buf : malloc(CLIP_MAX + 1);	/* once, as clip_buf */
+	if (!b)
+		return;
+	xclip_buf = b;
+	memcpy(b, d, n);
+	b[n] = 0;
+	term_paste_buf(b, n);
 }
 
 static int term_paste_pending(void)
@@ -1996,7 +2035,7 @@ static void term_paste_step(void)
 	if (paste_off >= paste_len || term.fd < 0)
 		return;
 	while (k < sizeof(chunk) && paste_off + k < paste_len) {
-		char c = clip_buf[paste_off + k];
+		char c = paste_src[paste_off + k];
 
 		chunk[k++] = c == '\n' ? '\r' : c;
 	}
@@ -13982,7 +14021,7 @@ static int mouse_poll(void)
 			if (!top && obj_in(o, term.win)) {
 				term_hit = 1;
 				if (btn_extra_act == 1)
-					term_paste();
+					term_paste(0);	/* PRIMARY */
 			}
 		}
 		if (!term_hit && !xwin_send_button(btn_extra, btn_extra_act)) {
@@ -14789,6 +14828,7 @@ int main(void)
 	xshim_on_warp(xwin_on_warp);
 	xshim_on_mode(xwin_on_mode);
 	xshim_on_fsnative(xwin_on_fsnative);
+	xshim_clip_set_cb(term_paste_from_x);
 	if (xshim_init(xwin_on_window, xwin_on_draw, xwin_on_close) < 0)
 		fprintf(stderr, "lvdesk: no X shim (socket in use?)\n");
 

@@ -1903,7 +1903,66 @@ Status XSendEvent(Display *dpy, Window w, Bool propagate, long mask,
 		p32(r + 16, ev->xclient.window);
 		p32(r + 20, ev->xclient.message_type);
 		memcpy(r + 24, ev->xclient.data.b, 20);
+	} else if (ev->type == SelectionNotify) {
+		/* Xproto.h selectionNotify: time, requestor, sel, target, prop */
+		p32(r + 16, ev->xselection.time);
+		p32(r + 20, ev->xselection.requestor);
+		p32(r + 24, ev->xselection.selection);
+		p32(r + 28, ev->xselection.target);
+		p32(r + 32, ev->xselection.property);
 	}
+	xlite_send(x, r);
+	return 1;
+}
+
+/*
+ * Selections. The server only records owners and routes the two events; the
+ * data moves between the clients through a property on the requestor. These
+ * were stubs, so opcode 24 never reached the wire and st's setsel() saw owner
+ * None straight after claiming PRIMARY and dropped its own highlight.
+ */
+XLITE_IMPL(XSetSelectionOwner)
+int XSetSelectionOwner(Display *dpy, Atom sel, Window owner, Time t)
+{
+	REQ(dpy, 22, 0, 4);
+
+	p32(r + 4, owner);
+	p32(r + 8, sel);
+	p32(r + 12, t);
+	xlite_send(x, r);
+	return 1;
+}
+
+XLITE_IMPL(XGetSelectionOwner)
+Window XGetSelectionOwner(Display *dpy, Atom sel)
+{
+	unsigned char hdr[32], *extra = NULL;
+	size_t nextra = 0;
+	uint32_t seq;
+
+	{
+		REQ(dpy, 23, 0, 2);
+		p32(r + 4, sel);
+		seq = x->pub.request;
+		xlite_send(x, r);
+		if (!xlite_reply(x, seq, hdr, &extra, &nextra))
+			return None;
+	}
+	free(extra);
+	return g32(hdr + 8);
+}
+
+XLITE_IMPL(XConvertSelection)
+int XConvertSelection(Display *dpy, Atom sel, Atom target, Atom prop,
+		      Window requestor, Time t)
+{
+	REQ(dpy, 24, 0, 6);
+
+	p32(r + 4, requestor);
+	p32(r + 8, sel);
+	p32(r + 12, target);
+	p32(r + 16, prop);
+	p32(r + 20, t);
 	xlite_send(x, r);
 	return 1;
 }

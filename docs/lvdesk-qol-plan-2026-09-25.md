@@ -6,6 +6,54 @@ commit; line numbers below refer to it and drift by a few lines either way).
 Wherever a figure below is an estimate, it says so. It needs measuring on the
 board before anyone quotes it.
 
+## Status, 2026-09-25 evening (late): D4 X selections shipped, plus RAM cut 1
+
+- **D4, X copy and paste.** st to st, st to console and console to st, over
+  both PRIMARY (select, then middle click or Shift+Insert) and CLIPBOARD
+  (st's Ctrl+Shift+C/V; the console's Ctrl+C/V).
+  - **xlite.** Requests 22, 23 (with reply) and 24 replace the stubs.
+    `decode()` handles events 29-31. XSendEvent encodes SelectionNotify.
+  - **xshim.**
+    - ConvertSelection is always answered: None when there is no live owner,
+      otherwise a SelectionRequest is forwarded to the owner.
+    - SendEvent routes types 29-31 to the creator of the destination window.
+    - A new owner sends SelectionClear to the old one.
+    - `res_free` clears the owner.
+    - The (requestor, property) of a conversion in flight gets a 16 kB budget
+      (XFER_MAX). Other properties keep PROP_MAX.
+    - GetProperty replies from `p->data`, and `send_reply` pads, so there is
+      no 1 kB stack buffer.
+  - **Phase 2, the console as a party.** CLIP_WIN is an unmapped window with
+    no owner, at an id no client can allocate. The console's copy claims
+    PRIMARY and CLIPBOARD, and xshim answers TARGETS, UTF8_STRING, STRING and
+    TEXT from clip_buf. The console's paste asks an X owner when one exists,
+    and the answer arrives through `xshim_clip_set_cb`. It is pasted from
+    xclip_buf, so the console's own selection is never overwritten.
+  - **Found on the way, and the real reason st selection never worked.**
+    xshim sent motion only to windows that selected PointerMotionMask. st
+    selects **ButtonMotionMask** alone, so it saw a press and a release with
+    no motion between them, which st treats as an empty selection. Motion now
+    also goes to ButtonMotion (bit 13) and Button1-5Motion (bits 8-12, which
+    match the state's button bits) while a button is held. The plan's guess
+    (the GetSelectionOwner stub) was a second, real cause, not the first.
+  - **Test.** `lvdesk-xsel-test.sh` passed six of six on the shipped libs:
+    - S1, S2: st to st, by middle click and by Shift+Insert.
+    - S3: st to console.
+    - S4: a dead CLIPBOARD owner gets None, with no hang.
+    - S5: console to st.
+    - S6: 20 lines, 1,604 B, over the old 1 kB limit, arrive whole.
+
+    Also passing: `lvdesk-clip-test.sh` and x11-compat-gate
+    `xcalc st prboom cdoom`.
+  - **Out, as planned.** Pasting into xfiles (it needs PropertyNotify), INCR,
+    and Xaw selections.
+- **RAM cut 1** (docs/lvdesk-ram-review-2026-09-25.md). Client in/out buffers
+  moved to page-aligned static arrays and are released with `MADV_DONTNEED`
+  in `client_drop`. After the same gate sequence (xcalc, st, prboom, cdoom
+  come and go), lvdesk's RssAnon+VmSwap was **208 kB** on the new build
+  against **368 kB** shipped. That is one run per arm, but it measures the
+  mechanism directly.
+
 ## Status, 2026-09-25 afternoon: the existing bugs are fixed and shipped
 
 The four existing bugs below were fixed and shipped in the XIP image on

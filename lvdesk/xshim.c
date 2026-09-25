@@ -61,6 +61,7 @@
  */
 #define MAXATOM		256
 #define INBUF		65536
+#define OUTBUF		16384
 
 /* Our one visual: TrueColor RGB565, matching the panel. */
 #define VISUAL_ID	0x21
@@ -338,7 +339,7 @@ struct cli {
 
 	int up;				/* connection setup completed */
 	uint32_t seq;
-	uint8_t in[INBUF];
+	uint8_t *in;			/* cli_in[slot], INBUF bytes */
 	size_t n;
 	/*
 	 * Bytes still to be swallowed from a request too big to buffer.
@@ -354,7 +355,7 @@ struct cli {
 	 * largest single reply (QueryFont, ~3.2 kB) many times over; anything
 	 * bigger flushes first and goes out directly.
 	 */
-	uint8_t out[16384];
+	uint8_t *out;			/* cli_out[slot], OUTBUF bytes */
 	size_t outn;
 	/*
 	 * What the socket would not take. Writes are non-blocking now: a
@@ -399,6 +400,15 @@ struct cli {
 
 static struct res res[MAXRES];
 static struct cli cli[MAXCLI];
+/*
+ * The buffers live outside the slot, page-aligned, so a slot's 80 kB can be
+ * handed back when its client leaves (client_drop) instead of sitting in RSS
+ * or swap for lvdesk's lifetime - and so accepting a client no longer memsets
+ * 84 kB of possibly swapped-out pages just to overwrite them.
+ * lvdesk-ram-review-2026-09-25.md, cut 1.
+ */
+static uint8_t cli_in[MAXCLI][INBUF] __attribute__((aligned(4096)));
+static uint8_t cli_out[MAXCLI][OUTBUF] __attribute__((aligned(4096)));
 static char *atom[MAXATOM];
 #define ATOM_BASE	68		/* XA_LAST_PREDEFINED: interned ids start after it */
 
@@ -421,6 +431,27 @@ static int ptr_root_x, ptr_root_y;	/* last pointer position, root coords */
 #define MAXSEL		8
 static struct { uint32_t sel, owner; } selown[MAXSEL];
 static int nselown;
+/*
+ * A conversion in flight names (requestor, property). That one property may
+ * hold a whole paste, so it gets XFER_MAX instead of PROP_MAX; ordinary
+ * properties keep their budget. Entries age out round-robin - the requestor
+ * deletes the property once it has read it, so a stale entry costs nothing.
+ */
+#define NXFER		4
+#define XFER_MAX	16384
+static struct { uint32_t win, prop; } xfer[NXFER];
+static int xfer_next;
+/*
+ * lvdesk's console as a selection party. CLIP_WIN is a window no client can
+ * allocate (the base after the last slot's), created unmapped with no parent
+ * and no owner the first time it is needed. As OWNER it answers conversions
+ * from clip_ptr; as REQUESTOR it receives the owner's property and the
+ * SelectionNotify, which is handed to clip_cb instead of any client.
+ */
+#define CLIP_WIN	(RES_BASE * (MAXCLI + 1) + 1)
+static const char *clip_ptr;
+static size_t clip_n;
+static void (*clip_cb)(const char *, size_t);
 static int natom;
 
 static const char *atom_name(uint32_t id)
@@ -842,6 +873,27 @@ static struct res *res_new(uint32_t id, int type)
 	return NULL;
 }
 
+/* The live client that created window `id`, or NULL. */
+static struct cli *win_cli(uint32_t id)
+{
+	struct res *w = res_find(id);
+
+	if (!w || w->type != R_WINDOW || w->owner < 0 || w->owner >= MAXCLI ||
+	    cli[w->owner].fd < 0)
+		return NULL;
+	return &cli[w->owner];
+}
+
+static int xfer_is(uint32_t win, uint32_t prop)
+{
+	int i;
+
+	for (i = 0; i < NXFER; i++)
+		if (xfer[i].win == win && xfer[i].prop == prop)
+			return 1;
+	return 0;
+}
+
 /* ------------------------------------------------------------ properties */
 
 static struct prop *prop_find(struct res *w, uint32_t atom)
@@ -898,7 +950,7 @@ static int prop_set(struct res *w, uint32_t atom, uint32_t type, uint8_t fmt,
 	struct prop *p = prop_find(w, atom);
 	static int mismatch_logged;
 	uint8_t *nd;
-	uint32_t total;
+	uint32_t total, lim = xfer_is(w->id, atom) ? XFER_MAX : PROP_MAX;
 	int fresh = 0;
 
 	if (fmt != 8 && fmt != 16 && fmt != 32)
@@ -915,8 +967,9 @@ static int prop_set(struct res *w, uint32_t atom, uint32_t type, uint8_t fmt,
 	if (!p)
 		mode = 0;
 	total = n + (mode ? p->n : 0);
-	if (total > PROP_MAX ||
-	    prop_bytes(w) - (p ? p->n : 0) + total > PROP_WIN_MAX ||
+	if (total > lim ||
+	    prop_bytes(w) - (p ? p->n : 0) + total >
+	    PROP_WIN_MAX + (lim - PROP_MAX) ||
 	    (!p && w->nprops >= MAXPROP)) {
 		if (!w->prop_over++)
 			fprintf(stderr, "xshim: property %s (%u bytes) on 0x%x "
@@ -994,6 +1047,12 @@ static void res_free(uint32_t id)
 	 * client_drop() frees every resource of a client directly.
 	 */
 	prop_free_all(r);
+	for (i = 0; i < nselown; i++)
+		if (selown[i].owner == id)
+			selown[i].owner = 0;
+	for (i = 0; i < NXFER; i++)
+		if (xfer[i].win == id)
+			xfer[i].win = xfer[i].prop = 0;
 	if (trace_on())
 		fprintf(stderr, "xshim: res_free 0x%x type %d %dx%d bpp %d px %p "
 			"alias 0x%x adopted %d gem %u shm %d buf %p parent 0x%x "
@@ -3368,9 +3427,9 @@ static void out_flush(struct cli *c)
 
 static void out_push(struct cli *c, const void *p, size_t n)
 {
-	if (c->outn + n > sizeof(c->out))
+	if (c->outn + n > OUTBUF)
 		out_flush(c);
-	if (n > sizeof(c->out)) {	/* larger than the buffer: direct */
+	if (n > OUTBUF) {	/* larger than the buffer: direct */
 		out_flush(c);
 		if (c->pendn)
 			pend_add(c, p, n);
@@ -3394,11 +3453,16 @@ static void send_reply(struct cli *c, uint8_t detail, const uint8_t *d24,
 
 	h[0] = 1; h[1] = detail;
 	put16(h + 2, c->seq);
-	put32(h + 4, nextra / 4);
+	put32(h + 4, (nextra + 3) / 4);
 	memcpy(h + 8, d24, 24);
 	out_push(c, h, 32);
 	if (nextra)
 		out_push(c, extra, nextra);
+	if (nextra & 3) {			/* unpadded caller: pad here */
+		static const uint8_t z[4];
+
+		out_push(c, z, 4 - (nextra & 3));
+	}
 }
 
 /*
@@ -3515,6 +3579,156 @@ static void send_event_d(struct cli *c, uint8_t type, uint8_t detail,
 static void send_event(struct cli *c, uint8_t type, const uint8_t *d, int n)
 {
 	send_event_d(c, type, 0, d, n);
+}
+
+/*
+ * SetSelectionOwner's work. The loser is told (Xproto.h selectionClear:
+ * time, window, atom), so an owner like xfiles or st drops its highlight.
+ * `c` is the requesting client, or NULL from lvdesk.
+ */
+static void sel_own(struct cli *c, uint32_t sel, uint32_t owner, uint32_t t)
+{
+	int i;
+
+	for (i = 0; i < nselown; i++)
+		if (selown[i].sel == sel)
+			break;
+	if (i == nselown && nselown < MAXSEL) {
+		selown[nselown].sel = sel;
+		selown[nselown++].owner = 0;
+	}
+	if (i >= MAXSEL)
+		return;
+	if (selown[i].owner && selown[i].owner != owner) {
+		struct cli *oc = win_cli(selown[i].owner);
+		uint8_t d[12];
+
+		if (oc) {
+			put32(d, t);
+			put32(d + 4, selown[i].owner);
+			put32(d + 8, sel);
+			send_event(oc, 29, d, 12);
+			if (oc != c)
+				out_flush(oc);
+		}
+	}
+	selown[i].owner = owner;
+}
+
+static uint32_t sel_owner(uint32_t sel)
+{
+	int i;
+
+	for (i = 0; i < nselown; i++)
+		if (selown[i].sel == sel)
+			return selown[i].owner;
+	return 0;
+}
+
+/* An atom by name, interned if no client has yet. 0 when the table is full. */
+static uint32_t atom_get(const char *name)
+{
+	uint32_t id = atom_find(name);
+
+	if (!id && natom < MAXATOM && (atom[natom] = strdup(name)))
+		id = ++natom + ATOM_BASE;
+	return id;
+}
+
+static struct res *clip_win(void)
+{
+	struct res *w = res_find(CLIP_WIN);
+
+	if (!w && (w = res_new(CLIP_WIN, R_WINDOW)))
+		w->owner = -1;		/* parent 0, unmapped: never drawn */
+	return w;
+}
+
+/*
+ * The console copied: it now owns PRIMARY and CLIPBOARD. The buffer is
+ * lvdesk's and must stay valid until the next call (it is its clip_buf).
+ */
+void xshim_clip_offer(const char *buf, size_t n)
+{
+	uint32_t cb = atom_get("CLIPBOARD");
+
+	if (!clip_win())
+		return;
+	clip_ptr = buf;
+	clip_n = n;
+	sel_own(NULL, 1 /* PRIMARY */, CLIP_WIN, 0);
+	if (cb)
+		sel_own(NULL, cb, CLIP_WIN, 0);
+}
+
+void xshim_clip_set_cb(void (*cb)(const char *, size_t))
+{
+	clip_cb = cb;
+}
+
+/*
+ * The console wants to paste. If an X client owns the selection, ask it and
+ * return 1: the text arrives later through clip_cb (NULL, 0 if the owner
+ * refuses). 0 means nobody else owns it - paste the console's own buffer.
+ */
+int xshim_clip_fetch(int clipboard)
+{
+	uint32_t sel = clipboard ? atom_find("CLIPBOARD") : 1;
+	uint32_t owner = sel ? sel_owner(sel) : 0, tgt;
+	struct cli *oc = owner && owner != CLIP_WIN ? win_cli(owner) : NULL;
+	uint8_t d[24];
+
+	if (!oc || !clip_win())
+		return 0;
+	tgt = atom_find("UTF8_STRING");
+	if (!tgt)
+		tgt = 31;			/* STRING */
+	xfer[xfer_next].win = CLIP_WIN;
+	xfer[xfer_next].prop = sel;
+	xfer_next = (xfer_next + 1) % NXFER;
+	put32(d, 0);
+	put32(d + 4, owner);
+	put32(d + 8, CLIP_WIN);
+	put32(d + 12, sel);
+	put32(d + 16, tgt);
+	put32(d + 20, sel);			/* property: the selection atom */
+	send_event(oc, 30, d, 24);
+	out_flush(oc);
+	return 1;
+}
+
+/*
+ * A conversion of the console's own selection: the property goes straight
+ * onto the requestor and the SelectionNotify back to it. Returns the property
+ * written, or 0 (None) for a target the console does not offer.
+ */
+static uint32_t clip_convert(uint32_t rq, uint32_t tgt, uint32_t pr)
+{
+	struct res *w = res_find(rq);
+	const char *tn = atom_name(tgt);
+	uint32_t utf8 = atom_find("UTF8_STRING"), prop = pr ? pr : tgt;
+
+	if (!w || w->type != R_WINDOW || !clip_ptr)
+		return 0;
+	xfer[xfer_next].win = rq;
+	xfer[xfer_next].prop = prop;
+	xfer_next = (xfer_next + 1) % NXFER;
+	if (tn && !strcmp(tn, "TARGETS")) {
+		uint8_t a[12];
+		int k = 0;
+
+		put32(a + 4 * k++, tgt);
+		if (utf8)
+			put32(a + 4 * k++, utf8);
+		put32(a + 4 * k++, 31);
+		return prop_set(w, prop, 4 /* ATOM */, 32, 0, a, 4 * k) ?
+		       prop : 0;
+	}
+	if (tgt == 31 || (utf8 && tgt == utf8) || (tn && !strcmp(tn, "TEXT")))
+		return prop_set(w, prop, tn && !strcmp(tn, "TEXT") ? 31 : tgt,
+				8, 0, (const uint8_t *)clip_ptr, clip_n) ?
+		       prop : 0;
+	return 0;
 }
 
 /*
@@ -6754,7 +6968,6 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		uint32_t off = get32(r + 16) * 4, want = get32(r + 20);
 		struct prop *p = w && w->type == R_WINDOW ?
 				 prop_find(w, prop) : NULL;
-		uint8_t ex[PROP_MAX + 4];
 		uint32_t take, avail;
 
 		if (!p) {
@@ -6777,14 +6990,14 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 			take = avail;
 		put32(d24 + 4, avail - take);
 		put32(d24 + 8, take / (p->fmt / 8));
-		memcpy(ex, p->data + off, take);
-		memset(ex + take, 0, 4);
 		if (trace_on())
 			fprintf(stderr, "xshim:   GetProperty %s on 0x%x: fmt %u "
 				"%u bytes (+%u after)\n",
 				atom_name(prop) ? atom_name(prop) : "?", w->id,
 				p->fmt, take, avail - take);
-		send_reply(c, p->fmt, d24, ex, (take + 3) & ~3u);
+		/* Straight from the store: send_reply() pads, and out_push()
+		 * copies before prop_del() below can free it. */
+		send_reply(c, p->fmt, d24, p->data + off, take);
 		if (detail && avail == take)	/* delete, once fully read */
 			prop_del(w, prop);
 		break;
@@ -7687,17 +7900,63 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		send_reply(c, 1 /* same-screen */, d24, NULL, 0);
 		break;
 	}
-	case 22: {					/* SetSelectionOwner */
-		uint32_t owner = get32(r + 4), sel = get32(r + 8);
+	case 22:					/* SetSelectionOwner */
+		sel_own(c, get32(r + 8), get32(r + 4), get32(r + 12));
+		break;
+	case 24: {					/* ConvertSelection */
+		/*
+		 * Always answered. With no live owner the requestor gets a
+		 * SelectionNotify with property None at once - st blocks its
+		 * paste on that event. Otherwise the owner gets a
+		 * SelectionRequest and answers with ChangeProperty on the
+		 * requestor plus a SendEvent, routed below. Xproto.h:
+		 * requestor 4, selection 8, target 12, property 16, time 20.
+		 */
+		uint32_t rq = get32(r + 4), sel = get32(r + 8),
+			 tgt = get32(r + 12), pr = get32(r + 16),
+			 t = get32(r + 20), owner = 0;
+		struct cli *oc;
+		uint8_t d[24];
 		int i;
 
 		for (i = 0; i < nselown; i++)
 			if (selown[i].sel == sel)
-				break;
-		if (i == nselown && nselown < MAXSEL)
-			selown[nselown++].sel = sel;
-		if (i < MAXSEL)
-			selown[i].owner = owner;
+				owner = selown[i].owner;
+		if (owner == CLIP_WIN) {	/* the console's selection */
+			put32(d, t);
+			put32(d + 4, rq);
+			put32(d + 8, sel);
+			put32(d + 12, tgt);
+			put32(d + 16, clip_convert(rq, tgt, pr));
+			send_event(c, 31, d, 20);
+			break;
+		}
+		oc = owner ? win_cli(owner) : NULL;
+		if (trace_on())
+			fprintf(stderr, "xshim: ConvertSelection %s -> %s on 0x%x"
+				" owner 0x%x%s\n", atom_name(sel) ? atom_name(sel)
+				: "?", atom_name(tgt) ? atom_name(tgt) : "?", rq,
+				owner, oc ? "" : " (none: answering None)");
+		put32(d, t);
+		if (!oc) {
+			put32(d + 4, rq);
+			put32(d + 8, sel);
+			put32(d + 12, tgt);
+			put32(d + 16, 0);
+			send_event(c, 31, d, 20);
+			break;
+		}
+		xfer[xfer_next].win = rq;
+		xfer[xfer_next].prop = pr ? pr : tgt;
+		xfer_next = (xfer_next + 1) % NXFER;
+		put32(d + 4, owner);
+		put32(d + 8, rq);
+		put32(d + 12, sel);
+		put32(d + 16, tgt);
+		put32(d + 20, pr);
+		send_event(oc, 30, d, 24);
+		if (oc != c)
+			out_flush(oc);
 		break;
 	}
 	case 23: {					/* GetSelectionOwner */
@@ -8344,6 +8603,34 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		const char *mt = atom_name(mtype);
 		struct res *w = res_find(win);
 
+		/*
+		 * Selection traffic between two clients: delivered to the
+		 * creator of the destination window, marked sent (0x80).
+		 */
+		if (len >= 44 && (e[0] & 0x7f) == 31 && get32(r + 4) == CLIP_WIN) {
+			/* the answer to xshim_clip_fetch() */
+			struct res *cw = res_find(CLIP_WIN);
+			uint32_t pr = get32(e + 20);
+			struct prop *p = cw && pr ? prop_find(cw, pr) : NULL;
+
+			if (clip_cb)
+				clip_cb(p ? (const char *)p->data : NULL,
+					p ? p->n : 0);
+			if (p)
+				prop_del(cw, pr);
+			break;
+		}
+		if (len >= 44 && (e[0] & 0x7f) >= 29 && (e[0] & 0x7f) <= 31) {
+			struct cli *dc = win_cli(get32(r + 4));
+
+			if (dc) {
+				send_event_d(dc, (e[0] & 0x7f) | 0x80, e[1],
+					     e + 4, 28);
+				if (dc != c)
+					out_flush(dc);
+			}
+			break;
+		}
 		if (len >= 44 && e[0] == 33 && mt && !strcmp(mt, "_NET_WM_STATE") &&
 		    w && w->type == R_WINDOW) {
 			const char *n1 = atom_name(a1), *n2 = atom_name(a2);
@@ -9484,6 +9771,7 @@ const uint16_t *xshim_window_pixels(uint32_t id, int *w, int *h)
 #define EV_ENTER	(1u << 4)
 #define EV_LEAVE	(1u << 5)
 #define EV_MOTION	(1u << 6)
+#define EV_BTN_MOTION	(1u << 13)	/* ButtonMotionMask */
 #define EV_FOCUS	(1u << 21)
 
 /*
@@ -9710,7 +9998,20 @@ void xshim_pointer(uint32_t id, int x, int y, int button, int act)
 		send_device_event(c, 5, button, w, x, y, EV_BTN_RELEASE, state);
 		state &= ~(0x100u << (button - 1));
 	} else {
-		send_device_event(c, 6, 0, w, x, y, EV_MOTION, state);
+		/*
+		 * Motion is selected three ways (Xproto: PointerMotion bit 6,
+		 * Button1..5Motion bits 8-12, ButtonMotion bit 13), and the
+		 * button ones match the state's Button1..5Mask bits. Only
+		 * PointerMotion was honoured, so st - which selects
+		 * ButtonMotionMask alone - never saw a drag, and its
+		 * press/release pair with no motion between is an EMPTY
+		 * selection: drag-select in st had never worked.
+		 */
+		uint32_t msel = EV_MOTION;
+
+		if (state & 0x1f00u)
+			msel |= EV_BTN_MOTION | (state & 0x1f00u);
+		send_device_event(c, 6, 0, w, x, y, msel, state);
 	}
 	/*
 	 * Buttons go out now; motion waits for xshim_flush(), which lvdesk
@@ -9887,6 +10188,8 @@ static void client_drop(struct cli *c, int notify)
 		close(c->fd);
 		c->fd = -1;
 	}
+	madvise(cli_in[owner], INBUF, MADV_DONTNEED);
+	madvise(cli_out[owner], OUTBUF, MADV_DONTNEED);
 	fprintf(stderr, "xshim: client %d gone after %u requests, "
 		"%d answered with an error\n", owner, c->seq, c->nbad);
 	if (c->nbad) {
@@ -10328,7 +10631,7 @@ static void client_data_once(struct cli *c)
 		n = (ssize_t)xring_read(&c->ring->c2s,
 					(const uint8_t *)c->ring + XRING_C2S_OFF,
 					XRING_C2S_SIZE, c->in + c->n,
-					(uint32_t)(sizeof(c->in) - c->n));
+					(uint32_t)(INBUF - c->n));
 		if (n == 0)
 			return;
 	} else {
@@ -10348,7 +10651,7 @@ static void client_data_once(struct cli *c)
 		struct cmsghdr *cs;
 
 		io.iov_base = c->in + c->n;
-		io.iov_len = sizeof(c->in) - c->n;
+		io.iov_len = INBUF - c->n;
 		memset(&m, 0, sizeof m);
 		m.msg_iov = &io;
 		m.msg_iovlen = 1;
@@ -10433,7 +10736,7 @@ static void client_data_once(struct cli *c)
 			client_drop(c, 1);
 			return;
 		}
-		if ((size_t)len > sizeof(c->in)) {
+		if ((size_t)len > INBUF) {
 			/*
 			 * Swallow it, do not drop the client.
 			 *
@@ -10463,7 +10766,7 @@ static void client_data_once(struct cli *c)
 
 			fprintf(stderr, "xshim: %s is %d bytes, larger than the "
 				"%zu-byte input buffer - discarding it\n",
-				opstr(r[0]), len, sizeof(c->in));
+				opstr(r[0]), len, INBUF);
 			/*
 			 * It still COUNTS. Every request advances the
 			 * sequence number whether or not the server does
@@ -10638,6 +10941,8 @@ void xshim_poll_ready(const int *ready, int nready)
 			for (j = 0; j < MAXCLI; j++)
 				if (cli[j].fd < 0) {
 					memset(&cli[j], 0, sizeof(cli[j]));
+					cli[j].in = cli_in[j];
+					cli[j].out = cli_out[j];
 					cli[j].fd = fd;
 					cli[j].efd_rd = cli[j].efd_wr = -1;
 					fprintf(stderr,
