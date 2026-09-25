@@ -1039,11 +1039,23 @@ static int kbd_key(int code)
  * in the desktop refers to it: the dispatcher above knows only that the
  * focused window may or may not have a handler.
  */
+static void term_copy(void);
+static void term_paste(void);
+static int sel_on;
+
 static void term_key(int code)
 {
 	const char *seq;
 	char buf[8], c;
 	int n = 0;
+
+	/* copy and paste (QoL A6), before keyseq() turns them into bytes */
+	if (mod_ctrl && shift && code == KEY_C) { term_copy(); return; }
+	if ((mod_ctrl && shift && code == KEY_V) ||
+	    (shift && code == KEY_INSERT)) {
+		term_paste();
+		return;
+	}
 
 	/*
 	 * Scrollback is a terminal function, not a shell one, so these are
@@ -1481,8 +1493,17 @@ static void term_mark_all(void)
 }
 
 /* Push the top line into the scrollback ring and scroll the grid up. */
+/*
+ * Lines scrolled into the scrollback since start: the absolute number of the
+ * live grid's top row. A selection is anchored in these absolute line
+ * numbers (QoL A6), so output that scrolls the screen, or a view scrolled
+ * back, never moves it off the text it was made on.
+ */
+static unsigned long sb_seq;
+
 static void term_scroll(void)
 {
+	sb_seq++;
 	memcpy(term.sb[term.sb_head], TROW(0), TERM_MAXCOLS + 1);
 	memcpy(term.sbattr[term.sb_head], TATTR(0), TERM_MAXCOLS);
 	term.sb_head = (term.sb_head + 1) % term_sb_max;
@@ -1723,8 +1744,9 @@ static void term_scrollback(int lines)
  * lv_conf.h. A root prompt ends in "~ #", and with the default marker that '#'
  * would start a colour command and swallow the rest of the line.
  */
-static void term_render_row(char *out, size_t outsz, const char *src,
-			    const unsigned char *at, int cols)
+static void term_render_row_sel(char *out, size_t outsz, const char *src,
+				const unsigned char *at, int cols,
+				int lo, int hi, int *slo, int *shi)
 {
 	unsigned char cur = TERM_FG_DEFAULT;
 	size_t n = 0;
@@ -1733,9 +1755,28 @@ static void term_render_row(char *out, size_t outsz, const char *src,
 	for (c = 0; c < cols; c++) {
 		unsigned char a = at ? at[c] : TERM_FG_DEFAULT;
 		char ch = src ? src[c] : ' ';
+		int insel = c >= lo && c < hi;
 
 		if (ch == 0)
 			ch = ' ';
+		/*
+		 * The selection (QoL A6): close any colour span at its start
+		 * and emit NO markers inside it, so the byte offsets handed to
+		 * LVGL's label selection land exactly on the selected columns.
+		 */
+		if (c == lo) {
+			if (open && n + 1 < outsz) {
+				out[n++] = LV_TXT_COLOR_CMD[0];
+				open = 0;
+			}
+			cur = TERM_FG_DEFAULT;
+			if (slo)
+				*slo = (int)n;
+		}
+		if (c == hi && shi)
+			*shi = (int)n;
+		if (insel)
+			a = TERM_FG_DEFAULT;
 		if (a != cur) {
 			if (n + 12 >= outsz)
 				break;
@@ -1755,9 +1796,17 @@ static void term_render_row(char *out, size_t outsz, const char *src,
 			break;
 		out[n++] = ch;
 	}
+	if (hi >= cols && lo < cols && shi)
+		*shi = (int)n;
 	if (open && n + 1 < outsz)
 		out[n++] = LV_TXT_COLOR_CMD[0];
 	out[n] = 0;
+}
+
+static void term_render_row(char *out, size_t outsz, const char *src,
+			    const unsigned char *at, int cols)
+{
+	term_render_row_sel(out, outsz, src, at, cols, -1, -1, NULL, NULL);
 }
 
 /*
@@ -1776,6 +1825,220 @@ static int term_visible(void)
 {
 	return term.win && !lv_obj_has_flag(term.win, LV_OBJ_FLAG_HIDDEN) &&
 	       !fs_active;
+}
+
+/*
+ * COPY AND PASTE in the terminal (QoL A6). A drag on the terminal selects -
+ * but only once it has left its starting cell or moved 4 px, so a finger's
+ * jitter on a tap selects nothing - anchored in absolute lines (sb_seq). The
+ * release copies: trailing spaces trimmed, lines joined with \n, at most
+ * 8 kB. Ctrl+Shift+C copies again, Ctrl+Shift+V / Shift+Insert / a middle
+ * click paste, one write per main-loop pass (\n sent as \r) so an 8 kB
+ * paste cannot overrun the pty. ctl `clip` prints it. A plain click clears.
+ */
+#define CLIP_MAX 8192
+static int sel_on, sel_pend;
+static long sel_al, sel_bl;		/* absolute lines, anchor and cursor */
+static int sel_ac, sel_bc;		/* columns */
+static int32_t sel_px, sel_py;
+static char *clip_buf;
+static size_t clip_len, paste_off, paste_len;
+static lv_style_t st_term_sel;
+
+static void term_sel_style(lv_obj_t *row)
+{
+	static int init;
+
+	if (!init) {
+		init = 1;
+		lv_style_init(&st_term_sel);
+		lv_style_set_bg_color(&st_term_sel, lv_color_hex(COL_HDR_FOCUS));
+		lv_style_set_bg_opa(&st_term_sel, LV_OPA_COVER);
+		lv_style_set_text_color(&st_term_sel, lv_color_white());
+	}
+	/* once per row object: the style is shared */
+	if (!lv_obj_get_user_data(row)) {
+		lv_obj_add_style(row, &st_term_sel, LV_PART_SELECTED);
+		lv_obj_set_user_data(row, (void *)1);
+	}
+}
+
+/* The absolute line shown on screen row r. */
+static long term_abs_line(int r)
+{
+	return (long)sb_seq - term.view + r;
+}
+
+/* The text of absolute line L, or NULL if it is no longer kept. */
+static const char *term_line_text(long L)
+{
+	if (L >= (long)sb_seq) {
+		long g = L - (long)sb_seq;
+
+		return g < term.nrows ? TROW(g) : NULL;
+	}
+	return term_sb_line((int)((long)sb_seq - L));
+}
+
+/* Normalised selection bounds: (l1,c1) <= (l2,c2), c2 exclusive. */
+static void term_sel_norm(long *l1, int *c1, long *l2, int *c2)
+{
+	if (sel_al < sel_bl || (sel_al == sel_bl && sel_ac <= sel_bc)) {
+		*l1 = sel_al; *c1 = sel_ac; *l2 = sel_bl; *c2 = sel_bc + 1;
+	} else {
+		*l1 = sel_bl; *c1 = sel_bc; *l2 = sel_al; *c2 = sel_ac + 1;
+	}
+}
+
+static void term_sel_cols(int r, int *lo, int *hi)
+{
+	long L = term_abs_line(r), l1, l2;
+	int c1, c2;
+
+	*lo = *hi = -1;
+	if (!sel_on)
+		return;
+	term_sel_norm(&l1, &c1, &l2, &c2);
+	if (L < l1 || L > l2)
+		return;
+	*lo = L == l1 ? c1 : 0;
+	*hi = L == l2 ? c2 : term.cols;
+	if (*hi > term.cols)
+		*hi = term.cols;
+}
+
+static void term_copy(void)
+{
+	long l1, l2, L;
+	int c1, c2;
+	size_t n = 0;
+	char *b;
+
+	if (!sel_on)
+		return;
+	term_sel_norm(&l1, &c1, &l2, &c2);
+	b = realloc(clip_buf, CLIP_MAX + 1);
+	if (!b)
+		return;
+	clip_buf = b;
+	for (L = l1; L <= l2 && n < CLIP_MAX; L++) {
+		const char *t = term_line_text(L);
+		int a = L == l1 ? c1 : 0, z = L == l2 ? c2 : term.cols, e;
+
+		if (z > term.cols)
+			z = term.cols;
+		if (L > l1)
+			clip_buf[n++] = '\n';
+		if (!t)
+			continue;
+		for (e = z; e > a && (t[e - 1] == ' ' || t[e - 1] == 0); e--)
+			;
+		for (; a < e && n < CLIP_MAX; a++)
+			clip_buf[n++] = t[a] ? t[a] : ' ';
+	}
+	clip_buf[n] = 0;
+	clip_len = n;
+}
+
+static void term_paste_step(void);
+
+static void term_paste(void)
+{
+	if (clip_len && term.fd >= 0) {
+		paste_off = 0;
+		paste_len = clip_len;
+		/*
+		 * The first chunk NOW, in order with whatever is typed next;
+		 * the rest one write per main-loop pass. Waiting for term_poll
+		 * alone ran it only when the shell next printed something, so
+		 * text typed after the paste reached the shell before it.
+		 */
+		term_paste_step();
+	}
+}
+
+static int term_paste_pending(void)
+{
+	return paste_off < paste_len;
+}
+
+/* From term_poll: at most one write of the pending paste per pass. */
+static void term_paste_step(void)
+{
+	char chunk[256];
+	size_t k = 0;
+	ssize_t w;
+
+	if (paste_off >= paste_len || term.fd < 0)
+		return;
+	while (k < sizeof(chunk) && paste_off + k < paste_len) {
+		char c = clip_buf[paste_off + k];
+
+		chunk[k++] = c == '\n' ? '\r' : c;
+	}
+	w = write(term.fd, chunk, k);
+	if (w > 0)
+		paste_off += (size_t)w;
+}
+
+static void term_sel_repaint(void)
+{
+	term_mark_all();
+	term.dirty = 1;
+}
+
+static void term_cell_at(int32_t x, int32_t y, long *L, int *c)
+{
+	lv_area_t a;
+	int r;
+
+	lv_obj_get_content_coords(term.content, &a);
+	*c = (int)((x - a.x1) / TERM_CW);
+	r = (int)((y - a.y1) / TERM_CH);
+	if (*c < 0) *c = 0;
+	if (*c >= term.cols) *c = term.cols - 1;
+	if (r < 0) r = 0;
+	if (r >= term.nrows) r = term.nrows - 1;
+	*L = term_abs_line(r);
+}
+
+static void term_sel_cb(lv_event_t *e)
+{
+	lv_event_code_t code = lv_event_get_code(e);
+	lv_indev_t *in = lv_indev_active();
+	lv_point_t p;
+	long L;
+	int c;
+
+	if (!in || !term.content)
+		return;
+	lv_indev_get_point(in, &p);
+	term_cell_at(p.x, p.y, &L, &c);
+	if (code == LV_EVENT_PRESSED) {
+		if (sel_on) {		/* a click clears the old selection */
+			sel_on = 0;
+			term_sel_repaint();
+		}
+		sel_pend = 1;
+		sel_al = sel_bl = L;
+		sel_ac = sel_bc = c;
+		sel_px = p.x;
+		sel_py = p.y;
+	} else if (code == LV_EVENT_PRESSING && sel_pend) {
+		if (!sel_on && L == sel_al && c == sel_ac &&
+		    abs(p.x - sel_px) < 4 && abs(p.y - sel_py) < 4)
+			return;		/* jitter, not a drag */
+		if (!sel_on || L != sel_bl || c != sel_bc) {
+			sel_on = 1;
+			sel_bl = L;
+			sel_bc = c;
+			term_sel_repaint();
+		}
+	} else if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
+		sel_pend = 0;
+		if (sel_on)
+			term_copy();	/* an empty selection never copies */
+	}
 }
 
 static void term_render(void);
@@ -1799,6 +2062,7 @@ static int term_poll(void)
 		term.need_fit = 0;
 		term_fit();
 	}
+	term_paste_step();
 	while ((n = read(term.fd, buf, sizeof(buf))) > 0) {
 		/*
 		 * Raw byte log, off unless asked for. Two guesses at this
@@ -1925,8 +2189,25 @@ static void term_render(void)
 			 * code substituted "" and then memcpy'd term.cols bytes
 			 * out of a one-byte string.
 			 */
-			term_render_row(line, sizeof(line), src, at, term.cols);
-			lv_label_set_text(term.rows[r], line);
+			{
+				int lo = -1, hi = -1, slo = -1, shi = -1;
+
+				term_sel_cols(r, &lo, &hi);
+				term_render_row_sel(line, sizeof(line), src, at,
+						    term.cols, lo, hi, &slo, &shi);
+				lv_label_set_text(term.rows[r], line);
+				/* set_text keeps old indices: set or clear both */
+				if (lo >= 0 && slo >= 0 && shi > slo) {
+					term_sel_style(term.rows[r]);
+					lv_label_set_text_selection_start(term.rows[r], (uint32_t)slo);
+					lv_label_set_text_selection_end(term.rows[r], (uint32_t)shi);
+				} else {
+					lv_label_set_text_selection_start(term.rows[r],
+						LV_LABEL_TEXT_SELECTION_OFF);
+					lv_label_set_text_selection_end(term.rows[r],
+						LV_LABEL_TEXT_SELECTION_OFF);
+				}
+			}
 			term.rowdirty[r] = 0;
 		}
 		if (cur_r >= 0)
@@ -3583,6 +3864,12 @@ static void ctl_line(char *buf)
 				else
 					win_snap(&wins[idx], w);
 			}
+		} else if (!strncmp(buf, "clip", 4)) {
+			/* the terminal clip and selection, for tests (QoL A6) */
+			printf("lvdesk: clip len=%u sel=%d [%s]\n",
+			       (unsigned)clip_len, sel_on,
+			       clip_buf ? clip_buf : "");
+			fflush(stdout);
 		} else if (!strncmp(buf, "osk", 3)) {
 			/* osk [toggle|show|hide], then report (QoL D8) */
 			if (strstr(buf, "hide"))
@@ -9597,6 +9884,13 @@ static void term_build_window(void)
 	lv_obj_set_style_bg_color(content, lv_color_hex(COL_TERM_BG), 0);
 	lv_obj_set_style_pad_all(content, 4, 0);
 	lv_obj_remove_flag(content, LV_OBJ_FLAG_SCROLLABLE);
+	/* drag to select (QoL A6) */
+	lv_obj_add_flag(content, LV_OBJ_FLAG_CLICKABLE);
+	lv_obj_add_event_cb(content, term_sel_cb, LV_EVENT_PRESSED, NULL);
+	lv_obj_add_event_cb(content, term_sel_cb, LV_EVENT_PRESSING, NULL);
+	lv_obj_add_event_cb(content, term_sel_cb, LV_EVENT_RELEASED, NULL);
+	lv_obj_add_event_cb(content, term_sel_cb, LV_EVENT_PRESS_LOST, NULL);
+	sel_on = sel_pend = 0;
 	/*
 	 * Only the live grid is initialised. The scrollback is left alone on
 	 * purpose (see struct term): the old memsets, and the NUL written into
@@ -13048,7 +13342,25 @@ static int mouse_poll(void)
 		if (getenv("LVDESK_AIMDBG"))
 			printf("lvdesk: btn%d at %d,%d\n", btn_extra,
 			       (int)ptr_x, (int)ptr_y), fflush(stdout);
-		if (!xwin_send_button(btn_extra, btn_extra_act)) {
+		/*
+		 * A middle click on the terminal pastes the clip (QoL A6),
+		 * decided before any X client can see it; both edges are
+		 * consumed.
+		 */
+		int term_hit = 0;
+
+		if (btn_extra == 2 && !fs_active && term.win &&
+		    !lv_obj_has_flag(term.win, LV_OBJ_FLAG_HIDDEN)) {
+			int top;
+			lv_obj_t *o = obj_at_pointer(&top);
+
+			if (!top && obj_in(o, term.win)) {
+				term_hit = 1;
+				if (btn_extra_act == 1)
+					term_paste();
+			}
+		}
+		if (!term_hit && !xwin_send_button(btn_extra, btn_extra_act)) {
 			if (btn_extra_act == 2) {
 				/*
 				 * A release that hit no X window. If the
@@ -14083,7 +14395,7 @@ int main(void)
 			if (left < ms)
 				ms = left;
 		}
-		if ((t_rrel || t_lrel) && ms > 5)
+		if ((t_rrel || t_lrel || term_paste_pending()) && ms > 5)
 			ms = 5;
 		xshim_close_tick(lv_tick_get());	/* WM_DELETE_WINDOW deadlines */
 		xshim_flush();		/* deferred client output, before we sleep */
@@ -14148,7 +14460,7 @@ int main(void)
 			if (input_rescan_due(mouse_scan_at)) rd_mouse = 1;
 			if (term.need_fit) rd_term = 1;
 
-			if (rd_term)  { PROF_START(a); busy |= term_poll();   PROF_ADD(prof_term, a); }
+			if (rd_term || term_paste_pending()) { PROF_START(a); busy |= term_poll();   PROF_ADD(prof_term, a); }
 			if (rd_kbd)   { PROF_START(a); busy |= kbd_poll();    PROF_ADD(prof_kbd, a); }
 			if (rd_mouse || t_pend || t_rrel || t_lrel) { PROF_START(a); busy |= mouse_poll();  PROF_ADD(prof_mouse, a); }
 			if (rd_wifi)  { PROF_START(a); busy |= wifi_ev_poll(); PROF_ADD(prof_wifi, a); }

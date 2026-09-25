@@ -35,6 +35,22 @@ cdoom (883 puts) and quake (motion 12, keys 4).
 Still open from the programme: everything else, starting with A3 (the
 drop-down console, diff 01, which needs rebasing onto these fixes).
 
+## Status, 2026-09-25 night: A6 shipped (console copy and paste)
+
+- Drag to select: it starts only once the pointer leaves its cell or moves
+  4 px, anchored in absolute lines (sb_seq), and highlighted with LVGL's
+  label selection. The row renderer closes colour spans at the selection edge
+  and emits no markers inside it. A click clears it.
+- The release copies: trailing spaces trimmed, lines joined, at most 8 kB.
+  Ctrl+Shift+C copies again. Ctrl+Shift+V, Shift+Insert and a middle click
+  paste.
+- The first paste chunk is written at once and the rest one write per
+  main-loop pass. Found by the test: paced from term_poll alone, the paste ran
+  only when the shell next printed, so text typed after it arrived first.
+- ctl `clip` prints the clip. uinject gained `mclick`.
+- `lvdesk-clip-test.sh`: a two-row drag gives "14\n15"; a one-row drag gives
+  "16"; `echo <Shift+Insert> > file` writes 16; a middle click writes 16.
+
 ## Status, 2026-09-25 night: A5, C5 shipped; menu launch keys replaced by row numbers
 
 - **Launch keys removed** (review: no more things to define in menu.conf).

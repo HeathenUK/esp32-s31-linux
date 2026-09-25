@@ -68,6 +68,7 @@ static int make_dev(const char *name, int keyboard)
 		 * tested; without it a client's context menu is unreachable
 		 * from the harness and looks like a missing feature. */
 		ioctl(fd, UI_SET_KEYBIT, BTN_RIGHT);
+		ioctl(fd, UI_SET_KEYBIT, BTN_MIDDLE);	/* mclick (QoL T1b) */
 	}
 
 	memset(&us, 0, sizeof(us));
@@ -394,6 +395,17 @@ static void run_cmd(int argc, char **argv)
 			emit(kbd_fd, EV_KEY, KEY_LEFTALT, 0); syn(kbd_fd);
 			msleep(400);
 		}
+	} else if (!strcmp(what, "mclick")) {
+		/* mclick X Y - move there and press the MIDDLE button (paste). */
+		move_to_precise(argc > 2 ? atoi(argv[2]) : 0,
+				argc > 3 ? atoi(argv[3]) : 0);
+		msleep(150);
+		emit(mouse_fd, EV_KEY, BTN_MIDDLE, 1);
+		syn(mouse_fd);
+		msleep(80);
+		emit(mouse_fd, EV_KEY, BTN_MIDDLE, 0);
+		syn(mouse_fd);
+		msleep(60);
 	} else if (!strcmp(what, "moveto")) {
 		/*
 		 * moveto X Y [MS] - move the pointer to X,Y precisely, press
