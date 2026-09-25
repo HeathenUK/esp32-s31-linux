@@ -320,7 +320,7 @@ CMDLINE_ADD := snd_aloop.index=1
 # desktop from the idle daemons' reclaim share). Kernel-memory and socket
 # accounting would add per-object slab bookkeeping on a SLUB_TINY board for
 # nothing we use.
-CMDLINE_ADD += cgroup.memory=nokmem,nosocket
+# (cgroup.memory=nokmem,nosocket was here while MEMCG was on, 2026-09-25)
 # PROF=1 must land here, not only in PROF_CMDLINE_TWEAK: the EARLYCON_TWEAK
 # below re-sets CMDLINE from CMDLINE_NOW + CMDLINE_ADD after it, and on
 # 2026-09-10 that silently dropped profile=6 - kernel #184 had PROFILING
@@ -653,7 +653,7 @@ linux: toolchain | $(LINUX_OUT)
 		--enable RISCV_ISA_C \
 		--enable PROFILING \
 		--enable VM_EVENT_COUNTERS \
-		--enable CGROUPS --enable MEMCG \
+		--disable MEMCG --disable CGROUPS \
 		$(PROF_CMDLINE_TWEAK) \
 		$(EARLYCON_TWEAK) \
 		$(HZ_TWEAKS) \
