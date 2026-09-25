@@ -279,6 +279,27 @@ static int wm_shortcut(int code);
 static void switcher_end(void);
 static void switcher_timeout(void);
 static void popover_close(void);	/* fullscreen entry closes any popover */
+static void toast_show(const char *text, uint32_t ms);	/* QoL D1 */
+static void toast_show_k(const char *key, const char *text, uint32_t ms);
+static void toast_flush_pending(void);	/* on leaving fullscreen */
+static void vol_key(int code, int value);	/* volume/mute keys (QoL D2) */
+static int menu_key(int code);		/* keyboard in an open menu (QoL B2) */
+static int popover_is_open(void);
+static void desk_menu_toggle(void);	/* Super tap / Start (QoL B1) */
+static int super_chord;			/* Super was used as a modifier */
+static void super_shortcut(int code);	/* Super+arrows etc. (QoL B3) */
+static uint32_t super_down_ms;
+/*
+ * Keyboard state of the open menu (QoL B2). menu_list is the lv_list of the
+ * popover built by menu_popover_build(), NULL for tray panels; menu_sel the
+ * highlighted row or -1. menu_kbd: the menu is being driven from the
+ * keyboard, so a (sub)menu opens with row 0 highlighted. Context menus
+ * never preselect: row 0 of xfiles' delete confirm is the deleting one.
+ */
+static lv_obj_t *menu_list;
+static lv_event_cb_t menu_cbk;
+static int menu_sel = -1, menu_rows, menu_kbd;
+static int menu_cur = -1;		/* submenu shown, -1 = root */
 
 /*
  * The passphrase prompt, declared here because the keyboard handler has to
@@ -946,6 +967,16 @@ static int kbd_key(int code)
 	/* Desktop shortcuts, before Alt turns into an ESC prefix. */
 	if (wm_shortcut(code))
 		return 1;
+	/*
+	 * An open menu or tray panel owns the keyboard (QoL B2): keys typed
+	 * with it up used to go to the window underneath. Modifiers pass, so
+	 * Alt+Tab and Shift state keep working.
+	 */
+	if (popover_is_open() && !fs_active && code != KEY_LEFTSHIFT &&
+	    code != KEY_RIGHTSHIFT && code != KEY_LEFTCTRL &&
+	    code != KEY_RIGHTCTRL && code != KEY_LEFTALT &&
+	    code != KEY_RIGHTALT)
+		return menu_key(code);
 
 	win_deliver_key(code);
 	return 0;
@@ -1187,6 +1218,18 @@ static int kbd_poll(void)
 			if (ev.type != EV_KEY)
 				continue;
 			/*
+			 * Volume and mute keys are the desktop's, ahead of grabs,
+			 * modifiers and the passphrase prompt (QoL D2). Only
+			 * those that arrive on a keyboard node already opened;
+			 * a media-key-only USB node is NOT opened for them (its
+			 * extra polled endpoint is a measured USB cost here).
+			 */
+			if (ev.code == KEY_VOLUMEUP || ev.code == KEY_VOLUMEDOWN ||
+			    ev.code == KEY_MUTE) {
+				vol_key(ev.code, ev.value);
+				continue;
+			}
+			/*
 			 * Track the modifier, then fall through and deliver it
 			 * like any other key. These used to `continue`, which
 			 * updated the desktop's idea of the modifier and threw
@@ -1254,8 +1297,18 @@ static int kbd_poll(void)
 			 * release alone handed clients an unpaired Super_L.
 			 */
 			if (!ev.value && (ev.code == KEY_LEFTMETA ||
-					  ev.code == KEY_RIGHTMETA))
+					  ev.code == KEY_RIGHTMETA)) {
+				/*
+				 * A Super TAP opens the app menu (QoL B1): a
+				 * press and release with nothing chorded in
+				 * between, under 600 ms - this board can lose a
+				 * release, so a long hold must not count.
+				 */
+				if (!super_chord && !fs_active && !pw_ta &&
+				    lv_tick_get() - super_down_ms < 600)
+					desk_menu_toggle();
 				continue;
+			}
 			/* A key the desktop consumed: eat its repeats and release. */
 			if (ev.code < KEY_CNT) {
 				if (ev.value == 1)
@@ -1314,6 +1367,7 @@ static int kbd_poll(void)
 			 */
 			if (con_key && ev.code == con_key &&
 			    (mod_super || con_eat_grave)) {
+				super_chord = 1;
 				if (ev.value == 1 && mod_super && !pw_ta)
 					console_set(CON_TOGGLE);
 				con_eat_grave = 1;
@@ -1325,6 +1379,11 @@ static int kbd_poll(void)
 			 * is not told and carries on; the protocol allows it.
 			 */
 			if (ev.code == KEY_LEFTMETA || ev.code == KEY_RIGHTMETA) {
+				if (ev.value == 1) {
+					super_down_ms = lv_tick_get();
+					/* the grab-escape press is not a tap */
+					super_chord = !!xshim_grab_top();
+				}
 				/*
 				 * Only in windowed mode: in fullscreen there is
 				 * no desktop to return to, so dropping the grab
@@ -1343,6 +1402,9 @@ static int kbd_poll(void)
 			 * with Super held still reach the game, as before.
 			 */
 			if (mod_super && !pw_ta && !fs_active) {
+				super_chord = 1;
+				if (ev.value == 1)
+					super_shortcut(ev.code);
 				if (ev.code < KEY_CNT)
 					KEY_EAT(ev.code);
 				continue;
@@ -2605,6 +2667,8 @@ static void audio_bong(void)
  * -1 none. One function so the preview and the drop cannot disagree about
  * where a window would land - if they can drift apart, eventually they will.
  */
+static int win_is_fixed(lv_obj_t *win);	/* after struct winrec */
+
 static int snap_zone_at(int32_t x, int32_t y)
 {
 	int32_t sw = lv_display_get_horizontal_resolution(NULL);
@@ -2833,7 +2897,8 @@ static void drag_cb(lv_event_t *e)
 	if (y > sh - TASKBAR_H - HDR_H) y = sh - TASKBAR_H - HDR_H;
 
 	lv_obj_set_pos(drag_ghost ? drag_ghost : win, x, y);
-	snap_hint_update(snap_zone_at(p.x, p.y), win);
+	/* no snap preview for a window that cannot resize (QoL B3) */
+	snap_hint_update(win_is_fixed(win) ? -1 : snap_zone_at(p.x, p.y), win);
 }
 
 /*
@@ -2880,6 +2945,8 @@ struct winrec {
 	 * reused by make_window().
 	 */
 	uint8_t closing;
+	uint8_t tb_state;		/* task button as last painted, 0 = never */
+	uint8_t desk_hid;		/* hidden by Super+D, restored by it */
 };
 
 static struct winrec wins[MAXWIN];
@@ -3160,6 +3227,9 @@ static int volume_current(void);
 static int state_get(const char *key, int def);
 static void term_raise_and_run(const char *cmd);
 
+static void win_snap(struct winrec *w, int mode);
+static void win_restore(struct winrec *w);
+
 static void ctl_line(char *buf)
 {
 	int idx, w, h;
@@ -3330,6 +3400,39 @@ static void ctl_line(char *buf)
 				fflush(stdout);
 				win_close(&wins[idx]);
 			}
+		} else if (!strncmp(buf, "notify ", 7)) {
+			/*
+			 * notify [@ms] <text>: a toast, 3 s unless @ms says
+			 * otherwise (QoL D1; the duration is for screenshots,
+			 * which take longer than 3 s to start).
+			 */
+			char *t = buf + 7, *nl = strchr(t, '\n');
+			uint32_t ms = 3000;
+
+			if (nl)
+				*nl = 0;
+			if (*t == '@') {
+				ms = (uint32_t)strtoul(t + 1, &t, 10);
+				while (*t == ' ')
+					t++;
+				if (ms < 500 || ms > 60000)
+					ms = 3000;
+			}
+			toast_show(t, ms);
+		} else if (sscanf(buf, "snap %d %d", &idx, &w) == 2) {
+			/* snap <idx> <0 left|1 right|2 max|3 restore> (QoL B3) */
+			if (idx >= 0 && idx < win_n && wins[idx].win) {
+				if (w == 3)
+					win_restore(&wins[idx]);
+				else
+					win_snap(&wins[idx], w);
+			}
+		} else if (!strncmp(buf, "pop", 3) && (!buf[3] || buf[3] == '\n')) {
+			/* popover state, for the keyboard-menu tests (QoL B2) */
+			printf("lvdesk: pop %s rows=%d sel=%d cur=%d menu=%d\n",
+			       popover_is_open() ? "open" : "closed",
+			       menu_rows, menu_sel, menu_cur, menu_list != NULL);
+			fflush(stdout);
 		} else if (!strncmp(buf, "run ", 4)) {
 			/* Type a command into the built-in terminal. */
 			term_raise_and_run(buf + 4);
@@ -3746,10 +3849,16 @@ static void win_toggle_max(struct winrec *w)
 		xwin_push_size(w->win);
 		w->maximised = 0;
 	} else {
-		w->rx = lv_obj_get_x(w->win);
-		w->ry = lv_obj_get_y(w->win);
-		w->rw = lv_obj_get_width(w->win);
-		w->rh = lv_obj_get_height(w->win);
+		/*
+		 * A tiled window's home is already saved; overwriting it with
+		 * the half-tile lost the real home on snap, then maximise.
+		 */
+		if (!w->snapped) {
+			w->rx = lv_obj_get_x(w->win);
+			w->ry = lv_obj_get_y(w->win);
+			w->rw = lv_obj_get_width(w->win);
+			w->rh = lv_obj_get_height(w->win);
+		}
 		lv_obj_set_pos(w->win, 0, 0);
 		lv_obj_set_size(w->win, sw, sh - TASKBAR_H);
 		w->maximised = 1;
@@ -3781,6 +3890,13 @@ static void win_snap(struct winrec *w, int mode)
 
 	if (!w || !w->win)
 		return;
+	/*
+	 * A window that declared a fixed size cannot tile: stretching xcalc's
+	 * frame to a half screen left an empty band beside the client that
+	 * nothing paints (QoL B3). Keyboard and drag snaps both stop here.
+	 */
+	if (w->fixed_size)
+		return;
 	console_leave(w);
 	/* Only remember home the first time, or snapping twice loses it. */
 	if (!w->maximised && !w->snapped) {
@@ -3811,6 +3927,93 @@ static void win_snap(struct winrec *w, int mode)
 	if (w->maxicon)
 		lv_image_set_src(w->maxicon, w->maximised ?
 				 &lvdesk_restore_img : &lvdesk_max_img);
+	lv_obj_move_foreground(w->win);
+	win_set_focus(w);
+}
+
+static int win_is_fixed(lv_obj_t *win)
+{
+	struct winrec *w = win_find(win);
+
+	return w && w->fixed_size;
+}
+
+static void win_minimise(struct winrec *w);
+
+/* Back to the home geometry from a tile or maximise (Super+Down). */
+static void win_restore(struct winrec *w)
+{
+	if (!w || !w->win || (!w->maximised && !w->snapped))
+		return;
+	lv_obj_set_pos(w->win, w->rx, w->ry);
+	lv_obj_set_size(w->win, w->rw, w->rh);
+	xwin_push_size(w->win);
+	w->maximised = w->snapped = 0;
+	if (w->maxicon)
+		lv_image_set_src(w->maxicon, &lvdesk_max_img);
+}
+
+/*
+ * Super+D: hide every visible window, or bring back exactly the ones it
+ * hid. A per-window flag rather than a list, so slot reuse cannot leave a
+ * stale entry; focus goes to nothing once instead of hopping N times.
+ */
+static void desk_show_toggle(void)
+{
+	int i, any = 0;
+
+	for (i = 0; i < win_n; i++)
+		if (wins[i].win && wins[i].desk_hid) {
+			any = 1;
+			break;
+		}
+	if (any) {
+		struct winrec *top = NULL;
+
+		for (i = 0; i < win_n; i++)
+			if (wins[i].win && wins[i].desk_hid) {
+				wins[i].desk_hid = 0;
+				wins[i].minimised = 0;
+				lv_obj_remove_flag(wins[i].win,
+						   LV_OBJ_FLAG_HIDDEN);
+				top = &wins[i];
+			}
+		if (top)
+			win_set_focus(top);
+		return;
+	}
+	for (i = 0; i < win_n; i++)
+		if (wins[i].win && !wins[i].minimised &&
+		    !lv_obj_has_flag(wins[i].win, LV_OBJ_FLAG_HIDDEN)) {
+			wins[i].desk_hid = 1;
+			wins[i].minimised = 1;
+			lv_obj_add_flag(wins[i].win, LV_OBJ_FLAG_HIDDEN);
+		}
+	win_set_focus(NULL);
+}
+
+/*
+ * Super+key chords on the focused window (QoL B3), from the B0 chord gate:
+ * value 1 only, the repeats and the release are eaten there.
+ */
+static void super_shortcut(int code)
+{
+	struct winrec *w = win_focus;
+
+	switch (code) {
+	case KEY_LEFT:  win_snap(w, 0); break;
+	case KEY_RIGHT: win_snap(w, 1); break;
+	case KEY_UP:    win_snap(w, 2); break;
+	case KEY_DOWN:
+		if (w && (w->maximised || w->snapped))
+			win_restore(w);
+		else if (w)
+			win_minimise(w);
+		break;
+	case KEY_H:     if (w) win_minimise(w); break;
+	case KEY_Q:     if (w) win_close(w); break;
+	case KEY_D:     desk_show_toggle(); break;
+	}
 }
 
 static int win_unsnap_for_drag(lv_obj_t *win, int32_t px)
@@ -3938,6 +4141,46 @@ static void win_min_cb(lv_event_t *e)
 }
 
 /*
+ * Task buttons show the window's state (QoL C1): the focused one in the
+ * accent colour, a minimised one dimmed on the bar colour, the rest as
+ * before. Run once per main-loop pass rather than from each of the half
+ * dozen places that un-minimise a window, so none can be missed; it is a
+ * compare per window and restyles (and so repaints) a button only when its
+ * state actually changed.
+ */
+static void tbtn_sync(void)
+{
+	int i;
+
+	for (i = 0; i < win_n; i++) {
+		struct winrec *w = &wins[i];
+		uint8_t st;
+
+		if (!w->win || !w->tbtn)
+			continue;
+		st = win_focus == w ? 3 : w->minimised ? 2 : 1;
+		if (st == w->tb_state)
+			continue;
+		w->tb_state = st;
+		lv_obj_set_style_bg_color(w->tbtn, lv_color_hex(st == 3 ?
+				COL_HDR_FOCUS : st == 2 ? COL_TASKBAR : COL_HDR), 0);
+		lv_obj_set_style_border_width(w->tbtn, st == 2 ? 1 : 0, 0);
+		lv_obj_set_style_border_color(w->tbtn, lv_color_hex(COL_HDR), 0);
+		if (w->tlabel) {
+			/*
+			 * The header text colour, explicitly: the theme's
+			 * button text read dark on the accent and nearly
+			 * vanished on the dimmed bar colour.
+			 */
+			lv_obj_set_style_text_color(w->tlabel,
+				lv_color_hex(COL_HDR_TEXT), 0);
+			lv_obj_set_style_text_opa(w->tlabel, st == 2 ?
+						  LV_OPA_60 : LV_OPA_COVER, 0);
+		}
+	}
+}
+
+/*
  * A task bar button is a toggle, not just a raise: click the window that is
  * already on top and it minimises, which is the contract on Windows, KDE and
  * every panel that has ever had a task list. Raising an already-raised window
@@ -4052,8 +4295,17 @@ static lv_obj_t *make_window(const char *title, int x, int y, int w, int h)
 
 		rec->tlabel = l;
 		lv_label_set_text(l, title);
-		lv_obj_center(l);
+		/*
+		 * Clipped at the right only, from the left edge. Centred, a
+		 * long title lost both ends. CLIP, not DOT: DOT rewrites the
+		 * label's text, and ctl `list` and the switcher read the title
+		 * back from it (QoL C1).
+		 */
+		lv_label_set_long_mode(l, LV_LABEL_LONG_MODE_CLIP);
+		lv_obj_set_width(l, LV_PCT(100));
+		lv_obj_align(l, LV_ALIGN_LEFT_MID, 3, 0);
 	}
+	rec->tb_state = 0;
 	win_set_focus(rec);
 	return win;
 }
@@ -4689,6 +4941,7 @@ static void xwin_on_fsnative(int on)
 			fs_render_set(1);
 			lv_obj_invalidate(lv_screen_active());
 			printf("lvdesk: fullscreen off (panel size)\n");
+			toast_flush_pending();
 			fflush(stdout);
 			cursor_vis_update();
 		}
@@ -4749,6 +5002,7 @@ static void xwin_on_mode(int w, int h)
 			fs_render_set(1);
 			lv_obj_invalidate(lv_screen_active());
 			printf("lvdesk: fullscreen off\n");
+			toast_flush_pending();
 			fflush(stdout);
 			cursor_vis_update();
 		}
@@ -5820,6 +6074,7 @@ static void xwin_on_close(uint32_t id)
 		fs_render_set(1);
 		lv_obj_invalidate(lv_screen_active());
 		printf("lvdesk: fullscreen off (client gone)\n");
+		toast_flush_pending();
 		fflush(stdout);
 		cursor_vis_update();
 	}
@@ -6158,6 +6413,8 @@ static void xwin_cover_cb(lv_event_t *e)
  */
 static lv_obj_t *pop_obj;		/* defined with the popovers below */
 static lv_obj_t *pop_scrim;		/* its click-catcher, ditto */
+#define TOAST_MAX 3
+static lv_obj_t *toast_objs[TOAST_MAX];	/* notification toasts (QoL D1) */
 
 /*
  * True when an LVGL overlay that the direct blit would stamp over covers
@@ -6175,16 +6432,19 @@ static lv_obj_t *pop_scrim;		/* its click-catcher, ditto */
  */
 static int xwin_overlay_hole(int idx, const lv_area_t *a, lv_area_t *hole)
 {
-	lv_obj_t *ov[3] = { sw_panel, pop_obj, NULL };
+	lv_obj_t *ov[3 + TOAST_MAX] = { sw_panel, pop_obj, NULL };
 	lv_area_t b;
 	int k, n = 0;
+
+	for (k = 0; k < TOAST_MAX; k++)
+		ov[3 + k] = toast_objs[k];
 
 	if (term.win && lv_obj_is_valid(term.win) &&
 	    xwins[idx].win && lv_obj_is_valid(xwins[idx].win) &&
 	    lv_obj_get_parent(term.win) == lv_obj_get_parent(xwins[idx].win) &&
 	    lv_obj_get_index(term.win) > lv_obj_get_index(xwins[idx].win))
 		ov[2] = term.win;
-	for (k = 0; k < 3; k++) {
+	for (k = 0; k < 3 + TOAST_MAX; k++) {
 		if (!ov[k] || !lv_obj_is_valid(ov[k]) ||
 		    lv_obj_has_flag(ov[k], LV_OBJ_FLAG_HIDDEN))
 			continue;
@@ -7084,6 +7344,209 @@ static void scrim_delete(void)
 	lv_display_enable_invalidation(d, true);
 }
 
+/*
+ * THE TOASTS (QoL D1): small panels bottom-right above the task bar that say
+ * what just happened - a volume step, a device that connected or left, a ctl
+ * `notify`. Up to TOAST_MAX STACK, newest at the bottom, each with its own
+ * timer; a fourth pushes out the oldest. A toast with a KEY (the volume, one
+ * Bluetooth address, Wi-Fi) is rewritten in place by the next one with the
+ * same key, so holding Volume Up does not build a tower of percentages.
+ *
+ * Not clickable and not scrollable, so a click inside one still reaches the
+ * window underneath (a clickable panel would swallow Button1 while buttons 2-5
+ * went through). They share the popover's slot: nothing is shown over an open
+ * popover, and opening one removes them. In fullscreen nothing LVGL draws
+ * reaches the panel, so up to TOAST_MAX lines wait and are shown on the way out.
+ */
+struct toast {
+	lv_obj_t *label;
+	lv_timer_t *tmr;
+	char key[20];
+	uint32_t seq;			/* creation order: higher is newer */
+	int32_t w;			/* as set: LVGL geometry is deferred */
+};
+#define TOAST_H 29
+static struct toast toasts[TOAST_MAX];
+static uint32_t toast_seq;
+static char toast_pending[TOAST_MAX][120];
+static char toast_pending_key[TOAST_MAX][20];
+
+static void toast_free(int i)
+{
+	if (toasts[i].tmr) {
+		lv_timer_delete(toasts[i].tmr);
+		toasts[i].tmr = NULL;
+	}
+	if (toast_objs[i]) {
+		lv_obj_delete(toast_objs[i]);
+		toast_objs[i] = NULL;
+	}
+	toasts[i].label = NULL;
+	toasts[i].key[0] = 0;
+}
+
+static void toast_hide(void)
+{
+	int i;
+
+	for (i = 0; i < TOAST_MAX; i++)
+		toast_free(i);
+}
+
+/* Newest at the bottom, each older one a row higher. Only moves what moved. */
+static void toast_layout(void)
+{
+	int32_t sw = lv_display_get_horizontal_resolution(NULL);
+	int32_t sh = lv_display_get_vertical_resolution(NULL);
+	int order[TOAST_MAX], n = 0, i, j;
+
+	for (i = 0; i < TOAST_MAX; i++)
+		if (toast_objs[i])
+			order[n++] = i;
+	for (i = 1; i < n; i++)			/* newest first */
+		for (j = i; j > 0 && toasts[order[j]].seq >
+				     toasts[order[j - 1]].seq; j--) {
+			int t = order[j];
+
+			order[j] = order[j - 1];
+			order[j - 1] = t;
+		}
+	for (i = 0; i < n; i++) {
+		/*
+		 * Width from the record, never read back: a panel created
+		 * this pass still reports 0x0 until the next layout, which
+		 * put the newest toast behind the task bar (s31-lvgl-
+		 * deferred-geometry).
+		 */
+		lv_obj_t *o = toast_objs[order[i]];
+		int32_t x = sw - toasts[order[i]].w - 4;
+		int32_t y = sh - TASKBAR_H - (TOAST_H + 4) * (i + 1);
+
+		lv_obj_set_pos(o, x, y);
+	}
+}
+
+static void toast_timer_cb(lv_timer_t *t)
+{
+	int i;
+
+	for (i = 0; i < TOAST_MAX; i++)
+		if (toasts[i].tmr == t) {
+			toasts[i].tmr = NULL;
+			lv_timer_delete(t);
+			toast_free(i);
+			toast_layout();
+			return;
+		}
+	lv_timer_delete(t);
+}
+
+static void toast_show_k(const char *key, const char *text, uint32_t ms)
+{
+	char buf[120];
+	lv_point_t sz;
+	int32_t w, h = TOAST_H;
+	int i, slot = -1;
+
+	snprintf(buf, sizeof(buf), "%s", text);
+	if (fs_active) {
+		/* keep it: same key replaces, else the next free line */
+		for (i = 0; i < TOAST_MAX && slot < 0; i++)
+			if (key && toast_pending[i][0] &&
+			    !strcmp(toast_pending_key[i], key))
+				slot = i;
+		for (i = 0; i < TOAST_MAX && slot < 0; i++)
+			if (!toast_pending[i][0])
+				slot = i;
+		if (slot < 0) {			/* full: drop the oldest */
+			memmove(toast_pending[0], toast_pending[1],
+				sizeof(toast_pending[0]) * (TOAST_MAX - 1));
+			memmove(toast_pending_key[0], toast_pending_key[1],
+				sizeof(toast_pending_key[0]) * (TOAST_MAX - 1));
+			slot = TOAST_MAX - 1;
+		}
+		memcpy(toast_pending[slot], buf, sizeof(toast_pending[0]));
+		snprintf(toast_pending_key[slot], sizeof(toast_pending_key[0]),
+			 "%s", key ? key : "");
+		return;
+	}
+	if (pop_obj || pw_ta)
+		return;
+	/* the same subject updates its own toast in place */
+	for (i = 0; i < TOAST_MAX && slot < 0 && key && *key; i++)
+		if (toast_objs[i] && !strcmp(toasts[i].key, key))
+			slot = i;
+	if (slot < 0) {
+		for (i = 0; i < TOAST_MAX && slot < 0; i++)
+			if (!toast_objs[i])
+				slot = i;
+		if (slot < 0) {			/* full: the oldest makes room */
+			slot = 0;
+			for (i = 1; i < TOAST_MAX; i++)
+				if (toasts[i].seq < toasts[slot].seq)
+					slot = i;
+			toast_free(slot);
+		}
+		toasts[slot].seq = ++toast_seq;
+	}
+	lv_text_get_size(&sz, buf, FONT_UI, 0, 0, LV_COORD_MAX,
+			 LV_TEXT_FLAG_NONE);
+	w = sz.x + 16;
+	if (w > 300)
+		w = 300;
+	if (!toast_objs[slot]) {
+		lv_obj_t *o = lv_obj_create(lv_layer_top());
+
+		toast_objs[slot] = o;
+		lv_obj_remove_flag(o, LV_OBJ_FLAG_CLICKABLE);
+		lv_obj_remove_flag(o, LV_OBJ_FLAG_SCROLLABLE);
+		lv_obj_set_style_radius(o, 0, 0);
+		lv_obj_set_style_bg_color(o, lv_color_hex(COL_PANEL), 0);
+		lv_obj_set_style_border_width(o, 1, 0);
+		lv_obj_set_style_border_color(o, lv_color_hex(COL_HDR_FOCUS), 0);
+		lv_obj_set_style_pad_all(o, 6, 0);
+		lv_obj_set_style_text_font(o, FONT_UI, 0);
+		lv_obj_set_style_text_color(o, lv_color_hex(COL_PANEL_TEXT), 0);
+		toasts[slot].label = lv_label_create(o);
+		lv_label_set_long_mode(toasts[slot].label,
+				       LV_LABEL_LONG_MODE_CLIP);
+	}
+	snprintf(toasts[slot].key, sizeof(toasts[slot].key), "%s",
+		 key ? key : "");
+	lv_label_set_text(toasts[slot].label, buf);
+	lv_obj_set_width(toasts[slot].label, w - 14);
+	lv_obj_set_size(toast_objs[slot], w, h);
+	toasts[slot].w = w;
+	if (toasts[slot].tmr)
+		lv_timer_reset(toasts[slot].tmr);
+	else
+		toasts[slot].tmr = lv_timer_create(toast_timer_cb, ms, NULL);
+	lv_timer_set_period(toasts[slot].tmr, ms);
+	toast_layout();
+}
+
+static void toast_show(const char *text, uint32_t ms)
+{
+	toast_show_k(NULL, text, ms);
+}
+
+static void toast_flush_pending(void)
+{
+	int i;
+
+	if (fs_active)
+		return;
+	for (i = 0; i < TOAST_MAX; i++)
+		if (toast_pending[i][0]) {
+			char t[sizeof(toast_pending[0])], k[sizeof(toast_pending_key[0])];
+
+			memcpy(t, toast_pending[i], sizeof(t));
+			memcpy(k, toast_pending_key[i], sizeof(k));
+			toast_pending[i][0] = 0;
+			toast_show_k(k[0] ? k : NULL, t, 3000);
+		}
+}
+
 static void popover_close(void)
 {
 	scan_watch_stop();
@@ -7092,6 +7555,9 @@ static void popover_close(void)
 	if (pop_obj) { lv_obj_delete(pop_obj); pop_obj = NULL; }
 	scrim_delete();
 	pop_owner = NULL;
+	menu_list = NULL;
+	menu_sel = -1;
+	toast_hide();		/* a popover and the toast share the slot */
 	vol_slider = vol_label = NULL;
 	wifi_list = wifi_status = NULL;
 	bt_forget_widgets();
@@ -7277,6 +7743,8 @@ static void menu_popover_build(char **labels, int n, size_t maxlen,
 	if (w < 120) w = 120;
 	if (w > 300) w = 300;
 	h = n * 30 + 10;	/* 30 px rows + panel padding and border */
+	if (h > sh - TASKBAR_H - 4)	/* a long list scrolls, not overflows */
+		h = sh - TASKBAR_H - 4;
 
 	scrim_create();
 
@@ -7321,6 +7789,32 @@ static void menu_popover_build(char **labels, int n, size_t maxlen,
 				      LV_FLEX_ALIGN_CENTER);
 		lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, NULL);
 	}
+	menu_list = list;
+	menu_cbk = cb;
+	menu_rows = n;
+	menu_sel = -1;
+}
+
+/* Highlight row `sel` of the open menu, un-highlighting the previous one. */
+static void menu_select(int sel)
+{
+	lv_obj_t *r;
+
+	if (!menu_list || sel >= menu_rows)
+		return;
+	if (menu_sel >= 0 && (r = lv_obj_get_child(menu_list, menu_sel))) {
+		/* back to the theme's own row style, not a guessed colour */
+		lv_obj_remove_local_style_prop(r, LV_STYLE_BG_COLOR, 0);
+		lv_obj_remove_local_style_prop(r, LV_STYLE_BG_OPA, 0);
+		lv_obj_remove_local_style_prop(r, LV_STYLE_TEXT_COLOR, 0);
+	}
+	menu_sel = sel;
+	if (sel >= 0 && (r = lv_obj_get_child(menu_list, sel))) {
+		lv_obj_set_style_bg_color(r, lv_color_hex(COL_HDR_FOCUS), 0);
+		lv_obj_set_style_bg_opa(r, LV_OPA_COVER, 0);
+		lv_obj_set_style_text_color(r, lv_color_hex(COL_HDR_TEXT), 0);
+		lv_obj_scroll_to_view(r, LV_ANIM_OFF);
+	}
 }
 
 /* ------------------------------------------------------ application menu */
@@ -7356,9 +7850,10 @@ struct mitem {
 };
 static struct mitem mitems[MENU_MAX];
 static int mitem_n;
-static int menu_cur = -1;		/* submenu shown, -1 = root */
+/* menu_cur (the submenu shown, -1 = root) is declared with menu_list */
 static int32_t menu_x, menu_y;		/* where it opened; submenus stay put */
 static const char menu_owner_key;
+static lv_obj_t *menu_owner;		/* what opened the root menu, or NULL */
 
 static void appmenu_load(void)
 {
@@ -7659,11 +8154,6 @@ static void appmenu_open(int parent)
 	int n = 0, i;
 	size_t maxlen = 0;
 
-	if (parent < 0) {
-		appmenu_load();
-		menu_x = ptr_x;
-		menu_y = ptr_y;
-	}
 	popover_close();
 	if (!mitem_n) {
 		printf("lvdesk: menu: no " MENU_CONF "\n");
@@ -7683,7 +8173,127 @@ static void appmenu_open(int parent)
 	if (maxlen < 6) maxlen = 6;
 	menu_cur = parent;
 	menu_popover_build(labels, n, maxlen, menu_x, menu_y, appmenu_item_cb);
-	pop_owner = &menu_owner_key;
+	pop_owner = menu_owner ? (const void *)menu_owner : &menu_owner_key;
+	if (menu_kbd)
+		menu_select(0);
+}
+
+/*
+ * Open the ROOT menu fresh, at x,y: re-read menu.conf and remember the
+ * place. Split out of appmenu_open() (QoL C1) because "< Back" to the root
+ * went through the same path and so re-read the file and jumped the menu
+ * to wherever the pointer had wandered. `owner` is the object that opened
+ * it (the Start button), so tapping that again closes the menu instead of
+ * the scrim forwarding the tap and reopening it; NULL for a right-click.
+ */
+static void appmenu_open_at(int32_t x, int32_t y, lv_obj_t *owner)
+{
+	menu_kbd = 0;			/* desk_menu_toggle() sets it after */
+	appmenu_load();
+	menu_x = x;
+	menu_y = y;
+	menu_owner = owner;
+	appmenu_open(-1);
+}
+
+/* Start: the root menu seated on the task bar at the left (clamped above it). */
+static lv_obj_t *start_btn;
+
+/*
+ * Keys while a menu or tray panel is open (QoL B2). Returns 1: the key is
+ * the desktop's, so its repeats and release are eaten (B0) - which is also
+ * what stops a held Enter falling through into the next menu.
+ */
+static int menu_key(int code)
+{
+	int n = menu_rows, s = menu_sel, app;
+	lv_obj_t *r;
+
+	if (code == KEY_ESC) {
+		popover_close();
+		return 1;
+	}
+	if (!menu_list)			/* a tray panel: Esc only */
+		return 1;
+	app = menu_cbk == appmenu_item_cb;
+	switch (code) {
+	case KEY_DOWN:
+		s = s < 0 ? 0 : (s + 1) % n; break;
+	case KEY_UP:
+		s = s <= 0 ? n - 1 : s - 1; break;
+	case KEY_HOME: case KEY_PAGEUP:
+		s = 0; break;
+	case KEY_END: case KEY_PAGEDOWN:
+		s = n - 1; break;
+	case KEY_ENTER: case KEY_KPENTER: case KEY_SPACE:
+		if (menu_sel >= 0 && (r = lv_obj_get_child(menu_list, menu_sel))) {
+			menu_kbd = 1;
+			/* the callback may delete the popover: touch nothing after */
+			lv_obj_send_event(r, LV_EVENT_CLICKED, NULL);
+		}
+		return 1;
+	case KEY_RIGHT:
+		/* only into a row that has a submenu */
+		if (app && menu_sel >= 0) {
+			int row = menu_sel - (menu_cur >= 0), i, k = 0;
+
+			for (i = 0; i < mitem_n && row >= 0; i++)
+				if (mitems[i].parent == menu_cur && k++ == row) {
+					if (!mitems[i].cmd[0] &&
+					    mitem_has_children(i) &&
+					    (r = lv_obj_get_child(menu_list, menu_sel))) {
+						menu_kbd = 1;
+						lv_obj_send_event(r, LV_EVENT_CLICKED, NULL);
+					}
+					break;
+				}
+		}
+		return 1;
+	case KEY_LEFT: case KEY_BACKSPACE:
+		/*
+		 * Back ONLY in the app menu. In a context menu row 0 is a
+		 * real item - "Confirm delete (N)" in xfiles.
+		 */
+		if (app && menu_cur >= 0 && (r = lv_obj_get_child(menu_list, 0))) {
+			menu_kbd = 1;
+			lv_obj_send_event(r, LV_EVENT_CLICKED, NULL);
+		}
+		return 1;
+	default:
+		return 1;
+	}
+	menu_kbd = 1;
+	menu_select(s);
+	return 1;
+}
+
+static int popover_is_open(void)
+{
+	return pop_obj != NULL;
+}
+
+/* A Super tap: open the app menu bottom-left for the keyboard, or close it. */
+static void desk_menu_toggle(void)
+{
+	if (pop_owner == (const void *)start_btn && menu_list) {
+		popover_close();
+		return;
+	}
+	appmenu_open_at(2, lv_display_get_vertical_resolution(NULL),
+			start_btn);
+	menu_kbd = 1;
+	menu_select(0);
+}
+
+static void start_btn_cb(lv_event_t *e)
+{
+	(void)e;
+	if (pop_owner == (const void *)start_btn) {	/* tap again: close */
+		popover_close();
+		return;
+	}
+	appmenu_open_at(2, lv_display_get_vertical_resolution(NULL),
+			start_btn);
 }
 
 /* Type one command line into the built-in terminal and bring it up front. */
@@ -8880,6 +9490,7 @@ static int wifi_ev_poll(void)
 			wpa_req("SAVE_CONFIG", rep, sizeof(rep));
 			wifi_show_status();
 			wifi_show_results();
+			toast_show_k("wifi", "Wi-Fi connected", 3000);
 		} else if (strstr(buf, "CTRL-EVENT-DISCONNECTED")) {
 			wifi_show_status();
 		} else if (strstr(buf, "SSID-TEMP-DISABLED") &&
@@ -9031,6 +9642,8 @@ static struct btdev *btdev_find(const char *addr)
 static void audio_sink_lost(const char *addr);
 
 /* One DEV line: DEV <addr> paired=x conn=x trusted=x kind=k bearer=b rssi=n "name" */
+static int audio_toasted;	/* audio_sink_lost() already said it */
+
 static void bt_dev_line(char *l)
 {
 	struct btdev *d;
@@ -9065,6 +9678,20 @@ static void bt_dev_line(char *l)
 	 */
 	if (was_conn && !conn)
 		audio_sink_lost(addr);
+	/*
+	 * Toast a REAL transition of a device already known (QoL D1): the
+	 * start-up `list` creates the records, so it cannot produce a flood.
+	 * The name is parsed below; the previous one is used here, which is
+	 * the same device.
+	 */
+	if (d->name[0] && was_conn != conn && !(was_conn && !conn && audio_toasted)) {
+		char t[96];
+
+		snprintf(t, sizeof(t), "%s %s", d->name,
+			 conn ? "connected" : "disconnected");
+		toast_show_k(d->addr, t, 3000);
+	}
+	audio_toasted = 0;
 	snprintf(d->kind, sizeof(d->kind), "%s", kind);
 	snprintf(d->bearer, sizeof(d->bearer), "%s", bearer);
 	if ((q = strchr(l, '"'))) {
@@ -9441,6 +10068,89 @@ static void volume_apply(int v)
 	}
 }
 
+/*
+ * Volume and mute keys (QoL D2). The level is lvdesk's own, seeded once from
+ * the state file - never stepped from the codec read-back, which reads 0
+ * below -60 dB, so Up from "0" would stick at 5. Speakers are written at
+ * once; Bluetooth at most every 100 ms, with the last value always sent on
+ * the release. The state file (a whole-file rewrite on SD) is written once
+ * per release, not per repeat. Mute keeps the level and says so in `muted`.
+ */
+static int vol_level = -1, vol_muted = -1, vol_bt_pending;
+static uint32_t vol_bt_ms;
+
+static void vol_out(int v)
+{
+	if (!audio_out_bt) {
+		audio_set_pct(v);
+		return;
+	}
+	if (lv_tick_get() - vol_bt_ms >= 100) {
+		bt_cmd("volume %d", v);
+		vol_bt_ms = lv_tick_get();
+		vol_bt_pending = 0;
+	} else {
+		vol_bt_pending = 1;
+	}
+}
+
+static void vol_key(int code, int value)
+{
+	char t[32];
+	int v;
+
+	if (vol_level < 0)
+		vol_level = audio_out_bt ? state_get("volume_bt", 60)
+					 : state_get("volume", 40);
+	if (vol_muted < 0)
+		vol_muted = state_get("muted", 0);
+	if (!value) {			/* release: persist, and one bong */
+		if (code == KEY_MUTE)
+			return;
+		if (vol_bt_pending) {
+			bt_cmd("volume %d", vol_level);
+			vol_bt_pending = 0;
+		}
+		state_set(audio_out_bt ? "volume_bt" : "volume", vol_level);
+		state_set("muted", vol_muted);
+		if (!fs_active && !audio_out_bt && !vol_muted)
+			audio_bong();
+		return;
+	}
+	if (code == KEY_MUTE) {
+		if (value != 1)
+			return;
+		vol_muted = !vol_muted;
+		if (vol_muted) {
+			if (audio_out_bt)
+				bt_cmd("volume 0");
+			else
+				audio_set_pct(0);
+		} else {
+			vol_out(vol_level);
+		}
+		state_set("muted", vol_muted);
+		snprintf(t, sizeof(t), vol_muted ? "Muted" : "Volume %d%%",
+			 vol_level);
+		toast_show_k("volume", t, 1500);
+		return;
+	}
+	v = vol_level + (code == KEY_VOLUMEUP ? 5 : -5);
+	if (code == KEY_VOLUMEUP && v < 10)
+		v = 10;			/* 1..9 is inaudible here */
+	if (v < 0) v = 0;
+	if (v > 100) v = 100;
+	vol_level = v;
+	vol_muted = 0;			/* any change unmutes */
+	vol_out(v);
+	if (vol_slider) {
+		lv_slider_set_value(vol_slider, v, LV_ANIM_OFF);
+		vol_label_set(v);
+	}
+	snprintf(t, sizeof(t), "Volume %d%%", v);
+	toast_show_k("volume", t, 1500);
+}
+
 static void vol_set_cb(lv_event_t *e)
 {
 	int v = lv_slider_get_value(lv_event_get_target(e));
@@ -9454,6 +10164,9 @@ static void vol_set_cb(lv_event_t *e)
 	 */
 	volume_apply(v);
 	vol_label_set(v);
+	vol_level = v;			/* the keys step from here */
+	vol_muted = 0;
+	state_set("muted", 0);
 	if (!audio_out_bt)
 		audio_bong();
 }
@@ -9533,7 +10246,8 @@ static void audio_out_cb(lv_event_t *e)
 		bt_cmd("volume %d", state_get("volume_bt", 60));
 	} else {
 		bt_cmd("route off");
-		audio_set_pct(state_get("volume", audio_get_pct()));
+		audio_set_pct(state_get("muted", 0) ? 0 :
+			      state_get("volume", audio_get_pct()));
 	}
 	popover_close();
 }
@@ -9566,6 +10280,15 @@ static void audio_sink_lost(const char *addr)
 	audio_out_bt = 0;
 	audio_route_write(0);
 	bt_cmd("route off");
+	{
+		const struct btdev *d = btdev_find(addr);
+		char t[96];
+
+		snprintf(t, sizeof(t), "%s disconnected - sound on speakers",
+			 d && d->name[0] ? d->name : "Headphones");
+		toast_show_k(addr, t, 4000);
+		audio_toasted = 1;
+	}
 }
 
 static void tray_audio_cb(lv_event_t *e)
@@ -10082,6 +10805,29 @@ static int ptr_pressed;
 static int press_edge;			/* a new press, not yet acted on */
 static int wheel;
 static int btn_extra, btn_extra_act;
+/*
+ * TWO-FINGER TAP = RIGHT CLICK on the touchscreen (2026-09-25, asked for).
+ *
+ * A touch press reaches the desktop the moment the finger lands, so a second
+ * finger cannot turn it into a right-click after the fact: the client would
+ * already hold a left press. So on the desktop - not under a grab and not in
+ * fullscreen, where games get the raw touch exactly as before - a touch press
+ * is HELD for touch2_ms. If the kernel reports a second finger inside that
+ * window (BTN_TOOL_DOUBLETAP: the GT1158 driver runs INPUT_MT_POINTER
+ * emulation), it becomes a Button3 press and release at the first finger,
+ * and that touch is swallowed until every finger lifts. Otherwise the left
+ * press goes out when the window ends, or at once on the lift for a short
+ * tap (the release then waits for LVGL to have read the press, or the
+ * click would be lost - the desktop samples the button as a level).
+ *
+ * Cost: touch presses only, up to touch2_ms later (60 ms; the driver polls
+ * every 20 ms while touched, so three polls). Mouse input is untouched.
+ * LVDESK_TOUCH2_MS=0 turns it off. Zero work when no finger is down.
+ */
+static int touch2_ms = -1;
+static int t_pend, t_up_early, t_swallow, t_rrel, t_lrel, t_two;
+static int t_press_live;		/* a released-late press LVGL may not have read */
+static uint32_t t_pend_ms, t_lrel_reads, t_press_reads, ptr_reads;
 static lv_obj_t *cursor_obj;
 static int hw_cursor;
 #define FRAME_MS 16		/* 60 Hz panel */
@@ -10347,6 +11093,11 @@ static int mouse_poll(void)
 
 		accel_on = !(e && !strcmp(e, "0"));
 	}
+	if (touch2_ms < 0) {
+		const char *e = getenv("LVDESK_TOUCH2_MS");
+
+		touch2_ms = e ? atoi(e) : 60;
+	}
 
 	if (input_rescan_due(mouse_scan_at)) {
 		mouse_scan_at = lv_tick_get() | 1;
@@ -10493,14 +11244,50 @@ static int mouse_poll(void)
 					ptr_x = ev.value;
 				else if (ev.code == ABS_Y)
 					ptr_y = ev.value;
+			} else if (ev.type == EV_KEY && mouse_touch[i] &&
+				   ev.code == BTN_TOOL_DOUBLETAP) {
+				t_two = !!ev.value;
+			} else if (ev.type == EV_KEY && mouse_touch[i] &&
+				   ev.code == BTN_TOUCH && touch2_ms > 0 &&
+				   (t_pend || t_swallow ||
+				    (ev.value && !xshim_grab_top() &&
+				     !fs_active))) {
+				if (ev.value) {
+					if (!t_swallow && !t_pend) {
+						t_pend = 1;
+						t_up_early = 0;
+						t_pend_ms = lv_tick_get();
+					}
+				} else if (t_swallow) {
+					t_swallow = 0;	/* last finger up */
+				} else if (t_pend) {
+					t_up_early = 1;
+				}
+			} else if (ev.type == EV_KEY && mouse_touch[i] &&
+				   ev.code == BTN_TOUCH && !ev.value &&
+				   t_press_live && ptr_reads == t_press_reads) {
+				/*
+				 * The finger lifted before LVGL sampled the
+				 * press that the window released late: hold
+				 * the release until it has, or the tap is
+				 * lost (measured: 2 of 3 short taps).
+				 */
+				t_press_live = 0;
+				t_lrel = 1;
+				t_lrel_reads = t_press_reads;
 			} else if (ev.type == EV_KEY &&
 				   (ev.code == BTN_LEFT ||
 				    ev.code == BTN_TOUCH)) {
 				int was = ptr_pressed;
 
+				if (!ev.value)
+					t_press_live = 0;
+
 				ptr_pressed = !!ev.value;
 				if (ptr_pressed && !was)
 					press_edge = 1;
+				if (ev.value && mod_super)
+					super_chord = 1;
 			} else if (ev.type == EV_KEY &&
 				   (ev.code == BTN_RIGHT ||
 				    ev.code == BTN_MIDDLE)) {
@@ -10513,6 +11300,43 @@ static int mouse_poll(void)
 	/* Synthetic motion lands exactly where it was aimed. */
 	ptr_x += vdx;
 	ptr_y += vdy;
+
+	/* The two-finger tap (see touch2_ms). */
+	if (t_rrel && !btn_extra) {
+		btn_extra = 3;
+		btn_extra_act = 2;
+		t_rrel = 0;
+	}
+	if (t_lrel && ptr_reads != t_lrel_reads) {
+		ptr_pressed = 0;
+		t_lrel = 0;
+	}
+	if (t_pend) {
+		if (t_two && !btn_extra) {
+			t_pend = 0;
+			t_swallow = !t_up_early;
+			btn_extra = 3;
+			btn_extra_act = 1;
+			t_rrel = 1;
+			busy = 1;
+			printf("lvdesk: two-finger tap -> right click at %d,%d\n",
+			       (int)ptr_x, (int)ptr_y);
+			fflush(stdout);
+		} else if (t_up_early ||
+			   lv_tick_get() - t_pend_ms >= (uint32_t)touch2_ms) {
+			t_pend = 0;
+			ptr_pressed = 1;
+			press_edge = 1;
+			busy = 1;		/* let LVGL run and read it now */
+			t_press_live = 1;
+			t_press_reads = ptr_reads;
+			if (t_up_early) {
+				t_up_early = 0;
+				t_lrel = 1;
+				t_lrel_reads = ptr_reads;
+			}
+		}
+	}
 
 	if (rdx || rdy) {
 		uint32_t now = ev_ms ? ev_ms : lv_tick_get();
@@ -10740,7 +11564,7 @@ static int mouse_poll(void)
 				if (pop_scrim && o == pop_scrim)
 					popover_close();
 				else if (!top && !obj_in(o, term.win))
-					appmenu_open(-1);
+					appmenu_open_at(ptr_x, ptr_y, NULL);
 			} else if (btn_extra == 3 && !fs_active &&
 				   ptr_y < h - TASKBAR_H) {
 				/*
@@ -10763,7 +11587,7 @@ static int mouse_poll(void)
 						    ptr_y <= ta.y2;
 				}
 				if (!over_term)
-					appmenu_open(-1);
+					appmenu_open_at(ptr_x, ptr_y, NULL);
 			}
 		}
 		btn_extra = 0;
@@ -10896,6 +11720,7 @@ static void mouse_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
 	}
 	data->point.x = ptr_x;
 	data->point.y = ptr_y;
+	ptr_reads++;		/* a deferred tap releases after this */
 	/*
 	 * A press is withheld from LVGL while a client holds a pointer grab -
 	 * and ALSO while a client is fullscreen, grab or no grab.
@@ -11214,8 +12039,10 @@ int main(void)
 		int v = state_get("volume", -1);
 
 		if (v >= 0) {
-			audio_set_pct(v);
-			printf("lvdesk: volume restored to %d\n", v);
+			/* a mute survives a reboot (QoL D2) */
+			audio_set_pct(state_get("muted", 0) ? 0 : v);
+			printf("lvdesk: volume restored to %d%s\n", v,
+			       state_get("muted", 0) ? " (muted)" : "");
 		}
 	}
 	input_watch_init();
@@ -11282,12 +12109,41 @@ int main(void)
 	lv_obj_align(taskbar, LV_ALIGN_BOTTOM_MID, 0, 0);
 	lv_obj_set_flex_flow(taskbar, LV_FLEX_FLOW_ROW);
 	lv_obj_set_style_pad_all(taskbar, 3, 0);
+	/*
+	 * A gap between entries (QoL C1); they sat edge to edge. Width budget
+	 * at the maximum: Start 28 + 5 task buttons x 96 (MAXXWIN 4 plus the
+	 * terminal) + tray 232 + 6 gaps x 4 + padding 6 = 770 of 800 px.
+	 */
+	lv_obj_set_style_pad_column(taskbar, 4, 0);
 	lv_obj_set_style_radius(taskbar, 0, 0);
 	lv_obj_set_style_bg_color(taskbar, lv_color_hex(COL_TASKBAR), 0);
 	lv_obj_set_style_border_width(taskbar, 0, 0);
 	lv_obj_set_style_text_font(taskbar, FONT_UI, 0);
 	lv_obj_remove_flag(taskbar, LV_OBJ_FLAG_SCROLLABLE);
 	lv_obj_set_scrollbar_mode(taskbar, LV_SCROLLBAR_MODE_OFF);
+
+	/*
+	 * The Start button (QoL C1): the only way to reach the app menu by
+	 * touch, since the menu otherwise opens on a right-button release and
+	 * a tap is Button1. First child, so it sits at the left end.
+	 */
+	{
+		lv_obj_t *sb = lv_button_create(taskbar);
+		lv_obj_t *l;
+
+		start_btn = sb;
+		lv_obj_set_size(sb, 28, TASKBAR_H - 6);
+		lv_obj_set_style_pad_all(sb, 0, 0);
+		lv_obj_set_style_radius(sb, 0, 0);
+		lv_obj_set_style_bg_opa(sb, LV_OPA_TRANSP, 0);
+		lv_obj_set_style_shadow_width(sb, 0, 0);
+		lv_obj_set_ext_click_area(sb, TRAY_TOUCH_PAD);
+		lv_obj_add_event_cb(sb, start_btn_cb, LV_EVENT_CLICKED, NULL);
+		l = lv_label_create(sb);
+		lv_label_set_text(l, LV_SYMBOL_LIST);
+		lv_obj_set_style_text_color(l, lv_color_hex(COL_HDR_TEXT), 0);
+		lv_obj_center(l);
+	}
 
 	{
 		/*
@@ -11649,6 +12505,18 @@ int main(void)
 		 * timing matters.
 		 */
 		ms = (int)next;
+		tbtn_sync();		/* task button states; compares unless changed */
+		/* a held touch press, or a deferred release, is due soon */
+		if (t_pend) {
+			int left = touch2_ms - (int)(lv_tick_get() - t_pend_ms);
+
+			if (left < 1)
+				left = 1;
+			if (left < ms)
+				ms = left;
+		}
+		if ((t_rrel || t_lrel) && ms > 5)
+			ms = 5;
 		xshim_close_tick(lv_tick_get());	/* WM_DELETE_WINDOW deadlines */
 		xshim_flush();		/* deferred client output, before we sleep */
 		{
@@ -11714,7 +12582,7 @@ int main(void)
 
 			if (rd_term)  { PROF_START(a); busy |= term_poll();   PROF_ADD(prof_term, a); }
 			if (rd_kbd)   { PROF_START(a); busy |= kbd_poll();    PROF_ADD(prof_kbd, a); }
-			if (rd_mouse) { PROF_START(a); busy |= mouse_poll();  PROF_ADD(prof_mouse, a); }
+			if (rd_mouse || t_pend || t_rrel || t_lrel) { PROF_START(a); busy |= mouse_poll();  PROF_ADD(prof_mouse, a); }
 			if (rd_wifi)  { PROF_START(a); busy |= wifi_ev_poll(); PROF_ADD(prof_wifi, a); }
 			if (rd_bt)    busy |= bt_ev_poll();
 			{

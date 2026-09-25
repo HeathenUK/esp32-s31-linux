@@ -35,6 +35,99 @@ cdoom (883 puts) and quake (motion 12, keys 4).
 Still open from the programme: everything else, starting with A3 (the
 drop-down console, diff 01, which needs rebasing onto these fixes).
 
+## Status, 2026-09-25 late: M2 built and tested (C1, B2, B1, D1, D2, B3) plus two-finger tap
+
+Each item has a board test in `scripts/board/`. All of them pass on one
+build. The tests are `lvdesk-touch-test.sh`, `lvdesk-kbdmenu-test.sh`,
+`lvdesk-ctxmenu-test.sh`, `lvdesk-tile-test.sh` and
+`lvdesk-toast-vol-test.sh`, alongside the earlier console, altf4, route and
+term-hammer tests.
+
+- **Two-finger tap = right click** (asked for after the plan, not in it). A
+  touch press on the desktop is held for up to 60 ms (`LVDESK_TOUCH2_MS`, 0 =
+  off). If the kernel reports BTN_TOOL_DOUBLETAP inside that window, it is
+  Button3 at the first finger and the left press never happens. It is not
+  held under a grab or in fullscreen, where games get raw touch as before.
+  Mouse input is untouched.
+  - Found by the test: a press released late by the window was lost when the
+    finger lifted before LVGL sampled it (2 of 3 short taps). The release now
+    waits for LVGL's read, and 3 of 3 land.
+  - uinject gains a synthetic touchscreen (`tap`, `taphold`, `tap2`) that
+    is_touch() classifies like the GT1158.
+- **C1 Start button and task states.**
+  - A list glyph at the left of the bar opens the root menu seated on the bar,
+    and a second tap closes it.
+  - Task buttons show focused (accent), minimised (dim, outlined) or normal.
+    They are painted by one per-loop function that restyles only on a change.
+  - Titles are left-aligned and clipped. DOT would rewrite the text `list`
+    reads.
+  - A 4 px gap goes between entries.
+  - "< Back" no longer re-reads the file and jumps to the pointer
+    (`appmenu_open_at`).
+- **B2 keyboard menus.**
+  - Up, Down, Home, End, PgUp and PgDn move a highlight. Enter activates.
+    Right enters a submenu, and Left or Backspace go Back in the app menu only.
+    Esc closes any popover.
+  - Keys typed with a menu open reach no client: 0 events to xcalc, against 1
+    after it closes.
+  - The ship blocker holds. In a delete-confirm-shaped context menu,
+    Backspace+Enter and a held Enter with nothing selected run nothing.
+    Down+Enter returns row 0.
+- **B1 Super tap.** A 150 ms tap opens the menu with row 0 highlighted. A 2 s
+  hold does not.
+- **B3 Super tiling.**
+  - Left/Right half tiles, Up maximise, Down restore-or-minimise, H minimise,
+    Q polite close, D show-desktop toggle.
+  - Super+Up then Down returns st to exactly its home.
+  - Snap-then-maximise no longer loses home.
+  - Fixed-size windows do not snap by key or drag. xcalc declares no fixed
+    size, so it tiles, as a drag already tiled it. Recorded, not a
+    regression.
+- **D1 toast.**
+  - Bottom-right, non-clickable, and in the direct-blit overlay cut-out.
+  - It shares the popover's slot, is kept pending in fullscreen and shown on
+    leaving, and repeated updates rewrite it in place.
+  - It is fed by ctl `notify`, Wi-Fi connected, a BT connect or disconnect of
+    an already-known device, the sink fall-back ("... disconnected - sound on
+    speakers") and the volume keys.
+  - 20 notifies leave `lvmem` used_bytes exactly at baseline.
+  - **Toasts stack** (asked for after the first version, where each new
+    message trampled the last). Up to 3 stack, newest at the bottom, each with
+    its own timer, and a fourth pushes out the oldest. A keyed toast (volume,
+    one BT address, Wi-Fi) updates its own panel in place, so holding
+    Volume Up does not build a tower. In fullscreen up to 3 wait. ctl `notify
+    @ms text` sets a duration, for screenshots.
+  - Found by the stack test: the newest toast landed behind the task bar,
+    because the layout read a just-created panel's size back and got 0x0
+    (deferred geometry). Positions now come from the width as set.
+- **D2 volume and mute keys**, on keyboard nodes already open. The media-only
+  consumer node is NOT opened: its polled endpoint is the plan's USB-cost risk
+  and needs its own measurement.
+  - The level is lvdesk's own, stepped in 5s, with 1-9 snapped to 10. The
+    state is written once per release, BT is rate-limited to one command per
+    100 ms, and a bong plays on release in windowed mode.
+  - Mute keeps the level, persists `muted`, and is honoured at start-up.
+  - Tested: 40 -> 50 -> 40 with DAC 143 -> 154 -> 143. Mute gives DAC 0 with
+    volume=40 kept, and unmute gives 143. The test restores the start level.
+
+**M2 shipped** in the XIP image (lvdesk md5 ed7cffde). x11-compat-gate is
+5/5 and gate2 on a fresh boot is 5/5. Performance: windowed prboom,
+`PB_ARGS=-window perframe.sh 30 60`, one fresh boot per arm, the desktop
+restarted identically in both arms:
+
+| arm | lvdesk ticks/frame | idle lvdesk ticks / 30 s |
+|---|---|---|
+| shipped (M0 build), 3 boots | 0.942 0.991 1.239 | 29 28 33 |
+| M2 build, 3 boots (0.911 on the pre-stacking build) | 0.922 0.960 (0.911) | 21 22 (21) |
+
+No regression. The M2 arms sit at or below the shipped cluster, and idle is
+lower on every boot, as it was at M0. Why idle is lower is still not
+established. prboom's own cost per frame is the same in both arms.
+
+The close button on prboom: WM_DELETE_WINDOW, then prboom's own quit prompt,
+then the 3 s drop ends it. That is by design (st and Quake shut down
+properly only when asked). A second click drops the client at once.
+
 ## Status, 2026-09-25 evening: M0 finished, the console (A3) shipped
 
 Shipped in the XIP image (lvdesk md5 d14fafe5) on kernel #391:

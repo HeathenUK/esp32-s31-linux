@@ -1,0 +1,27 @@
+  A idle_ticks_30s=30 bin=lvdesk
+  A   lvdesk 1.148 ticks/frame   prboom 1.534 ticks/frame   (3200 frames)
+  B idle_ticks_30s=22 bin=lvdesk.new
+  B   lvdesk 1.120 ticks/frame   prboom 1.553 ticks/frame   (3200 frames)
+  A idle_ticks_30s=30 bin=lvdesk
+  A   lvdesk 0.994 ticks/frame   prboom 1.584 ticks/frame   (3200 frames)
+  B idle_ticks_30s=20 bin=lvdesk.new
+  B   lvdesk 0.962 ticks/frame   prboom 1.598 ticks/frame   (3200 frames)
+  B idle_ticks_30s=22 bin=lvdesk.new
+  B   lvdesk 0.955 ticks/frame   prboom 1.610 ticks/frame   (3200 frames)
+  A idle_ticks_30s=29 bin=lvdesk
+  A   lvdesk 0.969 ticks/frame   prboom 1.597 ticks/frame   (3200 frames)
+  A idle_ticks_30s=37 bin=lvdesk
+  A   lvdesk 1.157 ticks/frame   prboom 1.526 ticks/frame   (3200 frames)
+== M2 build 14:33
+  A idle_ticks_30s=29 bin=lvdesk
+  A   lvdesk 0.942 ticks/frame   prboom 1.491 ticks/frame   (3400 frames)
+  B idle_ticks_30s=21 bin=lvdesk.new
+  B   lvdesk 0.911 ticks/frame   prboom 1.496 ticks/frame   (3400 frames)
+  A idle_ticks_30s=28 bin=lvdesk
+  A   lvdesk 0.991 ticks/frame   prboom 1.588 ticks/frame   (3200 frames)
+  B idle_ticks_30s=21 bin=lvdesk.new
+  B   lvdesk 0.922 ticks/frame   prboom 1.499 ticks/frame   (3400 frames)
+  B idle_ticks_30s=22 bin=lvdesk.new
+  B   lvdesk 0.960 ticks/frame   prboom 1.591 ticks/frame   (3200 frames)
+  A idle_ticks_30s=33 bin=lvdesk
+  A   lvdesk 1.239 ticks/frame   prboom 1.629 ticks/frame   (3000 frames)

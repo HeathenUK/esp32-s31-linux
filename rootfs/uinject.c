@@ -80,6 +80,53 @@ static int make_dev(const char *name, int keyboard)
 	return fd;
 }
 
+/*
+ * A synthetic TOUCHSCREEN, created only for the tap commands: absolute X/Y
+ * in panel coordinates, BTN_TOUCH, and the finger-count keys that the
+ * kernel's INPUT_MT_POINTER emulation reports for the real GT1158
+ * (BTN_TOOL_FINGER, BTN_TOOL_DOUBLETAP). No relative axes, so lvdesk's
+ * is_touch() classifies it exactly as it does the panel.
+ */
+static int touch_fd = -1;
+
+static int make_touch(void)
+{
+	struct uinput_setup us;
+	struct uinput_abs_setup ab;
+	int fd = open("/dev/uinput", O_WRONLY | O_NONBLOCK);
+
+	if (fd < 0) { perror("uinject: /dev/uinput"); exit(1); }
+	ioctl(fd, UI_SET_EVBIT, EV_KEY);
+	ioctl(fd, UI_SET_EVBIT, EV_SYN);
+	ioctl(fd, UI_SET_EVBIT, EV_ABS);
+	ioctl(fd, UI_SET_KEYBIT, BTN_TOUCH);
+	ioctl(fd, UI_SET_KEYBIT, BTN_TOOL_FINGER);
+	ioctl(fd, UI_SET_KEYBIT, BTN_TOOL_DOUBLETAP);
+	ioctl(fd, UI_SET_PROPBIT, INPUT_PROP_DIRECT);
+	memset(&ab, 0, sizeof(ab));
+	ab.code = ABS_X; ab.absinfo.maximum = 799;
+	ioctl(fd, UI_ABS_SETUP, &ab);
+	ab.code = ABS_Y; ab.absinfo.maximum = 479;
+	ioctl(fd, UI_ABS_SETUP, &ab);
+	memset(&us, 0, sizeof(us));
+	us.id.bustype = BUS_I2C;
+	us.id.vendor = 0x1d6b;
+	us.id.product = 0x0003;
+	snprintf(us.name, sizeof(us.name), "uinject-touch");
+	ioctl(fd, UI_DEV_SETUP, &us);
+	ioctl(fd, UI_DEV_CREATE);
+	return fd;
+}
+
+static void touch_at(int x, int y, int down, int tool)
+{
+	emit(touch_fd, EV_ABS, ABS_X, x);
+	emit(touch_fd, EV_ABS, ABS_Y, y);
+	emit(touch_fd, EV_KEY, BTN_TOUCH, down);
+	emit(touch_fd, EV_KEY, tool, down);
+	syn(touch_fd);
+}
+
 /* Move to an absolute position by deltas, in small steps so it looks like a
  * hand rather than a teleport - and so each step produces a real repaint. */
 static void move_to(int x, int y, int steps, int delay)
@@ -251,6 +298,8 @@ int main(int argc, char **argv)
 
 	mouse_fd = make_dev("uinject-mouse", 0);
 	kbd_fd = make_dev("uinject-kbd", 1);
+	if (!strncmp(what, "tap", 3))
+		touch_fd = make_touch();
 	/*
 	 * Settle time before the first event. Discovery is inotify-driven and
 	 * runs on an LVGL timer, so an event sent too early is delivered to a
@@ -364,6 +413,41 @@ int main(int argc, char **argv)
 			emit(kbd_fd, EV_KEY, KEY_LEFTALT, 0); syn(kbd_fd);
 			msleep(400);
 		}
+	} else if (!strcmp(what, "tap") || !strcmp(what, "taphold")) {
+		/*
+		 * tap X Y            - one finger, 100 ms
+		 * taphold X Y MS     - one finger held MS (a press that must
+		 *                      survive the desktop's two-finger window)
+		 */
+		int x = argc > 2 ? atoi(argv[2]) : 400;
+		int y = argc > 3 ? atoi(argv[3]) : 240;
+		int ms = !strcmp(what, "taphold") && argc > 4 ? atoi(argv[4]) : 100;
+
+		touch_at(x, y, 1, BTN_TOOL_FINGER);
+		msleep(ms);
+		touch_at(x, y, 0, BTN_TOOL_FINGER);
+		msleep(300);
+	} else if (!strcmp(what, "tap2")) {
+		/*
+		 * tap2 X Y [GAPMS] - two-finger tap: the first finger lands at
+		 * X,Y, the second GAPMS later (default 30), both lift together
+		 * 100 ms after that. The finger-count keys change the way the
+		 * kernel's pointer emulation changes them.
+		 */
+		int x = argc > 2 ? atoi(argv[2]) : 400;
+		int y = argc > 3 ? atoi(argv[3]) : 240;
+		int gap = argc > 4 ? atoi(argv[4]) : 30;
+
+		touch_at(x, y, 1, BTN_TOOL_FINGER);
+		msleep(gap);
+		emit(touch_fd, EV_KEY, BTN_TOOL_FINGER, 0);
+		emit(touch_fd, EV_KEY, BTN_TOOL_DOUBLETAP, 1);
+		syn(touch_fd);
+		msleep(100);
+		emit(touch_fd, EV_KEY, BTN_TOUCH, 0);
+		emit(touch_fd, EV_KEY, BTN_TOOL_DOUBLETAP, 0);
+		syn(touch_fd);
+		msleep(300);
 	} else if (!strcmp(what, "chord")) {
 		/*
 		 * chord MOD HOLDMS K1 [K2 ...] - hold MOD, tap each key (80 ms
