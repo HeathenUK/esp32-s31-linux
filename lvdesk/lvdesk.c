@@ -324,6 +324,8 @@ static void vol_key(int code, int value);	/* volume/mute keys (QoL D2) */
 static void tray_vol_update(void);	/* volume tray glyph (QoL C6) */
 static int menu_key(int code);		/* keyboard in an open menu (QoL B2) */
 static int popover_is_open(void);
+static void app_sid_note(pid_t pid);	/* menu-launched sessions (QoL D6) */
+static void memp_stop(void);
 static void pw_debug(void);
 static void desk_menu_toggle(void);	/* Super tap / Start (QoL B1) */
 static int super_chord;			/* Super was used as a modifier */
@@ -3794,6 +3796,8 @@ static void ctl_line(char *buf)
 				icon = bt_tray_icon;
 			else if (strstr(buf, "clock") && clock_lbl)
 				icon = clock_lbl;
+			else if (strstr(buf, "mem") && sysinfo)
+				icon = sysinfo;
 			else if (strstr(buf, "wifi") && wifi_tray_clip)
 				/* the clip's parent IS the clickable icon */
 				icon = lv_obj_get_parent(wifi_tray_clip);
@@ -8462,6 +8466,7 @@ static void popover_close(void)
 	menu_list = NULL;
 	menu_sel = -1;
 	help_up = 0;
+	memp_stop();
 	toast_hide();		/* a popover and the toast share the slot */
 	vol_slider = vol_label = NULL;
 	wifi_list = wifi_status = NULL;
@@ -9181,6 +9186,16 @@ static void launch_last_line(long off, char *out, size_t outsz)
 	fclose(f);
 }
 
+/* An End from the memory popover is deliberate: stop watching that launch. */
+static void launch_forget(pid_t pid)
+{
+	int i;
+
+	for (i = 0; i < LAUNCH_MAX; i++)
+		if (launches[i].pid == pid)
+			launches[i].pid = 0;
+}
+
 /* From the SIGCHLD reaper: was this one of our launches, and did it fail? */
 static void launch_reaped(pid_t pid, int status)
 {
@@ -9223,6 +9238,7 @@ static pid_t appmenu_spawn(const char *cmd)
 	if (pid > 0) {
 		printf("lvdesk: menu: [%d] %s\n", (int)pid, cmd);
 		fflush(stdout);
+		app_sid_note(pid);	/* setsid() below: pid IS the session */
 		return pid;
 	}
 	setsid();
@@ -9335,11 +9351,25 @@ static void appmenu_launch(const char *cmd)
 		if (launch_label[0]) {
 			snprintf(lbl, sizeof(lbl), "%s", launch_label);
 		} else {
-			size_t k = strcspn(cmd, " ");
+			/* the program, not a leading "cd <dir> &&" or VAR=x */
+			const char *c = cmd, *a, *b;
+			size_t k;
 
+			if (!strncmp(c, "cd ", 3) && (a = strstr(c, "&&"))) {
+				c = a + 2;
+				while (*c == ' ')
+					c++;
+			}
+			while ((b = strchr(c, ' ')) && memchr(c, '=', (size_t)(b - c)))
+				c = b + 1;
+			a = strrchr(c, '/');
+			b = strchr(c, ' ');
+			if (a && (!b || a < b))
+				c = a + 1;
+			k = strcspn(c, " ");
 			if (k >= sizeof(lbl))
 				k = sizeof(lbl) - 1;
-			memcpy(lbl, cmd, k);
+			memcpy(lbl, c, k);
 			lbl[k] = 0;
 		}
 		launch_label[0] = 0;
@@ -12117,6 +12147,325 @@ static void vol_key(int code, int value)
  * for them would add idle syscalls.
  */
 /*
+ * THE MEMORY POPOVER (QoL D6), from the tray's readout. The headline is the
+ * same obtainable figure the tray shows (MemFree+Buffers+Cached-Shmem-
+ * Mapped); the kernel's MemAvailable is shown only as "kernel est.", since
+ * it was measured 29% low here. Rows: the top 5 by RSS+swap, and always the
+ * top CPU user since the last pass - kernel threads included, so a spinner
+ * shows. Sampling is CHUNKED: 8 pids per 250 ms timer tick from an open
+ * DIR*, so the single-threaded loop never stalls on a whole /proc walk; a
+ * full pass repaints the rows. The timer lives only while the popover does.
+ * "End" is offered only for sessions lvdesk launched from the menu
+ * (app_sid): never the terminal's shell, a bong or a daemon.
+ */
+#define APP_SID_MAX 16
+static pid_t app_sid[APP_SID_MAX];
+
+static void app_sid_note(pid_t pid)
+{
+	int i, k = 0;
+
+	for (i = 0; i < APP_SID_MAX; i++)
+		if (!app_sid[i] || kill(app_sid[i], 0) < 0) {
+			k = i;
+			break;
+		}
+	app_sid[k] = pid;
+}
+
+static int app_sid_is(pid_t sid)
+{
+	int i;
+
+	for (i = 0; i < APP_SID_MAX && sid > 0; i++)
+		if (app_sid[i] == sid)
+			return 1;
+	return 0;
+}
+
+#define MEMP_MAX 96
+struct memp {
+	pid_t pid, sid;
+	unsigned long kb, ticks;	/* RSS+swap kB; utime+stime */
+	char comm[16];
+};
+static struct memp memp_cur[MEMP_MAX], memp_prev[MEMP_MAX];
+static int memp_ncur, memp_nprev;
+static DIR *memp_dir;
+static lv_timer_t *memp_tmr;
+static lv_obj_t *memp_pop, *memp_head, *memp_list, *memp_end;
+static pid_t memp_sel_sid;
+static char memp_sel_name[16];
+
+static void mem_read(unsigned long *obt, unsigned long *kavail)
+{
+	FILE *f = fopen("/proc/meminfo", "r");
+	char line[96];
+	unsigned long fr = 0, bu = 0, ca = 0, sh = 0, ma = 0, av = 0;
+
+	*obt = *kavail = 0;
+	if (!f)
+		return;
+	while (fgets(line, sizeof(line), f)) {
+		sscanf(line, "MemFree: %lu kB", &fr);
+		sscanf(line, "Buffers: %lu kB", &bu);
+		sscanf(line, "Cached: %lu kB", &ca);
+		sscanf(line, "Shmem: %lu kB", &sh);
+		sscanf(line, "Mapped: %lu kB", &ma);
+		sscanf(line, "MemAvailable: %lu kB", &av);
+	}
+	fclose(f);
+	*obt = fr + bu + ca;
+	*obt -= (sh + ma < *obt) ? sh + ma : *obt;
+	if (*obt < fr)
+		*obt = fr;
+	*kavail = av;
+}
+
+/* One /proc/<pid>: comm, session, ticks, RSS (+ VmSwap from status). */
+static int memp_sample(pid_t pid, struct memp *m)
+{
+	char path[40], buf[512], *p;
+	int fd, n;
+	unsigned long ut = 0, st = 0;
+	long rss = 0, sid = 0;
+
+	snprintf(path, sizeof(path), "/proc/%d/stat", (int)pid);
+	if ((fd = open(path, O_RDONLY)) < 0)
+		return 0;
+	n = (int)read(fd, buf, sizeof(buf) - 1);
+	close(fd);
+	if (n <= 0)
+		return 0;
+	buf[n] = 0;
+	if (!(p = strrchr(buf, ')')))
+		return 0;
+	{
+		char *l = strchr(buf, '(');
+		size_t k = l ? (size_t)(p - l - 1) : 0;
+
+		if (k >= sizeof(m->comm))
+			k = sizeof(m->comm) - 1;
+		memcpy(m->comm, l ? l + 1 : "?", k);
+		m->comm[k] = 0;
+	}
+	/* fields after ')': 3 state, 4 ppid, 5 pgrp, 6 session ... 14 utime,
+	 * 15 stime ... 24 rss */
+	if (sscanf(p + 2, "%*c %*d %*d %ld %*d %*d %*u %*u %*u %*u %*u %lu %lu "
+		   "%*d %*d %*d %*d %*d %*d %*u %*u %ld", &sid, &ut, &st, &rss) != 4)
+		return 0;
+	m->pid = pid;
+	m->sid = (pid_t)sid;
+	m->ticks = ut + st;
+	m->kb = (unsigned long)rss * 4;
+	snprintf(path, sizeof(path), "/proc/%d/status", (int)pid);
+	if ((fd = open(path, O_RDONLY)) >= 0) {
+		n = (int)read(fd, buf, sizeof(buf) - 1);
+		close(fd);
+		if (n > 0) {
+			unsigned long sw = 0;
+
+			buf[n] = 0;
+			if ((p = strstr(buf, "VmSwap:")) && sscanf(p, "VmSwap: %lu", &sw) == 1)
+				m->kb += sw;
+		}
+	}
+	return 1;
+}
+
+static void memp_end_cb(lv_event_t *e)
+{
+	(void)e;
+	printf("lvdesk: mem End pressed sid=%d app=%d\n", (int)memp_sel_sid,
+	       app_sid_is(memp_sel_sid));
+	fflush(stdout);
+	if (memp_sel_sid > 0 && app_sid_is(memp_sel_sid)) {
+		char t[64];
+
+		launch_forget(memp_sel_sid);	/* ended on purpose: no "failed" */
+		kill(-memp_sel_sid, SIGTERM);
+		snprintf(t, sizeof(t), "Ended %s", memp_sel_name);
+		popover_close();
+		toast_show_k("launch", t, 2500);
+	}
+}
+
+static void memp_row_cb(lv_event_t *e)
+{
+	lv_obj_t *r = lv_event_get_target(e);
+	int k = (int)(intptr_t)lv_obj_get_user_data(r) - 1;
+	uint32_t c;
+
+	if (k < 0 || k >= memp_nprev || !memp_end)
+		return;
+	for (c = 0; c < lv_obj_get_child_count(memp_list); c++)
+		lv_obj_remove_state(lv_obj_get_child(memp_list, (int32_t)c), LV_STATE_CHECKED);
+	lv_obj_add_state(r, LV_STATE_CHECKED);
+	memp_sel_sid = memp_prev[k].sid;
+	snprintf(memp_sel_name, sizeof(memp_sel_name), "%s", memp_prev[k].comm);
+	if (app_sid_is(memp_sel_sid)) {
+		lv_label_set_text_fmt(lv_obj_get_child(memp_end, 0), "End %s", memp_sel_name);
+		lv_obj_remove_flag(memp_end, LV_OBJ_FLAG_HIDDEN);
+	} else {
+		lv_obj_add_flag(memp_end, LV_OBJ_FLAG_HIDDEN);
+	}
+}
+
+/* A full pass is in memp_cur: rank, compare with memp_prev, repaint. */
+static void memp_render(void)
+{
+	int order[MEMP_MAX], n = memp_ncur, i, j, top_cpu = -1;
+	unsigned long best = 0, obt, kav;
+
+	/* CPU since the last pass, by pid */
+	for (i = 0; i < n; i++)
+		for (j = 0; j < memp_nprev; j++)
+			if (memp_prev[j].pid == memp_cur[i].pid) {
+				unsigned long d = memp_cur[i].ticks - memp_prev[j].ticks;
+
+				if (memp_cur[i].ticks >= memp_prev[j].ticks && d > best) {
+					best = d;
+					top_cpu = i;
+				}
+				break;
+			}
+	for (i = 0; i < n; i++)
+		order[i] = i;
+	for (i = 1; i < n; i++)
+		for (j = i; j > 0 && memp_cur[order[j]].kb > memp_cur[order[j - 1]].kb; j--) {
+			int t = order[j];
+
+			order[j] = order[j - 1];
+			order[j - 1] = t;
+		}
+	mem_read(&obt, &kav);
+	if (memp_head)
+		lv_label_set_text_fmt(memp_head, "%lu.%luM free   kernel est. %lu.%luM",
+				      obt * 10 / 1024 / 10, obt * 10 / 1024 % 10,
+				      kav * 10 / 1024 / 10, kav * 10 / 1024 % 10);
+	if (memp_list) {
+		int shown = 0, cpu_shown = 0;
+
+		lv_obj_clean(memp_list);
+		for (i = 0; i < n && (shown < 5 || (!cpu_shown && top_cpu >= 0)); i++) {
+			int k = order[i];
+			char t[64];
+			lv_obj_t *r;
+
+			if (shown >= 5 && k != top_cpu)
+				continue;
+			if (k == top_cpu)
+				cpu_shown = 1;
+			/* the name, and a busiest marker, dotted short of the size column */
+			snprintf(t, sizeof(t), "%s%s", memp_cur[k].comm,
+				 k == top_cpu && best ? "  (busiest)" : "");
+			r = list_row_r(memp_list, t, 64);
+			lv_obj_set_height(r, POP_ROW_H);
+			lv_obj_set_style_pad_left(r, 6, 0);
+			lv_obj_set_flex_align(r, LV_FLEX_ALIGN_START,
+					      LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+			{
+				lv_obj_t *z = lv_label_create(r);
+
+				lv_label_set_text_fmt(z, "%lu.%luM",
+						      memp_cur[k].kb * 10 / 1024 / 10,
+						      memp_cur[k].kb * 10 / 1024 % 10);
+				lv_obj_add_flag(z, LV_OBJ_FLAG_IGNORE_LAYOUT);
+				lv_obj_align(z, LV_ALIGN_RIGHT_MID, -8, 0);
+			}
+			lv_obj_set_user_data(r, (void *)(intptr_t)(k + 1));
+			lv_obj_add_event_cb(r, memp_row_cb, LV_EVENT_CLICKED, NULL);
+			shown++;
+		}
+	}
+	memcpy(memp_prev, memp_cur, sizeof(memp_cur[0]) * (size_t)n);
+	memp_nprev = n;
+}
+
+static void memp_tick(lv_timer_t *t)
+{
+	struct dirent *d;
+	int k = 0;
+
+	(void)t;
+	if (fs_active || !memp_pop) {
+		popover_close();
+		return;
+	}
+	if (!memp_dir) {
+		memp_dir = opendir("/proc");
+		memp_ncur = 0;
+		if (!memp_dir)
+			return;
+	}
+	while (k < 8 && (d = readdir(memp_dir))) {
+		pid_t pid = (pid_t)atoi(d->d_name);
+
+		if (pid <= 0 || memp_ncur >= MEMP_MAX)
+			continue;
+		if (memp_sample(pid, &memp_cur[memp_ncur]))
+			memp_ncur++;
+		k++;
+	}
+	if (!d) {			/* the pass is complete */
+		closedir(memp_dir);
+		memp_dir = NULL;
+		memp_render();
+	}
+}
+
+static void memp_stop(void)
+{
+	if (memp_tmr) {
+		lv_timer_delete(memp_tmr);
+		memp_tmr = NULL;
+	}
+	if (memp_dir) {
+		closedir(memp_dir);
+		memp_dir = NULL;
+	}
+	memp_pop = memp_head = memp_list = memp_end = NULL;
+	memp_sel_sid = 0;
+}
+
+static void tray_mem_cb(lv_event_t *e)
+{
+	lv_obj_t *pop = popover_open(lv_event_get_target(e), POP_W, POP_H);
+	lv_obj_t *b;
+
+	if (!pop)
+		return;
+	memp_pop = pop;
+	pop_title(pop, "Memory");
+	lv_obj_set_pos(lv_obj_get_child(pop, 0), 0,
+		       (22 - (int32_t)lv_font_get_line_height(FONT_UI_BIG)) / 2);
+	memp_head = pop_status(pop);
+	lv_label_set_text(memp_head, "reading...");
+	memp_list = lv_list_create(pop);
+	lv_obj_set_size(memp_list, POP_W - 18, POP_H - 16 - POP_LIST_Y);
+	lv_obj_set_pos(memp_list, 0, POP_LIST_Y);
+	lv_obj_set_style_radius(memp_list, 0, 0);
+	lv_obj_set_style_pad_all(memp_list, 0, 0);
+	lv_obj_set_style_text_font(memp_list, FONT_UI, 0);
+	b = lv_button_create(pop);
+	memp_end = b;
+	lv_obj_set_pos(b, 128, 0);
+	lv_obj_set_size(b, 114, 22);
+	lv_obj_set_style_radius(b, 0, 0);
+	lv_obj_set_style_bg_color(b, lv_color_hex(COL_HDR_FOCUS), 0);
+	lv_obj_set_style_text_color(b, lv_color_hex(COL_HDR_TEXT), 0);
+	lv_obj_set_style_shadow_width(b, 0, 0);
+	lv_obj_add_event_cb(b, memp_end_cb, LV_EVENT_CLICKED, NULL);
+	lv_obj_center(lv_label_create(b));
+	lv_label_set_long_mode(lv_obj_get_child(b, 0), LV_LABEL_LONG_MODE_DOTS);
+	lv_obj_set_width(lv_obj_get_child(b, 0), 106);
+	lv_obj_add_flag(b, LV_OBJ_FLAG_HIDDEN);
+	memp_nprev = 0;
+	memp_tmr = lv_timer_create(memp_tick, 250, NULL);
+	memp_tick(NULL);
+}
+
+/*
  * The clock's popover (QoL C6): the date, uptime and load. Integers only -
  * no %f, double is a library call on this board. "(not synced)" until ntpd
  * has stepped the clock (S30clock writes /tmp/clock-stepped): there is no
@@ -14316,6 +14665,10 @@ int main(void)
 		lv_obj_add_event_cb(l, tray_osk_cb, LV_EVENT_CLICKED, NULL);
 
 		sysinfo = lv_label_create(tray);
+		/* the memory popover (QoL D6); a label is not clickable by default */
+		lv_obj_add_flag(sysinfo, LV_OBJ_FLAG_CLICKABLE);
+		lv_obj_set_ext_click_area(sysinfo, TRAY_TOUCH_PAD);
+		lv_obj_add_event_cb(sysinfo, tray_mem_cb, LV_EVENT_CLICKED, NULL);
 		lv_obj_set_style_text_font(sysinfo, FONT_UI, 0);
 		lv_obj_set_style_text_color(sysinfo,
 					   lv_color_hex(COL_HDR_TEXT), 0);

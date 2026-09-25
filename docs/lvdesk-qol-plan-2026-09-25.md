@@ -35,6 +35,26 @@ cdoom (883 puts) and quake (motion 12, keys 4).
 Still open from the programme: everything else, starting with A3 (the
 drop-down console, diff 01, which needs rebasing onto these fixes).
 
+## Status, 2026-09-25 night: D6 shipped (memory popover); colour review applied
+
+- **D6.** Tap the tray's memory readout (or ctl `tray mem`).
+  - The headline is the tray's obtainable figure with the kernel's
+    MemAvailable as "kernel est.".
+  - Rows are the top 5 by RSS+swap, plus the busiest CPU user since the last
+    pass, in the UI font with a right-aligned size column.
+  - **Sampling runs only while the popover is open:** a 250 ms timer, 8 pids
+    a tick from an open DIR*, created on open and deleted on close (and on
+    fullscreen). Nothing runs when it is closed.
+  - End is offered only for sessions launched from the menu or ctl `launch`
+    (app_sid): SIGTERM to the session, and the launch is forgotten, so no
+    false "failed" toast follows. Tested on prboom: selected, End, gone,
+    "Ended prboom".
+  - A ctl `launch` toast names the program ("prboom"), not a leading
+    "cd <dir> &&".
+- **Colour review** (docs/lvdesk-colour-review-2026-09-25.md) direction A is
+  applied: dark popovers, neutral edges and buttons, readable selected-row
+  glyphs, themed switch, slider and text field.
+
 ## Status, 2026-09-25 night: D5 shipped (window geometry memory)
 
 - Keyed by WM_CLASS (predefined atom 67, via a new xshim_window_class();
