@@ -1,5 +1,10 @@
 # OpenGL for the shim: a TinyGL plan (2026-09-25)
 
+> **Superseded by docs/gl-plan-2026-09-25.md.** That plan keeps this one's
+> goal and pattern but corrects three things: this board's SDL is built
+> without GL, the budget is 450 kB per context, and the present is not
+> zero-copy today.
+
 Goal: simple 3D for stock X11 and SDL applications on this board - demos,
 small tools, simple games - through the same kind of drop-in library that
 made xlite work for libX11. Not a Quake renderer: sdlquake's own software
