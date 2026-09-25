@@ -6,6 +6,27 @@ commit; line numbers below refer to it and drift by a few lines either way).
 Wherever a figure below is an estimate, it says so. It needs measuring on the
 board before anyone quotes it.
 
+## Status, 2026-09-25 evening (later): A7 shipped at N=0
+
+- **A7.** An opt-in stepped console slide.
+  - Set it with `LVDESK_CONSOLE_STEPS=N` or ctl `console steps N`, capped
+    at 4.
+  - The final size is set first. Focus moves at once in both directions.
+  - It makes one position change per rendered frame, and the loop is kept
+    busy only while a slide runs.
+  - A fullscreen client arriving, or a second toggle, snaps the slide to its
+    end state.
+  - N=0, the default, takes the old path. `lvdesk-console-test.sh` passes.
+- **Measured.** One boot, five show/hide pairs, real clock:
+
+  | N | show | hide |
+  |---|---|---|
+  | 3 | 74-96 ms | 78-85 ms |
+  | 2 | 45-66 ms | 33-59 ms |
+
+  The kill-rule measurement (show-to-first-echo, 5 fresh boots) has not been
+  run, so no N is recommended yet. It was not filmed.
+
 ## Status, 2026-09-25 evening (later): C7 shipped, config only
 
 - **C7.** Both settings are config only, in `/etc/lvdesk.env` (on the card;

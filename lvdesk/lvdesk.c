@@ -439,6 +439,8 @@ static uint8_t key_eaten[(KEY_CNT + 7) / 8];
 #define KEY_UNEAT(c)	(key_eaten[(c) >> 3] &= (uint8_t)~(1u << ((c) & 7)))
 static int con_key = KEY_GRAVE;
 static int con_mode;		/* the terminal is docked as the console */
+static int con_steps = -1;	/* A7 stepped slide, see con_steps_get() */
+static int con_steps_get(void);
 enum { CON_TOGGLE, CON_SHOW, CON_HIDE, CON_UNDOCK };
 static void console_set(int op);	/* defined with the terminal window */
 struct winrec;
@@ -4002,7 +4004,14 @@ static void ctl_line(char *buf)
 			 * hotkey does.
 			 */
 			const char *a = buf[7] ? buf + 8 : "";
+			int ns;
 
+			if (sscanf(a, "steps %d", &ns) == 1) {	/* QoL A7 */
+				con_steps = ns;
+				printf("lvdesk: console steps %d\n",
+				       con_steps_get());
+				fflush(stdout);
+			} else
 			console_set(!strcmp(a, "show") ? CON_SHOW :
 				    !strcmp(a, "hide") ? CON_HIDE :
 				    !strcmp(a, "undock") ? CON_UNDOCK :
@@ -10447,10 +10456,110 @@ static void console_leave(struct winrec *w)
 		console_undock(w);
 }
 
+/*
+ * QoL A7: an opt-in stepped slide, OFF by default (N = 0 is the old instant
+ * show and hide, byte for byte the same path). LVDESK_CONSOLE_STEPS=N or ctl
+ * `console steps N`, capped at 4. The final size is set before anything
+ * moves, so the shell gets no SIGWINCH per step, and focus moves at once in
+ * both directions. One position per rendered frame (con_slide_step, called
+ * from the frame block), with the loop kept busy while a slide runs so the
+ * frames come. No lv_anim and no snapshot: the console stays an opaque
+ * radius-0 screen child and a snapshot would be 332,800 B of the pool.
+ * A fullscreen client arriving mid-slide snaps it to the end state.
+ *
+ * Measured 2026-09-25, one boot, 5 show/hide pairs, real clock (the
+ * "console slide" log line): N=3 shows in 74-96 ms and hides in 78-85 ms;
+ * N=2 shows in 45-66 ms and hides in 33-59 ms. N=0 is instant. It ships at
+ * 0. The plan's bar for recommending an N - show-to-first-echo under 150 ms
+ * worst case across 5 fresh boots - has not been run. The first show after
+ * the console is created does not slide, because the window starts
+ * visible.
+ */
+static int con_slide_dir, con_slide_k;	/* dir +1 show, -1 hide, 0 idle */
+static int32_t con_slide_h;
+static uint64_t con_slide_t0;	/* real-clock us: lv_tick lags real time */
+
+static uint64_t con_slide_us(void)
+{
+	struct timespec t;
+
+	clock_gettime(CLOCK_MONOTONIC, &t);
+	return (uint64_t)t.tv_sec * 1000000u + (uint64_t)t.tv_nsec / 1000u;
+}
+
+static int con_steps_get(void)
+{
+	if (con_steps < 0) {
+		const char *e = getenv("LVDESK_CONSOLE_STEPS");
+
+		con_steps = e ? atoi(e) : 0;
+	}
+	if (con_steps < 0)
+		con_steps = 0;
+	if (con_steps > 4)
+		con_steps = 4;
+	return con_steps;
+}
+
+static void con_slide_place(void)
+{
+	int n = con_steps_get() + 1;
+	int32_t y = con_slide_dir > 0 ?
+		    -con_slide_h + con_slide_h * con_slide_k / n :
+		    -con_slide_h * con_slide_k / n;
+
+	lv_obj_set_y(term.win, y);
+}
+
+/* End a slide where it was going: shown at y 0, or hidden. */
+static void con_slide_finish(void)
+{
+	if (!con_slide_dir || !term.win)
+		return;
+	lv_obj_set_y(term.win, 0);
+	if (con_slide_dir < 0)
+		lv_obj_add_flag(term.win, LV_OBJ_FLAG_HIDDEN);
+	printf("lvdesk: console slide %s %u ms\n",
+	       con_slide_dir > 0 ? "shown" : "hidden",
+	       (unsigned)((con_slide_us() - con_slide_t0) / 1000u));
+	fflush(stdout);
+	con_slide_dir = 0;
+}
+
+static int con_sliding(void)
+{
+	return con_slide_dir != 0;
+}
+
+/* From the frame block, before LVGL renders: one step per frame. */
+static void con_slide_step(void)
+{
+	if (!con_slide_dir)
+		return;
+	if (fs_active || !term.win || ++con_slide_k > con_steps_get()) {
+		con_slide_finish();
+		return;
+	}
+	con_slide_place();
+}
+
+static void con_slide_start(int dir)
+{
+	if (!con_steps_get() || !term.win)
+		return;
+	con_slide_dir = dir;
+	con_slide_k = 1;
+	con_slide_h = con_height();
+	con_slide_t0 = con_slide_us();
+	con_slide_place();
+}
+
 static void console_set(int op)
 {
 	struct winrec *w;
 	int shown;
+
+	con_slide_finish();	/* a toggle mid-slide starts from its end */
 
 	if (op == CON_TOGGLE || op == CON_SHOW) {
 		/*
@@ -10485,8 +10594,18 @@ static void console_set(int op)
 		 * win_minimise() hands focus back to the most recent window
 		 * still up - the one the console was called down over.
 		 */
-		if (con_mode && shown)
-			win_minimise(w);
+		if (con_mode && shown) {
+			if (con_steps_get()) {
+				/* minimised and unfocused now, drawn until the
+				 * slide ends (con_slide_finish hides it) */
+				w->minimised = 1;
+				if (win_focus == w)
+					win_focus_next();
+				con_slide_start(-1);
+			} else {
+				win_minimise(w);
+			}
+		}
 		con_rows_persist();
 		printf("lvdesk: console hidden\n");
 		fflush(stdout);
@@ -10498,6 +10617,8 @@ static void console_set(int op)
 	w->minimised = 0;
 	lv_obj_move_foreground(w->win);
 	win_set_focus(w);
+	if (con_mode && !shown)
+		con_slide_start(1);
 	printf("lvdesk: console %s\n", con_mode ? "shown" : "undocked");
 	fflush(stdout);
 }
@@ -15281,6 +15402,8 @@ int main(void)
 					term.fd = -1;
 				}
 			}
+			if (con_sliding())
+				busy = 1;	/* keep frames coming (A7) */
 			idle_rounds = busy ? 0 : idle_rounds + 1;
 			/*
 			 * Settle the cursor exactly once, when the gesture has
@@ -15383,6 +15506,7 @@ int main(void)
 			 */
 			uint64_t lv_a = lvp_on > 0 ? lvp_now() : 0;
 
+			con_slide_step();	/* A7; nothing when idle */
 			refr_site = "timer_handler(frame)";
 			{ PROF_START(t0); lv_timer_handler(); PROF_ADD_MAX(prof_timer, prof_max_timer, t0); }
 			refr_site = "?";
