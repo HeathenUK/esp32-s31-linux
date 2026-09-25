@@ -1041,6 +1041,7 @@ static int kbd_key(int code)
  */
 static void term_copy(void);
 static void term_paste(void);
+static void term_sel_clear(void);
 static int sel_on;
 
 static void term_key(int code)
@@ -1049,9 +1050,20 @@ static void term_key(int code)
 	char buf[8], c;
 	int n = 0;
 
-	/* copy and paste (QoL A6), before keyseq() turns them into bytes */
-	if (mod_ctrl && shift && code == KEY_C) { term_copy(); return; }
-	if ((mod_ctrl && shift && code == KEY_V) ||
+	/*
+	 * Copy and paste (QoL A6; keys chosen on review): Ctrl+C / Ctrl+X
+	 * with a selection copy it and clear the highlight - without one they
+	 * are the program's (^C interrupts, nano and emacs use ^X). Ctrl+V,
+	 * Shift+Insert (and a middle click) paste; the shell's rarely used
+	 * ^V "insert next key literally" is given up for that. Before
+	 * keyseq(), which would turn them into bytes.
+	 */
+	if (mod_ctrl && !mod_alt && (code == KEY_C || code == KEY_X) && sel_on) {
+		term_copy();
+		term_sel_clear();
+		return;
+	}
+	if ((mod_ctrl && !mod_alt && code == KEY_V) ||
 	    (shift && code == KEY_INSERT)) {
 		term_paste();
 		return;
@@ -1832,8 +1844,8 @@ static int term_visible(void)
  * but only once it has left its starting cell or moved 4 px, so a finger's
  * jitter on a tap selects nothing - anchored in absolute lines (sb_seq). The
  * release copies: trailing spaces trimmed, lines joined with \n, at most
- * 8 kB. Ctrl+Shift+C copies again, Ctrl+Shift+V / Shift+Insert / a middle
- * click paste, one write per main-loop pass (\n sent as \r) so an 8 kB
+ * 8 kB. Ctrl+C / Ctrl+X with a selection copy, Ctrl+V / Shift+Insert /
+ * a middle click paste, one write per main-loop pass (\n sent as \r) so an 8 kB
  * paste cannot overrun the pty. ctl `clip` prints it. A plain click clears.
  */
 #define CLIP_MAX 8192
@@ -1985,6 +1997,14 @@ static void term_sel_repaint(void)
 {
 	term_mark_all();
 	term.dirty = 1;
+}
+
+static void term_sel_clear(void)
+{
+	if (sel_on) {
+		sel_on = 0;
+		term_sel_repaint();
+	}
 }
 
 static void term_cell_at(int32_t x, int32_t y, long *L, int *c)
@@ -9731,11 +9751,13 @@ static int search_key(int code)
 static const char help_keys[] =
 	"Super (tap)\nSuper+`\nAlt+Tab / Super+Tab\nSuper+Left / Right\n"
 	"Super+Up / Down\nSuper+H / Q / D\nSuper+1 ... 8\n"
-	"1 ... 9 in a menu\nAlt+F4\nSuper+/\n2-finger tap\n3-finger tap";
+	"1 ... 9 in a menu\nCtrl+C / Ctrl+V\nAlt+F4\nSuper+/\n2-finger tap\n"
+	"3-finger tap";
 static const char help_what[] =
 	"App menu (then type to search)\nDrop-down console\nSwitch windows\n"
 	"Tile to a half\nMaximise / restore\nMinimise / close / desktop\n"
 	"Task bar button 1 ... 8\nPick that row\n"
+	"Copy selection / paste (console)\n"
 	"Close the window, fullscreen too\nThis sheet\nRight click\n"
 	"On-screen keyboard";
 
@@ -9743,7 +9765,7 @@ static void help_toggle(void)
 {
 	int32_t sw = lv_display_get_horizontal_resolution(NULL);
 	int32_t sh = lv_display_get_vertical_resolution(NULL);
-	int32_t w = 420, h = 12 * 17 + 20;
+	int32_t w = 420, h = 13 * 17 + 20;
 	lv_obj_t *l;
 
 	if (help_up) {

@@ -48,6 +48,12 @@ drop-down console, diff 01, which needs rebasing onto these fixes).
   main-loop pass. Found by the test: paced from term_poll alone, the paste ran
   only when the shell next printed, so text typed after it arrived first.
 - ctl `clip` prints the clip. uinject gained `mclick`.
+- **Keys (review):** Ctrl+C / Ctrl+X with a selection copy it and clear the
+  highlight; without one they are the program's (^C interrupts, ^X is
+  nano's and emacs'). Ctrl+V pastes, giving up the shell's ^V literal-next.
+  Shift+Insert and the middle click still paste. Ctrl+Shift+C/V are gone.
+  Test: select and Ctrl+C gives "19" with sel=0, Ctrl+V writes 19, and
+  Ctrl+C with no selection interrupts `sleep 30`.
 - `lvdesk-clip-test.sh`: a two-row drag gives "14\n15"; a one-row drag gives
   "16"; `echo <Shift+Insert> > file` writes 16; a middle click writes 16.
 
