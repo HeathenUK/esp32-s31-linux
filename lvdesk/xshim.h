@@ -58,6 +58,12 @@ void xshim_pointer(uint32_t id, int x, int y, int button, int act);
  * press so the held-button mask QueryPointer reports goes back to 0.
  */
 void xshim_pointer_lost(int button);
+/*
+ * The pointer left every X client (it is over the desktop or something the
+ * desktop stacks above a client): LeaveNotify to the window it was in, if it
+ * asked for one. Safe to call repeatedly.
+ */
+void xshim_pointer_leave(void);
 /* sym: Latin-1 char or XLW_ code; mods: Shift=1 Lock=2 Ctrl=4 Mod1=8 */
 void xshim_key(uint32_t id, int sym, int press, unsigned int mods);
 

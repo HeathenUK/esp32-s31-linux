@@ -9604,6 +9604,29 @@ static void send_device_event(struct cli *c, uint8_t type, uint8_t detail,
 
 static uint32_t ptr_last_top, ptr_last_win;
 static int ptr_last_x, ptr_last_y;	/* relative to ptr_last_win */
+/*
+ * The window the pointer is "in" for crossing events: one pointer, one
+ * desktop. File scope rather than local to xshim_pointer() so that
+ * xshim_pointer_leave() can end it when the pointer moves off every client.
+ */
+static uint32_t ptr_inside;
+
+/* LeaveNotify to `ow`, if it selected it and its client is still there. */
+static void send_leave(struct res *ow)
+{
+	uint8_t d[28];
+
+	if (!ow || ow->type != R_WINDOW || !(ow->event_mask & EV_LEAVE) ||
+	    ow->owner < 0 || cli[ow->owner].fd < 0)
+		return;
+	memset(d, 0, sizeof(d));
+	put32(d + 4, ROOT_ID);
+	put32(d + 8, ow->id);
+	d[26] = 0;		/* NotifyNormal */
+	d[27] = 2;		/* same-screen */
+	send_event_d(&cli[ow->owner], 8, 0, d, 28);
+	out_flush(&cli[ow->owner]);
+}
 
 void xshim_pointer(uint32_t id, int x, int y, int button, int act)
 {
@@ -9661,23 +9684,10 @@ void xshim_pointer(uint32_t id, int x, int y, int button, int act)
 	 * windows are not necessarily the same connection.
 	 */
 	{
-		static uint32_t inside;		/* one pointer, one desktop */
-
-		if (w->id != inside) {
-			struct res *ow = res_find(inside);
+		if (w->id != ptr_inside) {
 			uint8_t d[28];
 
-			if (ow && ow->type == R_WINDOW &&
-			    (ow->event_mask & EV_LEAVE) &&
-			    ow->owner >= 0 && cli[ow->owner].fd >= 0) {
-				memset(d, 0, sizeof(d));
-				put32(d + 4, ROOT_ID);
-				put32(d + 8, ow->id);
-				d[26] = 0;		/* NotifyNormal */
-				d[27] = 2;		/* same-screen */
-				send_event_d(&cli[ow->owner], 8, 0, d, 28);
-				out_flush(&cli[ow->owner]);
-			}
+			send_leave(res_find(ptr_inside));
 			if ((w->event_mask & EV_ENTER) &&
 			    w->owner >= 0 && cli[w->owner].fd >= 0) {
 				memset(d, 0, sizeof(d));
@@ -9689,7 +9699,7 @@ void xshim_pointer(uint32_t id, int x, int y, int button, int act)
 				d[27] = 2;
 				send_event_d(&cli[w->owner], 7, 0, d, 28);
 			}
-			inside = w->id;
+			ptr_inside = w->id;
 		}
 	}
 
@@ -9719,6 +9729,22 @@ void xshim_pointer(uint32_t id, int x, int y, int button, int act)
 	ptr_last_x = x;
 	ptr_last_y = y;
 #undef state
+}
+
+/*
+ * The pointer moved off every client - onto the desktop, or onto something of
+ * the desktop's stacked above a client. X would send the window it was in a
+ * LeaveNotify; nothing else here can, because crossings are otherwise derived
+ * only from the next xshim_pointer() call, which may never come. Idempotent:
+ * a no-op once nothing is entered, so the desktop may call it on every
+ * off-client motion. One 32-byte event per crossing, none per motion.
+ */
+void xshim_pointer_leave(void)
+{
+	if (!ptr_inside)
+		return;
+	send_leave(res_find(ptr_inside));
+	ptr_inside = 0;
 }
 
 /*

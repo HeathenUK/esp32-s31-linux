@@ -2738,6 +2738,15 @@ static struct winrec *win_find(lv_obj_t *win)
 {
 	int i;
 
+	/*
+	 * A closed slot keeps its place in wins[] with ->win NULL (make_window
+	 * reuses it), so without this test win_find(NULL) returned the first
+	 * CLOSED slot as if it were a live window. term.win is NULL whenever
+	 * no terminal is open, and every win_find(term.win) would have handed
+	 * back that stale record.
+	 */
+	if (!win)
+		return NULL;
 	for (i = 0; i < win_n; i++)
 		if (wins[i].win == win)
 			return &wins[i];
@@ -2836,8 +2845,9 @@ static void win_focus_next(void)
 
 /*
  * Keyboard input follows the focus, as it does on every desktop. A minimised
- * window is not focused, and once the terminal is closed term.win is NULL, so
- * both cases fall out of the same test.
+ * window is not focused, and once the terminal is closed term.win is NULL
+ * (term_on_close, run by win_close, clears it), so both cases fall out of the
+ * same test.
  */
 /*
  * Deliver a key to the focused window.
@@ -3867,27 +3877,88 @@ static int ptr_pressed;		/* Button1/BTN_TOUCH down, defined below */
 
 
 /*
- * Send a button the LVGL indev does not carry straight to the client under the
- * pointer.
- *
- * LVGL's pointer is a single pressed/released bit, so it can only ever express
- * Button1 - which is why xwin_on_pointer() passed a hardcoded 1 and why the
- * right button and the wheel never reached a client at all. xfiles handles
- * both (widget.c: Button3 for its context menu, Button4/Button5 to scroll), so
- * the capability was missing on OUR side, not the application's.
- *
- * Routed directly rather than through LVGL on purpose: feeding a right-click
- * into the indev would make lvdesk's own buttons treat it as an activation.
+ * LVDESK_OLDROUTE=1 restores the array-order X pointer routing that predates
+ * stacking-aware routing (2026-09-25), so the two can be A/B'd on one binary.
+ * Read once: the routing functions run per pointer batch.
  */
+static int route_old(void)
+{
+	static int v = -1;
+
+	if (v < 0)
+		v = getenv("LVDESK_OLDROUTE") != NULL;
+	return v;
+}
+
+/*
+ * The topmost LVGL object under the pointer, by the same rules LVGL itself
+ * uses to deliver Button1 (lv_indev.c pointer_search_obj): hidden objects and
+ * their children are skipped, only CLICKABLE objects are hits, and the top
+ * layer (taskbar, popovers and their scrim, the on-screen keyboard, the
+ * Wi-Fi password box) is searched before the screen. *on_top says the hit
+ * came from the top layer. The sys layer is skipped on purpose: it holds only
+ * the software cursor, which is not clickable anyway.
+ *
+ * This is the single source of truth for "what is the pointer over" on the
+ * paths LVGL does not carry - Button2/3, the wheel, button-free hover. Before
+ * it, those paths took the FIRST X window in xwins[] whose image contained
+ * the pointer, ignoring stacking entirely, so a right-click, a wheel notch or
+ * plain hover over the terminal, a popover, the taskbar, or another window's
+ * title bar went to whichever X client happened to be underneath - and a
+ * press raised and focused it. Using LVGL's own hit test makes Button1 and
+ * the rest agree by construction.
+ *
+ * Returns the screen itself over bare desktop (a screen is clickable).
+ * Cost: one walk of the children along the hit path, about 10-15 top-level
+ * objects plus the children of the window under the pointer - tens of us
+ * from flash, per pointer batch, and nothing while the mouse is still.
+ */
+static lv_obj_t *obj_at_pointer(int *on_top)
+{
+	lv_point_t p = { ptr_x, ptr_y };
+	lv_obj_t *o = lv_indev_search_obj(lv_layer_top(), &p);
+
+	*on_top = o != NULL;
+	return o ? o : lv_indev_search_obj(lv_screen_active(), &p);
+}
+
+/* Is o the object anc, or inside it? */
+static int obj_in(lv_obj_t *o, lv_obj_t *anc)
+{
+	for (; o && anc; o = lv_obj_get_parent(o))
+		if (o == anc)
+			return 1;
+	return 0;
+}
+
 /*
  * The X client whose image is under the pointer, or -1, with its image's
  * screen rectangle in *a. Shared by the direct button path and the hover path
  * below so the two cannot disagree about which window the pointer is in.
+ *
+ * The client counts as under the pointer only if its image is the topmost
+ * clickable thing there: anything on the top layer, a native window, or
+ * another frame's header stacked above it occludes it, exactly as it would
+ * a Button1 press. A client is never occluded by its own frame, because the
+ * image is the deepest hit inside it.
  */
 static int xwin_under_pointer(lv_area_t *a)
 {
 	int i;
 
+	if (!route_old()) {
+		int top;
+		lv_obj_t *o = obj_at_pointer(&top);
+
+		if (top || !o)
+			return -1;
+		for (i = 0; i < xwin_n; i++)
+			if (xwins[i].img == o && xwins[i].win) {
+				lv_obj_get_coords(o, a);
+				return i;
+			}
+		return -1;
+	}
 	for (i = 0; i < xwin_n; i++) {
 		if (!xwins[i].img || !xwins[i].win ||
 		    lv_obj_has_flag(xwins[i].win, LV_OBJ_FLAG_HIDDEN))
@@ -3901,6 +3972,60 @@ static int xwin_under_pointer(lv_area_t *a)
 	return -1;
 }
 
+/*
+ * Which X window took the press of Button2/3, by id, 0 for none.
+ *
+ * X gives the window that takes a press an implicit grab until the release,
+ * so the release goes back to it wherever the pointer has gone. Without this,
+ * pressing over the terminal and releasing over a client handed that client
+ * a release it never saw pressed, and pressing on a client and releasing over
+ * something stacked above it depended on xshim_pointer_lost() guessing the
+ * owner from ptr_last_top, which hover may have moved in between. Button1
+ * needs none of this: LVGL's PRESSING/PRESS_LOST already carry its drag.
+ * Wheel buttons are an instantaneous press/release pair and are not tracked.
+ */
+static uint32_t btn_owner[4];
+
+/*
+ * Deliver `button`'s release to the window that took its press, in that
+ * window's coordinates (possibly outside it, as under a real implicit grab).
+ * Returns 1 if it went anywhere; 0 leaves the caller to xshim_pointer_lost().
+ */
+static int xwin_owner_release(int button)
+{
+	uint32_t o;
+	int i;
+
+	if (button < 2 || button > 3)
+		return 0;
+	o = btn_owner[button];
+	btn_owner[button] = 0;
+	if (!o)
+		return 0;
+	for (i = 0; i < xwin_n; i++)
+		if (xwins[i].id == o && xwins[i].img) {
+			lv_area_t a;
+
+			lv_obj_get_coords(xwins[i].img, &a);
+			xshim_pointer(o, ptr_x - a.x1, ptr_y - a.y1, button, 2);
+			return 1;
+		}
+	return 0;
+}
+
+/*
+ * Send a button the LVGL indev does not carry straight to the client under the
+ * pointer.
+ *
+ * LVGL's pointer is a single pressed/released bit, so it can only ever express
+ * Button1 - which is why xwin_on_pointer() passed a hardcoded 1 and why the
+ * right button and the wheel never reached a client at all. xfiles handles
+ * both (widget.c: Button3 for its context menu, Button4/Button5 to scroll), so
+ * the capability was missing on OUR side, not the application's.
+ *
+ * Routed directly rather than through LVGL on purpose: feeding a right-click
+ * into the indev would make lvdesk's own buttons treat it as an activation.
+ */
 static int xwin_send_button(int button, int act)
 {
 	lv_area_t a;
@@ -3922,7 +4047,13 @@ static int xwin_send_button(int button, int act)
 	if (fs_active)
 		return 0;
 
+	/* A tracked button's release goes to its press's owner, not the hit. */
+	if (!route_old() && act == 2 && button >= 2 && button <= 3)
+		return xwin_owner_release(button);
+
 	i = xwin_under_pointer(&a);
+	if (!route_old() && act == 1 && button >= 2 && button <= 3)
+		btn_owner[button] = i < 0 ? 0 : xwins[i].id;
 	if (i < 0)
 		return 0;
 	/*
@@ -3930,8 +4061,13 @@ static int xwin_send_button(int button, int act)
 	 * same as a press on its title bar - every other focus path
 	 * already agreed. Without this, click-into-xcalc-and-type
 	 * typed into whichever window was focused last.
+	 *
+	 * A wheel notch is not a claim on anything: it is Button4/5 act 1
+	 * too, and used to raise and focus a background window just for
+	 * scrolling it. Real desktops scroll the window under the pointer
+	 * where it stands.
 	 */
-	if (act == 1) {
+	if (act == 1 && (button <= 3 || route_old())) {
 		struct winrec *r = win_find(xwins[i].win);
 
 		if (r) {
@@ -3999,13 +4135,48 @@ static void xwin_hover(void)
 
 		if (ptr_pressed)	/* LVGL PRESSING carries the drag */
 			return;
+		/*
+		 * Likewise during a Button2/3 drag: the window that took the
+		 * press owns the pointer until the release (btn_owner), so
+		 * motion goes to it - in its own coordinates, outside it too -
+		 * and does not wander off to whatever it crosses. Skipping
+		 * instead would starve a right-drag inside the window of the
+		 * motion it gets today.
+		 */
+		if (!route_old() && (btn_owner[2] || btn_owner[3])) {
+			uint32_t own = btn_owner[3] ? btn_owner[3]
+						    : btn_owner[2];
+
+			for (i = 0; i < xwin_n; i++)
+				if (xwins[i].id == own && xwins[i].img)
+					break;
+			if (i == xwin_n)
+				return;	/* owner gone; its release clears it */
+			lv_obj_get_coords(xwins[i].img, &a);
+			id = own;
+			goto route;
+		}
 		i = xwin_under_pointer(&a);
 		if (i < 0) {
+			/*
+			 * Off every client - onto the desktop, the terminal,
+			 * a popover, the taskbar. xshim only derives
+			 * Enter/Leave from xshim_pointer() calls, so without
+			 * telling it the last widget stays "entered": an Xaw
+			 * Command button at a window's edge stayed
+			 * highlighted after the pointer moved onto something
+			 * stacked above it. Idempotent, so it is called
+			 * whenever the pointer is off every client; that also
+			 * covers leaving at the end of a Button1 drag.
+			 */
+			if (!route_old())
+				xshim_pointer_leave();
 			h_id = 0;
 			return;
 		}
 		id = xwins[i].id;
 	}
+route:
 	rx = ptr_x - a.x1;
 	ry = ptr_y - a.y1;
 	if (id != h_id) {
@@ -4032,6 +4203,9 @@ static void xwin_hover(void)
  * every notch while the pointer is anywhere over it, even when a client window
  * is sitting on top: xfiles occupies the same corner of the screen and never
  * saw a scroll event.
+ *
+ * Used only under LVDESK_OLDROUTE=1 now: obj_at_pointer() answers the same
+ * question for every kind of object, not just X frames against the terminal.
  */
 static int xwin_above_term(void)
 {
@@ -5714,7 +5888,63 @@ static void xwin_cover_cb(lv_event_t *e)
  * another client's rectangle intersects this one. That is why this is a
  * measurement toggle and not yet the default.
  */
-static int xwin_direct_ok(int idx)
+static lv_obj_t *pop_obj;		/* defined with the popovers below */
+
+/*
+ * True when an LVGL overlay that the direct blit would stamp over covers
+ * the client's image: the Alt-Tab switcher, an open popover, or the
+ * terminal window stacked above this client (QoL review A1, 2026-09-25 -
+ * windowed prboom or any depth-8 client painted its pixels across all of
+ * these on every frame, because the blit runs after LVGL has drawn). The
+ * FAST PRESENT path declines while one is up (it bypasses LVGL entirely),
+ * and xwin_blit_direct() cuts the overlay's rectangle out of its blit, so
+ * the client keeps animating around the overlay. Declining the blit
+ * outright was tried first and left the whole window blank grey: with
+ * direct expansion the image has no src, so nothing else draws it. Deliberately NOT generalised to the
+ * whole top layer: the software cursor lives there, and a game under it
+ * would freeze wherever the pointer sat.
+ */
+static int xwin_overlay_hole(int idx, const lv_area_t *a, lv_area_t *hole)
+{
+	lv_obj_t *ov[3] = { sw_panel, pop_obj, NULL };
+	lv_area_t b;
+	int k, n = 0;
+
+	if (term.win && lv_obj_is_valid(term.win) &&
+	    xwins[idx].win && lv_obj_is_valid(xwins[idx].win) &&
+	    lv_obj_get_parent(term.win) == lv_obj_get_parent(xwins[idx].win) &&
+	    lv_obj_get_index(term.win) > lv_obj_get_index(xwins[idx].win))
+		ov[2] = term.win;
+	for (k = 0; k < 3; k++) {
+		if (!ov[k] || !lv_obj_is_valid(ov[k]) ||
+		    lv_obj_has_flag(ov[k], LV_OBJ_FLAG_HIDDEN))
+			continue;
+		lv_obj_get_coords(ov[k], &b);
+		if (b.x1 > a->x2 || b.x2 < a->x1 ||
+		    b.y1 > a->y2 || b.y2 < a->y1)
+			continue;
+		/* two overlays at once: their bounding box (rare, and the gap
+		 * between them only shows the window's last LVGL paint) */
+		if (!n++) {
+			*hole = b;
+		} else {
+			if (b.x1 < hole->x1) hole->x1 = b.x1;
+			if (b.y1 < hole->y1) hole->y1 = b.y1;
+			if (b.x2 > hole->x2) hole->x2 = b.x2;
+			if (b.y2 > hole->y2) hole->y2 = b.y2;
+		}
+	}
+	return n > 0;
+}
+
+static int xwin_overlay_covers(int idx, const lv_area_t *a)
+{
+	lv_area_t hole;
+
+	return xwin_overlay_hole(idx, a, &hole);
+}
+
+static int xwin_direct_ok_ov(int idx, int check_overlays)
 {
 	lv_area_t a, b;
 	int j;
@@ -5724,6 +5954,8 @@ static int xwin_direct_ok(int idx)
 	if (lv_obj_has_flag(xwins[idx].img, LV_OBJ_FLAG_HIDDEN))
 		return 0;
 	lv_obj_get_coords(xwins[idx].img, &a);
+	if (check_overlays && xwin_overlay_covers(idx, &a))
+		return 0;
 	for (j = 0; j < xwin_n; j++) {
 		if (j == idx || !xwins[j].img || !lv_obj_is_valid(xwins[j].img))
 			continue;
@@ -5735,6 +5967,11 @@ static int xwin_direct_ok(int idx)
 			return 0;
 	}
 	return 1;
+}
+
+static int xwin_direct_ok(int idx)
+{
+	return xwin_direct_ok_ov(idx, 1);
 }
 
 /*
@@ -5896,16 +6133,18 @@ static void xwin_blit_direct(const lv_area_t *area)
 	for (i = 0; i < xwin_n; i++) {
 		const uint16_t *pal;
 		const uint8_t *src;
-		lv_area_t coords, clip;
-		int sw, sh, sstride, y;
+		lv_area_t coords, clip, hole;
+		int sw, sh, sstride, y, has_hole;
 
-		if (!xwin_direct_ok(i))
+		if (!xwin_direct_ok_ov(i, 0))
 			continue;
 		src = xshim_window_indices(xwins[i].id, &sw, &sh, &sstride,
 					   &pal);
 		if (!src || !pal)
 			continue;
 		lv_obj_get_coords(xwins[i].img, &coords);
+		/* an LVGL overlay above the client: blit around it */
+		has_hole = xwin_overlay_hole(i, &coords, &hole);
 
 		/*
 		 * HARDWARE EXPANSION, when the index plane is GEM.
@@ -5927,7 +6166,8 @@ static void xwin_blit_direct(const lv_area_t *area)
 		 * would leave a black window, which is exactly the failure
 		 * that went unnoticed for a day here.
 		 */
-		if (ppa_gem_expand(i, &coords, area, sw, sh, pal))
+		/* the PPA expands the whole plane and cannot leave a hole */
+		if (!has_hole && ppa_gem_expand(i, &coords, area, sw, sh, pal))
 			continue;
 
 		/* Intersect with the flush rect AND with the panel. */
@@ -5947,120 +6187,144 @@ static void xwin_blit_direct(const lv_area_t *area)
 			continue;
 
 		for (y = clip.y1; y <= clip.y2; y++) {
-			int sy = y - coords.y1;
-			int sx = clip.x1 - coords.x1;
-			const uint8_t *sp;
-			uint16_t *dp;
-			int n, k;
+			int32_t segx1[2], segx2[2];
+			int seg, nseg = 1;
 
-			/*
-			 * Clamp against the SOURCE as well as the screen. The
-			 * object's size and the buffer's size can disagree for
-			 * a frame while a client resizes, and reading past the
-			 * plane is how a resize turns into a crash.
-			 */
-			if (sy < 0 || sy >= sh || sx < 0 || sx >= sw)
-				continue;
-			n = clip.x2 - clip.x1 + 1;
-			if (sx + n > sw)
-				n = sw - sx;
-			if (n <= 0)
-				continue;
-			sp = src + (size_t)sy * sstride + sx;
-			dp = (uint16_t *)(kms_map + (size_t)y * kms_pitch) +
-			     clip.x1;
-			/*
-			 * UNTESTED, not rejected (corrected 2026-09-07).
-			 *
-			 * The idea was that the 512-byte palette stays in
-			 * cache so the loop is store-bound, and halving the
-			 * stores would be free speed. Measured with the
-			 * lvdesk-CPU probe, against 29% and 30% for this plain
-			 * loop on the identical binary and arm:
-			 *
-			 *     word-at-a-time   lvdesk 37%
-			 *
-			 * That looked like 7 points worse. It was not: the
-			 * plain loop below later measured 37%, 38% and 39% on
-			 * the same binary, so 37% is inside ITS OWN spread and
-			 * the comparison was against two lucky samples.
-			 *
-			 * SETTLED 2026-09-08: it makes no difference. Six
-			 * alternating arms, LVPROF expand us/frame (a far
-			 * tighter instrument than the CPU probe - it is stable
-			 * to +/-2%):
-			 *
-			 *     word    5100, 4933, 4791   mean 4941
-			 *     scalar  4952, 5037, 5054   mean 5014
-			 *
-			 * 1.5%, with the ranges almost entirely overlapping.
-			 * A standalone micro-benchmark (rootfs/expbench.c) had
-			 * suggested scalar was 7-10% BETTER; that did not
-			 * reproduce here either - a third instance of two
-			 * agreeing samples pointing the wrong way.
-			 *
-			 * The reason neither wins: the expansion is
-			 * MEMORY-BOUND, not arithmetic-bound. 192,000 bytes a
-			 * frame (64k read, 128k written) in ~5 ms is ~38 MB/s,
-			 * and expbench measures the same loop at the same
-			 * speed into a plain heap buffer as into the KMS dumb
-			 * buffer - so the store width and the destination's
-			 * cacheability are both irrelevant. Do not retry
-			 * either.
-			 */
-			if (word8_on() && n >= 8 &&
-			    ((((uintptr_t)sp | (uintptr_t)dp) & 3u) == 0)) {
+			segx1[0] = clip.x1;
+			segx2[0] = clip.x2;
+			if (has_hole && y >= hole.y1 && y <= hole.y2) {
+				nseg = 0;
+				if (hole.x1 > clip.x1) {
+					segx1[nseg] = clip.x1;
+					segx2[nseg++] = hole.x1 - 1 < clip.x2 ?
+							hole.x1 - 1 : clip.x2;
+				}
+				if (hole.x2 < clip.x2) {
+					segx1[nseg] = hole.x2 + 1 > clip.x1 ?
+						      hole.x2 + 1 : clip.x1;
+					segx2[nseg++] = clip.x2;
+				}
+			}
+			for (seg = 0; seg < nseg; seg++) {
+				int32_t x1 = segx1[seg], x2 = segx2[seg];
+				int sy = y - coords.y1;
+				int sx = x1 - coords.x1;
+				const uint8_t *sp;
+				uint16_t *dp;
+				int n, k;
+
+				if (x2 < x1)
+					continue;
+
 				/*
-				 * Eight pixels from two 32-bit source loads.
-				 * Measured with rootfs/expbench.c, three
-				 * alternating reps: 46/46/47 ns/px against
-				 * 49/50/51 for the plain loop, ~8% off the
-				 * expansion.
+				 * Clamp against the SOURCE as well as the screen. The
+				 * object's size and the buffer's size can disagree for
+				 * a frame while a client resizes, and reading past the
+				 * plane is how a resize turns into a crash.
+				 */
+				if (sy < 0 || sy >= sh || sx < 0 || sx >= sw)
+					continue;
+				n = x2 - x1 + 1;
+				if (sx + n > sw)
+					n = sw - sx;
+				if (n <= 0)
+					continue;
+				sp = src + (size_t)sy * sstride + sx;
+				dp = (uint16_t *)(kms_map + (size_t)y * kms_pitch) +
+				     x1;
+				/*
+				 * UNTESTED, not rejected (corrected 2026-09-07).
 				 *
-				 * Note what this is NOT: breaking the
-				 * lbu->lhu dependency chain measured SLOWER
-				 * (60-66 ns/px), so the loop is not stalling
-				 * on load serialisation and this is not the
-				 * 3x that theory predicted. It is fewer source
-				 * loads and a shorter loop, nothing more.
+				 * The idea was that the 512-byte palette stays in
+				 * cache so the loop is store-bound, and halving the
+				 * stores would be free speed. Measured with the
+				 * lvdesk-CPU probe, against 29% and 30% for this plain
+				 * loop on the identical binary and arm:
+				 *
+				 *     word-at-a-time   lvdesk 37%
+				 *
+				 * That looked like 7 points worse. It was not: the
+				 * plain loop below later measured 37%, 38% and 39% on
+				 * the same binary, so 37% is inside ITS OWN spread and
+				 * the comparison was against two lucky samples.
+				 *
+				 * SETTLED 2026-09-08: it makes no difference. Six
+				 * alternating arms, LVPROF expand us/frame (a far
+				 * tighter instrument than the CPU probe - it is stable
+				 * to +/-2%):
+				 *
+				 *     word    5100, 4933, 4791   mean 4941
+				 *     scalar  4952, 5037, 5054   mean 5014
+				 *
+				 * 1.5%, with the ranges almost entirely overlapping.
+				 * A standalone micro-benchmark (rootfs/expbench.c) had
+				 * suggested scalar was 7-10% BETTER; that did not
+				 * reproduce here either - a third instance of two
+				 * agreeing samples pointing the wrong way.
+				 *
+				 * The reason neither wins: the expansion is
+				 * MEMORY-BOUND, not arithmetic-bound. 192,000 bytes a
+				 * frame (64k read, 128k written) in ~5 ms is ~38 MB/s,
+				 * and expbench measures the same loop at the same
+				 * speed into a plain heap buffer as into the KMS dumb
+				 * buffer - so the store width and the destination's
+				 * cacheability are both irrelevant. Do not retry
+				 * either.
 				 */
-				for (k = 0; k + 7 < n; k += 8) {
-					uint32_t a4 = *(const uint32_t *)(sp + k);
-					uint32_t b4 = *(const uint32_t *)(sp + k + 4);
+				if (word8_on() && n >= 8 &&
+				    ((((uintptr_t)sp | (uintptr_t)dp) & 3u) == 0)) {
+					/*
+					 * Eight pixels from two 32-bit source loads.
+					 * Measured with rootfs/expbench.c, three
+					 * alternating reps: 46/46/47 ns/px against
+					 * 49/50/51 for the plain loop, ~8% off the
+					 * expansion.
+					 *
+					 * Note what this is NOT: breaking the
+					 * lbu->lhu dependency chain measured SLOWER
+					 * (60-66 ns/px), so the loop is not stalling
+					 * on load serialisation and this is not the
+					 * 3x that theory predicted. It is fewer source
+					 * loads and a shorter loop, nothing more.
+					 */
+					for (k = 0; k + 7 < n; k += 8) {
+						uint32_t a4 = *(const uint32_t *)(sp + k);
+						uint32_t b4 = *(const uint32_t *)(sp + k + 4);
 
-					dp[k]     = pal[a4 & 0xff];
-					dp[k + 1] = pal[(a4 >> 8) & 0xff];
-					dp[k + 2] = pal[(a4 >> 16) & 0xff];
-					dp[k + 3] = pal[(a4 >> 24) & 0xff];
-					dp[k + 4] = pal[b4 & 0xff];
-					dp[k + 5] = pal[(b4 >> 8) & 0xff];
-					dp[k + 6] = pal[(b4 >> 16) & 0xff];
-					dp[k + 7] = pal[(b4 >> 24) & 0xff];
+						dp[k]     = pal[a4 & 0xff];
+						dp[k + 1] = pal[(a4 >> 8) & 0xff];
+						dp[k + 2] = pal[(a4 >> 16) & 0xff];
+						dp[k + 3] = pal[(a4 >> 24) & 0xff];
+						dp[k + 4] = pal[b4 & 0xff];
+						dp[k + 5] = pal[(b4 >> 8) & 0xff];
+						dp[k + 6] = pal[(b4 >> 16) & 0xff];
+						dp[k + 7] = pal[(b4 >> 24) & 0xff];
+					}
+					for (; k < n; k++)
+						dp[k] = pal[sp[k]];
+				} else if (wordexp_on()) {
+					/*
+					 * Two pixels per 32-bit store. Peel a leading
+					 * odd pixel first: dp is uint16_t*, so dp&3 is
+					 * 0 or 2, and one pixel of peel makes it
+					 * 4-aligned. Little-endian: first pixel is the
+					 * low half.
+					 */
+					k = 0;
+					if ((((uintptr_t)dp) & 3u) && n > 0) {
+						dp[0] = pal[sp[0]];
+						k = 1;
+					}
+					for (; k + 1 < n; k += 2)
+						*(uint32_t *)(dp + k) =
+							(uint32_t)pal[sp[k]] |
+							((uint32_t)pal[sp[k + 1]] << 16);
+					for (; k < n; k++)
+						dp[k] = pal[sp[k]];
+				} else {
+					for (k = 0; k < n; k++)
+						dp[k] = pal[sp[k]];
 				}
-				for (; k < n; k++)
-					dp[k] = pal[sp[k]];
-			} else if (wordexp_on()) {
-				/*
-				 * Two pixels per 32-bit store. Peel a leading
-				 * odd pixel first: dp is uint16_t*, so dp&3 is
-				 * 0 or 2, and one pixel of peel makes it
-				 * 4-aligned. Little-endian: first pixel is the
-				 * low half.
-				 */
-				k = 0;
-				if ((((uintptr_t)dp) & 3u) && n > 0) {
-					dp[0] = pal[sp[0]];
-					k = 1;
-				}
-				for (; k + 1 < n; k += 2)
-					*(uint32_t *)(dp + k) =
-						(uint32_t)pal[sp[k]] |
-						((uint32_t)pal[sp[k + 1]] << 16);
-				for (; k < n; k++)
-					dp[k] = pal[sp[k]];
-			} else {
-				for (k = 0; k < n; k++)
-					dp[k] = pal[sp[k]];
 			}
 		}
 	}
@@ -6452,7 +6716,7 @@ static void HOTTEXT xwin_on_draw(uint32_t id)
  * so opening and closing damages that rectangle and nothing else, where a full
  * window cost a title bar, a task bar button and a much larger repaint.
  */
-static lv_obj_t *pop_scrim, *pop_obj;
+static lv_obj_t *pop_scrim;	/* pop_obj is declared above xwin_direct_ok */
 static const void *pop_owner;		/* which icon opened it */
 static lv_obj_t *vol_slider, *vol_label;
 static lv_obj_t *wifi_list, *wifi_status;
@@ -6643,6 +6907,27 @@ static void ctxmenu_open(const char *replyfifo, char *items)
  * application menu are made of: scrim, panel at (ax,ay) clamped on-screen,
  * one 30 px row per label, `cb` on each row. The caller sets pop_owner.
  */
+/*
+ * lv_list_add_button() gives every row label SCROLL_CIRCULAR (lv_list.c:106),
+ * so any SSID or menu entry longer than its row animated at 42 Hz for as long
+ * as the popover stayed open (QoL review C2, 2026-09-25). CLIP stops that and,
+ * unlike DOTS, leaves the label's text untouched - the context menu replies
+ * with the row's text, and DOTS would rewrite it to "A-very-long-lab...".
+ */
+static lv_obj_t *list_row(lv_obj_t *list, const char *txt)
+{
+	lv_obj_t *b = lv_list_add_button(list, NULL, txt);
+	uint32_t k;
+
+	for (k = 0; k < lv_obj_get_child_count(b); k++) {
+		lv_obj_t *c = lv_obj_get_child(b, (int32_t)k);
+
+		if (lv_obj_check_type(c, &lv_label_class))
+			lv_label_set_long_mode(c, LV_LABEL_LONG_MODE_CLIP);
+	}
+	return b;
+}
+
 static void menu_popover_build(char **labels, int n, size_t maxlen,
 			       int32_t ax, int32_t ay, lv_event_cb_t cb)
 {
@@ -6697,7 +6982,7 @@ static void menu_popover_build(char **labels, int n, size_t maxlen,
 	lv_obj_set_style_pad_all(list, 0, 0);
 	lv_obj_set_style_text_font(list, FONT_UI, 0);
 	for (i = 0; i < n; i++) {
-		lv_obj_t *b = lv_list_add_button(list, NULL, labels[i]);
+		lv_obj_t *b = list_row(list, labels[i]);
 
 		lv_obj_set_style_pad_left(b, 6, 0);
 		lv_obj_set_height(b, 30);
@@ -7073,13 +7358,70 @@ static void appmenu_open(int parent)
  * terminal with no prompt and no cursor, and anything typed into it sat in the
  * pty until /bin/sh started and echoed the lot back in one burst.
  */
+/*
+ * The terminal window's teardown, run by win_close() before it deletes the
+ * window - so the close button, Alt-F4 and ctl "close N" all reach it.
+ *
+ * Nothing set on_close before this, so closing the terminal deleted term.win
+ * and its 48 row labels while term.win, term.content and term.rows[] went on
+ * pointing into the freed LVGL pool, and the shell and pty stayed alive. The
+ * next output from that shell (a ctl "run" from xfiles, say) went through
+ * term_poll() into lv_label_set_text() on freed objects - and TLSF reuses
+ * blocks, so that scribbled over whatever lived there next rather than
+ * crashing cleanly. "System > Terminal" meanwhile did nothing at all:
+ * term_build_window() saw a non-NULL term.win and returned.
+ *
+ * Deletes no objects itself; win_close() does that straight after.
+ */
+static void term_on_close(void)
+{
+	/*
+	 * Closing the master hangs up the slave, and the kernel sends SIGHUP
+	 * to the session leader and the foreground process group. Background
+	 * "&" jobs sit in their own groups and survive, which is what every
+	 * terminal does. The kill() is belt and braces for a shell that
+	 * ignores the hangup; the SIGCHLD reaper collects it either way.
+	 */
+	if (term.fd >= 0) {
+		close(term.fd);
+		term.fd = -1;
+	}
+	if (term.child > 0)
+		kill(term.child, SIGHUP);
+	term.child = 0;		/* the reaper must not mistake it for a live shell */
+	term.win = term.content = NULL;
+	/*
+	 * A reopened terminal starts clean. term_build_window() blanks the
+	 * grid, attributes and scrollback, but not the cursor, the ring
+	 * origin, the scrollback indices or the CSI parser - left alone, a new
+	 * shell would open with a stale cursor, "scrollback" of blank lines,
+	 * and a half-parsed escape sequence eating its first bytes.
+	 */
+	memset(term.rows, 0, sizeof(term.rows));
+	memset(term.rowdirty, 0, sizeof(term.rowdirty));
+	term.top = term.cx = term.cy = 0;
+	term.sb_head = term.sb_count = term.view = 0;
+	term.esc = term.npar = term.bold = 0;
+	term.need_fit = term.dirty = 0;
+}
+
 static void term_build_window(void)
 {
 	lv_obj_t *content;
+	struct winrec *w;
 
 	if (term.win)
 		return;
 	term.win = make_window("Terminal", 8, 8, 500, 320);
+	/*
+	 * make_window() refuses when all MAXWIN slots are in use. Carrying on
+	 * would parent 48 labels to NULL - 48 new SCREENS - and term_ensure()
+	 * would then spawn a shell with nowhere to draw.
+	 */
+	if (!term.win)
+		return;
+	w = win_find(term.win);
+	w->on_close = term_on_close;
 	content = lv_win_get_content(term.win);
 	term.content = content;
 	lv_obj_set_style_bg_color(content, lv_color_hex(COL_TERM_BG), 0);
@@ -7115,9 +7457,9 @@ static void term_build_window(void)
 	 * window may or may not have a handler. A second window wanting keys
 	 * sets its own here and needs no change anywhere else.
 	 */
-	win_find(term.win)->on_key = term_key;
+	w->on_key = term_key;
 
-	win_add_grip(win_find(term.win));
+	win_add_grip(w);
 	/* Re-fit when the window is resized or maximised. */
 	lv_obj_add_event_cb(term.win, term_resize_cb, LV_EVENT_SIZE_CHANGED, NULL);
 }
@@ -7475,7 +7817,7 @@ static void wifi_render(void)
 		lv_obj_t *b, *mark;
 		const char *glyph;
 
-		b = lv_list_add_button(wifi_list, NULL, aps[i].ssid);
+		b = list_row(wifi_list, aps[i].ssid);
 		lv_obj_set_style_text_font(b, FONT_UI, 0);
 		lv_obj_set_style_pad_ver(b, 2, 0);
 		/* The list sits flush with the popover edge, so the first
@@ -8090,7 +8432,7 @@ static void tray_wifi_cb(lv_event_t *e)
 	lv_label_set_text(wifi_status, "...");
 	lv_obj_set_style_text_font(wifi_status, FONT_UI, 0);
 	lv_obj_set_width(wifi_status, 112);
-	lv_label_set_long_mode(wifi_status, LV_LABEL_LONG_DOT);
+	lv_label_set_long_mode(wifi_status, LV_LABEL_LONG_DOT); lv_label_set_max_lines(wifi_status, 1);	/* DOTS wraps without it */
 	lv_obj_set_pos(wifi_status, 42,
 		       (22 - (int32_t)lv_font_get_line_height(FONT_UI)) / 2);
 	lv_obj_set_style_radius(b, 0, 0);
@@ -8199,6 +8541,8 @@ static struct btdev *btdev_find(const char *addr)
 	return NULL;
 }
 
+static void audio_sink_lost(const char *addr);
+
 /* One DEV line: DEV <addr> paired=x conn=x trusted=x kind=k bearer=b rssi=n "name" */
 static void bt_dev_line(char *l)
 {
@@ -8214,6 +8558,7 @@ static void bt_dev_line(char *l)
 	if ((q = strstr(l, "bearer=")))
 		sscanf(q, "bearer=%5[a-z]", bearer);
 	d = btdev_find(addr);
+	int was_conn = d ? d->conn : 0;	/* only a KNOWN device can drop */
 	if (!d) {
 		if (btdev_n >= BT_MAXDEV)
 			return;
@@ -8223,6 +8568,16 @@ static void bt_dev_line(char *l)
 	}
 	d->paired = paired;
 	d->conn = conn;
+	/*
+	 * A connected device that is no longer connected. s31-bt emits
+	 * DISCONNECTED only in reply to a request from us, so headphones that
+	 * power off or walk out of range arrive only as this DEV update - and
+	 * the fallback to the speakers never ran (QoL review D1, 2026-09-25).
+	 * audio_sink_lost() is idempotent and ignores devices that are not the
+	 * current sink.
+	 */
+	if (was_conn && !conn)
+		audio_sink_lost(addr);
 	snprintf(d->kind, sizeof(d->kind), "%s", kind);
 	snprintf(d->bearer, sizeof(d->bearer), "%s", bearer);
 	if ((q = strchr(l, '"'))) {
@@ -8454,9 +8809,9 @@ static void bt_render(void)
 				lv_obj_set_style_pad_left(h, 6, 0);
 				shown = 1;
 			}
-			b = lv_list_add_button(bt_list, NULL,
-					       btdevs[i].name[0] ? btdevs[i].name :
-					       btdevs[i].addr);
+			b = list_row(bt_list,
+				     btdevs[i].name[0] ? btdevs[i].name :
+				     btdevs[i].addr);
 			lv_obj_set_style_text_font(b, FONT_UI, 0);
 			lv_obj_set_style_pad_ver(b, 2, 0);
 			lv_obj_set_style_pad_left(b, 6, 0);
@@ -8541,7 +8896,7 @@ static void tray_bt_cb(lv_event_t *e)
 	 * string.
 	 */
 	lv_obj_set_width(bt_status, 112);
-	lv_label_set_long_mode(bt_status, LV_LABEL_LONG_DOT);
+	lv_label_set_long_mode(bt_status, LV_LABEL_LONG_DOT); lv_label_set_max_lines(bt_status, 1);	/* DOTS wraps without it */
 	lv_obj_set_pos(bt_status, 42,
 		       (22 - (int32_t)lv_font_get_line_height(FONT_UI)) / 2);
 
@@ -8781,7 +9136,7 @@ static void tray_audio_cb(lv_event_t *e)
 						  sink->addr) : "Speakers");
 			lv_obj_set_style_text_font(l, FONT_UI, 0);
 			lv_obj_set_width(l, 200);
-			lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
+			lv_label_set_long_mode(l, LV_LABEL_LONG_DOT); lv_label_set_max_lines(l, 1);	/* DOTS wraps without it */
 			lv_obj_align(l, LV_ALIGN_LEFT_MID, 4, 0);
 		}
 	}
@@ -9252,6 +9607,17 @@ static int cursor_pending;
  */
 static volatile sig_atomic_t child_exited;
 /*
+ * The reaper saw the terminal's shell exit. Detected by pid, not by EIO on
+ * the master: a pty master only reads EIO once EVERY slave fd is closed, so
+ * "xcalc &" then "exit" leaves xcalc holding the slave and EIO never comes.
+ *
+ * What happens next follows xterm/st/foot - "exit" closes the window.
+ * LVDESK_TERM_HOLD=1 keeps the old behaviour: the dead window stays, and the
+ * next "run" or "System > Terminal" respawns a shell into it.
+ */
+static int term_shell_gone;
+static int term_hold;
+/*
  * SIGUSR1 asks the X shim what it is holding. On-demand rather than periodic:
  * the answer only matters when something is being measured, and a timer that
  * fires for ever is a wakeup source this desktop spent real effort removing.
@@ -9563,6 +9929,17 @@ static int mouse_poll(void)
 				vdx = vdy = rdx = rdy = 0;
 				wheel = 0;
 				btn_extra = 0;
+				/*
+				 * Same for Button2/3 as for Button1 below:
+				 * treat the lost release as a release, or
+				 * the owner would hold hover off for ever.
+				 */
+				if (!route_old()) {
+					if (!xwin_owner_release(2))
+						xshim_pointer_lost(2);
+					if (!xwin_owner_release(3))
+						xshim_pointer_lost(3);
+				}
 				if (ptr_pressed) {
 					ptr_pressed = 0;
 					press_edge = 0;
@@ -9756,6 +10133,15 @@ static int mouse_poll(void)
 				if (btn_extra) {
 					xshim_pointer(g, rx, ry, btn_extra,
 						      btn_extra_act);
+					/*
+					 * The grab took over from any
+					 * implicit-grab owner: a client that
+					 * grabs on press (a spring-loaded
+					 * menu) gets its release here, and a
+					 * stale owner would stop hover.
+					 */
+					if (btn_extra < 4)
+						btn_owner[btn_extra] = 0;
 					btn_extra = 0;
 				}
 				if (wheel) {
@@ -9844,6 +10230,31 @@ static int mouse_poll(void)
 				 */
 				xshim_pointer_lost(btn_extra);
 			} else if (btn_extra == 3 && !fs_active &&
+				   !route_old()) {
+				/*
+				 * Classify the topmost thing hit, rather than
+				 * re-testing rectangles, so this agrees with
+				 * what was drawn on top:
+				 *  - the popover scrim: light-dismiss only.
+				 *    It covers the whole screen, so the old
+				 *    rectangle test opened the app menu under
+				 *    an open Wi-Fi/Bluetooth panel instead.
+				 *  - anything else on the top layer (a
+				 *    popover's body, the taskbar, the
+				 *    keyboard): theirs, nothing to do.
+				 *  - the terminal, body or chrome: as before,
+				 *    kept free for its own use.
+				 *  - otherwise (bare desktop, our own window
+				 *    chrome, an X frame's header): app menu.
+				 */
+				int top;
+				lv_obj_t *o = obj_at_pointer(&top);
+
+				if (pop_scrim && o == pop_scrim)
+					popover_close();
+				else if (!top && !obj_in(o, term.win))
+					appmenu_open(-1);
+			} else if (btn_extra == 3 && !fs_active &&
 				   ptr_y < h - TASKBAR_H) {
 				/*
 				 * No X window took it: a right-click on the
@@ -9874,8 +10285,29 @@ static int mouse_poll(void)
 		int handled = 0;
 
 
-		if (term.win && !lv_obj_has_flag(term.win, LV_OBJ_FLAG_HIDDEN) &&
-		    !xwin_above_term()) {
+		if (!route_old()) {
+			/*
+			 * Scroll what is on top under the pointer. The
+			 * terminal if it is the hit (its rows are not
+			 * clickable, so the hit is term.win or its content);
+			 * nothing at all if the top layer or a native window
+			 * covers the point - a popover is not scrolled by a
+			 * client underneath it any more. X clients are
+			 * handled below: xwin_send_button() only finds one
+			 * that is itself the topmost hit.
+			 */
+			int top;
+			lv_obj_t *o = obj_at_pointer(&top);
+
+			if (top)
+				handled = 1;
+			else if (term.win && obj_in(o, term.win)) {
+				term_scrollback(wheel * TERM_WHEEL_LINES);
+				handled = 1;
+			}
+		} else if (term.win &&
+			   !lv_obj_has_flag(term.win, LV_OBJ_FLAG_HIDDEN) &&
+			   !xwin_above_term()) {
 			lv_area_t a;
 
 			lv_obj_get_coords(term.win, &a);
@@ -9928,6 +10360,22 @@ static void raise_under_pointer(int32_t x, int32_t y)
 {
 	lv_obj_t *scr = lv_screen_active();
 	int32_t i;
+
+	/*
+	 * The task bar and tray popovers this comment names moved to
+	 * lv_layer_top, where the walk below cannot see them, so a click on
+	 * the bar, a popover (or its dismissing scrim), the on-screen
+	 * keyboard or the Wi-Fi password box raised and focused whichever
+	 * window lay beneath - and took the keyboard off the thing being
+	 * typed into. Anything clickable on the top layer is above every
+	 * window, so a hit there leaves the stack alone.
+	 */
+	if (!route_old()) {
+		lv_point_t p = { x, y };
+
+		if (lv_indev_search_obj(lv_layer_top(), &p))
+			return;
+	}
 
 	for (i = (int32_t)lv_obj_get_child_count(scr) - 1; i >= 0; i--) {
 		lv_obj_t *o = lv_obj_get_child(scr, i);
@@ -10075,6 +10523,7 @@ int main(void)
 	 * do not trade MB for ms here.
 	 */
 	term_log = getenv("LVDESK_TERMLOG") != NULL;
+	term_hold = getenv("LVDESK_TERM_HOLD") != NULL;
 	prof_on = getenv("LVDESK_PROF") != NULL;
 	fsg_vec_ok = getenv("LVDESK_VEC") != NULL;
 	rect_log = getenv("LVDESK_RECTLOG") != NULL;
@@ -10515,8 +10964,10 @@ int main(void)
 	 * keyboard regardless, and a dead keyboard at boot once input started
 	 * following the focus.
 	 */
-	lv_obj_move_foreground(term.win);
-	win_set_focus(win_find(term.win));
+	if (term.win) {
+		lv_obj_move_foreground(term.win);
+		win_set_focus(win_find(term.win));
+	}
 
 	/*
 	 * Block on the input fds instead of spinning.
@@ -10820,9 +11271,39 @@ int main(void)
 			if (child_exited) {
 				child_exited = 0;
 				PROF_START(a);
-				while (waitpid(-1, NULL, WNOHANG) > 0)
-					;
+				{
+					pid_t p;
+
+					while ((p = waitpid(-1, NULL,
+							    WNOHANG)) > 0)
+						if (p == term.child) {
+							/* never kill() a reused pid */
+							term.child = 0;
+							term_shell_gone = 1;
+						}
+				}
 				PROF_ADD(prof_wait4, a);
+			}
+			if (term_shell_gone) {
+				term_shell_gone = 0;
+				/*
+				 * Through win_close so term_on_close runs, as
+				 * for the close button. The last output is
+				 * already painted: term_poll ran above.
+				 */
+				if (term.win && !term_hold) {
+					win_close(win_find(term.win));
+				} else if (term.fd >= 0) {
+					/*
+					 * Held: drop a master a background
+					 * job still keeps alive, or the next
+					 * run is written to a pty with no
+					 * shell and term_ensure never
+					 * respawns.
+					 */
+					close(term.fd);
+					term.fd = -1;
+				}
 			}
 			idle_rounds = busy ? 0 : idle_rounds + 1;
 			/*
