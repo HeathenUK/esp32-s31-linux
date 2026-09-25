@@ -366,6 +366,28 @@ showing the CMD12 leg under 0.1 ms.
 
 ## Status log
 
+- 2026-09-25: **Tracks 2a and 2b closed; both shipped.** 2a sdtrace:
+  commit 2de1de8, patches/0064 (dw_mmc.c + block.c), kernel #373 - entry
+  below. 2b polled completion for reads <= 16 KiB: commit 840126b,
+  patches/0065 (poll_bytes 16384, poll_ns 1.5 ms defaults), kernel #377.
+  2b numbers: idle 4 KiB random p50 1.47 -> 1.14 ms on CPU0 same boot,
+  ctxt/request 1.9 -> 0.6; #377 min 0.99, p50 1.13 (#365 started the day at
+  min 1.38, p50 1.85). -mem 20 X11 timedemo, 5 + 5 fresh boots: 8.72 vs
+  8.44 fps mean, worst 7.9 vs 7.8, majflt 6446 vs 7511, ring total 2.53 vs
+  2.87 ms - inside the boot band (P3 later read 10.22 on the same sources),
+  shipped on the latency and context-switch numbers, not on fps. Cost:
+  ~20% of polls expire behind swap-out writes under load (~4% of CPU0).
+  B3 hardware CMD12 CLOSED by two independent prices (sdlat 512 B vs 1 KiB
+  and the sdtrace stop hop: 0.05-0.12 ms, kill line 0.10). The board runs
+  #379, a rebuild of #377's sources after the P2 item-4 arm; the port tree
+  equals patches/0065 dw_mmc.c and 0064 block.c. Still open here: mode 1
+  (writes off the kworker; swap-out writes cost 1.0-7.5 ms each under
+  load) behind its write hazard; the submit path (`gap` ~0.8 ms idle; P2's
+  faultlat puts 0.62 ms per swap-in fault above the driver). New from
+  paging P1: 30-32% of fault reads under play pay a 5.7-6.2 ms card idle
+  wake after >= ~6-14 ms of no reads, which no host-side hop can remove;
+  the driver keepalive (paging plan item 6) is the next build aimed at it.
+
 - 2026-09-24 (evening): **sdtrace SHIPPED**, patches/0064-dw-mmc-sdtrace,
   kernel #373; gate PASS on every rule (chain sums within 10% on 64/64
   rows in every arm, max residual 7-8 us; sdlat min unmoved). Section 1's

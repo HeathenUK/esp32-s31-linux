@@ -377,3 +377,22 @@ spread across the three five-boot series - 8.72 to 10.22 on one software
 state - is the day's boot/card band, and none of it is claimed as a win.
 Artifacts: artifacts/quake/td-p3final-*.
 
+### 2026-09-25, phase 2 outcome (P1-P3)
+
+Of the five levers, **none shipped and all five are closed**: item 1 memcg
+(non-game swap 1.42-1.56 MB < 2 MB), item 2 reclaim placement
+(pgsteal_direct 0.0-2.0% < 5%), item 3 fullscreen release (<= 268 kB <
+400 kB; the 752 kB was the driver's scanout), item 4 synchronous swap-in
+(fault p50 -43..-78 us < 100, tail worse; #378 in patches/attic), item 5
+schedulers (read p99 up 2-6%, rule -33%). Commits 5dcc411, c00d84a,
+c852439. What the phase bought is two measured facts: **30-32% of fault
+reads pay a 5.7-6.2 ms card idle wake** (a 512 B read every 3-5 ms keeps
+the card awake; CMD13 does not), and **0.62 ms of every swap-in fault sits
+above the driver** in the shared fault/bio/blk-mq/mmc submit path. Three
+five-boot timedemo series on one software state read 8.72, 9.22 and 10.22
+fps mean, so a lever now has to beat ~1.5 fps of boot band on fps, or be
+judged on the ring/fault instruments. Next, in order: item 6 (driver-side
+warm-window keepalive, interrupt path, bounded 100-200 ms after a real
+read), then the submit path with faultlat (B5 fast-text), then kswapd on
+CPU1 as a 10-pair re-test (9.22 -> 9.66, 5/5 pairs positive, ranges
+overlap). Board at close: #379 = images/ = patches/0064 + 0065.
