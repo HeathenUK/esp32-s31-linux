@@ -105,6 +105,16 @@ struct drm_esp32s31_ppa_clut {
 #define COL_HDR_TEXT_DIM 0xa9b8c6	/* unfocused title, 4.6:1 on COL_HDR */
 #define COL_PANEL	0xe9edf1
 #define COL_PANEL_TEXT	0x1b2838
+#define COL_PANEL_TEXT_DIM 0x5a6b7b	/* status lines, headers; 4.7:1 on COL_PANEL */
+/*
+ * Tray popover geometry (QoL C4): a titled top row (switch, title, action),
+ * a full-width status line, and 30 px list rows - finger-sized, and the
+ * same height as the menus. 244 px tall keeps six rows in view.
+ */
+#define POP_W		260
+#define POP_H		244
+#define POP_ROW_H	30
+#define POP_LIST_Y	48
 #define COL_TERM_BG	0x0a0f14
 #define COL_TERM_FG	0x9fe89f
 
@@ -7757,6 +7767,9 @@ static void toast_show_k(const char *key, const char *text, uint32_t ms)
 	int i, slot = -1;
 
 	snprintf(buf, sizeof(buf), "%s", text);
+	/* to the log too (a file, not the console): tests read toasts here */
+	printf("lvdesk: toast %s\n", buf);
+	fflush(stdout);
 	if (fs_active) {
 		/* keep it: same key replaces, else the next free line */
 		for (i = 0; i < TOAST_MAX && slot < 0; i++)
@@ -8105,6 +8118,10 @@ static void desk_theme_apply(lv_theme_t *th, lv_obj_t *o)
 				 LV_STATE_CHECKED | LV_STATE_HOVERED);
 		lv_obj_add_style(o, &st_row_chk_prs,
 				 LV_STATE_CHECKED | LV_STATE_PRESSED);
+	} else if (lv_obj_check_type(o, &lv_list_class) ||
+		   lv_obj_check_type(o, &lv_list_text_class)) {
+		/* the panel colour, not simple's grey slab under short lists */
+		lv_obj_add_style(o, &st_row, 0);
 	} else if (lv_obj_check_type(o, &lv_button_class)) {
 		lv_obj_add_style(o, &st_btn_prs, LV_STATE_PRESSED);
 	} else if (lv_obj_check_type(o, &lv_keyboard_class)) {
@@ -8431,16 +8448,129 @@ static void cg_join(const char *grp)
 	close(fd);
 }
 
-static void appmenu_spawn(const char *cmd)
+/*
+ * LAUNCH FEEDBACK (QoL D3, the failure half). A launch says "Starting ..."
+ * at once, and a launch that dies within 30 s says why: the last line it
+ * wrote to the apps log after it started ("sh: nosuchcmd: not found"), or
+ * the signal that killed it (9 is almost always the OOM killer here). A
+ * clean exit, or 30 s of running, drops it silently. The placeholder task
+ * button of the full design is NOT built: matching a window back to the
+ * process that asked for it needs the client's pid from xshim, and the
+ * plan's own kill rule is a placeholder cleared by the wrong client.
+ * LVDESK_NOLAUNCHFB=1 turns it off, so measurement arms stay identical.
+ */
+#define LAUNCH_MAX 4
+static struct launch {
+	pid_t pid;
+	uint32_t t0;
+	long logoff;
+	char label[40];
+} launches[LAUNCH_MAX];
+static char launch_label[40];		/* set by the caller of appmenu_launch */
+
+/* "Parent: Leaf", the form the menu search shows, or just the leaf at root. */
+static void launch_label_for(int idx)
+{
+	if (mitems[idx].parent >= 0)
+		snprintf(launch_label, sizeof(launch_label), "%s: %s",
+			 mitems[mitems[idx].parent].label, mitems[idx].label);
+	else
+		snprintf(launch_label, sizeof(launch_label), "%s",
+			 mitems[idx].label);
+}
+
+static int launch_fb_on(void)
+{
+	static int v = -1;
+
+	if (v < 0)
+		v = getenv("LVDESK_NOLAUNCHFB") == NULL;
+	return v;
+}
+
+static void launch_track(pid_t pid, const char *label, long logoff)
+{
+	int i, k = 0;
+
+	for (i = 0; i < LAUNCH_MAX; i++)
+		if (!launches[i].pid) {
+			k = i;
+			break;
+		} else if (launches[i].t0 < launches[k].t0) {
+			k = i;		/* full: replace the oldest */
+		}
+	launches[k].pid = pid;
+	launches[k].t0 = lv_tick_get();
+	launches[k].logoff = logoff;
+	snprintf(launches[k].label, sizeof(launches[k].label), "%s", label);
+}
+
+/* The last printable line the launch wrote to the apps log, 60 chars max. */
+static void launch_last_line(long off, char *out, size_t outsz)
+{
+	FILE *f = fopen(MENU_LOG, "r");
+	char line[160];
+
+	out[0] = 0;
+	if (!f)
+		return;
+	if (off > 0)
+		fseek(f, off, SEEK_SET);
+	while (fgets(line, sizeof(line), f)) {
+		size_t n = strlen(line), i, k = 0;
+
+		while (n && (line[n - 1] == '\n' || line[n - 1] == '\r'))
+			line[--n] = 0;
+		if (!n || !strncmp(line, "@@", 2))
+			continue;
+		for (i = 0; i < n && k + 1 < outsz && k < 60; i++)
+			if (line[i] >= 32 && line[i] < 127)
+				out[k++] = line[i];
+		out[k] = 0;
+	}
+	fclose(f);
+}
+
+/* From the SIGCHLD reaper: was this one of our launches, and did it fail? */
+static void launch_reaped(pid_t pid, int status)
+{
+	int i;
+	char t[120], why[64];
+
+	for (i = 0; i < LAUNCH_MAX; i++) {
+		struct launch *l = &launches[i];
+
+		if (l->pid != pid)
+			continue;
+		l->pid = 0;
+		if (lv_tick_get() - l->t0 > 30000)
+			return;			/* it ran; not a launch failure */
+		if (WIFEXITED(status) && WEXITSTATUS(status) == 0)
+			return;
+		if (WIFSIGNALED(status)) {
+			snprintf(t, sizeof(t), "%s was killed (signal %d%s)",
+				 l->label, WTERMSIG(status),
+				 WTERMSIG(status) == 9 ? " - out of memory?" : "");
+		} else {
+			launch_last_line(l->logoff, why, sizeof(why));
+			snprintf(t, sizeof(t), "%s failed: %s", l->label,
+				 why[0] ? why : "exit status");
+		}
+		toast_show_k("launch", t, 5000);
+		return;
+	}
+}
+
+static pid_t appmenu_spawn(const char *cmd)
 {
 	pid_t pid = fork();
 
 	if (pid < 0)
-		return;
+		return -1;
 	if (pid > 0) {
 		printf("lvdesk: menu: [%d] %s\n", (int)pid, cmd);
 		fflush(stdout);
-		return;
+		return pid;
 	}
 	setsid();
 	cg_join("play");
@@ -8522,7 +8652,33 @@ static void appmenu_launch(const char *cmd)
 		}
 		cmd = sp + 1;
 	}
-	appmenu_spawn(cmd);
+	{
+		struct stat st;
+		long off = stat(MENU_LOG, &st) == 0 ? (long)st.st_size : 0;
+		char lbl[40];
+		pid_t pid;
+
+		/* the menu entry's label, or the command's first word */
+		if (launch_label[0]) {
+			snprintf(lbl, sizeof(lbl), "%s", launch_label);
+		} else {
+			size_t k = strcspn(cmd, " ");
+
+			if (k >= sizeof(lbl))
+				k = sizeof(lbl) - 1;
+			memcpy(lbl, cmd, k);
+			lbl[k] = 0;
+		}
+		launch_label[0] = 0;
+		pid = appmenu_spawn(cmd);
+		if (pid > 0 && launch_fb_on()) {
+			char t[64];
+
+			launch_track(pid, lbl, off);
+			snprintf(t, sizeof(t), "Starting %s...", lbl);
+			toast_show_k("launch", t, 2500);
+		}
+	}
 }
 
 static void appmenu_item_cb(lv_event_t *e)
@@ -8553,6 +8709,7 @@ static void appmenu_item_cb(lv_event_t *e)
 		char cmd[sizeof(mitems[0].cmd)];
 
 		snprintf(cmd, sizeof(cmd), "%s", mitems[idx].cmd);
+		launch_label_for(idx);
 		popover_close();
 		appmenu_launch(cmd);
 	}
@@ -8872,6 +9029,7 @@ static void appsearch_launch(int hit)
 	if (hit < 0 || hit >= search_n)
 		return;
 	snprintf(cmd, sizeof(cmd), "%s", mitems[search_hit[hit]].cmd);
+	launch_label_for(search_hit[hit]);
 	menu_q[0] = 0;
 	popover_close();
 	appmenu_launch(cmd);
@@ -9624,7 +9782,7 @@ static void wifi_render(void)
 		lv_obj_set_flex_align(b, LV_FLEX_ALIGN_START,
 				      LV_FLEX_ALIGN_CENTER,
 				      LV_FLEX_ALIGN_CENTER);
-		lv_obj_set_height(b, 22);
+		lv_obj_set_height(b, POP_ROW_H);
 		lv_obj_add_event_cb(b, wifi_select_cb, LV_EVENT_CLICKED,
 				    (void *)(intptr_t)i);
 		if (i == ap_sel)
@@ -10238,9 +10396,34 @@ static int wifi_ev_poll(void)
 	return busy;
 }
 
+/* The title in a tray popover's top row, right of the radio switch. */
+static void pop_title(lv_obj_t *pop, const char *t)
+{
+	lv_obj_t *l = lv_label_create(pop);
+
+	lv_label_set_text(l, t);
+	lv_obj_set_style_text_font(l, FONT_UI_BIG, 0);
+	lv_obj_set_pos(l, 44, (22 - (int32_t)lv_font_get_line_height(FONT_UI_BIG)) / 2);
+}
+
+/* The full-width status line under it: one line, dotted, dimmed. */
+static lv_obj_t *pop_status(lv_obj_t *pop)
+{
+	lv_obj_t *l = lv_label_create(pop);
+
+	lv_label_set_text(l, "...");
+	lv_obj_set_style_text_font(l, FONT_UI, 0);
+	lv_obj_set_style_text_color(l, lv_color_hex(COL_PANEL_TEXT_DIM), 0);
+	lv_obj_set_width(l, POP_W - 18);
+	lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
+	lv_label_set_max_lines(l, 1);
+	lv_obj_set_pos(l, 0, 27);
+	return l;
+}
+
 static void tray_wifi_cb(lv_event_t *e)
 {
-	lv_obj_t *pop = popover_open(lv_event_get_target(e), 260, 190);
+	lv_obj_t *pop = popover_open(lv_event_get_target(e), POP_W, POP_H);
 	lv_obj_t *b;
 
 	if (!pop)
@@ -10260,13 +10443,8 @@ static void tray_wifi_cb(lv_event_t *e)
 	 * guessed: a fixed offset left the text sitting high in the row, which
 	 * reads as a misalignment even when nobody can say why.
 	 */
-	wifi_status = lv_label_create(pop);
-	lv_label_set_text(wifi_status, "...");
-	lv_obj_set_style_text_font(wifi_status, FONT_UI, 0);
-	lv_obj_set_width(wifi_status, 112);
-	lv_label_set_long_mode(wifi_status, LV_LABEL_LONG_DOT); lv_label_set_max_lines(wifi_status, 1);	/* DOTS wraps without it */
-	lv_obj_set_pos(wifi_status, 42,
-		       (22 - (int32_t)lv_font_get_line_height(FONT_UI)) / 2);
+	pop_title(pop, "Wi-Fi");
+	wifi_status = pop_status(pop);
 	lv_obj_set_style_radius(b, 0, 0);
 	lv_obj_set_style_bg_color(b, lv_color_hex(COL_HDR_FOCUS), 0);
 	lv_obj_set_style_shadow_width(b, 0, 0);
@@ -10277,8 +10455,8 @@ static void tray_wifi_cb(lv_event_t *e)
 	radio_switch(pop, wifi_power_cb, wifi_radio_get());
 
 	wifi_list = lv_list_create(pop);
-	lv_obj_set_size(wifi_list, 242, 138);
-	lv_obj_set_pos(wifi_list, 0, 26);
+	lv_obj_set_size(wifi_list, POP_W - 18, POP_H - 16 - POP_LIST_Y);
+	lv_obj_set_pos(wifi_list, 0, POP_LIST_Y);
 	lv_obj_set_style_radius(wifi_list, 0, 0);
 	lv_obj_set_style_pad_all(wifi_list, 0, 0);
 	lv_obj_set_style_text_font(wifi_list, FONT_UI, 0);
@@ -10321,6 +10499,8 @@ static int bt_powered, bt_scanning;
 static char bt_prompt[64];		/* passkey / confirm text for the panel */
 static char bt_confirm_addr[18];
 static lv_obj_t *bt_list, *bt_status, *bt_power_sw;
+static lv_obj_t *bt_action_btn;		/* Scan / Stop / Confirm (QoL C4) */
+static void bt_action_update(void);
 static void bt_render(void);
 
 static int bt_connect_sock(void)
@@ -10633,21 +10813,37 @@ static void bt_render(void)
 		else
 			lv_obj_remove_state(bt_power_sw, LV_STATE_CHECKED);
 	}
+	bt_action_update();
 	if (!bt_list)
 		return;
+	/*
+	 * The status line says what the switch cannot (review 2026-09-25):
+	 * who is connected, a scan, a pairing prompt, a missing daemon - the
+	 * same kind of line as Wi-Fi's "JELLING  -57 dBm". Nothing when the
+	 * radio is off, since the switch already says that, and no glyph.
+	 */
 	if (bt_status) {
+		const char *who = NULL;
+		int k;
+
+		for (k = 0; k < btdev_n; k++)
+			if (btdevs[k].conn) {
+				who = btdevs[k].name[0] ? btdevs[k].name :
+							  btdevs[k].addr;
+				break;
+			}
 		if (bt_prompt[0])
-			lv_label_set_text_fmt(bt_status, LV_SYMBOL_BLUETOOTH
-					      "  %s", bt_prompt);
+			lv_label_set_text(bt_status, bt_prompt);
 		else if (bt_fd < 0)
-			lv_label_set_text(bt_status, LV_SYMBOL_BLUETOOTH
-					  "  no daemon");
+			lv_label_set_text(bt_status, "Bluetooth service not running");
 		else if (!bt_powered)
-			lv_label_set_text(bt_status, LV_SYMBOL_BLUETOOTH "  off");
+			lv_label_set_text(bt_status, "");
+		else if (bt_scanning)
+			lv_label_set_text(bt_status, "Scanning...");
+		else if (who)
+			lv_label_set_text_fmt(bt_status, "Connected to %s", who);
 		else
-			lv_label_set_text(bt_status, bt_scanning ?
-					  LV_SYMBOL_BLUETOOTH "  Scanning..." :
-					  LV_SYMBOL_BLUETOOTH "  On");
+			lv_label_set_text(bt_status, "Not connected");
 	}
 	lv_obj_clean(bt_list);
 	/*
@@ -10672,7 +10868,11 @@ static void bt_render(void)
 				continue;
 			if (!shown) {
 				lv_obj_t *h = lv_list_add_text(bt_list,
-						pass == 0 ? "Paired" : "Available");
+						pass == 0 ? "PAIRED" : "AVAILABLE");
+
+				/* a heading, not a row (QoL C4) */
+				lv_obj_set_style_text_color(h,
+					lv_color_hex(COL_PANEL_TEXT_DIM), 0);
 
 				lv_obj_set_style_text_font(h, FONT_UI, 0);
 				lv_obj_set_style_pad_ver(h, 1, 0);
@@ -10688,7 +10888,7 @@ static void bt_render(void)
 			lv_obj_set_flex_align(b, LV_FLEX_ALIGN_START,
 					      LV_FLEX_ALIGN_CENTER,
 					      LV_FLEX_ALIGN_CENTER);
-			lv_obj_set_height(b, 22);
+			lv_obj_set_height(b, POP_ROW_H);
 			lv_obj_add_event_cb(b, bt_row_cb, LV_EVENT_CLICKED,
 					    (void *)(intptr_t)i);
 			if (btdevs[i].conn)
@@ -10724,11 +10924,35 @@ static void bt_render(void)
 static void bt_forget_widgets(void)
 {
 	bt_list = bt_status = bt_power_sw = NULL;
+	bt_action_btn = NULL;
+}
+
+/*
+ * The Bluetooth panel's one action button follows the state (QoL C4):
+ * Confirm while a pairing asks, Stop while scanning, Scan otherwise. It was
+ * set once when the panel opened and went stale the moment a scan started
+ * or a pairing asked for confirmation.
+ */
+static void bt_action_cb(lv_event_t *e)
+{
+	if (bt_confirm_addr[0])
+		bt_confirm_cb(e);
+	else
+		bt_scan_cb(e);
+}
+
+static void bt_action_update(void)
+{
+	if (!bt_action_btn || !lv_obj_get_child(bt_action_btn, 0))
+		return;
+	lv_label_set_text(lv_obj_get_child(bt_action_btn, 0),
+			  bt_confirm_addr[0] ? "Confirm" :
+			  bt_scanning ? "Stop" : "Scan");
 }
 
 static void tray_bt_cb(lv_event_t *e)
 {
-	lv_obj_t *pop = popover_open(lv_event_get_target(e), 260, 190);
+	lv_obj_t *pop = popover_open(lv_event_get_target(e), POP_W, POP_H);
 	lv_obj_t *b;
 
 	if (!pop)
@@ -10736,16 +10960,15 @@ static void tray_bt_cb(lv_event_t *e)
 	bt_connect_sock();
 
 	b = lv_button_create(pop);
+	bt_action_btn = b;
 	lv_obj_set_pos(b, 158, 0);
 	lv_obj_set_size(b, 84, 22);
 	lv_obj_set_style_radius(b, 0, 0);
 	lv_obj_set_style_bg_color(b, lv_color_hex(COL_HDR_FOCUS), 0);
 	lv_obj_set_style_shadow_width(b, 0, 0);
-	lv_obj_add_event_cb(b, bt_confirm_addr[0] ? bt_confirm_cb : bt_scan_cb,
-			    LV_EVENT_CLICKED, NULL);
+	lv_obj_add_event_cb(b, bt_action_cb, LV_EVENT_CLICKED, NULL);
 	lv_obj_center(lv_label_create(b));
-	lv_label_set_text(lv_obj_get_child(b, 0),
-			  bt_confirm_addr[0] ? "Confirm" : "Scan");
+	bt_action_update();
 
 	/*
 	 * The radio switch shares the top row with the status and Scan: it is
@@ -10755,23 +10978,17 @@ static void tray_bt_cb(lv_event_t *e)
 	 */
 	bt_power_sw = radio_switch(pop, bt_power_cb, bt_powered);
 
-	bt_status = lv_label_create(pop);
-	lv_label_set_text(bt_status, "...");
-	lv_obj_set_style_text_font(bt_status, FONT_UI, 0);
 	/*
-	 * Stop short of the Scan button at x=158. A failure reason can be any
-	 * length, and an unbounded label ran straight under the button -
-	 * unreadable, and it looked like a rendering fault rather than a long
-	 * string.
+	 * Status on its own full-width line (QoL C4): a pairing passkey,
+	 * "Type 123456 then Enter", is ~165 px and was cut off by the 112 px
+	 * slot it shared with the button.
 	 */
-	lv_obj_set_width(bt_status, 112);
-	lv_label_set_long_mode(bt_status, LV_LABEL_LONG_DOT); lv_label_set_max_lines(bt_status, 1);	/* DOTS wraps without it */
-	lv_obj_set_pos(bt_status, 42,
-		       (22 - (int32_t)lv_font_get_line_height(FONT_UI)) / 2);
+	pop_title(pop, "Bluetooth");
+	bt_status = pop_status(pop);
 
 	bt_list = lv_list_create(pop);
-	lv_obj_set_size(bt_list, 242, 138);
-	lv_obj_set_pos(bt_list, 0, 26);
+	lv_obj_set_size(bt_list, POP_W - 18, POP_H - 16 - POP_LIST_Y);
+	lv_obj_set_pos(bt_list, 0, POP_LIST_Y);
 	lv_obj_set_style_radius(bt_list, 0, 0);
 	lv_obj_set_style_pad_all(bt_list, 0, 0);
 	lv_obj_set_style_text_font(bt_list, FONT_UI, 0);
@@ -13547,14 +13764,17 @@ int main(void)
 				PROF_START(a);
 				{
 					pid_t p;
+					int wst;
 
-					while ((p = waitpid(-1, NULL,
-							    WNOHANG)) > 0)
+					while ((p = waitpid(-1, &wst,
+							    WNOHANG)) > 0) {
+						launch_reaped(p, wst);
 						if (p == term.child) {
 							/* never kill() a reused pid */
 							term.child = 0;
 							term_shell_gone = 1;
 						}
+					}
 				}
 				PROF_ADD(prof_wait4, a);
 			}

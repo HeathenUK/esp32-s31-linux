@@ -35,6 +35,43 @@ cdoom (883 puts) and quake (motion 12, keys 4).
 Still open from the programme: everything else, starting with A3 (the
 drop-down console, diff 01, which needs rebasing onto these fixes).
 
+## Status, 2026-09-25 night: D3 (failure half) and C4 shipped; s31-bt boot race fixed
+
+- **D3 launch feedback.**
+  - "Starting <Parent: Leaf>..." appears at launch.
+  - A launch that dies within 30 s toasts why: the last line it wrote to
+    /tmp/lvdesk-apps.log after starting, or its signal ("killed (signal 9 -
+    out of memory?)"). A clean exit or 30 s of running is silent.
+  - `LVDESK_NOLAUNCHFB=1` turns it off.
+  - The placeholder task button is NOT built: matching a window to the
+    process that launched it needs the X client's pid in xshim, and the
+    plan's own kill rule is a placeholder cleared by the wrong client.
+  - Toasts are also logged ("lvdesk: toast ..."), which the test reads.
+    `lvdesk-launch-test.sh`: nosuchcmd gives "failed: ...not found"; exit 0 is
+    silent; kill -9 gives "killed (signal 9"; xcalc gets "Starting" only.
+- **C4 popovers.**
+  - Wi-Fi and Bluetooth panels are 260x244: a titled top row (switch, title,
+    action), a full-width dimmed status line, and 30 px rows (6 in view).
+  - Lists and list headings take the panel colour. Section headings are
+    uppercase and dimmed.
+  - The BT action button follows the state (Scan / Stop / Confirm) instead of
+    being set once at open.
+  - After review, the BT status line carries only what the switch cannot:
+    "Connected to X", "Not connected", "Scanning...", a pairing prompt, or
+    "Bluetooth service not running". It is empty when the radio is off, with
+    no glyph.
+  - The audio popover is unchanged.
+- **s31-bt (not QoL; found on the way).**
+  - At S47 bluetoothd (started --background by S46) was often not yet on the
+    bus, so every setup call failed: power-on, agent, A2DP endpoint. The
+    adapter came up OFF, with no pairing agent and no A2DP endpoint.
+  - s31-bt now waits (bounded 10 s) for org.bluez, and redoes the setup on
+    NameOwnerChanged whenever bluetoothd reappears.
+  - The shipped binary was also the 4 September build: the 5 September fixes
+    (MCL_CURRENT instead of MCL_FUTURE, the 20x rescan backoff) had never
+    shipped. VmLck 216 = VmRSS before, 204 < 216 now.
+  - s31-bt lives in the SECOND XIP image: `make flash-xip2-rootfs`.
+
 ## Status, 2026-09-25 night: B5 search; the console is the built-in terminal
 
 - **B5 type-to-search.**

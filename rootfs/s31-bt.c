@@ -1774,6 +1774,22 @@ static int stream_step(void)
 
 /* ------------------------------------------------------------ signals */
 
+/*
+ * Everything that needs bluetoothd: the object list, the adapter powered, our
+ * pairing agent and the A2DP endpoint. Run at start once org.bluez is owned,
+ * and again whenever bluetoothd (re)appears on the bus.
+ */
+static void bluez_setup(void)
+{
+	load_objects();
+	if (!powered)
+		set_bool(adapter, "org.bluez.Adapter1", "Powered", 1);
+	if (register_agent())
+		fprintf(stderr, "s31-bt: no agent - pairing prompts will fail\n");
+	if (register_endpoint())
+		fprintf(stderr, "s31-bt: no A2DP endpoint - audio sinks will not stream\n");
+}
+
 static DBusHandlerResult signal_filter(DBusConnection *c, DBusMessage *msg,
 				       void *user)
 {
@@ -1782,6 +1798,22 @@ static DBusHandlerResult signal_filter(DBusConnection *c, DBusMessage *msg,
 	(void)c; (void)user;
 	if (dbus_message_get_type(msg) != DBUS_MESSAGE_TYPE_SIGNAL)
 		return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+
+	if (dbus_message_is_signal(msg, "org.freedesktop.DBus", "NameOwnerChanged")) {
+		const char *name = NULL, *old = NULL, *new_ = NULL;
+
+		if (dbus_message_get_args(msg, NULL, DBUS_TYPE_STRING, &name,
+					  DBUS_TYPE_STRING, &old,
+					  DBUS_TYPE_STRING, &new_,
+					  DBUS_TYPE_INVALID) &&
+		    name && !strcmp(name, "org.bluez") && new_ && *new_) {
+			fprintf(stderr, "s31-bt: bluetoothd (re)appeared - setting up\n");
+			powered = 0;
+			bluez_setup();
+			state_line(NULL);
+		}
+		return DBUS_HANDLER_RESULT_HANDLED;
+	}
 
 	if (dbus_message_is_signal(msg, "org.freedesktop.DBus.ObjectManager",
 				   "InterfacesAdded")) {
@@ -2155,13 +2187,27 @@ int main(int argc, char **argv)
 	dbus_connection_register_object_path(conn, AGENT_PATH, &agent_vt, NULL);
 	dbus_connection_register_object_path(conn, EP_PATH, &ep_vt, NULL);
 
-	load_objects();
-	if (!powered)
-		set_bool(adapter, "org.bluez.Adapter1", "Powered", 1);
-	if (register_agent())
-		fprintf(stderr, "s31-bt: no agent - pairing prompts will fail\n");
-	if (register_endpoint())
-		fprintf(stderr, "s31-bt: no A2DP endpoint - audio sinks will not stream\n");
+	/*
+	 * Wait for bluetoothd to own org.bluez. S46 starts it --background, so
+	 * at S47 it is usually not on the bus yet, and every call below failed
+	 * ("The name org.bluez was not provided by any .service files"): the
+	 * adapter stayed OFF after boot, pairing had no agent and A2DP no
+	 * endpoint until s31-bt was restarted (found 2026-09-25 from
+	 * /var/log/s31-bt.log). Bounded at 10 s; if BlueZ comes later still,
+	 * bluez_setup() runs again from the NameOwnerChanged signal below.
+	 */
+	{
+		int k;
+
+		for (k = 0; k < 100 && !dbus_bus_name_has_owner(conn, "org.bluez", NULL); k++)
+			usleep(100000);
+		fprintf(stderr, "s31-bt: org.bluez %s after %d ms\n",
+			k < 100 ? "present" : "STILL ABSENT", k * 100);
+	}
+	dbus_bus_add_match(conn, "type='signal',sender='org.freedesktop.DBus',"
+			   "interface='org.freedesktop.DBus',member='NameOwnerChanged',"
+			   "arg0='org.bluez'", NULL);
+	bluez_setup();
 	dbus_connection_get_unix_fd(conn, &dbus_fd);
 
 	unlink(CTL_PATH);
