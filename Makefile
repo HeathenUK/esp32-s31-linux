@@ -546,7 +546,8 @@ endif
 # the aggregate hot list: pingpong -29%, Quake 20.0 -> 21.3/21.6; the cold
 # control moved the same bytes for -14% / no Quake gain.
 # Default: the shipped list (patches/0062). FASTFN= (empty) builds without it.
-FASTFN ?= patches/0062-esp32s31-fastfn-list/agg-hot.list
+# 2026-09-25: 0062 + the swap-in fault path (patches/0069): faults 1.19-1.26 -> 0.90-1.04 ms p50.
+FASTFN ?= patches/0069-esp32s31-fastfn-swap-path/agg-hot-swap.list
 # HOTFN=<list> packs the listed functions hot-first at the head of FLASH .text
 # (they stay in flash). C39's flash half; empty until measured.
 HOTFN ?=

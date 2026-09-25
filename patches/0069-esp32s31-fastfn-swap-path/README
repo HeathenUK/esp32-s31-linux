@@ -1,0 +1,26 @@
+0069 - RAM text for the swap-in fault path (FASTFN list extension)
+=================================================================
+
+agg-hot-swap.list / .lds.h: the shipped 0062 list (137 functions, 24,320 B)
+plus 88 flash-text functions (12,282 B) on the swap-in fault path, chosen by
+scripts/board/fastfn-pick.py from 12,000 hart-1 PC samples of a fault loop
+(rootfs/faultlat 6 MB, 1,500 majors per round, pinned to CPU0, kernel #388),
+resolved against `nm -nS vmlinux` and a regenerated function index
+(artifacts/perf-plan/fault-path-profile/fn-index-388.txt). Excluded: the
+shipped list, and code that belongs to the probe rather than to a real
+fault (its mincore page walk, its MADV_PAGEOUT reclaim set-up: exclude.list),
+plus cpu_startup_entry. The new functions are the page allocator
+(get_page_from_freelist, __rmqueue_pcplist, prep_new_page, free paths), the
+swap-in path (do_swap_page, swap_read_folio, swap cache lookup/add,
+end_swap_bio_read), the maple-tree VMA lookup, rmap, LRU add, pte locking,
+and the blk-mq tag and segment mapping the mmc queue uses.
+
+Build: FASTFN=patches/0069-esp32s31-fastfn-swap-path/agg-hot-swap.list (the
+Makefile default from 2026-09-25). A handful of listed functions live in
+special sections (.sched.text / lock text) and stay in flash; fastfn-verify.py
+lists them.
+
+MEASURED (faultlat, 60 random-order majors x 6 arms, page-cluster 2/0):
+  #388 (0062 list)          fault p50 1.19-1.26 ms   min 1.13-1.15 ms
+  #389 (0062 + 0069 list)   fault p50 0.90-1.04 ms   min 0.86-0.87 ms
+About 0.3 ms off every swap-in fault, for 12 kB of RAM text.
