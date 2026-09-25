@@ -328,3 +328,52 @@ allocation, blk-mq and mmc_blk_mq_issue_rq up to dw_mci_request, and the
 return after the bio ends. A swap-cache hit (no I/O at all) costs 76-134 us
 p50. That is B5's swap-path FASTFN / submit-path question (the programme's
 "gap ~0.8 ms"), and faultlat is now its instrument.
+
+### 2026-09-25, step P3: item 3 (fullscreen release) - KILLED at the ceiling, not built
+
+**P1's ceiling was mis-attributed.** The "800x480x16 desktop buffer (752
+kB)" is not a desktop-owned dumb buffer: under direct scanout (the default;
+`/var/log/lvdesk.log` on #379: `kms: DIRECT scanout: handle 1, 800x480
+pitch 1600 (768000 bytes)`) lvdesk's 768,000-byte `/dev/dri/card0` mapping
+is the driver's own scanout buffer, `scan_gem` at 0x50800000, handed out by
+SCANOUT_GET and reserved at probe (`scanout buffer reserved: 768000
+bytes`). In a scaled mode the PPA writes the client's mode buffer INTO that
+same buffer (esp32s31-lcd.c, `esp32s31_ppa_scale_rect(..., lcd->scan_phys,
+...)` in both the enable and the damage paths) and the panel scans it out -
+the P1 fullscreen snapshot itself shows `scanout started ... fb=0x50800000`
+at fullscreen entry (159 s) - and the driver holds its own reference for
+the life of the device. Closing lvdesk's handle and unmapping returns 0
+bytes; freeing the buffer would blank the game. LVGL renders
+LV_DISPLAY_RENDER_MODE_DIRECT into that buffer, so there are no LVGL draw
+buffers to drop either (the 102 kB `partial_buf` is bss that direct mode
+never touches).
+
+What is left for lvdesk to give back, from the same P1 fullscreen snapshot:
+RssAnon 116 kB + VmSwap 152 kB = **268 kB at most**, most of it the LVGL
+object tree the desktop needs on leave; RssShmem 320 kB is the client's two
+XShm segments (2 x 152 kB) and the xlite ring, which the client owns; xshim
+holds 0 kB. 268 kB < 400 kB (the build's kill rule) and < 300 kB (the
+first-measurement line), so no LVDESK_FSRELEASE build, no gate run. The
+rejection is recorded next to xwin_on_mode() in lvdesk/lvdesk.c.
+
+**Five fresh-boot timedemos on what ships (kernel #379 = images/ =
+patches/0065 + 0064, lvdesk from the XIP image, fullscreen alias ON,
+scheduler none; `QUAKE_BIN=./tyr-quake-x11 quake-timedemo.sh p3final-N -mem
+20`):**
+
+| run | fps | seconds | game majflt | allocstall | VmSwap |
+|---|---|---|---|---|---|
+| 1 | 10.6 | 91.0 | 5,745 | 26 | 18,236 kB |
+| 2 | 11.1 | 87.7 | 4,819 | 16 | 18,580 kB |
+| 3 | 10.4 | 92.9 | 5,533 | 25 | 18,348 kB |
+| 4 | 10.2 | 94.8 | 5,906 | 28 | 18,424 kB |
+| 5 | 8.8 | 109.8 | 6,355 | 46 | 18,792 kB |
+
+Mean **10.22 fps, worst 8.8, majflt mean 5,672** (4,819-6,355), against
+2b's 8.72 / 7.9 / 6,446 (#377, before the fullscreen alias shipped) and
+P1's stock kswapd arm 9.22 / 8.5 / 7,892 (#377, alias on). No change was
+made between P1 and this series (#379 rebuilds #377's sources), so the
+spread across the three five-boot series - 8.72 to 10.22 on one software
+state - is the day's boot/card band, and none of it is claimed as a win.
+Artifacts: artifacts/quake/td-p3final-*.
+

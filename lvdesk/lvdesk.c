@@ -4278,6 +4278,26 @@ static void xwin_on_fsnative(int on)
 	fflush(stdout);
 }
 
+/*
+ * REJECTED 2026-09-25 (paging plan item 3, "release the desktop's memory
+ * during fullscreen", LVDESK_FSRELEASE): there is nothing here to release.
+ * Under direct scanout (the default; the log says "DIRECT scanout: handle 1")
+ * the desktop's 800x480 buffer - the 768,000-byte /dev/dri/card0 mapping that
+ * looks idle while a game is fullscreen - is the DRIVER's scanout buffer,
+ * scan_gem at 0x50800000, handed out by SCANOUT_GET. In a scaled mode the PPA
+ * writes the client's 320x240 mode buffer INTO that same buffer and the panel
+ * scans it out (esp32s31-lcd.c: ppa_scale_rect(..., lcd->scan_phys, ...);
+ * "scanout started ... fb=0x50800000" at fullscreen entry), and the driver
+ * keeps its own reference for life. Closing lvdesk's handle and unmapping it
+ * returns 0 bytes. LVGL renders DIRECT into it, so there are no draw buffers
+ * either (the 102 kB partial_buf is untouched bss). What lvdesk itself holds
+ * in fullscreen is RssAnon 116 kB + VmSwap 152 kB = 268 kB, most of it the
+ * LVGL object tree the desktop needs back; RssShmem 320 kB is the client's
+ * two XShm segments and the xlite ring, which the client owns. Ceiling
+ * <= 268 kB against a 400 kB kill rule (and the plan's 300 kB first-
+ * measurement line): not built. P1 had read the card0 mapping as a separate
+ * dumb buffer; it is not.
+ */
 static void xwin_on_mode(int w, int h)
 {
 	if (!fs_enabled())
