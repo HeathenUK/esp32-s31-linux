@@ -19,6 +19,9 @@
 # something different in each arm is worse than no normalisation at all.
 #
 #   perframe.sh [settle_s] [window_s]      default 40 60
+#   PB_ARGS=-window perframe.sh ...        windowed prboom (default: fullscreen,
+#                                          prboom's own default) - the windowed
+#                                          path is the one lvdesk composites
 #
 # Prints ticks/frame for both processes. Lower is better. Compare arms; the
 # absolute unit (USER_HZ) does not matter for a comparison.
@@ -35,7 +38,7 @@ for p in \$(ps | awk '/prboom/ && !/awk/ {print \$1}'); do kill -9 \$p 2>/dev/nu
 sleep 1
 : > /var/log/lvdesk.log 2>/dev/null
 cd /root/doom/wads
-setsid /root/doom/prboom -width 320 -height 200 -nosound -timedemo demo1 \\
+setsid /root/doom/prboom -width 320 -height 200 ${PB_ARGS:-} -nosound -timedemo demo1 \\
 	>/dev/null 2>&1 </dev/null &
 sleep $SETTLE
 # Sample 1. Frames = counter lines x 200; both arms print one per 200.

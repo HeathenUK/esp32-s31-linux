@@ -364,6 +364,44 @@ int main(int argc, char **argv)
 			emit(kbd_fd, EV_KEY, KEY_LEFTALT, 0); syn(kbd_fd);
 			msleep(400);
 		}
+	} else if (!strcmp(what, "chord")) {
+		/*
+		 * chord MOD HOLDMS K1 [K2 ...] - hold MOD, tap each key (80 ms
+		 * down, 250 ms apart), wait HOLDMS, release MOD. The generic
+		 * form of altkey, for Super chords (MOD 125): the desktop's
+		 * Super handling needs press and release in ONE uinput device
+		 * lifetime. A negative Kn HOLDS key -Kn and releases it after
+		 * MOD, to test the "modifier let go first" order.
+		 */
+		int mod = argc > 2 ? atoi(argv[2]) : KEY_LEFTMETA;
+		int holdms = argc > 3 ? atoi(argv[3]) : 0;
+		int i, late = 0;
+
+		emit(kbd_fd, EV_KEY, mod, 1); syn(kbd_fd);
+		msleep(150);
+		for (i = 4; i < argc; i++) {
+			int k = atoi(argv[i]);
+
+			if (k < 0) {
+				late = -k;
+				emit(kbd_fd, EV_KEY, late, 1); syn(kbd_fd);
+				msleep(250);
+				continue;
+			}
+			emit(kbd_fd, EV_KEY, k, 1); syn(kbd_fd);
+			msleep(80);
+			emit(kbd_fd, EV_KEY, k, 0); syn(kbd_fd);
+			msleep(250);
+		}
+		if (holdms > 0)
+			msleep(holdms);
+		emit(kbd_fd, EV_KEY, mod, 0); syn(kbd_fd);
+		msleep(150);
+		if (late) {
+			emit(kbd_fd, EV_KEY, late, 0); syn(kbd_fd);
+			msleep(150);
+		}
+		msleep(250);
 	} else if (!strcmp(what, "move")) {
 		/*
 		 * Relative motion and nothing else - no click, no homing - for

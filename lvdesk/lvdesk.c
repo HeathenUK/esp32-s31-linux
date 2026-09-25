@@ -278,6 +278,7 @@ static void win_deliver_key(int code);
 static int wm_shortcut(int code);
 static void switcher_end(void);
 static void switcher_timeout(void);
+static void popover_close(void);	/* fullscreen entry closes any popover */
 
 /*
  * The passphrase prompt, declared here because the keyboard handler has to
@@ -330,6 +331,49 @@ static int input_rescan_due(uint32_t scan_at)
 	return lv_tick_get() - scan_at > 2000;
 }
 static int shift, mod_ctrl, mod_alt, mod_caps;
+/*
+ * The drop-down console (Super+grave, see console_set()).
+ *
+ * mod_super is tracked like the other modifiers, but only the console reads
+ * it: Super is the desktop's key (it drops a grab, below), so nothing an X
+ * client does depends on lvdesk knowing it is down.
+ *
+ * con_eat_grave is set from the grave PRESS that fired the hotkey until that
+ * key's RELEASE, so neither its autorepeats nor its release reach a window -
+ * even when Super is let go first, which is the order most hands use. Without
+ * it the tail of the chord typed '`' into whatever the console just left.
+ *
+ * con_key is the physical key: KEY_GRAVE on ANSI and UK ISO boards alike (the
+ * ISO key beside left Shift is KEY_102ND, the '\|' key, not this one). Only
+ * Apple ISO keyboards under hid_apple swap the two, hence
+ * LVDESK_CONSOLE_KEY=<evdev code>; LVDESK_CONSOLE_KEY=0 disables the hotkey
+ * and leaves Super+grave to the focused client, as before.
+ */
+static int mod_super, con_eat_grave;
+/*
+ * Keys the DESKTOP consumed (QoL B0, 2026-09-25). A press that the desktop
+ * acts on - Alt+Tab, Alt+F4, a Super chord - never reached a client, so
+ * neither may its autorepeats or its release: an unpaired release confuses
+ * X clients, and a repeat reaching the shortcut again is how a held Alt+F4
+ * closed one window per repeat. A value-1 press clears its bit first, so a
+ * stale bit can never leave a key stuck in a client. 96 bytes; a few
+ * compares per key event, nothing at idle.
+ */
+static uint8_t key_eaten[(KEY_CNT + 7) / 8];
+#define KEY_EATEN(c)	(key_eaten[(c) >> 3] & (1u << ((c) & 7)))
+#define KEY_EAT(c)	(key_eaten[(c) >> 3] |= (uint8_t)(1u << ((c) & 7)))
+#define KEY_UNEAT(c)	(key_eaten[(c) >> 3] &= (uint8_t)~(1u << ((c) & 7)))
+static int con_key = KEY_GRAVE;
+static int con_mode;		/* the terminal is docked as the console */
+enum { CON_TOGGLE, CON_SHOW, CON_HIDE, CON_UNDOCK };
+static void console_set(int op);	/* defined with the terminal window */
+struct winrec;
+/*
+ * Undock first if w is the docked console. Everything that moves or resizes a
+ * window calls this, so the console can never be left headerless at some
+ * other size: that would be a window nobody can drag, resize or close.
+ */
+static void console_leave(struct winrec *w);
 static int fs_active, fs_w, fs_h;	/* fullscreen (direct scanout) state */
 static uint32_t fs_win;			/* the fullscreen client's top-level */
 static uint32_t fs_focused;		/* fs_win we have already handed focus to */
@@ -840,15 +884,44 @@ static void term_write(const char *buf, int n)
  *   - window-management shortcuts, which belong to the desktop and not to any
  *     window, and must be taken before Alt becomes an ESC prefix.
  */
-static void kbd_key(int code)
+static int fs_close_client(void);	/* with wm_shortcut() */
+
+static int kbd_key(int code)
 {
-	/* A keyboard grab takes every key, focus or no focus. */
-	if (!pw_ta && xshim_grab_top()) {
+	/*
+	 * Alt+F4 closes the fullscreen game too (2026-09-25, asked for: "Alt+F4
+	 * for any and all windows ... Doom running fullscreen"). Only F4: Alt
+	 * and Tab stay the game's, since there is no desktop to switch to and
+	 * Doom binds both. The close is the ordinary one - WM_DELETE_WINDOW
+	 * first, dropped 3 s later if the client ignores it (prboom answers
+	 * with its own quit prompt), and a second Alt+F4 drops it at once. The
+	 * Alt press has already reached the game; the F4 never does.
+	 */
+	if (!pw_ta && fs_active && mod_alt && code == KEY_F4 &&
+	    fs_close_client())
+		return 1;
+	/*
+	 * Desktop shortcuts come BEFORE a keyboard grab in windowed mode: a
+	 * windowed SDL game that grabs the keyboard used to swallow Alt+Tab
+	 * and Alt+F4, leaving no keyboard way out. Not in fullscreen, where
+	 * there is no desktop to switch to and games bind Alt and Tab (Doom's
+	 * strafe and automap) - they get them exactly as before.
+	 */
+	if (!pw_ta && !fs_active && xshim_grab_top() && wm_shortcut(code))
+		return 1;
+	/*
+	 * A keyboard grab takes every key, focus or no focus - except while
+	 * the drop-down console is up and focused. The Super press that
+	 * summoned it already dropped every grab (xshim_ungrab_all), but a
+	 * client can grab again while the console has focus, and then what
+	 * was typed into the console would land in the game.
+	 */
+	if (!pw_ta && xshim_grab_top() && !(con_mode && term_focused())) {
 		int sym = xkey_sym(code);
 
 		if (sym)
 			xshim_key(xshim_grab_top(), sym, 1, xkey_mods());
-		return;
+		return 0;
 	}
 	/*
 	 * While the passphrase prompt is up it owns the keyboard - otherwise
@@ -856,9 +929,9 @@ static void kbd_key(int code)
 	 * both wrong and a way to leak a passphrase into a terminal.
 	 */
 	if (pw_ta) {
-		if (code == KEY_ENTER || code == KEY_KPENTER) { pw_ok_cb(NULL); return; }
-		if (code == KEY_ESC) { pw_close(); return; }
-		if (code == KEY_BACKSPACE) { lv_textarea_delete_char(pw_ta); return; }
+		if (code == KEY_ENTER || code == KEY_KPENTER) { pw_ok_cb(NULL); return 0; }
+		if (code == KEY_ESC) { pw_close(); return 0; }
+		if (code == KEY_BACKSPACE) { lv_textarea_delete_char(pw_ta); return 0; }
 		if (code >= 0 && code < KEY_CNT) {
 			char ch = keymap[code][shift ? 1 : 0];
 
@@ -867,14 +940,15 @@ static void kbd_key(int code)
 				lv_textarea_add_char(pw_ta, ch);
 			}
 		}
-		return;
+		return 0;
 	}
 
 	/* Desktop shortcuts, before Alt turns into an ESC prefix. */
 	if (wm_shortcut(code))
-		return;
+		return 1;
 
 	win_deliver_key(code);
+	return 0;
 }
 
 /*
@@ -1026,6 +1100,8 @@ static int kbd_poll(void)
 						mod_ctrl = 0; break;
 					case KEY_LEFTALT: case KEY_RIGHTALT:
 						mod_alt = 0; break;
+					case KEY_LEFTMETA: case KEY_RIGHTMETA:
+						mod_super = 0; break;
 					}
 				}
 				if (rep_muted)
@@ -1075,6 +1151,14 @@ static int kbd_poll(void)
 				 * stuck on. Clear them.
 				 */
 				shift = mod_ctrl = mod_alt = 0;
+				/*
+				 * The console's too: a lost Super release
+				 * would make every later grave a hotkey, and a
+				 * lost grave release would leave the next
+				 * client grave release eaten.
+				 */
+				mod_super = con_eat_grave = 0;
+				memset(key_eaten, 0, sizeof(key_eaten));
 				continue;
 			}
 			/*
@@ -1124,6 +1208,14 @@ static int kbd_poll(void)
 				if (!mod_alt)
 					switcher_end();
 				break;
+			case KEY_LEFTMETA: case KEY_RIGHTMETA:
+				/*
+				 * No `continue`: the Meta branch below still
+				 * has to drop a grab on the press, and the
+				 * release still has to reach X.
+				 */
+				mod_super = !!ev.value;
+				break;
 			case KEY_CAPSLOCK:
 				/*
 				 * Only toggle it ourselves if nothing else is.
@@ -1156,7 +1248,34 @@ static int kbd_poll(void)
 				}
 				continue;
 			}
+			/*
+			 * Super is the desktop's key: neither edge reaches X.
+			 * The press was never forwarded, so forwarding the
+			 * release alone handed clients an unpaired Super_L.
+			 */
+			if (!ev.value && (ev.code == KEY_LEFTMETA ||
+					  ev.code == KEY_RIGHTMETA))
+				continue;
+			/* A key the desktop consumed: eat its repeats and release. */
+			if (ev.code < KEY_CNT) {
+				if (ev.value == 1)
+					KEY_UNEAT(ev.code);
+				else if (KEY_EATEN(ev.code)) {
+					if (!ev.value)
+						KEY_UNEAT(ev.code);
+					continue;
+				}
+			}
 			if (!ev.value) {	/* release; 2 is autorepeat */
+				/*
+				 * The release of the grave that summoned the
+				 * console. Its press never reached a client,
+				 * so neither may this.
+				 */
+				if (ev.code == con_key && con_eat_grave) {
+					con_eat_grave = 0;
+					continue;
+				}
 				/*
 				 * An X client tracks key state from the event
 				 * stream, so releases must arrive - a client
@@ -1167,6 +1286,9 @@ static int kbd_poll(void)
 				{
 					uint32_t t = xshim_grab_top();
 
+					/* Same exemption as kbd_key(). */
+					if (con_mode && term_focused())
+						t = 0;
 					if (!t)
 						t = win_focus_xid();
 					if (!pw_ta && t) {
@@ -1177,6 +1299,24 @@ static int kbd_poll(void)
 								  xkey_mods());
 					}
 				}
+				continue;
+			}
+			/*
+			 * Super+grave: show or hide the drop-down console.
+			 *
+			 * Here - after the release path, before the Meta branch
+			 * and kbd_key() - because kbd_key() hands every key to a
+			 * keyboard grab first, and a hotkey that a grabbing SDL
+			 * window could swallow is not a hotkey. Presses and
+			 * autorepeats are eaten until the release above clears
+			 * con_eat_grave. Not while the passphrase prompt owns
+			 * the keyboard.
+			 */
+			if (con_key && ev.code == con_key &&
+			    (mod_super || con_eat_grave)) {
+				if (ev.value == 1 && mod_super && !pw_ta)
+					console_set(CON_TOGGLE);
+				con_eat_grave = 1;
 				continue;
 			}
 			/*
@@ -1194,7 +1334,21 @@ static int kbd_poll(void)
 					xshim_ungrab_all();
 				continue;
 			}
-			kbd_key(ev.code);
+			/*
+			 * Super held: the key is a desktop chord, never a client
+			 * key (QoL B0). Super+grave is taken above; the other
+			 * chords (tiling, Super+1..8, the help sheet) are later
+			 * items and attach here. Eaten until release, so no half
+			 * of a chord leaks. Not in fullscreen, where keys pressed
+			 * with Super held still reach the game, as before.
+			 */
+			if (mod_super && !pw_ta && !fs_active) {
+				if (ev.code < KEY_CNT)
+					KEY_EAT(ev.code);
+				continue;
+			}
+			if (kbd_key(ev.code) && ev.code < KEY_CNT)
+				KEY_EAT(ev.code);
 		} while (read(kbd_fds[i], &ev, sizeof(ev)) == sizeof(ev));
 	}
 	return busy;
@@ -2814,6 +2968,24 @@ static void win_set_focus(struct winrec *w)
 	if (fs_active && w && fs_win && w->xid != fs_win &&
 	    w->xid != xshim_grab_top())
 		return;
+	/*
+	 * The drop-down console goes away when anything else takes focus -
+	 * clicking the window below it, Alt-Tab, a task bar button - which is
+	 * what makes it a console and not just a window at the top.
+	 *
+	 * The flag is set directly rather than through win_minimise(), which
+	 * would call win_focus_next() while win_focus is still the terminal and
+	 * so re-enter here. Focus going to NULL leaves it up, unfocused; the
+	 * next Super+grave focuses it.
+	 */
+	if (con_mode && w && term.win && w->win != term.win &&
+	    !lv_obj_has_flag(term.win, LV_OBJ_FLAG_HIDDEN)) {
+		struct winrec *t = win_find(term.win);
+
+		lv_obj_add_flag(term.win, LV_OBJ_FLAG_HIDDEN);
+		if (t)
+			t->minimised = 1;
+	}
 	if (win_focus)
 		lv_obj_set_style_bg_color(win_focus->hdr,
 					  lv_color_hex(COL_HDR), 0);
@@ -3017,12 +3189,23 @@ static void ctl_line(char *buf)
 					continue;
 				nm = wins[i].tlabel ?
 				     lv_label_get_text(wins[i].tlabel) : "?";
-				printf("lvdesk: win %d %dx%d+%d+%d%s %s\n", i,
+				/*
+				 * State flags after MAX and before the name
+				 * (QoL T3), so `awk $3` and name greps in the
+				 * existing harnesses still work. CON = docked
+				 * as the drop-down console; HID = hidden.
+				 */
+				printf("lvdesk: win %d %dx%d+%d+%d%s%s%s%s%s%s %s\n", i,
 				       (int)lv_obj_get_width(wins[i].win),
 				       (int)lv_obj_get_height(wins[i].win),
 				       (int)lv_obj_get_x(wins[i].win),
 				       (int)lv_obj_get_y(wins[i].win),
 				       wins[i].maximised ? " MAX" : "",
+				       win_focus == &wins[i] ? " FOCUS" : "",
+				       wins[i].minimised ? " MIN" : "",
+				       wins[i].snapped ? " SNAP" : "",
+				       (con_mode && wins[i].win == term.win) ? " CON" : "",
+				       lv_obj_has_flag(wins[i].win, LV_OBJ_FLAG_HIDDEN) ? " HID" : "",
 				       nm ? nm : "?");
 			}
 			fflush(stdout);
@@ -3047,6 +3230,7 @@ static void ctl_line(char *buf)
 			 * no way of being exercised. This makes it scriptable.
 			 */
 			if (idx >= 0 && idx < win_n && wins[idx].win) {
+				console_leave(&wins[idx]);
 				lv_obj_set_pos(wins[idx].win, mx, my);
 				lv_obj_update_layout(wins[idx].win);
 			}
@@ -3087,12 +3271,16 @@ static void ctl_line(char *buf)
 			lv_mem_monitor_t m;
 
 			lv_mem_monitor(&m);
-			printf("lvdesk: lvmem total %u max_used %u used_pct %u%% frag %u%%\n",
+			/* used_bytes: exact, for "returns to baseline" checks (QoL T2) */
+			printf("lvdesk: lvmem total %u max_used %u used_pct %u%% frag %u%% used_bytes %u\n",
 			       (unsigned)m.total_size, (unsigned)m.max_used,
-			       m.used_pct, m.frag_pct);
+			       m.used_pct, m.frag_pct,
+			       (unsigned)(m.total_size - m.free_size));
 			fflush(stdout);
 		} else if (sscanf(buf, "size %d %d %d", &idx, &w, &h) == 3) {
-			if (idx >= 0 && idx < win_n && w > 0 && h > 0) {
+			if (idx >= 0 && idx < win_n && w > 0 && h > 0 &&
+			    wins[idx].win) {
+				console_leave(&wins[idx]);
 				lv_obj_set_size(wins[idx].win, w, h);
 				xwin_push_size(wins[idx].win);
 			}
@@ -3145,6 +3333,20 @@ static void ctl_line(char *buf)
 		} else if (!strncmp(buf, "run ", 4)) {
 			/* Type a command into the built-in terminal. */
 			term_raise_and_run(buf + 4);
+		} else if (!strncmp(buf, "console", 7) &&
+			   (!buf[7] || buf[7] == ' ')) {
+			/*
+			 * console [toggle|show|hide|undock] - the drop-down
+			 * console without a Super chord, which the injector
+			 * cannot yet produce. Bare `console` toggles, as the
+			 * hotkey does.
+			 */
+			const char *a = buf[7] ? buf + 8 : "";
+
+			console_set(!strcmp(a, "show") ? CON_SHOW :
+				    !strcmp(a, "hide") ? CON_HIDE :
+				    !strcmp(a, "undock") ? CON_UNDOCK :
+				    CON_TOGGLE);
 		}
 	}
 }
@@ -3487,10 +3689,45 @@ static int wm_shortcut(int code)
 		return 1;
 	}
 	if (code == KEY_F4) {
-		win_close(win_focus);
+		/*
+		 * No repeat can get here any more: the F4 press is marked
+		 * eaten, so its autorepeats stop in kbd_poll(). A held Alt+F4
+		 * used to close one window per repeat.
+		 */
+		/*
+		 * Alt-F4 on the console hides it, like Super+grave. Closing
+		 * it would throw away the shell, its history and scrollback,
+		 * which is the whole point of a console you can call down.
+		 * The task bar button and ctl `close` still really close it.
+		 */
+		if (con_mode && term_focused())
+			console_set(CON_HIDE);
+		else
+			win_close(win_focus);
 		return 1;
 	}
 	return 0;
+}
+
+/* Alt+F4 in fullscreen: close the fullscreen client's window (see kbd_key). */
+static int fs_close_client(void)
+{
+	struct winrec *w = NULL;
+	int k;
+
+	for (k = 0; k < win_n && fs_win; k++)
+		if (wins[k].win && wins[k].xid == fs_win) {
+			w = &wins[k];
+			break;
+		}
+	if (!w)
+		w = win_focus;
+	if (!w)
+		return 0;
+	printf("lvdesk: Alt+F4 in fullscreen -> close 0x%x\n", w->xid);
+	fflush(stdout);
+	win_close(w);
+	return 1;
 }
 
 static void win_toggle_max(struct winrec *w)
@@ -3502,6 +3739,7 @@ static void win_toggle_max(struct winrec *w)
 		return;
 	if (w->fixed_size)		/* the client said it cannot resize */
 		return;
+	console_leave(w);
 	if (w->maximised) {
 		lv_obj_set_pos(w->win, w->rx, w->ry);
 		lv_obj_set_size(w->win, w->rw, w->rh);
@@ -3543,6 +3781,7 @@ static void win_snap(struct winrec *w, int mode)
 
 	if (!w || !w->win)
 		return;
+	console_leave(w);
 	/* Only remember home the first time, or snapping twice loses it. */
 	if (!w->maximised && !w->snapped) {
 		w->rx = lv_obj_get_x(w->win);
@@ -3621,6 +3860,7 @@ static void grip_cb(lv_event_t *e)
 
 	if (!w || !w->win || !indev)
 		return;
+	console_leave(w);	/* the grip is hidden while docked; belt and braces */
 	lv_indev_get_vect(indev, &v);
 	nw = lv_obj_get_width(w->win) + v.x;
 	nh = lv_obj_get_height(w->win) + v.y;
@@ -3967,6 +4207,24 @@ static int xwin_under_pointer(lv_area_t *a)
 		if (ptr_x < a->x1 || ptr_x > a->x2 ||
 		    ptr_y < a->y1 || ptr_y > a->y2)
 			continue;
+		/*
+		 * Not a client the terminal is covering at this point. Both
+		 * are children of the screen, so the child index is the
+		 * stacking order - the test xwin_above_term() makes. Without
+		 * it a right or middle click on terminal text went to the X
+		 * window underneath, which took focus (and so hid the
+		 * drop-down console on a click on itself), and hover motion
+		 * leaked to that window too.
+		 */
+		if (term.win && !lv_obj_has_flag(term.win, LV_OBJ_FLAG_HIDDEN) &&
+		    lv_obj_get_index(term.win) > lv_obj_get_index(xwins[i].win)) {
+			lv_area_t t;
+
+			lv_obj_get_coords(term.win, &t);
+			if (ptr_x >= t.x1 && ptr_x <= t.x2 &&
+			    ptr_y >= t.y1 && ptr_y <= t.y2)
+				continue;
+		}
 		return i;
 	}
 	return -1;
@@ -4436,6 +4694,11 @@ static void xwin_on_fsnative(int on)
 		}
 		return;
 	}
+	/*
+	 * A popover left open under a fullscreen game is invisible, cannot be
+	 * clicked away, and its keyboard rules could eat the game's keys.
+	 */
+	popover_close();
 	fs_render_set(0);
 	fs_unalias(1);			/* kms_fs_enter may recreate the map */
 	if (kms_fs_enter((int)kms_w, (int)kms_h, 16) < 0) {
@@ -4491,6 +4754,11 @@ static void xwin_on_mode(int w, int h)
 		}
 		return;
 	}
+	/*
+	 * A popover left open under a fullscreen game is invisible, cannot be
+	 * clicked away, and its keyboard rules could eat the game's keys.
+	 */
+	popover_close();
 	fs_render_set(0);
 	fs_unalias(1);			/* kms_fs_enter may recreate the map */
 	if (kms_fs_enter(w, h, 16) < 0) {
@@ -5889,6 +6157,7 @@ static void xwin_cover_cb(lv_event_t *e)
  * measurement toggle and not yet the default.
  */
 static lv_obj_t *pop_obj;		/* defined with the popovers below */
+static lv_obj_t *pop_scrim;		/* its click-catcher, ditto */
 
 /*
  * True when an LVGL overlay that the direct blit would stamp over covers
@@ -6404,7 +6673,14 @@ static int area_hits_children(lv_obj_t *parent, uint32_t from, const lv_area_t *
 		lv_obj_t *o = lv_obj_get_child(parent, (int32_t)k);
 		lv_area_t b;
 
-		if (!o || lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN))
+		/*
+		 * The popover scrim covers the whole screen and draws
+		 * nothing, so it hides no client pixels. Counting it took
+		 * EVERY X window off fast present for as long as a menu or
+		 * tray panel was open (QoL C0).
+		 */
+		if (!o || o == pop_scrim ||
+		    lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN))
 			continue;
 		lv_obj_get_coords(o, &b);
 		if (b.x1 <= a->x2 && b.x2 >= a->x1 &&
@@ -6716,7 +6992,7 @@ static void HOTTEXT xwin_on_draw(uint32_t id)
  * so opening and closing damages that rectangle and nothing else, where a full
  * window cost a title bar, a task bar button and a much larger repaint.
  */
-static lv_obj_t *pop_scrim;	/* pop_obj is declared above xwin_direct_ok */
+/* pop_obj and pop_scrim are declared above xwin_direct_ok */
 static const void *pop_owner;		/* which icon opened it */
 static lv_obj_t *vol_slider, *vol_label;
 static lv_obj_t *wifi_list, *wifi_status;
@@ -6764,23 +7040,89 @@ static void ctx_reply_send(const char *sel)
 	ctx_reply_to(path, sel);
 }
 
+/*
+ * The scrim is invisible, so creating and deleting it must damage nothing.
+ * LVGL invalidates an object on create, on size and on delete without
+ * looking at its opacity: measured 2026-09-25 with LVDESK_RECTLOG, every
+ * popover open and every close flushed the full 800x480 (384k px) for a
+ * panel of ~30-60k px. Invalidation is switched off around the scrim ONLY,
+ * after the top layer's pending layout has been applied (so nothing else's
+ * damage is swallowed), and its own layout is forced inside the window
+ * because geometry is deferred (s31-lvgl-deferred-geometry): left to the
+ * next refresh, the size change would invalidate the screen after all.
+ */
+static void pop_scrim_cb(lv_event_t *e);
+
+static void scrim_create(void)
+{
+	int32_t sw = lv_display_get_horizontal_resolution(NULL);
+	int32_t sh = lv_display_get_vertical_resolution(NULL);
+	lv_display_t *d = lv_display_get_default();
+
+	lv_obj_update_layout(lv_layer_top());
+	lv_display_enable_invalidation(d, false);
+	pop_scrim = lv_obj_create(lv_layer_top());
+	lv_obj_remove_style_all(pop_scrim);
+	lv_obj_set_size(pop_scrim, sw, sh);
+	lv_obj_set_pos(pop_scrim, 0, 0);
+	lv_obj_set_style_bg_opa(pop_scrim, LV_OPA_TRANSP, 0);
+	lv_obj_add_flag(pop_scrim, LV_OBJ_FLAG_CLICKABLE);
+	lv_obj_add_event_cb(pop_scrim, pop_scrim_cb, LV_EVENT_CLICKED, NULL);
+	lv_obj_update_layout(pop_scrim);
+	lv_display_enable_invalidation(d, true);
+}
+
+static void scrim_delete(void)
+{
+	lv_display_t *d = lv_display_get_default();
+
+	if (!pop_scrim)
+		return;
+	lv_display_enable_invalidation(d, false);
+	lv_obj_delete(pop_scrim);
+	pop_scrim = NULL;
+	lv_display_enable_invalidation(d, true);
+}
+
 static void popover_close(void)
 {
 	scan_watch_stop();
 	wifi_scan_restore();	/* never leave scan_ssid cleared behind us */
 	ctx_reply_send("");	/* a dismissed menu still answers its client */
 	if (pop_obj) { lv_obj_delete(pop_obj); pop_obj = NULL; }
-	if (pop_scrim) { lv_obj_delete(pop_scrim); pop_scrim = NULL; }
+	scrim_delete();
 	pop_owner = NULL;
 	vol_slider = vol_label = NULL;
 	wifi_list = wifi_status = NULL;
 	bt_forget_widgets();
 }
 
+/*
+ * A tap outside the panel closes it - and if that tap landed on a tray icon
+ * or a task button, it acts too, so tray-to-tray and panel-to-window are one
+ * tap, not two (QoL C0). The scrim sits above the task bar, so without this
+ * the first tap only dismissed. The icon that opened the panel is left
+ * alone: tapping it closes, exactly as before.
+ */
 static void pop_scrim_cb(lv_event_t *e)
 {
+	const void *old = pop_owner;
+	lv_indev_t *in = lv_indev_active();
+	lv_obj_t *hit = NULL;
+	lv_point_t p;
+
 	(void)e;
+	if (in)
+		lv_indev_get_point(in, &p);
 	popover_close();
+	if (!in || !taskbar)
+		return;
+	hit = lv_indev_search_obj(taskbar, &p);
+	while (hit && hit != taskbar &&
+	       !lv_obj_has_flag(hit, LV_OBJ_FLAG_CLICKABLE))
+		hit = lv_obj_get_parent(hit);
+	if (hit && hit != taskbar && (const void *)hit != old)
+		lv_obj_send_event(hit, LV_EVENT_CLICKED, NULL);
 }
 
 /*
@@ -6807,13 +7149,7 @@ static lv_obj_t *popover_open(lv_obj_t *anchor, int w, int h)
 	 * background with zero opacity, so this costs nothing to render and
 	 * exists only to catch the click that dismisses the panel.
 	 */
-	pop_scrim = lv_obj_create(lv_layer_top());
-	lv_obj_remove_style_all(pop_scrim);
-	lv_obj_set_size(pop_scrim, sw, sh);
-	lv_obj_set_pos(pop_scrim, 0, 0);
-	lv_obj_set_style_bg_opa(pop_scrim, LV_OPA_TRANSP, 0);
-	lv_obj_add_flag(pop_scrim, LV_OBJ_FLAG_CLICKABLE);
-	lv_obj_add_event_cb(pop_scrim, pop_scrim_cb, LV_EVENT_CLICKED, NULL);
+	scrim_create();
 
 	pop_obj = lv_obj_create(lv_layer_top());
 	lv_obj_set_size(pop_obj, w, h);
@@ -6942,13 +7278,7 @@ static void menu_popover_build(char **labels, int n, size_t maxlen,
 	if (w > 300) w = 300;
 	h = n * 30 + 10;	/* 30 px rows + panel padding and border */
 
-	pop_scrim = lv_obj_create(lv_layer_top());
-	lv_obj_remove_style_all(pop_scrim);
-	lv_obj_set_size(pop_scrim, sw, sh);
-	lv_obj_set_pos(pop_scrim, 0, 0);
-	lv_obj_set_style_bg_opa(pop_scrim, LV_OPA_TRANSP, 0);
-	lv_obj_add_flag(pop_scrim, LV_OBJ_FLAG_CLICKABLE);
-	lv_obj_add_event_cb(pop_scrim, pop_scrim_cb, LV_EVENT_CLICKED, NULL);
+	scrim_create();
 
 	pop_obj = lv_obj_create(lv_layer_top());
 	lv_obj_set_size(pop_obj, w, h);
@@ -7240,8 +7570,17 @@ static void appmenu_spawn(const char *cmd)
 static void appmenu_launch(const char *cmd)
 {
 	if (cmd[0] == '!') {
-		if (!strcmp(cmd, "!terminal"))
+		if (!strcmp(cmd, "!terminal")) {
+			/*
+			 * "Terminal" asks for the window, so a docked console
+			 * comes back as one - where it was before it docked.
+			 */
+			if (con_mode && term.win)
+				console_leave(win_find(term.win));
 			term_raise_and_run("");
+		} else if (!strcmp(cmd, "!console")) {
+			console_set(CON_TOGGLE);
+		}
 		return;
 	}
 	if (cmd[0] == '@') {
@@ -7403,6 +7742,7 @@ static void term_on_close(void)
 	term.sb_head = term.sb_count = term.view = 0;
 	term.esc = term.npar = term.bold = 0;
 	term.need_fit = term.dirty = 0;
+	con_mode = 0;		/* a closed console is no longer docked */
 }
 
 static void term_build_window(void)
@@ -7484,6 +7824,153 @@ static void term_raise_and_run(const char *cmd)
 		lv_obj_move_foreground(w->win);
 		win_set_focus(w);
 	}
+}
+
+/* ------------------------------------------------------ drop-down console */
+
+/*
+ * Super+grave calls the terminal down from the top of the screen as a
+ * full-width band, Quake-console style, and the same chord sends it away.
+ *
+ * It is NOT a second terminal. It is the one terminal window with its title
+ * bar and grip hidden, moved to 0,0 and stretched to the panel width, so it
+ * keeps its shell, history and scrollback across toggles and costs no LVGL
+ * objects, no pty and no shell beyond what the terminal already costs. Hiding
+ * it is the ordinary HIDDEN flag, which the fast present path already skips,
+ * so a hidden console costs nothing per frame and nothing at idle - no timer,
+ * no animation (a slide would repaint the band every frame for ~200 ms, for
+ * decoration).
+ *
+ * Its own save slot, never w->rx..rh: those hold the maximise and snap
+ * restore geometry, and docking a maximised terminal would otherwise lose the
+ * size it un-maximises to.
+ */
+static int32_t con_sx, con_sy, con_sw, con_sh;
+static int con_smax, con_ssnap;
+
+/*
+ * Height: about 45% of the work area, then rounded DOWN to whole rows so no
+ * dead strip sits under the last one. 9 is the chrome: a 1 px bottom rule and
+ * the content's 4 px padding top and bottom. On 800x480 that is 24 rows of 99
+ * columns in 201 px.
+ */
+static int32_t con_height(void)
+{
+	int32_t sh = lv_display_get_vertical_resolution(NULL);
+	int32_t rows = ((sh - TASKBAR_H) * 45 / 100 - 9) / TERM_CH;
+
+	if (rows < 4)
+		rows = 4;
+	if (rows > TERM_MAXROWS)
+		rows = TERM_MAXROWS;
+	return rows * TERM_CH + 9;
+}
+
+static void console_dock(struct winrec *w)
+{
+	int32_t sw = lv_display_get_horizontal_resolution(NULL);
+
+	con_sx = lv_obj_get_x(w->win);
+	con_sy = lv_obj_get_y(w->win);
+	con_sw = lv_obj_get_width(w->win);
+	con_sh = lv_obj_get_height(w->win);
+	con_smax = w->maximised;
+	con_ssnap = w->snapped;
+
+	lv_obj_add_flag(w->hdr, LV_OBJ_FLAG_HIDDEN);	/* flex gives its 20 px to the content */
+	if (w->grip)
+		lv_obj_add_flag(w->grip, LV_OBJ_FLAG_HIDDEN);
+	/* One accent rule along the bottom edge: where the console ends. */
+	lv_obj_set_style_border_side(w->win, LV_BORDER_SIDE_BOTTOM, 0);
+	lv_obj_set_style_border_color(w->win, lv_color_hex(COL_HDR_FOCUS), 0);
+	lv_obj_set_pos(w->win, 0, 0);
+	lv_obj_set_size(w->win, sw, con_height());
+	w->maximised = w->snapped = 0;
+	con_mode = 1;
+	/*
+	 * Hiding the header changes the content height without changing the
+	 * window's, so SIZE_CHANGED may not fire; ask for the re-fit here.
+	 * term_fit() runs lv_obj_update_layout() before it measures.
+	 */
+	term.need_fit = 1;
+}
+
+static void console_undock(struct winrec *w)
+{
+	lv_obj_remove_flag(w->hdr, LV_OBJ_FLAG_HIDDEN);
+	if (w->grip)
+		lv_obj_remove_flag(w->grip, LV_OBJ_FLAG_HIDDEN);
+	lv_obj_set_style_border_side(w->win, LV_BORDER_SIDE_FULL, 0);
+	lv_obj_set_style_border_color(w->win, lv_color_hex(COL_HDR), 0);
+	lv_obj_set_pos(w->win, con_sx, con_sy);
+	lv_obj_set_size(w->win, con_sw, con_sh);
+	w->maximised = con_smax;
+	w->snapped = con_ssnap;
+	if (w->maxicon)
+		lv_image_set_src(w->maxicon, w->maximised ?
+				 &lvdesk_restore_img : &lvdesk_max_img);
+	con_mode = 0;
+	term.need_fit = 1;
+}
+
+static void console_leave(struct winrec *w)
+{
+	if (con_mode && w && w->win && term.win && w->win == term.win)
+		console_undock(w);
+}
+
+static void console_set(int op)
+{
+	struct winrec *w;
+	int shown;
+
+	if (op == CON_TOGGLE || op == CON_SHOW) {
+		/*
+		 * A fullscreen client owns the screen and the keyboard, and
+		 * win_set_focus() would refuse the console focus anyway - it
+		 * would be drawn nowhere and typed into by nobody.
+		 */
+		if (fs_active) {
+			printf("lvdesk: console ignored in fullscreen\n");
+			fflush(stdout);
+			return;
+		}
+	}
+	if (op == CON_HIDE || op == CON_UNDOCK) {
+		if (!term.win)
+			return;		/* nothing to hide; never spawn for it */
+	} else {
+		term_ensure();
+		if (!term.win)
+			return;
+	}
+	w = win_find(term.win);
+	if (!w)
+		return;
+	shown = !lv_obj_has_flag(term.win, LV_OBJ_FLAG_HIDDEN);
+
+	if (op == CON_UNDOCK) {
+		console_leave(w);	/* then shown, raised and focused */
+	} else if (op == CON_HIDE ||
+		   (op == CON_TOGGLE && con_mode && shown && win_focus == w)) {
+		/*
+		 * win_minimise() hands focus back to the most recent window
+		 * still up - the one the console was called down over.
+		 */
+		if (con_mode && shown)
+			win_minimise(w);
+		printf("lvdesk: console hidden\n");
+		fflush(stdout);
+		return;
+	} else if (!con_mode) {
+		console_dock(w);
+	}
+	lv_obj_remove_flag(w->win, LV_OBJ_FLAG_HIDDEN);
+	w->minimised = 0;
+	lv_obj_move_foreground(w->win);
+	win_set_focus(w);
+	printf("lvdesk: console %s\n", con_mode ? "shown" : "undocked");
+	fflush(stdout);
 }
 
 /* ------------------------------------------------------------------ wifi */
@@ -10956,6 +11443,9 @@ int main(void)
 	 */
 	if (getenv("LVDESK_TERM_AT_START"))
 		term_ensure();
+	/* The drop-down console's key; 0 turns Super+grave off. */
+	if (getenv("LVDESK_CONSOLE_KEY"))
+		con_key = atoi(getenv("LVDESK_CONSOLE_KEY"));
 
 	/*
 	 * The terminal is what the desktop is for, so it starts focused and on

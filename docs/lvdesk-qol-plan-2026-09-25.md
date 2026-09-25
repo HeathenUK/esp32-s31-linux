@@ -35,6 +35,66 @@ cdoom (883 puts) and quake (motion 12, keys 4).
 Still open from the programme: everything else, starting with A3 (the
 drop-down console, diff 01, which needs rebasing onto these fixes).
 
+## Status, 2026-09-25 evening: M0 finished, the console (A3) shipped
+
+Shipped in the XIP image (lvdesk md5 d14fafe5) on kernel #391:
+
+- **A3 drop-down console.** Super+backquote docks the Terminal as an
+  800x201 band at the top, focused. The same chord hides it, and a third
+  brings back the same shell. Typing reaches its shell before and after a
+  hide/show. There is a menu entry, System > Console, and a ctl verb,
+  `console toggle|show|hide|undock`. Diff 01 was merged by hand. Its band clip
+  was dropped because `xwin_overlay_hole` (A1) already cuts the docked or
+  windowed terminal out of the direct blit.
+- **B0 Super as a modifier.** A `key_eaten` bitmap (96 B) marks keys the
+  desktop consumed, and their repeats and release are eaten. Neither Super
+  edge reaches X. Any key pressed with Super held is eaten in windowed mode,
+  and still reaches the game in fullscreen. Alt+Tab and Alt+F4 are checked
+  before a keyboard grab in windowed mode.
+- **Alt+F4 everywhere** (asked for after the plan). Fullscreen Alt+F4 closes
+  the fullscreen client: WM_DELETE_WINDOW, then the 3 s drop. Alt and Tab stay
+  the game's.
+- **C0 popover hygiene.**
+  - The scrim is created and deleted with invalidation off.
+  - `area_hits_children` skips the scrim.
+  - Entering fullscreen closes any popover.
+  - A tap outside the panel that lands on a tray icon or task button also
+    acts.
+- **T1-T3.** uinject gains `chord MOD HOLDMS K...`, where a negative K holds
+  the key past the modifier release. `list` gains the FOCUS, MIN, SNAP, CON
+  and HID flags, and `lvmem` gains `used_bytes`.
+
+Tests (`scripts/board/lvdesk-console-test.sh`, `lvdesk-altf4-test.sh`), run on
+the shipped binary first and then on the new one:
+
+| check | shipped | new |
+|---|---|---|
+| px flushed, volume popover open / close | 384,000 / 385,350 | 60,720 / 31,566 |
+| xcalc key events from Super+Left, and from Super released first | 1 / 1 | 0 / 0 |
+| console dock, hide, show-again (list flags) | no console | FOCUS CON / MIN CON HID / FOCUS CON |
+| Alt+F4: fullscreen prboom, windowed prboom, xcalc, all gone within 8 s | fullscreen not closable | all three; fullscreen off afterwards |
+| x11-compat-gate, gate2 (fresh boot) | - | 5/5 PASS, 5/5 PASS |
+
+**Performance.** `PB_ARGS=-window perframe.sh 30 60`, windowed prboom
+timedemo, one fresh boot per arm, and the desktop restarted the same way in
+both arms:
+
+| arm | lvdesk ticks/frame | median | idle lvdesk ticks / 30 s, median |
+|---|---|---|---|
+| shipped, 5 boots | 0.969 0.978 0.994 1.148 1.157 | 0.994 | 30 |
+| new, 4 boots | 0.955 0.962 1.120 1.221 | 1.041 | 22 |
+
+Both arms split into two clusters, about 0.96 and about 1.15, by boot. That
+is the known per-boot bimodality, so the per-frame difference is inside the
+noise. prboom's own ticks per frame are the same in both arms (1.53-1.65).
+Idle lvdesk CPU was lower on every new boot (20-23 against 28-37); the cause
+is not established. The popover change removes 323k px of repaint per open
+and 354k per close.
+
+Next in the programme: M2 (C1 Start button, B2 keyboard menus, B1 Super tap,
+D1 toast, D2 volume keys, B3 tiling), then A4 (hidden console renders
+nothing).
+
 The user asked for three things:
 
 - a drop-down terminal, summoned like a Quake console with Win+grave (Super+`);
