@@ -1,0 +1,31 @@
+lvdesk/lvdesk.bin  :
+section                size      addr
+.interp                  29     65876
+.hash                  1144     65908
+.gnu.hash              1260     67052
+.dynsym                2448     68312
+.dynstr                1577     70760
+.rela.dyn                24     72340
+.rela.plt              1776     72364
+.plt                   2400     74144
+.text                589948     76544
+text_hot               9750    666492
+text_mover             4030    679936
+.rodata              166380    683968
+.eh_frame_hdr         22700    850348
+.eh_frame            136232    873048
+.init_array               4   1015552
+.fini_array               4   1015556
+.data.rel.ro              8   1015560
+.dynamic                224   1015568
+.got                      8   1015792
+.got.plt                600   1015800
+.data                    80   1016400
+.sdata                  460   1016480
+.sbss                  1556   1016944
+.bss                1062852   1018504
+.comment                 35         0
+.riscv.attributes       153         0
+Total               2005682
+
+

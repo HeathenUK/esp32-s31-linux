@@ -1,0 +1,52 @@
+PID 637
+VmPeak:	    5076 kB
+VmSize:	    4560 kB
+VmLck:	       0 kB
+VmPin:	       0 kB
+VmHWM:	    1116 kB
+VmRSS:	     704 kB
+RssAnon:	     148 kB
+RssFile:	     556 kB
+RssShmem:	       0 kB
+VmData:	    1128 kB
+VmStk:	     132 kB
+VmExe:	     924 kB
+VmLib:	    1580 kB
+VmPTE:	      16 kB
+VmSwap:	     216 kB
+Threads:	1
+---SMAPS
+548 0 00010000-000f7000 r-xp 00000000 b3:00 2026       /root/lvdesk.new
+100 144 000f9000-001fd000 rw-p 00000000 00:00 0 
+12 0 9d27b000-9d29c000 rw-p 00000000 00:00 0          [stack]
+8 56 954a3000-954b3000 rw-p 00000000 00:00 0 
+8 0 95703000-95705000 rw-p 000a7000 00:19 3752624    /usr/lib/libc.so
+4 0 95705000-95706000 rw-p 00000000 00:00 0 
+4 0 9565a000-9565b000 r-xp 00000000 00:00 0          [vdso]
+4 0 95655000-95656000 rw-p 000e6000 00:19 438856     /usr/lib/libasound.so.2.0.0
+4 0 954a2000-954a3000 r--s 00000000 b3:00 619        /etc/localtime
+4 0 00c24000-00c25000 rw-p 00000000 00:00 0          [heap]
+4 0 000f8000-000f9000 rw-p 000e7000 b3:00 2026       /root/lvdesk.new
+4 0 000f7000-000f8000 r--p 000e6000 b3:00 2026       /root/lvdesk.new
+0 16 95651000-95655000 r--p 000e2000 00:19 438856     /usr/lib/libasound.so.2.0.0
+0 0 9565b000-95703000 r-xp 00000000 00:19 3752624    /usr/lib/libc.so
+0 0 95656000-9565a000 r--p 00000000 00:00 0          [vvar]
+0 0 9556f000-95651000 r-xp 00000000 00:19 438856     /usr/lib/libasound.so.2.0.0
+0 0 954b3000-9556f000 rw-s 00000000 00:07 137        /dev/dri/card0
+0 0 00c23000-00c24000 ---p 00000000 00:00 0          [heap]
+---LVMEM
+lvdesk: lvmem total 406920 max_used 20072 used_pct 3% frag 3% used_bytes 10160
+SHIPPED PID 718
+VmRSS:	     192 kB
+RssAnon:	     184 kB
+RssFile:	       8 kB
+VmData:	    1128 kB
+VmSwap:	       0 kB
+64 0 954cb000-954db000 rw-p 00000000 00:00 0 
+60 0 000f9000-001fd000 rw-p 00000000 00:00 0 
+16 0 9d198000-9d1b9000 rw-p 00000000 00:00 0          [stack]
+16 0 95679000-9567d000 r--p 000e2000 00:19 438856     /usr/lib/libasound.so.2.0.0
+8 0 9572b000-9572d000 rw-p 000a7000 00:19 3752624    /usr/lib/libc.so
+4 0 9572d000-9572e000 rw-p 00000000 00:00 0 
+4 0 95682000-95683000 r-xp 00000000 00:00 0          [vdso]
+4 0 9567d000-9567e000 rw-p 000e6000 00:19 438856     /usr/lib/libasound.so.2.0.0

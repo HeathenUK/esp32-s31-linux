@@ -12273,9 +12273,19 @@ static int memp_sample(pid_t pid, struct memp *m)
 	return 1;
 }
 
+/*
+ * The row's own close button (review 2026-09-25: an X on each endable row,
+ * not one "End <name>" button in the header). Only rows of sessions lvdesk
+ * launched carry one.
+ */
 static void memp_end_cb(lv_event_t *e)
 {
-	(void)e;
+	int k = (int)(intptr_t)lv_event_get_user_data(e) - 1;
+
+	if (k < 0 || k >= memp_nprev)
+		return;
+	memp_sel_sid = memp_prev[k].sid;
+	snprintf(memp_sel_name, sizeof(memp_sel_name), "%s", memp_prev[k].comm);
 	printf("lvdesk: mem End pressed sid=%d app=%d\n", (int)memp_sel_sid,
 	       app_sid_is(memp_sel_sid));
 	fflush(stdout);
@@ -12287,27 +12297,6 @@ static void memp_end_cb(lv_event_t *e)
 		snprintf(t, sizeof(t), "Ended %s", memp_sel_name);
 		popover_close();
 		toast_show_k("launch", t, 2500);
-	}
-}
-
-static void memp_row_cb(lv_event_t *e)
-{
-	lv_obj_t *r = lv_event_get_target(e);
-	int k = (int)(intptr_t)lv_obj_get_user_data(r) - 1;
-	uint32_t c;
-
-	if (k < 0 || k >= memp_nprev || !memp_end)
-		return;
-	for (c = 0; c < lv_obj_get_child_count(memp_list); c++)
-		lv_obj_remove_state(lv_obj_get_child(memp_list, (int32_t)c), LV_STATE_CHECKED);
-	lv_obj_add_state(r, LV_STATE_CHECKED);
-	memp_sel_sid = memp_prev[k].sid;
-	snprintf(memp_sel_name, sizeof(memp_sel_name), "%s", memp_prev[k].comm);
-	if (app_sid_is(memp_sel_sid)) {
-		lv_label_set_text_fmt(lv_obj_get_child(memp_end, 0), "End %s", memp_sel_name);
-		lv_obj_remove_flag(memp_end, LV_OBJ_FLAG_HIDDEN);
-	} else {
-		lv_obj_add_flag(memp_end, LV_OBJ_FLAG_HIDDEN);
 	}
 }
 
@@ -12347,20 +12336,26 @@ static void memp_render(void)
 		int shown = 0, cpu_shown = 0;
 
 		lv_obj_clean(memp_list);
-		for (i = 0; i < n && (shown < 5 || (!cpu_shown && top_cpu >= 0)); i++) {
+		/* as many rows as the list holds (review): 7 of 25 px here */
+		int fit = (int)(lv_obj_get_height(memp_list) / 25);
+
+		if (fit < 3)
+			fit = 3;
+		for (i = 0; i < n && shown < fit; i++) {
 			int k = order[i];
 			char t[64];
 			lv_obj_t *r;
 
-			if (shown >= 5 && k != top_cpu)
-				continue;
+			/* the last slot is the busiest's, if it is not already in */
+			if (shown == fit - 1 && !cpu_shown && top_cpu >= 0 && k != top_cpu)
+				k = top_cpu;
 			if (k == top_cpu)
 				cpu_shown = 1;
 			/* the name, and a busiest marker, dotted short of the size column */
 			snprintf(t, sizeof(t), "%s%s", memp_cur[k].comm,
 				 k == top_cpu && best ? "  (busiest)" : "");
-			r = list_row_r(memp_list, t, 64);
-			lv_obj_set_height(r, POP_ROW_H);
+			r = list_row_r(memp_list, t, 86);
+			lv_obj_set_height(r, 25);	/* 7 rows in the list (review) */
 			lv_obj_set_style_pad_left(r, 6, 0);
 			lv_obj_set_flex_align(r, LV_FLEX_ALIGN_START,
 					      LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -12371,10 +12366,31 @@ static void memp_render(void)
 						      memp_cur[k].kb * 10 / 1024 / 10,
 						      memp_cur[k].kb * 10 / 1024 % 10);
 				lv_obj_add_flag(z, LV_OBJ_FLAG_IGNORE_LAYOUT);
-				lv_obj_align(z, LV_ALIGN_RIGHT_MID, -8, 0);
+				lv_obj_align(z, LV_ALIGN_RIGHT_MID, -30, 0);
 			}
-			lv_obj_set_user_data(r, (void *)(intptr_t)(k + 1));
-			lv_obj_add_event_cb(r, memp_row_cb, LV_EVENT_CLICKED, NULL);
+			if (app_sid_is(memp_cur[k].sid)) {
+				lv_obj_t *x, *xl;
+
+				hdr_styles_init();	/* st_close_hot */
+				x = lv_button_create(r);
+
+				lv_obj_set_size(x, 22, 20);
+				lv_obj_set_style_radius(x, 0, 0);
+				lv_obj_set_style_pad_all(x, 0, 0);
+				lv_obj_set_style_shadow_width(x, 0, 0);
+				lv_obj_set_style_bg_color(x, lv_color_hex(COL_HDR), 0);
+				lv_obj_add_style(x, &st_close_hot, LV_STATE_PRESSED);
+				lv_obj_add_flag(x, LV_OBJ_FLAG_IGNORE_LAYOUT);
+				lv_obj_align(x, LV_ALIGN_RIGHT_MID, -2, 0);
+				/* the list may have been rebuilt by then: index into
+				 * memp_prev, which this pass is about to become */
+				lv_obj_add_event_cb(x, memp_end_cb, LV_EVENT_CLICKED,
+						    (void *)(intptr_t)(k + 1));
+				xl = lv_label_create(x);
+				lv_label_set_text(xl, LV_SYMBOL_CLOSE);
+				lv_obj_set_style_text_color(xl, lv_color_hex(COL_HDR_TEXT), 0);
+				lv_obj_center(xl);
+			}
 			shown++;
 		}
 	}
@@ -12410,7 +12426,14 @@ static void memp_tick(lv_timer_t *t)
 	if (!d) {			/* the pass is complete */
 		closedir(memp_dir);
 		memp_dir = NULL;
-		memp_render();
+		/*
+		 * Not while a press is down: rebuilding the rows deletes the
+		 * button under the finger, and the click is lost - which is
+		 * what made End / X look unreliable. This pass is dropped;
+		 * the next one renders.
+		 */
+		if (!ptr_pressed)
+			memp_render();
 	}
 }
 
@@ -12431,7 +12454,6 @@ static void memp_stop(void)
 static void tray_mem_cb(lv_event_t *e)
 {
 	lv_obj_t *pop = popover_open(lv_event_get_target(e), POP_W, POP_H);
-	lv_obj_t *b;
 
 	if (!pop)
 		return;
@@ -12447,19 +12469,6 @@ static void tray_mem_cb(lv_event_t *e)
 	lv_obj_set_style_radius(memp_list, 0, 0);
 	lv_obj_set_style_pad_all(memp_list, 0, 0);
 	lv_obj_set_style_text_font(memp_list, FONT_UI, 0);
-	b = lv_button_create(pop);
-	memp_end = b;
-	lv_obj_set_pos(b, 128, 0);
-	lv_obj_set_size(b, 114, 22);
-	lv_obj_set_style_radius(b, 0, 0);
-	lv_obj_set_style_bg_color(b, lv_color_hex(COL_HDR_FOCUS), 0);
-	lv_obj_set_style_text_color(b, lv_color_hex(COL_HDR_TEXT), 0);
-	lv_obj_set_style_shadow_width(b, 0, 0);
-	lv_obj_add_event_cb(b, memp_end_cb, LV_EVENT_CLICKED, NULL);
-	lv_obj_center(lv_label_create(b));
-	lv_label_set_long_mode(lv_obj_get_child(b, 0), LV_LABEL_LONG_MODE_DOTS);
-	lv_obj_set_width(lv_obj_get_child(b, 0), 106);
-	lv_obj_add_flag(b, LV_OBJ_FLAG_HIDDEN);
 	memp_nprev = 0;
 	memp_tmr = lv_timer_create(memp_tick, 250, NULL);
 	memp_tick(NULL);

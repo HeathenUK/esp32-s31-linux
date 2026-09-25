@@ -51,6 +51,16 @@ drop-down console, diff 01, which needs rebasing onto these fixes).
     "Ended prboom".
   - A ctl `launch` toast names the program ("prboom"), not a leading
     "cd <dir> &&".
+  - Review changes:
+    - Each endable row has its own close button at the far right, and the
+      header End button and row selection are gone. Only menu-launched
+      sessions get one; daemons and shells do not.
+    - The list shows as many 25 px rows as fit (7), with the busiest CPU user
+      in the last slot if it is not already listed.
+    - The list is not rebuilt while a press is down: rebuilding deleted the
+      button under the pointer and dropped the click. That was the
+      "unreliable End".
+    - Tested: prboom's close button ends it, and the toast says "Ended prboom".
 - **Colour review** (docs/lvdesk-colour-review-2026-09-25.md) direction A is
   applied: dark popovers, neutral edges and buttons, readable selected-row
   glyphs, themed switch, slider and text field.
