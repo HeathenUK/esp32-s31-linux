@@ -40,6 +40,7 @@ S=$OUT/run.sh
 AUDIODEV_ON_BOARD=${QUAKE_AUDIODEV:-default}
 cat > "$S" <<EOF
 cd /root/quake
+echo "BOARD_T script_start \$(cut -d' ' -f1 /proc/uptime)"
 export AUDIODEV=$AUDIODEV_ON_BOARD; echo "AUDIO=\$AUDIODEV"
 $PRE
 echo "PRE_APPLIED watermark_scale_factor=\$(cat /proc/sys/vm/watermark_scale_factor) page-cluster=\$(cat /proc/sys/vm/page-cluster)"
@@ -60,7 +61,8 @@ setsid sh -c 'DISPLAY=:0 HOME=/root/quake exec ${QUAKE_BIN:-./tiopex-quake} id1 
 sleep 8; grep -aq "^Error:" /root/quake/td.log 2>/dev/null || sleep 42
 # TyrQuake 0.71 (tyr-quake) logs to \$HOME/.tyrquake/id1/qconsole.log; the sdlquake-glue build (tiopex-quake) to id1/qconsole.log.
 i=0; while [ \$i -lt 60 ]; do grep -aqE "[0-9]+ frames" /root/quake/id1/qconsole.log /root/quake/.tyrquake/id1/qconsole.log 2>/dev/null && break; grep -aq "^Error:" /root/quake/td.log 2>/dev/null && break; sleep 3; i=\$((i+1)); done
-P=\$(ps | awk '/[t]iopex|[t]yr-quake|[t]yrquake/ {print \$1}' | head -1)
+echo "BOARD_T result_seen \$(cut -d' ' -f1 /proc/uptime) polls \$i"
+P=\$(ps | awk '/[t]iopex|[s]dlquake|[t]yr-quake|[t]yrquake/ {print \$1}' | head -1)
 echo "RESULT \$(grep -ahE '[0-9]+ frames' /root/-basedir/qconsole.log /root/quake/id1/qconsole.log /root/quake/.tyrquake/id1/qconsole.log 2>/dev/null | head -1)"
 echo "ERROR \$(grep -a '^Error:' /root/quake/td.log 2>/dev/null | head -1)"
 echo "QUAKE majflt=\$(awk '{print \$12}' /proc/\$P/stat 2>/dev/null) \$(grep -aE 'VmRSS|VmSwap' /proc/\$P/status 2>/dev/null | tr -s ' ' | tr '\n' ' ')"
@@ -79,10 +81,16 @@ amixer -q sset 'DACL' 143 2>/dev/null; amixer -q sset 'DACR' 143 2>/dev/null
 echo CLEAN
 EOF
 
+T0=$(date +%s)
 python3 scripts/board/reset.py >/dev/null 2>&1
-python3 scripts/board/runsh.py "$S" 240 170 > "$OUT/run.log" 2>&1
+T1=$(date +%s)
+python3 scripts/board/runsh.py "$S" 240 60 > "$OUT/run.log" 2>&1   # 60 = settle: board uptime >= 60 s (last boot service ~47 s)
+T2=$(date +%s)
 python3 scripts/board/screenshot.py "$OUT/panel.png" > /dev/null 2>&1
-python3 scripts/board/runsh.py "$OUT/clean.sh" 20 20 > /dev/null 2>&1
+T3=$(date +%s)
+python3 scripts/board/runsh.py "$OUT/clean.sh" 20 > /dev/null 2>&1
+T4=$(date +%s)
+echo "TIMING reset $((T1-T0))s  boot+run $((T2-T1))s  panel $((T3-T2))s  clean $((T4-T3))s" >> "$OUT/run.log"
 fps=$(sed -n 's/.* \([0-9.]*\) fps.*/\1/p' "$OUT/run.log" | head -1)
 echo "[$L] fps=${fps:-NONE}  $(grep -a '^RESULT' "$OUT/run.log" | cut -c8-)"
 grep -a '^ERROR [^ ]' "$OUT/run.log" | sed 's/^/     /'

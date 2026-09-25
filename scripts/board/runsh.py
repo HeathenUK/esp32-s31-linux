@@ -29,8 +29,14 @@ PORT, BAUD = '/dev/cu.usbserial-130', 1000000
 
 
 def run(path, timeout=240, boot_wait=0, shell_wait=75.0):
-    if boot_wait:
-        time.sleep(boot_wait)
+    # boot_wait is a MINIMUM BOARD UPTIME in seconds, not a sleep. It used to
+    # be time.sleep(boot_wait) before the port was even opened, so the timedemo
+    # harness's `240 170` slept 170 s after every reset although getty is up
+    # at ~31 s - two thirds of every arm - and every one-off call that passed
+    # a third argument paid it on an already-booted board (2026-09-25). Now
+    # the wait happens after the shell is reached, only for the part of it the
+    # board has not already been up for: settle time for a fresh boot, zero
+    # for a running board.
     p = console.open_port(timeout=0.05, what='runsh.py')
 
     def until(pred, limit, prod=None, every=2.0):
@@ -61,6 +67,15 @@ def run(path, timeout=240, boot_wait=0, shell_wait=75.0):
     except console.NoShell as e:
         p.close()
         return 'NO_SHELL (%s)' % e
+
+    if boot_wait:
+        o, got = cmd('cut -d. -f1 /proc/uptime', 'UT_OK')
+        up = None
+        for line in o.splitlines():
+            if line.strip().isdigit():
+                up = int(line.strip())
+        if up is not None and up < boot_wait:
+            time.sleep(boot_wait - up)
 
     # Quiet the console so kernel messages do not interleave into the results.
     cmd('dmesg -n 1', 'Q_OK')
