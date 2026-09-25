@@ -16,12 +16,23 @@
 #   -ffast-math                 what id's own CFLAGS used
 #   -fsingle-precision-constant this board has F but no D: a double literal
 #                               drags every expression into soft-float
+#   -fno-merge-constants        COM_FileBase (common.c:860) scans backwards for
+#                               a '/' with no lower bound, relying on every
+#                               string literal being preceded by the previous
+#                               one's NUL - true of the 1999 toolchain. GCC 14 +
+#                               ld tail-merge "progs.dat" into "PR_LoadProgs:
+#                               couldn't load progs.dat", the scan walks into the
+#                               message and overflows char base[32]: the stack
+#                               protector killed every map start (2026-09-21).
+#                               Same class as -fcommon and -std=gnu89: restores
+#                               the toolchain behaviour the 1999 source assumed,
+#                               no source change. Verified 2026-09-25: e1m1 loads.
 set -e
 SRC=/src/sdlquake
 OUT=/src/rootfs/sdlquake
 CC=/src/build/buildroot/host/bin/riscv32-esp-linux-musl-gcc
 SDLCFG=/src/build/buildroot/staging/usr/bin/sdl-config
-CFLAGS="-std=gnu89 -g -O2 -ffast-math -fsingle-precision-constant -fcommon -Did386=0 -DSDL -DELF \
+CFLAGS="-std=gnu89 -g -O2 -fno-merge-constants -ffast-math -fsingle-precision-constant -fcommon -Did386=0 -DSDL -DELF \
  -Wno-error=implicit-function-declaration -Wno-error=incompatible-pointer-types \
  -Wno-error=int-conversion -Wno-error=return-mismatch -w $($SDLCFG --cflags)"
 cd "$SRC"
