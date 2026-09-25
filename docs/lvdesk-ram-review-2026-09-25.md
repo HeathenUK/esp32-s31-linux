@@ -45,8 +45,23 @@ The real opportunity is what it keeps **after X clients have connected**.
   - 300 + 68 = **368 kB** shipped.
 
   That is one arm each. Idle before the clients was 180 kB on both.
-- **Cuts 2 and 3** are still to be checked, measurement first, as written
-  below.
+- **Cut 3 shipped, in a different form from the one proposed.** Freeing the
+  mixer and alsa.conf tree is the design audio_open() already records as
+  illusory (musl keeps freed heap). So the boot-time volume restore now runs
+  in a forked child that exits, taking its heap with it.
+  - The parent parses alsa.conf on the first volume interaction instead:
+    127 ms once, measured by the audio popover. That is the price
+    audio_open's comment already names.
+  - At boot the open takes 790 ms because the card is busy. That used to
+    block lvdesk's main loop; it no longer does.
+  - Measured, two runs each: idle RssAnon **176 -> 104 kB** with the restore
+    in the parent vs the child. DAC 143 restored on both channels, no
+    zombies, `lvdesk-toast-vol-test.sh` passes.
+  - Shipped, after a fresh boot: RssAnon 80 kB + VmSwap 28 kB = **108 kB**,
+    against about 190 kB before these two cuts.
+- **Cut 2**: the measurement is in place. xshim's "client N gone" line now
+  prints `spill peak N kB`. Build nothing until it has been seen to be
+  non-zero.
 
 ## Ranked cuts
 

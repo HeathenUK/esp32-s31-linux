@@ -10141,6 +10141,7 @@ int xshim_fds(int *out, int max)
 static void client_drop(struct cli *c, int notify)
 {
 	int owner = (int)(c - cli), i;
+	size_t pcap = c->pendcap;	/* for the log: RAM review cut 2 */
 
 	xshim_canary_check("client_drop:start");
 	free(c->pend);
@@ -10191,7 +10192,8 @@ static void client_drop(struct cli *c, int notify)
 	madvise(cli_in[owner], INBUF, MADV_DONTNEED);
 	madvise(cli_out[owner], OUTBUF, MADV_DONTNEED);
 	fprintf(stderr, "xshim: client %d gone after %u requests, "
-		"%d answered with an error\n", owner, c->seq, c->nbad);
+		"%d answered with an error, spill peak %zu kB\n", owner,
+		c->seq, c->nbad, pcap / 1024);
 	if (c->nbad) {
 		int j, first = 1;
 

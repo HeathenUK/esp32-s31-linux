@@ -2857,8 +2857,11 @@ static void audio_open(void)
 	snd_mixer_selem_id_t *sid;
 	snd_mixer_elem_t *e;
 
+	struct timespec t0, t1;
+
 	if (mixer)
 		return;
+	clock_gettime(CLOCK_MONOTONIC, &t0);
 	if (snd_mixer_open(&mixer, 0) < 0) { mixer = NULL; return; }
 	if (snd_mixer_attach(mixer, "hw:0") < 0 ||
 	    snd_mixer_selem_register(mixer, NULL, NULL) < 0 ||
@@ -2921,6 +2924,11 @@ static void audio_open(void)
 	if (mixer_elem)
 		snd_mixer_selem_get_playback_volume_range(mixer_elem,
 							  &mixer_min, &mixer_max);
+	clock_gettime(CLOCK_MONOTONIC, &t1);
+	printf("lvdesk: mixer opened in %ld ms (pid %d)\n",
+	       (long)((t1.tv_sec - t0.tv_sec) * 1000 +
+		      (t1.tv_nsec - t0.tv_nsec) / 1000000), (int)getpid());
+	fflush(stdout);
 	/*
 	 * alsa-lib's parsed configuration tree - alsa.conf and friends, ~100 KB
 	 * of heap built from SD reads - lives from this first use for the rest
@@ -14547,12 +14555,25 @@ int main(void)
 		/* The codec boots at its own default; restore the last level. */
 		int v = state_get("volume", -1);
 
-		if (v >= 0) {
+		/*
+		 * In a child, which exits. Opening the mixer here parsed
+		 * alsa.conf into lvdesk's own heap for its whole life - 68 kB
+		 * of RssAnon (176 -> 108 kB idle, measured 2026-09-25, two
+		 * runs each) on every boot, whether or not anyone touches the
+		 * volume. musl keeps freed heap, so freeing it here would not
+		 * give it back (see audio_open); a child's heap goes with the
+		 * child. The parent now parses on the first volume
+		 * interaction, which the comment in audio_open already calls
+		 * the feature's true price. Reaped by the SIGCHLD loop.
+		 */
+		if (v >= 0 && fork() == 0) {
 			/* a mute survives a reboot (QoL D2) */
 			audio_set_pct(state_get("muted", 0) ? 0 : v);
+			_exit(0);
+		}
+		if (v >= 0)
 			printf("lvdesk: volume restored to %d%s\n", v,
 			       state_get("muted", 0) ? " (muted)" : "");
-		}
 	}
 	input_watch_init();
 	mouse_init();			/* pointer and keyboard are both read here */
