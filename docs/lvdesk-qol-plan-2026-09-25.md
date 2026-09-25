@@ -35,6 +35,27 @@ cdoom (883 puts) and quake (motion 12, keys 4).
 Still open from the programme: everything else, starting with A3 (the
 drop-down console, diff 01, which needs rebasing onto these fixes).
 
+## Status, 2026-09-25 night: B6, B7 shipped; BT status line removed
+
+- **BT status line removed** (review: it restated the switch, and "Not
+  connected" is meaningless for a radio that is connected to any number of
+  things). The line appears ONLY while a pairing asks for a passkey or
+  confirmation, and the list moves up into its space otherwise.
+- **B6.**
+  - Super+1..8 act as a tap on the Nth task button; the docked console has
+    none and is skipped.
+  - `Label [Super+X] = cmd` in menu.conf gives a launch key, shown as a grey
+    hint column. The keys are looked up by re-reading the file, so an open
+    menu is never re-indexed. Defaults: Terminal Super+Enter (st), Files
+    Super+E, Calculator Super+C.
+  - Double-launch guard: an @name started by us within 8 s, still windowless,
+    is not started again.
+  - `lvdesk-keys-test.sh`: Super+2 focuses, then minimises; Super+E twice
+    gives exactly one xfiles.
+- **B7.** Super+/ or Super+F1, or System > Shortcuts: a 420 px sheet of the
+  bindings that exist (12 rows, ASCII). Any key closes it, eaten: Space
+  closed it and st received nothing.
+
 ## Status, 2026-09-25 night: D3 (failure half) and C4 shipped; s31-bt boot race fixed
 
 - **D3 launch feedback.**

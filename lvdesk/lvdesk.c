@@ -320,6 +320,11 @@ static void pw_debug(void);
 static void desk_menu_toggle(void);	/* Super tap / Start (QoL B1) */
 static int super_chord;			/* Super was used as a modifier */
 static void super_shortcut(int code);	/* Super+arrows etc. (QoL B3) */
+static void menu_hotkey(int code);	/* [Super+X] launch keys (QoL B6) */
+struct winrec;
+static void task_toggle(struct winrec *w);
+static int help_up;			/* the shortcuts sheet is open (QoL B7) */
+static void help_toggle(void);		/* Super+/ shortcuts sheet (QoL B7) */
 static uint32_t super_down_ms;
 /*
  * Keyboard state of the open menu (QoL B2). menu_list is the lv_list of the
@@ -4261,6 +4266,36 @@ static void super_shortcut(int code)
 		switcher_step(shift);
 		sw_by_super = 1;
 		break;
+	case KEY_SLASH: case KEY_F1:
+		help_toggle();
+		break;
+	case KEY_1: case KEY_2: case KEY_3: case KEY_4:
+	case KEY_5: case KEY_6: case KEY_7: case KEY_8: {
+		/*
+		 * Super+N: the Nth task bar button, as a tap on it would be
+		 * (QoL B6). Counted in bar order over the buttons shown - the
+		 * docked console has none.
+		 */
+		int want = code - KEY_1, k, n = 0, j;
+
+		switcher_cancel();
+		for (k = 0; k < (int)lv_obj_get_child_count(taskbar); k++) {
+			lv_obj_t *b = lv_obj_get_child(taskbar, k);
+
+			if (lv_obj_has_flag(b, LV_OBJ_FLAG_HIDDEN))
+				continue;
+			for (j = 0; j < win_n; j++)
+				if (wins[j].win && wins[j].tbtn == b) {
+					if (n++ == want)
+						task_toggle(&wins[j]);
+					break;
+				}
+		}
+		break;
+	}
+	default:
+		menu_hotkey(code);	/* a [Super+X] declared in menu.conf */
+		break;
 	}
 }
 
@@ -4492,11 +4527,15 @@ static void tbtn_sync(void)
  * every panel that has ever had a task list. Raising an already-raised window
  * does nothing visible, so without this the button is dead half the time.
  */
+static void task_toggle(struct winrec *w);
+
 static void task_btn_cb(lv_event_t *e)
 {
-	lv_obj_t *win = lv_event_get_user_data(e);
-	struct winrec *w = win_find(win);
+	task_toggle(win_find(lv_event_get_user_data(e)));
+}
 
+static void task_toggle(struct winrec *w)
+{
 	if (!w || !w->win)
 		return;
 	if (w->minimised) {
@@ -7878,6 +7917,7 @@ static void popover_close(void)
 	pop_owner = NULL;
 	menu_list = NULL;
 	menu_sel = -1;
+	help_up = 0;
 	toast_hide();		/* a popover and the toast share the slot */
 	vol_slider = vol_label = NULL;
 	wifi_list = wifi_status = NULL;
@@ -8273,6 +8313,7 @@ static void menu_select(int sel)
 
 struct mitem {
 	char label[40];
+	char hint[14];		/* "Super+E" from a [Super+E] suffix (QoL B6) */
 	char cmd[200];		/* empty: a submenu */
 	int parent;		/* -1 at the root */
 	int depth;
@@ -8318,9 +8359,24 @@ static void appmenu_load(void)
 		m->parent = depth ? stack[depth - 1] : -1;
 		eq = strchr(p, '=');
 		if (eq) {
+			char *br;
+
 			e = eq;
 			while (e > p && (e[-1] == ' ' || e[-1] == '\t'))
 				e--;
+			/*
+			 * "Files [Super+E] = cmd": the launch key, parsed from
+			 * the raw text before the label is cut to 40 bytes
+			 * (QoL B6). Only the label side is ever scanned.
+			 */
+			br = memchr(p, '[', (size_t)(e - p));
+			if (br && e[-1] == ']' && !strncmp(br, "[Super+", 7)) {
+				snprintf(m->hint, sizeof(m->hint), "%.*s",
+					 (int)(e - 1 - (br + 1)), br + 1);
+				e = br;
+				while (e > p && (e[-1] == ' ' || e[-1] == '\t'))
+					e--;
+			}
 			snprintf(m->label, sizeof(m->label), "%.*s",
 				 (int)(e - p), p);
 			eq++;
@@ -8602,6 +8658,9 @@ static pid_t appmenu_spawn(const char *cmd)
 	_exit(127);
 }
 
+static char last_name[32];		/* the last @name we started ... */
+static uint32_t last_ms;		/* ... and when (QoL B6 guard) */
+
 static void appmenu_launch(const char *cmd)
 {
 	if (cmd[0] == '!') {
@@ -8615,6 +8674,8 @@ static void appmenu_launch(const char *cmd)
 			term_raise_and_run("");
 		} else if (!strcmp(cmd, "!console")) {
 			console_set(CON_TOGGLE);
+		} else if (!strcmp(cmd, "!shortcuts")) {
+			help_toggle();
 		}
 		return;
 	}
@@ -8646,11 +8707,26 @@ static void appmenu_launch(const char *cmd)
 				fflush(stdout);
 				return;
 			}
+			/*
+			 * Running, no window yet, and WE started it moments
+			 * ago: it is still starting, not stuck. A held launch
+			 * key or a double-click would otherwise start a second
+			 * one - two xfiles is an OOM on this board (QoL B6).
+			 */
+			if (!strcmp(last_name, name) &&
+			    lv_tick_get() - last_ms < 8000) {
+				printf("lvdesk: menu: %s is still starting\n", name);
+				fflush(stdout);
+				return;
+			}
+			(void)0;
 			printf("lvdesk: menu: a %s is running with no window; "
 			       "starting another\n", name);
 			fflush(stdout);
 		}
 		cmd = sp + 1;
+		snprintf(last_name, sizeof(last_name), "%s", name);
+		last_ms = lv_tick_get();
 	}
 	{
 		struct stat st;
@@ -8729,17 +8805,47 @@ static void appmenu_open(int parent)
 	}
 	if (parent >= 0)
 		labels[n++] = (char *)"< Back";
-	for (i = 0; i < mitem_n; i++)
-		if (mitems[i].parent == parent) {
-			labels[n++] = mitems[i].label;
-			if (strlen(mitems[i].label) > maxlen)
-				maxlen = strlen(mitems[i].label);
-		}
-	if (!n)
-		return;
-	if (maxlen < 6) maxlen = 6;
+	{
+		size_t hint = 0;
+
+		for (i = 0; i < mitem_n; i++)
+			if (mitems[i].parent == parent) {
+				labels[n++] = mitems[i].label;
+				if (strlen(mitems[i].label) > maxlen)
+					maxlen = strlen(mitems[i].label);
+				if (strlen(mitems[i].hint) > hint)
+					hint = strlen(mitems[i].hint);
+			}
+		if (!n)
+			return;
+		if (maxlen < 6) maxlen = 6;
+		if (hint)			/* room for the hint column */
+			maxlen += hint + 2;
+		if (maxlen > 38)
+			maxlen = 38;
+	}
 	menu_cur = parent;
 	menu_popover_build(labels, n, maxlen, menu_x, menu_y, appmenu_item_cb);
+	/* launch-key hints, a solid mid-grey column on the right (QoL B6) */
+	{
+		int row = parent >= 0 ? 1 : 0;
+
+		for (i = 0; i < mitem_n; i++) {
+			lv_obj_t *r, *h;
+
+			if (mitems[i].parent != parent)
+				continue;
+			if (mitems[i].hint[0] && menu_list &&
+			    (r = lv_obj_get_child(menu_list, row))) {
+				h = lv_label_create(r);
+				lv_label_set_text(h, mitems[i].hint);
+				lv_obj_set_style_text_color(h, lv_color_hex(0x7a8896), 0);
+				lv_obj_add_flag(h, LV_OBJ_FLAG_IGNORE_LAYOUT);
+				lv_obj_align(h, LV_ALIGN_RIGHT_MID, -6, 0);
+			}
+			row++;
+		}
+	}
 	pop_owner = menu_owner ? (const void *)menu_owner : &menu_owner_key;
 	if (menu_kbd)
 		menu_select(0);
@@ -8878,7 +8984,7 @@ static int menu_key(int code)
 	int n = menu_rows, s = menu_sel, app;
 	lv_obj_t *r;
 
-	if (code == KEY_ESC) {
+	if (code == KEY_ESC || help_up) {	/* any key closes the sheet */
 		popover_close();
 		return 1;
 	}
@@ -9098,6 +9204,117 @@ static int search_key(int code)
 	menu_q[n + 1] = 0;
 	search_show();
 	return 1;
+}
+
+/*
+ * [Super+X] launch keys (QoL B6). menu.conf is re-read here with a stack
+ * buffer rather than through appmenu_load(), so an open menu is never
+ * re-indexed under its rows. "Enter" or a single character; the key is
+ * matched as evdev code, so Super+e and Super+E are the same key.
+ */
+static int hotkey_code(const char *t, size_t n)
+{
+	int c;
+
+	if (n == 5 && !strncasecmp(t, "Enter", 5))
+		return KEY_ENTER;
+	if (n != 1)
+		return -1;
+	for (c = 1; c < KEY_CNT; c++)
+		if (keymap[c][0] == (t[0] >= 'A' && t[0] <= 'Z' ? t[0] + 32 : t[0]))
+			return c;
+	return -1;
+}
+
+static void menu_hotkey(int code)
+{
+	FILE *f = fopen(MENU_CONF, "r");
+	char line[300];
+
+	if (!f)
+		return;
+	while (fgets(line, sizeof(line), f)) {
+		char *eq = strchr(line, '='), *br, *end, *p = line, *c;
+
+		if (!eq)
+			continue;
+		br = strstr(line, "[Super+");
+		if (!br || br > eq || !(end = strchr(br, ']')) || end > eq)
+			continue;
+		if (hotkey_code(br + 7, (size_t)(end - (br + 7))) != code)
+			continue;
+		while (*p == ' ' || *p == '\t')
+			p++;
+		{
+			char *e = br;
+
+			while (e > p && (e[-1] == ' ' || e[-1] == '\t'))
+				e--;
+			snprintf(launch_label, sizeof(launch_label), "%.*s",
+				 (int)(e - p), p);
+		}
+		for (c = eq + 1; *c == ' ' || *c == '\t'; c++)
+			;
+		c[strcspn(c, "\r\n")] = 0;
+		fclose(f);
+		popover_close();
+		appmenu_launch(c);
+		return;
+	}
+	fclose(f);
+}
+
+/*
+ * The shortcuts sheet (QoL B7): Super+/ or Super+F1, or System > Shortcuts.
+ * Only bindings that exist. Plain ASCII - the UI font has no arrow glyphs.
+ * Any key closes it (and is eaten), as does a tap outside it.
+ */
+static const char help_keys[] =
+	"Super (tap)\nSuper+`\nAlt+Tab / Super+Tab\nSuper+Left / Right\n"
+	"Super+Up / Down\nSuper+H / Q / D\nSuper+1 ... 8\n"
+	"Super+Enter / E / C\nAlt+F4\nSuper+/\n2-finger tap\n3-finger tap";
+static const char help_what[] =
+	"App menu (then type to search)\nDrop-down console\nSwitch windows\n"
+	"Tile to a half\nMaximise / restore\nMinimise / close / desktop\n"
+	"Task bar button 1 ... 8\nTerminal / Files / Calculator\n"
+	"Close the window, fullscreen too\nThis sheet\nRight click\n"
+	"On-screen keyboard";
+
+static void help_toggle(void)
+{
+	int32_t sw = lv_display_get_horizontal_resolution(NULL);
+	int32_t sh = lv_display_get_vertical_resolution(NULL);
+	int32_t w = 420, h = 12 * 17 + 20;
+	lv_obj_t *l;
+
+	if (help_up) {
+		popover_close();
+		return;
+	}
+	if (fs_active)
+		return;
+	popover_close();
+	scrim_create();
+	pop_obj = lv_obj_create(lv_layer_top());
+	lv_obj_set_size(pop_obj, w, h);
+	lv_obj_set_pos(pop_obj, (sw - w) / 2, (sh - TASKBAR_H - h) / 2);
+	lv_obj_set_style_radius(pop_obj, 0, 0);
+	lv_obj_set_style_bg_color(pop_obj, lv_color_hex(COL_PANEL), 0);
+	lv_obj_set_style_border_width(pop_obj, 1, 0);
+	lv_obj_set_style_border_color(pop_obj, lv_color_hex(COL_HDR_FOCUS), 0);
+	lv_obj_set_style_pad_all(pop_obj, 8, 0);
+	lv_obj_set_style_text_font(pop_obj, FONT_UI, 0);
+	lv_obj_set_style_text_color(pop_obj, lv_color_hex(COL_PANEL_TEXT), 0);
+	lv_obj_set_style_text_line_space(pop_obj, 2, 0);
+	lv_obj_remove_flag(pop_obj, LV_OBJ_FLAG_SCROLLABLE);
+	l = lv_label_create(pop_obj);
+	lv_label_set_text_static(l, help_keys);
+	lv_obj_set_style_text_color(l, lv_color_hex(COL_HDR_FOCUS), 0);
+	lv_obj_set_pos(l, 0, 0);
+	l = lv_label_create(pop_obj);
+	lv_label_set_text_static(l, help_what);
+	lv_obj_set_pos(l, 150, 0);
+	help_up = 1;
 }
 
 /* A Super tap: open the app menu bottom-left for the keyboard, or close it. */
@@ -10817,33 +11034,22 @@ static void bt_render(void)
 	if (!bt_list)
 		return;
 	/*
-	 * The status line says what the switch cannot (review 2026-09-25):
-	 * who is connected, a scan, a pairing prompt, a missing daemon - the
-	 * same kind of line as Wi-Fi's "JELLING  -57 dBm". Nothing when the
-	 * radio is off, since the switch already says that, and no glyph.
+	 * No status line (review 2026-09-25): the switch shows power, the
+	 * button shows a scan, the rows show what is connected. The line
+	 * exists ONLY while a pairing asks for something - a passkey to type
+	 * or a code to confirm - and the list moves up when it is gone.
 	 */
 	if (bt_status) {
-		const char *who = NULL;
-		int k;
+		int prompt = bt_prompt[0] != 0;
 
-		for (k = 0; k < btdev_n; k++)
-			if (btdevs[k].conn) {
-				who = btdevs[k].name[0] ? btdevs[k].name :
-							  btdevs[k].addr;
-				break;
-			}
-		if (bt_prompt[0])
+		if (prompt) {
 			lv_label_set_text(bt_status, bt_prompt);
-		else if (bt_fd < 0)
-			lv_label_set_text(bt_status, "Bluetooth service not running");
-		else if (!bt_powered)
-			lv_label_set_text(bt_status, "");
-		else if (bt_scanning)
-			lv_label_set_text(bt_status, "Scanning...");
-		else if (who)
-			lv_label_set_text_fmt(bt_status, "Connected to %s", who);
-		else
-			lv_label_set_text(bt_status, "Not connected");
+			lv_obj_remove_flag(bt_status, LV_OBJ_FLAG_HIDDEN);
+		} else {
+			lv_obj_add_flag(bt_status, LV_OBJ_FLAG_HIDDEN);
+		}
+		lv_obj_set_pos(bt_list, 0, prompt ? POP_LIST_Y : 26);
+		lv_obj_set_height(bt_list, POP_H - 16 - (prompt ? POP_LIST_Y : 26));
 	}
 	lv_obj_clean(bt_list);
 	/*
