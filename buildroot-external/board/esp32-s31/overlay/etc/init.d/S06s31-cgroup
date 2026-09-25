@@ -1,0 +1,54 @@
+#!/bin/sh
+#
+# Memory cgroups: who reclaim takes pages from FIRST.
+#
+# With one global LRU the game's hot pages compete with bluetoothd,
+# wpa_supplicant, udevd and friends, all idle while something is being
+# played; under a -mem 20 X11 Quake those daemons held ~1.5 MB of swap
+# (paging plan item 1, 2026-09-25). Two groups, both memory.low = max:
+#
+#   play   every app lvdesk launches from its menu (lvdesk/lvdesk.c cg_join)
+#   desk   lvdesk itself
+#
+# Everything else stays in the root group, unprotected, and is reclaimed
+# first; once that is gone, the protected groups are reclaimed in proportion
+# to their size exactly as before. memory.low is best-effort protection,
+# never a limit: nothing here can OOM anything that did not OOM before.
+#
+# The kernel accounts pages only (cgroup.memory=nokmem,nosocket, Makefile).
+# /etc/s31-cgroup.conf: CGROUP=0 disables this script; PLAY_LOW / DESK_LOW
+# override the protection (bytes, or "max"). Runtime arms need no reboot:
+#   echo 0 > /sys/fs/cgroup/play/memory.low
+#
+# S06: before lvdesk (S40) starts and joins "desk".
+# MEASURED 2026-09-25 and OFF BY DEFAULT: sdlquake timedemo, three
+# interleaved fresh-boot pairs on kernel #386, game in "play" with
+# memory.low max vs 0: 17.1/19.6/18.0 vs 21.7/19.2/19.6 fps (mean 18.2 vs
+# 20.2, protected lower in 2 of 3). sdlquake barely swaps (8 MB heap), so
+# protecting it only moved reclaim onto what was left. The unprotected arm
+# matches the no-memcg kernel (20.2 vs 20.5), so the accounting is free.
+# CGROUP=1 in /etc/s31-cgroup.conf turns it on for a heavier app.
+CONF=/etc/s31-cgroup.conf
+CGROUP=0
+PLAY_LOW=max
+DESK_LOW=max
+[ -r "$CONF" ] && . "$CONF"
+
+case "$1" in
+	start)
+		[ "$CGROUP" = "1" ] || exit 0
+		[ -d /sys/fs/cgroup ] || exit 0
+		printf "Memory cgroups: "
+		grep -q " /sys/fs/cgroup cgroup2" /proc/mounts ||
+			mount -t cgroup2 none /sys/fs/cgroup 2>/dev/null || { echo "no cgroup2"; exit 0; }
+		echo "+memory" > /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null ||
+			{ echo "no memory controller"; exit 0; }
+		mkdir -p /sys/fs/cgroup/play /sys/fs/cgroup/desk
+		echo "$PLAY_LOW" > /sys/fs/cgroup/play/memory.low
+		echo "$DESK_LOW" > /sys/fs/cgroup/desk/memory.low
+		echo "play/desk protected (low $PLAY_LOW/$DESK_LOW)"
+		;;
+	stop|restart|reload)
+		;;
+esac
+exit 0

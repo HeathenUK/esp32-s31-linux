@@ -6888,6 +6888,29 @@ static int xwin_raise_by_name(const char *name)
  */
 #define MENU_LOG	"/tmp/lvdesk-apps.log"
 
+/*
+ * Memory cgroups (/etc/init.d/S06s31-cgroup): the desktop joins "desk" and
+ * every menu launch joins "play", both with memory.low = max, so reclaim
+ * takes the idle daemons' pages (bluetoothd, wpa_supplicant, udevd - ~1.5 MB
+ * of swap under play, paging plan item 1) before the game's or the
+ * desktop's. Writing "0" moves the writer. Silent when the group does not
+ * exist (no cgroup kernel, S06 disabled) or LVDESK_NOCG is set.
+ */
+static void cg_join(const char *grp)
+{
+	char path[64];
+	int fd;
+
+	if (getenv("LVDESK_NOCG"))
+		return;
+	snprintf(path, sizeof(path), "/sys/fs/cgroup/%s/cgroup.procs", grp);
+	fd = open(path, O_WRONLY | O_CLOEXEC);
+	if (fd < 0)
+		return;
+	if (write(fd, "0\n", 2) < 0) { /* not fatal */ }
+	close(fd);
+}
+
 static void appmenu_spawn(const char *cmd)
 {
 	pid_t pid = fork();
@@ -6900,6 +6923,7 @@ static void appmenu_spawn(const char *cmd)
 		return;
 	}
 	setsid();
+	cg_join("play");
 	{
 		int fd = open("/dev/null", O_RDONLY);
 		int lg = open(MENU_LOG, O_WRONLY | O_CREAT | O_APPEND, 0644);
@@ -10025,6 +10049,7 @@ int main(void)
 	 * arbitrary window instead, to find the hot cluster by sweep.
 	 */
 	hottext_init();
+	cg_join("desk");		/* before any big allocation is charged */
 	fsg_clock_init();
 	fsg_on = getenv("LVDESK_NOFSG") == NULL;
 	fsg_stage = getenv("LVDESK_FSGSTAGE") != NULL;
