@@ -1,0 +1,17 @@
+# glref run: impl=ours name=fire frame=60 display=:91
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/demos/fire -geometry 320x240+0+0
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000fd77ca710000)
+#   	libGLU.so.1 => /src/gl/ref-apps/prefix/lib/libGLU.so.1 (0x0000fd77ca660000)
+#   	libglut.so.3 => /src/gl/ref-apps/prefix/lib/libglut.so.3 (0x0000fd77ca580000)
+Fire V1.5
+Written by David Bucciarelli (tech.hmw@plus.it)
+libGL: context 1 created (pid 3426, comm fire)
+libGL: unimplemented glTexEnv(GL_TEXTURE_ENV_MODE other than GL_REPLACE/GL_DECAL)
+libGL: unimplemented glEnable(GL_BLEND)
+libGL: unimplemented glEnable(GL_FOG)
+libGL: unimplemented texturing with GL_TEXTURE_ENV_MODE other than GL_REPLACE/GL_DECAL (drawn as GL_REPLACE)
+libGL: unimplemented glEnable(GL_ALPHA_TEST)
+libGL: unimplemented glRasterPos2i
+libGL: unimplemented glBitmap
+glref: ok at swap 60 -> /src/artifacts/gl/phase1/suite-review/ours/fire.f60

@@ -1,0 +1,37 @@
+# glref suite targets: stock mesa-demos 9.0.0 binaries, unmodified, run with
+# their own size switches. Columns are separated by '|':
+#   name | kind | capture | frames | command
+# kind     frames: capture after N swaps and compare with Mesa
+#          exit:   run to exit (no image); pass = clean exit, no missing symbol
+# capture  window (the swapped GL window, clipped to the screen) or screen
+# frames   blank = the suite default (3 20 60)
+# $XD = mesa-demos xdemos build dir, $GD = GLUT demos build dir. Apps run with
+# cwd = the mesa-demos SOURCE src/demos, so the demos' ../data/ files resolve.
+#
+# Stock sizes where the app has no size switch: glxheads 300x300,
+# glxgears_fbconfig 300x300, manywin 4 x 90x90, offset 900x300 (clipped to
+# the 800-wide screen; it draws once and waits for events, so only frame 1),
+# multictx (plan 2a; two contexts on one window - its pass is the F6 scissor
+# gate: ctx2's glClear must respect GL_SCISSOR_TEST),
+# isosurf 400x400 (it rejects -geometry: its own parser sees argv; it too
+# draws once, so only frame 1). The other GLUT demos call glutInitWindowSize
+# before glutInit, so -geometry overrides it.
+glxgears          | frames | window |         | $XD/glxgears -geometry 320x240+0+0
+glxinfo           | exit   | window |         | $XD/glxinfo
+glxheads          | frames | window |         | $XD/glxheads
+manywin           | frames | screen | 4 20 60 | $XD/manywin 4
+multictx          | frames | window | 20      | $XD/multictx
+offset            | frames | window | 1       | $XD/offset
+glxgears_fbconfig | frames | window |         | $XD/glxgears_fbconfig
+gears             | frames | window |         | $GD/gears -geometry 320x240+0+0
+morph3d           | frames | window |         | $GD/morph3d -geometry 320x240+0+0
+bounce            | frames | window |         | $GD/bounce -geometry 320x240+0+0
+spectex           | frames | window |         | $GD/spectex -geometry 320x240+0+0
+geartrain         | frames | window |         | $GD/geartrain -geometry 320x240+0+0
+ipers             | frames | window |         | $GD/ipers -geometry 320x240+0+0
+terrain           | frames | window |         | $GD/terrain -geometry 320x240+0+0
+tunnel            | frames | window |         | $GD/tunnel -geometry 320x240+0+0
+fire              | frames | window |         | $GD/fire -geometry 320x240+0+0
+teapot            | frames | window |         | $GD/teapot -geometry 320x240+0+0
+texcyl            | frames | window |         | $GD/texcyl -geometry 320x240+0+0
+isosurf           | frames | window | 1       | $GD/isosurf

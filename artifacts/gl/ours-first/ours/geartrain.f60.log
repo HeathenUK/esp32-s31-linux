@@ -1,0 +1,6 @@
+# glref run: impl=ours name=geartrain frame=60 display=:94
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/demos/geartrain -geometry 320x240+0+0
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000ec792c3e0000)
+#   	libglut.so.3 => /src/gl/ref-apps/prefix/lib/libglut.so.3 (0x0000ec792c300000)
+/src/gl/ref-apps/build/mesa-demos/src/demos/geartrain: symbol lookup error: /src/gl/ref-apps/prefix/lib/libglut.so.3: undefined symbol: glXChooseFBConfig

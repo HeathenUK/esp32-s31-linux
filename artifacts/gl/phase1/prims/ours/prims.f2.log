@@ -1,0 +1,6 @@
+# glref run: impl=ours name=prims frame=2 display=:90
+# cmd: /src/gl/out-host/glx_prims
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000ead53f200000)
+libGL: context 1 created (pid 99, comm glx_prims)
+glref: ok at swap 2 -> /src/artifacts/gl/phase1/prims/ours/prims.f2

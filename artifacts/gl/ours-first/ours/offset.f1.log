@@ -1,0 +1,5 @@
+# glref run: impl=ours name=offset frame=1 display=:93
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/xdemos/offset
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000fb9d74990000)
+/src/gl/ref-apps/build/mesa-demos/src/xdemos/offset: symbol lookup error: /src/gl/ref-apps/build/mesa-demos/src/xdemos/offset: undefined symbol: glXCreateContext

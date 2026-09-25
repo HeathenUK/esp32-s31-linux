@@ -1,0 +1,7 @@
+# glref run: impl=ours name=teapot frame=60 display=:95
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/demos/teapot -geometry 320x240+0+0
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000ed97b8f10000)
+#   	libGLU.so.1 => /src/gl/ref-apps/prefix/lib/libGLU.so.1 (0x0000ed97b8e60000)
+#   	libglut.so.3 => /src/gl/ref-apps/prefix/lib/libglut.so.3 (0x0000ed97b8d80000)
+/src/gl/ref-apps/build/mesa-demos/src/demos/teapot: symbol lookup error: /src/gl/ref-apps/prefix/lib/libglut.so.3: undefined symbol: glXChooseFBConfig

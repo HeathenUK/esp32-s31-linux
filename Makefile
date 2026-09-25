@@ -924,6 +924,14 @@ XIP_ROOTFS_IMG := $(BUILD_DIR)/rootfs-xip.cramfs
 # matched the target tree (b7d1d1d8) before this was shipped.
 # libpng16 and libz join for prboom's screenshots and xcalc for the menu -
 # 290 KB of text off the card on every use, measured as churn in smaps.
+# OpenGL platform library (docs/gl-plan-2026-09-25.md section 1, stage 7):
+# libGL.so.1 from buildroot-external/package/s31-libgl, in THIS image beside
+# xlite, as platform code (0 RSS). Its closure is libX11/libXext/libc, already
+# here. Until BR2_PACKAGE_S31_LIBGL is enabled the root matches nothing and
+# mkxipstage.py prints one "root matched nothing" warning - harmless. libGLU
+# and freeglut are NOT listed yet: their flash cost is unmeasured and the
+# image has ~504 KB left (docs/gl-packaging.md section 5).
+XIP_ROOTS_GL ?= usr/lib/libGL.so.1.2.0
 XIP_ROOTS ?= bin/busybox usr/sbin/wpa_supplicant usr/sbin/iw usr/bin/lvdesk \
 	usr/lib/alsa-lib/libasound_module_pcm_s31route.so \
 	usr/bin/s31-coex usr/bin/s31swapon usr/lib/libSDL-1.2.so.0.11.4 \
@@ -931,7 +939,8 @@ XIP_ROOTS ?= bin/busybox usr/sbin/wpa_supplicant usr/sbin/iw usr/bin/lvdesk \
 	usr/lib/libXrandr.so.2.2.0 usr/lib/libXxf86vm.so.1.0.0 \
 	usr/lib/libpng16.so.16.58.0 usr/lib/libz.so.1.3.2 usr/bin/xcalc \
 	usr/lib/libdbus-1.so.3.32.4 \
-	usr/bin/xfilesctl usr/bin/s31-open usr/bin/s31-thumb usr/bin/xfilesthumb usr/bin/s31-thumbs
+	usr/bin/xfilesctl usr/bin/s31-open usr/bin/s31-thumb usr/bin/xfilesthumb usr/bin/s31-thumbs \
+	$(XIP_ROOTS_GL)
 
 # In the closure but deliberately left on the card. NEEDED is not the same as
 # hot: lvdesk links libasound for the volume mixer and occasional PCM writes,

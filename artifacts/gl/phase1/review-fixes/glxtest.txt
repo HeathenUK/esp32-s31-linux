@@ -1,0 +1,13 @@
+=== MIT-SHM
+ALL PASS: 0 failure(s)
+=== S31GL_NOSHM=1
+ALL PASS: 0 failure(s)
+=== S31GL_SHMBUFS=2
+ALL PASS: 0 failure(s)
+exit shm=0 noshm=0 shmbufs2=0
+ALL PASS: 0 failure(s)
+exit 0
+=== xlite + S31GL_SHMBUFS=2
+ALL PASS: 0 failure(s)
+exit 0
+0

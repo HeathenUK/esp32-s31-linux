@@ -1,0 +1,19 @@
+# glref run: impl=ours name=ipers frame=60 display=:90
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/demos/ipers -geometry 320x240+0+0
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000f3a287740000)
+#   	libGLU.so.1 => /src/gl/ref-apps/prefix/lib/libGLU.so.1 (0x0000f3a287690000)
+#   	libglut.so.3 => /src/gl/ref-apps/prefix/lib/libglut.so.3 (0x0000f3a2875b0000)
+IperS V1.0
+Written by David Bucciarelli (tech.hmw@plus.it)
+libGL: context 1 created (pid 2620, comm ipers)
+libGL: unimplemented glEnable(GL_FOG)
+libGL: unimplemented glTexEnv(GL_TEXTURE_ENV_MODE other than GL_REPLACE/GL_DECAL)
+libGL: unimplemented glEnable(GL_RESCALE_NORMAL)
+libGL: unimplemented texturing with GL_TEXTURE_ENV_MODE other than GL_REPLACE/GL_DECAL (drawn as GL_REPLACE)
+libGL: unimplemented glRasterPos2i
+libGL: unimplemented glPushClientAttrib
+libGL: unimplemented glBitmap
+libGL: unimplemented glPopClientAttrib
+libGL: unimplemented glEnable(GL_BLEND)
+glref: ok at swap 60 -> /src/artifacts/gl/phase1/suite/ours/ipers.f60

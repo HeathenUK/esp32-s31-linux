@@ -1,0 +1,5 @@
+result=missing-symbol
+rc=127
+unimplemented=0
+missing=glXChooseFBConfig 
+unresolved=glXChooseFBConfig glXCreateNewContext glXCreatePbuffer glXDestroyContext glXDestroyPbuffer glXGetFBConfigAttrib glXGetFBConfigs glXGetProcAddress glXGetProcAddressARB glXGetVisualFromFBConfig glXMakeCurrent glXQueryExtensionsString glXQueryServerString glXQueryVersion glXSwapBuffers 

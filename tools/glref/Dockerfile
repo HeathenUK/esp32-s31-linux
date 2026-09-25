@@ -8,7 +8,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
     xvfb xauth x11-utils x11-apps x11-xserver-utils mesa-utils \
     libgl1-mesa-dri libglx-mesa0 libgl-dev libglu1-mesa-dev freeglut3-dev \
     libx11-dev libxext-dev libxi-dev libxrandr-dev libxxf86vm-dev \
-    build-essential meson ninja-build pkg-config cmake python3 python3-pil \
+    build-essential meson ninja-build pkg-config cmake python3 python3-pil python3-numpy \
     imagemagick wget ca-certificates xz-utils bzip2 git file binutils \
     libsdl1.2-dev libsdl2-dev \
  && rm -rf /var/lib/apt/lists/*

@@ -1,0 +1,7 @@
+# glref run: impl=ours name=terrain frame=20 display=:92
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/demos/terrain -geometry 320x240+0+0
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000e701b12f0000)
+#   	libGLU.so.1 => /src/gl/ref-apps/prefix/lib/libGLU.so.1 (0x0000e701b1240000)
+#   	libglut.so.3 => /src/gl/ref-apps/prefix/lib/libglut.so.3 (0x0000e701b1160000)
+/src/gl/ref-apps/build/mesa-demos/src/demos/terrain: symbol lookup error: /src/gl/ref-apps/prefix/lib/libglut.so.3: undefined symbol: glXChooseFBConfig

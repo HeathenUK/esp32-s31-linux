@@ -1,0 +1,16 @@
+--- enum values: TinyGL header against Khronos
+enumcmp: 0 mismatches
+--- compiling TinyGL core
+--- compiling the GL ABI layer
+--- export surface (mkstubs.py)
+mkstubs: 627 exported GL names: 347 implemented, 280 stubs
+--- compiling the GLX layer (gl/glx)
+--- linking /src/images/libGL.so.1
+-rwxr-xr-x 1 builder builder 177660 Sep 25 21:59 /src/images/libGL.so.1
+--- headless_gears (static: the core objects of libGL.so.1, no X)
+--- qemu-user variants (scalar mem*/str*: qemu has no ESP PIE)
+-rwxr-xr-x 1 builder builder 214856 Sep 25 21:59 /src/gl/out-rv32/core_test
+-rwxr-xr-x 1 builder builder 492948 Sep 25 21:59 /src/gl/out-rv32/core_test.qemu
+-rwxr-xr-x 1 builder builder 466764 Sep 25 21:59 /src/gl/out-rv32/d2f_test.qemu
+-rwxr-xr-x 1 builder builder 194548 Sep 25 21:59 /src/gl/out-rv32/headless_gears
+-rwxr-xr-x 1 builder builder 477712 Sep 25 21:59 /src/gl/out-rv32/headless_gears.qemu

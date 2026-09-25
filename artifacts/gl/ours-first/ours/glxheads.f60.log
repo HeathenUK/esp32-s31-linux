@@ -1,0 +1,5 @@
+# glref run: impl=ours name=glxheads frame=60 display=:99
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/xdemos/glxheads
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000f99e52d90000)
+/src/gl/ref-apps/build/mesa-demos/src/xdemos/glxheads: symbol lookup error: /src/gl/ref-apps/build/mesa-demos/src/xdemos/glxheads: undefined symbol: glXCreateContext

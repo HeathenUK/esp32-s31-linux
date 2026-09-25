@@ -1,0 +1,13 @@
+result=ok
+rc=0
+unimplemented=1
+missing=
+unresolved=
+meta_status=ok
+meta_swap=4
+meta_want_frame=4
+meta_x=0
+meta_y=0
+meta_w=800
+meta_h=480
+meta_virtual_ms=66

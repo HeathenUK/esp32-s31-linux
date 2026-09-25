@@ -1,0 +1,5 @@
+# glref run: impl=ours name=glxgears frame=20 display=:95
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/xdemos/glxgears -geometry 320x240+0+0
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000f47035a40000)
+/src/gl/ref-apps/build/mesa-demos/src/xdemos/glxgears: symbol lookup error: /src/gl/ref-apps/build/mesa-demos/src/xdemos/glxgears: undefined symbol: glXDestroyContext

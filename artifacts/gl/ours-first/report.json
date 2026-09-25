@@ -1,0 +1,702 @@
+{
+ "summary": [
+  {
+   "app": "glxgears",
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "glxinfo",
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "glxheads",
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "manywin",
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "offset",
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "glxgears_fbconfig",
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "gears",
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "morph3d",
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "bounce",
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "spectex",
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "geartrain",
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "ipers",
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "terrain",
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "tunnel",
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "fire",
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "teapot",
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "texcyl",
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "isosurf",
+   "verdict": "MISSING-SYMBOL"
+  }
+ ],
+ "rows": [
+  {
+   "app": "glxgears",
+   "frame": "3",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXDestroyContext",
+   "unresolved": "glXChooseVisual glXCreateContext glXDestroyContext glXGetProcAddressARB glXMakeCurrent glXQueryDrawable glXQueryExtensionsString glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/xdemos/glxgears: symbol lookup error: /src/gl/ref-apps/build/mesa-demos/src/xdemos/glxgears: undefined symbol: glXDestroyContext"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "glxgears",
+   "frame": "20",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXDestroyContext",
+   "unresolved": "glXChooseVisual glXCreateContext glXDestroyContext glXGetProcAddressARB glXMakeCurrent glXQueryDrawable glXQueryExtensionsString glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/xdemos/glxgears: symbol lookup error: /src/gl/ref-apps/build/mesa-demos/src/xdemos/glxgears: undefined symbol: glXDestroyContext"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "glxgears",
+   "frame": "60",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXDestroyContext",
+   "unresolved": "glXChooseVisual glXCreateContext glXDestroyContext glXGetProcAddressARB glXMakeCurrent glXQueryDrawable glXQueryExtensionsString glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/xdemos/glxgears: symbol lookup error: /src/gl/ref-apps/build/mesa-demos/src/xdemos/glxgears: undefined symbol: glXDestroyContext"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "glxinfo",
+   "frame": "0",
+   "impl_result": "missing-symbol",
+   "ref_result": "exit",
+   "unimplemented": 0,
+   "missing": "glXGetConfig",
+   "unresolved": "glXChooseFBConfig glXChooseVisual glXCreateContext glXCreateNewContext glXDestroyContext glXGetClientString glXGetConfig glXGetFBConfigAttrib glXGetFBConfigs glXGetProcAddress glXGetProcAddressARB glXGetVisualFromFBConfig glXIsDirect glXMakeCurrent glXQueryExtensionsString glXQueryServerString glXQueryVersion",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/xdemos/glxinfo: symbol lookup error: /src/gl/ref-apps/build/mesa-demos/src/xdemos/glxinfo: undefined symbol: glXGetConfig"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "glxheads",
+   "frame": "3",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXCreateContext",
+   "unresolved": "glXChooseVisual glXCreateContext glXMakeCurrent glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/xdemos/glxheads: symbol lookup error: /src/gl/ref-apps/build/mesa-demos/src/xdemos/glxheads: undefined symbol: glXCreateContext"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "glxheads",
+   "frame": "20",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXCreateContext",
+   "unresolved": "glXChooseVisual glXCreateContext glXMakeCurrent glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/xdemos/glxheads: symbol lookup error: /src/gl/ref-apps/build/mesa-demos/src/xdemos/glxheads: undefined symbol: glXCreateContext"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "glxheads",
+   "frame": "60",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXCreateContext",
+   "unresolved": "glXChooseVisual glXCreateContext glXMakeCurrent glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/xdemos/glxheads: symbol lookup error: /src/gl/ref-apps/build/mesa-demos/src/xdemos/glxheads: undefined symbol: glXCreateContext"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "manywin",
+   "frame": "4",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXDestroyContext",
+   "unresolved": "glXChooseVisual glXCreateContext glXDestroyContext glXMakeCurrent glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/xdemos/manywin: symbol lookup error: /src/gl/ref-apps/build/mesa-demos/src/xdemos/manywin: undefined symbol: glXDestroyContext"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "manywin",
+   "frame": "20",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXDestroyContext",
+   "unresolved": "glXChooseVisual glXCreateContext glXDestroyContext glXMakeCurrent glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/xdemos/manywin: symbol lookup error: /src/gl/ref-apps/build/mesa-demos/src/xdemos/manywin: undefined symbol: glXDestroyContext"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "manywin",
+   "frame": "60",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXDestroyContext",
+   "unresolved": "glXChooseVisual glXCreateContext glXDestroyContext glXMakeCurrent glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/xdemos/manywin: symbol lookup error: /src/gl/ref-apps/build/mesa-demos/src/xdemos/manywin: undefined symbol: glXDestroyContext"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "offset",
+   "frame": "1",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXCreateContext",
+   "unresolved": "glXChooseVisual glXCreateContext glXMakeCurrent glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/xdemos/offset: symbol lookup error: /src/gl/ref-apps/build/mesa-demos/src/xdemos/offset: undefined symbol: glXCreateContext"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "glxgears_fbconfig",
+   "frame": "3",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXChooseFBConfig",
+   "unresolved": "glXChooseFBConfig glXCreateNewContext glXCreatePbuffer glXDestroyContext glXDestroyPbuffer glXGetFBConfigAttrib glXGetFBConfigs glXGetProcAddress glXGetProcAddressARB glXGetVisualFromFBConfig glXMakeCurrent glXQueryExtensionsString glXQueryServerString glXQueryVersion glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/xdemos/glxgears_fbconfig: symbol lookup error: /src/gl/ref-apps/build/mesa-demos/src/xdemos/glxgears_fbconfig: undefined symbol: glXChooseFBConfig"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "glxgears_fbconfig",
+   "frame": "20",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXChooseFBConfig",
+   "unresolved": "glXChooseFBConfig glXCreateNewContext glXCreatePbuffer glXDestroyContext glXDestroyPbuffer glXGetFBConfigAttrib glXGetFBConfigs glXGetProcAddress glXGetProcAddressARB glXGetVisualFromFBConfig glXMakeCurrent glXQueryExtensionsString glXQueryServerString glXQueryVersion glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/xdemos/glxgears_fbconfig: symbol lookup error: /src/gl/ref-apps/build/mesa-demos/src/xdemos/glxgears_fbconfig: undefined symbol: glXChooseFBConfig"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "glxgears_fbconfig",
+   "frame": "60",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXChooseFBConfig",
+   "unresolved": "glXChooseFBConfig glXCreateNewContext glXCreatePbuffer glXDestroyContext glXDestroyPbuffer glXGetFBConfigAttrib glXGetFBConfigs glXGetProcAddress glXGetProcAddressARB glXGetVisualFromFBConfig glXMakeCurrent glXQueryExtensionsString glXQueryServerString glXQueryVersion glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/xdemos/glxgears_fbconfig: symbol lookup error: /src/gl/ref-apps/build/mesa-demos/src/xdemos/glxgears_fbconfig: undefined symbol: glXChooseFBConfig"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "gears",
+   "frame": "3",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXChooseFBConfig",
+   "unresolved": "glXChooseFBConfig glXCreateNewContext glXDestroyContext glXGetCurrentContext glXGetFBConfigAttrib glXGetProcAddressARB glXGetVisualFromFBConfig glXIsDirect glXMakeContextCurrent glXQueryExtension glXQueryExtensionsString glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/demos/gears: symbol lookup error: /src/gl/ref-apps/prefix/lib/libglut.so.3: undefined symbol: glXChooseFBConfig"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "gears",
+   "frame": "20",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXChooseFBConfig",
+   "unresolved": "glXChooseFBConfig glXCreateNewContext glXDestroyContext glXGetCurrentContext glXGetFBConfigAttrib glXGetProcAddressARB glXGetVisualFromFBConfig glXIsDirect glXMakeContextCurrent glXQueryExtension glXQueryExtensionsString glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/demos/gears: symbol lookup error: /src/gl/ref-apps/prefix/lib/libglut.so.3: undefined symbol: glXChooseFBConfig"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "gears",
+   "frame": "60",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXChooseFBConfig",
+   "unresolved": "glXChooseFBConfig glXCreateNewContext glXDestroyContext glXGetCurrentContext glXGetFBConfigAttrib glXGetProcAddressARB glXGetVisualFromFBConfig glXIsDirect glXMakeContextCurrent glXQueryExtension glXQueryExtensionsString glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/demos/gears: symbol lookup error: /src/gl/ref-apps/prefix/lib/libglut.so.3: undefined symbol: glXChooseFBConfig"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "morph3d",
+   "frame": "3",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXChooseFBConfig",
+   "unresolved": "glXChooseFBConfig glXCreateNewContext glXDestroyContext glXGetCurrentContext glXGetFBConfigAttrib glXGetProcAddressARB glXGetVisualFromFBConfig glXIsDirect glXMakeContextCurrent glXQueryExtension glXQueryExtensionsString glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/demos/morph3d: symbol lookup error: /src/gl/ref-apps/prefix/lib/libglut.so.3: undefined symbol: glXChooseFBConfig"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "morph3d",
+   "frame": "20",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXChooseFBConfig",
+   "unresolved": "glXChooseFBConfig glXCreateNewContext glXDestroyContext glXGetCurrentContext glXGetFBConfigAttrib glXGetProcAddressARB glXGetVisualFromFBConfig glXIsDirect glXMakeContextCurrent glXQueryExtension glXQueryExtensionsString glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/demos/morph3d: symbol lookup error: /src/gl/ref-apps/prefix/lib/libglut.so.3: undefined symbol: glXChooseFBConfig"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "morph3d",
+   "frame": "60",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXChooseFBConfig",
+   "unresolved": "glXChooseFBConfig glXCreateNewContext glXDestroyContext glXGetCurrentContext glXGetFBConfigAttrib glXGetProcAddressARB glXGetVisualFromFBConfig glXIsDirect glXMakeContextCurrent glXQueryExtension glXQueryExtensionsString glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/demos/morph3d: symbol lookup error: /src/gl/ref-apps/prefix/lib/libglut.so.3: undefined symbol: glXChooseFBConfig"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "bounce",
+   "frame": "3",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXChooseFBConfig",
+   "unresolved": "glXChooseFBConfig glXCreateNewContext glXDestroyContext glXGetCurrentContext glXGetFBConfigAttrib glXGetProcAddressARB glXGetVisualFromFBConfig glXIsDirect glXMakeContextCurrent glXQueryExtension glXQueryExtensionsString glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/demos/bounce: symbol lookup error: /src/gl/ref-apps/prefix/lib/libglut.so.3: undefined symbol: glXChooseFBConfig"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "bounce",
+   "frame": "20",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXChooseFBConfig",
+   "unresolved": "glXChooseFBConfig glXCreateNewContext glXDestroyContext glXGetCurrentContext glXGetFBConfigAttrib glXGetProcAddressARB glXGetVisualFromFBConfig glXIsDirect glXMakeContextCurrent glXQueryExtension glXQueryExtensionsString glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/demos/bounce: symbol lookup error: /src/gl/ref-apps/prefix/lib/libglut.so.3: undefined symbol: glXChooseFBConfig"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "bounce",
+   "frame": "60",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXChooseFBConfig",
+   "unresolved": "glXChooseFBConfig glXCreateNewContext glXDestroyContext glXGetCurrentContext glXGetFBConfigAttrib glXGetProcAddressARB glXGetVisualFromFBConfig glXIsDirect glXMakeContextCurrent glXQueryExtension glXQueryExtensionsString glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/demos/bounce: symbol lookup error: /src/gl/ref-apps/prefix/lib/libglut.so.3: undefined symbol: glXChooseFBConfig"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "spectex",
+   "frame": "3",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXChooseFBConfig",
+   "unresolved": "glXChooseFBConfig glXCreateNewContext glXDestroyContext glXGetCurrentContext glXGetFBConfigAttrib glXGetProcAddressARB glXGetVisualFromFBConfig glXIsDirect glXMakeContextCurrent glXQueryExtension glXQueryExtensionsString glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/demos/spectex: symbol lookup error: /src/gl/ref-apps/prefix/lib/libglut.so.3: undefined symbol: glXChooseFBConfig"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "spectex",
+   "frame": "20",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXChooseFBConfig",
+   "unresolved": "glXChooseFBConfig glXCreateNewContext glXDestroyContext glXGetCurrentContext glXGetFBConfigAttrib glXGetProcAddressARB glXGetVisualFromFBConfig glXIsDirect glXMakeContextCurrent glXQueryExtension glXQueryExtensionsString glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/demos/spectex: symbol lookup error: /src/gl/ref-apps/prefix/lib/libglut.so.3: undefined symbol: glXChooseFBConfig"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "spectex",
+   "frame": "60",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXChooseFBConfig",
+   "unresolved": "glXChooseFBConfig glXCreateNewContext glXDestroyContext glXGetCurrentContext glXGetFBConfigAttrib glXGetProcAddressARB glXGetVisualFromFBConfig glXIsDirect glXMakeContextCurrent glXQueryExtension glXQueryExtensionsString glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/demos/spectex: symbol lookup error: /src/gl/ref-apps/prefix/lib/libglut.so.3: undefined symbol: glXChooseFBConfig"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "geartrain",
+   "frame": "3",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXChooseFBConfig",
+   "unresolved": "glXChooseFBConfig glXCreateNewContext glXDestroyContext glXGetCurrentContext glXGetFBConfigAttrib glXGetProcAddressARB glXGetVisualFromFBConfig glXIsDirect glXMakeContextCurrent glXQueryExtension glXQueryExtensionsString glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/demos/geartrain: symbol lookup error: /src/gl/ref-apps/prefix/lib/libglut.so.3: undefined symbol: glXChooseFBConfig"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "geartrain",
+   "frame": "20",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXChooseFBConfig",
+   "unresolved": "glXChooseFBConfig glXCreateNewContext glXDestroyContext glXGetCurrentContext glXGetFBConfigAttrib glXGetProcAddressARB glXGetVisualFromFBConfig glXIsDirect glXMakeContextCurrent glXQueryExtension glXQueryExtensionsString glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/demos/geartrain: symbol lookup error: /src/gl/ref-apps/prefix/lib/libglut.so.3: undefined symbol: glXChooseFBConfig"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "geartrain",
+   "frame": "60",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXChooseFBConfig",
+   "unresolved": "glXChooseFBConfig glXCreateNewContext glXDestroyContext glXGetCurrentContext glXGetFBConfigAttrib glXGetProcAddressARB glXGetVisualFromFBConfig glXIsDirect glXMakeContextCurrent glXQueryExtension glXQueryExtensionsString glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/demos/geartrain: symbol lookup error: /src/gl/ref-apps/prefix/lib/libglut.so.3: undefined symbol: glXChooseFBConfig"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "ipers",
+   "frame": "3",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXChooseFBConfig",
+   "unresolved": "glXChooseFBConfig glXCreateNewContext glXDestroyContext glXGetCurrentContext glXGetFBConfigAttrib glXGetProcAddressARB glXGetVisualFromFBConfig glXIsDirect glXMakeContextCurrent glXQueryExtension glXQueryExtensionsString glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/demos/ipers: symbol lookup error: /src/gl/ref-apps/prefix/lib/libglut.so.3: undefined symbol: glXChooseFBConfig"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "ipers",
+   "frame": "20",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXChooseFBConfig",
+   "unresolved": "glXChooseFBConfig glXCreateNewContext glXDestroyContext glXGetCurrentContext glXGetFBConfigAttrib glXGetProcAddressARB glXGetVisualFromFBConfig glXIsDirect glXMakeContextCurrent glXQueryExtension glXQueryExtensionsString glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/demos/ipers: symbol lookup error: /src/gl/ref-apps/prefix/lib/libglut.so.3: undefined symbol: glXChooseFBConfig"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "ipers",
+   "frame": "60",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXChooseFBConfig",
+   "unresolved": "glXChooseFBConfig glXCreateNewContext glXDestroyContext glXGetCurrentContext glXGetFBConfigAttrib glXGetProcAddressARB glXGetVisualFromFBConfig glXIsDirect glXMakeContextCurrent glXQueryExtension glXQueryExtensionsString glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/demos/ipers: symbol lookup error: /src/gl/ref-apps/prefix/lib/libglut.so.3: undefined symbol: glXChooseFBConfig"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "terrain",
+   "frame": "3",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXChooseFBConfig",
+   "unresolved": "glXChooseFBConfig glXCreateNewContext glXDestroyContext glXGetCurrentContext glXGetFBConfigAttrib glXGetProcAddressARB glXGetVisualFromFBConfig glXIsDirect glXMakeContextCurrent glXQueryExtension glXQueryExtensionsString glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/demos/terrain: symbol lookup error: /src/gl/ref-apps/prefix/lib/libglut.so.3: undefined symbol: glXChooseFBConfig"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "terrain",
+   "frame": "20",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXChooseFBConfig",
+   "unresolved": "glXChooseFBConfig glXCreateNewContext glXDestroyContext glXGetCurrentContext glXGetFBConfigAttrib glXGetProcAddressARB glXGetVisualFromFBConfig glXIsDirect glXMakeContextCurrent glXQueryExtension glXQueryExtensionsString glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/demos/terrain: symbol lookup error: /src/gl/ref-apps/prefix/lib/libglut.so.3: undefined symbol: glXChooseFBConfig"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "terrain",
+   "frame": "60",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXChooseFBConfig",
+   "unresolved": "glXChooseFBConfig glXCreateNewContext glXDestroyContext glXGetCurrentContext glXGetFBConfigAttrib glXGetProcAddressARB glXGetVisualFromFBConfig glXIsDirect glXMakeContextCurrent glXQueryExtension glXQueryExtensionsString glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/demos/terrain: symbol lookup error: /src/gl/ref-apps/prefix/lib/libglut.so.3: undefined symbol: glXChooseFBConfig"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "tunnel",
+   "frame": "3",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXChooseFBConfig",
+   "unresolved": "glXChooseFBConfig glXCreateNewContext glXDestroyContext glXGetCurrentContext glXGetFBConfigAttrib glXGetProcAddressARB glXGetVisualFromFBConfig glXIsDirect glXMakeContextCurrent glXQueryExtension glXQueryExtensionsString glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/demos/tunnel: symbol lookup error: /src/gl/ref-apps/prefix/lib/libglut.so.3: undefined symbol: glXChooseFBConfig"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "tunnel",
+   "frame": "20",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXChooseFBConfig",
+   "unresolved": "glXChooseFBConfig glXCreateNewContext glXDestroyContext glXGetCurrentContext glXGetFBConfigAttrib glXGetProcAddressARB glXGetVisualFromFBConfig glXIsDirect glXMakeContextCurrent glXQueryExtension glXQueryExtensionsString glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/demos/tunnel: symbol lookup error: /src/gl/ref-apps/prefix/lib/libglut.so.3: undefined symbol: glXChooseFBConfig"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "tunnel",
+   "frame": "60",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXChooseFBConfig",
+   "unresolved": "glXChooseFBConfig glXCreateNewContext glXDestroyContext glXGetCurrentContext glXGetFBConfigAttrib glXGetProcAddressARB glXGetVisualFromFBConfig glXIsDirect glXMakeContextCurrent glXQueryExtension glXQueryExtensionsString glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/demos/tunnel: symbol lookup error: /src/gl/ref-apps/prefix/lib/libglut.so.3: undefined symbol: glXChooseFBConfig"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "fire",
+   "frame": "3",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXChooseFBConfig",
+   "unresolved": "glXChooseFBConfig glXCreateNewContext glXDestroyContext glXGetCurrentContext glXGetFBConfigAttrib glXGetProcAddressARB glXGetVisualFromFBConfig glXIsDirect glXMakeContextCurrent glXQueryExtension glXQueryExtensionsString glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/demos/fire: symbol lookup error: /src/gl/ref-apps/prefix/lib/libglut.so.3: undefined symbol: glXChooseFBConfig"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "fire",
+   "frame": "20",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXChooseFBConfig",
+   "unresolved": "glXChooseFBConfig glXCreateNewContext glXDestroyContext glXGetCurrentContext glXGetFBConfigAttrib glXGetProcAddressARB glXGetVisualFromFBConfig glXIsDirect glXMakeContextCurrent glXQueryExtension glXQueryExtensionsString glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/demos/fire: symbol lookup error: /src/gl/ref-apps/prefix/lib/libglut.so.3: undefined symbol: glXChooseFBConfig"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "fire",
+   "frame": "60",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXChooseFBConfig",
+   "unresolved": "glXChooseFBConfig glXCreateNewContext glXDestroyContext glXGetCurrentContext glXGetFBConfigAttrib glXGetProcAddressARB glXGetVisualFromFBConfig glXIsDirect glXMakeContextCurrent glXQueryExtension glXQueryExtensionsString glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/demos/fire: symbol lookup error: /src/gl/ref-apps/prefix/lib/libglut.so.3: undefined symbol: glXChooseFBConfig"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "teapot",
+   "frame": "3",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXChooseFBConfig",
+   "unresolved": "glXChooseFBConfig glXCreateNewContext glXDestroyContext glXGetCurrentContext glXGetFBConfigAttrib glXGetProcAddressARB glXGetVisualFromFBConfig glXIsDirect glXMakeContextCurrent glXQueryExtension glXQueryExtensionsString glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/demos/teapot: symbol lookup error: /src/gl/ref-apps/prefix/lib/libglut.so.3: undefined symbol: glXChooseFBConfig"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "teapot",
+   "frame": "20",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXChooseFBConfig",
+   "unresolved": "glXChooseFBConfig glXCreateNewContext glXDestroyContext glXGetCurrentContext glXGetFBConfigAttrib glXGetProcAddressARB glXGetVisualFromFBConfig glXIsDirect glXMakeContextCurrent glXQueryExtension glXQueryExtensionsString glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/demos/teapot: symbol lookup error: /src/gl/ref-apps/prefix/lib/libglut.so.3: undefined symbol: glXChooseFBConfig"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "teapot",
+   "frame": "60",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXChooseFBConfig",
+   "unresolved": "glXChooseFBConfig glXCreateNewContext glXDestroyContext glXGetCurrentContext glXGetFBConfigAttrib glXGetProcAddressARB glXGetVisualFromFBConfig glXIsDirect glXMakeContextCurrent glXQueryExtension glXQueryExtensionsString glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/demos/teapot: symbol lookup error: /src/gl/ref-apps/prefix/lib/libglut.so.3: undefined symbol: glXChooseFBConfig"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "texcyl",
+   "frame": "3",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXChooseFBConfig",
+   "unresolved": "glXChooseFBConfig glXCreateNewContext glXDestroyContext glXGetCurrentContext glXGetFBConfigAttrib glXGetProcAddressARB glXGetVisualFromFBConfig glXIsDirect glXMakeContextCurrent glXQueryExtension glXQueryExtensionsString glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/demos/texcyl: symbol lookup error: /src/gl/ref-apps/prefix/lib/libglut.so.3: undefined symbol: glXChooseFBConfig"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "texcyl",
+   "frame": "20",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXChooseFBConfig",
+   "unresolved": "glXChooseFBConfig glXCreateNewContext glXDestroyContext glXGetCurrentContext glXGetFBConfigAttrib glXGetProcAddressARB glXGetVisualFromFBConfig glXIsDirect glXMakeContextCurrent glXQueryExtension glXQueryExtensionsString glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/demos/texcyl: symbol lookup error: /src/gl/ref-apps/prefix/lib/libglut.so.3: undefined symbol: glXChooseFBConfig"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "texcyl",
+   "frame": "60",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXChooseFBConfig",
+   "unresolved": "glXChooseFBConfig glXCreateNewContext glXDestroyContext glXGetCurrentContext glXGetFBConfigAttrib glXGetProcAddressARB glXGetVisualFromFBConfig glXIsDirect glXMakeContextCurrent glXQueryExtension glXQueryExtensionsString glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/demos/texcyl: symbol lookup error: /src/gl/ref-apps/prefix/lib/libglut.so.3: undefined symbol: glXChooseFBConfig"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  },
+  {
+   "app": "isosurf",
+   "frame": "1",
+   "impl_result": "missing-symbol",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "glXChooseFBConfig",
+   "unresolved": "glXChooseFBConfig glXCreateNewContext glXDestroyContext glXGetCurrentContext glXGetFBConfigAttrib glXGetProcAddressARB glXGetVisualFromFBConfig glXIsDirect glXMakeContextCurrent glXQueryExtension glXQueryExtensionsString glXSwapBuffers",
+   "notes": [
+    "log: /src/gl/ref-apps/build/mesa-demos/src/demos/isosurf: symbol lookup error: /src/gl/ref-apps/prefix/lib/libglut.so.3: undefined symbol: glXChooseFBConfig"
+   ],
+   "verdict": "MISSING-SYMBOL"
+  }
+ ]
+}

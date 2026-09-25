@@ -1,0 +1,12 @@
+--- enum values: TinyGL header against Khronos
+enumcmp: 0 mismatches
+--- compiling TinyGL core
+--- compiling the GL ABI layer
+--- export surface (mkstubs.py)
+mkstubs: 627 exported GL names: 343 implemented, 284 stubs
+--- compiling the GLX layer (gl/glx)
+--- linking /src/gl/out-host/libGL.so.1
+--- headless_gears (links the shipped libGL.so.1)
+-rwxr-xr-x 1 root root  74920 Sep 25 21:04 /src/gl/out-host/core_test
+-rwxr-xr-x 1 root root  72704 Sep 25 21:04 /src/gl/out-host/headless_gears
+-rwxr-xr-x 1 root root 283248 Sep 25 21:04 /src/gl/out-host/libGL.so.1

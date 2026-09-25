@@ -1,0 +1,46 @@
+# glref run: impl=ours name=manywin frame=4 display=:92
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/xdemos/manywin 4
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000ecd7ece00000)
+libGL: context 1 created (pid 1031, comm manywin)
+libGL: context 2 created (pid 1031, comm manywin)
+libGL: context 3 created (pid 1031, comm manywin)
+libGL: context 4 created (pid 1031, comm manywin)
+libGL: unimplemented texturing with GL_TEXTURE_ENV_MODE other than GL_REPLACE/GL_DECAL (drawn as GL_REPLACE)
+4 windows
+0, 0
+Name: 0
+  Display:     0xb40ca508f370
+  Window:      0x200002
+  Context:     0xb40ca509bae0
+  GL_VERSION:  1.1 s31-tinygl
+  GL_VENDOR:   s31
+  GL_RENDERER: Software Rasterizer
+100, 0
+sharing
+Name: 1
+  Display:     0xb40ca50a6360
+  Window:      0x400002
+  Context:     0xb40ca50b29e0
+  GL_VERSION:  1.1 s31-tinygl
+  GL_VENDOR:   s31
+  GL_RENDERER: Software Rasterizer
+200, 0
+sharing
+Name: 2
+  Display:     0xb40ca50b4730
+  Window:      0x600002
+  Context:     0xb40ca50c1aa0
+  GL_VERSION:  1.1 s31-tinygl
+  GL_VENDOR:   s31
+  GL_RENDERER: Software Rasterizer
+300, 0
+sharing
+Name: 3
+  Display:     0xb40ca50c37e0
+  Window:      0x800002
+  Context:     0xb40ca50d0a70
+  GL_VERSION:  1.1 s31-tinygl
+  GL_VENDOR:   s31
+  GL_RENDERER: Software Rasterizer
+glref: ok at swap 4 -> /src/artifacts/gl/phase1/suite-review/ours/manywin.f4

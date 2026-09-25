@@ -1,0 +1,5 @@
+# glref run: impl=ours name=glxinfo frame=0 display=:99
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/xdemos/glxinfo
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000ee8989520000)
+/src/gl/ref-apps/build/mesa-demos/src/xdemos/glxinfo: symbol lookup error: /src/gl/ref-apps/build/mesa-demos/src/xdemos/glxinfo: undefined symbol: glXGetConfig

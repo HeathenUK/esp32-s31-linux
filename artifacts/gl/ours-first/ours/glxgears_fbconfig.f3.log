@@ -1,0 +1,5 @@
+# glref run: impl=ours name=glxgears_fbconfig frame=3 display=:97
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/xdemos/glxgears_fbconfig
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000e7c189e30000)
+/src/gl/ref-apps/build/mesa-demos/src/xdemos/glxgears_fbconfig: symbol lookup error: /src/gl/ref-apps/build/mesa-demos/src/xdemos/glxgears_fbconfig: undefined symbol: glXChooseFBConfig

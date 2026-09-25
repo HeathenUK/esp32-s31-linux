@@ -1,0 +1,9 @@
+# glref run: impl=mesa name=offset frame=1 display=:94
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/xdemos/offset
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /lib/aarch64-linux-gnu/libGL.so.1 (0x0000e598a6f20000)
+#   	libGLdispatch.so.0 => /lib/aarch64-linux-gnu/libGLdispatch.so.0 (0x0000e598a6a60000)
+#   	libGLX.so.0 => /lib/aarch64-linux-gnu/libGLX.so.0 (0x0000e598a6a00000)
+GL_DEPTH_BITS = 24
+using 1.1 offset
+glref: ok at swap 1 -> /src/artifacts/gl/mesa-vs-mesa/mesa/offset.f1

@@ -1,0 +1,13 @@
+# glref run: impl=ours name=terrain frame=60 display=:90
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/demos/terrain -geometry 320x240+0+0
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000e11b2acd0000)
+#   	libGLU.so.1 => /src/gl/ref-apps/prefix/lib/libGLU.so.1 (0x0000e11b2ac20000)
+#   	libglut.so.3 => /src/gl/ref-apps/prefix/lib/libglut.so.3 (0x0000e11b2ab40000)
+libGL: context 1 created (pid 2946, comm terrain)
+libGL: unimplemented glTexEnv(GL_TEXTURE_ENV_MODE other than GL_REPLACE/GL_DECAL)
+libGL: unimplemented glEnable(GL_FOG)
+libGL: unimplemented glEnable(GL_BLEND)
+libGL: unimplemented glRasterPos2i
+libGL: unimplemented glBitmap
+glref: ok at swap 60 -> /src/artifacts/gl/phase1/suite-review/ours/terrain.f60

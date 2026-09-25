@@ -1,0 +1,5 @@
+# glref run: impl=ours name=manywin frame=20 display=:94
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/xdemos/manywin 4
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000f569ebbe0000)
+/src/gl/ref-apps/build/mesa-demos/src/xdemos/manywin: symbol lookup error: /src/gl/ref-apps/build/mesa-demos/src/xdemos/manywin: undefined symbol: glXDestroyContext

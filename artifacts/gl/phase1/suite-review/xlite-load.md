@@ -1,0 +1,35 @@
+# xlite load arm
+
+Each app and the GL libraries it loads, resolved with `ldd -r` (every
+relocation, as musl binds) against our libGL + xlite libX11 + xstubs
+libXext (+ xlite's libXrandr/libXxf86vm), built for the host from the
+repo sources; libXi/libXrender are the host's, standing in for the
+board's. LOADS means no undefined symbol; it says nothing about what
+the calls then do.
+
+| app | result | undefined symbols (library) |
+|---|---|---|
+| glxgears | MISSING-SYMBOL | XSetNormalHints (build/mesa-demos/src/xdemos/glxgears), XSetStandardProperties (build/mesa-demos/src/xdemos/glxgears) |
+| glxinfo | LOADS | |
+| glxheads | MISSING-SYMBOL | XSetNormalHints (build/mesa-demos/src/xdemos/glxheads), XSetStandardProperties (build/mesa-demos/src/xdemos/glxheads) |
+| manywin | MISSING-SYMBOL | XSetNormalHints (build/mesa-demos/src/xdemos/manywin), XSetStandardProperties (build/mesa-demos/src/xdemos/manywin) |
+| multictx | MISSING-SYMBOL | XSetNormalHints (build/mesa-demos/src/xdemos/multictx), XSetStandardProperties (build/mesa-demos/src/xdemos/multictx) |
+| offset | LOADS | |
+| glxgears_fbconfig | MISSING-SYMBOL | XSetNormalHints (build/mesa-demos/src/xdemos/glxgears_fbconfig), XSetStandardProperties (build/mesa-demos/src/xdemos/glxgears_fbconfig) |
+| gears | MISSING-SYMBOL | XFreeEventData (prefix/lib/libglut.so.3), XGetEventData (prefix/lib/libglut.so.3), XGetPointerMapping (prefix/lib/libglut.so.3), XGetWMName (prefix/lib/libglut.so.3), XRRConfigTimes (prefix/lib/libglut.so.3), XRRSetScreenConfig (prefix/lib/libglut.so.3), XStoreColor (prefix/lib/libglut.so.3), _XData32 (/lib/aarch64-linux-gnu/libXi.so.6), _XRead32 (/lib/aarch64-linux-gnu/libXi.so.6), _XUnknownNativeEvent (/lib/aarch64-linux-gnu/libXi.so.6) |
+| morph3d | MISSING-SYMBOL | XFreeEventData (prefix/lib/libglut.so.3), XGetEventData (prefix/lib/libglut.so.3), XGetPointerMapping (prefix/lib/libglut.so.3), XGetWMName (prefix/lib/libglut.so.3), XRRConfigTimes (prefix/lib/libglut.so.3), XRRSetScreenConfig (prefix/lib/libglut.so.3), XStoreColor (prefix/lib/libglut.so.3), _XData32 (/lib/aarch64-linux-gnu/libXi.so.6), _XRead32 (/lib/aarch64-linux-gnu/libXi.so.6), _XUnknownNativeEvent (/lib/aarch64-linux-gnu/libXi.so.6) |
+| bounce | MISSING-SYMBOL | XFreeEventData (prefix/lib/libglut.so.3), XGetEventData (prefix/lib/libglut.so.3), XGetPointerMapping (prefix/lib/libglut.so.3), XGetWMName (prefix/lib/libglut.so.3), XRRConfigTimes (prefix/lib/libglut.so.3), XRRSetScreenConfig (prefix/lib/libglut.so.3), XStoreColor (prefix/lib/libglut.so.3), _XData32 (/lib/aarch64-linux-gnu/libXi.so.6), _XRead32 (/lib/aarch64-linux-gnu/libXi.so.6), _XUnknownNativeEvent (/lib/aarch64-linux-gnu/libXi.so.6) |
+| spectex | MISSING-SYMBOL | XFreeEventData (prefix/lib/libglut.so.3), XGetEventData (prefix/lib/libglut.so.3), XGetPointerMapping (prefix/lib/libglut.so.3), XGetWMName (prefix/lib/libglut.so.3), XRRConfigTimes (prefix/lib/libglut.so.3), XRRSetScreenConfig (prefix/lib/libglut.so.3), XStoreColor (prefix/lib/libglut.so.3), _XData32 (/lib/aarch64-linux-gnu/libXi.so.6), _XRead32 (/lib/aarch64-linux-gnu/libXi.so.6), _XUnknownNativeEvent (/lib/aarch64-linux-gnu/libXi.so.6) |
+| geartrain | MISSING-SYMBOL | XFreeEventData (prefix/lib/libglut.so.3), XGetEventData (prefix/lib/libglut.so.3), XGetPointerMapping (prefix/lib/libglut.so.3), XGetWMName (prefix/lib/libglut.so.3), XRRConfigTimes (prefix/lib/libglut.so.3), XRRSetScreenConfig (prefix/lib/libglut.so.3), XStoreColor (prefix/lib/libglut.so.3), _XData32 (/lib/aarch64-linux-gnu/libXi.so.6), _XRead32 (/lib/aarch64-linux-gnu/libXi.so.6), _XUnknownNativeEvent (/lib/aarch64-linux-gnu/libXi.so.6) |
+| ipers | MISSING-SYMBOL | XFreeEventData (prefix/lib/libglut.so.3), XGetEventData (prefix/lib/libglut.so.3), XGetPointerMapping (prefix/lib/libglut.so.3), XGetWMName (prefix/lib/libglut.so.3), XRRConfigTimes (prefix/lib/libglut.so.3), XRRSetScreenConfig (prefix/lib/libglut.so.3), XStoreColor (prefix/lib/libglut.so.3), _XData32 (/lib/aarch64-linux-gnu/libXi.so.6), _XRead32 (/lib/aarch64-linux-gnu/libXi.so.6), _XUnknownNativeEvent (/lib/aarch64-linux-gnu/libXi.so.6) |
+| terrain | MISSING-SYMBOL | XFreeEventData (prefix/lib/libglut.so.3), XGetEventData (prefix/lib/libglut.so.3), XGetPointerMapping (prefix/lib/libglut.so.3), XGetWMName (prefix/lib/libglut.so.3), XRRConfigTimes (prefix/lib/libglut.so.3), XRRSetScreenConfig (prefix/lib/libglut.so.3), XStoreColor (prefix/lib/libglut.so.3), _XData32 (/lib/aarch64-linux-gnu/libXi.so.6), _XRead32 (/lib/aarch64-linux-gnu/libXi.so.6), _XUnknownNativeEvent (/lib/aarch64-linux-gnu/libXi.so.6) |
+| tunnel | MISSING-SYMBOL | XFreeEventData (prefix/lib/libglut.so.3), XGetEventData (prefix/lib/libglut.so.3), XGetPointerMapping (prefix/lib/libglut.so.3), XGetWMName (prefix/lib/libglut.so.3), XRRConfigTimes (prefix/lib/libglut.so.3), XRRSetScreenConfig (prefix/lib/libglut.so.3), XStoreColor (prefix/lib/libglut.so.3), _XData32 (/lib/aarch64-linux-gnu/libXi.so.6), _XRead32 (/lib/aarch64-linux-gnu/libXi.so.6), _XUnknownNativeEvent (/lib/aarch64-linux-gnu/libXi.so.6) |
+| fire | MISSING-SYMBOL | XFreeEventData (prefix/lib/libglut.so.3), XGetEventData (prefix/lib/libglut.so.3), XGetPointerMapping (prefix/lib/libglut.so.3), XGetWMName (prefix/lib/libglut.so.3), XRRConfigTimes (prefix/lib/libglut.so.3), XRRSetScreenConfig (prefix/lib/libglut.so.3), XStoreColor (prefix/lib/libglut.so.3), _XData32 (/lib/aarch64-linux-gnu/libXi.so.6), _XRead32 (/lib/aarch64-linux-gnu/libXi.so.6), _XUnknownNativeEvent (/lib/aarch64-linux-gnu/libXi.so.6) |
+| teapot | MISSING-SYMBOL | XFreeEventData (prefix/lib/libglut.so.3), XGetEventData (prefix/lib/libglut.so.3), XGetPointerMapping (prefix/lib/libglut.so.3), XGetWMName (prefix/lib/libglut.so.3), XRRConfigTimes (prefix/lib/libglut.so.3), XRRSetScreenConfig (prefix/lib/libglut.so.3), XStoreColor (prefix/lib/libglut.so.3), _XData32 (/lib/aarch64-linux-gnu/libXi.so.6), _XRead32 (/lib/aarch64-linux-gnu/libXi.so.6), _XUnknownNativeEvent (/lib/aarch64-linux-gnu/libXi.so.6) |
+| texcyl | MISSING-SYMBOL | XFreeEventData (prefix/lib/libglut.so.3), XGetEventData (prefix/lib/libglut.so.3), XGetPointerMapping (prefix/lib/libglut.so.3), XGetWMName (prefix/lib/libglut.so.3), XRRConfigTimes (prefix/lib/libglut.so.3), XRRSetScreenConfig (prefix/lib/libglut.so.3), XStoreColor (prefix/lib/libglut.so.3), _XData32 (/lib/aarch64-linux-gnu/libXi.so.6), _XRead32 (/lib/aarch64-linux-gnu/libXi.so.6), _XUnknownNativeEvent (/lib/aarch64-linux-gnu/libXi.so.6) |
+| isosurf | MISSING-SYMBOL | XFreeEventData (prefix/lib/libglut.so.3), XGetEventData (prefix/lib/libglut.so.3), XGetPointerMapping (prefix/lib/libglut.so.3), XGetWMName (prefix/lib/libglut.so.3), XRRConfigTimes (prefix/lib/libglut.so.3), XRRSetScreenConfig (prefix/lib/libglut.so.3), XStoreColor (prefix/lib/libglut.so.3), _XData32 (/lib/aarch64-linux-gnu/libXi.so.6), _XRead32 (/lib/aarch64-linux-gnu/libXi.so.6), _XUnknownNativeEvent (/lib/aarch64-linux-gnu/libXi.so.6) |
+
+2 load, 17 would abort at load on the board.
+
+These are gaps in xlite / the stub libraries (not libGL: every gl*/glX*
+import resolves). Owners: xlite for libX11 names, xstubs for libXext.

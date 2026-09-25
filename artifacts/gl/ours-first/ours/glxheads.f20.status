@@ -1,0 +1,5 @@
+result=missing-symbol
+rc=127
+unimplemented=0
+missing=glXCreateContext 
+unresolved=glXChooseVisual glXCreateContext glXMakeCurrent glXSwapBuffers 

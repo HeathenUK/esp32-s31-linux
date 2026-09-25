@@ -46,3 +46,6 @@ rootfs/lvdesk.syms
 tyrquake/
 rootfs/tyr-quake
 rootfs/tyr-quake.*
+
+# glref host GL rig: downloaded/extracted reference app sources and builds
+/gl/ref-apps/

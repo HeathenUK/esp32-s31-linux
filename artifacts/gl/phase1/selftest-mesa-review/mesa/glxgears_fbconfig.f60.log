@@ -1,0 +1,30 @@
+# glref run: impl=mesa name=glxgears_fbconfig frame=60 display=:93
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/xdemos/glxgears_fbconfig
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /lib/aarch64-linux-gnu/libGL.so.1 (0x0000f1414e630000)
+#   	libGLdispatch.so.0 => /lib/aarch64-linux-gnu/libGLdispatch.so.0 (0x0000f1414e0c0000)
+#   	libGLX.so.0 => /lib/aarch64-linux-gnu/libGLX.so.0 (0x0000f1414e060000)
+GLX 1.3 is supported.
+GLX_SGIX_fbconfig is supported.
+
+The following fbconfigs meet the requirements.  The first one will be used.
+
+0x96        TrueColor     16   0   y   .  y    .    5  6  5  0  24  0   0  0  0  0     0     0       y       .
+0xc8        TrueColor     16   0   y   .  y    .    5  6  5  0  24  0   0  0  0  0     0     0       y       .
+0x14a       DirectColor   16   0   y   .  y    .    5  6  5  0  24  0   0  0  0  0     0     0       y       .
+0x17c       DirectColor   16   0   y   .  y    .    5  6  5  0  24  0   0  0  0  0     0     0       y       .
+0x94        TrueColor     16   0   y   .  y    .    5  6  5  0  24  8   0  0  0  0     0     0       y       .
+0xc6        TrueColor     16   0   y   .  y    .    5  6  5  0  24  8   0  0  0  0     0     0       y       .
+0x148       DirectColor   16   0   y   .  y    .    5  6  5  0  24  8   0  0  0  0     0     0       y       .
+0x17a       DirectColor   16   0   y   .  y    .    5  6  5  0  24  8   0  0  0  0     0     0       y       .
+0x98        TrueColor     16   0   y   .  y    .    5  6  5  0  16  0   0  0  0  0     0     0       y       .
+0xca        TrueColor     16   0   y   .  y    .    5  6  5  0  16  0   0  0  0  0     0     0       y       .
+0x14c       DirectColor   16   0   y   .  y    .    5  6  5  0  16  0   0  0  0  0     0     0       y       .
+0x17e       DirectColor   16   0   y   .  y    .    5  6  5  0  16  0   0  0  0  0     0     0       y       .
+0x1ae       TrueColor     32   0   y   .  y    .    8  8  8  8  24  0   0  0  0  0     0     0       y       .
+0x1b8       TrueColor     32   0   y   .  y    .    8  8  8  8  24  0   0  0  0  0     0     0       y       .
+0x1ac       TrueColor     32   0   y   .  y    .    8  8  8  8  24  8   0  0  0  0     0     0       y       .
+0x1b6       TrueColor     32   0   y   .  y    .    8  8  8  8  24  8   0  0  0  0     0     0       y       .
+0x1b0       TrueColor     32   0   y   .  y    .    8  8  8  8  16  0   0  0  0  0     0     0       y       .
+0x1ba       TrueColor     32   0   y   .  y    .    8  8  8  8  16  0   0  0  0  0     0     0       y       .
+glref: ok at swap 60 -> /src/artifacts/gl/phase1/selftest-mesa-review/mesa/glxgears_fbconfig.f60

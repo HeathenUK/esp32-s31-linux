@@ -1,0 +1,162 @@
+TinyGL for the S31 libGL
+========================
+
+Origin
+------
+Vendored from erysdren TinyGL (https://github.com/erysdren/TinyGL), commit
+7f229c8 ("ui: blit to texture for sdl2/sdl3"), MIT (COPYING, also LICENSE).
+It is Fabrice Bellard's TinyGL 0.4.1 plus erysdren's arrays/ortho/offscreen
+work. The source layout is kept (include/, source/, examples/) so a diff
+against the upstream checkout reads directly:
+
+    git clone https://github.com/erysdren/TinyGL && git -C TinyGL checkout 7f229c8
+    diff -ru TinyGL/source gl/tinygl/source
+
+Not vendored: archive/ (the 0.4 / 0.4.1 tarballs) and .github/.
+Not built: source/glu.c (plan 2.3: GLU is Mesa's libGLU, unmodified) and
+source/ostinygl.c (replaced by source/s31_ctx.c).
+
+This directory is the rasteriser core only. The public, Khronos-ABI GL
+entry points are gl/api/; GLX is gl/glx/; the build is gl/build.sh (RV32)
+and gl/host-build.sh (host rig).
+
+How the two headers coexist
+---------------------------
+TinyGL compiles against its own include/GL/gl.h; gl/api compiles against
+the standard headers in gl/include/GL (libglvnd/Mesa, MIT). They meet only
+through source/tgl_bridge.h, which uses plain C types and is included by
+zgl.h too, so every bridge declaration is checked against TinyGL's
+definition by the compiler.
+
+- Every TinyGL entry point is renamed tgl_<name> (include/GL/tgl_rename.h,
+  included first by gl.h) and TinyGL is built -fvisibility=hidden, so the
+  ABI layer is the only exporter of GL names.
+- Enum VALUES are shared: gl/api/enumcmp.py checks every GL_* in TinyGL's
+  gl.h against the Khronos headers and fails the build on a mismatch. Two
+  were wrong upstream and are fixed here: GL_POLYGON_OFFSET_FACTOR (0x3038,
+  Khronos 0x8038) and GL_ALL_ATTRIB_BITS (0x000fffff, Khronos 0xffffffff).
+  Names TinyGL lacked were added with their Khronos values ("s31 additions"
+  at the end of the enum).
+- glFrustum, glOrtho and glClearDepth take float internally (double is a
+  libgcc call on this F-without-D hart); the ABI layer converts with
+  s31_float.h's s31_d2f, bit-exact with (float)d (gl/tests/d2f_test.c).
+
+Changes (every changed site is marked "s31")
+--------------------------------------------
+Robustness - TinyGL exit(1)ed or asserted on ordinary stock-app input:
+- error.c: gl_fatal_error no longer exits; prints once per message. Every
+  caller returns safely and records the GL error the spec gives.
+- a real GL error flag (GLContext.error; first error sticks until
+  glGetError); asserts replaced by GL_INVALID_ENUM / _VALUE / _OPERATION,
+  GL_STACK_OVERFLOW / _UNDERFLOW (matrix and name stacks: the asserts had
+  been the only bounds checks), GL_OUT_OF_MEMORY.
+- list.c: list names are bounds-checked (the table was indexed with any
+  value), glGenLists starts at 1, undefined lists are ignored (GL) instead
+  of exiting, nesting is capped at 64, glNewList/glEndList misuse errors.
+- texture.c: see "Textures" below; glGenTextures reserves its names (two
+  calls returned the same name); a texture with no image draws untextured
+  (clip.c read a NULL pixmap).
+- vertex.c: glBegin(bad mode), nested glBegin, glEnd without glBegin, and a
+  failed vertex-array growth no longer abort.
+- api.c: colours are clamped to [0,1] before the integer flat colour is
+  made (out-of-range colours wrapped); lights, materials and light models
+  read only as many floats as the pname has.
+
+Buffers and contexts (s31_ctx.c, see gl/api/s31gl.h for the contract):
+- Rendering goes straight into the caller's RGB565 buffer of any pitch
+  (ZBuffer.linesize = pitch); no ZB_copyFrameBuffer. zline.h stepped rows
+  by xsize pixels instead of linesize bytes - wrong for any pitched buffer,
+  it wrote outside it - and is fixed.
+- The depth buffer is allocated at the first clear/draw, not at bind.
+- The GLX frame hook runs once per frame before the first access
+  (gl_prepare in zgl.h; one load and branch per glBegin/glClear).
+- Several contexts, with glXCreateContext list/texture sharing (refcounted
+  GLSharedState); with nothing current, GL calls go to a buffer-less
+  context and are dropped. endSharedState/glClose free every list, texture
+  chain and specular table (TinyGL leaked all but the first of each).
+- misc.c/vertex.c, the viewport guard: GL's viewport is bottom-up and may
+  be larger than, or lie outside, the window. TinyGL measured from the top
+  and relied on resizing its own buffer to the viewport. gl_eval_viewport
+  now intersects the viewport with the buffer and, when it is not wholly
+  inside, folds a clip-space scale/offset into the projection so the
+  ordinary clipper cuts primitives to the visible part - exact screen
+  positions, nothing written outside, zero per-pixel cost.
+  gl/tests/core_test.c fuzzes it (20000 random viewports and primitives
+  with canaries round the buffer).
+- memset_16 aligns before word stores (odd-width rows start 2 bytes off);
+  a contiguous colour buffer is cleared in one pass.
+
+State (s31_state.c, get.c): every GL 1.3 fixed-function value is recorded
+for glGet* / glIsEnabled, validated, and list-compilable (one new opcode,
+OP_State). What the rasteriser HONOURS today:
+
+  honoured      depth test on/off, glDepthMask (triangles: ztriangle_nt.c /
+                ztriangle_nw.c are the fillers specialised at compile time,
+                chosen per triangle - the default fillers are byte-for-byte
+                unchanged), glClearDepth (clear.c: TinyGL cleared to 0 and
+                GL's default is 1.0; stored as (1 - d) * 0xffff since Z grows
+                towards the viewer), glClearColor clamping, the viewport,
+                stencil state (there are no stencil bits, so ignoring it is
+                exact), glHint (a hint), GL_DITHER/GL_MULTISAMPLE (no effect
+                by definition here).
+  recorded only (prints "libGL: unimplemented ..." once when used):
+                blending, alpha test, fog, scissor, colour mask, logic op,
+                depth func other than LESS/LEQUAL, depth range, line width
+                and point size other than 1, stipples, clip planes, texgen,
+                texenv modes other than REPLACE/DECAL (GL_MODULATE, GL's
+                default, draws as REPLACE), CLAMP wrap (drawn as REPEAT),
+                separate specular. These are the plan's F4-F8.
+
+Textures (texture.c, s31_pixels.c): glTexImage2D accepts every GL 1.3
+format/type in s31_pixels.c and honours GL_UNPACK_ALIGNMENT, ROW_LENGTH,
+SKIP_ROWS, SKIP_PIXELS and SWAP_BYTES; it samples the application's image
+straight into the rasteriser's single 256x256 RGB565 image, so no
+full-size copy is made. NULL pixels allocate a black image. Levels > 0 are
+accepted and dropped. GL_PROXY_TEXTURE_2D answers glGetTexLevelParameteriv
+(0 above 256, GL_MAX_TEXTURE_SIZE) so GLU's gluBuild2DMipmaps behaves.
+Uploads up to 2048 are accepted and sampled down (lenient: GL says
+INVALID_VALUE above the max). Not done yet (plan F3/G13): native sizes,
+alpha, glTexSubImage2D, copying pixel data compiled into display lists.
+
+Vertex arrays (arrays.c, rewritten): byte strides (0 = packed), every GL
+1.1 type (colour as UNSIGNED_BYTE, GL_DOUBLE via s31_d2f), the edge-flag
+array; client state executes at once and is never compiled; glDrawArrays /
+glDrawElements / glArrayElement inside glNewList compile the vertices, not
+the pointers. Fixed: the normal array wrote Z twice; an array colour left
+the flat-shading integer colour as stack garbage.
+
+Also fixed: glLighting on/off left the composed projection stale; a
+texture-matrix change cleared a pending modelview/projection update;
+glMaterial(GL_FRONT_AND_BACK) rewrote the op inside a display list so
+replays only set the front; the local-viewer specular vector used X for
+all three components.
+
+Rasterisation rules fixed at integration (2026-09-25; found by
+gl/tests/glx_prims.c against Mesa, 34% -> 0.013% tolerant-bad; details in
+artifacts/gl/phase1/INTEGRATION.md):
+- matrix.c glopOrtho: upstream filled the row-major M4 column-major, so
+  every asymmetric glOrtho (glOrtho(0,w,h,0) of every 2D app) was
+  transposed, translation in the w row. Symmetric ortho hid it.
+- GL_FLAT provoking vertex (GL 1.5 table 2.12): the flat fillers read p2
+  AFTER their y sort, and the quad/quad-strip/strip decompositions did not
+  keep the provoking vertex in p2. vertex.c records it (gl_set_provoking);
+  clip.c applies it to the triangle's three vertices and to flat lines.
+- clip.c: with lighting off gl_transform_to_viewport takes the CURRENT
+  colour, so clipped vertices got the last glColor; they now take their
+  own (gl_zp_color). Clipped lines in select mode are selected, not drawn.
+- zline.h: smooth lines started at p2's colour and stepped from p1.
+- zfeatures.h: only the 16-bit output format is compiled (the others were
+  dead code, and 8-bit dithering could exit(1)).
+- vertex.c glopBegin: a textured draw with the default GL_MODULATE (or
+  BLEND/ADD) says once that it is drawn as REPLACE.
+Known, not changed: the (size - 0.5) / 2 viewport scale with inclusive
+spans places exact-integer edges up to one pixel from GL's (the strict
+column of tools/glref); an exact transform needs a top-left fill rule.
+
+Not changed yet (plan stage 3): the soft-double sites TinyGL has always had
+(gl_clipcode's CLIP_EPSILON, sqrt/pow in lighting, sin/cos in glRotate,
+the specular table's pow, 1.0/W per vertex in gl_transform_to_viewport and
+1.0/fz per triangle in ztriangle.h). After --gc-sections the RV32 library
+has 20 __extendsfdf2, 18 __truncdfsf2, 8 __muldf3, 3 __divdf3, 1
+__floatsidf, 1 __gedf2 call sites plus pow x4, sincos x3, cos x2, sqrt x2
+(objdump of gl/out-rv32/libGL.so.1.unstripped, 2026-09-25).

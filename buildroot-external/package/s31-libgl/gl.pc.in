@@ -1,0 +1,12 @@
+prefix=/usr
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: gl
+Description: S31 OpenGL 1.x library (TinyGL-based, software, RGB565)
+Version: @VERSION@
+Requires.private: x11 xext
+Libs: -L${libdir} -lGL
+Libs.private: -lm
+Cflags: -I${includedir}

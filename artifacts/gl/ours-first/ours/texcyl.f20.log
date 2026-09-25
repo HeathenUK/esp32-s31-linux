@@ -1,0 +1,7 @@
+# glref run: impl=ours name=texcyl frame=20 display=:91
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/demos/texcyl -geometry 320x240+0+0
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000f782b7b10000)
+#   	libGLU.so.1 => /src/gl/ref-apps/prefix/lib/libGLU.so.1 (0x0000f782b7a60000)
+#   	libglut.so.3 => /src/gl/ref-apps/prefix/lib/libglut.so.3 (0x0000f782b7980000)
+/src/gl/ref-apps/build/mesa-demos/src/demos/texcyl: symbol lookup error: /src/gl/ref-apps/prefix/lib/libglut.so.3: undefined symbol: glXChooseFBConfig

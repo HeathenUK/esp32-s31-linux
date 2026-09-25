@@ -1,0 +1,12 @@
+prefix=/usr
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: glx
+Description: S31 GLX 1.4, client side only (lives in libGL.so.1)
+Version: @VERSION@
+Requires: x11
+Requires.private: gl
+Libs: -L${libdir} -lGL
+Cflags: -I${includedir}

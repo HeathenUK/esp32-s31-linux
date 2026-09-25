@@ -1,0 +1,72 @@
+config BR2_PACKAGE_S31_LIBGL
+	bool "s31-libgl"
+	depends on BR2_PACKAGE_XORG7
+	# Exactly one libgl provider may exist, and mesa3d-headers
+	# (selected below) refuses to coexist with mesa3d.
+	depends on !BR2_PACKAGE_MESA3D
+	depends on !BR2_PACKAGE_LIBGLVND
+	select BR2_PACKAGE_HAS_LIBGL
+	select BR2_PACKAGE_MESA3D_HEADERS
+	select BR2_PACKAGE_XLIB_LIBX11
+	select BR2_PACKAGE_XLIB_LIBXEXT
+	help
+	  The board's own OpenGL 1.x library: erysdren TinyGL grown
+	  by us, with a client-side GLX 1.4 and an MIT-SHM present
+	  path, built from gl/ in this repository.
+
+	  This is a Buildroot "libgl" provider, like nvidia-driver or
+	  mesa3d, so the stock GL packages (libglu, libfreeglut,
+	  mesa3d-demos, later the games) build against it unmodified.
+	  It installs libGL.so.1 (Mesa's soname, which SDL and freeglut
+	  dlopen by name), gl.pc and glx.pc. The GL/ and KHR/ headers
+	  come from mesa3d-headers.
+
+	  See docs/gl-plan-2026-09-25.md and docs/gl-packaging.md.
+
+if BR2_PACKAGE_S31_LIBGL
+
+config BR2_PACKAGE_PROVIDES_LIBGL
+	default "s31-libgl"
+
+config BR2_PACKAGE_S31_LIBGL_SDL_OPENGL
+	bool "SDL 1.2 with OpenGL (plan stage 5a)"
+	depends on BR2_PACKAGE_SDL_X11
+	# SDL 1.2's configure probe compiles GL/gl.h, GL/glx.h AND
+	# GL/glu.h (configure.in:1660-1663); without glu.h staged it
+	# silently builds GL-off even when asked.
+	select BR2_PACKAGE_LIBGLU
+	help
+	  Off by default. With this off, SDL 1.2 is configured with an
+	  explicit --disable-video-opengl, so staging GL headers can
+	  never flip it on (its configure otherwise enables GL whenever
+	  GL/gl.h, GL/glx.h and GL/glu.h are in staging, and sdl.mk
+	  passes no switch). With it on, SDL 1.2 gets
+	  --enable-video-opengl and is ordered after libgl and libglu.
+
+	  Only SDL_OPENGL video modes pick a GL visual in SDL 1.2
+	  (SDL_x11video.c:928-936), so software SDL 1.2 apps keep their
+	  path. The stage-5a gate in docs/gl-plan-2026-09-25.md section
+	  4.2 decides whether this ships.
+
+config BR2_PACKAGE_S31_LIBGL_SDL2_NO_GL_RENDERER
+	bool "SDL2: GL contexts, but no SDL OpenGL render driver"
+	default y
+	depends on BR2_PACKAGE_SDL2_OPENGL
+	help
+	  Only reachable once BR2_PACKAGE_SDL2_OPENGL is enabled (plan
+	  stage 5b); it is inert until then.
+
+	  A post-configure hook deletes SDL_VIDEO_RENDER_OGL from the
+	  generated SDL_config.h, so SDL_internal.h defaults it to 0:
+	  GL contexts work for apps that ask for SDL_WINDOW_OPENGL, but
+	  "opengl" never enters SDL_CreateRenderer's list and the
+	  window-surface probe keeps today's X11/MIT-SHM path for every
+	  app that does not ask for GL (plan section 4.2, option B).
+
+	  Say n only to measure SDL's own GL renderer on purpose.
+
+endif
+
+comment "s31-libgl needs X.org and no other OpenGL provider"
+	depends on !BR2_PACKAGE_XORG7 || BR2_PACKAGE_MESA3D || \
+		BR2_PACKAGE_LIBGLVND

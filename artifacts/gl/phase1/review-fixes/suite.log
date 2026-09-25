@@ -1,0 +1,71 @@
+suite: phase1/suite-review, impl=ours, 49 runs, 4 at a time
+  ours glxinfo f0: exit (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/glxinfo.f0.png
+  ours glxgears f3: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/glxgears.f3.png
+  ours glxgears f20: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/glxgears.f20.png
+  ours glxgears f60: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/glxgears.f60.png
+  ours glxheads f3: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/glxheads.f3.png
+  ours glxheads f20: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/glxheads.f20.png
+  ours glxheads f60: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/glxheads.f60.png
+  ours manywin f4: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/manywin.f4.png
+  ours manywin f20: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/manywin.f20.png
+  ours manywin f60: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/manywin.f60.png
+  ours offset f1: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/offset.f1.png
+  ours multictx f20: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/multictx.f20.png
+  ours glxgears_fbconfig f3: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/glxgears_fbconfig.f3.png
+  ours glxgears_fbconfig f20: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/glxgears_fbconfig.f20.png
+  ours glxgears_fbconfig f60: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/glxgears_fbconfig.f60.png
+  ours gears f3: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/gears.f3.png
+  ours gears f20: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/gears.f20.png
+  ours morph3d f3: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/morph3d.f3.png
+  ours morph3d f20: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/morph3d.f20.png
+  ours gears f60: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/gears.f60.png
+  ours morph3d f60: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/morph3d.f60.png
+  ours bounce f3: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/bounce.f3.png
+  ours bounce f20: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/bounce.f20.png
+  ours bounce f60: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/bounce.f60.png
+  ours spectex f3: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/spectex.f3.png
+  ours spectex f20: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/spectex.f20.png
+  ours geartrain f3: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/geartrain.f3.png
+  ours spectex f60: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/spectex.f60.png
+  ours geartrain f20: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/geartrain.f20.png
+  ours ipers f3: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/ipers.f3.png
+  ours geartrain f60: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/geartrain.f60.png
+  ours ipers f20: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/ipers.f20.png
+  ours terrain f3: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/terrain.f3.png
+  ours terrain f20: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/terrain.f20.png
+  ours terrain f60: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/terrain.f60.png
+  ours tunnel f3: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/tunnel.f3.png
+  ours tunnel f20: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/tunnel.f20.png
+  ours ipers f60: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/ipers.f60.png
+  ours fire f3: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/fire.f3.png
+  ours tunnel f60: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/tunnel.f60.png
+  ours fire f20: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/fire.f20.png
+  ours teapot f3: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/teapot.f3.png
+  ours teapot f20: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/teapot.f20.png
+  ours fire f60: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/fire.f60.png
+  ours teapot f60: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/teapot.f60.png
+  ours texcyl f3: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/texcyl.f3.png
+  ours texcyl f20: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/texcyl.f20.png
+  ours texcyl f60: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/texcyl.f60.png
+  ours isosurf f1: ok (rc=0) -> /src/artifacts/gl/phase1/suite-review/ours/isosurf.f1.png
+report: /src/artifacts/gl/phase1/suite-review/report.md
+  glxgears           PASS
+  glxinfo            PASS
+  glxheads           PASS
+  manywin            MISSING-SYMBOL
+  multictx           MISSING-SYMBOL
+  offset             PASS
+  glxgears_fbconfig  PASS
+  gears              PASS
+  morph3d            PASS
+  bounce             PASS
+  spectex            MISSING-SYMBOL
+  geartrain          PASS
+  ipers              MISSING-SYMBOL
+  terrain            MISSING-SYMBOL
+  tunnel             MISSING-SYMBOL
+  fire               MISSING-SYMBOL
+  teapot             MISSING-SYMBOL
+  texcyl             MISSING-SYMBOL
+  isosurf            MISSING-SYMBOL
+  xlite load arm: 2 load, 17 missing -> /src/artifacts/gl/phase1/suite-review/xlite-load.md

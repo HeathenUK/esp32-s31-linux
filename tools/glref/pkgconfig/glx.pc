@@ -1,0 +1,11 @@
+# glref override: the reference apps must link ONLY libGL.so.1 (as they do on
+# the board against s31-libgl), never glvnd's libOpenGL.so.0/libGLX.so.0,
+# or LD_LIBRARY_PATH could not swap Mesa for ours at run time.
+prefix=/usr
+includedir=${prefix}/include
+
+Name: glx
+Description: GLX from libGL.so.1 (glref override)
+Version: 1.4
+Libs: -lGL
+Cflags: -I${includedir}
