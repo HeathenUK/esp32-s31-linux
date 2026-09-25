@@ -970,8 +970,19 @@ static void osk_hide(void);
 static lv_obj_t *pw_kb;			/* the passphrase prompt's keyboard */
 static void switcher_step(int back);
 
+static int shot_take(const char *path);	/* QoL D7 */
+
 static int kbd_key(int code)
 {
+	/*
+	 * PrintScreen (QoL D7), ahead of everything including a grab and
+	 * fullscreen: a screenshot is the desktop's. Not with Alt (Alt+SysRq
+	 * is the kernel's), not while a passphrase is being typed.
+	 */
+	if (!pw_ta && !mod_alt && (code == KEY_SYSRQ || code == KEY_PRINT)) {
+		shot_take(NULL);
+		return 1;
+	}
 	if (!pw_ta && switcher_key(code))
 		return 1;
 	/* ahead of a grab: a windowed game under the menu never sees these */
@@ -3992,6 +4003,9 @@ static void ctl_line(char *buf)
 			       menu_rows, menu_sel, menu_cur, menu_list != NULL);
 			pw_debug();
 			fflush(stdout);
+		} else if (!strncmp(buf, "shot", 4) &&
+			   (!buf[4] || buf[4] == ' ')) {
+			shot_take(buf[4] ? buf + 5 : NULL);	/* QoL D7 */
 		} else if (!strncmp(buf, "run ", 4)) {
 			/* Type a command into the built-in terminal. */
 			term_raise_and_run(buf + 4);
@@ -8494,6 +8508,158 @@ static void toast_show_k(const char *key, const char *text, uint32_t ms)
 static void toast_show(const char *text, uint32_t ms)
 {
 	toast_show_k(NULL, text, ms);
+}
+
+/*
+ * PrintScreen (QoL D7): the frame as an uncompressed BMP in /root/Pictures.
+ *
+ * Deliberately NOT the hardware JPEG encoder the plan first chose. That
+ * needed a kernel patch, because the recorder path keeps a 512 kB coherent
+ * JPEG buffer from the lcd_reserved CMA pool, plus its ring, allocated for
+ * the rest of the boot after the first shot. It also brought ppa.c's
+ * recorded encode-then-thumbnail-decode wedge into play. lvdesk already
+ * holds the pixels: on the desktop, kms_map is exactly what the panel shows,
+ * written by this process. In fullscreen, kms_fs_map is the client's mode
+ * buffer at its own size - CPU-written, unlike the PPA-scaled scanout, whose
+ * cache state nobody here can vouch for.
+ *
+ * Top-down BMP with BI_BITFIELDS, so the pixels go out exactly as they are
+ * (RGB565 or XRGB8888): no conversion, no heap, one write() when rows are
+ * unpadded. It costs the file size (768 kB at 800x480) in page cache until
+ * writeback, and nothing afterwards. No fsync.
+ */
+static unsigned shots_fs;	/* taken in fullscreen, reported on leave */
+
+static int shot_take(const char *path)
+{
+	const uint8_t *src = kms_map;
+	uint32_t w = kms_w, h = kms_h, pitch = kms_pitch, bpp = 16;
+	uint32_t rowb, rowp, img, y;
+	uint8_t hd[66];
+	char pb[96], t[128];
+	struct timespec t0, t1;
+	int fd = -1, k, err = 0;
+
+	if (fs_active && kms_fs_map && kms_fs_w && kms_fs_h &&
+	    (kms_fs_bpp == 16 || kms_fs_bpp == 32)) {
+		src = kms_fs_map;
+		w = kms_fs_w; h = kms_fs_h; pitch = kms_fs_pitch; bpp = kms_fs_bpp;
+	}
+	if (!src || !w || !h)
+		return -1;
+	clock_gettime(CLOCK_MONOTONIC, &t0);
+	if (path) {
+		fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+	} else {
+		time_t now = time(NULL);
+		struct tm tm;
+		char base[64];
+
+		localtime_r(&now, &tm);
+		strftime(base, sizeof(base), "shot-%Y%m%d-%H%M%S", &tm);
+		mkdir("/root/Pictures", 0755);
+		for (k = 0; k < 10 && fd < 0; k++) {	/* two in one second */
+			snprintf(pb, sizeof(pb), k ? "/root/Pictures/%s-%d.bmp"
+				 : "/root/Pictures/%s.bmp", base, k);
+			fd = open(pb, O_WRONLY | O_CREAT | O_EXCL, 0644);
+			if (fd < 0 && errno != EEXIST)
+				break;
+		}
+		path = pb;
+	}
+	if (fd < 0) {
+		printf("lvdesk: shot %s failed: %s\n", path, strerror(errno));
+		fflush(stdout);
+		if (!fs_active)
+			toast_show("Screenshot failed", 2500);
+		return -1;
+	}
+	rowb = w * bpp / 8;
+	rowp = (rowb + 3) & ~3u;
+	img = rowp * h;
+	memset(hd, 0, sizeof(hd));
+	hd[0] = 'B'; hd[1] = 'M';
+#define SHOT_P32(o, v) do { uint32_t v_ = (v); hd[o] = v_; hd[(o) + 1] = v_ >> 8; \
+		hd[(o) + 2] = v_ >> 16; hd[(o) + 3] = v_ >> 24; } while (0)
+	SHOT_P32(2, sizeof(hd) + img);
+	SHOT_P32(10, sizeof(hd));		/* pixel data offset */
+	SHOT_P32(14, 40);			/* BITMAPINFOHEADER */
+	SHOT_P32(18, w);
+	SHOT_P32(22, (uint32_t)-(int32_t)h);	/* negative: top-down */
+	hd[26] = 1;				/* planes */
+	hd[28] = (uint8_t)bpp;
+	SHOT_P32(30, 3);			/* BI_BITFIELDS */
+	SHOT_P32(34, img);
+	SHOT_P32(38, 2835); SHOT_P32(42, 2835);	/* 72 dpi */
+	SHOT_P32(54, bpp == 16 ? 0xF800 : 0x00FF0000);
+	SHOT_P32(58, bpp == 16 ? 0x07E0 : 0x0000FF00);
+	SHOT_P32(62, bpp == 16 ? 0x001F : 0x000000FF);
+#undef SHOT_P32
+	if (write(fd, hd, sizeof(hd)) != (ssize_t)sizeof(hd))
+		err = 1;
+	if (!err && pitch == rowp) {
+		size_t off = 0;
+
+		while (off < img) {
+			ssize_t n = write(fd, src + off, img - off);
+
+			if (n <= 0) { err = 1; break; }
+			off += (size_t)n;
+		}
+	} else {
+		/* padded or pitched rows: through a 16 kB bounce, few writes */
+		static uint8_t bb[16384];
+		size_t bn = 0;
+
+		for (y = 0; !err && y < h; y++) {
+			if (bn + rowp > sizeof(bb)) {
+				if (write(fd, bb, bn) != (ssize_t)bn)
+					err = 1;
+				bn = 0;
+			}
+			memcpy(bb + bn, src + (size_t)y * pitch, rowb);
+			memset(bb + bn + rowb, 0, rowp - rowb);
+			bn += rowp;
+		}
+		if (!err && bn && write(fd, bb, bn) != (ssize_t)bn)
+			err = 1;
+	}
+	if (close(fd) < 0)
+		err = 1;
+	clock_gettime(CLOCK_MONOTONIC, &t1);
+	printf("lvdesk: shot %s %ux%u %u bpp %s in %ld ms\n", path, w, h, bpp,
+	       err ? "FAILED" : "saved",
+	       (long)((t1.tv_sec - t0.tv_sec) * 1000 +
+		      (t1.tv_nsec - t0.tv_nsec) / 1000000));
+	fflush(stdout);
+	if (err) {
+		unlink(path);
+		if (!fs_active)
+			toast_show("Screenshot failed", 2500);
+		return -1;
+	}
+	if (fs_active) {
+		shots_fs++;		/* no toast over a game: told on leave */
+	} else {
+		const char *b = strrchr(path, '/');
+
+		snprintf(t, sizeof(t), "Screenshot saved: %s", b ? b + 1 : path);
+		toast_show(t, 2500);
+	}
+	return 0;
+}
+
+/* From the frame block once fullscreen has ended. */
+static void shot_fs_report(void)
+{
+	char t[64];
+
+	if (!shots_fs)
+		return;
+	snprintf(t, sizeof(t), shots_fs == 1 ? "1 screenshot saved" :
+		 "%u screenshots saved", shots_fs);
+	toast_show(t, 3000);
+	shots_fs = 0;
 }
 
 static void toast_flush_pending(void)
@@ -15507,6 +15673,7 @@ int main(void)
 			uint64_t lv_a = lvp_on > 0 ? lvp_now() : 0;
 
 			con_slide_step();	/* A7; nothing when idle */
+			shot_fs_report();	/* D7; a compare when idle */
 			refr_site = "timer_handler(frame)";
 			{ PROF_START(t0); lv_timer_handler(); PROF_ADD_MAX(prof_timer, prof_max_timer, t0); }
 			refr_site = "?";

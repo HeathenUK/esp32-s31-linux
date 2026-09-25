@@ -6,6 +6,33 @@ commit; line numbers below refer to it and drift by a few lines either way).
 Wherever a figure below is an estimate, it says so. It needs measuring on the
 board before anyone quotes it.
 
+## Status, 2026-09-25 evening (latest): D7 shipped without the kernel patch
+
+- **D7, PrintScreen.** KEY_SYSRQ or KEY_PRINT, not with Alt and not during
+  passphrase entry, ahead of grabs and fullscreen; or ctl `shot [path]`.
+  - **Output.** `/root/Pictures/shot-YYYYmmdd-HHMMSS.bmp`, top-down, with
+    BI_BITFIELDS, written straight from the pixels lvdesk already has:
+    - on the desktop, `kms_map` (800x480 RGB565, the panel);
+    - in fullscreen, the client's own mode buffer `kms_fs_map` at its own
+      size (16 or 32 bpp).
+  - **Feedback.** A toast on the desktop. In fullscreen the shots are counted
+    and reported when fullscreen ends.
+  - **The design changed on review ("do we REALLY need a kernel patch").**
+    The JPEG-encoder design needed a kernel patch, because the recorder keeps
+    a 512 kB coherent buffer from CMA for life after the first encode. It
+    also brought the encode-then-thumbnail-decode wedge into play. The BMP
+    path needs neither and holds no memory. The price is file size: 768 kB
+    per desktop shot against about 20 kB as JPEG.
+  - **Test.** `lvdesk-shot-test.sh` passes.
+    - P1: Print gives a toast and a 768,066 B file in 114 ms. It decodes
+      correctly on the host (`artifacts/lvdesk-qol/d7-printscreen.png`).
+    - P2: ten ctl shots took 47-144 ms each. MemAvailable and CmaFree were
+      unchanged once the files were deleted.
+    - P3: during prboom -fullscreen, a 320x200 shot took 16 ms, with no toast
+      over the game and "1 screenshot saved" on leave.
+  - **Not done.** A Print row in the Super+/ sheet, which will go with the
+    next lvdesk change.
+
 ## Status, 2026-09-25 evening (later): A7 shipped at N=0
 
 - **A7.** An opt-in stepped console slide.
