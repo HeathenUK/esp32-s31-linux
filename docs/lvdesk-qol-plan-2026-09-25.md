@@ -35,6 +35,29 @@ cdoom (883 puts) and quake (motion 12, keys 4).
 Still open from the programme: everything else, starting with A3 (the
 drop-down console, diff 01, which needs rebasing onto these fixes).
 
+## Status, 2026-09-25 night: B5 search; the console is the built-in terminal
+
+- **B5 type-to-search.**
+  - Typing while the app menu is open (any level) shows "> query_" and up to
+    12 matching leaves as "Parent: Leaf". Every word must match the leaf or
+    an ancestor.
+  - Up/Down skip the query row, Enter launches as a click would, Backspace
+    edits, Esc clears back to the menu and a second Esc closes it. It is
+    hooked ahead of a grab.
+  - `lvdesk-search-test.sh`: "clock" gives 1 hit and Enter starts xclock;
+    "zzz" shows no matches and Enter starts nothing; Esc, Esc as described.
+    "quake" lists the four Quake entries.
+- **The console is the built-in terminal** (review):
+  - While docked it has no task bar button and no Alt-Tab entry. Undocked
+    (ctl `console undock`), both come back.
+  - The menu no longer offers the built-in Terminal window. "Terminal" is st,
+    and System > Console stays.
+  - ctl `run` (xfiles, s31-open's `less`, the harnesses) now brings the
+    output down in the console. Only a deliberately undocked terminal stays
+    a window.
+  - term-hammer and the hidden test pass; the hidden test restores with
+    `console show`.
+
 ## Status, 2026-09-25 night: M3 (C2, B4, C3, C6) and A4
 
 - **C2 theme.**

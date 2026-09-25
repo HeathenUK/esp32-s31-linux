@@ -2,8 +2,8 @@
 # scrollback pages exist only once used. Run ON the board:
 #   BIN=/root/lvdesk.new sh lvdesk-hidden-test.sh
 #  H1 RssAnon: desktop up / terminal opened / after `seq 1 400` (scrollback used)
-#  H2 minimise, `seq 1 300` while hidden, restore: the last row reads 300
-#     (checked through the flushed-area log: rows repainted after the restore)
+#  H2 minimise, `seq 1 300` while hidden, restore (console show): the last
+#     row reads 300 (the host screenshots it)
 #  H3 px flushed while hidden output streams (want 0)
 # ~60 s. Prints one RESULT line. Not on a board in use.
 BIN=${BIN:-/usr/bin/lvdesk}; LOG=/var/log/lvdesk.log; U=/root/uinject
@@ -30,4 +30,7 @@ echo "   after:  $still"
 echo "H1 RssAnon kB: up $r0 / terminal open $r1 / after seq 400 $r2"
 ok=1; echo "$hid" | grep -q HID || ok=0; echo "$still" | grep -q HID || ok=0
 [ "$px" -lt 20000 ] || ok=0; [ $((r2-r1)) -ge 30 ] || ok=0
-echo "RESULT bin=$BIN ok=$ok (restore it and look: the last row must read 300)"
+# restore it (the console has no task bar button) and let the host look:
+# the last row must read 300
+c "console show" 1
+echo "RESULT bin=$BIN ok=$ok (restored: the last row must read 300)"

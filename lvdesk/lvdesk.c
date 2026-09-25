@@ -322,6 +322,7 @@ static lv_obj_t *menu_list;
 static lv_event_cb_t menu_cbk;
 static int menu_sel = -1, menu_rows, menu_kbd;
 static int menu_cur = -1;		/* submenu shown, -1 = root */
+static char menu_q[24];			/* the app menu's search query (QoL B5) */
 
 /*
  * The passphrase prompt, declared here because the keyboard handler has to
@@ -929,6 +930,7 @@ static void term_write(const char *buf, int n)
  */
 static int fs_close_client(void);	/* with wm_shortcut() */
 static int switcher_key(int code);	/* Esc/arrows/Enter in Alt-Tab */
+static int search_key(int code);	/* type-to-search in the app menu */
 static int sw_n, sw_by_super;		/* Alt-Tab switcher: rows up, by Super */
 static lv_obj_t *osk_obj;		/* on-screen keyboard (QoL D8) */
 static void osk_toggle(void);
@@ -939,6 +941,9 @@ static void switcher_step(int back);
 static int kbd_key(int code)
 {
 	if (!pw_ta && switcher_key(code))
+		return 1;
+	/* ahead of a grab: a windowed game under the menu never sees these */
+	if (!pw_ta && !fs_active && search_key(code))
 		return 1;
 	/*
 	 * Alt+F4 closes the fullscreen game too (2026-09-25, asked for: "Alt+F4
@@ -3882,6 +3887,9 @@ static void switcher_open(void)
 
 			if (!w->win || !!w->minimised != pass)
 				continue;
+			/* the docked console is Super+grave's, not Alt-Tab's */
+			if (con_mode && w->win == term.win)
+				continue;
 			if (!pass && lv_obj_has_flag(w->win, LV_OBJ_FLAG_HIDDEN))
 				continue;
 			sw_list[sw_n++] = w;
@@ -4435,10 +4443,25 @@ static void tbtn_sync(void)
 
 		if (!w->win || !w->tbtn)
 			continue;
-		st = win_focus == w ? 2 : 1;
+		/*
+		 * The docked console has no task bar button (review,
+		 * 2026-09-25): it is summoned by Super+grave, and a "Terminal"
+		 * entry made it look like an ordinary window. Undocked, the
+		 * same window is the Terminal and gets its button back.
+		 */
+		st = (con_mode && w->win == term.win) ? 3 :
+		     win_focus == w ? 2 : 1;
 		if (st == w->tb_state)
 			continue;
+		if (st == 3 || w->tb_state == 3) {
+			if (st == 3)
+				lv_obj_add_flag(w->tbtn, LV_OBJ_FLAG_HIDDEN);
+			else
+				lv_obj_remove_flag(w->tbtn, LV_OBJ_FLAG_HIDDEN);
+		}
 		w->tb_state = st;
+		if (st == 3)
+			continue;
 		lv_obj_set_style_bg_color(w->tbtn, lv_color_hex(st == 2 ?
 				COL_HDR_FOCUS : COL_HDR), 0);
 		if (w->tlabel) {
@@ -8576,6 +8599,7 @@ static void appmenu_open(int parent)
 static void appmenu_open_at(int32_t x, int32_t y, lv_obj_t *owner)
 {
 	menu_kbd = 0;			/* desk_menu_toggle() sets it after */
+	menu_q[0] = 0;			/* a fresh menu, a fresh search */
 	appmenu_load();
 	menu_x = x;
 	menu_y = y;
@@ -8760,6 +8784,164 @@ static int popover_is_open(void)
 	return pop_obj != NULL;
 }
 
+/*
+ * TYPE-TO-SEARCH in the app menu (QoL B5). Typing while the app menu is open
+ * at any level replaces it with a search: row 0 shows the query, rows 1..12
+ * the matching LEAVES as "Parent: Leaf". Every space-separated word must
+ * appear in the leaf's label or in an ancestor's (so "doom win" finds
+ * Games > Doom > Windowed). Up/Down skip the query row, Enter launches
+ * through appmenu_launch() as a click would, Backspace edits, Esc clears the
+ * query back to the menu and a second Esc closes it. The file is not
+ * re-read per keystroke. Consumed keys are eaten (B0), so their releases
+ * never reach a window underneath.
+ */
+#define SEARCH_MAX 12
+/* menu_q is declared with the menu state */
+static int search_hit[SEARCH_MAX], search_n;
+static char search_txt[SEARCH_MAX + 1][72];
+
+static void appsearch_item_cb(lv_event_t *e);
+
+static int mitem_matches(int i, const char *q)
+{
+	char w[24];
+	const char *p = q;
+
+	while (*p) {
+		int n = 0, j, found = 0;
+
+		while (*p == ' ')
+			p++;
+		while (*p && *p != ' ' && n < (int)sizeof(w) - 1)
+			w[n++] = *p++;
+		w[n] = 0;
+		if (!n)
+			break;
+		for (j = i; j >= 0 && !found; j = mitems[j].parent)
+			if (title_has(mitems[j].label, w))
+				found = 1;
+		if (!found)
+			return 0;
+	}
+	return 1;
+}
+
+static void search_show(void)
+{
+	char *labels[SEARCH_MAX + 1];
+	int i, n = 0;
+	size_t maxlen = 20;
+
+	search_n = 0;
+	for (i = 0; i < mitem_n && search_n < SEARCH_MAX; i++)
+		if (mitems[i].cmd[0] && mitem_matches(i, menu_q))
+			search_hit[search_n++] = i;
+	snprintf(search_txt[0], sizeof(search_txt[0]), "> %s_%s", menu_q,
+		 search_n ? "" : "   no matches");
+	labels[n++] = search_txt[0];
+	for (i = 0; i < search_n; i++) {
+		const struct mitem *m = &mitems[search_hit[i]];
+
+		if (m->parent >= 0)
+			snprintf(search_txt[i + 1], sizeof(search_txt[0]), "%s: %s",
+				 mitems[m->parent].label, m->label);
+		else
+			snprintf(search_txt[i + 1], sizeof(search_txt[0]), "%s",
+				 m->label);
+		labels[n++] = search_txt[i + 1];
+		if (strlen(search_txt[i + 1]) > maxlen)
+			maxlen = strlen(search_txt[i + 1]);
+	}
+	{
+		lv_obj_t *owner = menu_owner;
+
+		popover_close();
+		menu_owner = owner;
+		menu_popover_build(labels, n, maxlen, menu_x, menu_y,
+				   appsearch_item_cb);
+		pop_owner = menu_owner ? (const void *)menu_owner : &menu_owner_key;
+	}
+	if (search_n)
+		menu_select(1);
+}
+
+static void appsearch_launch(int hit)
+{
+	char cmd[sizeof(mitems[0].cmd)];
+
+	if (hit < 0 || hit >= search_n)
+		return;
+	snprintf(cmd, sizeof(cmd), "%s", mitems[search_hit[hit]].cmd);
+	menu_q[0] = 0;
+	popover_close();
+	appmenu_launch(cmd);
+}
+
+static void appsearch_item_cb(lv_event_t *e)
+{
+	int row = (int)lv_obj_get_index(lv_event_get_target(e));
+
+	if (row >= 1)
+		appsearch_launch(row - 1);
+}
+
+static int search_key(int code)
+{
+	int app = popover_is_open() && menu_list &&
+		  (menu_cbk == appmenu_item_cb || menu_cbk == appsearch_item_cb);
+	int searching = app && menu_cbk == appsearch_item_cb;
+	size_t n = strlen(menu_q);
+	char c;
+
+	if (!app || mod_ctrl || mod_alt)
+		return 0;
+	if (searching) {
+		switch (code) {
+		case KEY_ESC:			/* clear, back to the menu */
+			menu_q[0] = 0;
+			appmenu_open(-1);
+			menu_select(0);
+			return 1;
+		case KEY_BACKSPACE:
+			if (n)
+				menu_q[n - 1] = 0;
+			if (!menu_q[0]) {
+				appmenu_open(-1);
+				menu_select(0);
+			} else {
+				search_show();
+			}
+			return 1;
+		case KEY_DOWN:
+			if (search_n)
+				menu_select(menu_sel >= search_n ? 1 : menu_sel + 1);
+			return 1;
+		case KEY_UP:
+			if (search_n)
+				menu_select(menu_sel <= 1 ? search_n : menu_sel - 1);
+			return 1;
+		case KEY_ENTER: case KEY_KPENTER:
+			if (search_n && menu_sel >= 1)
+				appsearch_launch(menu_sel - 1);
+			return 1;
+		}
+	}
+	if (code <= 0 || code >= KEY_CNT)
+		return 0;
+	c = keymap[code][shift ? 1 : 0];
+	/* printable, but not the space that would open a row by keyboard */
+	if (c < 32 || c > 126 || (c == ' ' && !searching))
+		return 0;
+	if (n + 1 >= sizeof(menu_q))
+		return 1;
+	if (c >= 'A' && c <= 'Z')
+		c += 32;
+	menu_q[n] = c;
+	menu_q[n + 1] = 0;
+	search_show();
+	return 1;
+}
+
 /* A Super tap: open the app menu bottom-left for the keyboard, or close it. */
 static void desk_menu_toggle(void)
 {
@@ -8921,6 +9103,7 @@ static void term_build_window(void)
 static void term_raise_and_run(const char *cmd)
 {
 	struct winrec *w;
+	int fresh = !term.win;
 
 	term_ensure();
 	if (term.fd < 0)
@@ -8928,6 +9111,16 @@ static void term_raise_and_run(const char *cmd)
 	if (cmd && *cmd) {
 		write(term.fd, cmd, strlen(cmd));
 		write(term.fd, "\n", 1);
+	}
+	/*
+	 * The built-in terminal is the drop-down console now; st is the
+	 * windowed terminal (review, 2026-09-25). So a command run here -
+	 * xfiles' "run", s31-open's `less` - comes down in the console. Only a
+	 * terminal deliberately undocked (ctl `console undock`) stays a window.
+	 */
+	if (fresh || con_mode) {
+		console_set(CON_SHOW);
+		return;
 	}
 	w = win_find(term.win);
 	if (w) {
