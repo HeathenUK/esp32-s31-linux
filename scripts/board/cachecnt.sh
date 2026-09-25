@@ -54,7 +54,10 @@ for n, v in names:
     hit, miss, conf, rd = v[0], v[1], v[2], v[3]
     wr = v[4] if len(v) > 4 else None
     tot = hit + miss
-    line = "%-18s hit %10d miss %9d (%.2f%%) conflict %7d nxtlvl_rd %8d" % (n, hit, miss, 100.0 * miss / max(1, tot), conf, rd)
+    # "miss" counts STALL EVENTS, not missed lines (esp-idf 16078650, the S31
+    # cache counter semantics), so miss/(hit+miss) is a stall share. The line
+    # miss ratio is the next-level reads per hit.
+    line = "%-18s hit %10d stall %9d (stall%% %.2f) conflict %7d nxtlvl_rd %8d (rd/hit %.2f%%)" % (n, hit, miss, 100.0 * miss / max(1, tot), conf, rd, 100.0 * rd / max(1, hit))
     if wr is not None:
         line += " nxtlvl_wr %8d" % wr
     print(line)

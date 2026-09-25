@@ -4556,9 +4556,13 @@ Levers, in order of expected value:
   **worse**: 0 of 8 connects against the default's 4 of 8, with a
   control (Wi-Fi down, same firmware) connecting in 16.6 s to prove the
   sink was awake. Reverted; see the note in esp-hosted slave_bt.c.
-- We are on the **latest esp-idf master** (2067f3ae, 2026-08-28) - a
-  live fetch shows zero commits since, and the recent a2dp/bt fixes are
-  already ancestors of it.
+- ~~We are on the latest esp-idf master (2067f3ae, 2026-08-28)~~ - stale.
+  **Since 2026-09-25 the loader is built from master 048ec57f** (2026-09-24,
+  732 commits later), with blobs bt 10c50778, wifi af55a0ca, phy 20f1db05,
+  coex c758e7b5. That includes the BLE MIC fix (IDF a41d5e35 / bt-lib
+  c5b4cbd9) and six later BLE drops. Rollback: raw-flash
+  images/hello_world-onboard-2067f3ae-oc320.bin at 0x20000.
+  See docs/esp-idf-toolchain-review-2026-09-25.md.
 
 ## The A2DP bottleneck is the hosted transport's interrupt cost, not SBC
 

@@ -65,3 +65,13 @@ CONFIG_ESP_WIFI_EXTRA_IRAM_OPT=n
 # code does not need to live in the 504 KB of internal SRAM.
 CONFIG_PM_SLEEP_FUNC_IN_IRAM=n
 CONFIG_PM_SLP_IRAM_OPT=n
+
+# IDF 048ec57f adds PVT auto core-voltage, default y. On this chip (eFuse block
+# v0.0) pvt_auto_dbias_enable() returns early, so the voltage stays fixed anyway.
+# What it would still change is clock state: BBPLL held permanently and PLL_F160M
+# never gated, which moves things under the 360 MHz XTAL detour. Off, for a
+# like-for-like bump (ESP-IDF review 2026-09-25, section 3).
+CONFIG_ESP_ENABLE_PVT=n
+# Keep the blocking HCI command-buffer API (default n for VHCI without NimBLE;
+# pinned so a future default change cannot flip it). ESP-IDF review 2026-09-25.
+CONFIG_BT_CTRL_NONBLOCK_CMD_BUF=n

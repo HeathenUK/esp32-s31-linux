@@ -18,7 +18,7 @@ Several structural ideas below already appear in earlier project plans. This rev
 
 Inspected the active Linux PPA/LCD/cache/DMA drivers, lvdesk presentation and event paths, xshim and xlite image handling, LVGL's PPA draw unit, board harnesses, and these container sources:
 
-- ESP-IDF `/opt/esp-idf`, `v6.1-dev-7447-g2067f3ae32`.
+- ESP-IDF `/opt/esp-idf`, `v6.1-dev-7447-g2067f3ae32` (the pin when this was written; since 2026-09-25 it is `048ec57f`).
 - `/src/build/buildroot/build/sdl-1.2.15`.
 - `/src/build/buildroot/build/sdl2-2.32.10`.
 - `/src/build/buildroot/build/chocolate-doom-3.1.1`.

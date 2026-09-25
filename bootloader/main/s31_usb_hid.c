@@ -26,6 +26,7 @@
  */
 
 #include <inttypes.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -308,6 +309,24 @@ void s31_usb_hid_resync(void)
  * its own task for the class driver, but the library below it is ours to
  * drive.
  */
+/*
+ * Set once s31_usb_hid_start() has pinned the root port to full speed.
+ *
+ * esp-usb 1.5.0 recovers the root port after any disconnect or port error
+ * with hcd_port_recover() -> usb_dwc_hal_core_soft_reset(), and a core soft
+ * reset clears HCFG, FSLSSupp included (ESP-IDF review 2026-09-25, item 2.6).
+ * A replug would then come back at high speed, and a hub would need the
+ * transaction translator esp-usb does not implement. The upstream fix
+ * (usb_host_config_t.fsls_only, esp-usb b07aae2) is unreleased above 1.5.0.
+ * Until it is, re-apply here. Recovery runs inside usb_host_lib_handle_events()
+ * (the hub driver), and a replugged device's connect and port reset come in a
+ * LATER call, so checking after every return puts the bit back before the next
+ * chirp. We write only when the bit reads 0, which happens only after a soft
+ * reset. That is while the port is disabled, so the read-modify-write cannot
+ * race the HCD's own HCFG writes (FrListEn/PerSchedEna at port enable).
+ */
+static volatile bool fsls_pinned;
+
 static void usb_lib_task(void *arg)
 {
 	while (1) {
@@ -316,6 +335,11 @@ static void usb_lib_task(void *arg)
 		usb_host_lib_handle_events(portMAX_DELAY, &flags);
 		if (flags & USB_HOST_LIB_EVENT_FLAGS_NO_CLIENTS)
 			usb_host_device_free_all();
+		if (fsls_pinned && !USB_OTGHS.hcfg_reg.fslssupp) {
+			usb_dwc_ll_hcfg_set_fsls_supp_only(&USB_OTGHS);
+			ESP_LOGW(TAG, "root port recovered: HCFG.FSLSSupp was cleared, re-applied (=%u)",
+				 (unsigned)USB_OTGHS.hcfg_reg.fslssupp);
+		}
 	}
 }
 
@@ -365,6 +389,7 @@ esp_err_t s31_usb_hid_start(void)
 	 * Cost: none that matters for HID; the SOF interrupt stays masked.
 	 */
 	usb_dwc_ll_hcfg_set_fsls_supp_only(&USB_OTGHS);
+	fsls_pinned = true;
 	ESP_LOGW(TAG, "root port pinned to full speed (HCFG.FSLSSupp=%u)",
 		 (unsigned)USB_OTGHS.hcfg_reg.fslssupp);
 
