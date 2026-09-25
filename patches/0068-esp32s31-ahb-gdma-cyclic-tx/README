@@ -1,0 +1,32 @@
+0068 - esp32s31 AHB GDMA: four cyclic-TX (audio playback) fixes
+===============================================================
+
+Full copy of drivers/dma/esp32s31-ahb-gdma.c. Found by reading the driver
+during the 48 kHz audio plan (docs/audio-48k-plan-2026-09-25.md), fixed
+2026-09-25, kernel #387.
+
+1. esp32s31_ahb_start_cyclic_tx() used the PERIOD index as a DESCRIPTOR
+   index. A TX period may span several descriptors (per_period), so any
+   start at a non-zero period landed mid-period. Now tx_node * per_period.
+2. prep_dma_cyclic rounded the chunk DOWN, which could leave a 4-byte tail
+   descriptor per period (8188 -> 4092 + 4092 + 4). Now the period is split
+   evenly with the chunk rounded UP inside the aligned 4092-byte cap.
+3. The position was an interrupt COUNT: two period-ends latched into one
+   interrupt advanced it by one, and the reported position then stayed a
+   period behind for the rest of the stream (ALSA believing more was queued
+   than was). Now taken from the hardware: OUT_EOF_DES_ADDR (channel +0x9c,
+   "address of the transmit descriptor when the EOF bit in this descriptor
+   is 1", IDF ahb_dma_reg.h) -> period. A read-only counter
+   /sys/module/esp32s31_ahb_gdma/parameters/tx_pos_fixups counts the
+   corrections.
+4. After a DMA error the ring restarted at node 0 while the client kept
+   writing ahead - playback jumped back a buffer and the position went
+   backwards. Now it restarts at the current period (needs fix 1).
+
+VERIFIED, #387: boots clean; sdlquake plays (11025 Hz S16 stereo, 512-frame
+periods) with tx_pos_fixups 0; a 48 kHz stream under two CPU0 spinners plus
+25 MB of O_DIRECT SD writes: tx_pos_fixups 0, no cyclic TX error. So on this
+board the coalescing case does not currently occur and fix 3 is insurance.
+With 2 KB periods the code path is identical to before except one register
+read per interrupt. No change can alter normal playback; an ear check is
+simply playing anything.
