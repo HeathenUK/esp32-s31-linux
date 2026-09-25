@@ -3,7 +3,7 @@
 # Toasts are also logged ("lvdesk: toast ..."), which is what this reads.
 #  L1 launch nosuchcmd        -> "Starting", then "... failed: ...not found"
 #  L2 launch sh -c 'exit 0'   -> "Starting" only
-#  L3 launch sh -c 'kill -9 $$' -> "... was killed (signal 9 ...)"
+#  L3 launch sh -c 'kill -9 $$' -> "... was killed (signal 9)" (not "out of memory": oom_kill did not move)
 #  L4 launch xcalc            -> "Starting" only, xcalc maps
 # ~40 s. Prints one RESULT line.
 BIN=${BIN:-/usr/bin/lvdesk}; LOG=/var/log/lvdesk.log
@@ -18,6 +18,6 @@ echo "L1 $a"; echo "L2 $b"; echo "L3 $c"; echo "L4 $d (xcalc $x)"
 ok=1
 echo "$a" | grep -q "failed:.*not found" || ok=0
 echo "$b" | grep -q "failed\|killed" && ok=0
-echo "$c" | grep -q "killed (signal 9" || ok=0
+echo "$c" | grep -q "killed (signal 9)" || ok=0
 echo "$d" | grep -q "failed\|killed" && ok=0; [ "$x" = 1 ] || ok=0
 echo "RESULT bin=$BIN ok=$ok"

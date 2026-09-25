@@ -1,7 +1,7 @@
 # lvdesk-keys-test.sh - QoL B6 Super+N / launch keys and B7 shortcuts sheet.
 # Run ON the board:  BIN=/root/lvdesk.new sh lvdesk-keys-test.sh [shot]
 #  K1 Super+2 focuses the 2nd task button's window; again minimises it
-#  K2 Super+E twice 250 ms apart starts exactly ONE xfiles (the 8 s guard)
+#  K2 search + 1 twice 250 ms apart starts exactly ONE xfiles (the 8 s guard)
 #  K3 Super+/ opens the sheet, Space closes it, st receives no key
 # With "shot": leaves the sheet open for a host screenshot and exits.
 BIN=${BIN:-/usr/bin/lvdesk}; LOG=/var/log/lvdesk.log; U=/root/uinject; SL=/tmp/st-keys.log
@@ -17,7 +17,7 @@ L() { n=$(wc -l < $LOG); echo list > /tmp/lvdesk.ctl; sleep 1; tail -n +$((n+1))
 echo "raise 0" > /tmp/lvdesk.ctl; sleep 1
 printf 'chord 125 0 3\n' | $U script >/dev/null 2>&1; a=$(L xcalc)
 printf 'chord 125 0 3\n' | $U script >/dev/null 2>&1; b=$(L xcalc)
-printf 'chord 125 0 18 18\n' | $U script >/dev/null 2>&1; sleep 9; x=$(pidof xfiles | wc -w)
+printf 'hold 125 150\nsleep 300\ntype files\nkey 2\nsleep 250\nhold 125 150\nsleep 300\ntype files\nkey 2\n' | $U script >/dev/null 2>&1; sleep 9; x=$(pidof xfiles | wc -w)
 for p in $(pidof xfiles); do kill -9 $p; done; sleep 1
 echo "raise 0" > /tmp/lvdesk.ctl; sleep 1
 k0=$(grep -ac 'queue event type 2$' $SL)
@@ -26,7 +26,7 @@ n=$(wc -l < $LOG); echo pop > /tmp/lvdesk.ctl; sleep 1; p=$(tail -n +$((n+1)) $L
 k1=$(grep -ac 'queue event type 2$' $SL)
 for q in $(pidof xcalc) $(pidof st); do kill -9 $q; done
 echo "K1 Super+2: $a | again: $b"
-echo "K2 xfiles after Super+E, Super+E: $x"
+echo "K2 xfiles after search+1 twice: $x"
 echo "K3 sheet after Space: $p | st key presses: $((k1-k0))"
 ok=1; echo "$a" | grep -q FOCUS || ok=0; echo "$b" | grep -q MIN || ok=0
 [ "$x" = 1 ] || ok=0; [ "$p" = closed ] || ok=0; [ $((k1-k0)) = 0 ] || ok=0

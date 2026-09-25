@@ -35,6 +35,35 @@ cdoom (883 puts) and quake (motion 12, keys 4).
 Still open from the programme: everything else, starting with A3 (the
 drop-down console, diff 01, which needs rebasing onto these fixes).
 
+## Status, 2026-09-25 night: A5, C5 shipped; menu launch keys replaced by row numbers
+
+- **Launch keys removed** (review: no more things to define in menu.conf).
+  The `[Super+X]` syntax and the `:glyph:` tokens are gone. Instead, rows of
+  the app menu and of a search are numbered 1..9 in a dimmed column on the
+  left, and the plain digit picks the row, so "type a few letters, then 1"
+  launches. Digits no longer go into the search. Super+1..8 are the task
+  bar's only. Context menus are neither numbered nor digit-picked.
+  - `lvdesk-keys-test.sh`: "files" then 1, twice, gives exactly one xfiles.
+- **C5.**
+  - Rows carry tags in user_data instead of being counted.
+  - The Back row names its target ("< Games", "< Menu") as a dimmed heading.
+  - Submenus show a chevron. Running @name entries show an accent dot (a
+    click will raise, not start).
+  - Recent: the last 3 leaves launched by a menu click (not ctl `launch`), as
+    label paths in /etc/lvdesk/recent resolved against the loaded menu.
+  - The wheel scrolls an open menu.
+- **A5.**
+  - term_fit on shrink scrolls the lines above the cursor into the scrollback
+    and keeps the prompt on the bottom row; on grow it blanks the exposed rows.
+  - Super+Up/Down resize the focused console by 4 rows (10..48), remembered
+    as `con_rows` on hide. Measured 24x99 -> 12x99 -> 24x99, with the prompt
+    on the bottom row after the shrink.
+  - Not built: the 8x13 font option, and the drag strip.
+- **Launch toast, OOM wording** (review). A SIGKILL is called "out of
+  memory" only if /proc/vmstat oom_kill moved since the launch; otherwise it
+  is "was killed (signal 9)". The "out of memory?" toast seen on the board
+  was the keys test's own `kill -9` of xfiles: oom_kill 0, no OOM in dmesg.
+
 ## Status, 2026-09-25 night: B6, B7 shipped; BT status line removed
 
 - **BT status line removed** (review: it restated the switch, and "Not
@@ -47,7 +76,7 @@ drop-down console, diff 01, which needs rebasing onto these fixes).
   - `Label [Super+X] = cmd` in menu.conf gives a launch key, shown as a grey
     hint column. The keys are looked up by re-reading the file, so an open
     menu is never re-indexed. Defaults: Terminal Super+Enter (st), Files
-    Super+E, Calculator Super+C.
+    Super+F (Super+E at first; changed on review), Calculator Super+C.
   - Double-launch guard: an @name started by us within 8 s, still windowless,
     is not started again.
   - `lvdesk-keys-test.sh`: Super+2 focuses, then minimises; Super+E twice

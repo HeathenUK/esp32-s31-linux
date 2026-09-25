@@ -320,7 +320,8 @@ static void pw_debug(void);
 static void desk_menu_toggle(void);	/* Super tap / Start (QoL B1) */
 static int super_chord;			/* Super was used as a modifier */
 static void super_shortcut(int code);	/* Super+arrows etc. (QoL B3) */
-static void menu_hotkey(int code);	/* [Super+X] launch keys (QoL B6) */
+static void console_resize(int delta);	/* Super+Up/Down on the console */
+static int menu_num_activate(int n);	/* Super+N on an open menu */
 struct winrec;
 static void task_toggle(struct winrec *w);
 static int help_up;			/* the shortcuts sheet is open (QoL B7) */
@@ -1966,6 +1967,29 @@ static void term_fit(void)
 	if (cols == term.cols && nrows == term.nrows)
 		return;
 
+	/*
+	 * SHRINK with the cursor below the new bottom: scroll the lines above
+	 * it into the scrollback (while term.nrows still holds the OLD size,
+	 * which term_scroll uses), then put the cursor on the new last row.
+	 * Clamping the cursor instead, as this did, left the prompt on a row
+	 * that was then hidden (QoL A5).
+	 */
+	if (nrows < term.nrows && term.cy >= nrows) {
+		int k = term.cy - nrows + 1;
+
+		while (k-- > 0)
+			term_scroll();
+		term.cy = nrows - 1;
+	}
+	/*
+	 * GROW: the rows now exposed at the bottom hold whatever the ring had
+	 * there - stale or wrapped lines. Blank them.
+	 */
+	for (r = term.nrows; r < nrows && term.nrows > 0; r++) {
+		memset(TROW(r), ' ', TERM_MAXCOLS);
+		memset(TATTR(r), TERM_FG_DEFAULT, TERM_MAXCOLS);
+		TROW(r)[TERM_MAXCOLS] = 0;
+	}
 	term.cols = cols;
 	term.nrows = nrows;
 	if (term.cx >= cols) term.cx = cols - 1;
@@ -4251,8 +4275,19 @@ static void super_shortcut(int code)
 	switch (code) {
 	case KEY_LEFT:  win_snap(w, 0); break;
 	case KEY_RIGHT: win_snap(w, 1); break;
-	case KEY_UP:    win_snap(w, 2); break;
+	case KEY_UP:
+		/* the docked console resizes instead (QoL A5) */
+		if (con_mode && w && w->win == term.win) {
+			console_resize(-4);
+			break;
+		}
+		win_snap(w, 2);
+		break;
 	case KEY_DOWN:
+		if (con_mode && w && w->win == term.win) {
+			console_resize(4);
+			break;
+		}
 		if (w && (w->maximised || w->snapped))
 			win_restore(w);
 		else if (w)
@@ -4293,9 +4328,6 @@ static void super_shortcut(int code)
 		}
 		break;
 	}
-	default:
-		menu_hotkey(code);	/* a [Super+X] declared in menu.conf */
-		break;
 	}
 }
 
@@ -8313,7 +8345,6 @@ static void menu_select(int sel)
 
 struct mitem {
 	char label[40];
-	char hint[14];		/* "Super+E" from a [Super+E] suffix (QoL B6) */
 	char cmd[200];		/* empty: a submenu */
 	int parent;		/* -1 at the root */
 	int depth;
@@ -8324,6 +8355,9 @@ static int mitem_n;
 static int32_t menu_x, menu_y;		/* where it opened; submenus stay put */
 static const char menu_owner_key;
 static lv_obj_t *menu_owner;		/* what opened the root menu, or NULL */
+#define ROW_TAG_BACK	(-2)		/* menu row tags (QoL C5) */
+static int row_tag(lv_obj_t *row);
+static void recent_record(int idx);
 
 static void appmenu_load(void)
 {
@@ -8359,24 +8393,9 @@ static void appmenu_load(void)
 		m->parent = depth ? stack[depth - 1] : -1;
 		eq = strchr(p, '=');
 		if (eq) {
-			char *br;
-
 			e = eq;
 			while (e > p && (e[-1] == ' ' || e[-1] == '\t'))
 				e--;
-			/*
-			 * "Files [Super+E] = cmd": the launch key, parsed from
-			 * the raw text before the label is cut to 40 bytes
-			 * (QoL B6). Only the label side is ever scanned.
-			 */
-			br = memchr(p, '[', (size_t)(e - p));
-			if (br && e[-1] == ']' && !strncmp(br, "[Super+", 7)) {
-				snprintf(m->hint, sizeof(m->hint), "%.*s",
-					 (int)(e - 1 - (br + 1)), br + 1);
-				e = br;
-				while (e > p && (e[-1] == ' ' || e[-1] == '\t'))
-					e--;
-			}
 			snprintf(m->label, sizeof(m->label), "%.*s",
 				 (int)(e - p), p);
 			eq++;
@@ -8450,6 +8469,21 @@ static int title_has(const char *hay, const char *needle)
 }
 
 /* Raise the X window whose title mentions `name`, if there is one. */
+/* The same match xwin_raise_by_name() makes, without raising (QoL C5). */
+static int xwin_title_has(const char *name)
+{
+	int i;
+
+	for (i = 0; i < xwin_n; i++) {
+		const char *t = xwins[i].win ? xshim_window_title(xwins[i].id)
+					     : NULL;
+
+		if (t && title_has(t, name))
+			return 1;
+	}
+	return 0;
+}
+
 static int xwin_raise_by_name(const char *name)
 {
 	int i;
@@ -8520,8 +8554,30 @@ static struct launch {
 	pid_t pid;
 	uint32_t t0;
 	long logoff;
+	unsigned long oom0;	/* the kernel's oom_kill count at launch */
 	char label[40];
 } launches[LAUNCH_MAX];
+
+/*
+ * /proc/vmstat oom_kill: how many processes the OOM killer has taken since
+ * boot. A SIGKILL is only called an out-of-memory kill if this moved - a
+ * `kill -9` from anything else is just a kill (review 2026-09-25: the toast
+ * guessed "out of memory?" for a test's own kill -9).
+ */
+static unsigned long oom_kills(void)
+{
+	FILE *f = fopen("/proc/vmstat", "r");
+	char line[64];
+	unsigned long v = 0;
+
+	if (!f)
+		return 0;
+	while (fgets(line, sizeof(line), f))
+		if (sscanf(line, "oom_kill %lu", &v) == 1)
+			break;
+	fclose(f);
+	return v;
+}
 static char launch_label[40];		/* set by the caller of appmenu_launch */
 
 /* "Parent: Leaf", the form the menu search shows, or just the leaf at root. */
@@ -8558,6 +8614,7 @@ static void launch_track(pid_t pid, const char *label, long logoff)
 	launches[k].pid = pid;
 	launches[k].t0 = lv_tick_get();
 	launches[k].logoff = logoff;
+	launches[k].oom0 = oom_kills();
 	snprintf(launches[k].label, sizeof(launches[k].label), "%s", label);
 }
 
@@ -8603,10 +8660,13 @@ static void launch_reaped(pid_t pid, int status)
 			return;			/* it ran; not a launch failure */
 		if (WIFEXITED(status) && WEXITSTATUS(status) == 0)
 			return;
-		if (WIFSIGNALED(status)) {
-			snprintf(t, sizeof(t), "%s was killed (signal %d%s)",
-				 l->label, WTERMSIG(status),
-				 WTERMSIG(status) == 9 ? " - out of memory?" : "");
+		if (WIFSIGNALED(status) && WTERMSIG(status) == SIGKILL &&
+		    oom_kills() > l->oom0) {
+			snprintf(t, sizeof(t), "%s was killed: out of memory",
+				 l->label);
+		} else if (WIFSIGNALED(status)) {
+			snprintf(t, sizeof(t), "%s was killed (signal %d)",
+				 l->label, WTERMSIG(status));
 		} else {
 			launch_last_line(l->logoff, why, sizeof(why));
 			snprintf(t, sizeof(t), "%s failed: %s", l->label,
@@ -8760,22 +8820,15 @@ static void appmenu_launch(const char *cmd)
 static void appmenu_item_cb(lv_event_t *e)
 {
 	lv_obj_t *btn = lv_event_get_target(e);
-	int row = (int)lv_obj_get_index(btn), i, n = 0, idx = -1;
+	int idx = row_tag(btn);
 	int parent = menu_cur;
 
-	if (parent >= 0) {
-		if (row == 0) {			/* "< Back" */
+	if (idx == ROW_TAG_BACK) {
+		if (parent >= 0)
 			appmenu_open(mitems[parent].parent);
-			return;
-		}
-		row--;
+		return;
 	}
-	for (i = 0; i < mitem_n; i++)
-		if (mitems[i].parent == parent && n++ == row) {
-			idx = i;
-			break;
-		}
-	if (idx < 0)
+	if (idx < 0 || idx >= mitem_n)
 		return;
 	if (!mitems[idx].cmd[0] && mitem_has_children(idx)) {
 		appmenu_open(idx);
@@ -8786,15 +8839,157 @@ static void appmenu_item_cb(lv_event_t *e)
 
 		snprintf(cmd, sizeof(cmd), "%s", mitems[idx].cmd);
 		launch_label_for(idx);
+		recent_record(idx);	/* clicks only; not ctl `launch` */
 		popover_close();
 		appmenu_launch(cmd);
 	}
 }
 
+/*
+ * Row numbers (review 2026-09-25, replacing per-entry launch keys in
+ * menu.conf): while the app menu or a search is open, its rows are numbered
+ * 1..9 in a dimmed column on the left and the plain digit picks that row -
+ * "type a few letters, then 1" launches with no configuration at all. Digits
+ * therefore do not go into the search. Super+N stays the task bar's.
+ * Context menus are neither numbered nor picked by digit: a stray digit
+ * must never confirm xfiles' delete.
+ */
+static void appsearch_item_cb(lv_event_t *e);
+
+static void menu_num_hint(lv_obj_t *row, int n)
+{
+	lv_obj_t *x;
+
+	if (!row)
+		return;
+	/* a dimmed column BEFORE the label; the right edge is the chevron's */
+	x = lv_label_create(row);
+	lv_label_set_text_fmt(x, "%d", n);
+	lv_obj_set_style_text_color(x, lv_color_hex(0x7a8896), 0);
+	lv_obj_set_width(x, 14);
+	lv_obj_move_to_index(x, 0);
+}
+
+/* Super+N with a menu up: activate its Nth numbered row. 1 if a menu is up. */
+static int menu_num_activate(int n)
+{
+	int k, seen = 0;
+
+	if (!menu_list || !pop_obj)
+		return 0;
+	for (k = 0; k < (int)lv_obj_get_child_count(menu_list); k++) {
+		lv_obj_t *r = lv_obj_get_child(menu_list, k);
+
+		if (!lv_obj_check_type(r, &lv_list_button_class))
+			continue;
+		/* the Back row and the search's query row carry no number */
+		if (menu_cbk == appsearch_item_cb ? k == 0 :
+		    row_tag(r) == ROW_TAG_BACK)
+			continue;
+		if (++seen == n) {
+			menu_kbd = 1;
+			lv_obj_send_event(r, LV_EVENT_CLICKED, NULL);
+			return 1;
+		}
+	}
+	return 1;			/* a menu is up: the key is its, even unmatched */
+}
+
+/*
+ * RECENT (QoL C5): the last three leaves launched by a click in this menu -
+ * not ctl `launch`, which the harnesses drive - kept as label paths in
+ * /etc/lvdesk/recent and resolved against the freshly loaded menu, so an
+ * edited menu.conf can never run a stale command from here.
+ */
+#define RECENT_FILE "/etc/lvdesk/recent"
+#define RECENT_MAX 3
+
+static void mitem_path(int idx, char *out, size_t n)
+{
+	char tmp[160];
+
+	out[0] = 0;
+	for (; idx >= 0; idx = mitems[idx].parent) {
+		snprintf(tmp, sizeof(tmp), "%s%s%s", mitems[idx].label,
+			 out[0] ? "/" : "", out);
+		snprintf(out, n, "%s", tmp);
+	}
+}
+
+static int mitem_by_path(const char *path)
+{
+	int i;
+	char p[160];
+
+	for (i = 0; i < mitem_n; i++)
+		if (mitems[i].cmd[0]) {
+			mitem_path(i, p, sizeof(p));
+			if (!strcmp(p, path))
+				return i;
+		}
+	return -1;
+}
+
+static void recent_record(int idx)
+{
+	char paths[RECENT_MAX + 1][160], line[160];
+	int n = 0, i;
+	FILE *f;
+
+	mitem_path(idx, paths[n++], sizeof(paths[0]));
+	if ((f = fopen(RECENT_FILE, "r"))) {
+		while (n <= RECENT_MAX && fgets(line, sizeof(line), f)) {
+			line[strcspn(line, "\n")] = 0;
+			if (line[0] && strcmp(line, paths[0]))
+				snprintf(paths[n++], sizeof(paths[0]), "%s", line);
+		}
+		fclose(f);
+	}
+	if (n > RECENT_MAX)
+		n = RECENT_MAX;
+	if ((f = fopen(RECENT_FILE, "w"))) {
+		for (i = 0; i < n; i++)
+			fprintf(f, "%s\n", paths[i]);
+		fclose(f);
+	}
+}
+
+/* Is there a window for this @name entry (the predicate the @ raise uses)? */
+static int xwin_title_has(const char *name);
+
+static int mitem_running(int idx)
+{
+	char name[32];
+	const char *c = mitems[idx].cmd, *sp;
+	size_t k;
+
+	if (c[0] != '@' || !(sp = strchr(c, ' ')))
+		return 0;
+	k = (size_t)(sp - c - 1);
+	if (k >= sizeof(name))
+		k = sizeof(name) - 1;
+	memcpy(name, c + 1, k);
+	name[k] = 0;
+	return xwin_title_has(name);
+}
+
+/*
+ * Rows carry TAGS in user_data (QoL C5): the mitem index + 3, or 1 for
+ * "< Back". Counting rows, as this did, breaks as soon as anything else -
+ * Recent - sits in the list.
+ */
+static char menu_disp[MENU_MAX + RECENT_MAX + 1][72];
+
+static int row_tag(lv_obj_t *row)
+{
+	return (int)(intptr_t)lv_obj_get_user_data(row) - 3;
+}
+
 static void appmenu_open(int parent)
 {
-	char *labels[MENU_MAX + 1];
-	int n = 0, i;
+	char *labels[MENU_MAX + RECENT_MAX + 1];
+	int tags[MENU_MAX + RECENT_MAX + 1];
+	int n = 0, i, num = 0;
 	size_t maxlen = 0;
 
 	popover_close();
@@ -8803,47 +8998,81 @@ static void appmenu_open(int parent)
 		fflush(stdout);
 		return;
 	}
-	if (parent >= 0)
-		labels[n++] = (char *)"< Back";
-	{
-		size_t hint = 0;
+	if (parent >= 0) {
+		/* "< Games": where Back goes, as a heading */
+		int up = mitems[parent].parent;
 
-		for (i = 0; i < mitem_n; i++)
-			if (mitems[i].parent == parent) {
-				labels[n++] = mitems[i].label;
-				if (strlen(mitems[i].label) > maxlen)
-					maxlen = strlen(mitems[i].label);
-				if (strlen(mitems[i].hint) > hint)
-					hint = strlen(mitems[i].hint);
-			}
-		if (!n)
-			return;
-		if (maxlen < 6) maxlen = 6;
-		if (hint)			/* room for the hint column */
-			maxlen += hint + 2;
-		if (maxlen > 38)
-			maxlen = 38;
+		snprintf(menu_disp[n], sizeof(menu_disp[0]), LV_SYMBOL_LEFT "  %s",
+			 up >= 0 ? mitems[up].label : "Menu");
+		labels[n] = menu_disp[n];
+		tags[n++] = ROW_TAG_BACK;
+	} else {
+		FILE *f = fopen(RECENT_FILE, "r");
+		char line[160];
+
+		while (f && n < RECENT_MAX && fgets(line, sizeof(line), f)) {
+			int idx;
+
+			line[strcspn(line, "\n")] = 0;
+			if ((idx = mitem_by_path(line)) < 0)
+				continue;
+			if (mitems[idx].parent >= 0)
+				snprintf(menu_disp[n], sizeof(menu_disp[0]),
+					 LV_SYMBOL_LOOP "  %s: %s",
+					 mitems[mitems[idx].parent].label, mitems[idx].label);
+			else
+				snprintf(menu_disp[n], sizeof(menu_disp[0]),
+					 LV_SYMBOL_LOOP "  %s", mitems[idx].label);
+			labels[n] = menu_disp[n];
+			tags[n++] = idx;
+			if (strlen(menu_disp[n - 1]) > maxlen)
+				maxlen = strlen(menu_disp[n - 1]);
+		}
+		if (f)
+			fclose(f);
 	}
+	for (i = 0; i < mitem_n && n < MENU_MAX + RECENT_MAX; i++)
+		if (mitems[i].parent == parent) {
+			snprintf(menu_disp[n], sizeof(menu_disp[0]), "%s",
+				 mitems[i].label);
+			labels[n] = menu_disp[n];
+			tags[n++] = i;
+			if (strlen(menu_disp[n - 1]) > maxlen)
+				maxlen = strlen(menu_disp[n - 1]);
+		}
+	if (!n)
+		return;
+	if (maxlen < 6) maxlen = 6;
+	maxlen += 5;			/* chevron / dot, and the number column */
+	if (maxlen > 38)
+		maxlen = 38;
 	menu_cur = parent;
 	menu_popover_build(labels, n, maxlen, menu_x, menu_y, appmenu_item_cb);
-	/* launch-key hints, a solid mid-grey column on the right (QoL B6) */
-	{
-		int row = parent >= 0 ? 1 : 0;
+	for (i = 0; i < n && menu_list; i++) {
+		lv_obj_t *r = lv_obj_get_child(menu_list, i), *x;
+		int t = tags[i];
 
-		for (i = 0; i < mitem_n; i++) {
-			lv_obj_t *r, *h;
-
-			if (mitems[i].parent != parent)
-				continue;
-			if (mitems[i].hint[0] && menu_list &&
-			    (r = lv_obj_get_child(menu_list, row))) {
-				h = lv_label_create(r);
-				lv_label_set_text(h, mitems[i].hint);
-				lv_obj_set_style_text_color(h, lv_color_hex(0x7a8896), 0);
-				lv_obj_add_flag(h, LV_OBJ_FLAG_IGNORE_LAYOUT);
-				lv_obj_align(h, LV_ALIGN_RIGHT_MID, -6, 0);
-			}
-			row++;
+		if (!r)
+			continue;
+		lv_obj_set_user_data(r, (void *)(intptr_t)(t + 3));
+		if (t == ROW_TAG_BACK) {
+			lv_obj_set_style_text_color(r, lv_color_hex(COL_PANEL_TEXT_DIM), 0);
+			continue;
+		}
+		if (++num <= 9)
+			menu_num_hint(r, num);
+		if (!mitems[t].cmd[0] && mitem_has_children(t)) {
+			/* a submenu: chevron, a flex child after the label */
+			x = lv_label_create(r);
+			lv_label_set_text(x, LV_SYMBOL_RIGHT);
+			lv_obj_set_style_text_color(x, lv_color_hex(COL_PANEL_TEXT_DIM), 0);
+			lv_obj_set_style_margin_right(x, 2, 0);
+		} else if (mitem_running(t)) {
+			/* a click will raise it, not start another */
+			x = lv_label_create(r);
+			lv_label_set_text(x, LV_SYMBOL_BULLET);
+			lv_obj_set_style_text_color(x, lv_color_hex(COL_HDR_FOCUS), 0);
+			lv_obj_set_style_margin_right(x, 2, 0);
 		}
 	}
 	pop_owner = menu_owner ? (const void *)menu_owner : &menu_owner_key;
@@ -9009,19 +9238,14 @@ static int menu_key(int code)
 		return 1;
 	case KEY_RIGHT:
 		/* only into a row that has a submenu */
-		if (app && menu_sel >= 0) {
-			int row = menu_sel - (menu_cur >= 0), i, k = 0;
+		if (app && menu_sel >= 0 &&
+		    (r = lv_obj_get_child(menu_list, menu_sel))) {
+			int t = row_tag(r);
 
-			for (i = 0; i < mitem_n && row >= 0; i++)
-				if (mitems[i].parent == menu_cur && k++ == row) {
-					if (!mitems[i].cmd[0] &&
-					    mitem_has_children(i) &&
-					    (r = lv_obj_get_child(menu_list, menu_sel))) {
-						menu_kbd = 1;
-						lv_obj_send_event(r, LV_EVENT_CLICKED, NULL);
-					}
-					break;
-				}
+			if (t >= 0 && !mitems[t].cmd[0] && mitem_has_children(t)) {
+				menu_kbd = 1;
+				lv_obj_send_event(r, LV_EVENT_CLICKED, NULL);
+			}
 		}
 		return 1;
 	case KEY_LEFT: case KEY_BACKSPACE:
@@ -9120,9 +9344,11 @@ static void search_show(void)
 
 		popover_close();
 		menu_owner = owner;
-		menu_popover_build(labels, n, maxlen, menu_x, menu_y,
+		menu_popover_build(labels, n, maxlen + 4, menu_x, menu_y,
 				   appsearch_item_cb);
 		pop_owner = menu_owner ? (const void *)menu_owner : &menu_owner_key;
+		for (i = 1; i < n && i <= 9 && menu_list; i++)
+			menu_num_hint(lv_obj_get_child(menu_list, i), i);
 	}
 	if (search_n)
 		menu_select(1);
@@ -9193,6 +9419,10 @@ static int search_key(int code)
 	if (code <= 0 || code >= KEY_CNT)
 		return 0;
 	c = keymap[code][shift ? 1 : 0];
+	if (c >= '1' && c <= '9') {	/* a row number, not a search char */
+		menu_num_activate(c - '0');
+		return 1;
+	}
 	/* printable, but not the space that would open a row by keyboard */
 	if (c < 32 || c > 126 || (c == ' ' && !searching))
 		return 0;
@@ -9207,64 +9437,6 @@ static int search_key(int code)
 }
 
 /*
- * [Super+X] launch keys (QoL B6). menu.conf is re-read here with a stack
- * buffer rather than through appmenu_load(), so an open menu is never
- * re-indexed under its rows. "Enter" or a single character; the key is
- * matched as evdev code, so Super+e and Super+E are the same key.
- */
-static int hotkey_code(const char *t, size_t n)
-{
-	int c;
-
-	if (n == 5 && !strncasecmp(t, "Enter", 5))
-		return KEY_ENTER;
-	if (n != 1)
-		return -1;
-	for (c = 1; c < KEY_CNT; c++)
-		if (keymap[c][0] == (t[0] >= 'A' && t[0] <= 'Z' ? t[0] + 32 : t[0]))
-			return c;
-	return -1;
-}
-
-static void menu_hotkey(int code)
-{
-	FILE *f = fopen(MENU_CONF, "r");
-	char line[300];
-
-	if (!f)
-		return;
-	while (fgets(line, sizeof(line), f)) {
-		char *eq = strchr(line, '='), *br, *end, *p = line, *c;
-
-		if (!eq)
-			continue;
-		br = strstr(line, "[Super+");
-		if (!br || br > eq || !(end = strchr(br, ']')) || end > eq)
-			continue;
-		if (hotkey_code(br + 7, (size_t)(end - (br + 7))) != code)
-			continue;
-		while (*p == ' ' || *p == '\t')
-			p++;
-		{
-			char *e = br;
-
-			while (e > p && (e[-1] == ' ' || e[-1] == '\t'))
-				e--;
-			snprintf(launch_label, sizeof(launch_label), "%.*s",
-				 (int)(e - p), p);
-		}
-		for (c = eq + 1; *c == ' ' || *c == '\t'; c++)
-			;
-		c[strcspn(c, "\r\n")] = 0;
-		fclose(f);
-		popover_close();
-		appmenu_launch(c);
-		return;
-	}
-	fclose(f);
-}
-
-/*
  * The shortcuts sheet (QoL B7): Super+/ or Super+F1, or System > Shortcuts.
  * Only bindings that exist. Plain ASCII - the UI font has no arrow glyphs.
  * Any key closes it (and is eaten), as does a tap outside it.
@@ -9272,11 +9444,11 @@ static void menu_hotkey(int code)
 static const char help_keys[] =
 	"Super (tap)\nSuper+`\nAlt+Tab / Super+Tab\nSuper+Left / Right\n"
 	"Super+Up / Down\nSuper+H / Q / D\nSuper+1 ... 8\n"
-	"Super+Enter / E / C\nAlt+F4\nSuper+/\n2-finger tap\n3-finger tap";
+	"1 ... 9 in a menu\nAlt+F4\nSuper+/\n2-finger tap\n3-finger tap";
 static const char help_what[] =
 	"App menu (then type to search)\nDrop-down console\nSwitch windows\n"
 	"Tile to a half\nMaximise / restore\nMinimise / close / desktop\n"
-	"Task bar button 1 ... 8\nTerminal / Files / Calculator\n"
+	"Task bar button 1 ... 8\nPick that row\n"
 	"Close the window, fullscreen too\nThis sheet\nRight click\n"
 	"On-screen keyboard";
 
@@ -9534,16 +9706,60 @@ static int con_smax, con_ssnap;
  * the content's 4 px padding top and bottom. On 800x480 that is 24 rows of 99
  * columns in 201 px.
  */
+/*
+ * con_rows: the console's height in rows once the user has changed it
+ * (Super+Up / Super+Down while it has focus, QoL A5); 0 = the default.
+ * Remembered in the state file, written on hide and only if it changed.
+ */
+static int con_rows = -1, con_rows_saved = -1;
+
 static int32_t con_height(void)
 {
 	int32_t sh = lv_display_get_vertical_resolution(NULL);
 	int32_t rows = ((sh - TASKBAR_H) * 45 / 100 - 9) / TERM_CH;
+
+	if (con_rows < 0)
+		con_rows = con_rows_saved = state_get("con_rows", 0);
+	if (con_rows > 0)
+		rows = con_rows;
 
 	if (rows < 4)
 		rows = 4;
 	if (rows > TERM_MAXROWS)
 		rows = TERM_MAXROWS;
 	return rows * TERM_CH + 9;
+}
+
+/* Super+Up / Super+Down on the focused console: 4 rows a step. */
+static void console_resize(int delta)
+{
+	int32_t sh = lv_display_get_vertical_resolution(NULL);
+	int max = (sh - TASKBAR_H - 9) / TERM_CH, cur;
+
+	if (!con_mode || !term.win)
+		return;
+	if (max > 48)
+		max = 48;
+	if (max > TERM_MAXROWS)
+		max = TERM_MAXROWS;
+	cur = (int)((con_height() - 9) / TERM_CH);
+	cur += delta;
+	if (cur < 10)
+		cur = 10;
+	if (cur > max)
+		cur = max;
+	con_rows = cur;
+	lv_obj_set_height(term.win, con_height());
+	term.need_fit = 1;
+}
+
+/* The console's height goes to the state file on hide, if it changed. */
+static void con_rows_persist(void)
+{
+	if (con_rows > 0 && con_rows != con_rows_saved) {
+		state_set("con_rows", con_rows);
+		con_rows_saved = con_rows;
+	}
 }
 
 static void console_dock(struct winrec *w)
@@ -9639,6 +9855,7 @@ static void console_set(int op)
 		 */
 		if (con_mode && shown)
 			win_minimise(w);
+		con_rows_persist();
 		printf("lvdesk: console hidden\n");
 		fflush(stdout);
 		return;
@@ -12914,8 +13131,20 @@ static int mouse_poll(void)
 			int top;
 			lv_obj_t *o = obj_at_pointer(&top);
 
-			if (top)
+			if (top) {
 				handled = 1;
+				/* the wheel scrolls an open menu it is over (QoL C5) */
+				if (menu_list && pop_obj) {
+					lv_area_t pa;
+
+					lv_obj_get_coords(pop_obj, &pa);
+					if (ptr_x >= pa.x1 && ptr_x <= pa.x2 &&
+					    ptr_y >= pa.y1 && ptr_y <= pa.y2)
+						lv_obj_scroll_by(menu_list, 0,
+								 wheel * 30,
+								 LV_ANIM_OFF);
+				}
+			}
 			else if (term.win && obj_in(o, term.win)) {
 				term_scrollback(wheel * TERM_WHEEL_LINES);
 				handled = 1;
