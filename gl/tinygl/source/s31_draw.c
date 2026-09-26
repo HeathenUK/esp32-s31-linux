@@ -375,6 +375,7 @@ static unsigned int row_bits(const S31Bits *b, const unsigned char *rp, int x, i
 
 void glopBitmap(GLContext *c, GLParam *p)
 {
+  S31T_SYNC(c);                  /* phase 6 (s31_thr.h) */
   int w = p[1].i, h = p[2].i, canon = p[8].i;
   float xorig = p[3].f, yorig = p[4].f;
   const unsigned char *bits = p[7].p;
@@ -683,6 +684,7 @@ static unsigned int *unpack_depth(GLContext *c, int w, int h, int type,
 
 void glopDrawPixels(GLContext *c, GLParam *p)
 {
+  S31T_SYNC(c);                  /* phase 6 (s31_thr.h) */
   int w = p[1].i, h = p[2].i, format = p[3].i, type = p[4].i, e;
   const void *pixels = p[5].p;
   PixPipe *pp;
@@ -759,6 +761,7 @@ void tgl_draw_pixels(int w, int h, int format, int type, const void *pixels)
 
 void glopCopyPixels(GLContext *c, GLParam *p)
 {
+  S31T_SYNC(c);                  /* phase 6 (s31_thr.h) */
   int x = p[1].i, y = p[2].i, w = p[3].i, h = p[4].i, type = p[5].i;
   ZBuffer *zb;
   PixPipe *pp;
@@ -868,6 +871,7 @@ void tgl_read_pixels(int x, int y, int w, int h, int format, int type, void *pix
 
   if (c->in_begin) { gl_set_error(c, GL_INVALID_OPERATION); return; }
   if (w < 0 || h < 0) { gl_set_error(c, GL_INVALID_VALUE); return; }
+  S31T_SYNC(c);                  /* phase 6 (s31_thr.h) */
   if (format == GL_STENCIL_INDEX) {
     /* phase 4 F8: from the stencil buffer (none: INVALID_OPERATION) */
     if (pixels == NULL || w == 0 || h == 0) {
@@ -999,6 +1003,7 @@ static void copy_tex(GLContext *c, GLParam *p);
 /* phase 5 O1: into the active unit's texture (s31_mtex.c) */
 void glopCopyTex(GLContext *c, GLParam *p)
 {
+  S31T_SYNC(c);                  /* phase 6 (s31_thr.h) */
   if (c->active_tex) {
     tu_swap(c);
     copy_tex(c, p);
@@ -1064,6 +1069,7 @@ static void copy_tex(GLContext *c, GLParam *p)
 
 void glopPolygonStipple(GLContext *c, GLParam *p)
 {
+  S31T_SYNC(c);                  /* phase 6 (s31_thr.h) */
   int i;
   for (i = 0; i < 32; i++) c->poly_stipple[i] = p[1 + i].ui;
   c->pipe_dirty = 1;

@@ -111,6 +111,11 @@ int tgl_ctx_stencil_bytes(void *ctx);
 void tgl_ctx_set_doublebuffer(void *ctx, int on);
 void tgl_ctx_set_retained(void *ctx, int on);  /* phase 3a dirty boxes */
 void tgl_ctx_arm(void *ctx);            /* frame hook before the next access */
+/* phase 6: every triangle queued for the second rasteriser thread is in
+   the buffers (S31GL_THREADS; NULL: the current context) */
+void tgl_ctx_sync(void *ctx);
+/* phase 6: per-frame thread statistics (s31_thr.h tgl_thr_stats) */
+void tgl_thr_stats(unsigned int out[8]);
 
 /* glPush/PopAttrib and glPush/PopClientAttrib: the stacks live in the
    context (they are per-context state) but are built by the ABI layer

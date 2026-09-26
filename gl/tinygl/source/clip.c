@@ -117,6 +117,7 @@ static void zb_plot_in(GLContext *c,ZBufferPoint *p)
 
 void gl_draw_point(GLContext *c,GLVertex *p0)
 {
+  S31T_SYNC(c);                  /* phase 6 (s31_thr.h) */
   if (p0->clip_code == 0) {
     if (c->render_mode == GL_SELECT) {
       gl_add_select(c,p0->zp.z,p0->zp.z);
@@ -255,6 +256,8 @@ void gl_draw_line(GLContext *c,GLVertex *p1,GLVertex *p2)
   float dx,dy,dz,dw,x1,y1,z1,w1;
   float tmin,tmax;
   GLVertex q1,q2;
+
+  S31T_SYNC(c);                  /* phase 6 (s31_thr.h) */
   int cc1,cc2;
   
   cc1=p1->clip_code;

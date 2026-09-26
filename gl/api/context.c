@@ -98,13 +98,17 @@ void s31gl_set_hooks(s31gl_ctx *ctx, const struct s31gl_hooks *hooks)
 
 void s31gl_frame_end(s31gl_ctx *ctx)
 {
-	if (ctx)
+	if (ctx) {
+		tgl_ctx_sync(ctx->tgl);	/* phase 6 */
 		tgl_ctx_arm(ctx->tgl);
+	}
 }
 
 void s31gl_finish(s31gl_ctx *ctx)
 {
-	(void)ctx;		/* TinyGL rasterises synchronously */
+	/* phase 6: S31GL_THREADS' queued triangles are drawn (otherwise
+	 * TinyGL rasterises synchronously) */
+	tgl_ctx_sync(ctx ? ctx->tgl : NULL);
 }
 
 s31gl_ctx *s31gl_get_current(void)
@@ -166,6 +170,11 @@ void s31gl_fused_stats(unsigned int out[8])
 	tgl_fused_stats(out);
 }
 
+void s31gl_thr_stats(unsigned int out[8])
+{
+	tgl_thr_stats(out);
+}
+
 void s31_hook_viewport(int x, int y, int w, int h)
 {
 	if (current && current->hooks.viewport)
@@ -185,10 +194,12 @@ void s31_unimpl(const char *name)
 
 void GLAPIENTRY glFlush(void)
 {
+	tgl_ctx_sync(NULL);		/* phase 6 */
 	s31_hook_flush(0);
 }
 
 void GLAPIENTRY glFinish(void)
 {
+	tgl_ctx_sync(NULL);		/* phase 6 */
 	s31_hook_flush(1);
 }

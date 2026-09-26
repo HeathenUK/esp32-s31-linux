@@ -23,13 +23,23 @@
 #include "zgl.h"
 #include "zpipe.h"
 #include "ztri.h"
+#include "s31_thr.h"
 
 /* the filler, for a batch without (mt 0) or with (mt 1, phase 5 O1)
    texture unit 1: mt 0 is exactly the phase 4 filler (every unit 1 part
    below is dead code in it) */
+/* phase 6 (s31_thr.h): everything after the set-up - the texel level
+   choice, the planes and the spans - for the rows own[y] == me (band 1;
+   own NULL: every row). The application's thread and the worker both run
+   one out-of-line banded copy (ZB_fillBodyGeneral), so a pixel is computed
+   by the same instructions whichever thread owns its row; the unbanded
+   copy inlined in the filler is S31GL_THREADS=0's code as it was (a row
+   test cost +0.3-0.5% on the QuakeSpasm replay), and gl/tests/
+   run-qsr-threads.sh holds the two copies to the same bits */
 static inline __attribute__((always_inline))
-void fill_general(ZBuffer *zb, const ZVtxG *a, const ZVtxG *b, const ZVtxG *c,
-                  const int mt)
+void fill_body(ZBuffer *zb, const ZTri *T, const ZVtxG *a, const ZVtxG *b,
+               const ZVtxG *c, const int mt, const int band,
+               const unsigned char *own, int me)
 {
   const ZPipe *p = zb->pipe;
   const ZVtxG *pv[3] = { a, b, c }, *v0, *v1, *v2;
@@ -42,17 +52,11 @@ void fill_general(ZBuffer *zb, const ZVtxG *a, const ZVtxG *b, const ZVtxG *c,
   float R1 = 0, R2 = 0, R3 = 0;
   float s0 = 0, s1 = 0, s2 = 0, t0 = 0, t1 = 0, t2 = 0;
   float gs1x = 0, gs1y = 0, gt1x = 0, gt1y = 0, Rs1 = 0, Rt1 = 0;
-  ZTri T;
   int part, y, ye, xl, dxl, xr, dxr, x0, x1;
   unsigned int zy = 0;
   ZSpan sp;
 
-  if (!ztri_setup(&T, a->x, a->y, a->z, b->x, b->y, b->z, c->x, c->y, c->z,
-                  p))
-    return;
-  ztri_zepoch(&T, p, a->z, b->z, c->z);
-  ztri_rows(&T, p);
-  v0 = pv[T.o[0]]; v1 = pv[T.o[1]]; v2 = pv[T.o[2]];
+  v0 = pv[T->o[0]]; v1 = pv[T->o[1]]; v2 = pv[T->o[2]];
   sp.run = mt ? p->x->run_mt : zp_run;
   /* phase 4 (s31_tfilter.c): this triangle's texture level(s) and filter,
      and whether its colour is perspective-corrected - one call when the
@@ -62,14 +66,14 @@ void fill_general(ZBuffer *zb, const ZVtxG *a, const ZVtxG *b, const ZVtxG *c,
     /* a triangle whose q hardly differ keeps the affine colour: one test
        here, not a call (zpx_qspread) */
     if ((p->xact & ZPX_TEX) || x->pc_cur || zpx_qspread(v0->q, v1->q, v2->q))
-      if (zpx_tri((ZPipe *)p, &T, v0, v1, v2)) sp.run = mt ? p->x->run_lod_mt : zp_run_lod;
+      if (zpx_tri((ZPipe *)p, T, v0, v1, v2)) sp.run = mt ? p->x->run_lod_mt : zp_run_lod;
   }
   need = p->need;
 
   /* only the planes the chosen stages read (ZPipe.need, gl_build_pipe),
      each referenced to the centre of pixel (px, py) */
-#define PLANE(F, gx, gy, R) do { ZTRI_GRAD(&T, v0->F, v1->F, v2->F, gx, gy); \
-    R = v0->F + gx * T.ox + gy * T.oy; } while (0)
+#define PLANE(F, gx, gy, R) do { ZTRI_GRAD(T, v0->F, v1->F, v2->F, gx, gy); \
+    R = v0->F + gx * T->ox + gy * T->oy; } while (0)
   if (need & ZP_N_RGBA) {
     PLANE(r, grx, gry, Rr);
     PLANE(g, ggx, ggy, Rg);
@@ -104,10 +108,10 @@ void fill_general(ZBuffer *zb, const ZVtxG *a, const ZVtxG *b, const ZVtxG *c,
     }
     s0 = (float)sa * v0->q; s1 = (float)sb * v1->q; s2 = (float)sc * v2->q;
     t0 = (float)ta * v0->q; t1 = (float)tb * v1->q; t2 = (float)tc * v2->q;
-    ZTRI_GRAD(&T, s0, s1, s2, gsx, gsy);
-    ZTRI_GRAD(&T, t0, t1, t2, gtx, gty);
-    Rs = s0 + gsx * T.ox + gsy * T.oy;
-    Rt = t0 + gtx * T.ox + gty * T.oy;
+    ZTRI_GRAD(T, s0, s1, s2, gsx, gsy);
+    ZTRI_GRAD(T, t0, t1, t2, gtx, gty);
+    Rs = s0 + gsx * T->ox + gsy * T->oy;
+    Rt = t0 + gtx * T->ox + gty * T->oy;
     /* phase 4 (review 4 R1): for the level per 8-pixel block */
     sp.dszdy = gsy; sp.dtzdy = gty; sp.dfzdy = gqy;
   }
@@ -138,10 +142,10 @@ void fill_general(ZBuffer *zb, const ZVtxG *a, const ZVtxG *b, const ZVtxG *c,
     }
     u0 = (float)sa * v0->q; u1 = (float)sb * v1->q; u2 = (float)sc * v2->q;
     w0 = (float)ta * v0->q; w1 = (float)tb * v1->q; w2 = (float)tc * v2->q;
-    ZTRI_GRAD(&T, u0, u1, u2, gs1x, gs1y);
-    ZTRI_GRAD(&T, w0, w1, w2, gt1x, gt1y);
-    Rs1 = u0 + gs1x * T.ox + gs1y * T.oy;
-    Rt1 = w0 + gt1x * T.ox + gt1y * T.oy;
+    ZTRI_GRAD(T, u0, u1, u2, gs1x, gs1y);
+    ZTRI_GRAD(T, w0, w1, w2, gt1x, gt1y);
+    Rs1 = u0 + gs1x * T->ox + gs1y * T->oy;
+    Rt1 = w0 + gt1x * T->ox + gt1y * T->oy;
     sp.dszdy1 = gs1y; sp.dtzdy1 = gt1y; sp.dfzdy = gqy;
   }
   if (need & ZP_N_SPEC) {
@@ -154,8 +158,8 @@ void fill_general(ZBuffer *zb, const ZVtxG *a, const ZVtxG *b, const ZVtxG *c,
        (zc_smooth_pc). The planes are kept in the span (pcr, pcgy, and
        the x steps), not in locals: only this triangle's spans read them */
 #define PPLANE(F, k, gx) do { float a0_ = v0->F * v0->q, a1_ = v1->F * v1->q, \
-      a2_ = v2->F * v2->q; ZTRI_GRAD(&T, a0_, a1_, a2_, sp.gx, sp.pcgy[k]); \
-      sp.pcr[k] = a0_ + sp.gx * T.ox + sp.pcgy[k] * T.oy; } while (0)
+      a2_ = v2->F * v2->q; ZTRI_GRAD(T, a0_, a1_, a2_, sp.gx, sp.pcgy[k]); \
+      sp.pcr[k] = a0_ + sp.gx * T->ox + sp.pcgy[k] * T->oy; } while (0)
     PPLANE(r, 0, drqdx);
     PPLANE(g, 1, dgqdx);
     PPLANE(b, 2, dbqdx);
@@ -166,7 +170,7 @@ void fill_general(ZBuffer *zb, const ZVtxG *a, const ZVtxG *b, const ZVtxG *c,
 
   sp.drdx = (int)grx; sp.dgdx = (int)ggx; sp.dbdx = (int)gbx;
   sp.dadx = (int)gax;
-  sp.dzdx = T.dzdx;
+  sp.dzdx = T->dzdx;
   sp.dszdx = gsx; sp.dtzdx = gtx; sp.dfqdx = gfx; sp.dfzdx = gqx;
   sp.dsrdx = (int)g1x; sp.dsgdx = (int)g2x; sp.dsbdx = (int)g3x;
   sp.z = 0; sp.r = sp.g = sp.b = sp.a = 0;
@@ -178,22 +182,24 @@ void fill_general(ZBuffer *zb, const ZVtxG *a, const ZVtxG *b, const ZVtxG *c,
   }
 
   for (part = 0; part < 2; part++) {
-    y = T.part[part].ya; ye = T.part[part].yb;
+    y = T->part[part].ya; ye = T->part[part].yb;
     if (y >= ye) continue;
-    xl = T.part[part].xl; dxl = T.part[part].dxl;
-    xr = T.part[part].xr; dxr = T.part[part].dxr;
-    zy = T.zc + (unsigned int)T.dzdy * (unsigned int)y;
-    for (; y < ye; y++, xl += dxl, xr += dxr, zy += (unsigned int)T.dzdy) {
+    xl = T->part[part].xl; dxl = T->part[part].dxl;
+    xr = T->part[part].xr; dxr = T->part[part].dxr;
+    zy = T->zc + (unsigned int)T->dzdy * (unsigned int)y;
+    for (; y < ye; y++, xl += dxl, xr += dxr, zy += (unsigned int)T->dzdy) {
       float fx, fy;
+      /* phase 6: another thread's row (the edges step on regardless) */
+      if (band && own != NULL && own[y] != me) continue;
       ZTRI_SPAN(xl, xr, x0, x1);
       if (x1 <= x0) continue;
-      fx = (float)(x0 - T.px);
-      fy = (float)(y - T.py);
+      fx = (float)(x0 - T->px);
+      fy = (float)(y - T->py);
       sp.pp = (PIXEL *)((char *)zb->pbuf + y * zb->linesize) + x0;
       sp.pz = zb->zbuf + y * zb->xsize + x0;
       sp.n = x1 - x0;
       /* tier 1's depth, to the bit */
-      sp.z = zy + (unsigned int)T.dzdx * (unsigned int)x0;
+      sp.z = zy + (unsigned int)T->dzdx * (unsigned int)x0;
       if (need & ZP_N_RGBA) {
         sp.r = (int)(Rr + grx * fx + gry * fy);
         sp.g = (int)(Rg + ggx * fx + ggy * fy);
@@ -234,18 +240,45 @@ void fill_general(ZBuffer *zb, const ZVtxG *a, const ZVtxG *b, const ZVtxG *c,
    with ZTRI_GEN_MT - so the single-unit one is compiled, inlined and
    register-allocated exactly as before phase 5) */
 #ifndef ZTRI_GEN_MT
-void ZB_fillTriangleGeneral(ZBuffer *zb, const ZVtxG *a, const ZVtxG *b,
-                            const ZVtxG *c, int textured)
-{
-  (void)textured;
-  fill_general(zb, a, b, c, 0);
-}
+#define FILL_BODY ZB_fillBodyGeneral
+#define FILL_TRI ZB_fillTriangleGeneral
+#define FILL_MT 0
 #else
 /* phase 5 O1 */
-void ZB_fillTriangleGeneralMT(ZBuffer *zb, const ZVtxG *a, const ZVtxG *b,
-                              const ZVtxG *c, int textured)
-{
-  (void)textured;
-  fill_general(zb, a, b, c, 1);
-}
+#define FILL_BODY ZB_fillBodyGeneralMT
+#define FILL_TRI ZB_fillTriangleGeneralMT
+#define FILL_MT 1
 #endif
+
+__attribute__((noinline))
+void FILL_BODY(ZBuffer *zb, const ZTri *T, const ZVtxG *a, const ZVtxG *b,
+               const ZVtxG *c, const unsigned char *own, int me)
+{
+  fill_body(zb, T, a, b, c, FILL_MT, 1, own, me);
+}
+
+/* the set-up, which writes shared state (the depth epoch, the dirty box),
+   runs once, on the application's thread; with S31GL_THREADS the triangle
+   is queued for the worker's rows (s31_thr.c) and this thread draws its
+   own */
+void FILL_TRI(ZBuffer *zb, const ZVtxG *a, const ZVtxG *b, const ZVtxG *c,
+              int textured)
+{
+  const ZPipe *p = zb->pipe;
+  const unsigned char *own;
+  ZTri T;
+
+  (void)textured;
+  if (!ztri_setup(&T, a->x, a->y, a->z, b->x, b->y, b->z, c->x, c->y, c->z,
+                  p))
+    return;
+  ztri_zepoch(&T, p, a->z, b->z, c->z);
+  ztri_rows(&T, p);
+  if (__builtin_expect(p->thr != NULL, 0)) {
+    own = s31t_tri(zb, &T, a, b, c, FILL_MT);
+    if (own == (const unsigned char *)1) return;      /* all the worker's */
+    FILL_BODY(zb, &T, a, b, c, own, 0);
+    return;
+  }
+  fill_body(zb, &T, a, b, c, FILL_MT, 0, NULL, 0);
+}

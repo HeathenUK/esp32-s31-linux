@@ -197,6 +197,12 @@ S31GL_API int s31gl_stencil_bytes(s31gl_ctx *ctx);
    are inline for nearest textures, out[6] for filtered ones (O2); out[7]
    is 0), then zeroes the counts (gl/tinygl/source/zpipe_fused.c) */
 S31GL_API void s31gl_fused_stats(unsigned int out[8]);
+/* phase 6 (S31GL_THREADS): per-frame counts of the second rasteriser
+ * thread since the last call, then zeroed: [0] the worker's instructions
+ * (S31GL_THREADS=2 on the bare-metal RV32 counter), [1] triangles queued,
+ * [2] pipe copies sent, [3] syncs, [4] triangles not threadable, [5] of
+ * [1] wholly the worker's, [6] ring-full waits, [7] ring bytes */
+S31GL_API void s31gl_thr_stats(unsigned int out[8]);
 
 #ifdef __cplusplus
 }

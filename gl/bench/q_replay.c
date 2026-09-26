@@ -274,9 +274,17 @@ static void save_frame(uint32_t frame)
 	}
 }
 
+static int thr_on = -1;		/* phase 6: S31GL_THREADS set */
+
 static void on_swap(const uint32_t *a)
 {
-	unsigned long long now = rdinstret(), d = now - t_prev;
+	unsigned long long now, d;
+	/* phase 6: the second rasteriser thread's queue is drawn before the
+	 * frame is counted and hashed (S31GL_THREADS=2 runs it here) */
+	if (cur_c)
+		s31gl_finish(ctx[cur_c]);
+	now = rdinstret();
+	d = now - t_prev;
 	uint32_t frame = a[0], fl = a[1], live_h = a[2], wi = a[5];
 	cur_frame = frame + 1;
 	q_off();
@@ -292,6 +300,17 @@ static void on_swap(const uint32_t *a)
 		}
 		printf("qsrf %u %s %llu %08x %08x %s\n", (unsigned)frame, fl & TRS_COUNT ? "count" : "warm",
 		       d, (unsigned)h, (unsigned)live_h, same ? "same" : "DIFF");
+		if (thr_on < 0) {
+			const char *e = getenv("S31GL_THREADS");
+			thr_on = e && atoi(e) > 0;
+		}
+		if (thr_on) {
+			unsigned int ts[8];
+			s31gl_thr_stats(ts);
+			printf("qsrt %u %s worker %u tri %u pipe %u sync %u mainonly %u allw %u full %u bytes %u\n",
+			       (unsigned)frame, fl & TRS_COUNT ? "count" : "warm", ts[0], ts[1], ts[2],
+			       ts[3], ts[4], ts[5], ts[6], ts[7]);
+		}
 		if (same) nsame++; else ndiff++;
 		if (wi < MAXW && (fl & TRS_COUNT)) {
 			if (!win[wi].n) {

@@ -20,6 +20,7 @@ void glopClearDepth(GLContext *c,GLParam *p)
 void glopClear(GLContext *c,GLParam *p)
 {
   int mask=p[1].i;
+  S31T_SYNC(c);                  /* phase 6 (s31_thr.h) */
 #ifdef S31GL_P4ARITH
   int r=(int)(c->clear_color.v[0]*65535);
   int g=(int)(c->clear_color.v[1]*65535);

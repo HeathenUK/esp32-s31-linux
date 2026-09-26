@@ -121,6 +121,7 @@ void tgl_ctx_destroy(void *ctx)
   ZBuffer *zb;
 
   if (c == NULL || c == null_ctx) return;
+  s31t_free(c);                  /* phase 6: sync and stop the worker */
   zb = c->zb;
   {
     /* attribute stacks the app left pushed (tgl_bridge.h: next first) */
@@ -158,6 +159,7 @@ int tgl_ctx_bind(void *ctx, void *pixels, int width, int height, int pitch)
       (pixels != NULL && (pitch < 2 * width || (pitch & 1))))
     return -1;
   zb = c->zb;
+  S31T_SYNC(c);                  /* phase 6 (s31_thr.h) */
   c->ready = 0;
   c->armed = 1;
   /* phase 3a dirty boxes: another buffer of the same shape (GLX's
@@ -227,6 +229,7 @@ void tgl_ctx_set_prepare(void *ctx, int (*prepare)(void *user), void *user)
 
 void tgl_ctx_make_current(void *ctx)
 {
+  if (gl_ctx) S31T_SYNC(gl_ctx);   /* phase 6: nothing in flight on the old one */
   if ((ctx ? (GLContext *)ctx : null_ctx) != gl_ctx) tgl_bind_serial++;
   gl_ctx = ctx ? (GLContext *)ctx : null_ctx;
   gl_ctx->ready = 0;
@@ -243,6 +246,14 @@ void tgl_ctx_arm(void *ctx)
   if (c == NULL) return;
   c->ready = 0;
   c->armed = 1;
+}
+
+/* phase 6: glFlush / glFinish / glXSwapBuffers - every queued triangle
+   is in the buffers afterwards */
+void tgl_ctx_sync(void *ctx)
+{
+  GLContext *c = ctx ? (GLContext *)ctx : gl_ctx;
+  if (c) S31T_SYNC(c);
 }
 
 void *tgl_ctx_current(void)
@@ -265,6 +276,7 @@ void tgl_ctx_release_depth(void *ctx)
 {
   GLContext *c = ctx;
   if (c == NULL) return;
+  S31T_SYNC(c);                  /* phase 6 (s31_thr.h) */
   tgl_bind_serial++;
   zb_drop_depth(c->zb);
   zb_drop_stencil(c->zb);        /* phase 4 F8: the ancillary buffers go together */
@@ -280,6 +292,7 @@ void tgl_ctx_set_stencil_bits(void *ctx, int bits)
   if (c == NULL) return;
   bits = bits > 0 ? 8 : 0;
   if (bits == c->stencil_bits) return;
+  S31T_SYNC(c);                  /* phase 6 (s31_thr.h) */
   c->stencil_bits = bits;
   if (!bits) zb_drop_stencil(c->zb);
   c->ready = 0;
@@ -302,6 +315,7 @@ int tgl_ctx_bind_stencil(void *ctx, void *stencil)
   zb = c->zb;
   if (stencil != NULL && (zb->xsize <= 0 || zb->ysize <= 0)) return -1;
   if (stencil == zb->sbuf && zb->sbuf_ext == (stencil != NULL)) return 0;
+  S31T_SYNC(c);                  /* phase 6 (s31_thr.h) */
   zb_drop_stencil(zb);
   zb->sbuf = stencil;
   zb->sbuf_ext = stencil != NULL;
@@ -331,6 +345,7 @@ int tgl_ctx_bind_depth(void *ctx, void *depth)
   zb = c->zb;
   if (depth != NULL && (zb->xsize <= 0 || zb->ysize <= 0)) return -1;
   if (depth == zb->zbuf && zb->zbuf_ext == (depth != NULL)) return 0;
+  S31T_SYNC(c);                  /* phase 6 (s31_thr.h) */
   tgl_bind_serial++;
   zb_drop_depth(zb);
   zb->zbuf = depth;
@@ -346,6 +361,7 @@ void tgl_ctx_set_retained(void *ctx, int on)
 {
   GLContext *c = ctx;
   if (c == NULL) return;
+  S31T_SYNC(c);                  /* phase 6 (s31_thr.h) */
   c->zb->retained = on != 0;
   zdb_invalidate(c->zb);
   tgl_bind_serial++;
@@ -368,6 +384,8 @@ void tgl_ctx_set_doublebuffer(void *ctx, int on)
 int gl_prepare_slow(GLContext *c)
 {
   ZBuffer *zb = c->zb;
+
+  S31T_SYNC(c);                  /* phase 6 (s31_thr.h) */
 
   if (c->armed && c->prepare != NULL && !c->prepare_busy) {
     c->armed = 0;

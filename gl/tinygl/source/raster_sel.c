@@ -550,6 +550,10 @@ void gl_update_raster(GLContext *c)
   else c->draw_fill_inner = s31_rt.draw_fill;
   c->draw_fill = (c->offset_states & TGL_OFFSET_FILL) && !skip ?
                  gl_draw_triangle_offset : c->draw_fill_inner;
+  /* phase 6 (s31_thr.h): only a general batch's triangles are threaded; a
+     tier-1 batch (and the general triangles its fillers fall back to)
+     draws every row here, after what is in flight */
+  if (!gen) S31T_SYNC(c);
 
   /* phase 3a G03 (s31_zepoch.c): stale depth epochs under this depth
      state - GL_LESS gets the far-step check (the fillers, ztri_zepoch),
@@ -1028,4 +1032,6 @@ void gl_build_pipe(GLContext *c)
   x->run_mt = zp_run_mt;
   x->run_lod_mt = zp_run_lod_mt;
   if (c->fused_on) zpf_select(c);
+  /* phase 6 (s31_thr.h): whether this batch's triangles are threaded */
+  if (s31t_mode) s31t_pipe_built(c);
 }

@@ -12,6 +12,7 @@
 #include "zmath.h"
 #include "zfeatures.h"
 #include "zpipe.h"
+#include "s31_thr.h"
 
 /* s31 (phase 5, O7): fixed-size word copy and compare for the per-vertex and
    per-glBegin blocks (64 to 156 bytes). A libc memcpy/memcmp of 64 bytes

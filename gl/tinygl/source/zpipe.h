@@ -171,6 +171,9 @@ typedef struct ZPipe {
   /* unit 1's texel indices of a pixel rectangle (s31_draw.c: every
      fragment the raster position's texel), NULL: the chunk's own idx1 */
   const unsigned int *idx1_px;
+  /* phase 6 (s31_thr.h): the context's second rasteriser thread, NULL
+     with S31GL_THREADS=0 (and in the worker's own copy) */
+  struct S31ThrHot *thr;
 } ZPipe;
 
 /* ZPipe.xact */
@@ -566,5 +569,16 @@ void ZB_fillTriangleGeneral(ZBuffer *zb, const ZVtxG *v0, const ZVtxG *v1,
    zp_run_mt / zp_run_lod_mt, or a fused filler's) */
 void ZB_fillTriangleGeneralMT(ZBuffer *zb, const ZVtxG *v0, const ZVtxG *v1,
                               const ZVtxG *v2, int textured);
+/* phase 6: their per-row part after the set-up, for the rows own[y] == me
+   (own NULL: all) - what both rasteriser threads run (s31_thr.h) */
+void ZB_fillBodyGeneral(ZBuffer *zb, const struct ZTri *T, const ZVtxG *a,
+                        const ZVtxG *b, const ZVtxG *c, const unsigned char *own,
+                        int me);
+void ZB_fillBodyGeneralMT(ZBuffer *zb, const struct ZTri *T, const ZVtxG *a,
+                          const ZVtxG *b, const ZVtxG *c, const unsigned char *own,
+                          int me);
+/* phase 6: zpipe_fused.c's world tables for scale 2^sh into x (the
+   worker's own copy of them) */
+int zpf_world_tables(ZPipeX *x, int sh);
 
 #endif

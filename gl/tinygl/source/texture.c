@@ -70,6 +70,7 @@ static void free_texture(GLContext *c,int h)
 
   t=find_texture(c,h);
   if (t == NULL) return;
+  S31T_SYNC(c);                  /* phase 6 (s31_thr.h) */
   if (t->prev==NULL) {
     ht=&c->shared_state.texture_hash_table
       [t->handle % TEXTURE_HASH_TABLE_SIZE];
@@ -350,6 +351,7 @@ int gl_tex_image_src(GLContext *c, GLParam *p, const S31Unpack *src)
   int target=p[1].i;
   int level=p[2].i;
   int components=p[3].i;
+  S31T_SYNC(c);                  /* phase 6 (s31_thr.h) */
   int width=p[4].i;
   int height=p[5].i;
   int border=p[6].i;
@@ -495,6 +497,8 @@ int gl_tex_subimage_src(GLContext *c, GLParam *p, const S31Unpack *src)
   GLTexture *t = gl_tex_target(c, target);
   S31Unpack u;
   int e, b, vb, x0, y0, sx, sy, w, h, TW, TH;
+
+  S31T_SYNC(c);                  /* phase 6 (s31_thr.h) */
 
   if (t == NULL) {
     gl_set_error(c, GL_INVALID_ENUM);
@@ -737,6 +741,7 @@ static void tex_parameter(GLContext *c,GLParam *p);
 
 void glopTexParameter(GLContext *c,GLParam *p)
 {
+  S31T_SYNC(c);                  /* phase 6 (s31_thr.h) */
   TU_RUN(c, tex_parameter(c, p));
 }
 

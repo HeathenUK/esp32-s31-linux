@@ -34,7 +34,9 @@ static int fails, passes;
 
 static unsigned short mem[(H + 2 * PAD) * (W + 2 * PAD)];
 #define PITCH ((W + 2 * PAD) * 2)
-#define PX(x, y) mem[((y) + PAD) * (W + 2 * PAD) + (x) + PAD]
+/* phase 6: with S31GL_THREADS the worker's rows are in the buffer after a
+   sync (s31gl_finish), as GLX does before every present */
+#define PX(x, y) (*(s31gl_finish(NULL), &mem[((y) + PAD) * (W + 2 * PAD) + (x) + PAD]))
 
 static void canary_fill(void)
 {
@@ -46,6 +48,7 @@ static void canary_fill(void)
 static int canary_intact(void)
 {
 	int x, y;
+	s31gl_finish(NULL);
 	for (y = -PAD; y < H + PAD; y++)
 		for (x = -PAD; x < W + PAD; x++) {
 			int inside = x >= 0 && x < W && y >= 0 && y < H;
@@ -294,6 +297,7 @@ static void test_lazy_colour(void)
 	quad(-1, -1, 1, 1);
 	glGetIntegerv(GL_VIEWPORT, vp);
 	CHECK(vp[2] == W / 2 && vp[3] == H / 2, "early glViewport survives the lazy bind");
+	s31gl_finish(NULL);
 	CHECK(lazy_buf[(H - 1) * W] == 0xffff && lazy_buf[0] == 0,
 	      "lazily bound buffer drawn; viewport is bottom-left (y up)");
 	s31gl_make_current(NULL);
@@ -1290,6 +1294,7 @@ static void test_sharing_and_none(void)
 	ident();
 	glClear(GL_COLOR_BUFFER_BIT);
 	glCallList(list);
+	s31gl_finish(NULL);
 	CHECK(b2[W * 5 + 5] == 0x07e0, "shared list works after the creator is destroyed");
 	s31gl_destroy_context(c2);
 	CHECK(s31gl_get_current() == NULL, "destroying the current context releases it");

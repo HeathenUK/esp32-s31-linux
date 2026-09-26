@@ -454,6 +454,12 @@ static int zf_world_tables(ZPipeX *x, int sh)
   return 1;
 }
 
+/* phase 6 (s31_thr.c): the worker's copy of the tables */
+int zpf_world_tables(ZPipeX *x, int sh)
+{
+  return zf_world_tables(x, sh);
+}
+
 /* the alias chunk: A0 unit 0's texture has an alpha plane, A1 unit 1's
    alpha modulates (GL_ADD of an alpha format), BL blend SRC_ALPHA /
    ONE_MINUS_SRC_ALPHA (else stored). The colour stage, zc_comb (unit 0),

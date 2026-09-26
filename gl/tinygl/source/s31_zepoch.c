@@ -495,6 +495,7 @@ void zep_materialise(GLContext *c)
   int n;
 
   if (st == NULL || !st->stale) return;
+  S31T_SYNC(c);                  /* phase 6 (s31_thr.h) */
   b = st->base;
   b2 = b << 16;
   q = zb->zbuf;
@@ -536,6 +537,7 @@ void zep_demote(GLContext *c)
   int i, n;
 
   if (st == NULL || st->base == 0) return;
+  S31T_SYNC(c);                  /* phase 6 (s31_thr.h) */
   b = st->base;
   q = zb->zbuf;
   n = zb->xsize * zb->ysize;
