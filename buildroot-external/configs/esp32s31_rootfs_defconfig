@@ -447,6 +447,12 @@ BR2_PACKAGE_MESA3D_DEMOS=y
 # Stage 5a: SDL 1.2 built with GL (safe: only SDL_OPENGL modes use it; the
 # 4.2 gate checks prboom/prboom-plus/opentyrian create no GL context).
 BR2_PACKAGE_S31_LIBGL_SDL_OPENGL=y
+# Stage 5b: SDL2 with GL contexts but WITHOUT SDL's own GL render driver
+# (plan 4.2 option B): "opengl" never enters SDL_CreateRenderer's list and the
+# window-surface probe keeps the X11/MIT-SHM path, so existing SDL2 apps are
+# untouched; apps that ask for SDL_WINDOW_OPENGL get our libGL.
+BR2_PACKAGE_SDL2_OPENGL=y
+BR2_PACKAGE_S31_LIBGL_SDL2_NO_GL_RENDERER=y
 # rRootage 0.23a (package/rrootage) is NOT enabled: its stock screen.c copies a
 # 42-character path into char name[32] and crashes on the board (SIGSEGV,
 # 2026-09-26); only a source patch (Debian carries one) fixes it.
