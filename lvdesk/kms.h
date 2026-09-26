@@ -64,4 +64,16 @@ int kms_fs_enter(int w, int h, int bpp);
 void kms_fs_leave(void);
 int kms_fs_dirty(int x1, int y1, int x2, int y2);	/* inclusive */
 
+/*
+ * P2 zero-copy fullscreen (kms.c): a GL client's GEM buffer as a framebuffer
+ * of its own, flipped onto the CRTC in place of the mode buffer. flip returns
+ * 2 (flipped; the PPA has read the buffer), 1 (already current, re-presented
+ * async) or 0 (not presentable now: copy the frame instead). release puts
+ * the mode buffer back first when the fb is on the CRTC, then RMFBs it.
+ */
+uint32_t kms_zc_addfb(uint32_t handle, int w, int h, uint32_t pitch);
+int kms_zc_flip(uint32_t fb, int w, int h);
+void kms_zc_release(uint32_t fb);
+int kms_zc_current(uint32_t fb);
+
 #endif

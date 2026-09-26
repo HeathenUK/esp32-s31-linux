@@ -75,8 +75,38 @@
  * NOT DONE, measured: letting the server show our segment until the next
  * put ("segment hold") saved lvdesk's copy but LOWERED fps, 37.9 -> 32.6
  * windowed - see "REJECTED 2026-09-26" in lvdesk/xshim.c mitshm_request.
+ *
+ * ZERO-COPY FULLSCREEN (plan section 5 P2; board test in
+ * artifacts/gl/phase6/ZEROCOPY.txt). Once render scale is granted - which
+ * xshim does only for a panel-size fullscreen window - the colour buffers
+ * need not be MIT-SHM at all: xshim can re-home a pixmap of ours as a GEM
+ * dumb buffer (XLITE-SHM minor 5, "XLITE-ZC", lvdesk/xshim.c zc_request),
+ * we map it through XLITE-SHM GetPixmapFd (xlite's XliteShmMap, found with
+ * dlsym, so a stock libX11 simply never gets here), render into it, and a
+ * present is a request naming the buffer: the desktop flips that buffer's
+ * framebuffer onto the CRTC and the PPA scales it to the panel. Nothing
+ * copies the frame. Two buffers by default (S31GL_ZCBUFS=3 for three).
+ *
+ * The wait is on a FENCE instead of a completion: a control row past each
+ * buffer's image holds `consumed`, the newest frame whose buffer the PPA has
+ * finished reading. The server publishes it before it reads our next
+ * request (the flip's scale is synchronous), so it is normally there long
+ * before we need it (two buffers = a whole frame of slack); if not, a short
+ * poll and then XSync, after which it is certain - never a hang.
+ *
+ * Fallbacks: no extension, no XliteShmMap, a refused or failed allocation,
+ * S31GL_ZC=0, or fewer than two buffers: MIT-SHM as above. The server says
+ * "revoked" (left fullscreen) or "declined" (the desktop would not flip) in
+ * the same row; either is handled like the render-scale revoke - this frame
+ * goes out, the buffers are remade before the next - and a decline, or a
+ * fence that never arrives, keeps this drawable on MIT-SHM for good.
  */
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE		/* RTLD_DEFAULT */
+#endif
+#include <dlfcn.h>
 #include <errno.h>
+#include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -87,6 +117,7 @@
 #include <X11/Xlibint.h>
 
 #include "glx_int.h"
+#include "zc_proto.h"
 
 static struct glxi_surf *surfs;
 
@@ -150,6 +181,19 @@ int glxi_surf_revoked(struct glxi_surf *s)
 {
 	int i;
 
+	if (s->zc) {
+		if (!s->zctl)
+			return 1;
+		if (s->zctl[ZC_W_DECLINED] || s->zc_off) {	/* MIT-SHM for good */
+			if (!s->zc_off && glxi_trace())
+				fprintf(stderr, "libGL: drawable 0x%lx: zero-copy "
+					"declined by the server\n",
+					(unsigned long)s->win);
+			s->zc_off = 1;
+			return 1;
+		}
+		return s->zctl[ZC_W_REVOKED] != 0;	/* render scale revoked */
+	}
 	if (!s->rscale || !s->use_shm)
 		return 0;
 	for (i = 0; i < s->nbuf; i++)
@@ -281,7 +325,12 @@ struct glxi_surf *glxi_surf_get(Display *dpy, Drawable d)
 	s->dpy = dpy;
 	s->win = d;
 	s->interval = 1;
-	s->buf[0].shm.shmid = s->buf[1].shm.shmid = -1;
+	{
+		int i;
+
+		for (i = 0; i < GLXI_MAXBUF; i++)
+			s->buf[i].shm.shmid = -1;
+	}
 	s->next = surfs;
 	surfs = s;
 	return s;
@@ -292,17 +341,28 @@ static void print_stats(struct glxi_surf *s)
 	if (!glxi_trace() || !s->n_present)
 		return;
 	fprintf(stderr, "libGL: drawable 0x%lx %dx%d %s x%d: %lu presents, "
-		"%lu allocs; waits: %lu event, %lu serial, %lu earlier-round-trip, "
-		"%lu XSync, %lu none\n",
+		"%lu allocs; waits: %lu event/fence, %lu serial, "
+		"%lu earlier-round-trip, %lu XSync, %lu fence-poll, %lu none\n",
 		(unsigned long)s->win, s->last_w, s->last_h,
-		s->use_shm ? "MIT-SHM" : "XPutImage", s->last_nbuf,
-		s->n_present, s->n_alloc,
+		s->zc ? "ZERO-COPY" : s->use_shm ? "MIT-SHM" : "XPutImage",
+		s->last_nbuf, s->n_present, s->n_alloc,
 		s->n_wait_ev, s->n_wait_lkrp, s->n_wait_rt, s->n_wait_sync,
-		s->n_wait_none);
+		s->n_wait_poll, s->n_wait_none);
 }
 
 static void buf_free(struct glxi_surf *s, struct glxi_buf *b)
 {
+	if (b->zpix) {
+		/* The mapping is xlite's (XliteShmMap caches it per drawable)
+		 * and FreePixmap drops it; the server orders the free after
+		 * any present still in flight and puts its own mode buffer
+		 * back on the CRTC first (xshim.c zc_pix_release). */
+		if (s->dpy)
+			XFreePixmap(s->dpy, b->zpix);
+		memset(b, 0, sizeof(*b));
+		b->shm.shmid = -1;
+		return;
+	}
 	if (b->img) {
 		if (s->use_shm) {
 			/* Ordered after any put still in flight, and the
@@ -328,8 +388,10 @@ void glxi_surf_free_buffers(struct glxi_surf *s)
 {
 	int i;
 
-	for (i = 0; i < 2; i++)
+	for (i = 0; i < GLXI_MAXBUF; i++)
 		buf_free(s, &s->buf[i]);
+	s->zc = 0;
+	s->zctl = NULL;
 	/* the server stops treating half-size puts as the whole window (a
 	 * resize has already dropped it there; this covers the unbind) */
 	if (s->rscale && s->dpy)
@@ -392,6 +454,300 @@ void glxi_surfs_for_display_closed(Display *dpy)
 		s->dpy = NULL;
 		s->gc = 0;
 		glxi_surf_destroy(s);
+	}
+}
+
+static int nowait(void);
+
+/* ------------------------------------------------------------ zero-copy */
+
+/* S31GL_ZC=0: never ask (the A/B toggle). Default on. */
+static int zc_wanted(void)
+{
+	static int v = -1;
+
+	if (v < 0) {
+		const char *e = getenv("S31GL_ZC");
+
+		v = !(e && strcmp(e, "0") == 0);
+	}
+	return v;
+}
+
+/* S31GL_ZCBUFS=2|3; default 2 (one frame of slack is all the fence needs:
+ * the server publishes it as it handles the present). */
+static int zc_bufs(void)
+{
+	static int n = -1;
+
+	if (n < 0) {
+		const char *e = getenv("S31GL_ZCBUFS");
+
+		n = e && atoi(e) >= 3 ? 3 : 2;
+	}
+	return n;
+}
+
+typedef void *(*xlite_map_fn)(Display *, Pixmap, int *, int *, int *, int *);
+
+/* xlite's XLITE-SHM GetPixmapFd + mmap, exported by the board's libX11 and
+ * absent from every stock one. */
+static xlite_map_fn zc_mapper(void)
+{
+	static int looked;
+	static xlite_map_fn fn;
+
+	if (!looked) {
+		looked = 1;
+		fn = (xlite_map_fn)dlsym(RTLD_DEFAULT, "XliteShmMap");
+	}
+	return fn;
+}
+
+/*
+ * XLITE-SHM minor 5 (lvdesk/xshim.c zc_request): op 0 ALLOC (a reply), op 1
+ * PRESENT seq (none). Returns the reply's words for ALLOC, 0 on refusal.
+ */
+static int zc_send(Display *dpy, Window win, Pixmap pix, int op, uint32_t seq)
+{
+	int major, ev, er, ok = 0;
+	struct zc_req {
+		CARD8 reqType, minor;
+		CARD16 length;
+		CARD32 window, pixmap;
+		CARD8 op, pad0, pad1, pad2;
+		CARD32 seq;
+	} *req;
+
+	if (!XQueryExtension(dpy, "XLITE-ZC", &major, &ev, &er))
+		return 0;
+	LockDisplay(dpy);
+	req = (struct zc_req *)_XGetRequest(dpy, (CARD8)major,
+					    op == ZC_OP_PRESENT ? 20 : 16);
+	if (req) {
+		req->minor = ZC_MINOR;
+		req->window = (CARD32)win;
+		req->pixmap = (CARD32)pix;
+		req->op = (CARD8)op;
+		req->pad0 = req->pad1 = req->pad2 = 0;
+		if (op == ZC_OP_PRESENT)
+			req->seq = seq;
+		ok = 1;
+	}
+	UnlockDisplay(dpy);
+	SyncHandle();
+	return ok;
+}
+
+static int zc_ask_alloc(Display *dpy, Window win, Pixmap pix, int *pitch,
+			uint32_t *ctl_off, uint32_t *len)
+{
+	int major, ev, er, ok = 0;
+	xGenericReply rep;
+	struct zc_req {
+		CARD8 reqType, minor;
+		CARD16 length;
+		CARD32 window, pixmap;
+		CARD8 op, pad0, pad1, pad2;
+	} *req;
+
+	if (!XQueryExtension(dpy, "XLITE-ZC", &major, &ev, &er))
+		return 0;
+	LockDisplay(dpy);
+	req = (struct zc_req *)_XGetRequest(dpy, (CARD8)major, sizeof(*req));
+	if (req) {
+		req->minor = ZC_MINOR;
+		req->window = (CARD32)win;
+		req->pixmap = (CARD32)pix;
+		req->op = ZC_OP_ALLOC;
+		req->pad0 = req->pad1 = req->pad2 = 0;
+		if (_XReply(dpy, (xReply *)&rep, 0, xTrue) &&
+		    (rep.data00 & 0xff) == 1) {
+			ok = 1;
+			*pitch = (int)(rep.data00 >> 16);
+			*ctl_off = rep.data01;
+			*len = rep.data02;
+		}
+	}
+	UnlockDisplay(dpy);
+	SyncHandle();
+	return ok;
+}
+
+/* ZC_OP_QUERY: the buffer size the server would grant zero-copy at. */
+static int zc_query(Display *dpy, Window win, int *bw, int *bh)
+{
+	int major, ev, er, ok = 0;
+	xGenericReply rep;
+	struct zc_req {
+		CARD8 reqType, minor;
+		CARD16 length;
+		CARD32 window, pixmap;
+		CARD8 op, pad0, pad1, pad2;
+	} *req;
+
+	if (!XQueryExtension(dpy, "XLITE-ZC", &major, &ev, &er))
+		return 0;
+	LockDisplay(dpy);
+	req = (struct zc_req *)_XGetRequest(dpy, (CARD8)major, sizeof(*req));
+	if (req) {
+		req->minor = ZC_MINOR;
+		req->window = (CARD32)win;
+		req->pixmap = 0;
+		req->op = ZC_OP_QUERY;
+		req->pad0 = req->pad1 = req->pad2 = 0;
+		if (_XReply(dpy, (xReply *)&rep, 0, xTrue) &&
+		    (rep.data00 & 0xff) == 1) {
+			ok = 1;
+			*bw = (int)(rep.data00 >> 16);
+			*bh = (int)(rep.data01 & 0xffff);
+		}
+	}
+	UnlockDisplay(dpy);
+	SyncHandle();
+	return ok;
+}
+
+/*
+ * The colour buffers as zero-copy GEM pixmaps. 0 on success (s->zc set,
+ * s->nbuf buffers, s->pitch the GEM pitch); -1 leaves nothing behind and
+ * the caller makes MIT-SHM segments as before.
+ */
+static int zc_alloc(struct glxi_surf *s)
+{
+	xlite_map_fn map = zc_mapper();
+	int major, ev, er, i, n = zc_bufs(), pitch = 0, err;
+	uint32_t ctl_off = 0, len = 0;
+
+	if (!zc_wanted() || s->zc_off || !map || !s->dpy ||
+	    !XQueryExtension(s->dpy, "XLITE-ZC", &major, &ev, &er))
+		return -1;
+	{
+		/* one round trip, at allocation only: is this drawable a
+		 * fullscreen the server scans out whole, at our size? */
+		int qw = 0, qh = 0;
+
+		if (!zc_query(s->dpy, s->win, &qw, &qh) || qw != s->bw ||
+		    qh != s->bh) {
+			if (glxi_trace())
+				fprintf(stderr, "libGL: drawable 0x%lx %dx%d: "
+					"zero-copy not offered (server %dx%d)\n",
+					(unsigned long)s->win, s->bw, s->bh,
+					qw, qh);
+			return -1;
+		}
+	}
+	glxi_trap_begin(s->dpy);
+	for (i = 0; i < n; i++) {
+		struct glxi_buf *b = &s->buf[i];
+		int w = 0, h = 0, stride = 0, bpp = 0, p = 0;
+		void *px;
+
+		b->zpix = XCreatePixmap(s->dpy, s->win, (unsigned)s->bw,
+					(unsigned)s->bh, 16);
+		if (!b->zpix)
+			break;
+		if (!zc_ask_alloc(s->dpy, s->win, b->zpix, &p, &ctl_off, &len))
+			break;
+		px = map(s->dpy, b->zpix, &w, &h, &stride, &bpp);
+		if (!px || w != s->bw || h != s->bh || stride != p ||
+		    bpp != 2 || ctl_off < (uint32_t)p * (uint32_t)s->bh ||
+		    (size_t)ctl_off + 16 > len)
+			break;
+		b->pixels = px;
+		b->pending = 0;
+		b->zseq = 0;
+		pitch = p;
+	}
+	err = glxi_trap_end();
+	if (i < n || err) {
+		if (glxi_trace())
+			fprintf(stderr, "libGL: drawable 0x%lx: zero-copy "
+				"buffer %d of %d refused (X error %d), "
+				"MIT-SHM\n", (unsigned long)s->win, i + 1, n,
+				err);
+		for (i = 0; i < n; i++)
+			if (s->buf[i].zpix) {
+				XFreePixmap(s->dpy, s->buf[i].zpix);
+				memset(&s->buf[i], 0, sizeof(s->buf[i]));
+				s->buf[i].shm.shmid = -1;
+			}
+		return -1;
+	}
+	s->zctl = (volatile uint32_t *)((char *)s->buf[0].pixels + ctl_off);
+	if (s->zctl[ZC_W_MAGIC] != ZC_MAGIC) {
+		s->zctl = NULL;
+		for (i = 0; i < n; i++) {
+			XFreePixmap(s->dpy, s->buf[i].zpix);
+			memset(&s->buf[i], 0, sizeof(s->buf[i]));
+			s->buf[i].shm.shmid = -1;
+		}
+		return -1;
+	}
+	/* number our frames on from what the window has consumed, so a
+	 * fresh buffer's first wait can never be satisfied by an old value */
+	s->zseq = __atomic_load_n(&s->zctl[ZC_W_CONSUMED], __ATOMIC_SEQ_CST);
+	s->zc = 1;
+	s->nbuf = n;
+	s->pitch = pitch;
+	return 0;
+}
+
+static int zc_consumed(struct glxi_surf *s, const struct glxi_buf *b)
+{
+	if (!s->zctl)
+		return 1;
+	return zc_seq_done(__atomic_load_n(&s->zctl[ZC_W_CONSUMED],
+					   __ATOMIC_SEQ_CST), b->zseq);
+}
+
+/*
+ * Before the first write into a zero-copy buffer: the PPA must have read the
+ * frame it last presented. Normally already true (the server published it a
+ * frame ago). Otherwise poll for up to 2 ms - the desktop is mid-flip - then
+ * one round trip, after which the server has handled the present and the
+ * fence is certain. If it is STILL not there the protocol is broken: say so
+ * once, stop waiting and leave zero-copy for this drawable (glXSwapBuffers
+ * sees zc_off through glxi_surf_revoked and remakes the buffers).
+ */
+static void zc_wait(struct glxi_surf *s, struct glxi_buf *b)
+{
+	unsigned long sync_serial;
+	struct timespec ts = { 0, 125000 };
+	int i;
+
+	if (zc_consumed(s, b)) {
+		b->pending = 0;
+		s->n_wait_ev++;
+		return;
+	}
+	for (i = 0; i < 16; i++) {
+		nanosleep(&ts, NULL);
+		if (zc_consumed(s, b)) {
+			b->pending = 0;
+			s->n_wait_poll++;
+			return;
+		}
+	}
+	sync_serial = NextRequest(s->dpy);
+	XSync(s->dpy, False);
+	glxi_dpy_proven(s->dpy, sync_serial);
+	s->n_wait_sync++;
+	b->pending = 0;
+	if (zc_consumed(s, b))
+		return;
+	for (i = 0; i < 400 && !zc_consumed(s, b); i++)
+		nanosleep(&ts, NULL);	/* <= 50 ms: an async re-present */
+	if (!zc_consumed(s, b)) {
+		static int said;
+
+		if (!said++)
+			fprintf(stderr, "libGL: drawable 0x%lx: zero-copy fence "
+				"stuck (consumed %u, need %u) - MIT-SHM from now "
+				"on\n", (unsigned long)s->win,
+				(unsigned)s->zctl[ZC_W_CONSUMED],
+				(unsigned)b->zseq);
+		s->zc_off = 1;
 	}
 }
 
@@ -568,6 +924,10 @@ int glxi_surf_alloc(struct glxi_surf *s, VisualID vid, int screen, int db)
 	s->rscale = rscale_negotiate(s);
 	s->bw = s->w >> s->rscale;
 	s->bh = s->h >> s->rscale;
+	/* zero-copy: render scale granted (panel-size fullscreen), or a
+	 * VidMode fullscreen - the server's QUERY decides */
+	if (db && s->use_shm && zc_alloc(s) == 0)
+		goto have_colour;
 	s->use_shm = s->use_shm && alloc_shm(s, &s->buf[0]) == 0;
 	if (!s->use_shm && s->rscale) {
 		rscale_ask(s->dpy, s->win, 0, 0);
@@ -590,6 +950,7 @@ int glxi_surf_alloc(struct glxi_surf *s, VisualID vid, int screen, int db)
 	    want_bufs((size_t)s->pitch * s->bh) == 2 &&
 	    alloc_shm(s, &s->buf[1]) == 0)
 		s->nbuf = 2;
+have_colour:
 	s->cur = 0;
 	s->pixels = s->buf[0].pixels;
 	/* The drawable's depth buffer, shared by every context current on it.
@@ -603,9 +964,11 @@ int glxi_surf_alloc(struct glxi_surf *s, VisualID vid, int screen, int db)
 	s->last_nbuf = s->nbuf;
 	s->n_alloc++;
 	if (glxi_trace() || s->rscale)
-		fprintf(stderr, "libGL: drawable 0x%lx %dx%d: buffers %dx%d%s\n",
+		fprintf(stderr, "libGL: drawable 0x%lx %dx%d: buffers %dx%d%s%s\n",
 			(unsigned long)s->win, s->w, s->h, s->bw, s->bh,
-			s->rscale ? " (render scale 2x, server-scaled)" : "");
+			s->rscale ? " (render scale 2x, server-scaled)" : "",
+			s->zc ? (s->nbuf == 3 ? ", zero-copy x3" :
+				 ", zero-copy x2") : "");
 	return 0;
 }
 
@@ -666,6 +1029,10 @@ void glxi_surf_wait(struct glxi_surf *s)
 
 	if (!b->pending)
 		return;
+	if (s->zc) {
+		zc_wait(s, b);
+		return;
+	}
 	drain_completions(s);
 	if (!b->pending) {
 		s->n_wait_ev++;
@@ -713,6 +1080,20 @@ int glxi_surf_present(struct glxi_surf *s)
 	struct glxi_buf *b = &s->buf[s->cur];
 
 	s->vp_asked = 0;	/* a new frame: glViewport may ask again */
+	if (s->zc) {
+		if (!b->zpix || !s->dpy)
+			return 0;
+		b->zseq = ++s->zseq;
+		b->pending = !nowait();
+		if (!b->pending)
+			s->n_wait_none++;
+		zc_send(s->dpy, s->win, b->zpix, ZC_OP_PRESENT, b->zseq);
+		XFlush(s->dpy);	/* the flip runs while we compute */
+		s->n_present++;
+		s->cur = (s->cur + 1) % s->nbuf;
+		s->pixels = s->buf[s->cur].pixels;
+		return 1;
+	}
 	if (!b->img || !s->dpy)
 		return 0;
 	if (s->use_shm) {

@@ -82,9 +82,17 @@ struct glxi_buf {
 	XShmSegmentInfo shm;	/* stable address: xlite and libXext keep a
 				 * pointer to it in img->obdata */
 	void *pixels;
-	int pending;		/* a ShmPutImage with send_event is in flight */
+	int pending;		/* a ShmPutImage with send_event is in flight,
+				 * or (zero-copy) a present not yet consumed */
 	unsigned long pend_serial;
+	/* P2 ZERO-COPY (glx_present.c zc_alloc): a GEM pixmap the server
+	 * flips onto the CRTC, mapped through XLITE-SHM GetPixmapFd, and the
+	 * sequence number of its last present */
+	Pixmap zpix;
+	uint32_t zseq;
 };
+
+#define GLXI_MAXBUF 3		/* 2 MIT-SHM segments, or up to 3 zero-copy */
 
 struct glxi_surf {
 	struct glxi_surf *next;
@@ -94,7 +102,7 @@ struct glxi_surf {
 	/* The colour buffer(s): allocated lazily at the first draw. With
 	 * S31GL_SHMBUFS=2 a double-buffered drawable gets two segments and
 	 * renders into one while the server copies the other. */
-	struct glxi_buf buf[2];
+	struct glxi_buf buf[GLXI_MAXBUF];
 	int nbuf, cur;
 	void *pixels;		/* == buf[cur].pixels, what the core renders to */
 	/* the drawable's depth buffer, bw * bh 16-bit values, made with the
@@ -112,6 +120,14 @@ struct glxi_surf {
 	 * them (s31gl_set_render_scale). */
 	int rscale;
 	int use_shm;
+	/* P2 ZERO-COPY (glx_present.c): the buffers are GEM pixmaps the server
+	 * scans out directly. zctl is buffer 0's control row (consumed fence,
+	 * revoke and decline words, written by the server); zseq the last frame
+	 * number sent; zc_off sticks once the server declined or the fence
+	 * failed, so this drawable stays on MIT-SHM. */
+	int zc, zc_off;
+	volatile uint32_t *zctl;
+	uint32_t zseq;
 	GC gc;
 	Visual *visual;
 	int interval;		/* GLX_SWAP_INTERVAL_EXT as set; no vblank here,
@@ -132,7 +148,7 @@ struct glxi_surf {
 	unsigned long event_mask;	/* glXSelectEvent, never delivered */
 	/* stats, printed at exit with S31GL_TRACE */
 	unsigned long n_present, n_wait_ev, n_wait_lkrp, n_wait_rt,
-		      n_wait_sync, n_wait_none, n_alloc;
+		      n_wait_sync, n_wait_none, n_alloc, n_wait_poll;
 	int last_w, last_h, last_nbuf;
 };
 

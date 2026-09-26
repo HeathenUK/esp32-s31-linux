@@ -455,6 +455,7 @@ static uint32_t fs_win;			/* the fullscreen client's top-level */
 static uint32_t fs_focused;		/* fs_win we have already handed focus to */
 static uint32_t fs_alias_id;		/* window whose pixels ARE kms_fs_map */
 static unsigned long fs_alias_presents, fs_alias_estab;	/* SIGUSR1 report */
+static unsigned long fs_zc_presents, fs_zc_refused;	/* P2, xwin_on_zc() */
 static void fs_unalias(int keep);
 static void cursor_vis_update(void);
 static int caps_led_seen;	/* the kernel drives the Caps Lock LED */
@@ -6340,6 +6341,10 @@ static void fsg_report(void)
 	       fsg_dirty_bucket[3], fsg_dirty_bucket[4]);
 	printf("lvdesk: alias presents %lu, established %lu, window 0x%x\n",
 	       fs_alias_presents, fs_alias_estab, (unsigned)fs_alias_id);
+	printf("lvdesk: zero-copy presents %lu, refused %lu\n",
+	       fs_zc_presents, fs_zc_refused);
+	fflush(stdout);
+	xshim_zc_report();
 	printf("lvdesk: rowskip presents %lu, rows %lu/%lu kept (%lu%%), "
 	       "frames forced %lu, skipped whole %lu\n",
 	       fsrh_presents, fsrh_rows_kept, fsrh_rows_seen,
@@ -6645,12 +6650,61 @@ static int fs_alias_present(uint32_t id, int sw, int sh, int bpp)
 	return 1;
 }
 
+/*
+ * P2 ZERO-COPY (xshim.c zc_request, kms.c kms_zc_flip): a render-scaled
+ * fullscreen GL client drew this frame straight into a GEM buffer of its
+ * own; putting that buffer's framebuffer on the CRTC is the present. Called
+ * from inside the client's request, so the flip - which the driver scales
+ * synchronously - has finished before the client can learn the frame was
+ * consumed. The fsg frame-gap histogram and stage timers see it like any
+ * other fullscreen present.
+ */
+static int xwin_on_zc(uint32_t win, uint32_t fb, int w, int h)
+{
+	uint64_t t;
+	int k;
+
+	(void)win;			/* xshim checked it is the fs window */
+	if (!fs_active || !fs_enabled()) {
+		fs_zc_refused++;
+		return 0;
+	}
+	fsg_note();
+	t = fsg_stage ? prof_ns() : 0;
+	k = kms_zc_flip(fb, w, h);
+	if (!k) {
+		fs_zc_refused++;
+		return 0;
+	}
+	fs_zc_presents++;
+	fsg_expand_us = 0;
+	fsg_dirty_us = fsg_stage ? (uint32_t)((prof_ns() - t) / 1000u) : 0;
+	if (fsg_dirty_us > fsg_dirty_max)
+		fsg_dirty_max = fsg_dirty_us;
+	fsg_dirty_bucket[fsg_dirty_us < 1000 ? 0 :
+			 fsg_dirty_us < 3000 ? 1 :
+			 fsg_dirty_us < 6000 ? 2 :
+			 fsg_dirty_us < 12000 ? 3 : 4]++;
+	return k;
+}
+
 static void fs_present(uint32_t id)
 {
-	fsg_note();
 	const uint16_t *pal, *px = NULL;
 	const uint8_t *src;
 	int sw, sh, sstride, dx, dy, dw, dh, y;
+
+	/*
+	 * A zero-copy buffer is on the CRTC: this window's surface is stale
+	 * (an Expose fill, a stray core draw), and presenting it would put
+	 * the mode buffer back over the frame. Take the damage and show
+	 * nothing; the client's next frame presents itself.
+	 */
+	if (xshim_window_zc_live(id)) {
+		(void)xshim_window_take_damage(id, &dx, &dy, &dw, &dh);
+		return;
+	}
+	fsg_note();
 
 	src = xshim_window_indices(id, &sw, &sh, &sstride, &pal);
 	if (!src || !pal) {
@@ -15469,6 +15523,7 @@ int main(void)
 	xshim_on_warp(xwin_on_warp);
 	xshim_on_mode(xwin_on_mode);
 	xshim_on_fsnative(xwin_on_fsnative);
+	xshim_on_zc(xwin_on_zc);
 	xshim_clip_set_cb(term_paste_from_x);
 	if (xshim_init(xwin_on_window, xwin_on_draw, xwin_on_close) < 0)
 		fprintf(stderr, "lvdesk: no X shim (socket in use?)\n");
