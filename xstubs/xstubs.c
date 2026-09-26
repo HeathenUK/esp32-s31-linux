@@ -1015,3 +1015,27 @@ Cursor XcursorLibraryLoadCursor(Display *dpy, const char *name)
 	return XCreateFontCursor(dpy, shape);
 }
 #endif
+
+#ifdef STUB_XI
+/*
+ * XInput 2, answered honestly as absent (GL plan, 2026-09-26).
+ *
+ * freeglut 3.8 (the GLUT demos' toolkit) NEEDs libXi.so.6 and imports exactly
+ * one symbol from it, XISelectEvents - and calls it only after
+ * XQueryExtension("XInputExtension") succeeds, which xshim never lets happen.
+ * The stock libXi cannot be used: it links libxcb, libXau and libXdmcp, the
+ * stock X stack xlite replaces, none of which exist on the card. musl binds
+ * eagerly, so without this the demos do not load at all.
+ *
+ * Shipped beside freeglut (/root/gl2/lib), NOT system-wide: SDL2 dlopens
+ * libXi.so.6 for its XINPUT2 module, and an incomplete library there would
+ * be a change to every SDL2 app for nothing.
+ */
+#include <X11/Xlib.h>
+typedef struct XIEventMask XIEventMask;
+int XISelectEvents(Display *dpy, Window win, XIEventMask *masks, int n)
+{
+	(void)dpy; (void)win; (void)masks; (void)n;
+	return 1;	/* BadRequest: the extension is not there */
+}
+#endif /* STUB_XI */

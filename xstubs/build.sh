@@ -33,6 +33,9 @@ build libICE.so.6  libICE.so.6.3.0    STUB_ICE
 build libSM.so.6   libSM.so.6.0.1     STUB_SM
 build libXext.so.6 libXext.so.6.4.0   STUB_XEXT
 build libXpm.so.4  libXpm.so.4.11.0   STUB_XPM
+# freeglut-only (see STUB_XI in xstubs.c): shipped beside the GL demos in
+# /root/gl2/lib, deliberately NOT in X11_REPLACEMENTS
+build libXi.so.6   libXi.so.6.1.0     STUB_XI
 # Not X libraries, but the same argument: xfiles references 13 fontconfig
 # symbols and ONE Xcursor symbol, and pays 80 kB of RSS for them - fontconfig
 # alone drags in freetype, expat and zlib. See the notes in xstubs.c.

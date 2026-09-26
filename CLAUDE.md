@@ -290,8 +290,9 @@ for kernel work; the rootfs only needs rebuilding when userspace changes.
 - **`/usr/bin`, `/usr/lib` and `/lib` are read-only overlays** stacking two
   cramfs XIP images over the ext4 root, with **no upperdir**. Nothing can be
   written to them at runtime, so installing anything fails with "Read-only file
-  system". Write to the ext4 underneath via a non-recursive `mount --bind /`
-  (`/usr/sbin/s31-opkg` does this) and reboot for the overlay to restack. This
+  system". Write to the ext4 underneath via a non-recursive
+  `mount --bind / /mnt/realroot` and reboot for the overlay to restack.
+  (There is no package manager: opkg was removed 2026-08-29.) This
   is what makes userspace cost zero RSS - it is the feature, not a defect.
 - **Never base64 a large file over the serial console.** At ~65 KB/s a 52 MB
   recording is 13 minutes during which the board is unusable and every other
