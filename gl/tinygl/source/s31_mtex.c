@@ -207,7 +207,10 @@ void tgl_client_active_texture(int texture)
 
 void tgl_multi_tex_coord(int target, float s, float t, float r, float q)
 {
-  GLContext *c = gl_get_context();
+  /* s31 (phase 6 V3): per vertex in a multitexturing game's world pass -
+     the context read once, tgl_max_texture_units' test inline (two calls
+     to gl_get_context and five saved registers were 48 instructions) */
+  GLContext *c = gl_ctx;
   GLParam p[6];
   int u = target - GL_TEXTURE0;
 
@@ -219,7 +222,7 @@ void tgl_multi_tex_coord(int target, float s, float t, float r, float q)
     gl_set_error(c, GL_INVALID_ENUM);
     return;
   }
-  if (u >= tgl_max_texture_units()) return;   /* no such unit: nothing to set */
+  if (!c || u >= (c->mtex_adv ? 2 : 1)) return;   /* no such unit: nothing to set */
   if (!(c->compile_flag | c->print_flag)) {
     /* executing (glBegin/glEnd included): the op's stores, here */
     c->tu1.cur_tc.X = s;

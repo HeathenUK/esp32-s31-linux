@@ -1,5 +1,7 @@
 #include <stddef.h>
 #include "zgl.h"
+#include "ztri.h"
+#include "s31_ttv.h"
 #include "s31_fmath.h"
 
 _Static_assert(offsetof(GLVertex, tex_coord1) % 4 == 0, "GLVertex prefix is whole words");
@@ -624,8 +626,16 @@ void gl_vertex_core(GLContext * c, float x, float y, float z, float w,
     }
     /* s31: the fog factor (only on the general path, plan F6) and the
        user clip planes (plan F7): one test where there was one */
-    if (c->vtx_extra)
-	gl_vertex_extra(c, v);
+    if (c->vtx_extra) {
+	/* s31 (phase 6 V2): texture unit 1 on and nothing else - its plain
+	   coordinates, here: s31_xform.c gl_vertex_texcoord1's copy when
+	   there is no texgen and no texture matrix (tu1_apply 0), without
+	   the call (the world's lightmap pass: every multitextured vertex) */
+	if (c->vtx_extra == 4 && !c->tu1_apply)
+	    v->tex_coord1 = c->tu1.cur_tc;
+	else
+	    gl_vertex_extra(c, v);
+    }
 
     /* color */
     /* s31: last of the per-vertex work - texgen (the normal, which the
@@ -641,7 +651,7 @@ void gl_vertex_core(GLContext * c, float x, float y, float z, float w,
 
     /* precompute the mapping to the viewport */
     if (v->clip_code == 0)
-	gl_transform_to_viewport(c, v);
+	gl_ttv(c, v);	/* s31 (phase 6 V1): inline, s31_ttv.h */
 
     /* edge flag */
 
