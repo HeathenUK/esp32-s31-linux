@@ -1,0 +1,136 @@
+GL phase 6, lever #4: the vertex and geometry path (library, host only) -
+2026-09-26. Nothing touched the board; no make / Buildroot. Base: commit
+acb8323 (phase 5 fix 2, GL_MAX_TEXTURE_SIZE 512). Workload: the QuakeSpasm
+proxy on the p5f2 / p5f2-tf0 traces (the 512-texture captures), RV32 qemu
+instruction counter, board flags. Raw data beside this file: geometry/qsr/
+(every replay, per-frame hashes), geometry/prof/ (qsprof.sh function tables
+and pcann.py call counts, base and final), gates/. s31, MIT.
+
+1. WHERE THE GEOMETRY SIDE SPENDS (profile first; base tree, TEXFILTER=0,
+   instructions per counted frame of 17.52 M; the default config spends the
+   same absolute numbers, it only adds filler work)
+                                      insn/frame  calls/frame  insn/call
+  ZB_fillTriangleGeneralMT setup+spans  1,137,520        544     2,091
+  ZB_fillTriangleGeneral   setup+spans    726,433      1,205       603
+  gl_vertex4f (the vertex core)           697,515      4,652       150
+  to_vg (GLVertex -> filler vertex)       304,385      5,247        58
+  gl_transform_to_viewport                244,420      4,007        61
+  tgl_glColor4f                            91,497      2,408        38
+  gl_draw_triangle (cull, clip test)       89,015      2,932        30
+  set_flat                                 60,897      1,242        49
+  gl_draw_triangle_general / _mt          111,198      1,749     46/102
+  tgl_multi_tex_coord                      54,919      1,144        48
+  updateTmp (clipper)                      51,514        360       143
+  tgl_glTexCoord4f                         51,155      4,650        11
+  gl_vertex_extra (unit-1 texcoords)       46,910      1,144        41
+  tu_swap (glActiveTexture commands)       43,250        102       426
+  gl_M4_MulLeft (glTranslate/Rotate/Mult)  32,412         57       568
+  glopBegin / glopEnd                      45,233        509     59/29
+  API wrappers (glVertex3fv, tgl_glVertex4f, gl_vertex4f checks,
+    glTexCoord2f, glMultiTexCoord2fARB)   ~110,000
+  Geometry side, not counting the fillers' own setup: ~2.2 M/frame (12.6%
+  of TEXFILTER=0, 5.7% of the default). The fillers' per-triangle setup
+  (ztri_setup, the plane gradients, the ZSpan fields) is ~470 instructions
+  a triangle in ZB_fillTriangleGeneral and ~740 in the MT one (~1.0 M/frame
+  together), and their per-span plane evaluation ~64 instructions a span
+  (10,496 spans/frame in the MT filler alone, 672 k).
+  Frame shape: ~4,650 vertices, 1,749 general-path triangles, 8 tier-1,
+  509 glBegin, 422 clipped triangles, 1,144 multitextured vertices.
+
+2. WHAT CHANGED (all bit-identical: 84/84 full-frame hashes equal to the
+   base in both configs after every step, gl/bench/qsrhash.py)
+  QuakeSpasm M instructions/frame, windows 0 / 1:
+                                   default            TEXFILTER=0
+    base (acb8323)                 38.3892 / 39.1270  17.8717 / 17.1742
+    V1-V3 (74c5e5b)                38.2946 / 39.0323  17.7771 / 17.0795
+    + V4                           38.2617 / 39.0003  17.7441 / 17.0474
+    + V5 (51501b4 = V4 + V5)       38.2255 / 38.9876  17.7079 / 17.0353
+    + V6 (cee3768, code size)      38.2255 / 38.9876  17.7079 / 17.0353
+    total                          -0.43% / -0.36%    -0.92% / -0.81%
+                                   (-164 k / -139 k per frame)
+  V1 gl_transform_to_viewport inline in glVertex's vertex core
+     (s31_ttv.h gl_ttv; clip.c keeps gl_transform_to_viewport for the
+     clipper): no call, no spill of the vertex pointer around it, the clip
+     coordinates stay in registers. 244 k -> 20 k (the 325 clipper calls);
+     the core +208 k: net -37 k/frame (-9 a vertex).
+  V2 unit 1's texture coordinates copied inline when that is all
+     vtx_extra asks (vtx_extra == 4, no texgen, no texture matrix):
+     gl_vertex_extra's 47 k/frame gone (every multitextured world vertex).
+  V3 glMultiTexCoord fast path (s31_mtex.c): the context read once and
+     tgl_max_texture_units' test inline (it called gl_get_context twice and
+     saved five registers): 48 -> 27 instructions a call, -24 k/frame.
+     V1-V3 together: -95 k/frame both configs.
+  V4 the 4x4 matrix product unrolled (zmath.c m4_mul_rows, shared by
+     gl_M4_Mul and gl_M4_MulLeft): b held in registers, each row of a read
+     before that row of c is written (so c may be a, no copy of it), each
+     element the same fma chain from +0 the rolled loops compiled to
+     (fmaf(x, y, 0) is not x * y for a -0 product, so the zero is kept).
+     568 -> ~115 instructions a product: -33 k/frame (57 products).
+  V5 set_flat once per provoking vertex (raster.c, GLContext.flat_ok,
+     cleared by gl_set_provoking_flat, by the two-sided swap on both sides,
+     and by the line/point paths that write pipe.flat themselves): a
+     GL_POLYGON's n - 2 triangles share its provoking vertex. 1,242 ->
+     557 calls: -31 k/frame in the default config, -12 k in window 1 of the
+     TEXFILTER=0 one (fewer flat polygons there). flat_ok is at the END of
+     GLContext so no hot field moves past the 2 kB load reach.
+  V6 V1's inline only in glVertex's instance of gl_vertex_core; the two
+     glDrawElements instances (vertex cache) keep the call: vertex.o
+     +734 B -> +68 B, QuakeSpasm unchanged (it draws no arrays).
+
+3. CODE SIZE (gl/bench/brsize.sh, Buildroot flags; gates/brsize.txt)
+                .text     .rodata   stripped
+    acb8323     291,538   25,512    403,072
+    phase 6     291,616   25,512    403,072   (+78 B .text, 0 stripped)
+  Board-flag objects (the qsreplay builds): vertex.o +68, s31_mtex.o -64,
+  zmath.o +20, raster.o +74, clip.o -4. The hot footprint does not grow:
+  gl_transform_to_viewport's 190 B leave the per-vertex path.
+
+4. GATES (run-3a p6-geo on this tree; gates/)
+  core_test 292/0, raster_gate 51/0, filt_test 32/0, fused_test 45/0
+  (both FILT8 modes), headless_gears md5 34a082d3... as before; suite:
+  0 apps worse, suitecmp.txt identical line for line to phase 5 fix 2's;
+  pixels, raster, mtex (4 of 5 PASS, 5 logs 0 differ) and prec (99.35%,
+  identical score file) summaries identical to p5-fix2; prims PASS;
+  qsr-fused 10 traces, 856/856 fused = general, 856/856 fused = the
+  unpacked reference. RV32 and bench: section 6.
+  (The host half of the gate built V1-V5; V6 and a brace-only fix landed
+  while it ran and are covered by the RV32 half, qsr-fused, bench and the
+  final replays: V6 is the same body called instead of inlined.)
+
+5. NOT DONE, AND WHY (ranked by what is left)
+  - The fillers' triangle setup and span-plane evaluation (~1.7 M/frame
+    TEXFILTER=0, section 1) is now the largest geometry-side cost. Its
+    instructions are mostly stack traffic: a 64-instruction span iteration
+    re-evaluates every plane from the reference pixel (bit-exactness
+    forbids stepping them incrementally) and stores ~30 ZSpan fields per
+    triangle. It is in ztriangle_gen.c, where the concurrent second-
+    rasteriser-thread work lives, so it was left alone: the lever is to
+    store the plane coefficients once per triangle in the ZSpan and let
+    zp_run evaluate them at the span start (one call's arguments instead
+    of per-span stores), measured there.
+  - to_vg: 58 instructions a triangle vertex, 5,247 calls for ~4,650
+    vertices. A per-vertex cache of the filler vertex saves only the
+    ~12% re-conversions (~50 k/frame) against invalidation in four places
+    (polygon offset, two-sided swap, clipped vertices, colour-only
+    updates): not worth its risk.
+  - The immediate-mode entry chain (glVertex3fv -> tgl_glVertex4f ->
+    vtx_run -> gl_vertex4f checks -> core): 18 instructions a vertex, of
+    which ~5 are removable by pointing vtx_run at a discard stub outside
+    glBegin; it interacts with the RAM-text lever (vtx_run is its hook).
+  - tu_swap (426 a call, 102/frame) is state code, not geometry.
+  - The vertex core itself (150 a vertex, no lighting): transform, clip
+    code, the colour and texcoord copies and primitive assembly; nothing
+    left in it that is not needed for bit-identical output.
+
+6. RV32 AND BENCH
+  RV32 qemu-user (final tree): core_test 290/0, raster_gate 51/0, d2f 0
+  mismatches, filt_test 32/0, fused_test 45/0, headless_gears md5
+  34a082d3... (unchanged).
+  bench.sh (gates/bench-p6-vs-fix2.txt): 64 lines, every frame hash
+  identical to phase 5 fix 2's run, none slower (worst +0.00%); matrix-
+  heavy lines gain most - geo4 0.5219 -> 0.2977 (-43%), geo5 0.7068 ->
+  0.6162 (-12.8%, so the compat build's old geo5 +1.49% is gone too),
+  teapot -0.8/-1.0%, glxgears -0.7%, prim1/prim4 -0.6/-0.7%.
+  limits.txt: 62 within, 6 over (fix 2: 61 / 7) - prim8 is back inside;
+  the six left are fix 2's owner-pending Mesa-rounding lines (filt6,
+  p4v6-8, filt11 x2), each a few k instructions lower than at fix 2.

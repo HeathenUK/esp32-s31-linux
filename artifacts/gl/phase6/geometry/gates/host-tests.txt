@@ -1,0 +1,11 @@
+enumcmp: 0 mismatches
+core_test: 292 passed, 0 failed
+raster_gate: 51 passed, 0 failed
+filt_test: 32 passed, 0 failed
+--- fused_test (phase 5: fused = general, every pixel)
+fused_test: 45 passed, 0 failed
+--- fused_test, S31GL_FILT8=1 (phase 5: the 8-bit filters on RGB565 textures)
+fused_test: 45 passed, 0 failed
+--- headless_gears md5
+34a082d3b0f572e9c952557a71ed7ac1  /tmp/hg.ppm
+f2d/i2d: 4299173934 tested, 0 mismatches

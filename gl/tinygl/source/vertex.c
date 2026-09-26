@@ -1,5 +1,7 @@
 #include <stddef.h>
 #include "zgl.h"
+#include "ztri.h"
+#include "s31_ttv.h"
 #include "s31_fmath.h"
 
 _Static_assert(offsetof(GLVertex, tex_coord1) % 4 == 0, "GLVertex prefix is whole words");
@@ -559,7 +561,7 @@ void gl_vertex_transform(GLContext * c, GLVertex * v)
    passes NULL for both, so its code is what it was. */
 static inline __attribute__((always_inline))
 void gl_vertex_core(GLContext * c, float x, float y, float z, float w,
-                    const GLVertex * hit, GLVertex * save, int mt)
+                    const GLVertex * hit, GLVertex * save, int mt, int inl)
 {
     GLVertex *v;
     int n, cnt;
@@ -624,8 +626,16 @@ void gl_vertex_core(GLContext * c, float x, float y, float z, float w,
     }
     /* s31: the fog factor (only on the general path, plan F6) and the
        user clip planes (plan F7): one test where there was one */
-    if (c->vtx_extra)
-	gl_vertex_extra(c, v);
+    if (c->vtx_extra) {
+	/* s31 (phase 6 V2): texture unit 1 on and nothing else - its plain
+	   coordinates, here: s31_xform.c gl_vertex_texcoord1's copy when
+	   there is no texgen and no texture matrix (tu1_apply 0), without
+	   the call (the world's lightmap pass: every multitextured vertex) */
+	if (c->vtx_extra == 4 && !c->tu1_apply)
+	    v->tex_coord1 = c->tu1.cur_tc;
+	else
+	    gl_vertex_extra(c, v);
+    }
 
     /* color */
     /* s31: last of the per-vertex work - texgen (the normal, which the
@@ -640,8 +650,14 @@ void gl_vertex_core(GLContext * c, float x, float y, float z, float w,
     }
 
     /* precompute the mapping to the viewport */
-    if (v->clip_code == 0)
-	gl_transform_to_viewport(c, v);
+    if (v->clip_code == 0) {
+	/* s31 (phase 6 V1): inline (s31_ttv.h) in glVertex's instance; the
+	   glDrawElements instances keep the call (+~240 B each otherwise) */
+	if (inl)
+	    gl_ttv(c, v);
+	else
+	    gl_transform_to_viewport(c, v);
+    }
 
     /* edge flag */
 
@@ -769,7 +785,7 @@ void gl_vertex_core(GLContext * c, float x, float y, float z, float w,
    with the context last glVertex4f passes its a0-a3 through unmoved */
 void gl_vertex4f(float x, float y, float z, float w, GLContext * c)
 {
-    gl_vertex_core(c, x, y, z, w, NULL, NULL, 0);
+    gl_vertex_core(c, x, y, z, w, NULL, NULL, 0, 1);
 }
 
 void glopVertex(GLContext * c, GLParam * p)
@@ -783,17 +799,17 @@ void glopVertex(GLContext * c, GLParam * p)
 void gl_vertex_indexed(GLContext * c, GLParam * p, const GLVertex * hit, GLVertex * save)
 {
     if (hit)
-	gl_vertex_core(c, 0, 0, 0, 1, hit, NULL, 0);
+	gl_vertex_core(c, 0, 0, 0, 1, hit, NULL, 0, 0);
     else
-	gl_vertex_core(c, p[1].f, p[2].f, p[3].f, p[4].f, NULL, save, 0);
+	gl_vertex_core(c, p[1].f, p[2].f, p[3].f, p[4].f, NULL, save, 0, 0);
 }
 
 void gl_vertex_indexed_mt(GLContext * c, GLParam * p, const GLVertex * hit, GLVertex * save)
 {
     if (hit)
-	gl_vertex_core(c, 0, 0, 0, 1, hit, NULL, 1);
+	gl_vertex_core(c, 0, 0, 0, 1, hit, NULL, 1, 0);
     else
-	gl_vertex_core(c, p[1].f, p[2].f, p[3].f, p[4].f, NULL, save, 1);
+	gl_vertex_core(c, p[1].f, p[2].f, p[3].f, p[4].f, NULL, save, 1, 0);
 }
 
 void glopEnd(GLContext * c, GLParam * param)

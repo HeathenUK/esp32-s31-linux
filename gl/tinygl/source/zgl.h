@@ -703,6 +703,8 @@ typedef struct GLContext {
                                    phase 4 did, 1 (default) 8-bit palette
                                    levels, 2 their unpacked RGBA8 reference */
   int mtex_adv;                 /* S31GL_MTEX (default 1): advertise 2 units */
+  int flat_ok;                  /* phase 6 V5: pipe.flat is flat_vtx's (raster.c
+                                   set_flat; per triangle, so at the end) */
 } GLContext;
 
 /* GLContext.p4_en */

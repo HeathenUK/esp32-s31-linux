@@ -820,3 +820,19 @@ feature-free bench regressions, GL_MAX_TEXTURE_SIZE 512, .text.
   S31GL_FILT8=1 only, 5.9 kB) and the any-kind bilinear picture shortcut
   (zf8_bil0_gen, 3.5 kB; no QuakeSpasm replay ran it): those batches
   take zf8_world_11 / the texel stage, the same pixels.
+
+Phase 6, the vertex and geometry path (2026-09-26; measurements and what
+was left in artifacts/gl/phase6/GEOMETRY.txt). All bit-identical; the
+QuakeSpasm proxy -0.4% default, -0.9% TEXFILTER=0; .text +78 B.
+- s31_ttv.h: gl_transform_to_viewport's body as gl_ttv, inlined into
+  glVertex's instance of the vertex core (vertex.c); the clipper and the
+  glDrawElements instances call gl_transform_to_viewport (code size).
+- vertex.c: with only texture unit 1 in vtx_extra (no texgen, no texture
+  matrix) its coordinates are copied inline, not through gl_vertex_extra.
+- s31_mtex.c: glMultiTexCoord reads the context once and tests the unit
+  count inline.
+- zmath.c: gl_M4_Mul / gl_M4_MulLeft share m4_mul_rows, unrolled with b in
+  registers; the same fma chain from +0 per element as the rolled loops.
+- raster.c: set_flat runs once per provoking vertex (GLContext.flat_ok,
+  cleared by gl_set_provoking_flat, the two-sided swap and the line/point
+  paths that write pipe.flat), not once per triangle.

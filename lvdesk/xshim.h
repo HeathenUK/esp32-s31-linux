@@ -133,6 +133,17 @@ void xshim_on_fsnative(void (*cb)(int on));
 /* the desktop could not present an on == 2 fullscreen: xshim goes back to
  * the window's own (2x-expanded) pixels */
 void xshim_fsnative_refused(void);
+/*
+ * P2 zero-copy fullscreen GL (xshim.c zc_request). cb(win, fb, w, h) is asked
+ * to put a GL client's GEM framebuffer on the CRTC for the render-scaled
+ * fullscreen window `win`: return kms_zc_flip()'s 2/1, or 0 to refuse (the
+ * frame is then copied the old way). While a flip is on the CRTC the window's
+ * own surface is stale and the desktop must not present it
+ * (xshim_window_zc_live).
+ */
+void xshim_on_zc(int (*cb)(uint32_t win, uint32_t fb, int w, int h));
+int xshim_window_zc_live(uint32_t id);
+void xshim_zc_report(void);
 
 /* The mapped top-level that covers (0,0)-(w,h) in root coordinates, or 0. */
 uint32_t xshim_mode_window(int w, int h);

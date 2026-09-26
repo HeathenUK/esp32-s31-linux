@@ -1,0 +1,100 @@
+# qsreplay v4tf0: GLDIR=/Users/gadyke/esp32-s31-linux/.claude/worktrees/agent-ae55b11d3ad768259/gl TRACE=/Users/gadyke/esp32-s31-linux/gl/bench/qstrace/work/p5f2-tf0/qs.gltr QSR_ENV=S31GL_TEXFILTER=0
+qsr: env S31GL_TEXFILTER=0
+libGL: context 1 created (pid 1, comm ?)
+libGL: context 2 created (pid 1, comm ?)
+qsrf 98 warm 16422947 a8de4cc1 a8de4cc1 same
+qsrf 99 warm 16382980 477944ca 477944ca same
+qsrf 100 count 15148595 c0157993 c0157993 same
+qsrf 101 count 14780086 fd4f6339 fd4f6339 same
+qsrf 102 count 14255786 aedf7116 aedf7116 same
+qsrf 103 count 13053112 ea5e49b3 ea5e49b3 same
+qsrf 104 count 11768928 54bf47e3 54bf47e3 same
+qsrf 105 count 11797684 cd419d06 cd419d06 same
+qsrf 106 count 12166650 520a13a3 520a13a3 same
+qsrf 107 count 12692613 a3fa41c9 a3fa41c9 same
+qsrf 108 count 13291280 786e30b5 786e30b5 same
+qsrf 109 count 13429268 bd335091 bd335091 same
+qsrf 110 count 16431202 3e0bb0cb 3e0bb0cb same
+qsrf 111 count 17311534 488eef82 488eef82 same
+qsrf 112 count 15840892 d080bf27 d080bf27 same
+qsrf 113 count 15878180 c39480ae c39480ae same
+qsrf 114 count 15373016 9b65d34c 9b65d34c same
+qsrf 115 count 15266742 825aad25 825aad25 same
+qsrf 116 count 19757732 c858a871 c858a871 same
+qsrf 117 count 19421844 a36dbf69 a36dbf69 same
+qsrf 118 count 20633419 3065465d 3065465d same
+qsrf 119 count 21115820 15f71473 15f71473 same
+qsrf 120 count 20575744 901cdcd5 901cdcd5 same
+qsrf 121 count 19894852 01ecfabb 01ecfabb same
+qsrf 122 count 22618577 434b257f 434b257f same
+qsrf 123 count 21841922 a35c943a a35c943a same
+qsrf 124 count 23877910 4331f79c 4331f79c same
+qsrf 125 count 23825741 96517458 96517458 same
+qsrf 126 count 23162158 5635554e 5635554e same
+qsrf 127 count 21972055 6c3b7eb9 6c3b7eb9 same
+qsrf 128 count 19533844 21243dbb 21243dbb same
+qsrf 129 count 19683925 0e72290a 0e72290a same
+qsrf 130 count 15421557 d193a352 d193a352 same
+qsrf 131 count 14915610 b74fe5e0 b74fe5e0 same
+qsrf 132 count 14473266 7333321b 7333321b same
+qsrf 133 count 18897310 ef0ebba4 ef0ebba4 same
+qsrf 134 count 18838070 be8a7695 be8a7695 same
+qsrf 135 count 18943979 563540d5 563540d5 same
+qsrf 136 count 20317585 69a75a8e 69a75a8e same
+qsrf 137 count 20965929 2a953957 2a953957 same
+qsrf 138 count 20871365 402b1211 402b1211 same
+qsrf 139 count 19719115 906b8efe 906b8efe same
+qsrf 398 warm 18648762 cc3be0d3 cc3be0d3 same
+qsrf 399 warm 19430421 7e01c13c 7e01c13c same
+qsrf 400 count 21429262 c3ff2ca5 c3ff2ca5 same
+qsrf 401 count 21884265 08f04420 08f04420 same
+qsrf 402 count 21729383 e64b9b09 e64b9b09 same
+qsrf 403 count 21619705 12cb15f7 12cb15f7 same
+qsrf 404 count 21464444 a306dfd7 a306dfd7 same
+qsrf 405 count 21282091 4cfc3f27 4cfc3f27 same
+qsrf 406 count 21213629 e6a996c3 e6a996c3 same
+qsrf 407 count 21249579 0c98020c 0c98020c same
+qsrf 408 count 21275117 9a67734a 9a67734a same
+qsrf 409 count 21326153 86a82278 86a82278 same
+qsrf 410 count 21366053 81c4ab0c 81c4ab0c same
+qsrf 411 count 21406031 ac525cfa ac525cfa same
+qsrf 412 count 21451344 d6cadf79 d6cadf79 same
+qsrf 413 count 18997230 a49e0b08 a49e0b08 same
+qsrf 414 count 19252727 7f582ede 7f582ede same
+qsrf 415 count 19212296 f8185e5b f8185e5b same
+qsrf 416 count 18168640 71f70c1a 71f70c1a same
+qsrf 417 count 17872972 90260609 90260609 same
+qsrf 418 count 15165931 da7447e9 da7447e9 same
+qsrf 419 count 14097185 4bc69417 4bc69417 same
+qsrf 420 count 13748759 bc057911 bc057911 same
+qsrf 421 count 13718178 c4157440 c4157440 same
+qsrf 422 count 13592951 df0bf8bd df0bf8bd same
+qsrf 423 count 13388745 25917bd3 25917bd3 same
+qsrf 424 count 13429056 c32d483d c32d483d same
+qsrf 425 count 13290393 f3711460 f3711460 same
+qsrf 426 count 13333163 004d8391 004d8391 same
+qsrf 427 count 13389166 3f664483 3f664483 same
+qsrf 428 count 13445600 2f7b44f2 2f7b44f2 same
+qsrf 429 count 13587628 1294140f 1294140f same
+qsrf 430 count 13693509 1a28b53a 1a28b53a same
+qsrf 431 count 13770237 d647d10d d647d10d same
+qsrf 432 count 13958120 aaa77f99 aaa77f99 same
+qsrf 433 count 14086240 26dac521 26dac521 same
+qsrf 434 count 14367580 9b6330ee 9b6330ee same
+qsrf 435 count 15011472 e784b99a e784b99a same
+qsrf 436 count 14637634 5f04b49b 5f04b49b same
+qsrf 437 count 14845435 e9378fac e9378fac same
+qsrf 438 count 15548655 bd7fdd01 bd7fdd01 same
+qsrf 439 count 15590675 bb79068c bb79068c same
+qsr v4tf0 window 0 frames 100-139: 17.7441 Minsn/frame min 11.7689 max 23.8779 (frame 124), 0 dcalls/frame, hashes 40/40 same as live, tex 3249509 B heap 39792 B at start
+qsr v4tf0 window 1 frames 400-439: 17.0474 Minsn/frame min 13.2904 max 21.8843 (frame 401), 0 dcalls/frame, hashes 40/40 same as live, tex 3216837 B heap 42416 B at start
+qsr v4tf0 load: 306.75 Minsn before frame 98 (355 state-only frames in all: 404.18 Minsn), warm-up 70.89 Minsn
+qsr v4tf0 heap: texture 3249509 B, other 39792 B after the load phase; at the end texture 3216837 B, other 42432 B; peak 5465685 B, 438 allocations
+qsr v4tf0 peak: texture 5426085 B, other 39600 B, in frame 13
+qsr v4tf0 done: 439 frames, 84 full: 84 same as live, 0 differ
+qsr v4tf0-null window 0 frames 100-139: 0.2429 Minsn/frame min 0.0908 max 0.4488 (frame 124), 0 dcalls/frame, hashes 0/40 same as live, tex 0 B heap 39600 B at start
+qsr v4tf0-null window 1 frames 400-439: 0.1370 Minsn/frame min 0.0686 max 0.2013 (frame 415), 0 dcalls/frame, hashes 0/40 same as live, tex 0 B heap 39600 B at start
+qsr v4tf0-null load: 2.21 Minsn before frame 98 (355 state-only frames in all: 6.23 Minsn), warm-up 0.75 Minsn
+qsr v4tf0-null heap: texture 0 B, other 39600 B after the load phase; at the end texture 0 B, other 39616 B; peak 39616 B, 39 allocations
+qsr v4tf0-null peak: texture 0 B, other 39616 B, in frame 440
+qsr v4tf0-null done: 439 frames, 84 full: 0 same as live, 84 differ
