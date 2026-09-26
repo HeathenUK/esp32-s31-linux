@@ -836,3 +836,29 @@ QuakeSpasm proxy -0.4% default, -0.9% TEXFILTER=0; .text +78 B.
 - raster.c: set_flat runs once per provoking vertex (GLContext.flat_ok,
   cleared by gl_set_provoking_flat, the two-sided swap and the line/point
   paths that write pipe.flat), not once per triangle.
+
+Phase 6, lever #1: a second rasteriser thread (2026-09-26; design, gates,
+the work split and the board A/B in artifacts/gl/phase6/THREADS.txt).
+S31GL_THREADS=0 (the default) is the previous code path and pixels; 1 runs
+a pthread worker, 2 runs the worker's records deferred on the calling
+thread (the validation arm and the RV32 counter's work split).
+- s31_thr.[ch]: rows are split into bands (S31GL_TBAND, S31GL_TSPLIT k/n);
+  the general filler (ztriangle_gen.c) does ztri_setup, the depth epoch and
+  the dirty box once on the application's thread, queues the triangle
+  (ZTri + vertices) in an SPSC ring when it covers a worker row, and both
+  threads run the same out-of-line banded body (ZB_fillBodyGeneral[MT]) on
+  their own rows - so every pixel is computed identically and written by
+  one thread. The worker runs on its own copy of ZPipe / ZPipeX / ZBuffer
+  (sent when pipe_serial moves, internal pointers relocated) with its own
+  lazily built tables; stencil, stipple, tier-1, lines and points stay on
+  the application's thread.
+- S31T_SYNC before every other access to the buffers or texel storage
+  (clears, pixel paths, readbacks, texture upload / delete / parameters,
+  depth-epoch rewrites, binds, make-current, the frame hook, glFlush /
+  glFinish / s31gl_finish / glXSwapBuffers, destroy). A test that reads the
+  colour buffer directly must call s31gl_finish first (core_test,
+  filt_test do).
+- The worker's path calls no libc routine that is PIE on the board
+  (gl/tests/thrchk-pie.sh); gates: gl/tests/run-qsr-threads.sh (RV32
+  trace hashes, modes 0 / 2), run-threads-host.sh (host, real threads),
+  run-threads-rv32.sh (qemu-user, real threads).

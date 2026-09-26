@@ -1,0 +1,82 @@
+--- enum values: TinyGL header against Khronos
+enumcmp: 0 mismatches
+--- compiling TinyGL core, the GL ABI layer and GLX (8 jobs)
+--- export surface (mkstubs.py)
+mkstubs: 674 exported GL names: 462 implemented, 212 stubs
+ramtext: 14 sections moved to s31hot_text
+--- linking /src/gl/out-host/libGL.so.1
+ramtext: libGL.so.1: 14752 bytes at 0x6cb80-0x70520, 4 pages in RAM, 63 sites (adrp 28, b/bl 35), 63 table entries; slot 0x91000, displacement +148608; 116 references into the range from outside
+--- tests (headless_gears, core_test, raster_gate, glx_prims, glx_reopen), in parallel
+-rwxr-xr-x 1 root root 144576 Sep 26 21:47 /src/gl/out-host/core_test
+-rwxr-xr-x 1 root root  72704 Sep 26 21:47 /src/gl/out-host/headless_gears
+-rwxr-xr-x 1 root root 647088 Sep 26 21:47 /src/gl/out-host/libGL.so.1
+-rwxr-xr-x 1 root root  72856 Sep 26 21:47 /src/gl/out-host/raster_gate
+--- core_test
+PASS destroying the current context releases it
+PASS no current context: glGetString = NULL, draws ignored
+core_test: 292 passed, 0 failed
+--- raster_gate
+ok   texel phase general RGB REPLACE + alpha test: 2x magnified wrong: 0 (want 0)
+ok   texel phase general RGB REPLACE + alpha test: negative texcoords wrong: 0 (want 0)
+raster_gate: 51 passed, 0 failed
+--- filt_test (phase 4)
+filt_test: 32 passed, 0 failed
+--- fused_test (phase 5: fused = general, every pixel)
+PASS the fused world's one-multiply MULS8: 0 of 196608 products differ
+PASS the fused 565 packing folded into the product: 0 of 196608 differ
+PASS world (QuakeSpasm r_world.c case 1 and neighbours) [random]: 144 variants x 2 seeds: 0 colour and 0 depth values differ (of 5529600), 0 and 0 against the unpacked reference; fused batches: world 1125 (inline nearest 16, filtered 23), alias 0, alias-store 0, one-unit 0; general 0 (the general contexts: 0, 0 fused)
+PASS world, both units nearest (every depth state) [random]: 128 variants x 2 seeds: 0 colour and 0 depth values differ (of 4915200), 0 and 0 against the unpacked reference; fused batches: world 1002 (inline nearest 376, filtered 0), alias 0, alias-store 0, one-unit 0; general 0 (the general contexts: 0, 0 fused)
+PASS alias (QuakeSpasm r_alias.c case 1, blended) [random]: 72 variants x 2 seeds: 0 colour and 0 depth values differ (of 2764800), 0 and 0 against the unpacked reference; fused batches: world 0 (inline nearest 0, filtered 0), alias 288, alias-store 288, one-unit 0; general 0 (the general contexts: 0, 0 fused)
+PASS alias, no blend [random]: 216 variants x 1 seeds: 0 colour and 0 depth values differ (of 4147200), 0 and 0 against the unpacked reference; fused batches: world 0 (inline nearest 0, filtered 0), alias 427, alias-store 429, one-unit 0; general 0 (the general contexts: 0, 0 fused)
+PASS world, filtered, sampled inline (every unit 0 filter) [random]: 96 variants x 2 seeds: 0 colour and 0 depth values differ (of 3686400), 0 and 0 against the unpacked reference; fused batches: world 751 (inline nearest 0, filtered 751), alias 0, alias-store 0, one-unit 0; general 0 (the general contexts: 0, 0 fused)
+PASS status bar (REPLACE RGB, SRC_ALPHA/ONE_MINUS_SRC_ALPHA, flat) [random]: 48 variants x 2 seeds: 0 colour and 0 depth values differ (of 1843200), 0 and 0 against the unpacked reference; fused batches: world 0 (inline nearest 0, filtered 0), alias 0, alias-store 0, one-unit 191; general 189 (the general contexts: 0, 0 fused)
+PASS view blend (untextured, SRC_ALPHA/ONE_MINUS_SRC_ALPHA, flat) [random]: 48 variants x 2 seeds: 0 colour and 0 depth values differ (of 1843200), 0 and 0 against the unpacked reference; fused batches: world 0 (inline nearest 0, filtered 0), alias 0, alias-store 0, one-unit 191; general 189 (the general contexts: 0, 0 fused)
+PASS picture (REPLACE RGB, alpha GREATER) [random]: 48 variants x 2 seeds: 0 colour and 0 depth values differ (of 1843200), 0 and 0 against the unpacked reference; fused batches: world 0 (inline nearest 0, filtered 0), alias 0, alias-store 0, one-unit 191; general 189 (the general contexts: 0, 0 fused)
+PASS picture RGBA (REPLACE RGBA, alpha GREATER) [random]: 48 variants x 2 seeds: 0 colour and 0 depth values differ (of 1843200), 0 and 0 against the unpacked reference; fused batches: world 0 (inline nearest 0, filtered 0), alias 0, alias-store 0, one-unit 380; general 0 (the general contexts: 0, 0 fused)
+PASS fence (REPLACE RGBA, alpha GREATER, depth LEQUAL + write) [random]: 48 variants x 2 seeds: 0 colour and 0 depth values differ (of 1843200), 0 and 0 against the unpacked reference; fused batches: world 0 (inline nearest 0, filtered 0), alias 0, alias-store 0, one-unit 380; general 0 (the general contexts: 0, 0 fused)
+PASS console (MODULATE RGB, SRC_ALPHA/ONE_MINUS_SRC_ALPHA, flat) [random]: 48 variants x 2 seeds: 0 colour and 0 depth values differ (of 1843200), 0 and 0 against the unpacked reference; fused batches: world 0 (inline nearest 0, filtered 0), alias 0, alias-store 0, one-unit 191; general 189 (the general contexts: 0, 0 fused)
+PASS water (REPLACE RGB, depth LEQUAL + write) [random]: 48 variants x 2 seeds: 0 colour and 0 depth values differ (of 1843200), 0 and 0 against the unpacked reference; fused batches: world 0 (inline nearest 0, filtered 0), alias 0, alias-store 0, one-unit 372; general 0 (the general contexts: 0, 0 fused)
+PASS alias case 2 (COMBINE MODULATE TEXTURE PRIMARY x 1/2/4) [random]: 144 variants x 2 seeds: 0 colour and 0 depth values differ (of 5529600), 0 and 0 against the unpacked reference; fused batches: world 0 (inline nearest 0, filtered 0), alias 0, alias-store 0, one-unit 566; general 562 (the general contexts: 0, 0 fused)
+PASS particles (MODULATE RGBA, SRC_ALPHA/ONE_MINUS_SRC_ALPHA, depth mask off) [random]: 48 variants x 2 seeds: 0 colour and 0 depth values differ (of 1843200), 0 and 0 against the unpacked reference; fused batches: world 0 (inline nearest 0, filtered 0), alias 0, alias-store 0, one-unit 191; general 189 (the general contexts: 0, 0 fused)
+PASS glow (MODULATE RGB, ONE/ONE, depth mask off) [random]: 48 variants x 2 seeds: 0 colour and 0 depth values differ (of 1843200), 0 and 0 against the unpacked reference; fused batches: world 0 (inline nearest 0, filtered 0), alias 0, alias-store 0, one-unit 380; general 0 (the general contexts: 0, 0 fused)
+PASS lightmap case 3 (REPLACE RGBA, DST_COLOR/SRC_COLOR) [random]: 48 variants x 2 seeds: 0 colour and 0 depth values differ (of 1843200), 0 and 0 against the unpacked reference; fused batches: world 0 (inline nearest 0, filtered 0), alias 0, alias-store 0, one-unit 380; general 0 (the general contexts: 0, 0 fused)
+PASS lightmap case 3 (REPLACE RGBA, ZERO/SRC_COLOR) [random]: 48 variants x 2 seeds: 0 colour and 0 depth values differ (of 1843200), 0 and 0 against the unpacked reference; fused batches: world 0 (inline nearest 0, filtered 0), alias 0, alias-store 0, one-unit 380; general 0 (the general contexts: 0, 0 fused)
+PASS alias case 3 (MODULATE RGB, smooth) [random]: 48 variants x 2 seeds: 0 colour and 0 depth values differ (of 1843200), 0 and 0 against the unpacked reference; fused batches: world 0 (inline nearest 0, filtered 0), alias 0, alias-store 0, one-unit 191; general 189 (the general contexts: 0, 0 fused)
+PASS alias case 3 second pass (MODULATE RGB, ONE/ONE, smooth) [random]: 48 variants x 2 seeds: 0 colour and 0 depth values differ (of 1843200), 0 and 0 against the unpacked reference; fused batches: world 0 (inline nearest 0, filtered 0), alias 0, alias-store 0, one-unit 380; general 0 (the general contexts: 0, 0 fused)
+PASS world (QuakeSpasm r_world.c case 1 and neighbours) [P8 / L8]: 144 variants x 2 seeds: 0 colour and 0 depth values differ (of 5529600), 0 and 0 against the unpacked reference; fused batches: world 1125 (inline nearest 16, filtered 23), alias 0, alias-store 0, one-unit 0; general 0 (the general contexts: 0, 0 fused)
+PASS world, both units nearest (every depth state) [P8 / L8]: 128 variants x 2 seeds: 0 colour and 0 depth values differ (of 4915200), 0 and 0 against the unpacked reference; fused batches: world 1002 (inline nearest 376, filtered 0), alias 0, alias-store 0, one-unit 0; general 0 (the general contexts: 0, 0 fused)
+PASS alias (QuakeSpasm r_alias.c case 1, blended) [P8 / L8]: 72 variants x 2 seeds: 0 colour and 0 depth values differ (of 2764800), 0 and 0 against the unpacked reference; fused batches: world 0 (inline nearest 0, filtered 0), alias 288, alias-store 288, one-unit 0; general 0 (the general contexts: 0, 0 fused)
+PASS alias, no blend [P8 / L8]: 216 variants x 1 seeds: 0 colour and 0 depth values differ (of 4147200), 0 and 0 against the unpacked reference; fused batches: world 0 (inline nearest 0, filtered 0), alias 427, alias-store 429, one-unit 0; general 0 (the general contexts: 0, 0 fused)
+PASS world, filtered, sampled inline (every unit 0 filter) [P8 / L8]: 96 variants x 2 seeds: 0 colour and 0 depth values differ (of 3686400), 0 and 0 against the unpacked reference; fused batches: world 751 (inline nearest 0, filtered 751), alias 0, alias-store 0, one-unit 0; general 0 (the general contexts: 0, 0 fused)
+PASS status bar (REPLACE RGB, SRC_ALPHA/ONE_MINUS_SRC_ALPHA, flat) [P8 / L8]: 48 variants x 2 seeds: 0 colour and 0 depth values differ (of 1843200), 0 and 0 against the unpacked reference; fused batches: world 0 (inline nearest 0, filtered 0), alias 0, alias-store 0, one-unit 191; general 189 (the general contexts: 0, 0 fused)
+PASS view blend (untextured, SRC_ALPHA/ONE_MINUS_SRC_ALPHA, flat) [P8 / L8]: 48 variants x 2 seeds: 0 colour and 0 depth values differ (of 1843200), 0 and 0 against the unpacked reference; fused batches: world 0 (inline nearest 0, filtered 0), alias 0, alias-store 0, one-unit 191; general 189 (the general contexts: 0, 0 fused)
+PASS picture (REPLACE RGB, alpha GREATER) [P8 / L8]: 48 variants x 2 seeds: 0 colour and 0 depth values differ (of 1843200), 0 and 0 against the unpacked reference; fused batches: world 0 (inline nearest 0, filtered 0), alias 0, alias-store 0, one-unit 191; general 189 (the general contexts: 0, 0 fused)
+PASS picture RGBA (REPLACE RGBA, alpha GREATER) [P8 / L8]: 48 variants x 2 seeds: 0 colour and 0 depth values differ (of 1843200), 0 and 0 against the unpacked reference; fused batches: world 0 (inline nearest 0, filtered 0), alias 0, alias-store 0, one-unit 380; general 0 (the general contexts: 0, 0 fused)
+PASS fence (REPLACE RGBA, alpha GREATER, depth LEQUAL + write) [P8 / L8]: 48 variants x 2 seeds: 0 colour and 0 depth values differ (of 1843200), 0 and 0 against the unpacked reference; fused batches: world 0 (inline nearest 0, filtered 0), alias 0, alias-store 0, one-unit 380; general 0 (the general contexts: 0, 0 fused)
+PASS console (MODULATE RGB, SRC_ALPHA/ONE_MINUS_SRC_ALPHA, flat) [P8 / L8]: 48 variants x 2 seeds: 0 colour and 0 depth values differ (of 1843200), 0 and 0 against the unpacked reference; fused batches: world 0 (inline nearest 0, filtered 0), alias 0, alias-store 0, one-unit 191; general 189 (the general contexts: 0, 0 fused)
+PASS water (REPLACE RGB, depth LEQUAL + write) [P8 / L8]: 48 variants x 2 seeds: 0 colour and 0 depth values differ (of 1843200), 0 and 0 against the unpacked reference; fused batches: world 0 (inline nearest 0, filtered 0), alias 0, alias-store 0, one-unit 372; general 0 (the general contexts: 0, 0 fused)
+PASS alias case 2 (COMBINE MODULATE TEXTURE PRIMARY x 1/2/4) [P8 / L8]: 144 variants x 2 seeds: 0 colour and 0 depth values differ (of 5529600), 0 and 0 against the unpacked reference; fused batches: world 0 (inline nearest 0, filtered 0), alias 0, alias-store 0, one-unit 566; general 562 (the general contexts: 0, 0 fused)
+PASS particles (MODULATE RGBA, SRC_ALPHA/ONE_MINUS_SRC_ALPHA, depth mask off) [P8 / L8]: 48 variants x 2 seeds: 0 colour and 0 depth values differ (of 1843200), 0 and 0 against the unpacked reference; fused batches: world 0 (inline nearest 0, filtered 0), alias 0, alias-store 0, one-unit 191; general 189 (the general contexts: 0, 0 fused)
+PASS glow (MODULATE RGB, ONE/ONE, depth mask off) [P8 / L8]: 48 variants x 2 seeds: 0 colour and 0 depth values differ (of 1843200), 0 and 0 against the unpacked reference; fused batches: world 0 (inline nearest 0, filtered 0), alias 0, alias-store 0, one-unit 380; general 0 (the general contexts: 0, 0 fused)
+PASS lightmap case 3 (REPLACE RGBA, DST_COLOR/SRC_COLOR) [P8 / L8]: 48 variants x 2 seeds: 0 colour and 0 depth values differ (of 1843200), 0 and 0 against the unpacked reference; fused batches: world 0 (inline nearest 0, filtered 0), alias 0, alias-store 0, one-unit 380; general 0 (the general contexts: 0, 0 fused)
+PASS lightmap case 3 (REPLACE RGBA, ZERO/SRC_COLOR) [P8 / L8]: 48 variants x 2 seeds: 0 colour and 0 depth values differ (of 1843200), 0 and 0 against the unpacked reference; fused batches: world 0 (inline nearest 0, filtered 0), alias 0, alias-store 0, one-unit 380; general 0 (the general contexts: 0, 0 fused)
+PASS alias case 3 (MODULATE RGB, smooth) [P8 / L8]: 48 variants x 2 seeds: 0 colour and 0 depth values differ (of 1843200), 0 and 0 against the unpacked reference; fused batches: world 0 (inline nearest 0, filtered 0), alias 0, alias-store 0, one-unit 191; general 189 (the general contexts: 0, 0 fused)
+PASS alias case 3 second pass (MODULATE RGB, ONE/ONE, smooth) [P8 / L8]: 48 variants x 2 seeds: 0 colour and 0 depth values differ (of 1843200), 0 and 0 against the unpacked reference; fused batches: world 0 (inline nearest 0, filtered 0), alias 0, alias-store 0, one-unit 380; general 0 (the general contexts: 0, 0 fused)
+PASS world (QuakeSpasm r_world.c case 1 and neighbours) [565 + L8]: 144 variants x 2 seeds: 0 colour and 0 depth values differ (of 5529600), 0 and 0 against the unpacked reference; fused batches: world 1125 (inline nearest 16, filtered 23), alias 0, alias-store 0, one-unit 0; general 0 (the general contexts: 0, 0 fused)
+PASS world, both units nearest (every depth state) [565 + L8]: 128 variants x 2 seeds: 0 colour and 0 depth values differ (of 4915200), 0 and 0 against the unpacked reference; fused batches: world 1002 (inline nearest 376, filtered 0), alias 0, alias-store 0, one-unit 0; general 0 (the general contexts: 0, 0 fused)
+PASS alias (QuakeSpasm r_alias.c case 1, blended) [565 + L8]: 72 variants x 2 seeds: 0 colour and 0 depth values differ (of 2764800), 0 and 0 against the unpacked reference; fused batches: world 0 (inline nearest 0, filtered 0), alias 288, alias-store 288, one-unit 0; general 0 (the general contexts: 0, 0 fused)
+PASS alias, no blend [565 + L8]: 216 variants x 1 seeds: 0 colour and 0 depth values differ (of 4147200), 0 and 0 against the unpacked reference; fused batches: world 0 (inline nearest 0, filtered 0), alias 427, alias-store 429, one-unit 0; general 0 (the general contexts: 0, 0 fused)
+PASS world, filtered, sampled inline (every unit 0 filter) [565 + L8]: 96 variants x 2 seeds: 0 colour and 0 depth values differ (of 3686400), 0 and 0 against the unpacked reference; fused batches: world 751 (inline nearest 0, filtered 751), alias 0, alias-store 0, one-unit 0; general 0 (the general contexts: 0, 0 fused)
+fused_test: 45 passed, 0 failed
+--- fused_test, S31GL_FILT8=1 (phase 5: the 8-bit filters on RGB565 textures)
+fused_test: 45 passed, 0 failed
+--- headless_gears md5
+34a082d3b0f572e9c952557a71ed7ac1  /tmp/hg.ppm
+--- fmath_test, f2d_test (host arm64 in the rig)
+sincos_deg(90) = 1 -0; (180) -0 -1; (270) -1 0; (-90) -1 0
+sin_deg: max 0.915 ulp (old path 8388044.8 ulp where |ref| > 1e-3), cos_deg: max 0.915 ulp (old 8385052.1); max abs 5.46e-08 (old 0.000976)
+powf random: max rel 1.08e-05 so far, at x 0.671769798 y 124.038
+powf: max 158.47 ulp, max rel 1.08e-05 (libm powf 0.51 ulp)
+expf: max 1.077 ulp over [-87.3, 88] (libm expf 0.502)
+fmath_test: PASS
+f2d/i2d: 4299173934 tested, 0 mismatches

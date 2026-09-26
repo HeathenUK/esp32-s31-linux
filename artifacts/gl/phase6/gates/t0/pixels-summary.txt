@@ -1,0 +1,9 @@
+p1: PASS  320x240  strict 0.055% (42 px >16)  tolerant 0.055% (42 px)  max 66  mean 2.47  diff /src/artifacts/gl/phase3a/p6-t0/pixels/diff-p1.png | log: 11 lines compared, 0 differ
+p2: PASS  320x240  strict 0.354% (272 px >16)  tolerant 0.333% (256 px)  max 255  mean 1.33  diff /src/artifacts/gl/phase3a/p6-t0/pixels/diff-p2.png | log: 5 lines compared, 0 differ
+p3: PASS  320x240  strict 0.690% (530 px >16)  tolerant 0.091% (70 px)  max 255  mean 2.93  diff /src/artifacts/gl/phase3a/p6-t0/pixels/diff-p3.png | log: 22 lines compared, 0 differ
+p4: PASS  320x240  strict 0.193% (148 px >16)  tolerant 0.029% (22 px)  max 251  mean 2.70  diff /src/artifacts/gl/phase3a/p6-t0/pixels/diff-p4.png | log: 13 lines compared, 0 differ
+g1: PASS  320x240  strict 0.676% (519 px >16)  tolerant 0.042% (32 px)  max 231  mean 2.90  diff /src/artifacts/gl/phase3a/p6-t0/pixels/diff-g1.png | log: 2 lines compared, 0 differ
+g2: PASS  320x240  strict 0.382% (293 px >16)  tolerant 0.004% (3 px)  max 165  mean 2.36  diff /src/artifacts/gl/phase3a/p6-t0/pixels/diff-g2.png | log: 23 lines compared, 0 differ
+g3: FAIL  320x240  strict 4.824% (3705 px >16)  tolerant 4.824% (3705 px)  max 231  mean 13.11  diff /src/artifacts/gl/phase3a/p6-t0/pixels/diff-g3.png | log: 1 lines compared, 0 differ
+b1: PASS  320x240  strict 0.676% (519 px >16)  tolerant 0.042% (32 px)  max 231  mean 2.90  diff /src/artifacts/gl/phase3a/p6-t0/pixels/diff-b1.png | log: 2 lines compared, 0 differ
+b2: PASS  320x240  strict 0.382% (293 px >16)  tolerant 0.004% (3 px)  max 165  mean 2.36  diff /src/artifacts/gl/phase3a/p6-t0/pixels/diff-b2.png | log: 23 lines compared, 0 differ

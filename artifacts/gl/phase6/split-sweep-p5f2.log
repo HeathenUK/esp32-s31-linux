@@ -1,0 +1,24 @@
+== band 4 split 1/2: m0 vs sw-b4-1_2:       84 of       84 frames identical
+window 0 (40 frames): total 39.908 M, worker 17.450 M (43.7%), main 22.457 M; max(main,worker) 22.457 M/frame; tri 1545 pipe 38.1 sync 2.0 mainonly 0 allw 810 ring 636 kB /frame
+window 1 (40 frames): total 40.181 M, worker 18.722 M (46.6%), main 21.459 M; max(main,worker) 21.459 M/frame; tri 817 pipe 36.3 sync 1.6 mainonly 0 allw 202 ring 376 kB /frame
+== band 16 split 1/2: m0 vs sw-b16-1_2:       84 of       84 frames identical
+window 0 (40 frames): total 39.700 M, worker 18.648 M (47.0%), main 21.052 M; max(main,worker) 21.368 M/frame; tri 1398 pipe 35.9 sync 2.0 mainonly 0 allw 984 ring 579 kB /frame
+window 1 (40 frames): total 40.018 M, worker 20.253 M (50.6%), main 19.765 M; max(main,worker) 20.315 M/frame; tri 701 pipe 33.6 sync 1.6 mainonly 0 allw 317 ring 329 kB /frame
+== band 32 split 1/2: m0 vs sw-b32-1_2:       84 of       84 frames identical
+window 0 (40 frames): total 39.693 M, worker 18.725 M (47.2%), main 20.968 M; max(main,worker) 21.047 M/frame; tri 1556 pipe 34.8 sync 2.0 mainonly 0 allw 1269 ring 632 kB /frame
+window 1 (40 frames): total 39.910 M, worker 19.651 M (49.2%), main 20.259 M; max(main,worker) 20.377 M/frame; tri 596 pipe 30.1 sync 1.6 mainonly 0 allw 303 ring 283 kB /frame
+== band 8 split 3/5: m0 vs sw-b8-3_5:       84 of       84 frames identical
+window 0 (40 frames): total 39.743 M, worker 20.490 M (51.6%), main 19.254 M; max(main,worker) 20.896 M/frame; tri 1576 pipe 36.0 sync 1.9 mainonly 0 allw 1222 ring 643 kB /frame
+window 1 (40 frames): total 40.005 M, worker 21.634 M (54.1%), main 18.371 M; max(main,worker) 21.634 M/frame; tri 697 pipe 32.0 sync 1.6 mainonly 0 allw 315 ring 323 kB /frame
+== band 8 split 4/7: m0 vs sw-b8-4_7:       84 of       84 frames identical
+window 0 (40 frames): total 39.716 M, worker 20.668 M (52.0%), main 19.049 M; max(main,worker) 21.007 M/frame; tri 1576 pipe 36.1 sync 2.0 mainonly 0 allw 1271 ring 643 kB /frame
+window 1 (40 frames): total 40.030 M, worker 21.952 M (54.8%), main 18.078 M; max(main,worker) 21.952 M/frame; tri 831 pipe 34.1 sync 1.6 mainonly 0 allw 514 ring 376 kB /frame
+== band 8 split 2/5: m0 vs sw-b8-2_5:       84 of       84 frames identical
+window 0 (40 frames): total 39.529 M, worker 13.605 M (34.4%), main 25.924 M; max(main,worker) 25.924 M/frame; tri 1113 pipe 30.4 sync 1.9 mainonly 0 allw 767 ring 466 kB /frame
+window 1 (40 frames): total 39.889 M, worker 14.387 M (36.1%), main 25.502 M; max(main,worker) 25.502 M/frame; tri 511 pipe 26.2 sync 1.6 mainonly 0 allw 168 ring 244 kB /frame
+== band 4 split 3/5: m0 vs sw-b4-3_5:       84 of       84 frames identical
+window 0 (40 frames): total 39.840 M, worker 20.594 M (51.7%), main 19.246 M; max(main,worker) 21.043 M/frame; tri 1631 pipe 36.5 sync 2.0 mainonly 0 allw 1129 ring 663 kB /frame
+window 1 (40 frames): total 40.111 M, worker 22.124 M (55.2%), main 17.987 M; max(main,worker) 22.124 M/frame; tri 794 pipe 34.2 sync 1.6 mainonly 0 allw 292 ring 363 kB /frame
+== band 16 split 3/5: m0 vs sw-b16-3_5:       84 of       84 frames identical
+window 0 (40 frames): total 39.483 M, worker 19.912 M (50.4%), main 19.571 M; max(main,worker) 20.757 M/frame; tri 1169 pipe 29.7 sync 1.8 mainonly 0 allw 939 ring 484 kB /frame
+window 1 (40 frames): total 39.947 M, worker 21.141 M (52.9%), main 18.805 M; max(main,worker) 21.162 M/frame; tri 777 pipe 31.9 sync 1.6 mainonly 0 allw 546 ring 351 kB /frame

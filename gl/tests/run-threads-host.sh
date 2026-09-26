@@ -2,7 +2,7 @@
 # run-threads-host.sh [OUT] - phase 6 (S31GL_THREADS) on the host rig: the
 # library's own tests in every thread mode (0 one thread, 1 two real
 # threads, 2 deferred), which must agree with mode 0 bit for bit:
-# core_test, raster_gate, fused_test (both S31GL_FILT8 modes) pass counts,
+# core_test, raster_gate, filt_test, fused_test (both S31GL_FILT8 modes) pass counts,
 # headless_gears' image md5, and the QuakeSpasm traces replayed through
 # GLX (tools/glref/gltrace/replay-host.sh) with every full frame's hash
 # compared against mode 0. Mode 1 runs each replay twice with different
@@ -26,6 +26,7 @@ for m in 0 1 2; do
   echo "== S31GL_THREADS=$m"
   ./core_test 2>&1 | tail -1
   ./raster_gate 2>&1 | tail -1
+  ./filt_test 2>&1 | tail -1
   ./fused_test 2>&1 | grep -v "^libGL" | tail -1
   S31GL_FILT8=1 ./fused_test 2>&1 | grep -v "^libGL" | tail -1
   ./zepoch_test 2>&1 | tail -1

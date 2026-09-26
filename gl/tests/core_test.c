@@ -41,6 +41,7 @@ static unsigned short mem[(H + 2 * PAD) * (W + 2 * PAD)];
 static void canary_fill(void)
 {
 	int i;
+	s31gl_finish(NULL);
 	for (i = 0; i < (int)(sizeof(mem) / 2); i++)
 		mem[i] = CANARY;
 }

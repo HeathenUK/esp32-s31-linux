@@ -1,0 +1,23 @@
+glxgears           PASS           PASS           same  f20 0.000->0.000 (strict 0.000->0.000); f3 0.000->0.000 (strict 0.004->0.004); f60 0.000->0.000 (strict 0.001->0.001)
+glxinfo            PASS           PASS           same  f0 -
+glxheads           PASS           PASS           same  f20 0.000->0.000 (strict 0.000->0.000); f3 0.000->0.000 (strict 0.002->0.002); f60 0.000->0.000 (strict 0.001->0.001)
+manywin            PASS           EXACT          same  f20 0.000->0.000 (strict 0.000->0.000); f4 0.000->0.000 (strict 0.000->0.000); f60 0.000->0.000 (strict 0.000->0.000)
+multictx           PASS           PASS           same  f20 0.003->0.003 (strict 0.004->0.004)
+offset             PASS           PASS           same  f1 0.152->0.152 (strict 1.173->1.173)
+glxgears_fbconfig  PASS           PASS           ok    f20 0.000->0.000 (strict 0.003->0.002); f3 0.000->0.000 (strict 0.001->0.001); f60 0.000->0.000 (strict 0.004->0.004)
+gears              PASS           PASS           same  f20 0.000->0.000 (strict 0.004->0.004); f3 0.000->0.000 (strict 0.000->0.000); f60 0.000->0.000 (strict 0.001->0.001)
+morph3d            PASS           PASS           ok    f20 0.016->0.000 (strict 0.016->0.000); f3 0.034->0.000 (strict 0.035->0.000); f60 0.025->0.000 (strict 0.027->0.000)
+bounce             PASS           PASS           same  f20 0.001->0.001 (strict 6.082->6.082); f3 0.014->0.014 (strict 6.159->6.159); f60 0.005->0.005 (strict 6.168->6.168)
+spectex            PASS           PASS           same  f20 0.010->0.010 (strict 0.184->0.184); f3 0.020->0.020 (strict 0.207->0.207); f60 0.013->0.013 (strict 0.193->0.193)
+geartrain          PASS           PASS           ok    f20 0.030->0.030 (strict 0.212->0.242); f3 0.029->0.029 (strict 0.202->0.233); f60 0.022->0.021 (strict 0.184->0.214)
+ipers              PASS           PASS           ok    f20 0.164->0.001 (strict 0.208->0.004); f3 0.173->0.001 (strict 0.242->0.009); f60 0.156->0.000 (strict 0.185->0.004)
+terrain            PASS           PASS           same  f20 0.000->0.000 (strict 0.000->0.000); f3 0.000->0.000 (strict 0.004->0.004); f60 0.000->0.000 (strict 0.000->0.000)
+tunnel             PASS           PASS           ok    f20 0.324->0.000 (strict 0.862->0.000); f3 0.288->0.000 (strict 0.743->0.001); f60 0.188->0.000 (strict 0.440->0.000)
+fire               FAIL           PASS           ok    f20 3.159->0.309 (strict 6.292->0.757); f3 3.081->0.255 (strict 6.246->0.633); f60 3.039->0.240 (strict 6.026->0.621)
+teapot             FAIL           PASS           ok    f20 5.997->0.020 (strict 7.953->0.030); f3 5.737->0.005 (strict 7.708->0.010); f60 4.818->0.237 (strict 6.711->0.293)
+texcyl             PASS           PASS           same  f20 0.000->0.000 (strict 0.000->0.000); f3 0.000->0.000 (strict 0.000->0.000); f60 0.000->0.000 (strict 0.003->0.003)
+isosurf            PASS           PASS           same  f1 0.001->0.001 (strict 0.002->0.002)
+testgl             FAIL           PASS           ok    f20 0.225->0.000 (strict 0.320->0.000); f3 0.093->0.000 (strict 0.109->0.000); f60 1.990->0.000 (strict 2.183->0.000)
+testgl2            ERROR          PASS           ok    f20 -; f3 -; f60 -
+rrootage           MISSING-SYMBOL PASS           ok    f3 8.182->0.579 (strict 12.469->0.672); f300 8.246->0.536 (strict 12.848->0.629); f60 7.960->0.565 (strict 12.645->0.663)
+suitecmp: 0 apps worse

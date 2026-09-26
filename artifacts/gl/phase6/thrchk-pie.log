@@ -1,0 +1,11 @@
+thrchk-pie: 210 roots, 232 functions reachable
+PLT atoi@plt from zpx_prepare zst_clear
+PLT fprintf@plt from check_reloc gl_note_once gl_warn_once
+PLT getenv@plt from zpx_prepare zst_clear
+PLT malloc@plt from gl_malloc
+PLT memcmp@plt from zs_build
+PLT memcpy@plt from factor zc_comb0 zc_comb1 zc_saveprim zs_build zs_l_ro zs_l_ro_w zs_l_rw zs_l_rw_w
+PLT memset@plt from factor zc_comb0 zc_comb1 zc_flat zd_never_m zd_none zst_clear
+PLT strcmp@plt from first_time
+PLT syscall@plt from worker
+thrchk-pie: 8 PLT callees other than syscall

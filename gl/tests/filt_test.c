@@ -48,17 +48,21 @@ static int fails, passes;
 #define CANARY 0xA5A5
 static unsigned short mem[(H + 2 * PAD) * (W + 2 * PAD)];
 #define PITCH ((W + 2 * PAD) * 2)
-#define PX(x, y) mem[((y) + PAD) * (W + 2 * PAD) + (x) + PAD]   /* y: row from the top */
+/* y: row from the top. Phase 6: with S31GL_THREADS the worker's rows are
+   in the buffer after a sync (s31gl_finish), as GLX does before a present */
+#define PX(x, y) (*(s31gl_finish(NULL), &mem[((y) + PAD) * (W + 2 * PAD) + (x) + PAD]))
 
 static void canary_fill(void)
 {
 	int i;
+	s31gl_finish(NULL);
 	for (i = 0; i < (int)(sizeof(mem) / 2); i++) mem[i] = CANARY;
 }
 
 static int canary_intact(void)
 {
 	int x, y;
+	s31gl_finish(NULL);
 	for (y = -PAD; y < H + PAD; y++)
 		for (x = -PAD; x < W + PAD; x++) {
 			int inside = x >= 0 && x < W && y >= 0 && y < H;

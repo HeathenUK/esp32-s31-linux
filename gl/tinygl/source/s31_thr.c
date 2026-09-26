@@ -131,10 +131,17 @@ static void fx_wake(volatile unsigned int *a)
 }
 #endif
 
+/* the mode when S31GL_THREADS is not set: 0; a gate build may compile
+   another in (S31GL_HOST_DEFS=-DS31GL_THREADS_DEFAULT=1 gl/tests/run-3a.sh
+   runs the whole host suite threaded - the suite passes no environment) */
+#ifndef S31GL_THREADS_DEFAULT
+#define S31GL_THREADS_DEFAULT 0
+#endif
+
 static void read_env(void)
 {
   const char *e = getenv("S31GL_THREADS");
-  s31t_mode = e ? atoi(e) : 0;
+  s31t_mode = e ? atoi(e) : S31GL_THREADS_DEFAULT;
   if (s31t_mode < 0 || s31t_mode > 2) s31t_mode = 0;
 #ifndef S31T_PTHREAD
   if (s31t_mode == 1) s31t_mode = 2;
