@@ -65,6 +65,47 @@ low run of the kind #393 also showed once (44.3 on its gate2 boot), so it is
 not counted against it - but nothing here is a win, and a kernel that does not
 ship gets no regression pass. Board and images/xipImage are back on #393.
 
+## GLQuake tick/timer/scheduler churn (lever #6): attributed, nothing ships (2026-09-26, #393)
+
+**Question.** Under QuakeSpasm fullscreen (7.5 fps) the h1s profile puts the
+sched/tick/timer path at ~8-9% of CPU0, with ~450 timer IRQs/s and ~400
+switches/s. What drives them, and is any of it avoidable with a runtime knob?
+
+**Attribution** (current boot, game unpinned, 34.5 s window from t=60 s;
+raw data, capture and analyser in artifacts/gl/glquake/tick/):
+
+| source | rate | what it is |
+|---|---|---|
+| riscv-timer | 391 CPU0 / 178 CPU1 /s | hrtimer events 417/190. HZ=100 periodic gives 100/CPU; the rest is armed hrtimers: hrtimer_wakeup (sleepers), hrtick, esp32s31_lcd_vblank_tick (~42-47/s), dw_mci_ka_timer (SD keepalive, soft: HRTIMER softirq 64/s on CPU0), dl_task_timer |
+| dw-mci | 320 /s | paging (52 majflt/s, 39 pswpin/s) + ~2.2 IRQs per keepalive |
+| Function-call IPI | 121 / 148 /s | cross-hart TLB shootdowns from the paging game (09-23 finding) |
+| lcd / i2c / GDMA / PPA / wifi | 46.5 / 41 / 42 / 5.7 / 2.3 /s | vblank, touch poll, audio DMA |
+| Resched IPI | 1.9 / 0.9 /s | |
+| ctxt | 477 /s | game main 91 (75 involuntary), touch-poll kworker (events_freezable) 57, lvdesk 56, SDL audio thread 49, kswapd 41, ksoftirqd/0 15, rcu_sched 13, s31-bt 5 |
+| CPU0 | user 42, sys 24, softirq 5, idle 28 % | |
+
+Timer slack is 50 us everywhere (s31-bt 0), base slice 1.4 ms, sched_features
+0x1BE1FBDF (HRTICK and HRTICK_DL on).
+
+**Arms** (runtime only, one fresh boot each, interleaved A B C A B C,
+timedemo demo1 969 frames, knob read back on every boot):
+
+| arm | seconds | fps | majflt in run |
+|---|---|---|---|
+| base | 131.9, 131.5 | 7.3, 7.4 | 6716, 6585 |
+| HRTICK+HRTICK_DL off (devmem 0x5008a114 = 0x1BE1CBDF) | 129.6, 130.0 | 7.5, 7.5 | 8408, 8077 |
+| SD keepalive off (ka_period_us=0) | 130.3, 130.8 | 7.4, 7.4 | 7240, 7245 |
+
+The shipped reference for this configuration is 7.3-7.5 fps (128.8 s on the
+ship boot). HRTICK off is 1.3% quicker than this pair of base runs, but it is
+inside the recorded band, and 09-23 closed it as < 0.5% of CPU0 (C42). The
+keepalive off run sits between the two, so the 10 ms keepalive is not a cost for
+GLQuake. Nothing clears the spread, so nothing ships and the board stays on #393.
+Not armed: touch poll and hw_vblank (< 1 point of CPU0 on 09-23), NOCB, and
+TTWU_QUEUE (worse on 09-23). HZ is already 100. NO_HZ_IDLE hangs the board
+(dead end 69). The IPIs and dw-mci IRQs come from paging and go down only when
+paging does.
+
 ## tiopex-quake has no mouse, by construction - CLOSED, not ours (2026-09-24)
 
 **Symptom** (2026-09-23, XLITE_TRACE_INPUT=1): TyrQuake fullscreen 320x240

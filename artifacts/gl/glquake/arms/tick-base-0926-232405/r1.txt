@@ -1,0 +1,70 @@
+GQ tick-base-r1 args: -mixspeed 11025 -zone 384 -heapsize 12288 -width 320 -height 240 -fullscreen | #393 SMP Sat Sep 26 12:31:02 UTC 2026 up 61.69
+MEM0 MemFree: 3240 kB MemAvailable: 3440 kB SwapFree: 65448 kB CmaFree: 852 kB 
+VM0 pswpin=39 pswpout=111 pgmajfault=461 
+LV0 lvdesk: frames 0  gaps <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 xshim: 0 MIT-SHM ShmPutImage, 0 identical (no rows changed) 
+S 10 VmRSS:5040 VmSwap:10888  majflt=528 sdrd=123214 pswpin=374 pswpout=2232 pgmajfault=1053 
+S 20 VmRSS:5304 VmSwap:13828  majflt=1809 sdrd=186702 pswpin=1837 pswpout=4401 pgmajfault=2417 
+S 30 VmRSS:5644 VmSwap:14100  majflt=2802 sdrd=200422 pswpin=2376 pswpout=4795 pgmajfault=3451 
+S 40 VmRSS:5364 VmSwap:14368  majflt=3174 sdrd=204670 pswpin=2621 pswpout=4883 pgmajfault=3808 
+S 50 VmRSS:5384 VmSwap:13988  majflt=3349 sdrd=206910 pswpin=2761 pswpout=4925 pgmajfault=4062 
+S 60 VmRSS:5624 VmSwap:14052  majflt=4076 sdrd=213694 pswpin=2990 pswpout=5069 pgmajfault=4770 
+M 3980 292 492 784 
+M 964 268 484 752 
+M 1588 288 1240 1528 
+M 268 4 264 268 
+M 884 436 448 884 
+M 1244 372 872 1244 
+M 356 80 276 356 
+M 12292 2328 9964 12292 
+S 70 VmRSS:5540 VmSwap:14200  majflt=4348 sdrd=216694 pswpin=3189 pswpout=5153 pgmajfault=5077 
+S 80 VmRSS:5644 VmSwap:14132  majflt=4764 sdrd=221022 pswpin=3448 pswpout=5252 pgmajfault=5497 
+S 90 VmRSS:5696 VmSwap:14084  majflt=5254 sdrd=226606 pswpin=3718 pswpout=5380 pgmajfault=5984 
+S 100 VmRSS:5720 VmSwap:14044  majflt=5499 sdrd=229198 pswpin=3869 pswpout=5428 pgmajfault=6246 
+S 110 VmRSS:5672 VmSwap:14120  majflt=5619 sdrd=230398 pswpin=3914 pswpout=5450 pgmajfault=6360 
+S 120 VmRSS:5768 VmSwap:14028  majflt=5648 sdrd=230926 pswpin=3964 pswpout=5477 pgmajfault=6392 
+S 130 VmRSS:5548 VmSwap:14228  majflt=5702 sdrd=231470 pswpin=3976 pswpout=5494 pgmajfault=6447 
+S 140 VmRSS:5536 VmSwap:13952  majflt=6333 sdrd=237950 pswpin=4278 pswpout=5636 pgmajfault=7098 
+S 150 VmRSS:5528 VmSwap:14060  majflt=6401 sdrd=238870 pswpin=4338 pswpout=5659 pgmajfault=7173 
+WALL 64.75 227.34
+RESULT 969 frames 131.9 seconds   7.3 fps
+VM1 pswpin=4340 pswpout=5666 pgmajfault=7177 
+LV1 lvdesk: frames 1017  gaps <25:0 <50:1 <100:236 <200:657 <400:99 >=400:24 xshim: 1197 MIT-SHM ShmPutImage, 179 identical (no rows changed) 
+MEM1 MemFree: 1964 kB MemAvailable: 732 kB SwapFree: 45944 kB CmaFree: 360 kB 
+FINAL VmHWM:6312 VmRSS:5092 VmData:22388 VmSwap:14324  majflt=6406 cpu=15257
+--- log
+12.0 megabyte heap
+Video mode 320x240x16 60Hz (16-bit z-buffer, 0x FSAA) initialized
+GL_VENDOR: s31
+GL_RENDERER: Software Rasterizer
+GL_VERSION: 1.1 s31-tinygl
+Warning: OpenGL version < 1.5, skipping ARB_vertex_buffer_object check
+FOUND: ARB_multitexture
+GL_MAX_TEXTURE_UNITS: 2
+FOUND: ARB_texture_env_combine
+FOUND: ARB_texture_env_add
+Warning: vertical sync not supported (swap_control doesn't match vid_vsync)
+Warning: texture_filter_anisotropic not supported
+Warning: texture_non_power_of_two not supported
+Warning: OpenGL version < 2, GLSL not available
+Warning: GLSL gamma not available, using hardware gamma
+Warning: GLSL alias model rendering not available, using Fitz renderer
+Warning: glGenerateMipmap not available, liquids won't have mipmaps
+Sound Initialization
+969 frames 131.9 seconds   7.3 fps
+--- out
+GL_VERSION: 1.1 s31-tinygl
+Warning: OpenGL version < 1.5, skipping ARB_vertex_buffer_object check
+FOUND: ARB_multitexture
+GL_MAX_TEXTURE_UNITS: 2
+FOUND: ARB_texture_env_combine
+FOUND: ARB_texture_env_add
+Warning: vertical sync not supported (swap_control doesn't match vid_vsync)
+Warning: texture_filter_anisotropic not supported
+Warning: texture_non_power_of_two not supported
+Warning: OpenGL version < 2, GLSL not available
+Warning: GLSL gamma not available, using hardware gamma
+Warning: GLSL alias model rendering not available, using Fitz renderer
+Warning: glGenerateMipmap not available, liquids won't have mipmaps
+
+Sound Initialization
+GQDONE

@@ -1,0 +1,19 @@
+cpu: 0
+ #0: <925ef361>, 0xc08436d2, S:01
+ #1: <decda7ff>, 0xc083be32, S:01
+ #2: <5bc7aa6d>, 0xc085882c, S:01
+ #3: <32e8eff3>, 0xc085882c, S:01
+ #4: <800f19b9>, dl_task_timer, S:01
+ #5: <95b73e8b>, pm_suspend_timer_fn, S:01
+ #6: <41a71fba>, 0xc085882c, S:01
+ #7: <d59b282d>, 0xc085882c, S:01
+ #8: <85cb8030>, sched_clock_poll, S:01
+ #0: <53aedb7b>, 0xc0872656, S:01
+cpu: 1
+ #0: <3af6e447>, 0xc08436d2, S:01
+ #1: <3af6e447>, 0xc08436d2, S:01
+ #2: <5d2fb74f>, dl_task_timer, S:01
+ #3: <c073f64e>, 0xc085882c, S:01
+ #4: <6f415513>, 0xc085882c, S:01
+ #5: <082235f2>, 0xc085882c, S:01
+ #6: <ee9fca41>, 0xc085882c, S:01
