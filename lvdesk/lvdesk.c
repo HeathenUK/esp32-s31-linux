@@ -7383,44 +7383,72 @@ static void xwin_cover_cb(lv_event_t *e)
  *
  * LIMITATION, deliberate and gated: this paints after everything, so anything
  * stacked ON TOP of a client - another window, a popover - would be
- * overwritten. xwin_direct_ok() therefore declines the fast path whenever
- * another client's rectangle intersects this one. That is why this is a
- * measurement toggle and not yet the default.
+ * overwritten. xwin_overlay_holes() therefore lists everything stacked over
+ * the client: the blit cuts those rectangles out, and the fast path declines.
  */
 static lv_obj_t *pop_obj;		/* defined with the popovers below */
 static lv_obj_t *pop_scrim;		/* its click-catcher, ditto */
 #define TOAST_MAX 3
 static lv_obj_t *toast_objs[TOAST_MAX];	/* notification toasts (QoL D1) */
 
+#define XWIN_HOLES 8
+
 /*
- * True when an LVGL overlay that the direct blit would stamp over covers
- * the client's image: the Alt-Tab switcher, an open popover, or the
- * terminal window stacked above this client (QoL review A1, 2026-09-25 -
- * windowed prboom or any depth-8 client painted its pixels across all of
- * these on every frame, because the blit runs after LVGL has drawn). The
- * FAST PRESENT path declines while one is up (it bypasses LVGL entirely),
- * and xwin_blit_direct() cuts the overlay's rectangle out of its blit, so
- * the client keeps animating around the overlay. Declining the blit
- * outright was tried first and left the whole window blank grey: with
- * direct expansion the image has no src, so nothing else draws it. Deliberately NOT generalised to the
- * whole top layer: the software cursor lives there, and a game under it
- * would freeze wherever the pointer sat.
+ * Is sibling frame `o` stacked above window idx's frame? Both must be
+ * children of the same parent (the screen); LVGL draws later children over
+ * earlier ones, so the child index IS the stacking order.
  */
-static int xwin_overlay_hole(int idx, const lv_area_t *a, lv_area_t *hole)
+static int xwin_frame_above(lv_obj_t *o, int idx)
 {
-	lv_obj_t *ov[4 + TOAST_MAX] = { sw_panel, pop_obj, NULL, osk_obj };
+	lv_obj_t *w = xwins[idx].win;
+
+	return o && w && o != w && lv_obj_is_valid(o) && lv_obj_is_valid(w) &&
+	       lv_obj_get_parent(o) == lv_obj_get_parent(w) &&
+	       lv_obj_get_index(o) > lv_obj_get_index(w);
+}
+
+/*
+ * Every rectangle stacked over window idx that intersects `a`: another
+ * client's frame above it, the Alt-Tab switcher, an open popover, the OSK,
+ * a toast, or the terminal (QoL review A1, 2026-09-25 - windowed prboom or
+ * any depth-8 client painted its pixels across all of these on every frame,
+ * because the blit runs after LVGL has drawn). The FAST PRESENT path
+ * declines while one is up (it bypasses LVGL entirely), and
+ * xwin_blit_direct() cuts each one out of its blit, so the client keeps
+ * animating around them. Declining the blit outright was tried first and
+ * left the whole window blank grey: with direct expansion the image has no
+ * src, so nothing else draws it. Deliberately NOT generalised to the whole
+ * top layer: the software cursor lives there, and a game under it would
+ * freeze wherever the pointer sat.
+ *
+ * Client frames were missing from this list until 2026-09-26, and instead
+ * ANY other client intersecting a depth-8 window - above OR below it - took
+ * it off the direct blit altogether. That is the same blank grey window:
+ * windowed prboom dragged so its corner touched an st terminal showed an
+ * empty frame (and presented at ~4 puts/s) until it was moved clear again.
+ * A client BELOW is simply painted over, as LVGL would; one ABOVE is a hole.
+ * Returns the number of holes (at most XWIN_HOLES; any overflow collapses
+ * into the last one's bounding box, which only costs pixels, never order).
+ */
+static int xwin_overlay_holes(int idx, const lv_area_t *a,
+			      lv_area_t *holes)
+{
+	lv_obj_t *ov[4 + TOAST_MAX + MAXXWIN];
 	lv_area_t b;
-	int k, n = 0;
+	int k, n = 0, nov = 0;
 
+	ov[nov++] = sw_panel;
+	ov[nov++] = pop_obj;
+	ov[nov++] = osk_obj;
 	for (k = 0; k < TOAST_MAX; k++)
-		ov[4 + k] = toast_objs[k];
-
-	if (term.win && lv_obj_is_valid(term.win) &&
-	    xwins[idx].win && lv_obj_is_valid(xwins[idx].win) &&
-	    lv_obj_get_parent(term.win) == lv_obj_get_parent(xwins[idx].win) &&
-	    lv_obj_get_index(term.win) > lv_obj_get_index(xwins[idx].win))
-		ov[2] = term.win;
-	for (k = 0; k < 4 + TOAST_MAX; k++) {
+		ov[nov++] = toast_objs[k];
+	if (term.win && xwin_frame_above(term.win, idx))
+		ov[nov++] = term.win;
+	for (k = 0; k < xwin_n; k++)
+		if (k != idx && xwins[k].img && xwins[k].drawn &&
+		    xwin_frame_above(xwins[k].win, idx))
+			ov[nov++] = xwins[k].win;
+	for (k = 0; k < nov; k++) {
 		if (!ov[k] || !lv_obj_is_valid(ov[k]) ||
 		    lv_obj_has_flag(ov[k], LV_OBJ_FLAG_HIDDEN))
 			continue;
@@ -7428,31 +7456,30 @@ static int xwin_overlay_hole(int idx, const lv_area_t *a, lv_area_t *hole)
 		if (b.x1 > a->x2 || b.x2 < a->x1 ||
 		    b.y1 > a->y2 || b.y2 < a->y1)
 			continue;
-		/* two overlays at once: their bounding box (rare, and the gap
-		 * between them only shows the window's last LVGL paint) */
-		if (!n++) {
-			*hole = b;
+		if (n < XWIN_HOLES) {
+			holes[n++] = b;
 		} else {
-			if (b.x1 < hole->x1) hole->x1 = b.x1;
-			if (b.y1 < hole->y1) hole->y1 = b.y1;
-			if (b.x2 > hole->x2) hole->x2 = b.x2;
-			if (b.y2 > hole->y2) hole->y2 = b.y2;
+			lv_area_t *h = &holes[XWIN_HOLES - 1];
+
+			if (b.x1 < h->x1) h->x1 = b.x1;
+			if (b.y1 < h->y1) h->y1 = b.y1;
+			if (b.x2 > h->x2) h->x2 = b.x2;
+			if (b.y2 > h->y2) h->y2 = b.y2;
 		}
 	}
-	return n > 0;
+	return n;
 }
 
 static int xwin_overlay_covers(int idx, const lv_area_t *a)
 {
-	lv_area_t hole;
+	lv_area_t holes[XWIN_HOLES];
 
-	return xwin_overlay_hole(idx, a, &hole);
+	return xwin_overlay_holes(idx, a, holes) > 0;
 }
 
 static int xwin_direct_ok_ov(int idx, int check_overlays)
 {
-	lv_area_t a, b;
-	int j;
+	lv_area_t a;
 
 	if (!xwins[idx].img || !lv_obj_is_valid(xwins[idx].img))
 		return 0;
@@ -7461,16 +7488,6 @@ static int xwin_direct_ok_ov(int idx, int check_overlays)
 	lv_obj_get_coords(xwins[idx].img, &a);
 	if (check_overlays && xwin_overlay_covers(idx, &a))
 		return 0;
-	for (j = 0; j < xwin_n; j++) {
-		if (j == idx || !xwins[j].img || !lv_obj_is_valid(xwins[j].img))
-			continue;
-		if (lv_obj_has_flag(xwins[j].img, LV_OBJ_FLAG_HIDDEN))
-			continue;
-		lv_obj_get_coords(xwins[j].img, &b);
-		if (b.x1 <= a.x2 && b.x2 >= a.x1 &&
-		    b.y1 <= a.y2 && b.y2 >= a.y1)
-			return 0;
-	}
 	return 1;
 }
 
@@ -7638,7 +7655,7 @@ static void xwin_blit_direct(const lv_area_t *area)
 	for (i = 0; i < xwin_n; i++) {
 		const uint16_t *pal;
 		const uint8_t *src;
-		lv_area_t coords, clip, hole;
+		lv_area_t coords, clip, holes[XWIN_HOLES];
 		int sw, sh, sstride, y, has_hole;
 
 		if (!xwin_direct_ok_ov(i, 0))
@@ -7649,7 +7666,7 @@ static void xwin_blit_direct(const lv_area_t *area)
 			continue;
 		lv_obj_get_coords(xwins[i].img, &coords);
 		/* an LVGL overlay above the client: blit around it */
-		has_hole = xwin_overlay_hole(i, &coords, &hole);
+		has_hole = xwin_overlay_holes(i, &coords, holes);
 
 		/*
 		 * HARDWARE EXPANSION, when the index plane is GEM.
@@ -7692,23 +7709,42 @@ static void xwin_blit_direct(const lv_area_t *area)
 			continue;
 
 		for (y = clip.y1; y <= clip.y2; y++) {
-			int32_t segx1[2], segx2[2];
-			int seg, nseg = 1;
+			int32_t segx1[XWIN_HOLES + 1], segx2[XWIN_HOLES + 1];
+			int seg, nseg = 1, hk;
 
 			segx1[0] = clip.x1;
 			segx2[0] = clip.x2;
-			if (has_hole && y >= hole.y1 && y <= hole.y2) {
-				nseg = 0;
-				if (hole.x1 > clip.x1) {
-					segx1[nseg] = clip.x1;
-					segx2[nseg++] = hole.x1 - 1 < clip.x2 ?
-							hole.x1 - 1 : clip.x2;
+			/*
+			 * Subtract each hole that crosses this row from the
+			 * segment list: a segment is cut into at most two, so
+			 * XWIN_HOLES holes leave at most XWIN_HOLES + 1.
+			 */
+			for (hk = 0; hk < has_hole; hk++) {
+				const lv_area_t *h = &holes[hk];
+				int32_t nx1[XWIN_HOLES + 1], nx2[XWIN_HOLES + 1];
+				int ns = 0;
+
+				if (y < h->y1 || y > h->y2)
+					continue;
+				for (seg = 0; seg < nseg; seg++) {
+					int32_t s1 = segx1[seg], s2 = segx2[seg];
+
+					if (h->x2 < s1 || h->x1 > s2) {
+						nx1[ns] = s1; nx2[ns++] = s2;
+						continue;
+					}
+					if (h->x1 > s1 && ns <= XWIN_HOLES) {
+						nx1[ns] = s1; nx2[ns++] = h->x1 - 1;
+					}
+					if (h->x2 < s2 && ns <= XWIN_HOLES) {
+						nx1[ns] = h->x2 + 1; nx2[ns++] = s2;
+					}
 				}
-				if (hole.x2 < clip.x2) {
-					segx1[nseg] = hole.x2 + 1 > clip.x1 ?
-						      hole.x2 + 1 : clip.x1;
-					segx2[nseg++] = clip.x2;
+				for (seg = 0; seg < ns; seg++) {
+					segx1[seg] = nx1[seg];
+					segx2[seg] = nx2[seg];
 				}
+				nseg = ns;
 			}
 			for (seg = 0; seg < nseg; seg++) {
 				int32_t x1 = segx1[seg], x2 = segx2[seg];
@@ -7901,6 +7937,8 @@ static void xwin_dsc_check(const char *when)
  */
 static uint32_t frames_flushed;		/* defined with the flush callback */
 
+static lv_obj_t *cursor_obj;	/* software cursor, set up in mouse_init() */
+
 static int area_hits_children(lv_obj_t *parent, uint32_t from, const lv_area_t *a)
 {
 	uint32_t n = lv_obj_get_child_count(parent), k;
@@ -7915,7 +7953,7 @@ static int area_hits_children(lv_obj_t *parent, uint32_t from, const lv_area_t *
 		 * EVERY X window off fast present for as long as a menu or
 		 * tray panel was open (QoL C0).
 		 */
-		if (!o || o == pop_scrim ||
+		if (!o || o == pop_scrim || o == cursor_obj ||
 		    lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN))
 			continue;
 		lv_obj_get_coords(o, &b);
@@ -7926,17 +7964,73 @@ static int area_hits_children(lv_obj_t *parent, uint32_t from, const lv_area_t *
 	return 0;
 }
 
-static int xwin_fast_present(int i, const lv_area_t *a)
+/*
+ * The SOFTWARE cursor over a fast-presented rectangle. Direct scanout
+ * refuses the hardware cursor plane, so the pointer is an LVGL image on the
+ * system layer. Counting it as "covering" took every X window off both fast
+ * paths whenever the pointer rested over it - including at start-up, when it
+ * parks mid-screen, where a glxgears window sits (2026-09-26). Instead the
+ * fast paths blit, then stamp the cursor's pixels back over the blit, inside
+ * the same rectangle: no LVGL pass and no flicker.
+ */
+static void cursor_stamp(const lv_area_t *c)
+{
+	lv_area_t k;
+	const uint8_t *img = lvdesk_cursor_img.data;
+	int cw = (int)lvdesk_cursor_img.header.w, ch = (int)lvdesk_cursor_img.header.h;
+	int x, y, x1, y1, x2, y2;
+
+	if (!cursor_obj || !kms_map ||
+	    lv_obj_has_flag(cursor_obj, LV_OBJ_FLAG_HIDDEN))
+		return;
+	lv_obj_get_coords(cursor_obj, &k);
+	x1 = k.x1 > c->x1 ? k.x1 : c->x1;
+	y1 = k.y1 > c->y1 ? k.y1 : c->y1;
+	x2 = k.x1 + cw - 1 < c->x2 ? k.x1 + cw - 1 : c->x2;
+	y2 = k.y1 + ch - 1 < c->y2 ? k.y1 + ch - 1 : c->y2;
+	for (y = y1; y <= y2; y++) {
+		uint16_t *dp = (uint16_t *)(kms_map + (size_t)y * kms_pitch);
+		const uint8_t *sp = img + ((size_t)(y - k.y1) * cw) * 4;
+
+		for (x = x1; x <= x2; x++) {
+			const uint8_t *p = sp + (size_t)(x - k.x1) * 4;
+			unsigned a = p[3], d = dp[x];
+			unsigned r, g, b;
+
+			if (!a)
+				continue;
+			/* lv_color32: B, G, R, A in memory */
+			r = (p[2] * a + ((d >> 11) << 3) * (255 - a)) / 255;
+			g = (p[1] * a + (((d >> 5) & 63) << 2) * (255 - a)) / 255;
+			b = (p[0] * a + ((d & 31) << 3) * (255 - a)) / 255;
+			dp[x] = (uint16_t)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3));
+		}
+	}
+}
+
+/*
+ * May window i's damage `a` be written straight to the scanout? The shared
+ * test for both fast paths (indexed expansion and 16-bit copy); *c gets the
+ * rectangle clipped to the panel. 0 = take the LVGL route.
+ */
+static int xwin_fast_ok(int i, const lv_area_t *a, lv_area_t *c)
 {
 	static int off = -1;
-	static int said;
 	lv_obj_t *win = xwins[i].win, *parent;
-	lv_area_t c = *a;
 
+	static int dbg = -1;
+
+	*c = *a;
+	if (dbg < 0)
+		dbg = getenv("LVDESK_FASTDBG") != NULL;
 	if (off < 0)
 		off = getenv("LVDESK_NOFASTPRESENT") != NULL;
-	if (off || fs_active || !win || !xwin_direct_ok(i))
+	if (off || fs_active || !win || !xwin_direct_ok(i)) {
+		if (dbg)
+			fprintf(stderr, "fastdbg: no: off=%d fs=%d win=%p direct_ok=%d\n",
+				off, fs_active, (void *)win, win ? xwin_direct_ok(i) : -1);
 		return 0;
+	}
 	if (lv_obj_has_flag(win, LV_OBJ_FLAG_HIDDEN))
 		return 0;
 	{
@@ -7957,6 +8051,8 @@ static int xwin_fast_present(int i, const lv_area_t *a)
 		}
 		if (xwins[i].fast_stable < 2) {
 			xwins[i].fast_stable++;
+			if (dbg)
+				fprintf(stderr, "fastdbg: no: unstable\n");
 			return 0;
 		}
 	}
@@ -7964,15 +8060,50 @@ static int xwin_fast_present(int i, const lv_area_t *a)
 	if (!parent ||
 	    area_hits_children(parent, (uint32_t)lv_obj_get_index(win) + 1, a) ||
 	    area_hits_children(lv_layer_top(), 0, a) ||
-	    area_hits_children(lv_layer_sys(), 0, a))
+	    area_hits_children(lv_layer_sys(), 0, a)) {
+		if (dbg)
+			fprintf(stderr, "fastdbg: no: covered sib=%d top=%d sys=%d\n",
+				parent ? area_hits_children(parent, (uint32_t)lv_obj_get_index(win) + 1, a) : -1,
+				area_hits_children(lv_layer_top(), 0, a),
+				area_hits_children(lv_layer_sys(), 0, a));
 		return 0;
-	if (c.x1 < 0) c.x1 = 0;
-	if (c.y1 < 0) c.y1 = 0;
-	if (c.x2 > (int32_t)kms_w - 1) c.x2 = (int32_t)kms_w - 1;
-	if (c.y2 > (int32_t)kms_h - 1) c.y2 = (int32_t)kms_h - 1;
+	}
+	/*
+	 * Clip to what LVGL would show: every ancestor of the image clips it.
+	 * The frame is resized BEFORE the client is told (xwin_push_size), so
+	 * for a frame or two a client can present an image larger than its
+	 * frame - restoring from maximise is the common case - and an
+	 * unclipped fast blit painted it across the desktop beside the window.
+	 */
+	for (parent = lv_obj_get_parent(xwins[i].img);
+	     parent && parent != lv_screen_active();
+	     parent = lv_obj_get_parent(parent)) {
+		lv_area_t pc;
+
+		lv_obj_get_coords(parent, &pc);
+		if (c->x1 < pc.x1) c->x1 = pc.x1;
+		if (c->y1 < pc.y1) c->y1 = pc.y1;
+		if (c->x2 > pc.x2) c->x2 = pc.x2;
+		if (c->y2 > pc.y2) c->y2 = pc.y2;
+	}
+	if (c->x1 < 0) c->x1 = 0;
+	if (c->y1 < 0) c->y1 = 0;
+	if (c->x2 > (int32_t)kms_w - 1) c->x2 = (int32_t)kms_w - 1;
+	if (c->y2 > (int32_t)kms_h - 1) c->y2 = (int32_t)kms_h - 1;
+	return 1;
+}
+
+static int xwin_fast_present(int i, const lv_area_t *a)
+{
+	static int said;
+	lv_area_t c;
+
+	if (!xwin_fast_ok(i, a, &c))
+		return 0;
 	if (c.x2 < c.x1 || c.y2 < c.y1)
 		return 1;			/* wholly off screen: nothing to show */
 	xwin_blit_direct(&c);
+	cursor_stamp(&c);
 	kms_dirty(c.x1, c.y1, c.x2, c.y2);
 	frames_flushed++;
 	if (frames_flushed % 200 == 0)
@@ -7981,6 +8112,54 @@ static int xwin_fast_present(int i, const lv_area_t *a)
 	if (!said) {
 		said = 1;
 		printf("lvdesk: fast present (no LVGL pass) for window 0x%x\n",
+		       (unsigned)xwins[i].id);
+		fflush(stdout);
+	}
+	return 1;
+}
+
+/*
+ * FAST PRESENT for 16-bit windows (GL plan, 2026-09-26). The same idea as
+ * the indexed path above, for the RGB565 image route every other client
+ * takes: the damaged rows go from the window's pixel buffer straight into
+ * the scanout, and LVGL is not involved. The lv_image still points at the
+ * same buffer, so any later LVGL repaint of the window draws exactly these
+ * pixels.
+ *
+ * Measured before it existed (stock glxgears 300x300, 2026-09-26): lvdesk
+ * spent about 18.6 ms of CPU per presented frame, and its profiler put
+ * 10-15 ms of that in LVGL passes that only copy this image. Eligibility is
+ * xwin_fast_ok(): unobscured, geometry stable, and nothing on the top or
+ * system layers over it. LVDESK_NOFAST16=1 turns this path off on its own.
+ */
+static int xwin_fast_present16(int i, const lv_area_t *a,
+			       const uint16_t *px, int w, int h)
+{
+	static int off = -1, said;
+	lv_area_t c, img;
+	int y;
+
+	if (off < 0)
+		off = getenv("LVDESK_NOFAST16") != NULL;
+	if (off || !px || w <= 0 || !kms_map || !xwin_fast_ok(i, a, &c))
+		return 0;
+	lv_obj_get_coords(xwins[i].img, &img);
+	if (c.x1 < img.x1) c.x1 = img.x1;
+	if (c.y1 < img.y1) c.y1 = img.y1;
+	if (c.x2 > img.x1 + w - 1) c.x2 = img.x1 + w - 1;
+	if (c.y2 > img.y1 + h - 1) c.y2 = img.y1 + h - 1;
+	if (c.x2 < c.x1 || c.y2 < c.y1)
+		return 1;			/* nothing on screen to show */
+	for (y = c.y1; y <= c.y2; y++)
+		memcpy(kms_map + (size_t)y * kms_pitch + (size_t)c.x1 * 2,
+		       px + (size_t)(y - img.y1) * w + (c.x1 - img.x1),
+		       (size_t)(c.x2 - c.x1 + 1) * 2);
+	cursor_stamp(&c);
+	kms_dirty(c.x1, c.y1, c.x2, c.y2);
+	frames_flushed++;
+	if (!said) {
+		said = 1;
+		printf("lvdesk: fast present 16 (no LVGL pass) for window 0x%x\n",
 		       (unsigned)xwins[i].id);
 		fflush(stdout);
 	}
@@ -8136,6 +8315,7 @@ static void HOTTEXT xwin_on_draw(uint32_t id)
 				     (int)xwins[i].dsc.header.h != h)) {
 					xwins[i].dsc.header.w = w;
 					xwins[i].dsc.header.h = h;
+					xwins[i].fast_stable = 0;
 					lv_obj_set_size(xwins[i].img, w, h);
 					lv_obj_set_size(xwins[i].win,
 							w + xwin_chrome_w,
@@ -8154,6 +8334,11 @@ static void HOTTEXT xwin_on_draw(uint32_t id)
 				   (int)xwins[i].dsc.header.h != h ||
 				   xwins[i].dsc.data != (const uint8_t *)px ||
 				   lv_image_get_src(xwins[i].img) == NULL)) {
+				/* geometry is deferred: no fast blit until a
+				 * refresh has laid the new size out */
+				if ((int)xwins[i].dsc.header.w != w ||
+				    (int)xwins[i].dsc.header.h != h)
+					xwins[i].fast_stable = 0;
 				xwins[i].dsc.header.w = w;
 				xwins[i].dsc.header.h = h;
 				xwins[i].dsc.header.stride = w * 2;
@@ -8181,6 +8366,15 @@ static void HOTTEXT xwin_on_draw(uint32_t id)
 				 * useful comparison on this board is an
 				 * `echo x >` and not a rebuild.
 				 */
+				{
+					static int dbg = -1;
+
+					if (dbg < 0)
+						dbg = getenv("LVDESK_FASTDBG") != NULL;
+					if (dbg)
+						fprintf(stderr, "fastdbg: draw 0x%x px=%p direct=%d w=%d h=%d\n",
+							(unsigned)id, (const void *)px, direct, w, h);
+				}
 				if (!fulldmg && (px || direct) &&
 				    xshim_window_take_damage(id, &dx, &dy,
 							     &dw, &dh)) {
@@ -8192,9 +8386,18 @@ static void HOTTEXT xwin_on_draw(uint32_t id)
 					a.y2 = a.y1 + dh - 1;
 					if (direct && xwin_fast_present(i, &a))
 						return;
+					if (!direct &&
+					    xwin_fast_present16(i, &a, px, w, h))
+						return;
 					lv_obj_invalidate_area(xwins[i].img,
 							       &a);
 				} else {
+					static int dbg2 = -1;
+
+					if (dbg2 < 0)
+						dbg2 = getenv("LVDESK_FASTDBG") != NULL;
+					if (dbg2)
+						fprintf(stderr, "fastdbg: no damage rect -> full invalidate\n");
 					lv_obj_invalidate(xwins[i].img);
 				}
 			}
