@@ -195,3 +195,29 @@ GATE: fps never lower than p1 in any arm (plan section 5). If zc2 loses and
 zc3 wins, make 3 the default (zc_bufs()); if both lose, ship with
 LVDESK_NOZC=1 in /etc/lvdesk.env and record the numbers here and beside
 kms_zc_flip.
+
+BOARD RESULT, 2026-09-26 22:40 (coordinator). One fresh boot, kernel #393,
+libGL 17a5bb48 on the SD root with the ZC client, and /root/lvdesk.new
+(18811afe) with the ZC server. The run is
+artifacts/gl/dips/arms/zc-0926-223941.
+
+| | fullscreen (2 windows) | swap time per frame | windowed (5 runs) |
+|---|---|---|---|
+| P1, shipped lvdesk (shipsd arm) | 47.9, 46.9 fps | 0.7 ms | 52.9-53.7 fps |
+| ZC, lvdesk.new | **42.0, 41.7 fps** | 2.6 ms, with 1 voluntary switch per frame | 52.7-54.9 fps |
+
+In both ZC windows glxgears stayed on CPU0 (cpu1 frac 0), so placement
+does not explain the difference.
+
+- **ZC LOSES about 12% in fullscreen.** The same-mode SETCRTC flip is a
+  synchronous commit of about 2 ms plus the scale, inside the client's
+  request. That costs more than the 192 kB copy it removes, which is the
+  risk the design notes flagged.
+- **Gate verdict: not shipped.** The shipped lvdesk stays e83b9d67 (no
+  ZC server).
+- **What would make ZC pay:** a flip that costs no commit. That means
+  extending PRESENT_MODE_FB (patches/0071) to take a source framebuffer
+  id, so the PPA scales from the client's buffer the way it already does
+  from the mode framebuffer, asynchronously.
+- **Why that is not next:** for QuakeSpasm at 7.5 fps, lvdesk is 2-3% of
+  the CPU, so ZC is not the next lever.
