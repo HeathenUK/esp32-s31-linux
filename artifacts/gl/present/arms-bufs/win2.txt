@@ -1,0 +1,22 @@
+ARM win2 render_scale=1 shmbufs=2 mode=win runs=6 bin=/root/lvdesk.new lib=/root/g04 #391 SMP Fri Sep 25 10:24:40 UTC 2026 up 79.25
+RUN 1 fps 32.6 gears 93% lvdesk 59% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+209 frames in 5.0 seconds = 41.690 FPS 135 frames in 5.0 seconds = 26.868 FPS 187 frames in 5.0 seconds = 37.169 FPS 
+RUN 2 fps 35.1 gears 97% lvdesk 61% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+149 frames in 5.0 seconds = 29.796 FPS 169 frames in 5.0 seconds = 33.655 FPS 186 frames in 5.0 seconds = 37.036 FPS 
+RUN 3 fps 32.9 gears 92% lvdesk 60% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+176 frames in 5.0 seconds = 35.192 FPS 167 frames in 5.0 seconds = 33.282 FPS 160 frames in 5.0 seconds = 31.950 FPS 
+RUN 4 fps 34.1 gears 91% lvdesk 59% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+211 frames in 5.0 seconds = 42.184 FPS 155 frames in 5.0 seconds = 30.826 FPS 181 frames in 5.0 seconds = 36.165 FPS 
+RUN 5 fps 32.3 gears 96% lvdesk 60% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+169 frames in 5.0 seconds = 33.472 FPS 141 frames in 5.0 seconds = 28.133 FPS 185 frames in 5.0 seconds = 36.929 FPS 
+RUN 6 fps 34.8 gears 97% lvdesk 61% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+155 frames in 5.0 seconds = 30.923 FPS 168 frames in 5.0 seconds = 33.441 FPS 184 frames in 5.0 seconds = 36.731 FPS 
+xshim: render scale 0x200002 150x150 refused
+xshim: render scale 0x200002 150x150 refused
+xshim: render scale 0x200002 150x150 refused
+xshim: render scale 0x200002 150x150 refused
+xshim: render scale 0x200002 150x150 refused
+xshim: render scale 0x200002 150x150 refused
+              total        used        free      shared  buff/cache   available
+Mem:          15336        9588        3008         140        2740        2772
+DONE

@@ -83,3 +83,38 @@ void *glxi_core_get_proc(const char *name)
 {
 	return s31gl_get_proc(name);
 }
+
+/*
+ * RENDER SCALE (plan G04). The core's half of the contract:
+ *
+ *   int s31gl_set_render_scale(s31gl_ctx *ctx, int shift);
+ *
+ * "The colour buffer bound next (and every one after it until this is
+ * called again) holds the window at 1/2^shift of its size in each axis."
+ * GL's window coordinates stay the APPLICATION's - the window's real size -
+ * and the core maps them onto the buffer: viewport, scissor, raster position
+ * and glWindowPos, glBitmap/glDrawPixels/glCopyPixels/glReadPixels/
+ * glCopyTex*, line width and point size; every glGet reports the
+ * application's values. 0 = success, -1 = shift not supported. shift 0 is
+ * native and must always succeed.
+ *
+ * Referenced WEAK: a core that does not provide it (or predates it) leaves
+ * the symbol NULL, glxi_core_can_scale() says 0, and GLX never asks the
+ * server for a scale - so gl/glx builds and runs against either core.
+ */
+#pragma weak s31gl_set_render_scale
+S31GL_API int s31gl_set_render_scale(s31gl_ctx *ctx, int shift);
+
+int glxi_core_can_scale(void)
+{
+	return s31gl_set_render_scale != NULL;
+}
+
+int glxi_core_set_scale(s31gl_ctx *ctx, int shift)
+{
+	if (!ctx)
+		return -1;
+	if (!s31gl_set_render_scale)
+		return shift ? -1 : 0;
+	return s31gl_set_render_scale(ctx, shift);
+}

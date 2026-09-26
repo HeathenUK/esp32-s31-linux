@@ -15,9 +15,12 @@
  * Runtime toggles (platform A/B switches, never per-app steering):
  *   S31GL_TRACE=1     per-drawable present/wait counts on stderr at exit
  *   S31GL_NOSHM=1     present with XPutImage instead of MIT-SHM
- *   S31GL_SHMBUFS=2   two ping-pong SHM segments per double-buffered drawable
- *                     (+1 colour buffer; host rig: glxgears 300x300 5.55k ->
- *                     9.73k fps, 3 runs each; unmeasured on the board)
+ *   S31GL_SHMBUFS=1|2 force one or two ping-pong SHM segments per
+ *                     double-buffered drawable; unset, two when a segment is
+ *                     at most 200 kB (glx_present.c want_bufs(): board
+ *                     glxgears +18% windowed, +32% render-scaled fullscreen)
+ *   S31GL_RENDER_SCALE=0  never ask the server to take a panel-size window
+ *                     at half size (plan G04; on by default, glx_present.c)
  *
  * Window size is read (XGetGeometry, one round trip) at MakeCurrent when the
  * context/drawable pair changes, and from glViewport - the Mesa xlib
@@ -132,9 +135,13 @@ static void context_free(struct __GLXcontextRec *c)
 static void bind_surf(struct __GLXcontextRec *c, struct glxi_surf *s)
 {
 	if (s->pixels) {
+		/* a render-scaled buffer is bw x bh = the window >> rscale:
+		 * the core maps the window's coordinates onto it */
+		glxi_core_set_scale(c->core, s->rscale);
 		glxi_core_bind(c->core, s->pixels, s->bw, s->bh, s->pitch);
 		glxi_core_bind_depth(c->core, s->depth);
 	} else {
+		glxi_core_set_scale(c->core, 0);
 		glxi_core_bind(c->core, NULL, s->w, s->h, 0);
 		glxi_core_bind_depth(c->core, NULL);
 	}

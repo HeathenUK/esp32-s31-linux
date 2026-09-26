@@ -1,0 +1,22 @@
+ARM win1 render_scale=1 shmbufs=1 mode=win runs=6 bin=/root/lvdesk.new lib=/root/g04 #391 SMP Fri Sep 25 10:24:40 UTC 2026 up 79.55
+RUN 1 fps 28.8 gears 61% lvdesk 52% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+152 frames in 5.0 seconds = 30.132 FPS 122 frames in 5.0 seconds = 24.396 FPS 166 frames in 5.0 seconds = 33.174 FPS 
+RUN 2 fps 30.4 gears 63% lvdesk 51% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+130 frames in 5.0 seconds = 25.874 FPS 144 frames in 5.0 seconds = 28.708 FPS 162 frames in 5.0 seconds = 32.270 FPS 
+RUN 3 fps 28.6 gears 61% lvdesk 50% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+156 frames in 5.0 seconds = 31.118 FPS 143 frames in 5.0 seconds = 28.585 FPS 139 frames in 5.0 seconds = 27.675 FPS 
+RUN 4 fps 28.9 gears 60% lvdesk 52% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+155 frames in 5.0 seconds = 30.813 FPS 125 frames in 5.0 seconds = 24.769 FPS 163 frames in 5.0 seconds = 32.511 FPS 
+RUN 5 fps 28.9 gears 62% lvdesk 51% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+141 frames in 5.0 seconds = 28.153 FPS 132 frames in 5.0 seconds = 26.331 FPS 161 frames in 5.0 seconds = 32.189 FPS 
+RUN 6 fps 29.8 gears 62% lvdesk 51% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+141 frames in 5.0 seconds = 27.987 FPS 141 frames in 5.0 seconds = 28.196 FPS 163 frames in 5.0 seconds = 32.541 FPS 
+xshim: render scale 0x200002 150x150 refused
+xshim: render scale 0x200002 150x150 refused
+xshim: render scale 0x200002 150x150 refused
+xshim: render scale 0x200002 150x150 refused
+xshim: render scale 0x200002 150x150 refused
+xshim: render scale 0x200002 150x150 refused
+              total        used        free      shared  buff/cache   available
+Mem:          15336        9648        2484         128        3204        2616
+DONE

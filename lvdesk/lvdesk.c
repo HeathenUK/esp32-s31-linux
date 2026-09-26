@@ -5852,8 +5852,11 @@ static void fs_render_set(int on)
 
 static void xwin_on_fsnative(int on)
 {
-	if (!fs_enabled())
+	if (!fs_enabled()) {
+		if (on == 2)
+			xshim_fsnative_refused();
 		return;
+	}
 	if (!on) {
 		if (fs_active) {
 			fs_unalias(1);		/* before the map is unmapped */
@@ -5878,9 +5881,21 @@ static void xwin_on_fsnative(int on)
 	osk_hide();			/* never shown in fullscreen (QoL D8) */
 	fs_render_set(0);
 	fs_unalias(1);			/* kms_fs_enter may recreate the map */
-	if (kms_fs_enter((int)kms_w, (int)kms_h, 16) < 0) {
+	/*
+	 * on == 2: RENDER SCALE (xshim.c rscale_request, GL plan G04). The
+	 * client renders the panel-size window at half size in each axis and
+	 * xshim hands us that surface as the window's pixels, so the mode is
+	 * half the panel and the driver's PPA scales it 2x - an exact factor.
+	 * fs_w/fs_h stay the PANEL: they are the window's own size, which is
+	 * the coordinate space the pointer is delivered in, and the client
+	 * must not notice the scale.
+	 */
+	if (kms_fs_enter(on == 2 ? (int)kms_w / 2 : (int)kms_w,
+			 on == 2 ? (int)kms_h / 2 : (int)kms_h, 16) < 0) {
 		fs_active = 0;
 		fs_render_set(1);
+		if (on == 2)		/* the window's own pixels, then */
+			xshim_fsnative_refused();
 		return;
 	}
 	fs_active = 1;
@@ -5888,7 +5903,8 @@ static void xwin_on_fsnative(int on)
 	fs_h = (int)kms_h;
 	fs_win = 0;
 	cursor_vis_update();
-	printf("lvdesk: fullscreen at panel size\n");
+	printf("lvdesk: fullscreen at panel size%s\n",
+	       on == 2 ? ", render scale 2x (half-size mode)" : "");
 	fflush(stdout);
 }
 

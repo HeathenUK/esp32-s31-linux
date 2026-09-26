@@ -267,6 +267,17 @@ struct res {
 	uint8_t cur_hidden;		/* cursors: mask all zero, draws nothing */
 	uint8_t want_fs;		/* _NET_WM_STATE_FULLSCREEN set on the window */
 	/*
+	 * RENDER SCALE (XLITE-SHM RenderScale, see rscale_request()). On a
+	 * window: `rs` is the half-size surface our libGL renders into, and
+	 * rs_live says the desktop presents the window FROM it (scaled
+	 * fullscreen) rather than from px. On that surface: rs_of names the
+	 * window it serves. Never set for anything but our own libGL's
+	 * panel-size windows.
+	 */
+	struct res *rs;
+	uint8_t rs_live;
+	uint32_t rs_of;
+	/*
 	 * WM_PROTOCOLS lists WM_DELETE_WINDOW (ICCCM 4.1.2.7): the client
 	 * wants to be ASKED to close, not have its connection cut. See
 	 * xshim_window_request_close().
@@ -490,6 +501,14 @@ static void (*warp_cb)(uint32_t top, int x, int y);
 static void (*mode_cb)(int w, int h);
 static void (*fsnat_cb)(int on);	/* fullscreen at the panel's own size */
 static int vm_native;			/* that state is on */
+static uint32_t vm_native_win;		/* ... for this window */
+static void rs_go_live(struct res *w, int on);	/* render scale, below */
+static void rs_drop(struct res *w);
+/* a window presented from its render-scale surface names that surface to
+ * the desktop's accessors (xshim_window_pixels() and friends) */
+static struct res *rs_src(struct res *r);
+static void rs_upscale(struct res *w, int x, int y, int cw, int ch);
+static struct res *res_find(uint32_t id);
 
 /*
  * XFree86-VidMode. The list is what a client may switch to; the panel is the
@@ -550,8 +569,16 @@ static void ewmh_fullscreen(struct res *w, int on)
 				win_resize(w, XSHIM_W, XSHIM_H, 1);
 			vm_cli = w->owner;
 			vm_native = 1;
+			vm_native_win = w->id;
+			/*
+			 * Our libGL asked to render this window at half size
+			 * (rscale_request): the desktop scans out the half-size
+			 * surface through the PPA instead of the window.
+			 */
+			if (w->rs)
+				rs_go_live(w, 1);
 			if (fsnat_cb)
-				fsnat_cb(1);
+				fsnat_cb(w->rs_live ? 2 : 1);
 		}
 	} else if (vm_cur) {
 		fprintf(stderr, "xshim: EWMH fullscreen off 0x%x\n", w->id);
@@ -559,7 +586,14 @@ static void ewmh_fullscreen(struct res *w, int on)
 	} else if (vm_native) {
 		fprintf(stderr, "xshim: EWMH fullscreen off 0x%x (panel size)\n",
 			w->id);
+		{
+			struct res *nw = res_find(vm_native_win);
+
+			if (nw && nw->type == R_WINDOW && nw->rs_live)
+				rs_go_live(nw, 0);	/* before the map goes */
+		}
 		vm_native = 0;
+		vm_native_win = 0;
 		vm_cli = -1;
 		if (fsnat_cb)
 			fsnat_cb(0);
@@ -1047,6 +1081,15 @@ static void res_free(uint32_t id)
 	 * client_drop() frees every resource of a client directly.
 	 */
 	prop_free_all(r);
+	if (r->rs) {				/* render scale: its surface */
+		struct res *sf = r->rs;
+
+		r->rs = NULL;
+		r->rs_live = 0;
+		res_free(sf->id);	/* res[] is static: r stays valid */
+	}
+	if (vm_native_win == id)
+		vm_native_win = 0;
 	for (i = 0; i < nselown; i++)
 		if (selown[i].owner == id)
 			selown[i].owner = 0;
@@ -1574,7 +1617,7 @@ static void px_release(struct res *r)
  */
 const void *xshim_window_pixel_ptr(uint32_t id)
 {
-	struct res *r = res_find(id);
+	struct res *r = rs_src(res_find(id));
 
 	if (!r || r->type != R_WINDOW)
 		return NULL;
@@ -1639,7 +1682,7 @@ const void *xshim_window_pixel_ptr(uint32_t id)
 int xshim_window_alias_scanout(uint32_t id, void *map, size_t pitch,
 			       int mw, int mh, int mbpp)
 {
-	struct res *r = res_find(id);
+	struct res *r = rs_src(res_find(id));
 	size_t n;
 
 	if (!r || r->type != R_WINDOW || r->buf != r || !r->px || !map)
@@ -1673,9 +1716,8 @@ int xshim_window_alias_scanout(uint32_t id, void *map, size_t pitch,
  * of the map first (leaving fullscreen: the windowed view shows what the
  * game last drew); a window about to be freed passes 0 and just lets go.
  */
-void xshim_window_unalias(uint32_t id, int keep)
+static void unalias_res(struct res *r, int keep)
 {
-	struct res *r = res_find(id);
 	void *old;
 	size_t n;
 
@@ -1692,17 +1734,24 @@ void xshim_window_unalias(uint32_t id, int keep)
 		r->w = r->h = 0;	/* nothing to draw */
 		return;
 	}
+	wr_touch(r);
+	if (keep == 2)		/* fresh, untouched pages (render scale) */
+		return;
 	memcpy(r->px, old, n);
 	r->hole = 0;
 	r->dirty = 1;
-	wr_touch(r);
+}
+
+void xshim_window_unalias(uint32_t id, int keep)
+{
+	unalias_res(rs_src(res_find(id)), keep);
 }
 
 /* The map this window is aliased to, or NULL: lets lvdesk notice a resize
  * that gave the window a memfd again (px_release() drops the alias). */
 const void *xshim_window_scanout_ptr(uint32_t id)
 {
-	struct res *r = res_find(id);
+	struct res *r = rs_src(res_find(id));
 
 	return (r && r->type == R_WINDOW && r->px_scanout) ? r->px : NULL;
 }
@@ -6011,6 +6060,8 @@ static void HOTTEXT mitshm_request(struct cli *c, const uint8_t *r, int len)
 		uint32_t off = get32(r + 36);
 		struct shmseg *sg = shmseg_find(seg);
 		struct res *db;
+		struct res *rsw = NULL;		/* render scale: the window */
+		int rsx = 0, rsy = 0, rscw = 0, rsch = 0;
 		int bpp, sstride;
 		size_t need;
 
@@ -6025,6 +6076,17 @@ static void HOTTEXT mitshm_request(struct cli *c, const uint8_t *r, int len)
 			break;
 		}
 		nshmput++;
+		/*
+		 * RENDER SCALE: our libGL's whole half-size frame goes into the
+		 * window's half-size surface (rscale_request()). Anything else -
+		 * a partial put, another size - is an ordinary put on the window.
+		 * The completion below still names the window.
+		 */
+		if (d->rs && dx == 0 && dy == 0 && sx == 0 && sy == 0 &&
+		    sw == d->rs->w && sh == d->rs->h) {
+			rsw = d;
+			d = d->rs;
+		}
 		db = d->buf ? d->buf : d;
 		bpp = db->bpp ? db->bpp : 2;
 		/*
@@ -6253,6 +6315,10 @@ static void HOTTEXT mitshm_request(struct cli *c, const uint8_t *r, int len)
 			if (cy0 >= 0) {
 				damage_add(d, x0 - d->ax, y0 - d->ay + cy0, cw,
 					   cy1 - cy0 + 1);
+				rsx = x0 - d->ax;
+				rsy = y0 - d->ay + cy0;
+				rscw = cw;
+				rsch = cy1 - cy0 + 1;
 			} else {
 				/*
 				 * Not one row differs, so there is nothing to
@@ -6283,6 +6349,14 @@ static void HOTTEXT mitshm_request(struct cli *c, const uint8_t *r, int len)
 		if (d->buf)
 			d->buf->dirty = 1;
 		d->hole = 0;
+		if (rsw) {
+			/* not presented from the surface: the window's own
+			 * pixels follow it, 2x */
+			if (!rsw->rs_live)
+				rs_upscale(rsw, rsx, rsy, rscw, rsch);
+			rsw->dirty = 1;
+			d = rsw;	/* the desktop hears of the WINDOW */
+		}
 		if (late_present_on())
 			late_present_queue(d->id);
 		else
@@ -6538,6 +6612,253 @@ refuse:
 	send_reply(c, 0, d24, NULL, 0);
 }
 
+/* ------------------------------------------------------------ render scale */
+
+/*
+ * RENDER SCALE - XLITE-SHM minor 3 (docs/gl-plan-2026-09-25.md G04, owner
+ * decision section 7: ON by default for panel-size fullscreen GL windows,
+ * a platform toggle, and its fps never quoted as like-for-like).
+ *
+ * A panel-size (800x480) window does not fit in RAM at native resolution
+ * alongside the desktop once a GL client adds its colour and depth buffers
+ * (about 2.25 MB, plan 6.1). Our libGL (gl/glx/glx_present.c) can instead
+ * render the window at HALF size in each axis and let the PPA scale it 2x
+ * on the way to the panel - an exact factor, 0.6 ms of CPU against the 13-15
+ * ms a full-size clear alone costs. The APPLICATION must not notice: the
+ * window stays 800x480 in every reply and event (GetGeometry,
+ * ConfigureNotify, pointer coordinates), and libGL maps GL's window
+ * coordinates onto the half-size buffer itself.
+ *
+ *   RenderScale  CARD8 major (XLITE-SHM), CARD8 3, CARD16 length 3,
+ *                CARD32 window, CARD16 width, CARD16 height
+ *   reply        BYTE granted (0/1), BYTE shift (1 when granted),
+ *                CARD16 width, CARD16 height (what will be accepted)
+ *
+ * width x height is the buffer the client will put; 0 x 0 withdraws. It is
+ * granted only for a top-level the client owns, at depth 16, at exactly the
+ * panel size, for exactly half of it, that is fullscreen or has asked to be
+ * (_NET_WM_STATE_FULLSCREEN), with XSHIM_RENDERSCALE unset or not 0. A
+ * panel-size window that is NOT fullscreen renders natively: the scale is
+ * the owner's policy for fullscreen only (plan section 7).
+ * A client discovers the request through a SECOND extension name,
+ * "XLITE-RSCALE" (same major opcode): an xshim that predates it answers that
+ * name "absent", where sending it minor 3 would have had no reply and left
+ * the client waiting for ever.
+ *
+ * While granted, a ShmPutImage of exactly width x height at 0,0 on the
+ * window lands in a server-private half-size surface (w->rs, an unmapped
+ * top-level no client can name) instead of the window's pixels. Then:
+ *   - scaled fullscreen (the window is the EWMH panel-size fullscreen one):
+ *     rs_live, and the desktop's accessors for the window return the
+ *     surface, so lvdesk scans it out as a 400x240 mode (fsnat_cb(2)); its
+ *     scanout alias makes the put's copy the present, as in any fullscreen;
+ *   - the window not (or no longer) fullscreen while the grant stands - it
+ *     left fullscreen and has not reallocated yet: each put is also
+ *     expanded 2x on the CPU into the window's own pixels, so the window is
+ *     correct in every state - slower, and never the case the scale is for.
+ * Any other request drawing into the window draws into its own pixels, as
+ * always; they are simply not shown while it is scaled fullscreen.
+ *
+ * Resizing the window, withdrawing, or destroying it frees the surface; the
+ * client re-asks when it reallocates. Nothing about the scale is ever sent
+ * to the application, so a stock client (anything but our libGL) cannot
+ * even see it.
+ */
+#define RS_ID_BASE	(RES_BASE * (MAXCLI + 1) + 0x100)
+
+static int rscale_on(void)
+{
+	static int v = -1;
+
+	if (v < 0) {
+		const char *e = getenv("XSHIM_RENDERSCALE");
+
+		v = !(e && strcmp(e, "0") == 0);
+		fprintf(stderr, "xshim: render scale for panel-size GL windows "
+			"%s\n", v ? "ON" : "OFF (XSHIM_RENDERSCALE=0)");
+	}
+	return v;
+}
+
+static struct res *rs_src(struct res *r)
+{
+	return (r && r->rs && r->rs_live) ? r->rs : r;
+}
+
+static struct res *rs_new(struct res *w, int bw, int bh)
+{
+	static uint32_t next;
+	struct res *sf;
+	uint32_t id = 0;
+	int k;
+
+	for (k = 0; k < 64; k++) {
+		id = RS_ID_BASE + (next++ & 63);
+		if (!res_find(id))
+			break;
+	}
+	if (k == 64 || !(sf = res_new(id, R_WINDOW)))
+		return NULL;
+	sf->parent = ROOT_ID;
+	sf->owner = -1;		/* the server's: no client sweep frees it */
+	sf->depth = 16;
+	sf->w = bw;
+	sf->h = bh;
+	sf->rs_of = w->id;
+	if (!px_alloc(sf, bw, bh)) {
+		sf->type = R_FREE;
+		return NULL;
+	}
+	geom_update(sf);
+	return sf;
+}
+
+/*
+ * The window's pixels from its half-size surface, 2x nearest, for the
+ * rectangle (x, y, cw, ch) of the SURFACE. Only when not presenting the
+ * surface itself.
+ */
+static void rs_upscale(struct res *w, int x, int y, int cw, int ch)
+{
+	struct res *sf = w->rs;
+	int i, j;
+
+	if (!sf || !sf->px || !w->px || w->bpp != 2 || sf->bpp != 2 ||
+	    w->w < sf->w * 2 || w->h < sf->h * 2)
+		return;
+	if (x < 0) { cw += x; x = 0; }
+	if (y < 0) { ch += y; y = 0; }
+	if (x + cw > sf->w) cw = sf->w - x;
+	if (y + ch > sf->h) ch = sf->h - y;
+	if (cw <= 0 || ch <= 0)
+		return;
+	for (j = y; j < y + ch; j++) {
+		const uint16_t *sp = sf->px + (size_t)j * sf->w;
+		/* w->w is even (twice the surface), so the rows are 4-aligned */
+		uint32_t *d0 = (uint32_t *)(w->px + (size_t)(2 * j) * w->w);
+		uint32_t *d1 = (uint32_t *)(w->px + (size_t)(2 * j + 1) * w->w);
+
+		for (i = x; i < x + cw; i++) {
+			uint32_t v = (uint32_t)sp[i] * 0x10001u;
+
+			d0[i] = v;
+			d1[i] = v;
+		}
+	}
+	wr_touch(w);
+	w->hole = 0;
+	w->dirty = 1;
+	damage_add(w, 2 * x, 2 * y, 2 * cw, 2 * ch);
+}
+
+/*
+ * Present the window from its surface (on) or from its own pixels (off).
+ * The caller tells the desktop (fsnat_cb). Ordering is the whole contract:
+ * whichever of the two is scanout-aliased stops being so BEFORE the desktop
+ * re-enters or leaves fullscreen and unmaps the map it points into.
+ */
+static void rs_go_live(struct res *w, int on)
+{
+	struct res *sf = w ? w->rs : NULL;
+
+	if (!sf || !!w->rs_live == !!on)
+		return;
+	if (on) {
+		/* the native mode buffer is about to go: fresh pages, no copy
+		 * (nothing will show them while scaled) */
+		if (w->px_scanout)
+			unalias_res(w, 2);
+		w->rs_live = 1;
+		wr_touch(sf);		/* the next put re-sends every row */
+	} else {
+		if (sf->px_scanout)
+			unalias_res(sf, 1);
+		w->rs_live = 0;
+		rs_upscale(w, 0, 0, sf->w, sf->h);	/* the last frame */
+	}
+	if (on)
+		fprintf(stderr, "xshim: render scale 0x%x LIVE: scaled "
+			"fullscreen from %dx%d\n", w->id, sf->w, sf->h);
+	else
+		fprintf(stderr, "xshim: render scale 0x%x not live\n", w->id);
+}
+
+static void rs_drop(struct res *w)
+{
+	struct res *sf = w ? w->rs : NULL;
+
+	if (!sf)
+		return;
+	if (w->rs_live) {
+		if (sf->px_scanout)
+			unalias_res(sf, 0);
+		w->rs_live = 0;
+		/* still fullscreen: back to the window's own pixels at
+		 * native size (they are stale until the client's next put) */
+		if (vm_native && vm_native_win == w->id && fsnat_cb)
+			fsnat_cb(1);
+	}
+	w->rs = NULL;
+	res_free(sf->id);
+	fprintf(stderr, "xshim: render scale 0x%x dropped\n", w->id);
+}
+
+/*
+ * The desktop could not (or will not) scan the surface out - fullscreen is
+ * off by configuration, or the half-size mode buffer could not be allocated.
+ * Present the window from its own pixels again, expanded 2x on the CPU, so
+ * it is still correct; the next fullscreen entry retries.
+ */
+void xshim_fsnative_refused(void)
+{
+	struct res *w = res_find(vm_native_win);
+
+	if (w && w->type == R_WINDOW && w->rs_live)
+		rs_go_live(w, 0);
+}
+
+static void rscale_request(struct cli *c, const uint8_t *r, int len)
+{
+	uint8_t d24[24];
+	struct res *w = len >= 12 ? res_find(get32(r + 4)) : NULL;
+	int bw = len >= 12 ? get16(r + 8) : 0;
+	int bh = len >= 12 ? get16(r + 10) : 0;
+	int ok = 0;
+
+	memset(d24, 0, sizeof d24);
+	if (w && w->type == R_WINDOW && w->parent == ROOT_ID &&
+	    w->owner == (int)(c - cli) && w->buf == w && !w->rs_of) {
+		if (!bw && !bh) {
+			rs_drop(w);
+		} else if (rscale_on() && (w->bpp ? w->bpp : 2) == 2 &&
+			   w->w == XSHIM_W && w->h == XSHIM_H &&
+			   bw * 2 == w->w && bh * 2 == w->h &&
+			   /* fullscreen, or asking to be (the owner's policy
+			    * is for fullscreen windows only) */
+			   (w->want_fs ||
+			    (vm_native && vm_native_win == w->id))) {
+			if (w->rs && (w->rs->w != bw || w->rs->h != bh))
+				rs_drop(w);
+			if (!w->rs)
+				w->rs = rs_new(w, bw, bh);
+			ok = w->rs != NULL;
+		}
+	}
+	d24[0] = (uint8_t)ok;
+	d24[1] = ok ? 1 : 0;
+	put16(d24 + 2, (uint16_t)(ok ? bw : 0));
+	put16(d24 + 4, (uint16_t)(ok ? bh : 0));
+	send_reply(c, 0, d24, NULL, 0);
+	fprintf(stderr, "xshim: render scale 0x%x %dx%d %s\n",
+		w ? w->id : 0, bw, bh, ok ? "granted" : "refused");
+	/* already the panel-size fullscreen window: go live now */
+	if (ok && vm_native && vm_native_win == w->id && !w->rs_live) {
+		rs_go_live(w, 1);
+		if (fsnat_cb)
+			fsnat_cb(2);
+	}
+}
+
 static void HOTTEXT xshm_request(struct cli *c, const uint8_t *r, int len)
 {
 	uint8_t d24[24];
@@ -6547,12 +6868,14 @@ static void HOTTEXT xshm_request(struct cli *c, const uint8_t *r, int len)
 	memset(d24, 0, sizeof(d24));
 
 		/*
-		 * XLITE-SHM. Two requests, both about one pixmap:
+		 * XLITE-SHM. Two requests about one pixmap, and a third that
+		 * only our libGL sends:
 		 *
 		 *   1 GetPixmapFd  - reply carries width, height, stride and
 		 *                    bytes-per-pixel, with the memfd attached.
 		 *   2 Damaged      - the client has written to those pages, so
 		 *                    mark the surface dirty and repaint.
+		 *   3 RenderScale  - see rscale_request() above.
 		 *
 		 * There is no reply to Damaged: the point of the whole path is
 		 * that pixels move without round trips, and a round trip per
@@ -6560,6 +6883,10 @@ static void HOTTEXT xshm_request(struct cli *c, const uint8_t *r, int len)
 		 */
 		struct res *p = res_find(get32(r + 4));
 
+		if (r[1] == 3) {
+			rscale_request(c, r, len);
+			return;
+		}
 		if (r[1] == 1) {
 			/*
 			 * Windows too, not just pixmaps - and this is where
@@ -6885,6 +7212,17 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		 * pixel loading stops being protocol traffic entirely.
 		 */
 		if (n == 9 && !memcmp(r + 8, "XLITE-SHM", 9)) {
+			d24[0] = 1;
+			d24[1] = XSHM_MAJOR;
+			d24[2] = 0;
+			d24[3] = 0;
+		}
+		/*
+		 * "This XLITE-SHM has RenderScale (minor 3)": a name, not a
+		 * version number, because an older xshim answers an unknown
+		 * name "absent" and never answers an unknown minor at all.
+		 */
+		if (n == 12 && !memcmp(r + 8, "XLITE-RSCALE", 12)) {
 			d24[0] = 1;
 			d24[1] = XSHM_MAJOR;
 			d24[2] = 0;
@@ -9446,6 +9784,10 @@ static void win_resize(struct res *r, int w, int h, int force)
 	if (r->owner < 0 || r->owner >= MAXCLI)
 		return;
 	c = &cli[r->owner];
+	/* a half-size surface is for exactly twice its size: the client asks
+	 * again (or not) when it reallocates for the new one */
+	if (r->rs)
+		rs_drop(r);
 
 	/*
 	 * Re-back the top-level at the new size. Only a top-level owns pixels;
@@ -9498,7 +9840,7 @@ void xshim_window_resize(uint32_t id, int w, int h)
  */
 int xshim_window_take_damage(uint32_t id, int *x, int *y, int *w, int *h)
 {
-	struct res *r = res_find(id), *b;
+	struct res *r = rs_src(res_find(id)), *b;
 
 	if (!r || r->type != R_WINDOW)
 		return 0;
@@ -9535,7 +9877,7 @@ uint32_t xshim_window_gem(uint32_t id)
 const uint8_t *xshim_window_indices(uint32_t id, int *w, int *h,
 				    int *stride, const uint16_t **pal)
 {
-	struct res *r = res_find(id);
+	struct res *r = rs_src(res_find(id));
 
 	if (!r || r->type != R_WINDOW || !r->px || r->bpp != 1)
 		return NULL;
@@ -9554,7 +9896,7 @@ const uint8_t *xshim_window_indices(uint32_t id, int *w, int *h,
 
 const void *xshim_window_raw(uint32_t id, int *w, int *h, int *bpp)
 {
-	struct res *r = res_find(id);
+	struct res *r = rs_src(res_find(id));
 
 	if (!r || r->type != R_WINDOW || !r->px)
 		return NULL;
@@ -9567,7 +9909,7 @@ const void *xshim_window_raw(uint32_t id, int *w, int *h, int *bpp)
 
 const uint16_t *xshim_window_pixels(uint32_t id, int *w, int *h)
 {
-	struct res *r = res_find(id);
+	struct res *r = rs_src(res_find(id));
 
 	if (!r || r->type != R_WINDOW || !r->px)
 		return NULL;

@@ -1,0 +1,22 @@
+ARM g04 render_scale=1 shmbufs=1 mode=fs runs=6 bin=/root/lvdesk.new lib=/root/g04 #391 SMP Fri Sep 25 10:24:40 UTC 2026 up 80.04
+RUN 1 fps 24.4 gears 68% lvdesk 32% | gaps0 <25:0 <50:93 <100:8 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:352 <100:53 <200:3 <400:0 >=400:0
+130 frames in 5.0 seconds = 25.937 FPS 98 frames in 5.0 seconds = 19.466 FPS 145 frames in 5.0 seconds = 28.859 FPS 
+RUN 2 fps 28.5 gears 70% lvdesk 36% | gaps0 <25:0 <50:435 <100:99 <200:8 <400:0 >=400:1 | gaps1 <25:0 <50:770 <100:116 <200:10 <400:0 >=400:1
+109 frames in 5.0 seconds = 21.661 FPS 134 frames in 5.0 seconds = 26.736 FPS 152 frames in 5.0 seconds = 30.397 FPS 
+RUN 3 fps 25.9 gears 67% lvdesk 36% | gaps0 <25:0 <50:906 <100:139 <200:12 <400:0 >=400:2 | gaps1 <25:0 <50:1192 <100:177 <200:17 <400:0 >=400:2
+141 frames in 5.0 seconds = 28.025 FPS 134 frames in 5.0 seconds = 26.712 FPS 146 frames in 5.1 seconds = 28.775 FPS 
+RUN 4 fps 25.3 gears 65% lvdesk 34% | gaps0 <25:0 <50:1314 <100:211 <200:18 <400:0 >=400:3 | gaps1 <25:0 <50:1575 <100:265 <200:20 <400:0 >=400:3
+142 frames in 5.0 seconds = 28.366 FPS 135 frames in 5.0 seconds = 26.956 FPS 112 frames in 5.0 seconds = 22.374 FPS 
+RUN 5 fps 26.1 gears 66% lvdesk 35% | gaps0 <25:0 <50:1707 <100:293 <200:21 <400:0 >=400:4 | gaps1 <25:0 <50:1980 <100:345 <200:21 <400:0 >=400:4
+143 frames in 5.0 seconds = 28.517 FPS 105 frames in 5.0 seconds = 20.986 FPS 152 frames in 5.0 seconds = 30.288 FPS 
+RUN 6 fps 27.2 gears 70% lvdesk 37% | gaps0 <25:0 <50:2101 <100:370 <200:28 <400:0 >=400:5 | gaps1 <25:0 <50:2410 <100:400 <200:32 <400:0 >=400:5
+115 frames in 5.0 seconds = 22.864 FPS 128 frames in 5.0 seconds = 25.547 FPS 150 frames in 5.0 seconds = 29.982 FPS 
+kms: fullscreen 400x240, fb 42 pitch 800
+lvdesk: fullscreen at panel size, render scale 2x (half-size mode)
+lvdesk: fullscreen alias 0x200002 400x240x16
+kms: fullscreen off
+lvdesk: fs_render_set(1): refresh restored (refreshes during fullscreen so far 0)
+lvdesk: fullscreen off (client gone)
+              total        used        free      shared  buff/cache   available
+Mem:          15336        8968        4332         120        2036        3764
+DONE

@@ -126,7 +126,13 @@ int xshim_cursor_hidden(uint32_t top, int x, int y);
  * that window scaled to the panel and composites nothing else.
  */
 void xshim_on_mode(void (*cb)(int w, int h));
-void xshim_on_fsnative(void (*cb)(int on));	/* EWMH fullscreen of a panel-sized window */
+/* EWMH fullscreen of a panel-sized window: on = 0 off, 1 native, 2 native
+ * with render scale (the window's pixels, as the accessors below return
+ * them, are a half-size surface: scan it out as a half-size mode) */
+void xshim_on_fsnative(void (*cb)(int on));
+/* the desktop could not present an on == 2 fullscreen: xshim goes back to
+ * the window's own (2x-expanded) pixels */
+void xshim_fsnative_refused(void);
 
 /* The mapped top-level that covers (0,0)-(w,h) in root coordinates, or 0. */
 uint32_t xshim_mode_window(int w, int h);

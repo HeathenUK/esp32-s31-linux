@@ -1,0 +1,627 @@
+diff -ru a/gl/api/context.c b/gl/api/context.c
+--- a/gl/api/context.c	2026-09-26 05:03:38.000000000 +0100
++++ b/gl/api/context.c	2026-09-26 05:15:51.641516748 +0100
+@@ -74,6 +74,11 @@
+ 	return 0;
+ }
+ 
++int s31gl_set_render_scale(s31gl_ctx *ctx, int shift)
++{
++	return ctx ? tgl_ctx_set_scale(ctx->tgl, shift) : -1;
++}
++
+ int s31gl_bind_color(s31gl_ctx *ctx, void *pixels, int w, int h, int pitch)
+ {
+ 	if (ctx == NULL)
+diff -ru a/gl/api/s31gl.h b/gl/api/s31gl.h
+--- a/gl/api/s31gl.h	2026-09-26 05:03:38.000000000 +0100
++++ b/gl/api/s31gl.h	2026-09-26 05:15:51.641786954 +0100
+@@ -126,6 +126,18 @@
+    -1 = no size bound. */
+ S31GL_API int s31gl_bind_depth(s31gl_ctx *ctx, void *depth);
+ 
++/* RENDER SCALE (plan G04). The colour buffer bound next (and every one
++   after it until this is called again) holds the window at 1/2^shift of its
++   size in each axis: bind_color gets the BUFFER's size (the window's >>
++   shift). GL's window coordinates stay the application's - the window's
++   real size - and are mapped onto the buffer: viewport, scissor, raster
++   position and glWindowPos, glBitmap/glDrawPixels/glCopyPixels/glReadPixels/
++   glCopyTex*, line width and point size; every glGet reports the
++   application's values. The GLX layer uses it for panel-size fullscreen
++   windows that the server scales back up (gl/glx/glx_present.c). 0 =
++   success, -1 = unsupported shift (0..2 are supported; 0 is native). */
++S31GL_API int s31gl_set_render_scale(s31gl_ctx *ctx, int shift);
++
+ #ifdef __cplusplus
+ }
+ #endif
+diff -ru a/gl/tinygl/source/clear.c b/gl/tinygl/source/clear.c
+--- a/gl/tinygl/source/clear.c	2026-09-26 05:03:38.000000000 +0100
++++ b/gl/tinygl/source/clear.c	2026-09-26 05:16:35.243004855 +0100
+@@ -43,9 +43,15 @@
+              (c->color_mask[2] ? 0x001f : 0);
+     int x0 = 0, y0 = 0, x1 = zb->xsize, y1 = zb->ysize;
+     if (c->scissor_enabled) {
++      /* the box is in the window's units (render scale: GLContext.rscale) */
++      int rs = c->rscale, vh = zb->ysize << rs;
+       int sx0 = c->scissor[0], sx1 = c->scissor[0] + c->scissor[2];
+-      int sy0 = zb->ysize - (c->scissor[1] + c->scissor[3]);
+-      int sy1 = zb->ysize - c->scissor[1];
++      int sy0 = vh - (c->scissor[1] + c->scissor[3]);
++      int sy1 = vh - c->scissor[1];
++      if (rs) {
++        sx0 >>= rs; sy0 >>= rs;
++        sx1 = -((-sx1) >> rs); sy1 = -((-sy1) >> rs);
++      }
+       if (sx0 > x0) x0 = sx0;
+       if (sx1 < x1) x1 = sx1;
+       if (sy0 > y0) y0 = sy0;
+diff -ru a/gl/tinygl/source/raster_sel.c b/gl/tinygl/source/raster_sel.c
+--- a/gl/tinygl/source/raster_sel.c	2026-09-26 05:03:38.000000000 +0100
++++ b/gl/tinygl/source/raster_sel.c	2026-09-26 05:16:35.243259769 +0100
+@@ -169,8 +169,18 @@
+   /* ---- polygon stipple (plan F7): a stage of the general path */
+   if (c->poly_stipple_enabled && !skip) gen = 1;
+ 
+-  c->line_w = c->line_width < 1.5f ? 1 : (int)(c->line_width + 0.5f);
+-  c->point_w = c->point_size < 1.5f ? 1 : (int)(c->point_size + 0.5f);
++  {
++    /* widths are in window pixels; a render-scaled buffer's are 2^rscale
++       of them (GLContext.rscale) */
++    float lw = c->line_width, ps = c->point_size;
++    if (c->rscale) {
++      float rf = 1.0f / (float)(1 << c->rscale);
++      lw *= rf;
++      ps *= rf;
++    }
++    c->line_w = lw < 1.5f ? 1 : (int)(lw + 0.5f);
++    c->point_w = ps < 1.5f ? 1 : (int)(ps + 0.5f);
++  }
+   c->raster_general = gen;
+   c->raster_gen_lines = gen || tex || (c->depth_test && !c->depth_mask) || c->line_w > 1 ||
+                        c->line_stipple_enabled;
+diff -ru a/gl/tinygl/source/s31_ctx.c b/gl/tinygl/source/s31_ctx.c
+--- a/gl/tinygl/source/s31_ctx.c	2026-09-26 05:03:38.000000000 +0100
++++ b/gl/tinygl/source/s31_ctx.c	2026-09-26 05:15:51.641319083 +0100
+@@ -149,15 +149,32 @@
+   zb->frame_buffer_allocated = 0;
+   c->viewport.updated = 1;
+   if (!c->vp_initialized && width > 0 && height > 0) {
++    /* the WINDOW's size: a render-scaled buffer is 1/2^rscale of it */
+     c->vp_initialized = 1;
+     c->viewport.xmin = 0;
+     c->viewport.ymin = 0;
+-    c->viewport.xsize = width;
+-    c->viewport.ysize = height;
++    c->viewport.xsize = width << c->rscale;
++    c->viewport.ysize = height << c->rscale;
+     c->scissor[0] = 0;
+     c->scissor[1] = 0;
+-    c->scissor[2] = width;
+-    c->scissor[3] = height;
++    c->scissor[2] = width << c->rscale;
++    c->scissor[3] = height << c->rscale;
++  }
++  return 0;
++}
++
++/* s31 render scale (plan G04): see GLContext.rscale. Takes effect with the
++   next bind; 0..2 supported. */
++int tgl_ctx_set_scale(void *ctx, int shift)
++{
++  GLContext *c = ctx;
++
++  if (c == NULL || shift < 0 || shift > 2)
++    return -1;
++  if (c->rscale != shift) {
++    c->rscale = shift;
++    c->viewport.updated = 1;     /* the buffer mapping changed */
++    c->raster_dirty = 1;         /* line and point widths */
+   }
+   return 0;
+ }
+diff -ru a/gl/tinygl/source/s31_draw.c b/gl/tinygl/source/s31_draw.c
+--- a/gl/tinygl/source/s31_draw.c	2026-09-26 05:03:38.000000000 +0100
++++ b/gl/tinygl/source/s31_draw.c	2026-09-26 05:17:18.357868240 +0100
+@@ -235,6 +235,41 @@
+   return i - (v < (float)i);
+ }
+ 
++/*
++ * s31 render scale (GLContext.rscale, plan G04): the buffer holds the window
++ * at 1/2^rs, and every coordinate here is the WINDOW's. rs_px() fetches the
++ * buffer pixel under window pixel (wx, wy) - wy counted up from the bottom,
++ * GL's way - or returns 0 when it is off the window; rs_read() makes a w x h
++ * RGB565 copy of window rectangle (x, y) nearest-neighbour, top row first,
++ * as glCopyPixels' snapshot is. Only the scaled paths call them.
++ */
++static int rs_px(const GLContext *c, int wx, int wy, unsigned int *pix, unsigned int *z)
++{
++  const ZBuffer *zb = c->zb;
++  int rs = c->rscale, row = (zb->ysize << rs) - 1 - wy;
++  if (wx < 0 || row < 0 || wx >= (zb->xsize << rs) || row >= (zb->ysize << rs))
++    return 0;
++  row >>= rs; wx >>= rs;
++  if (pix) *pix = ((const PIXEL *)((const char *)zb->pbuf + row * zb->linesize))[wx];
++  if (z) *z = zb->zbuf ? zb->zbuf[row * zb->xsize + wx] : 0;
++  return 1;
++}
++
++static unsigned short *rs_read(GLContext *c, int x, int y, int w, int h)
++{
++  unsigned short *tmp = gl_malloc(w * h * 2 + 2);
++  int i, j;
++  if (tmp == NULL) return NULL;
++  for (j = 0; j < h; j++) {
++    unsigned short *d = tmp + (h - 1 - j) * w;
++    for (i = 0; i < w; i++) {
++      unsigned int t = 0;
++      d[i] = rs_px(c, x + i, y + j, &t, NULL) ? (unsigned short)t : 0;
++    }
++  }
++  return tmp;
++}
++
+ static void raster_col8(GLContext *c, unsigned char *col)
+ {
+   int i;
+@@ -279,7 +314,43 @@
+   int x0, y0, j, i, bh, whole, lo, hi;
+ 
+   if (!c->raster_valid) return;   /* GL 1.3 3.7: no fragments, no move */
+-  if (w > 0 && h > 0 && bits != NULL && (pp = pix_begin(c)) != NULL) {
++  if (c->rscale && w > 0 && h > 0 && bits != NULL && (pp = pix_begin(c)) != NULL) {
++    /* render scale: each buffer pixel takes the bit under its centre, in
++       window units (a glyph at half size; nearest, as the image paths) */
++    int rs = c->rscale, xs, xe, ys, ye, bx, by;
++    float sc = (float)(1 << rs), fx0, fy0;
++    bh = c->zb->ysize;
++    fx0 = (float)ifloor(c->raster_pos[0] - xorig + 0.0001f);
++    fy0 = (float)ifloor(c->raster_pos[1] - yorig + 0.0001f);
++    if (canon) {
++      b.base = bits; b.pitch = (w + 7) / 8; b.skip = 0; b.lsb = 0;
++    } else {
++      s31_bits_setup(c, &b, w, bits);
++    }
++    raster_col8(c, col);
++    pix_span_init(pp, &sp);
++    xs = (int)ceilf(fx0 / sc - 0.5f); xe = (int)ceilf((fx0 + (float)w) / sc - 0.5f);
++    ys = (int)ceilf(fy0 / sc - 0.5f); ye = (int)ceilf((fy0 + (float)h) / sc - 0.5f);
++    if (xs < pp->box[0]) xs = pp->box[0];
++    if (xe > pp->box[2]) xe = pp->box[2];
++    if (ys < bh - pp->box[3]) ys = bh - pp->box[3];
++    if (ye > bh - pp->box[1]) ye = bh - pp->box[1];
++    for (by = ys; by < ye; by++) {
++      int jj = (int)floorf(((float)by + 0.5f) * sc - fy0), run = -1;
++      const unsigned char *rp;
++      if (jj < 0 || jj >= h) continue;
++      rp = b.base + jj * b.pitch;
++      for (bx = xs; bx <= xe; bx++) {
++        int ii = (int)floorf(((float)bx + 0.5f) * sc - fx0);
++        int on = bx < xe && ii >= 0 && ii < w && (row_bits(&b, rp, ii, 1) & 1u);
++        if (on && run < 0) run = bx;
++        if (!on && run >= 0) {
++          pix_span(c, pp, &sp, run, bh - 1 - by, bx - run, NULL, col, NULL);
++          run = -1;
++        }
++      }
++    }
++  } else if (w > 0 && h > 0 && bits != NULL && (pp = pix_begin(c)) != NULL) {
+     bh = c->zb->ysize;
+     /* Mesa's placement (drawpix.c): the lower left at floor(raster -
+        origin + epsilon), so integer positions are not moved by rounding */
+@@ -396,9 +467,15 @@
+   int xs, xe, ys, ye, y, bh = c->zb->ysize;
+   unsigned char buf[ROWBUF * 4], *full = NULL;
+   unsigned int zbuf[ROWBUF];
+-  int unit = zx == 1.0f;
++  int unit;
+   ZSpan sp;
+ 
++  if (c->rscale) {              /* render scale: into buffer units */
++    float rf = 1.0f / (float)(1 << c->rscale);
++    zx *= rf; zy *= rf; rx *= rf; ry *= rf;
++  }
++  unit = zx == 1.0f;
++
+   zoom_range(rx, zx, w, &xs, &xe);
+   zoom_range(ry, zy, h, &ys, &ye);
+   /* clip to the buffer and scissor (rows from the top: box[1..3]) */
+@@ -568,10 +645,10 @@
+     /* a copy of the source first: the rectangles may overlap. Kept as
+        RGB565 (2 bytes a pixel), read back through the same unpacker,
+        which applies the pixel transfer */
+-    unsigned short *tmp = gl_malloc(w * h * 2);
++    unsigned short *tmp = c->rscale ? rs_read(c, x, y, w, h) : gl_malloc(w * h * 2);
+     S31Unpack u;
+     if (tmp == NULL) { gl_set_error(c, GL_OUT_OF_MEMORY); return; }
+-    for (j = 0; j < h; j++) {
++    for (j = 0; j < h && !c->rscale; j++) {
+       int wy = y + j, row = zb->ysize - 1 - wy;
+       unsigned short *d = tmp + (h - 1 - j) * w;
+       const PIXEL *s = (const PIXEL *)((const char *)zb->pbuf + row * zb->linesize);
+@@ -592,8 +669,12 @@
+       int row = zb->ysize - 1 - (y + j);
+       for (i = 0; i < w; i++) {
+         int wx = x + i;
+-        unsigned int v = (row >= 0 && row < zb->ysize && wx >= 0 && wx < zb->xsize) ?
+-                         zb->zbuf[row * zb->xsize + wx] : 0;
++        unsigned int v = 0;
++        if (c->rscale) {
++          if (!rs_px(c, wx, y + j, NULL, &v)) v = 0;
++        } else if (row >= 0 && row < zb->ysize && wx >= 0 && wx < zb->xsize) {
++          v = zb->zbuf[row * zb->xsize + wx];
++        }
+         float d = 1.0f - (float)v * (1.0f / 65535.0f);
+         d = d * c->depth_scale + c->depth_bias;
+         d = d < 0.0f ? 0.0f : (d > 1.0f ? 1.0f : d);
+@@ -638,6 +719,40 @@
+   if (e) { gl_set_error(c, e); return; }
+   if (pixels == NULL || w == 0 || h == 0 || !gl_prepare(c)) return;
+   zb = c->zb;
++  if (c->rscale) {
++    /* render scale: window pixels sampled from the smaller buffer; only
++       the part inside the WINDOW is written */
++    int vw = zb->xsize << c->rscale;
++    x0 = x < 0 ? 0 : x;
++    x1 = x + w > vw ? vw : x + w;
++    for (j = 0; j < h; j++) {
++      int xx;
++      unsigned int t, zv;
++      if (!rs_px(c, x0, y + j, &t, &zv)) continue;
++      for (xx = x0; xx < x1; ) {
++        int n = x1 - xx < 64 ? x1 - xx : 64;
++        for (i = 0; i < n; i++) {
++          rs_px(c, xx + i, y + j, &t, &zv);
++          if (format == GL_DEPTH_COMPONENT) {
++            float d = 1.0f - (float)zv * (1.0f / 65535.0f);
++            v[i] = d * c->depth_scale + c->depth_bias;
++          } else {
++            float *q = v + 4 * i;
++            int ch;
++            q[0] = (float)(t >> 11) * (1.0f / 31.0f);
++            q[1] = (float)((t >> 5) & 63) * (1.0f / 63.0f);
++            q[2] = (float)(t & 31) * (1.0f / 31.0f);
++            q[3] = 1.0f;
++            if (c->xfer_active)
++              for (ch = 0; ch < 4; ch++) q[ch] = q[ch] * c->xfer_scale[ch] + c->xfer_bias[ch];
++          }
++        }
++        s31_pack_span(&k, xx - x, j, n, v);
++        xx += n;
++      }
++    }
++    return;
++  }
+   /* only the part inside the buffer is written (GL leaves the rest
+      undefined; Mesa leaves it untouched too) */
+   x0 = x < 0 ? 0 : x;
+@@ -727,6 +842,26 @@
+   if (!gl_prepare(c)) return;
+   zb = c->zb;
+   if (is1d) h = 1;
++  if (c->rscale) {
++    /* render scale: the window rectangle, sampled from the smaller buffer */
++    unsigned short *tmp = rs_read(c, x, y, w, h);
++    if (tmp == NULL) { gl_set_error(c, GL_OUT_OF_MEMORY); return; }
++    s31_unpack_fb(c, &u, tmp, w, h, w * 2, 0, 0, w, h);
++    q[0].op = p[11].i ? OP_TexSubImage2D : OP_TexImage2D;
++    q[1].i = target; q[2].i = level;
++    if (p[11].i) {
++      q[3].i = p[9].i; q[4].i = is1d ? 0 : p[10].i;
++      q[5].i = w; q[6].i = h;
++      q[7].i = S31_FB_565; q[8].i = GL_UNSIGNED_SHORT_5_6_5; q[9].p = tmp;
++      gl_tex_subimage_src(c, q, &u);
++    } else {
++      q[3].i = ifmt; q[4].i = w; q[5].i = h; q[6].i = border;
++      q[7].i = S31_FB_565; q[8].i = GL_UNSIGNED_SHORT_5_6_5; q[9].p = tmp;
++      gl_tex_image_src(c, q, &u);
++    }
++    gl_free(tmp);
++    return;
++  }
+   s31_unpack_fb(c, &u, zb->pbuf, zb->xsize, zb->ysize, zb->linesize, x, y, w, h);
+   q[0].op = p[11].i ? OP_TexSubImage2D : OP_TexImage2D;
+   q[1].i = target; q[2].i = level;
+diff -ru a/gl/tinygl/source/tgl_bridge.h b/gl/tinygl/source/tgl_bridge.h
+--- a/gl/tinygl/source/tgl_bridge.h	2026-09-26 05:03:38.000000000 +0100
++++ b/gl/tinygl/source/tgl_bridge.h	2026-09-26 05:15:51.641124085 +0100
+@@ -97,6 +97,7 @@
+ void *tgl_ctx_create(void *share);
+ void tgl_ctx_destroy(void *ctx);
+ int tgl_ctx_bind(void *ctx, void *pixels, int width, int height, int pitch);
++int tgl_ctx_set_scale(void *ctx, int shift);   /* render scale, s31gl.h */
+ void tgl_ctx_set_prepare(void *ctx, int (*prepare)(void *user), void *user);
+ void tgl_ctx_make_current(void *ctx);  /* NULL: a context that draws nothing */
+ void *tgl_ctx_current(void);           /* NULL when none is current */
+diff -ru a/gl/tinygl/source/vertex.c b/gl/tinygl/source/vertex.c
+--- a/gl/tinygl/source/vertex.c	2026-09-26 05:03:38.000000000 +0100
++++ b/gl/tinygl/source/vertex.c	2026-09-26 05:16:35.242748982 +0100
+@@ -79,13 +79,29 @@
+     int ix0, ix1, iy0, iy1;      /* its intersection with the buffer */
+     float sx, tx, sy, ty;        /* full viewport transform */
+     float isx, itx, isy, ity;    /* rasteriser transform */
++    /* s31 render scale (GLContext.rscale): the viewport and scissor are in
++       the WINDOW's units, bh << rs rows high; the buffer is 1/2^rs of it.
++       fx0/fy0/fw/fh are the full viewport in BUFFER units, the integer
++       rectangle x0..y1 the buffer pixels it touches. rs == 0 is TinyGL's
++       own arithmetic, unchanged. */
++    int rs = c->rscale, vbh = bh << rs;
++    float rf = rs ? 1.0f / (float)(1 << rs) : 1.0f;
++    float fx0, fy0, fw, fh;
+ 
+     v = &c->viewport;
+ 
+     x0 = v->xmin;
+     x1 = v->xmin + v->xsize;
+-    y0 = bh - (v->ymin + v->ysize);
+-    y1 = bh - v->ymin;
++    y0 = vbh - (v->ymin + v->ysize);
++    y1 = vbh - v->ymin;
++    fx0 = (float)x0 * rf;
++    fy0 = (float)y0 * rf;
++    fw = (float)v->xsize * rf;
++    fh = (float)v->ysize * rf;
++    if (rs) {                   /* floor the start, ceil the end */
++        x0 >>= rs; y0 >>= rs;
++        x1 = -((-x1) >> rs); y1 = -((-y1) >> rs);
++    }
+     ix0 = x0 < 0 ? 0 : x0;
+     ix1 = x1 > bw ? bw : x1;
+     iy0 = y0 < 0 ? 0 : y0;
+@@ -98,7 +114,11 @@
+         int bx0 = 0, by0 = 0, bx1 = bw, by1 = bh;
+         if (c->scissor_enabled) {
+             int sx0 = c->scissor[0], sx1 = c->scissor[0] + c->scissor[2];
+-            int sy0 = bh - (c->scissor[1] + c->scissor[3]), sy1 = bh - c->scissor[1];
++            int sy0 = vbh - (c->scissor[1] + c->scissor[3]), sy1 = vbh - c->scissor[1];
++            if (rs) {           /* every buffer pixel the box touches */
++                sx0 >>= rs; sy0 >>= rs;
++                sx1 = -((-sx1) >> rs); sy1 = -((-sy1) >> rs);
++            }
+             if (sx0 > bx0) bx0 = sx0;
+             if (sx1 < bx1) bx1 = sx1;
+             if (sy0 > by0) by0 = sy0;
+@@ -115,10 +135,10 @@
+     v->empty = (ix1 <= ix0 || iy1 <= iy0);
+     v->guard = !v->empty && (ix0 != x0 || ix1 != x1 || iy0 != y0 || iy1 != y1);
+ 
+-    sx = (v->xsize - 0.5f) / 2.0f;
+-    tx = sx + x0;
+-    sy = -(v->ysize - 0.5f) / 2.0f;
+-    ty = (v->ysize - 0.5f) / 2.0f + y0;
++    sx = (fw - 0.5f) / 2.0f;
++    tx = sx + fx0;
++    sy = -(fh - 0.5f) / 2.0f;
++    ty = (fh - 0.5f) / 2.0f + fy0;
+ 
+     if (v->guard) {
+         isx = (ix1 - ix0 - 0.5f) / 2.0f;
+@@ -138,10 +158,10 @@
+     {
+         float gx0 = v->guard ? v->gx[0] : 1.0f, gx1 = v->guard ? v->gx[1] : 0.0f;
+         float gy0 = v->guard ? v->gy[0] : 1.0f, gy1 = v->guard ? v->gy[1] : 0.0f;
+-        v->ex[0] = (float)v->xsize * 0.5f / gx0;
+-        v->ex[1] = (float)x0 + (float)v->xsize * 0.5f - v->ex[0] * gx1;
+-        v->ey[0] = -(float)v->ysize * 0.5f / gy0;
+-        v->ey[1] = (float)y0 + (float)v->ysize * 0.5f - v->ey[0] * gy1;
++        v->ex[0] = fw * 0.5f / gx0;
++        v->ex[1] = fx0 + fw * 0.5f - v->ex[0] * gx1;
++        v->ey[0] = -fh * 0.5f / gy0;
++        v->ey[1] = fy0 + fh * 0.5f - v->ey[0] * gy1;
+     }
+     c->pipe.box[0] = ix0; c->pipe.box[1] = iy0;
+     c->pipe.box[2] = ix1; c->pipe.box[3] = iy1;
+diff -ru a/gl/tinygl/source/zgl.h b/gl/tinygl/source/zgl.h
+--- a/gl/tinygl/source/zgl.h	2026-09-26 05:03:38.000000000 +0100
++++ b/gl/tinygl/source/zgl.h	2026-09-26 05:15:51.640981503 +0100
+@@ -344,6 +344,13 @@
+   M4 matrix_proj_eff;         /* S * P when viewport.guard (see GLViewport) */
+   M4 *proj_used;              /* &matrix_proj_eff or matrix_stack_ptr[1] */
+   int vp_initialized;         /* first buffer bind sets viewport + scissor */
++  /* s31 render scale (plan G04, s31gl_set_render_scale): the colour and
++     depth buffers hold the window at 1/2^rscale in each axis. Viewport,
++     scissor, raster position and every pixel-rectangle coordinate stay in
++     the WINDOW's units (what glGet reports); they are mapped onto the
++     buffer where they are used: gl_eval_viewport, the scissored clear,
++     the line/point widths and s31_draw.c's pixel paths. 0 = native. */
++  int rscale;
+   int doublebuffer;           /* GL_DOUBLEBUFFER, set by the GLX layer */
+ 
+   int depth_func, depth_mask;
+--- a/gl/tests/rscale_test.c	1970-01-01 01:00:00.000000000 +0100
++++ b/gl/tests/rscale_test.c	1970-01-01 01:00:00.000000000 +0100
+@@ -0,0 +1,193 @@
++/*
++ * rscale_test.c - the core's render scale (s31gl_set_render_scale, plan G04)
++ * against native rendering. MIT.
++ *
++ * The same scene is drawn by context N into an 800x480 buffer and by context
++ * S (render scale 1) into a 400x240 one, with every coordinate in window
++ * units: viewport, a scissored clear, depth-tested triangles, wide lines and
++ * points, a glBitmap glyph at a raster position, glDrawPixels, glCopyPixels.
++ * Checks:
++ *   pix     S's buffer pixel (x, y) equals one of N's four window pixels it
++ *           covers (2x..2x+1, 2y..2y+1); a pixel-centre sampling difference
++ *           is allowed at edges, a wrong mapping is not - under 3% mismatch
++ *   get     glGet VIEWPORT, SCISSOR_BOX, LINE_WIDTH, CURRENT_RASTER_POSITION
++ *           identical in both
++ *   read    glReadPixels of the whole WINDOW (800x480) from S has N's size
++ *           and matches N within the same tolerance
++ * Exit 0 = all pass. Built and run by the host rig (no X needed).
++ */
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <GL/gl.h>
++#include "s31gl.h"
++
++#define W 800
++#define H 480
++
++static const GLubyte glyph[16] = {	/* 8x16 'A'-ish */
++	0x00, 0x00, 0xc3, 0xc3, 0xc3, 0xc3, 0xff, 0xff,
++	0xc3, 0xc3, 0xc3, 0x66, 0x3c, 0x18, 0x00, 0x00,
++};
++
++static void scene(void)
++{
++	static GLubyte img[16 * 8 * 3];
++	int i;
++
++	for (i = 0; i < 16 * 8; i++) {
++		img[i * 3] = (GLubyte)(i * 13);
++		img[i * 3 + 1] = (GLubyte)(255 - i * 7);
++		img[i * 3 + 2] = (GLubyte)(i & 1 ? 255 : 0);
++	}
++	glViewport(0, 0, W, H);
++	glClearColor(0.1f, 0.2f, 0.3f, 1.0f);
++	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
++	/* a scissored clear at odd coordinates */
++	glEnable(GL_SCISSOR_TEST);
++	glScissor(101, 51, 203, 97);
++	glClearColor(0.9f, 0.9f, 0.2f, 1.0f);
++	glClear(GL_COLOR_BUFFER_BIT);
++	glDisable(GL_SCISSOR_TEST);
++	glMatrixMode(GL_PROJECTION);
++	glLoadIdentity();
++	glFrustum(-1.6667, 1.6667, -1.0, 1.0, 1.0, 20.0);
++	glMatrixMode(GL_MODELVIEW);
++	glLoadIdentity();
++	glTranslatef(0.0f, 0.0f, -5.0f);
++	glEnable(GL_DEPTH_TEST);
++	glBegin(GL_TRIANGLES);
++	glColor3f(1, 0, 0); glVertex3f(-2, -1.5f, 0); glVertex3f(2, -1.5f, -1); glVertex3f(0, 1.8f, 0.5f);
++	glColor3f(0, 1, 0); glVertex3f(-2.5f, 1, -0.5f); glVertex3f(1, 1.2f, 1); glVertex3f(-0.5f, -1.8f, 0);
++	glEnd();
++	glDisable(GL_DEPTH_TEST);
++	glLineWidth(4.0f);
++	glColor3f(1, 1, 1);
++	glBegin(GL_LINES);
++	glVertex3f(-3, -1.9f, 0); glVertex3f(3, 1.9f, 0);
++	glEnd();
++	glPointSize(6.0f);
++	glColor3f(1, 0, 1);
++	glBegin(GL_POINTS);
++	glVertex3f(2.5f, -1.5f, 0); glVertex3f(-2.5f, 1.5f, 0);
++	glEnd();
++	/* window-space raster operations */
++	glMatrixMode(GL_PROJECTION);
++	glLoadIdentity();
++	glOrtho(0, W, 0, H, -1, 1);
++	glMatrixMode(GL_MODELVIEW);
++	glLoadIdentity();
++	glColor3f(0, 1, 1);
++	glRasterPos2i(600, 400);
++	glBitmap(8, 16, 0, 0, 10, 0, glyph);
++	glBitmap(8, 16, 0, 0, 10, 0, glyph);
++	glRasterPos2i(40, 300);
++	glPixelZoom(2.0f, 2.0f);
++	glDrawPixels(16, 8, GL_RGB, GL_UNSIGNED_BYTE, img);
++	glPixelZoom(1.0f, 1.0f);
++	glRasterPos2i(500, 60);
++	glCopyPixels(100, 50, 64, 32, GL_COLOR);
++	glFinish();
++}
++
++static int near565(unsigned a, unsigned b)
++{
++	int dr = (int)(a >> 11) - (int)(b >> 11);
++	int dg = (int)((a >> 5) & 63) - (int)((b >> 5) & 63);
++	int db = (int)(a & 31) - (int)(b & 31);
++	return abs(dr) <= 1 && abs(dg) <= 2 && abs(db) <= 1;
++}
++
++int main(void)
++{
++	unsigned short *bn = calloc(W * H, 2), *bs = calloc(W * H / 4, 2);
++	unsigned char *rn = malloc(W * H * 3), *rs = malloc(W * H * 3);
++	s31gl_ctx *n = s31gl_create_context(NULL), *s = s31gl_create_context(NULL);
++	GLint vn[4], vs[4], sn[4], ss[4];
++	GLfloat pn[4], ps[4], ln, ls;
++	int x, y, bad = 0, badr = 0, fail = 0;
++
++	if (!n || !s || !bn || !bs || !rn || !rs)
++		return 2;
++	s31gl_make_current(n);
++	s31gl_bind_color(n, bn, W, H, W * 2);
++	scene();
++	glScissor(7, 9, 301, 203);
++	glGetIntegerv(GL_VIEWPORT, vn);
++	glGetIntegerv(GL_SCISSOR_BOX, sn);
++	glGetFloatv(GL_LINE_WIDTH, &ln);
++	glGetFloatv(GL_CURRENT_RASTER_POSITION, pn);
++	glReadPixels(0, 0, W, H, GL_RGB, GL_UNSIGNED_BYTE, rn);
++
++	s31gl_make_current(s);
++	/* GLX's order: the window-size bind first (sets the viewport), then
++	   the scaled buffer */
++	s31gl_bind_color(s, NULL, W, H, 0);
++	if (s31gl_set_render_scale(s, 1) != 0) {
++		printf("FAIL set_render_scale\n");
++		return 1;
++	}
++	s31gl_bind_color(s, bs, W / 2, H / 2, W);
++	scene();
++	glScissor(7, 9, 301, 203);
++	glGetIntegerv(GL_VIEWPORT, vs);
++	glGetIntegerv(GL_SCISSOR_BOX, ss);
++	glGetFloatv(GL_LINE_WIDTH, &ls);
++	glGetFloatv(GL_CURRENT_RASTER_POSITION, ps);
++	glReadPixels(0, 0, W, H, GL_RGB, GL_UNSIGNED_BYTE, rs);
++
++	for (y = 0; y < H / 2; y++)
++		for (x = 0; x < W / 2; x++) {
++			unsigned v = bs[y * (W / 2) + x];
++			int k, ok = 0;
++
++			for (k = 0; k < 4 && !ok; k++)
++				ok = near565(v, bn[(2 * y + (k >> 1)) * W + 2 * x + (k & 1)]);
++			bad += !ok;
++		}
++	for (y = 0; y < H; y++)
++		for (x = 0; x < W; x++) {
++			const unsigned char *a = rs + (y * W + x) * 3;
++			int k, ok = 0;
++
++			/* the scaled read is the buffer pixel under (x, y): it
++			   matches one of the native pixels of its 2x2 block */
++			for (k = 0; k < 4 && !ok; k++) {
++				int xx = (x & ~1) + (k & 1), yy = (y & ~1) + (k >> 1);
++				const unsigned char *b = rn + (yy * W + xx) * 3;
++
++				ok = abs(a[0] - b[0]) <= 8 && abs(a[1] - b[1]) <= 8 &&
++				     abs(a[2] - b[2]) <= 8;
++			}
++			badr += !ok;
++		}
++	printf("pix  %d of %d buffer pixels differ (%.2f%%)\n", bad, W * H / 4,
++	       100.0 * bad / (W * H / 4));
++	printf("read %d of %d window pixels differ (%.2f%%)\n", badr, W * H,
++	       100.0 * badr / (W * H));
++	printf("get  viewport %d,%d,%d,%d / %d,%d,%d,%d  scissor %d,%d,%d,%d / "
++	       "%d,%d,%d,%d  line %.1f / %.1f  raster %.1f,%.1f / %.1f,%.1f\n",
++	       vn[0], vn[1], vn[2], vn[3], vs[0], vs[1], vs[2], vs[3],
++	       sn[0], sn[1], sn[2], sn[3], ss[0], ss[1], ss[2], ss[3],
++	       ln, ls, pn[0], pn[1], ps[0], ps[1]);
++	if (bad * 100 > 3 * (W * H / 4)) { printf("FAIL pix\n"); fail = 1; }
++	if (badr * 100 > 3 * (W * H)) { printf("FAIL read\n"); fail = 1; }
++	if (memcmp(vn, vs, sizeof vn) || memcmp(sn, ss, sizeof sn) || ln != ls ||
++	    pn[0] != ps[0] || pn[1] != ps[1]) {
++		printf("FAIL get\n");
++		fail = 1;
++	}
++	{	/* PPM dumps for a look */
++		FILE *f = fopen("rscale_native.ppm", "wb");
++
++		if (f) { fprintf(f, "P6 %d %d 255\n", W, H);
++			for (y = H - 1; y >= 0; y--) fwrite(rn + y * W * 3, 3, W, f);
++			fclose(f); }
++		f = fopen("rscale_scaled.ppm", "wb");
++		if (f) { fprintf(f, "P6 %d %d 255\n", W, H);
++			for (y = H - 1; y >= 0; y--) fwrite(rs + y * W * 3, 3, W, f);
++			fclose(f); }
++	}
++	printf(fail ? "RESULT FAIL\n" : "RESULT PASS\n");
++	return fail;
++}

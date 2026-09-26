@@ -41,16 +41,32 @@
  * now). S31GL_NOWAIT=1 is the old behaviour as a debug toggle only: every
  * put unpaced, torn and half-drawn frames included.
  *
- * S31GL_SHMBUFS=2 (runtime toggle, default 1) gives a double-buffered
- * drawable a second segment: frame N+1 renders into B while the server copies
- * A, and the wait at N+2 is for a copy that has normally long finished. It
- * costs one more colour buffer (150 kB at 320x240), which is why it is not the
- * default: memory binds on this board, and whether the overlap pays is a board
- * measurement (docs/gl-plan-2026-09-25.md section 5 kill rules).
+ * A double-buffered drawable gets a SECOND segment when it costs at most
+ * 200 kB (want_bufs(); S31GL_SHMBUFS=1 or 2 forces one or two): frame N+1
+ * renders into B while the server copies A, and the wait at N+2 is for a
+ * copy that has normally long finished. Measured in want_bufs().
  *
  * Without MIT-SHM (or with S31GL_NOSHM=1, the runtime A/B toggle) the buffer
  * is malloc'd and presented with XPutImage, which copies into the request
  * before it returns, so it never needs a wait.
+ *
+ * RENDER SCALE (plan G04; owner decision: ON by default for panel-size
+ * fullscreen windows, S31GL_RENDER_SCALE=0 turns it off for an A/B, and its
+ * fps is never quoted as like-for-like). A window the size of the panel does
+ * not fit in RAM at native resolution next to the desktop (colour + depth
+ * 1.5 MB at 800x480), and its clear alone is 13-15 ms. So when the server is
+ * our xshim and the core can map coordinates, glxi_surf_alloc() asks the
+ * server (XLITE-SHM RenderScale, lvdesk/xshim.c rscale_request) whether it
+ * will take the window at HALF size in each axis. xshim grants it only for
+ * exactly the panel size; then the colour and depth buffers are 400x240,
+ * the core maps GL's window coordinates onto them (glx_core.c,
+ * s31gl_set_render_scale), and the whole-frame XShmPutImage of 400x240 is
+ * scanned out through the PPA at 2x. The application sees an 800x480 window
+ * throughout - geometry, events, glGet(GL_VIEWPORT), glReadPixels sizes -
+ * and only the pixels are softer. Anything that is not a whole-frame put
+ * of the half-size buffer is an ordinary put, and a server without the
+ * request ("XLITE-RSCALE" absent: stock X, the host Xvfb rig, an older
+ * xshim) is never asked.
  */
 #include <errno.h>
 #include <stdio.h>
@@ -59,9 +75,69 @@
 #include <sys/ipc.h>
 #include <sys/shm.h>
 
+#include <X11/Xlibint.h>
+
 #include "glx_int.h"
 
 static struct glxi_surf *surfs;
+
+/* ------------------------------------------------------------ render scale */
+
+/* S31GL_RENDER_SCALE=0: never ask (the A/B toggle). Default on. */
+static int rscale_wanted(void)
+{
+	static int v = -1;
+
+	if (v < 0) {
+		const char *e = getenv("S31GL_RENDER_SCALE");
+
+		v = !(e && strcmp(e, "0") == 0);
+	}
+	return v;
+}
+
+/*
+ * XLITE-SHM minor 3, RenderScale(window, width, height): the reply's first
+ * byte says whether the server will take a width x height whole-frame put
+ * as the window's full contents. 0 x 0 withdraws. Returns the granted shift
+ * (1) or 0. One round trip, only when buffers are (re)made.
+ */
+static int rscale_ask(Display *dpy, Window win, int bw, int bh)
+{
+	int major, ev, er, ok = 0;
+	xGenericReply rep;
+	struct rscale_req {
+		CARD8 reqType, minor;
+		CARD16 length;
+		CARD32 window;
+		CARD16 width, height;
+	} *req;
+
+	if (!XQueryExtension(dpy, "XLITE-RSCALE", &major, &ev, &er))
+		return 0;
+	LockDisplay(dpy);
+	req = (struct rscale_req *)_XGetRequest(dpy, (CARD8)major, sizeof(*req));
+	if (req) {
+		req->minor = 3;
+		req->window = (CARD32)win;
+		req->width = (CARD16)bw;
+		req->height = (CARD16)bh;
+		if (_XReply(dpy, (xReply *)&rep, 0, xTrue))
+			ok = (rep.data00 & 0xff) == 1 ? 1 : 0;
+	}
+	UnlockDisplay(dpy);
+	SyncHandle();
+	return ok;
+}
+
+/* The window is the panel's size: ask for half of it. */
+static int rscale_negotiate(struct glxi_surf *s)
+{
+	if (!rscale_wanted() || !glxi_core_can_scale() || !s->use_shm ||
+	    (s->w & 1) || (s->h & 1) || s->w < 64 || s->h < 64)
+		return 0;
+	return rscale_ask(s->dpy, s->win, s->w / 2, s->h / 2);
+}
 
 /* ------------------------------------------------------------ error trap */
 
@@ -224,6 +300,11 @@ void glxi_surf_free_buffers(struct glxi_surf *s)
 
 	for (i = 0; i < 2; i++)
 		buf_free(s, &s->buf[i]);
+	/* the server stops treating half-size puts as the whole window (a
+	 * resize has already dropped it there; this covers the unbind) */
+	if (s->rscale && s->dpy)
+		rscale_ask(s->dpy, s->win, 0, 0);
+	s->rscale = 0;
 	free(s->depth);
 	s->depth = NULL;
 	s->nbuf = s->cur = 0;
@@ -307,7 +388,7 @@ static int alloc_shm(struct glxi_surf *s, struct glxi_buf *b)
 
 	b->shm.shmid = -1;
 	img = XShmCreateImage(dpy, s->visual, 16, ZPixmap, NULL, &b->shm,
-			      s->w, s->h);
+			      s->bw, s->bh);
 	if (!img)
 		return -1;
 	len = (size_t)img->bytes_per_line * img->height;
@@ -352,13 +433,13 @@ static int alloc_shm(struct glxi_surf *s, struct glxi_buf *b)
 
 static int alloc_plain(struct glxi_surf *s, struct glxi_buf *b)
 {
-	int pitch = ((s->w * 16 + 31) / 32) * 4;
-	void *p = malloc((size_t)pitch * s->h);
+	int pitch = ((s->bw * 16 + 31) / 32) * 4;
+	void *p = malloc((size_t)pitch * s->bh);
 	XImage *img;
 
 	if (!p)
 		return -1;
-	img = XCreateImage(s->dpy, s->visual, 16, ZPixmap, 0, p, s->w, s->h,
+	img = XCreateImage(s->dpy, s->visual, 16, ZPixmap, 0, p, s->bw, s->bh,
 			   32, pitch);
 	if (!img) {
 		free(p);
@@ -370,18 +451,42 @@ static int alloc_plain(struct glxi_surf *s, struct glxi_buf *b)
 	return 0;
 }
 
-/* S31GL_SHMBUFS=2: ping-pong two segments for double-buffered drawables.
- * Default 1, the plan's P1 budget (one 150 kB segment at 320x240). */
-static int want_bufs(void)
+/*
+ * How many segments a double-buffered SHM drawable gets. S31GL_SHMBUFS=1 or
+ * 2 forces it; unset, a second segment is made when it costs at most
+ * GLXI_BUF2_MAX bytes. MEASURED 2026-09-26 (stock glxgears from SD, kernel
+ * #391, fresh boot per arm, 6 runs of 10 s, run 1 discarded; presents/s and
+ * CPU% of each process, artifacts/gl/present/arms-*):
+ *
+ *   windowed 300x300        1 buf  fps 28.6-30.4 (median 28.9)  gears 60-63%  lvdesk 50-52%
+ *                           2 bufs fps 32.3-35.1 (median 34.1)  gears 91-97%  lvdesk 59-61%
+ *   fullscreen, render      1 buf  fps 25.3-28.5 (median 26.1)  gears 65-70%  lvdesk 34-37%
+ *   scale (400x240 buffer)  2 bufs fps 30.2-37.3 (median 34.4)  gears 93-97%  lvdesk 43-63%
+ *
+ * The second segment wins fps in both (+18%, +32%; the ranges do not
+ * overlap) for 176-192 kB. It is NOT a spin: the "98% of a core" it was
+ * suspected of is the client no longer idling while the server copies the
+ * frame (h1s, glxgears pinned to CPU0: 80% of samples in the rasteriser -
+ * memset_16 24.5%, ZB_fillTriangleFlat_lt 19.9%, glopVertex 8.2% - and no
+ * xlite or GLX wait symbol in the top 30). Per frame the client costs ~31%
+ * more (21 -> 28 ms: the clear and the fill slow down while the desktop's
+ * copy of the previous frame shares PSRAM with them), so the cap keeps big
+ * windowed drawables, where RAM is the thing that runs out, on one.
+ */
+#define GLXI_BUF2_MAX	(200 * 1024)
+
+static int want_bufs(size_t seg_bytes)
 {
 	static int n = -1;
 
 	if (n < 0) {
 		const char *e = getenv("S31GL_SHMBUFS");
 
-		n = e && atoi(e) >= 2 ? 2 : 1;
+		n = !e ? 0 : atoi(e) >= 2 ? 2 : 1;
 	}
-	return n;
+	if (n)
+		return n;
+	return seg_bytes <= GLXI_BUF2_MAX ? 2 : 1;
 }
 
 /*
@@ -419,7 +524,23 @@ int glxi_surf_alloc(struct glxi_surf *s, VisualID vid, int screen, int db)
 		if (!s->gc)
 			return -1;
 	}
-	s->use_shm = shm_usable(s->dpy, d) && alloc_shm(s, &s->buf[0]) == 0;
+	/*
+	 * Render scale first: it decides the size of everything below. The
+	 * use_shm guess makes it SHM-only (the scale is a server-side
+	 * redirect of ShmPutImage); if the SHM allocation then fails, the
+	 * scale is withdrawn and the buffers are made at native size.
+	 */
+	s->use_shm = shm_usable(s->dpy, d);
+	s->rscale = rscale_negotiate(s);
+	s->bw = s->w >> s->rscale;
+	s->bh = s->h >> s->rscale;
+	s->use_shm = s->use_shm && alloc_shm(s, &s->buf[0]) == 0;
+	if (!s->use_shm && s->rscale) {
+		rscale_ask(s->dpy, s->win, 0, 0);
+		s->rscale = 0;
+		s->bw = s->w;
+		s->bh = s->h;
+	}
 	if (!s->use_shm) {
 		if (d->shm == 1 && glxi_trace())
 			fprintf(stderr, "libGL: MIT-SHM attach failed (%s), "
@@ -431,7 +552,8 @@ int glxi_surf_alloc(struct glxi_surf *s, VisualID vid, int screen, int db)
 	/* A second segment only helps a SHM double-buffered drawable: a
 	 * single-buffered one must keep one persistent front buffer, and
 	 * XPutImage has copied before it returns. A failure is not fatal. */
-	if (s->use_shm && db && want_bufs() == 2 &&
+	if (s->use_shm && db &&
+	    want_bufs((size_t)s->pitch * s->bh) == 2 &&
 	    alloc_shm(s, &s->buf[1]) == 0)
 		s->nbuf = 2;
 	s->cur = 0;
@@ -439,11 +561,15 @@ int glxi_surf_alloc(struct glxi_surf *s, VisualID vid, int screen, int db)
 	/* The drawable's depth buffer, shared by every context current on it.
 	 * calloc: 0 is the far plane, as the core's private buffer starts. A
 	 * failure is not fatal: the core then allocates a private one. */
-	s->depth = calloc((size_t)s->w * s->h, 2);
-	s->bw = s->last_w = s->w;
-	s->bh = s->last_h = s->h;
+	s->depth = calloc((size_t)s->bw * s->bh, 2);
+	s->last_w = s->w;
+	s->last_h = s->h;
 	s->last_nbuf = s->nbuf;
 	s->n_alloc++;
+	if (glxi_trace() || s->rscale)
+		fprintf(stderr, "libGL: drawable 0x%lx %dx%d: buffers %dx%d%s\n",
+			(unsigned long)s->win, s->w, s->h, s->bw, s->bh,
+			s->rscale ? " (render scale 2x, server-scaled)" : "");
 	return 0;
 }
 

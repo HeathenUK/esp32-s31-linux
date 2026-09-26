@@ -99,6 +99,11 @@ struct glxi_surf {
 	 * every context current on this window renders into the same one */
 	void *depth;
 	int bw, bh, pitch;
+	/* RENDER SCALE (glx_present.c, plan G04): the buffers are the window
+	 * at 1/2^rscale in each axis and the server scales them back up; 0 =
+	 * native. The core maps GL's window coordinates (s->w x s->h) onto
+	 * them (s31gl_set_render_scale). */
+	int rscale;
 	int use_shm;
 	GC gc;
 	Visual *visual;
@@ -162,6 +167,8 @@ void glxi_core_finish(s31gl_ctx *ctx);
 void *glxi_core_get_proc(const char *name);
 void glxi_core_release_depth(s31gl_ctx *ctx);
 int glxi_core_bind_depth(s31gl_ctx *ctx, void *depth);
+int glxi_core_can_scale(void);
+int glxi_core_set_scale(s31gl_ctx *ctx, int shift);
 /* callbacks the core calls, defined in glx.c */
 void glxi_hook_frame_begin(void *user);
 void glxi_hook_viewport(void *user, int x, int y, int w, int h);

@@ -1,0 +1,22 @@
+ARM native render_scale=0 shmbufs=1 mode=fs runs=6 bin=/root/lvdesk.new lib=/root/g04 #391 SMP Fri Sep 25 10:24:40 UTC 2026 up 79.85
+RUN 1 fps 10.1 gears 66% lvdesk 36% | gaps0 <25:0 <50:0 <100:39 <200:3 <400:1 >=400:0 | gaps1 <25:0 <50:0 <100:150 <200:14 <400:7 >=400:0
+55 frames in 5.1 seconds = 10.864 FPS 39 frames in 5.0 seconds =  7.786 FPS 60 frames in 5.1 seconds = 11.820 FPS 
+RUN 2 fps 11.5 gears 67% lvdesk 37% | gaps0 <25:0 <50:0 <100:177 <200:35 <400:10 >=400:1 | gaps1 <25:0 <50:0 <100:308 <200:42 <400:11 >=400:1
+46 frames in 5.1 seconds =  9.056 FPS 56 frames in 5.1 seconds = 11.052 FPS 61 frames in 5.0 seconds = 12.126 FPS 
+RUN 3 fps 10.4 gears 63% lvdesk 35% | gaps0 <25:0 <50:0 <100:360 <200:53 <400:12 >=400:2 | gaps1 <25:0 <50:0 <100:471 <200:72 <400:15 >=400:2
+58 frames in 5.0 seconds = 11.559 FPS 54 frames in 5.1 seconds = 10.633 FPS 59 frames in 5.0 seconds = 11.730 FPS 
+RUN 4 fps 10.4 gears 65% lvdesk 35% | gaps0 <25:0 <50:0 <100:522 <200:78 <400:18 >=400:3 | gaps1 <25:0 <50:0 <100:626 <200:99 <400:21 >=400:3
+58 frames in 5.1 seconds = 11.353 FPS 55 frames in 5.0 seconds = 10.993 FPS 48 frames in 5.0 seconds =  9.566 FPS 
+RUN 5 fps 10.5 gears 66% lvdesk 37% | gaps0 <25:0 <50:0 <100:677 <200:109 <400:23 >=400:4 | gaps1 <25:0 <50:0 <100:788 <200:126 <400:25 >=400:4
+58 frames in 5.1 seconds = 11.386 FPS 44 frames in 5.0 seconds =  8.742 FPS 61 frames in 5.0 seconds = 12.084 FPS 
+RUN 6 fps 11.3 gears 68% lvdesk 35% | gaps0 <25:0 <50:0 <100:829 <200:138 <400:30 >=400:5 | gaps1 <25:0 <50:0 <100:957 <200:148 <400:33 >=400:5
+45 frames in 5.1 seconds =  8.844 FPS 55 frames in 5.0 seconds = 10.972 FPS 63 frames in 5.0 seconds = 12.530 FPS 
+kms: fullscreen 800x480, fb 43 pitch 1600
+lvdesk: fullscreen at panel size
+lvdesk: fullscreen alias 0x200002 800x480x16
+kms: fullscreen off
+lvdesk: fs_render_set(1): refresh restored (refreshes during fullscreen so far 0)
+lvdesk: fullscreen off (client gone)
+              total        used        free      shared  buff/cache   available
+Mem:          15336        9752        3932         124        1652        3200
+DONE
