@@ -58,7 +58,7 @@ static int tu1_update(GLContext *c);   /* phase 5 O1, below */
 #ifdef S31GL_P4ARITH
 #define UNIT_W8(t, filtered) ((t)->st != TGL_ST_565)
 #else
-#define UNIT_W8(t, filtered) ((t)->st != TGL_ST_565 || ((filtered) && c->filt8))
+#define UNIT_W8(t, filtered) ((t)->st != TGL_ST_565 || ((filtered) && (c->filt8 || (t)->x565)))
 #endif
 
 /* phase 5: texenv_op of a texture - an RGBA one stored without its A8

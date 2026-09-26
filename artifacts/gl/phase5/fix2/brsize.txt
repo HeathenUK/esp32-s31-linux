@@ -1,0 +1,2 @@
+p5fix: .text 300130 .rodata 25512  stripped 411264 B
+final: .text 291538 .rodata 25512  stripped 403072 B

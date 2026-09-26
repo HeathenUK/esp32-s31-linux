@@ -783,11 +783,13 @@ static void name(const ZPipe *p, const ZSpan *s, ZFrag *f)              \
 {                                                                       \
   PIXEL *pp = s->pp;                                                    \
   int i, n = f->n, dr, dg, db, sa;                                      \
-  (void)p; (void)sa;                                                    \
+  unsigned int ks;                                                      \
+  (void)p; (void)sa; (void)ks;                                          \
   for (i = 0; i < n; i++) {                                             \
     if (!f->m[i]) continue;                                             \
     UNPACK(pp[i], dr, dg, db);                                          \
     sa = f->a[i];                                                       \
+    ks = MUL8K_PREP(sa);           /* (fix 2: once for three products) */ \
     BODY                                                                \
   }                                                                     \
 }
@@ -796,12 +798,76 @@ static void name(const ZPipe *p, const ZSpan *s, ZFrag *f)              \
    8-bit fixed point, each product rounded: glx_prec bands 11, 29) never
    exceed 255 together: round(s a) + round(d (255 - a)) <= round(255 a) +
    round(255 (255 - a)) = 255 */
-ZP_OUT(zo_sa_omsa, PUT(MUL8(f->r[i], sa) + MUL8(dr, 255 - sa),
-                        MUL8(f->g[i], sa) + MUL8(dg, 255 - sa),
-                        MUL8(f->b[i], sa) + MUL8(db, 255 - sa)))
-ZP_OUT(zo_sa_one, PUT(clamp255(MUL8(f->r[i], sa) + dr),
-                       clamp255(MUL8(f->g[i], sa) + dg),
-                       clamp255(MUL8(f->b[i], sa) + db)))
+const unsigned char *zf_btab(ZPipeX *x, int a);
+_Static_assert(__builtin_offsetof(ZFrag, a) % 4 == 0, "ZFrag.a is at a word offset");
+/* MUL8(v, a) of every 8-bit v (cold: at a chunk whose alpha differs from
+   the table's); NULL without memory */
+__attribute__((noinline))
+static const unsigned char *zp_satab(ZPipeX *x, int a)
+{
+  int v;
+  const unsigned int k = MUL8K_PREP(a);
+  if (x->satab == NULL) {
+    x->satab = gl_malloc(256);
+    if (x->satab == NULL) return NULL;
+  }
+  for (v = 0; v < 256; v++) x->satab[v] = (unsigned char)MUL8K(v, k);
+  x->satab_a = a;
+  return x->satab;
+}
+/* (fix 2, bench P2: the rounded products made this stage +32% over phase
+   4.) A chunk of one alpha (a flat colour, glBitmap, an opaque RGB
+   texture's 255) takes the destination terms from zf_btab's tables - the
+   same MUL8 of the same UNPACK expansions - and the source's with the
+   factor prepared once; alpha 255 is the source itself. Otherwise each
+   pixel prepares its two factors once for its three channels */
+static void zo_sa_omsa(const ZPipe *p, const ZSpan *s, ZFrag *f)
+{
+  PIXEL *pp = s->pp;
+  const unsigned char *fr = f->r, *fg = f->g, *fb = f->b, *fa = f->a, *m = f->m;
+  const unsigned char *bt, *st;
+  int i, n = f->n, a0 = fa[0];
+  unsigned int d = 0;
+  {
+    /* one alpha? a word at a time (ZFrag.a is at a word offset) */
+    typedef unsigned int __attribute__((may_alias)) zp_w32a;
+    const unsigned int a4 = (unsigned int)a0 * 0x01010101u;
+    for (i = 0; i + 4 <= n; i += 4) d |= *(const zp_w32a *)(fa + i) ^ a4;
+    for (; i < n; i++) d |= (unsigned int)(fa[i] ^ a0);
+  }
+  if (d == 0) {
+    ZPipeX *x = p->x;
+    if (a0 == 255) {
+      for (i = 0; i < n; i++)
+        if (m[i]) pp[i] = PACK(fr[i], fg[i], fb[i]);
+      return;
+    }
+    bt = x->btab && x->btab_a == a0 ? x->btab : zf_btab(x, a0);
+    st = x->satab && x->satab_a == a0 ? x->satab : zp_satab(x, a0);
+    if (bt && st) {
+      for (i = 0; i < n; i++) {
+        unsigned int t = pp[i];
+        if (!m[i]) continue;
+        pp[i] = PACK(st[fr[i]] + bt[32 + (t >> 11)], st[fg[i]] + bt[128 + ((t >> 5) & 63)],
+                     st[fb[i]] + bt[32 + (t & 31)]);
+      }
+      return;
+    }
+  }
+  for (i = 0; i < n; i++) {
+    unsigned int ks, kd;
+    int dr, dg, db;
+    if (!m[i]) continue;
+    UNPACK(pp[i], dr, dg, db);
+    ks = MUL8K_PREP(fa[i]);
+    kd = MUL8K_PREP(255 - fa[i]);
+    pp[i] = PACK(MUL8K(fr[i], ks) + MUL8K(dr, kd), MUL8K(fg[i], ks) + MUL8K(dg, kd),
+                 MUL8K(fb[i], ks) + MUL8K(db, kd));
+  }
+}
+ZP_OUT(zo_sa_one, PUT(clamp255(MUL8K(f->r[i], ks) + dr),
+                       clamp255(MUL8K(f->g[i], ks) + dg),
+                       clamp255(MUL8K(f->b[i], ks) + db)))
 ZP_OUT(zo_one_one, PUT(clamp255(f->r[i] + dr), clamp255(f->g[i] + dg),
                         clamp255(f->b[i] + db)))
 /* ZERO, SRC_COLOR and DST_COLOR, ZERO: the product */
@@ -816,10 +882,12 @@ ZP_OUT(zo_sub_one_one, PUT(clamp255(f->r[i] - dr), clamp255(f->g[i] - dg),
                             clamp255(f->b[i] - db)))
 ZP_OUT(zo_rsub_one_one, PUT(clamp255(dr - f->r[i]), clamp255(dg - f->g[i]),
                              clamp255(db - f->b[i])))
-ZP_OUT(zo_sub_sa_one, PUT(clamp255(MUL8(f->r[i], sa) - dr), clamp255(MUL8(f->g[i], sa) - dg),
-                           clamp255(MUL8(f->b[i], sa) - db)))
-ZP_OUT(zo_rsub_sa_one, PUT(clamp255(dr - MUL8(f->r[i], sa)), clamp255(dg - MUL8(f->g[i], sa)),
-                            clamp255(db - MUL8(f->b[i], sa))))
+ZP_OUT(zo_sub_sa_one, PUT(clamp255((int)MUL8K(f->r[i], ks) - dr),
+                           clamp255((int)MUL8K(f->g[i], ks) - dg),
+                           clamp255((int)MUL8K(f->b[i], ks) - db)))
+ZP_OUT(zo_rsub_sa_one, PUT(clamp255(dr - (int)MUL8K(f->r[i], ks)),
+                            clamp255(dg - (int)MUL8K(f->g[i], ks)),
+                            clamp255(db - (int)MUL8K(f->b[i], ks))))
 
 /* one blend factor for a chunk (GL 1.4 table 4.1; the destination alpha
    factors are folded by raster_sel.c: there is no alpha plane, so dst

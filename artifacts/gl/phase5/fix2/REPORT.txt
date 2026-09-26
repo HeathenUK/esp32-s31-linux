@@ -1,0 +1,129 @@
+GL phase 5, fix 2 (library, host only) - 2026-09-26. Nothing touched the
+board; no make / Buildroot. Base: commit 105effc (the phase-5 review fix).
+Raw data beside this file: bench-fix2-vs-p4final.txt (all 74 bench lines,
+three trees), qsr/ (QuakeSpasm replays), gates/ (run-3a p5-fix2 output),
+brsize.txt. s31, MIT.
+
+1. FEATURE-FREE BENCH REGRESSIONS (owner rule: nothing may get slower)
+  M instructions/frame, qemu RV32 (bench.sh); every fix-2 frame hash is
+  identical to 105effc's on all 74 lines.
+                          phase-4 final   105effc          fix 2
+    pix6 (glCopyTexSub)       0.6657    0.9181 +37.9%    0.0874 -86.9%
+    pix2 (blended glBitmap)   5.4259    6.1382 +13.1%    5.3820  -0.8%
+    feat5 texobj              2.1239    2.3949 +12.8%    1.6429 -22.6%
+    texobj 640x400            1.0081    1.1102 +10.1%    1.0064  -0.2%
+    texobj 320x240            0.3253    0.3551  +9.2%    0.3236  -0.5%
+    feat4 texobj              0.3254    0.3552  +9.2%    0.3237  -0.5%
+    feat2 texobj              1.5112    1.5214  +0.7%    1.4988  -0.8%
+    feat3 texobj              1.8664    1.8765  +0.5%    1.8540  -0.7%
+  Same-hash lines over +0.5% vs phase-4 final: 8 -> 0 (worst now pix7
+  +0.29%, pix8 +0.29%, unchanged by phase 5's arithmetic). limits.txt:
+  12 over -> 7 over. What did it:
+  a. s31_tex8.c t8_kind: a colour image of <= 256 colours all exact in
+     565 is stored 565, not P8 (texobj's red/green/white). Nearest reads
+     the same texels without the palette load; GLTexture.x565 sends it,
+     filtered, through the 8-bit filters as P8 would (raster_sel.c
+     UNIT_W8), so filtered pixels are unchanged too. Grey stays L8.
+     (Without x565 the first cut failed glx_mtex page 3: 2.58% -> 3.99%.)
+  b. gl_tex8_sub: glCopyTexSubImage2D over the whole of an RGB/RGBA
+     texture's only level converts L8/P8 to 565 once; st565_rows stores
+     the colour buffer's 565 values directly (no 8-bit row, no rounding
+     pass; the expansion and T565 are inverse). pix6 was an L8 (black,
+     no-pixels) texture re-scanned on every copy.
+  c. zpipe.c zo_sa_omsa: one-alpha chunks (word test) use zf_btab's
+     destination tables + a 256-B source table for that alpha
+     (ZPipeX.satab); alpha 255 is a plain store; other chunks prepare the
+     two factors once per pixel (MUL8K: (257 n + 32896) >> 16 = round(n /
+     255), checked for every n <= 70000). zo_sa_one and the subtract
+     pairs prepare the factor per pixel.
+  d. zpipe_int.h div255r = (n + 128) * 257 >> 16 with 257 in an opaque
+     register: 4 instructions instead of 5, same value (n <= 70000).
+  Compat build (-DS31GL_P4ARITH): 0 of 74 hashes differ from phase-4
+  final; worst geo5 +1.49% (geo5 is 0.7068 in the default build both at
+  105effc and now - not a fix-2 change; the review's compat worst +0.42%
+  was measured on an earlier tree).
+
+  The 7 lines still over limits.txt all change pixels vs phase 4 (the
+  Mesa rounding and 8-bit storage), none is feature-free, all improved:
+                          phase-4 final   105effc          fix 2
+    filt11 640x400           46.9837   52.1301           51.6469  +9.9%
+    filt11 320x240           14.7586   16.2925           16.1470  +9.4%
+      the lightmap is L8 now and takes the exact 8-bit bilinear filter
+      (zx8_bil 4.80 M vs phase 4's 565 zx_bil_r 3.91 M) - DARKNESS
+      defect A's fix, by design; QuakeSpasm itself is -35% overall
+    p4v7 / p4v6 / p4v8       18.2578 / 10.5276 / 0.7107 ->
+                             18.9333 / 10.8672 / 0.7299  +3.7 / +3.2 / +2.7%
+      smooth lines / points with SRC_ALPHA, ONE: per-pixel coverage
+      alpha, so no table; the rounded product is 3 instructions against
+      phase 4's floor at 2 (zo_sa_one on p4v7: 7.61 M phase 4, 8.95 M
+      at 105effc)
+    filt6 320x240            37.4256 -> 38.7412  +3.5%: ze_mod_rgba, four
+      independent rounded products a pixel (texel x vertex colour, no
+      shared factor), + zo_sa_one as above
+    prim8 320x240             3.0614 -> 3.0829  +0.70% (guard +0.2%):
+      ZB_fillTriangleSmooth +26 k/frame (~11 instructions a triangle of
+      2,400, the rounded colour set-up); not touched by fix 2
+  These need the owner's sign-off for new limits.txt values (not changed
+  here), or accepting -DS31GL_P4ARITH arithmetic for them.
+
+2. GL_MAX_TEXTURE_SIZE 512 (owner decision, done)
+  zgl.h TGL_TEX_MAX 512: get.c, texture.c (levels 0..9; 1024 and level 10
+  GL_INVALID_VALUE; proxies answer 0 above 512 >> level), the s31_tex8.c
+  row buffers (512 wide). The s/t fixed point keeps F + ws + hs <= 22: a
+  512 x 512 texture has 4 fraction bits, so its bilinear weights move in
+  16 steps instead of 32 (512 x 32 has 8, no loss). core_test: 512x2
+  upload + draw (P8, both halves), proxy 512 yes / 1024 no / level 1 at
+  512 no, level 10 invalid (core_test 286 -> 292 host, 284 -> 290 RV32).
+  QuakeSpasm re-captured against the 512 library (traces p5f2, p5f2-tf0;
+  gitignored as the others), replayed on this tree:
+                          256 (trace p5a)   512 (trace p5f2)
+    default M/frame       37.78 / 38.26     38.39 / 39.13   (+1.6% / +2.3%)
+    TEXFILTER=0           17.42 / 16.64     17.87 / 17.17   (+2.6% / +3.2%)
+    texture B after load  3,636,022         3,625,718       (-10 kB)
+    texture B at end      3,657,910         3,593,046       (-65 kB)
+    peak library heap     5,682,998         5,841,894       (+159 kB, +2.8%,
+                                                              load frame 13)
+    load phase            219.6 M           321.6 M instructions
+  (tf0: after load 3,259,813 -> 3,249,509, peak 5,306,789 -> 5,465,685.)
+  So QuakeSpasm holds slightly less texture memory in play at 512, but the
+  transient load peak grows 159 kB and loading costs +46% instructions;
+  per frame +1.6-3.2%. Not capped; board A/B is the arbiter. TyrQuake
+  0.71 GL's 320x24 status bar (512x32) now uploads; not rendered here
+  (no TyrQuake trace).
+
+3. .text (gl/bench/brsize.sh, Buildroot flags; brsize.txt)
+                .text     .rodata  stripped
+    105effc     300,130   25,512   411,264
+    fix 2       291,538   25,512   403,072   (-8,592 .text, -8,192 stripped)
+  Removed zf8_wx_{near,bil,ntri,tri}_c565 + zf8_world_x_c565 (the
+  565-on-8-bit-filter world loops, S31GL_FILT8=1 only, ~5.9 kB) and
+  zf8_bil0_gen (the any-kind picture shortcut, 3.5 kB, run by no
+  QuakeSpasm replay); those batches take zf8_world_11 / the texel stage,
+  same pixels (fused_test in both FILT8 modes, qsr-fused). Fix 2 added
+  ~1 kB back (satab, the copy path, x565). The selection code is already
+  __attribute__((cold)) (size-optimised); nothing else cheap was found in
+  the time box.
+
+4. GATES ON THE FINAL TREE (run-3a p5-fix2; gates/)
+  core_test 292/0 host, 290/0 RV32; raster_gate 51/0; filt_test 32/0;
+  fused_test 45/0 (both S31GL_FILT8 modes); headless_gears md5
+  34a082d3... as before; suite: 0 apps worse (suitecmp); pixels and
+  raster summaries identical to p5-final3; prims PASS; prec 99.35%
+  exact (identical score file); mtex 4 of 5 PASS as p5-final3, page 4
+  1.421% -> 1.426% strict / 220 -> 221 px tolerant (attributed to 1b's
+  copy rule - the one remaining change that alters stored texels: a
+  full-level copy into an L8/P8 texture is then filtered by phase 4's 565
+  filter, not the 8-bit one on the rounded expansion; not isolated);
+  qsr-fused: 10 traces, 856/856 fused = general = unpacked reference;
+  bench: 61 within limits.txt, 7 over (section 1).
+  QuakeSpasm p5a / p5a-tf0 replays: 84/84 frame hashes identical to
+  105effc's in both configs, 37.78 / 38.26 (was 37.82 / 38.67) and
+  17.42 / 16.64 (was 17.47 / 17.05); texture bytes +902 B / +576 B.
+
+5. OPEN
+  - The 7 over-limit lines above (owner: new limits or accept).
+  - 512 x 512 textures filter with 4 fraction bits (16 weight steps).
+  - mtex page 4's 1-pixel precision cost of the copy rule (section 4).
+  - geo5 +1.49% in the compat build predates fix 2 (not investigated).
+  - The per-level texel kinds (review P4) and the trilinear world loop
+    (review P5) are untouched.

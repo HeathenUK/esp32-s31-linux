@@ -35,16 +35,29 @@ static inline int clamp255(int v)
 #define MIX8(a, wa, b, wb) (MUL8(a, wa) + MUL8(b, wb))
 #define MIXS8(a, wa, b, wb, sh) clamp255((MUL8(a, wa) + MUL8(b, wb)) << (sh))
 #define ADDS8(x, y, sh) clamp255(((x) + (y) - 128) * (1 << (sh)))
+#define MUL8K_PREP(y) ((unsigned int)(y) + 1u)
+#define MUL8K(x, k) (((unsigned int)(x) * (k)) >> 8)
 
 #else
 
 /* round(n / 255) for 0 <= n <= 65662 (exhaustively checked; every use is a
    product or a sum of products of 8-bit values that adds to at most 65025,
    or a scaled one clamped at 255 first) */
+/* 257 in a register GCC cannot see into (fix 2): n * 257 is then one
+   multiply, not a shift and an add (the asm is not volatile, so a loop
+   computes it once) */
+static inline unsigned int zp_k257(void)
+{
+  unsigned int k;
+  __asm__("" : "=r"(k) : "0"(257u));
+  return k;
+}
+/* (fix 2: (n + 128) 257 >> 16 is the same value for n <= 70000 - every n
+   checked - in four instructions with the multiply, against five for
+   (n + 128 + (n + 128 >> 8)) >> 8) */
 static inline int div255r(unsigned int n)
 {
-  n += 128;
-  return (int)((n + (n >> 8)) >> 8);
+  return (int)(((n + 128u) * zp_k257()) >> 16);
 }
 #define MUL8(x, y) div255r((unsigned int)((x) * (y)))
 /* n = x y 2^sh can reach 4 x 65025: past 65662 the result is above 255
@@ -57,6 +70,12 @@ static inline int muls8(unsigned int n)
 #define MULS8(x, y, sh) muls8((unsigned int)((x) * (y)) << (sh))
 #define MIX8(a, wa, b, wb) div255r((unsigned int)((a) * (wa) + (b) * (wb)))
 #define MIXS8(a, wa, b, wb, sh) muls8((unsigned int)((a) * (wa) + (b) * (wb)) << (sh))
+/* MUL8 with its second operand prepared once (fix 2: a blend factor per
+   pixel, three products): round(n / 255) = (257 n + 32896) >> 16 for
+   0 <= n <= 70000 (exhaustively checked), so MUL8(x, y) is
+   MUL8K(x, MUL8K_PREP(y)) - a multiply, an add and a shift */
+#define MUL8K_PREP(y) ((unsigned int)(y) * zp_k257())
+#define MUL8K(x, k) (((unsigned int)(x) * (k) + 32896u) >> 16)
 /* (x + y - 127.5) 2^sh rounded half up: ((2 (x + y) - 255) 2^sh + 1) >> 1 */
 #define ADDS8(x, y, sh) clamp255((((2 * ((x) + (y)) - 255) * (1 << (sh))) + 1) >> 1)
 

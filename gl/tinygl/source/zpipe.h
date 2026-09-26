@@ -336,6 +336,10 @@ typedef struct ZPipeX {
      with no per-triangle choice (the 1:1 sampler may replace it) */
   unsigned char *btab;
   int btab_a;
+  /* fix 2 (zpipe.c zo_sa_omsa): MUL8(v, satab_a) of every 8-bit v, 256 B,
+     allocated at the first chunk of one alpha */
+  unsigned char *satab;
+  int satab_a;
   int bil0;
   /* phase 5 O2: the runners of a batch with unit 1 (ztriangle_genmt.c):
      zp_run_mt / zp_run_lod_mt, or under the filtered world filler the

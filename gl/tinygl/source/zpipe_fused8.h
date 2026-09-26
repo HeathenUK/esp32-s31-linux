@@ -380,7 +380,6 @@ static void zf8_world_x_##K0N(const ZPipe *p, const ZSpan *s, ZFrag *f) \
   else if (x->gen_depth(s, f)) zf8_world_11(p, s, f);                   \
 }
 ZF8_WX(p8, KP8)
-ZF8_WX(c565, K565)
 
 /* The filtered world with an RGB565 texture sampled by phase 4's 565
    filter (unit 0 not t8: S31GL_FILT8=0, the default) and the L8 lightmap:
@@ -617,8 +616,6 @@ void zf8_bil0_t(const ZPipe *p, const ZSpan *s, ZFrag *f, const int K8)
 }
 __attribute__((noinline))
 static void zf8_bil0_p8(const ZPipe *p, const ZSpan *s, ZFrag *f) { zf8_bil0_t(p, s, f, KB_P8); }
-__attribute__((noinline))
-static void zf8_bil0_gen(const ZPipe *p, const ZSpan *s, ZFrag *f) { zf8_bil0_t(p, s, f, KB_GEN); }
 
 /* the same for an L8 level (alpha none, bits or A8): the grey by one lerp
    of the cached 2x2 square's two rows at once (LM8's arithmetic), and the
@@ -667,15 +664,15 @@ static void zf8_bil0_l8(const ZPipe *p, const ZSpan *s, ZFrag *f) { zf8_bil0_l8_
 __attribute__((noinline))
 static void zf8_bil0_l8a(const ZPipe *p, const ZSpan *s, ZFrag *f) { zf8_bil0_l8_t(p, s, f, 1); }
 
-/* the batch's bilinear sampler (ZPipeX.bil0): 1 P8, 2 any kind, 3 L8
-   without the alpha, 4 L8 with it */
+/* the batch's bilinear sampler (ZPipeX.bil0): 1 P8, 3 L8 without the
+   alpha, 4 L8 with it (2, any kind, is gone: fix 2) */
 static inline void zf8_bil0(const ZPipe *p, const ZSpan *s, ZFrag *f)
 {
   switch (p->x->bil0) {
   case 1: zf8_bil0_p8(p, s, f); break;
   case 3: zf8_bil0_l8(p, s, f); break;
   case 4: zf8_bil0_l8a(p, s, f); break;
-  default: zf8_bil0_gen(p, s, f); break;
+  default: zf8_bil0_l8a(p, s, f); break;
   }
 }
 
@@ -893,7 +890,9 @@ static ZStageFn zpf8_pick(GLContext *c, int *kind, int *direct)
       int al = fn == zf8_pica || fn == zf8_fence || fn == zf8_part;
       if (L0->k8 == TGL_ST_P8) x->bil0 = 1;
       else if (L0->k8 == TGL_ST_L8 && L0->am <= TGL_AM_A8) x->bil0 = al ? 4 : 3;
-      else x->bil0 = 2;
+      /* (fix 2: any other kind - the W32 reference, S31GL_FILT8's 565, an
+         INTENSITY / ALPHA L8 - keeps the stage: the any-kind shortcut was
+         3.5 kB that no QuakeSpasm replay ran) */
     }
     return fn;
   }
@@ -933,10 +932,13 @@ static ZStageFn zpf8_pick(GLContext *c, int *kind, int *direct)
     if (lm && k0 >= 0 && p->depth == zp_depth_fn(ZP_DEPTH_LEQUAL, 1) &&
         c->tu1_filtered && !(p->xact & ZPX_TEX1) && u1->kmag == u1->kmin &&
         *u1->slot == zpx_stage8_u(1, TF_LINEAR0) && u1->cur0 == &u1->lvl[0]) {
-      if (u0->t8) {
+      /* (fix 2: the RGB565-on-8-bit-filter loops, S31GL_FILT8=1 only, were
+         removed - 5.9 kB of .text for a non-default arm; that arm takes
+         zf8_world_11 below, the same pixels) */
+      if (u0->t8 && k0 == KP8) {
         *direct = 2;
         zpf_count[ZF_WORLD_X]++;
-        return k0 == KP8 ? zf8_world_x_p8 : zf8_world_x_c565;
+        return zf8_world_x_p8;
       }
       /* an RGB565 texture on phase 4's filter (S31GL_FILT8=0): its REPEAT,
          no-alpha stages, or nearest in level 0 */

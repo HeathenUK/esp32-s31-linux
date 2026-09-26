@@ -612,7 +612,7 @@ static void zf_bil0_ra(const ZPipe *p, const ZSpan *s, ZFrag *f) { zf_bil0_t(p, 
    MUL8(e6(v), 255 - a), e5 / e6 UNPACK's expansions (cold: at a chunk
    whose alpha differs from the tables'); NULL without memory */
 __attribute__((noinline))
-static const unsigned char *zf_btab(ZPipeX *x, int a)
+const unsigned char *zf_btab(ZPipeX *x, int a)
 {
   int v;
   if (x->btab == NULL) {
@@ -982,5 +982,5 @@ int zpf_is_fused_stage(ZStageFn f)
          f == zf_alias_00 || f == zf_alias_10 || f == zf_alias_01 ||
          f == zf_alias_11 || f == zf_alias_st ||
          f == zf8_world_11 || f == zf8_world_10 || f == zf8_world_01 ||
-         f == zf8_world_x_p8 || f == zf8_world_x_c565 || f == zf8_alias_bl || f == zf8_alias_st;
+         f == zf8_world_x_p8 || f == zf8_alias_bl || f == zf8_alias_st;
 }

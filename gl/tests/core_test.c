@@ -99,7 +99,7 @@ static void test_basics(s31gl_ctx *ctx)
 
 #define GETI(p, want) do { iv[0] = -12345; glGetIntegerv(p, iv); \
 	CHECK(iv[0] == (want), #p " = %d (want %d)", iv[0], (int)(want)); } while (0)
-	GETI(GL_MAX_TEXTURE_SIZE, 256);
+	GETI(GL_MAX_TEXTURE_SIZE, 512);
 	GETI(GL_RED_BITS, 5);
 	GETI(GL_GREEN_BITS, 6);
 	GETI(GL_BLUE_BITS, 5);
@@ -522,9 +522,15 @@ static void test_textures(void)
 	glTexImage2D(GL_TEXTURE_2D, 1, GL_RGBA, 8, 8, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
 	CHECK(glGetError() == GL_NO_ERROR, "mipmap level 1 accepted");
 
+	glTexImage2D(GL_PROXY_TEXTURE_2D, 0, GL_RGBA, 1024, 1024, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+	glGetTexLevelParameteriv(GL_PROXY_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &v);
+	CHECK(v == 0, "proxy 1024x1024 refused (GL_MAX_TEXTURE_SIZE 512)");
 	glTexImage2D(GL_PROXY_TEXTURE_2D, 0, GL_RGBA, 512, 512, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
 	glGetTexLevelParameteriv(GL_PROXY_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &v);
-	CHECK(v == 0, "proxy 512x512 refused (GL_MAX_TEXTURE_SIZE 256)");
+	CHECK(v == 512, "proxy 512x512 accepted (GL_MAX_TEXTURE_SIZE 512)");
+	glTexImage2D(GL_PROXY_TEXTURE_2D, 1, GL_RGBA, 512, 512, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+	glGetTexLevelParameteriv(GL_PROXY_TEXTURE_2D, 1, GL_TEXTURE_WIDTH, &v);
+	CHECK(v == 0, "proxy level 1 at 512 refused");
 	glTexImage2D(GL_PROXY_TEXTURE_2D, 0, GL_RGBA, 256, 128, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
 	glGetTexLevelParameteriv(GL_PROXY_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &v);
 	CHECK(v == 128, "proxy 256x128 accepted");
@@ -629,13 +635,39 @@ static void test_raster_features(void)
 	/* GL 1.1: power-of-two sizes only, up to GL_MAX_TEXTURE_SIZE */
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 12, 8, 0, GL_RGBA, GL_UNSIGNED_BYTE, img);
 	CHECK(glGetError() == GL_INVALID_VALUE, "12x8 texture: GL_INVALID_VALUE");
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 512, 4, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-	CHECK(glGetError() == GL_INVALID_VALUE, "512 wide: GL_INVALID_VALUE");
-	glTexImage2D(GL_PROXY_TEXTURE_2D, 0, GL_RGB, 512, 4, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 1024, 4, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+	CHECK(glGetError() == GL_INVALID_VALUE, "1024 wide: GL_INVALID_VALUE");
+	glTexImage2D(GL_PROXY_TEXTURE_2D, 0, GL_RGB, 1024, 4, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
 	glGetTexLevelParameteriv(GL_PROXY_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &v);
-	CHECK(glGetError() == GL_NO_ERROR && v == 0, "512 wide proxy: width 0, no error");
-	glTexImage2D(GL_TEXTURE_2D, 9, GL_RGB, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, img);
-	CHECK(glGetError() == GL_INVALID_VALUE, "level 9 (> log2 256): GL_INVALID_VALUE");
+	CHECK(glGetError() == GL_NO_ERROR && v == 0, "1024 wide proxy: width 0, no error");
+	glTexImage2D(GL_TEXTURE_2D, 10, GL_RGB, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, img);
+	CHECK(glGetError() == GL_INVALID_VALUE, "level 10 (> log2 512): GL_INVALID_VALUE");
+	{
+		/* fix 2: a 512-wide image (TyrQuake's status bar is 512x32): two
+		   colours no 565 value holds (P8), left half and right half */
+		static unsigned char wide[512 * 2 * 4];
+		int k;
+		for (k = 0; k < 512 * 2; k++) {
+			int right = (k & 511) >= 256;
+			wide[k * 4 + 0] = right ? 50 : 200;
+			wide[k * 4 + 1] = 100;
+			wide[k * 4 + 2] = right ? 200 : 50;
+			wide[k * 4 + 3] = 255;
+		}
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 512, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, wide);
+		CHECK(glGetError() == GL_NO_ERROR, "512x2 upload accepted");
+		glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &v);
+		CHECK(v == 512, "GL_TEXTURE_WIDTH 512 = %d", v);
+		glEnable(GL_TEXTURE_2D);
+		glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+		glClear(GL_COLOR_BUFFER_BIT);
+		tquad();
+		CHECK((PX(1, H / 2) >> 11) == 200 >> 3 && (PX(1, H / 2) & 31) == 50 >> 3,
+		      "512 wide: left texel (0x%04x)", PX(1, H / 2));
+		CHECK((PX(W - 2, H / 2) >> 11) == 50 >> 3 && (PX(W - 2, H / 2) & 31) == 200 >> 3,
+		      "512 wide: right texel (0x%04x)", PX(W - 2, H / 2));
+		glDisable(GL_TEXTURE_2D);
+	}
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE_ALPHA, 16, 8, 0, GL_RGBA, GL_UNSIGNED_BYTE, img);
 	CHECK(glGetError() == GL_NO_ERROR, "16x8 LUMINANCE_ALPHA upload");
 	glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_INTERNAL_FORMAT, &v);

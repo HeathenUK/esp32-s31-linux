@@ -272,7 +272,7 @@ static int get(GLContext *c, int pname, int *iv, float *fv, int *kind)
   case GL_MAX_PROJECTION_STACK_DEPTH: I1(MAX_PROJECTION_STACK_DEPTH); break;
   case GL_MAX_TEXTURE_STACK_DEPTH: I1(MAX_TEXTURE_STACK_DEPTH); break;
   case GL_SUBPIXEL_BITS: I1(0); break;               /* integer vertices */
-  case GL_MAX_TEXTURE_SIZE: I1(256); break;          /* texture.c TEX_SIZE: native sizes up to it */
+  case GL_MAX_TEXTURE_SIZE: I1(TGL_TEX_MAX); break;  /* texture.c TEX_SIZE: native sizes up to it */
   case GL_MAX_3D_TEXTURE_SIZE: I1(0); break;
   case GL_MAX_CUBE_MAP_TEXTURE_SIZE: I1(0); break;
   case GL_MAX_PIXEL_MAP_TABLE: I1(32); break;

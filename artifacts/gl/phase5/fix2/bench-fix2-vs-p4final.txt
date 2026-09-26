@@ -1,0 +1,81 @@
+bench.sh (qemu RV32, M instructions/frame): phase-4 final (gl/bench/base5) | phase-5 fix (105effc) | fix 2 (default build)
+hash: vs phase-4 final; fix2-vs-105effc: frame hash of fix 2 against 105effc's; limit: limits.txt
+74 lines; fix-2 frame hashes identical to 105effc on 74 of 74; over limits.txt: 7
+line                       p4final   105effc      fix2    vs p4  hash limit
+filt11 640x400             46.9837   52.1301   51.6469   +9.93%  HASH 47.9234 tripwire OVER
+filt11 320x240             14.7586   16.2925   16.1470   +9.41%  HASH 15.0538 tripwire OVER
+p4v7 320x240               18.2578   19.5788   18.9333   +3.70%  HASH 18.6238 tripwire OVER
+filt6 320x240              37.4256   39.8957   38.7412   +3.52%  HASH 38.1606 tripwire OVER
+p4v6 320x240               10.5276   11.1803   10.8672   +3.23%  HASH 10.7390 tripwire OVER
+p4v8 320x240                0.7107    0.7434    0.7299   +2.70%  HASH 0.7253 tripwire OVER
+feat1 gears 320x240         4.2143    4.3574    4.2990   +2.01%  HASH 5.8137 tripwire
+feat1 texobj 320x240        1.7402    1.8294    1.7657   +1.47%  HASH 2.3012 tripwire
+geo5 320x240                0.6977    0.7068    0.7068   +1.30%  HASH 0.7980 tripwire
+filt8 320x240               1.1841    1.1966    1.1966   +1.06%  HASH 1.2079 tripwire
+prim8 320x240               3.0614    3.0829    3.0829   +0.70%  HASH 3.0675 guard OVER
+prim4 320x240               0.9920    0.9969    0.9969   +0.49%  HASH 1.2414 tripwire
+pix7 320x240                0.1365    0.1369    0.1369   +0.29%  same 0.2063 tripwire
+pix8 320x240                1.2397    1.2433    1.2433   +0.29%  same 1.2617 tripwire
+pix1 320x240                2.0146    2.0189    2.0189   +0.21%  same 2.0517 tripwire
+prim6 320x240               5.5622    5.5697    5.5697   +0.13%  same 5.7784 tripwire
+prim2 320x240               5.0574    5.0637    5.0637   +0.12%  same 5.2307 tripwire
+geo1 320x240                0.0940    0.0941    0.0941   +0.11%  same 0.2024 tripwire
+prim3 320x240               8.2109    8.2177    8.2177   +0.08%  same 8.4424 tripwire
+pix4 320x240                1.0105    1.0112    1.0112   +0.07%  same 1.0448 tripwire
+prim1 320x240               0.4360    0.4361    0.4361   +0.02%  HASH 0.5213 tripwire
+geo9 320x240                1.1441    1.1442    1.1442   +0.01%  same -
+geo9 640x400                3.7024    3.7025    3.7025   +0.00%  same -
+geo10 640x400               3.8464    3.8465    3.8465   +0.00%  same -
+pix0 320x240                0.0004    0.0004    0.0004   +0.00%  same 0.0590 tripwire
+pix3 320x240                0.3636    0.3636    0.3636   +0.00%  same 0.3853 tripwire
+pix5 320x240                1.6999    1.6999    1.6999   +0.00%  same 1.7932 tripwire
+prim0 320x240               0.0009    0.0009    0.0009   +0.00%  same 0.1182 tripwire
+geo1 640x400                0.3346    0.3346    0.3346   +0.00%  same 0.6772 tripwire
+geo10 320x240               1.1874    1.1874    1.1874   +0.00%  same -
+filt1 320x240               0.6378    0.6378    0.6378   +0.00%  HASH 0.6506 tripwire
+filt1 640x400               2.0596    2.0596    2.0596   +0.00%  HASH 2.1008 tripwire
+filt7 320x240               1.7045    1.7044    1.7044   -0.01%  HASH 1.7386 tripwire
+geo4 320x240                0.5220    0.5219    0.5219   -0.02%  same 0.6481 tripwire
+geo8 320x240                0.4671    0.4669    0.4669   -0.04%  HASH 0.5651 tripwire
+prim7 320x240               3.0559    3.0510    3.0510   -0.16%  HASH 3.5273 tripwire
+texobj 640x400              1.0081    1.1102    1.0064   -0.17%  same 1.0130 guard
+p4v2 320x240                5.4316    5.4213    5.4213   -0.19%  same 5.5324 tripwire
+geo6 320x240                3.6800    3.6726    3.6726   -0.20%  HASH 3.8946 tripwire
+p4v5 320x240                4.3214    4.3120    4.3120   -0.22%  same 4.3998 tripwire
+p4v4 320x240                4.2338    4.2244    4.2244   -0.22%  HASH 4.3104 tripwire
+p4v1 320x240                4.6215    4.6112    4.6112   -0.22%  same 4.7058 tripwire
+prim5 320x240               4.2377    4.2282    4.2282   -0.22%  same 4.4083 tripwire
+gears 640x400               1.8812    1.8764    1.8764   -0.26%  HASH 1.8896 guard
+p4v3 320x240                0.1494    0.1489    0.1489   -0.33%  same 0.1523 tripwire
+feat2 gears 320x240         3.4583    3.4461    3.4461   -0.35%  same 5.0366 tripwire
+teapot 640x400              3.0522    3.0411    3.0411   -0.36%  HASH 3.0669 guard
+feat3 gears 320x240         3.4452    3.4326    3.4326   -0.37%  same 5.0237 tripwire
+teapot 320x240              2.5657    2.5545    2.5545   -0.44%  HASH 2.5779 guard
+gears 320x240               1.0318    1.0267    1.0267   -0.49%  HASH 1.0361 guard
+feat4 gears 320x240         1.0318    1.0267    1.0267   -0.49%  HASH 2.6680 tripwire
+feat4 texobj 320x240        0.3254    0.3552    0.3237   -0.52%  same 0.4229 tripwire
+texobj 320x240              0.3253    0.3551    0.3236   -0.52%  same 0.3268 guard
+glxgears 300x300            0.9675    0.9624    0.9624   -0.53%  HASH 0.9714 guard
+glxgears-2buf 300x300       0.9679    0.9627    0.9627   -0.54%  HASH 0.9717 guard
+feat3 texobj 320x240        1.8664    1.8765    1.8540   -0.66%  same 1.9927 tripwire
+geo7 320x240                3.6854    3.6595    3.6595   -0.70%  HASH 3.9001 tripwire
+pix2 320x240                5.4259    6.1382    5.3820   -0.81%  same 5.4461 tripwire
+feat2 texobj 320x240        1.5112    1.5214    1.4988   -0.82%  same 2.0674 tripwire
+geo12 320x240               3.4177    3.3685    3.3685   -1.44%  HASH -
+geo3 320x240                2.4591    2.4103    2.4103   -1.98%  HASH 2.4640 guard
+geo11 320x240               2.2984    2.2482    2.2482   -2.18%  HASH -
+filt5 320x240               8.2774    7.1441    7.1441  -13.69%  HASH 8.4429 tripwire
+filt4 320x240               7.5232    6.4070    6.4070  -14.84%  HASH 7.6737 tripwire
+filt4 640x400              23.0769   19.4298   19.4298  -15.80%  HASH 23.5384 tripwire
+filt2 320x240               4.9113    4.0223    4.0223  -18.10%  HASH 5.0091 tripwire
+filt2 640x400              16.2100   13.2579   13.2579  -18.21%  HASH 16.5335 tripwire
+filt3 320x240               5.3012    4.2442    4.2442  -19.94%  HASH 5.4072 tripwire
+filt3 640x400              17.4114   13.9028   13.9028  -20.15%  HASH 17.7596 tripwire
+feat5 texobj 320x240        2.1239    2.3949    1.6429  -22.65%  same 2.2552 tripwire
+feat5 gears 320x240         3.8033    2.9376    2.8870  -24.09%  same 5.3887 tripwire
+filt10 320x240              3.9390    2.7567    2.7567  -30.02%  HASH 4.0178 tripwire
+filt9 320x240               3.0387    1.9548    1.9548  -35.67%  HASH 3.0995 tripwire
+pix6 320x240                0.6657    0.9181    0.0874  -86.87%  same 0.7378 tripwire
+
+compat build (-DS31GL_P4ARITH, fix-2 tree before the x565 / copy-rule revisions, which it does not use: TEX8 defaults to 0 there):
+  worst vs phase-4 final: geo5 320x240 +1.491%; hash changes vs phase-4 final: 0 of 74

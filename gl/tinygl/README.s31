@@ -773,3 +773,50 @@ artifacts/gl/phase5/REPORT.txt).
   8-bit storage and rounded blend's cost on small textures and
   glCopyTexSubImage2D (review P2, bench limits over), per-level texel kinds
   (review P4).
+
+Phase 5, fix 2 (2026-09-26; artifacts/gl/phase5/fix2/REPORT.txt): the
+feature-free bench regressions, GL_MAX_TEXTURE_SIZE 512, .text.
+- Storage (s31_tex8.c t8_kind): a colour RGB / RGBA image whose every
+  colour is exact in RGB565 (UNPACK(PACK(c)) == c: 0 and 255 always) is
+  stored 565, not P8 - the texels read back identically, and tier 1 and
+  the phase-4 stages fetch it without the palette load (texobj +10% ->
+  -0.5% vs phase 4). Grey images stay L8 (a black lightmap keeps its 8
+  bits). Such a texture carries
+  GLTexture.x565: filtered, it takes the 8-bit filters (raster_sel.c
+  UNIT_W8, as S31GL_FILT8=1 does for every 565 texture), so its filtered
+  pixels are the P8 storage's exactly - the first cut without the flag
+  sent it through phase 4's 565 filter and glx_mtex page 3 went from
+  2.58% / 0.03% (strict / tolerant) to 3.99% / 1.44%, a FAIL.
+- glCopyTexSubImage2D / glCopyTexImage2D into a 565 level (st565_rows):
+  the colour buffer's 565 values are stored as they are (no pixel
+  transfer; the 8-bit expansion and T565 are inverse in both arithmetics).
+  A copy over the whole of an RGB / RGBA texture's only level converts an
+  L8 / P8 texture to 565 first (gl_tex8_sub): no texel is left to
+  requantise, and every later copy is the direct store instead of the
+  statistics pass - pix6 0.918 -> 0.087 M (phase 4 0.666). Measured cost:
+  such a texture, filtered, now takes phase 4's 565 filter on the
+  replicated expansion instead of the 8-bit filter on s31_c5to8's rounded
+  one - glx_mtex page 4 1.421% -> 1.426% strict, 220 -> 221 px tolerant
+  (still PASS). A partial copy or a mipmapped texture keeps the rules.
+- SRC_ALPHA / ONE_MINUS_SRC_ALPHA (zpipe.c zo_sa_omsa): a chunk of one
+  alpha (tested a word at a time) takes the destination terms from
+  zf_btab's tables and the source terms from a 256-entry MUL8 table for
+  that alpha (ZPipeX.satab, 256 B at the first such chunk); alpha 255 is
+  the store. Other chunks prepare each pixel's two factors once
+  (MUL8K_PREP / MUL8K: round(n / 255) = (257 n + 32896) >> 16, checked
+  for every n <= 70000). zo_sa_one and the (reverse) subtract pairs
+  prepare the factor once per pixel. pix2 6.14 -> 5.38 M (phase 4 5.43).
+- div255r is (n + 128) * 257 >> 16 with 257 in an opaque register
+  (zp_k257): one multiply instead of a shift and an add; the same value
+  for every n <= 70000.
+- GL_MAX_TEXTURE_SIZE 512 (zgl.h TGL_TEX_MAX; owner decision): TyrQuake
+  0.71 GL does not clamp its uploads, and its 320x24 status bar is a
+  512x32 image. Proxies and GL_INVALID_VALUE follow it (1024 is refused,
+  level 10 is invalid). The s/t fixed point keeps F + ws + hs <= 22, so a
+  512 x 512 texture has 4 fraction bits (bilinear weights in 16 steps,
+  not 32); nothing else in the fillers depended on 256. The s31_tex8.c
+  row buffers are 512 wide (2 kB on the stack each).
+- Removed: the RGB565-on-8-bit-filter world loops (zf8_wx_*_c565,
+  S31GL_FILT8=1 only, 5.9 kB) and the any-kind bilinear picture shortcut
+  (zf8_bil0_gen, 3.5 kB; no QuakeSpasm replay ran it): those batches
+  take zf8_world_11 / the texel stage, the same pixels.

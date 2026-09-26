@@ -3,7 +3,7 @@
  *
  * s31 changes:
  *  - (plan F3) every texture is stored at its own power-of-two size, up
- *    to GL_MAX_TEXTURE_SIZE 256: RGB565, plus an A8 plane only when the
+ *    to GL_MAX_TEXTURE_SIZE 512 (256 before fix 2): RGB565, plus an A8 plane only when the
  *    internal format has alpha (see tex_class; README.s31 has the
  *    RGB565+A8 versus ARGB4444 measurement). Non-power-of-two and larger
  *    sizes are GL_INVALID_VALUE, as GL 1.1 says (with one "libGL:"
@@ -31,7 +31,7 @@
 #include "s31_pixels.h"
 #include "s31_tex8.h"
 
-#define TEX_SIZE 256            /* GL_MAX_TEXTURE_SIZE (get.c) */
+#define TEX_SIZE TGL_TEX_MAX    /* GL_MAX_TEXTURE_SIZE (get.c), zgl.h */
 
 /* phase 5 O1 (s31_mtex.c): a command on the ACTIVE texture unit runs its
    body with unit 1's state in the context fields when unit 1 is active */
@@ -418,10 +418,10 @@ int gl_tex_image_src(GLContext *c, GLParam *p, const S31Unpack *src)
     }
     return 0;
   }
-  /* GL_MAX_TEXTURE_SIZE is 256, so level L is at most 256 >> L; larger is
-     GL_INVALID_VALUE */
+  /* GL_MAX_TEXTURE_SIZE is TEX_SIZE, so level L is at most TEX_SIZE >> L;
+     larger is GL_INVALID_VALUE */
   if (iw > (TEX_SIZE >> level) || ih > (TEX_SIZE >> level)) {
-    gl_warn_once("texture larger than GL_MAX_TEXTURE_SIZE 256 (GL_INVALID_VALUE)");
+    gl_warn_once("texture larger than GL_MAX_TEXTURE_SIZE 512 (GL_INVALID_VALUE)");
     gl_set_error(c, GL_INVALID_VALUE);
     return 0;
   }
@@ -466,7 +466,8 @@ int gl_tex_image_src(GLContext *c, GLParam *p, const S31Unpack *src)
   t->ws = ws; t->hs = hs;
   t->fmt = cls;
   /* fraction bits of the fixed-point s/t (clip.c): F + ws + hs <= 22 keeps
-     9 bits of repeat headroom; 14 is TinyGL's for 256 wide */
+     9 bits of repeat headroom; 14 is TinyGL's for 256 wide. (fix 2: a
+     512 x 512 texture has 4, so its bilinear weights are 16 steps, not 32) */
   t->fbits = 22 - ws - hs < 14 ? 22 - ws - hs : 14;
   (void)lum;
   return pixels != NULL || src != NULL;

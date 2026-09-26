@@ -1,0 +1,12 @@
+qsr f2tf0 window 0 frames 100-139: 17.4249 Minsn/frame min 11.3770 max 23.6340 (frame 124), 0 dcalls/frame, hashes 0/40 same as live, tex 3259813 B heap 39792 B at start
+qsr f2tf0 window 1 frames 400-439: 16.6376 Minsn/frame min 12.8408 max 21.5270 (frame 401), 0 dcalls/frame, hashes 0/40 same as live, tex 3281701 B heap 42416 B at start
+qsr f2tf0 load: 206.74 Minsn before frame 98 (355 state-only frames in all: 321.54 Minsn), warm-up 69.61 Minsn
+qsr f2tf0 heap: texture 3259813 B, other 39792 B after the load phase; at the end texture 3281701 B, other 42432 B; peak 5306789 B, 464 allocations
+qsr f2tf0 peak: texture 5267189 B, other 39600 B, in frame 13
+qsr f2tf0 done: 439 frames, 84 full: 0 same as live, 84 differ
+qsr f2tf0-null window 0 frames 100-139: 0.2429 Minsn/frame min 0.0908 max 0.4488 (frame 124), 0 dcalls/frame, hashes 0/40 same as live, tex 0 B heap 39600 B at start
+qsr f2tf0-null window 1 frames 400-439: 0.1370 Minsn/frame min 0.0686 max 0.2013 (frame 415), 0 dcalls/frame, hashes 0/40 same as live, tex 0 B heap 39600 B at start
+qsr f2tf0-null load: 2.21 Minsn before frame 98 (355 state-only frames in all: 6.23 Minsn), warm-up 0.75 Minsn
+qsr f2tf0-null heap: texture 0 B, other 39600 B after the load phase; at the end texture 0 B, other 39616 B; peak 39616 B, 39 allocations
+qsr f2tf0-null peak: texture 0 B, other 39616 B, in frame 440
+qsr f2tf0-null done: 439 frames, 84 full: 0 same as live, 84 differ

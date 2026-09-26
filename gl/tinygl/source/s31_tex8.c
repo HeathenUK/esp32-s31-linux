@@ -177,7 +177,7 @@ __attribute__((optimize("O2")))
 static void st565_rows(unsigned short *pix, unsigned char *al, int ws, int ifmt,
                        const S31Unpack *u, int sx, int sy, int x0, int y0, int w, int h)
 {
-  unsigned char row[4 * 256];
+  unsigned char row[4 * TGL_TEX_MAX];
   int TW = 1 << ws, x, y, lum;
   int cls = gl_tex_class(ifmt, &lum);
 
@@ -189,10 +189,31 @@ static void st565_rows(unsigned short *pix, unsigned char *al, int ws, int ifmt,
      (u->format == GL_RGBA && (cls == TGL_TEXF_RGBA || cls == TGL_TEXF_RGB) && !lum) ||
      (u->format == GL_LUMINANCE && cls == TGL_TEXF_RGB && lum));
 
+  /* (fix 2, bench P2) the colour buffer into an RGB or RGBA texture, no
+     pixel transfer: its 565 values are the texels (the expansion
+     s31_c5to8 / c6to8 and T565 are inverse, in both arithmetics; alpha
+     255, black outside the buffer as unpack_fb_row reads it).
+     glCopyTexSubImage2D was +15% over phase 4 through the 8-bit row */
+  int fbd = u->fb != NULL && u->xs == NULL && !lum &&
+            (cls == TGL_TEXF_RGB || cls == TGL_TEXF_RGBA);
+
   for (y = 0; y < h; y++) {
     unsigned short *d = pix + (y0 + y) * TW + x0;
     unsigned char *da = al ? al + (y0 + y) * TW + x0 : NULL;
     const unsigned char *q = row;
+    if (fbd) {
+      int wy = u->fby + sy + y, wx = u->fbx + sx;
+      const unsigned short *fr = (const unsigned short *)
+        ((const char *)u->fb + (u->fbh - 1 - wy) * u->fbls);
+      if (wy < 0 || wy >= u->fbh)
+        for (x = 0; x < w; x++) d[x] = 0;
+      else if (wx >= 0 && wx + w <= u->fbw)
+        for (x = 0; x < w; x++) d[x] = fr[wx + x];
+      else
+        for (x = 0; x < w; x++) d[x] = wx + x >= 0 && wx + x < u->fbw ? fr[wx + x] : 0;
+      if (da) for (x = 0; x < w; x++) da[x] = 255;
+      continue;
+    }
     if (direct) {
       const unsigned char *p = u->base + (sy + y) * u->pitch + sx * u->group;
       switch (u->format) {
@@ -429,7 +450,7 @@ __attribute__((optimize("O2")))
 static void t8_row(const S31Unpack *u, int cls, int lum, int sx, int sy, int n,
                    unsigned int *out)
 {
-  unsigned char row[4 * 256];
+  unsigned char row[4 * TGL_TEX_MAX];
   const unsigned char *q = row;
   int x;
   if (u->fb == NULL && u->xs == NULL && u->type == GL_UNSIGNED_BYTE && u->format == GL_RGBA &&
@@ -514,7 +535,7 @@ static void t8_fold(T8Scan *s, const unsigned int *w, int n, unsigned char *ix)
 static void t8_scan_src(T8Scan *s, const S31Unpack *u, int cls, int lum, int sx, int sy,
                         int w, int h, unsigned char *ix, int ixs)
 {
-  unsigned int row[256];
+  unsigned int row[TGL_TEX_MAX];
   int y;
   for (y = 0; y < h; y++) {
     t8_row(u, cls, lum, sx, sy + y, w, row);
@@ -532,7 +553,7 @@ static void t8_l8_pass(T8Scan *s, const GLTexture *t, unsigned char *pix, unsign
                        int ws, int cls, int lum, const S31Unpack *u, int sx, int sy,
                        int x0, int y0, int w, int h)
 {
-  unsigned int row[256];
+  unsigned int row[TGL_TEX_MAX];
   int TW = 1 << ws, x, y, sh = t->amode == TGL_AM_ALPHA ? 24 : 0;
   if (u->fb == NULL && u->xs == NULL && u->type == GL_UNSIGNED_BYTE &&
       u->format == GL_RGBA && !lum && (cls == TGL_TEXF_RGBA || cls == TGL_TEXF_RGB) &&
@@ -617,11 +638,32 @@ static int t8_amode(const T8Scan *s, int cls, int lum)
   return s->a255 ? TGL_AM_ONE : (s->abin ? TGL_AM_BITS : TGL_AM_A8);
 }
 
-/* the kind a level with texels s would have on its own */
+/* every entry of s's palette survives RGB565 unchanged: UNPACK(PACK(w))
+   is w in r, g and b (0 and 255 always; texobj's red / green / white, a
+   black undefined image) */
+static int t8_pal565(const T8Scan *s)
+{
+  int k;
+  for (k = 0; k < s->n; k++) {
+    unsigned int w = s->pal[k], r = w & 255, g = (w >> 8) & 255, b = (w >> 16) & 255;
+    if ((((r & 0xf8) | (r >> 5)) != r) | (((g & 0xfc) | (g >> 6)) != g) |
+        (((b & 0xf8) | (b >> 5)) != b))
+      return 0;
+  }
+  return 1;
+}
+
+/* the kind a level with texels s would have on its own. (fix 2: a colour
+   RGB / RGBA image whose every colour is exact in 565 is stored as 565 -
+   the texels read back the same, and tier 1 and the phase-4 stages fetch
+   565 without the palette load: texobj was +10% over phase 4, bench P2.
+   A grey one stays L8: a lightmap that starts black keeps its 8 bits) */
 static int t8_kind(const GLContext *c, const T8Scan *s, int cls, int lum)
 {
   if (c->tex8 == 0) return TGL_ST_565;
-  if (cls == TGL_TEXF_ALPHA || cls == TGL_TEXF_INTENSITY || lum || s->grey) return TGL_ST_L8;
+  if (cls == TGL_TEXF_ALPHA || cls == TGL_TEXF_INTENSITY || lum) return TGL_ST_L8;
+  if (s->grey) return TGL_ST_L8;
+  if (s->n <= 256 && t8_pal565(s)) return TGL_ST_565;
   return s->n <= 256 ? TGL_ST_P8 : TGL_ST_565;
 }
 
@@ -646,7 +688,7 @@ static void t8_write(const GLTexture *t, void *pix, unsigned char *al, int ws, i
                      int lum, T8Scan *s, const S31Unpack *u, int sx, int sy, int x0,
                      int y0, int w, int h)
 {
-  unsigned int row[256];
+  unsigned int row[TGL_TEX_MAX];
   int TW = 1 << ws, x, y;
   for (y = 0; y < h; y++) {
     int k0 = (y0 + y) * TW + x0;
@@ -965,14 +1007,14 @@ int gl_tex8_image(GLContext *c, GLTexture *t, int level, int ws, int hs, int ifm
     }
     b = *v.pix;
     *v.pal = NULL;
-    t->st = TGL_ST_565; t->stref = 0; t->a1 = 0; t->amode = 0;
+    t->st = TGL_ST_565; t->stref = 0; t->a1 = 0; t->amode = 0; t->x565 = 0;
     *v.alpha = has_alpha ? (unsigned char *)b + n * 2 : NULL;
     if (u == NULL) memset(b, 0, (size_t)need);
     else st565_rows(b, *v.alpha, ws, ifmt, u, sx, sy, 0, 0, 1 << ws, 1 << hs);
     return 1;
   }
   if (!others) {
-    t->st = TGL_ST_565; t->stref = 0; t->a1 = 0; t->amode = 0;
+    t->st = TGL_ST_565; t->stref = 0; t->a1 = 0; t->amode = 0; t->x565 = 0;
   }
 
   /* what the image holds */
@@ -990,6 +1032,7 @@ int gl_tex8_image(GLContext *c, GLTexture *t, int level, int ws, int hs, int ifm
     t8_fold(&s, &w, 1, NULL);
   }
   st = t8_kind(c, &s, cls, lum);
+  if (!others && st == TGL_ST_565 && s.n <= 256) t->x565 = 1;   /* t8_kind's exact rule */
   if (st == TGL_ST_L8) am = t8_amode(&s, cls, lum);
   vk = others ? t8_vkind(t) : st;
   if (others && (vk != st || (st == TGL_ST_L8 && (am >= TGL_AM_I || t->amode >= TGL_AM_I) &&
@@ -1050,6 +1093,20 @@ int gl_tex8_sub(GLContext *c, GLTexture *t, int level, const S31Unpack *u,
 
   if (!lv_get(t, level, &v)) return 0;
   cls = gl_tex_class(ifmt, &lum);
+  if (u->fb != NULL && u->xs == NULL && !lum && t->st != TGL_ST_565 &&
+      (cls == TGL_TEXF_RGB || cls == TGL_TEXF_RGBA) && x0 == 0 && y0 == 0 &&
+      w == 1 << v.ws && h == 1 << v.hs && !t8_others(t, level)) {
+    /* (fix 2, bench P2) glCopyTexSubImage2D from the colour buffer over the
+       whole of a texture's only level (RGB / RGBA): the buffer is RGB565,
+       so a 565 texture holds the copy exactly - no texel is left to
+       requantise - and st565_rows stores it as it is, where every copy
+       paid the statistics pass before (pix6 +38% over phase 4: an L8
+       texture made with no pixels, black, stayed L8 while black was
+       copied into it). A partial copy, or one into a mipmapped texture,
+       keeps the kind rules below */
+    if (!t8_to565(c, t)) return 0;
+    lv_get(t, level, &v);
+  }
   vk = t8_vkind(t);
   if (vk == TGL_ST_L8 && t->st == TGL_ST_L8) {
     /* one pass (the per-frame lightmap update): written while checked */

@@ -265,6 +265,8 @@ void glClose(void)
   c->pipex.wtab = NULL;
   gl_free(c->pipex.btab);   /* phase 5 O2: its blend tables */
   c->pipex.btab = NULL;
+  gl_free(c->pipex.satab);  /* fix 2: zo_sa_omsa's source table */
+  c->pipex.satab = NULL;
 
   for(i=0;i<4;i++) {
     gl_free(c->matrix_stack[i]);

@@ -1,0 +1,8 @@
+bench: prim8 320x240 3.0829 > guard limit 3.0675
+bench: filt6 320x240 38.7412 > tripwire limit 38.1606
+bench: p4v6 320x240 10.8672 > tripwire limit 10.7390
+bench: p4v7 320x240 18.9333 > tripwire limit 18.6238
+bench: p4v8 320x240 0.7299 > tripwire limit 0.7253
+bench: filt11 320x240 16.1470 > tripwire limit 15.0538
+bench: filt11 640x400 51.6469 > tripwire limit 47.9234
+bench: 61 lines within limits.txt, 7 over

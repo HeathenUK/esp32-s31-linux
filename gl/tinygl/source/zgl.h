@@ -79,6 +79,10 @@ enum {
 #define MAX_TEXTURE_STACK_DEPTH    8
 #define MAX_NAME_STACK_DEPTH       64
 #define MAX_TEXTURE_LEVELS         11
+/* GL_MAX_TEXTURE_SIZE (fix 2: 512, owner decision - TyrQuake 0.71 GL does
+   not clamp its uploads to the advertised size, and its 320x24 status bar
+   is a 512x32 image); texture.c, get.c, the s31_tex8.c row buffers */
+#define TGL_TEX_MAX 512
 #define MAX_LIGHTS                 16
 
 #define VERTEX_HASH_SIZE 1031
@@ -297,6 +301,11 @@ typedef struct GLTexture {
   /* TGL_ST_L8: TGL_AM_*; TGL_ST_W32: the kind (P8 or L8) whose decisions
      the reference mirrors (stref) */
   unsigned char amode, stref;
+  /* fix 2: level 0 was a colour image of <= 256 colours all exact in 565,
+     stored 565 instead of P8 (s31_tex8.c t8_kind); filtered, it takes the
+     8-bit filters as a P8 texture would (raster_sel.c UNIT_W8), so only
+     the nearest paths see the change - and read the same texels */
+  unsigned char x565;
   GLTexPal *pal0;           /* in level 0's block (NULL: none) */
 } GLTexture;
 
