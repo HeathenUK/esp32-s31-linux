@@ -1,0 +1,53 @@
+# glref run: impl=ours name=plain-ours frame=60 display=:90
+# cmd: /src/artifacts/gl/glquake/host/quakespasm -basedir /src/artifacts/gl/glquake/host/plain -width 320 -height 240 -window -nosound -nocdaudio
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/artifacts/gl/glquake/host/ours/gl/out-host/libGL.so.1 (0x0000ef5e8e320000)
+libGL: context 1 created (pid 55, comm quakespasm)
+libGL: context 2 created (pid 55, comm quakespasm)
+libGL: approximated mipmap level chosen once per triangle (lambda at its centroid)
+Command line: /src/artifacts/gl/glquake/host/quakespasm -basedir /src/artifacts/gl/glquake/host/plain -width 320 -height 240 -window -nosound -nocdaudio
+Found SDL version 1.2.68
+Terminal input not available.
+Detected 8 CPUs.
+Initializing QuakeSpasm v0.96.3
+Host_Init
+Playing shareware version.
+Console initialized.
+UDP Initialized
+Server using protocol 666 (FitzQuake)
+Exe: 09:44:21 Sep 26 2026
+256.0 megabyte heap
+Video mode 320x240x16 60Hz (16-bit z-buffer, 0x FSAA) initialized
+GL_VENDOR: s31
+GL_RENDERER: Software Rasterizer
+GL_VERSION: 1.1 s31-tinygl
+Warning: OpenGL version < 1.5, skipping ARB_vertex_buffer_object check
+Warning: multitexture not supported (extension not found)
+Warning: texture_env_combine not supported
+Warning: texture_env_add not supported
+FOUND: SDL_GL_SWAP_CONTROL
+Warning: texture_filter_anisotropic not supported
+Warning: texture_non_power_of_two not supported
+Warning: OpenGL version < 2, GLSL not available
+Warning: GLSL gamma not available, using hardware gamma
+Warning: GLSL alias model rendering not available, using Fitz renderer
+Warning: glGenerateMipmap not available, liquids won't have mipmaps
+gamma adjustment not available
+
+Language initialization
+Couldn't load 'localization/loc_english.txt'
+from '/src/artifacts/gl/glquake/host/plain'
+
+========= Quake Initialized =========
+
+execing quake.rc
+execing default.cfg
+couldn't exec config.cfg
+couldn't exec autoexec.cfg
+3 demo(s) in loop
+Playing demo from demo1.dem.
+
+
+the Necropolis
+Using protocol 15
+glref: ok at swap 60 -> /src/artifacts/gl/glquake/dark/ours/plain-ours.f60

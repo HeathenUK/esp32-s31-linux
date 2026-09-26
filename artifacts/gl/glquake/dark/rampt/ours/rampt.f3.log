@@ -1,0 +1,7 @@
+# glref run: impl=ours name=rampt frame=3 display=:90
+# cmd: /src/artifacts/gl/glquake/host/rampt
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/artifacts/gl/glquake/host/ours/gl/out-host/libGL.so.1 (0x0000edc1911b0000)
+libGL: context 1 created (pid 55, comm rampt)
+GL_VENDOR s31
+glref: ok at swap 3 -> /src/artifacts/gl/glquake/dark/rampt/ours/rampt.f3

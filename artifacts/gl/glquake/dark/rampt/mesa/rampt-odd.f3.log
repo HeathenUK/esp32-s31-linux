@@ -1,0 +1,8 @@
+# glref run: impl=mesa name=rampt-odd frame=3 display=:90
+# cmd: /src/artifacts/gl/glquake/host/rampt-odd
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /lib/aarch64-linux-gnu/libGL.so.1 (0x0000f89fe3470000)
+#   	libGLdispatch.so.0 => /lib/aarch64-linux-gnu/libGLdispatch.so.0 (0x0000f89fe2fb0000)
+#   	libGLX.so.0 => /lib/aarch64-linux-gnu/libGLX.so.0 (0x0000f89fe2f50000)
+GL_VENDOR Mesa
+glref: ok at swap 3 -> /src/artifacts/gl/glquake/dark/rampt/mesa/rampt-odd.f3

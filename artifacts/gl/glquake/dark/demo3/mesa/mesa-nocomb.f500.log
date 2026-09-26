@@ -1,0 +1,59 @@
+# glref run: impl=mesa name=mesa-nocomb frame=500 display=:90
+# cmd: /src/artifacts/gl/glquake/host/quakespasm -basedir /src/artifacts/gl/glquake/host/d3 -width 320 -height 240 -window -nosound -nocdaudio -novbo -nomtex -nocombine -noadd -notexturenpot -noglsl -nowarpmipmaps
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /lib/aarch64-linux-gnu/libGL.so.1 (0x0000e16b93d10000)
+#   	libGLdispatch.so.0 => /lib/aarch64-linux-gnu/libGLdispatch.so.0 (0x0000e16b938c0000)
+#   	libGLX.so.0 => /lib/aarch64-linux-gnu/libGLX.so.0 (0x0000e16b93860000)
+Command line: /src/artifacts/gl/glquake/host/quakespasm -basedir /src/artifacts/gl/glquake/host/d3 -width 320 -height 240 -window -nosound -nocdaudio -novbo -nomtex -nocombine -noadd -notexturenpot -noglsl -nowarpmipmaps
+Found SDL version 1.2.68
+Terminal input not available.
+Detected 8 CPUs.
+Initializing QuakeSpasm v0.96.3
+Host_Init
+Playing shareware version.
+Console initialized.
+UDP Initialized
+Server using protocol 666 (FitzQuake)
+Exe: 09:44:21 Sep 26 2026
+256.0 megabyte heap
+Video mode 320x240x16 60Hz (24-bit z-buffer, 0x FSAA) initialized
+GL_VENDOR: Mesa
+GL_RENDERER: llvmpipe (LLVM 19.1.7, 128 bits)
+GL_VERSION: 4.5 (Compatibility Profile) Mesa 25.0.7-2+deb13u1
+Warning: Vertex buffer objects disabled at command line
+Warning: Mutitexture disabled at command line
+Warning: texture_env_combine disabled at command line
+Warning: texture_env_add disabled at command line
+FOUND: SDL_GL_SWAP_CONTROL
+FOUND: EXT_texture_filter_anisotropic
+Warning: texture_non_power_of_two disabled at command line
+Warning: GLSL disabled at command line
+Warning: GLSL gamma not available, using hardware gamma
+Warning: GLSL alias model rendering not available, using Fitz renderer
+Warning: glGenerateMipmap disabled at command line
+
+Language initialization
+Couldn't load 'localization/loc_english.txt'
+from '/src/artifacts/gl/glquake/host/d3'
+
+========= Quake Initialized =========
+
+execing quake.rc
+execing default.cfg
+couldn't exec config.cfg
+execing autoexec.cfg
+Playing demo from demo3.dem.
+3 demo(s) in loop
+
+
+The Door To Chthon
+Using protocol 15
+You got the shells
+You got the rockets
+You get 2 rockets  
+You receive 25 health
+You got the Rocket Launcher
+You receive 25 health
+You get 2 rockets  
+You got armor
+glref: ok at swap 500 -> /src/artifacts/gl/glquake/dark/demo3/mesa/mesa-nocomb.f500

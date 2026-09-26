@@ -49,3 +49,21 @@ rootfs/tyr-quake.*
 
 # glref host GL rig: downloaded/extracted reference app sources and builds
 /gl/ref-apps/
+
+# QuakeSpasm host rig (artifacts/gl/glquake/host): game data (shareware pak0, 18 MB), source copy, build output
+artifacts/gl/glquake/host/id1/pak0.pak
+artifacts/gl/glquake/host/src/
+artifacts/gl/glquake/host/ours/
+artifacts/gl/glquake/host/plain/id1/pak0.pak
+artifacts/gl/glquake/host/exp-*/
+artifacts/gl/glquake/host/nopb/id1/pak0.pak
+artifacts/gl/glquake/host/d2/id1/pak0.pak
+artifacts/gl/glquake/host/d3/id1/pak0.pak
+artifacts/gl/glquake/host/quakespasm
+artifacts/gl/glquake/host/rampt
+artifacts/gl/glquake/host/rampt-odd
+artifacts/gl/glquake/host/rampt[0-9]
+artifacts/gl/glquake/host/rampt4-flat
+artifacts/gl/glquake/host/*.so
+artifacts/gl/glquake/host/*/config.cfg
+artifacts/gl/glquake/host/history.txt

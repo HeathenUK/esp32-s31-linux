@@ -1,0 +1,9 @@
+PASS  320x240  strict 0.896% (688 px >16)  tolerant 0.350% (269 px)  max 82  mean 1.78  diff diff/libgl.f100.png
+nocomb                     14.41     11.81     11.33     24.78
+ours                       13.92     11.65     10.61     22.98
+PASS  320x240  strict 0.408% (313 px >16)  tolerant 0.202% (155 px)  max 148  mean 1.30  diff diff/libgl.f300.png
+nocomb                      9.15      5.33      7.22     24.40
+ours                        8.31      4.73      6.58     22.65
+FAIL  320x240  strict 7.768% (5966 px >16)  tolerant 3.025% (2323 px)  max 181  mean 2.63  diff diff/libgl.f500.png
+nocomb                     29.75     30.03     42.48     28.66
+ours                       30.20     30.94     43.42     27.25

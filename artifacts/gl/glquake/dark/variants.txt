@@ -1,0 +1,43 @@
+view = rows 0-191; ratio = view luminance / mesa-nocomb; dRGB = mean signed error vs mesa-nocomb
+frame 250  mesa-nocomb view 31.87
+   mesa-full      32.66  ratio 1.025  dRGB +1.27 +0.58 +0.61
+   ours(frozen)   31.63  ratio 0.992  dRGB -0.15 +0.67 -5.19
+   exp-base       31.63  ratio 0.992  dRGB -0.15 +0.67 -5.19
+   exp-round      34.55  ratio 1.084  dRGB +4.44 +2.85 -2.81
+   exp-lmround    32.16  ratio 1.009  dRGB +0.71 +1.08 -4.94
+frame 400  mesa-nocomb view 21.27
+   mesa-full      21.55  ratio 1.013  dRGB +0.60 +0.13 +0.22
+   ours(frozen)   20.31  ratio 0.955  dRGB -1.38 -0.89 -0.24
+   exp-base       20.31  ratio 0.955  dRGB -1.38 -0.89 -0.24
+   exp-round      22.32  ratio 1.050  dRGB +2.03 +0.67 +0.47
+   exp-lmround    21.00  ratio 0.987  dRGB -0.03 -0.44 -0.00
+frame 550  mesa-nocomb view 8.39
+   mesa-full       8.60  ratio 1.024  dRGB +0.55 +0.02 +0.25
+   ours(frozen)    7.22  ratio 0.860  dRGB -0.29 -1.69 -0.84
+   exp-base        7.22  ratio 0.860  dRGB -0.29 -1.69 -0.84
+   exp-round       8.75  ratio 1.043  dRGB +2.42 -0.53 -0.50
+   exp-lmround     7.52  ratio 0.896  dRGB +0.34 -1.50 -0.83
+frame 700  mesa-nocomb view 19.43
+   mesa-full      20.15  ratio 1.037  dRGB +1.16 +0.38 +1.28
+   ours(frozen)   18.99  ratio 0.977  dRGB +0.04 -0.85 +0.36
+   exp-base       18.99  ratio 0.977  dRGB +0.04 -0.85 +0.36
+   exp-round      20.86  ratio 1.074  dRGB +3.24 +0.36 +2.24
+   exp-lmround    19.55  ratio 1.006  dRGB +1.13 -0.52 +0.72
+frame 850  mesa-nocomb view 7.40
+   mesa-full       7.69  ratio 1.038  dRGB +0.50 +0.13 +0.51
+   ours(frozen)    7.15  ratio 0.966  dRGB -0.29 -0.30 +0.08
+   exp-base        7.15  ratio 0.966  dRGB -0.29 -0.30 +0.08
+   exp-round       8.72  ratio 1.178  dRGB +2.17 +0.90 +1.23
+   exp-lmround     7.63  ratio 1.030  dRGB +0.59 +0.03 +0.26
+frame p48  mesa-nocomb view 16.32
+   mesa-full      16.77  ratio 1.028  dRGB +0.78 +0.25 +0.66
+   ours(frozen)   15.78  ratio 0.967  dRGB -0.59 -0.62 +0.00
+   exp-base       15.78  ratio 0.967  dRGB -0.59 -0.62 +0.00
+   exp-round      18.31  ratio 1.122  dRGB +3.03 +1.40 +2.31
+   exp-lmround    16.14  ratio 0.989  dRGB +0.08 -0.37 +0.14
+== rampt-odd exp-base
+impl L Y/exact;ours tex 1.000;ours 20 0.788;ours 39 0.838;ours 55 0.889;ours 71 0.932;ours 100 0.995;ours 135 0.984;ours 199 0.995;
+== rampt-odd exp-round
+impl L Y/exact;ours tex 1.022;ours 20 0.984;ours 39 1.010;ours 55 1.019;ours 71 1.036;ours 100 1.052;ours 135 1.043;ours 199 1.025;
+== rampt-odd exp-lmround
+impl L Y/exact;ours tex 1.000;ours 20 0.788;ours 39 0.838;ours 55 0.889;ours 71 0.932;ours 100 0.995;ours 135 0.984;ours 199 0.995;

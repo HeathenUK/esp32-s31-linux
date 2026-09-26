@@ -1,0 +1,15 @@
+PASS  320x240  strict 0.335% (257 px >16)  tolerant 0.135% (104 px)  max 49  mean 2.25  diff diff/libgl.f60.png
+arm                         full      view  view_low       hud
+full                       27.39     27.16     24.75     28.31
+nocomb                     26.70     26.35     24.02     28.08
+ours                       25.23     25.03     22.11     26.06
+PASS  320x240  strict 0.128% (98 px >16)  tolerant 0.038% (29 px)  max 41  mean 1.18  diff diff/libgl.f200.png
+arm                         full      view  view_low       hud
+full                       11.35      8.12      7.27     24.24
+nocomb                     11.04      7.76      6.89     24.17
+ours                       10.01      6.95      6.22     22.26
+PASS  320x240  strict 0.478% (367 px >16)  tolerant 0.105% (81 px)  max 49  mean 1.57  diff diff/libgl.f400.png
+arm                         full      view  view_low       hud
+full                       35.49     36.82     34.54     30.17
+nocomb                     35.08     36.32     34.14     30.10
+ours                       33.91     35.21     33.10     28.68

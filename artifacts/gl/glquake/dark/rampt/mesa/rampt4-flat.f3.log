@@ -1,0 +1,7 @@
+# glref run: impl=mesa name=rampt4-flat frame=3 display=:90
+# cmd: /src/artifacts/gl/glquake/host/rampt4-flat
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /lib/aarch64-linux-gnu/libGL.so.1 (0x0000f9b5726f0000)
+#   	libGLdispatch.so.0 => /lib/aarch64-linux-gnu/libGLdispatch.so.0 (0x0000f9b572230000)
+#   	libGLX.so.0 => /lib/aarch64-linux-gnu/libGLX.so.0 (0x0000f9b5721d0000)
+glref: ok at swap 3 -> /src/artifacts/gl/glquake/dark/rampt/mesa/rampt4-flat.f3

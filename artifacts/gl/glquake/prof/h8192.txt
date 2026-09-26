@@ -1,0 +1,51 @@
+ 2>/dev/null; exit" TERM INT; sleep 27; ; wait "${__rs_sleep}"; kill -0 ${__rp} 2>/dev/null && echo RS_TIME"K"ILL; kill -9 ${__rp} 2>/dev/null)
+[1]+  Done                       sh /tmp/r.sh 2>&1
+~ # 
+
+GQ h8192 args: -mixspeed 11025 -heapsize 8192 -zone 384 -width 320 -height 240 -window | #391 SMP Fri Sep 25 10:24:40 UTC 2026 up 3742.12
+MEM0 MemFree: 3968 kB MemAvailable: 3252 kB SwapFree: 64212 kB CmaFree: 1576 kB 
+VM0 pswpin=89289 pswpout=76988 pgmajfault=104247 
+EXITED at 10s
+WALL 3743.52 3753.70
+RESULT 
+VM1 pswpin=89486 pswpout=78137 pgmajfault=104658 
+MEM1 MemFree: 4940 kB MemAvailable: 3812 kB SwapFree: 63920 kB CmaFree: 1512 kB 
+--- log
+ 8.0 megabyte heap
+Video mode 320x240x16 60Hz (16-bit z-buffer, 0x FSAA) initialized
+GL_VENDOR: s31
+GL_RENDERER: Software Rasterizer
+GL_VERSION: 1.1 s31-tinygl
+Warning: OpenGL version < 1.5, skipping ARB_vertex_buffer_object check
+Warning: multitexture not supported (extension not found)
+Warning: texture_env_combine not supported
+Warning: texture_env_add not supported
+Warning: vertical sync not supported (swap_control doesn't match vid_vsync)
+Warning: texture_filter_anisotropic not supported
+Warning: texture_non_power_of_two not supported
+Warning: OpenGL version < 2, GLSL not available
+Warning: GLSL gamma not available, using hardware gamma
+Warning: GLSL alias model rendering not available, using Fitz renderer
+Warning: glGenerateMipmap not available, liquids won't have mipmaps
+Sound Initialization
+Shutting down SDL sound
+--- out
+from '/root/quake/td'
+
+========= Quake Initialized =========
+
+execing quake.rc
+execing default.cfg
+couldn't exec config.cfg
+execing autoexec.cfg
+Playing demo from demo1.dem.
+3 demo(s) in loop
+
+
+the Necropolis
+Using protocol 15
+Shutting down SDL sound
+GQDONE
+RS_DONE
+[2]+  Done(143)                  (trap "kill \"\$__rs_sleep\" 2>/dev/null; wait \"\$__rs_sleep\" 2>/dev/null; exit" TERM INT; sleep 387; ; wait "${__rs_sleep}"; kill -0 ${__rp} 2>/dev/null && 
+

@@ -1,0 +1,49 @@
+== timedemo frame 250
+path  (mesa-full vs mesa-nocomb): PASS  320x240  strict 0.040% (31 px >16)  tolerant 0.013% (10 px)  max 17  mean 0.89  diff diff/path.f250.png
+libGL (mesa-nocomb vs ours):      PASS  320x240  strict 0.944% (725 px >16)  tolerant 0.332% (255 px)  max 49  mean 2.97  diff diff/libgl.f250.png
+arm                         full      view  view_low       hud
+mesa-full                  32.62     32.66     34.01     32.46
+mesa-nocomb                31.90     31.87     33.05     32.00
+ours                       31.39     31.63     33.13     30.44
+== timedemo frame 400
+path  (mesa-full vs mesa-nocomb): PASS  320x240  strict 0.000% (0 px >16)  tolerant 0.000% (0 px)  max 9  mean 0.43  diff diff/path.f400.png
+libGL (mesa-nocomb vs ours):      PASS  320x240  strict 0.310% (238 px >16)  tolerant 0.094% (72 px)  max 49  mean 1.47  diff diff/libgl.f400.png
+arm                         full      view  view_low       hud
+mesa-full                  22.65     21.55     19.85     27.04
+mesa-nocomb                22.41     21.27     19.67     26.96
+ours                       21.26     20.31     18.54     25.08
+== timedemo frame 550
+path  (mesa-full vs mesa-nocomb): PASS  320x240  strict 0.042% (32 px >16)  tolerant 0.016% (12 px)  max 41  mean 0.58  diff diff/path.f550.png
+libGL (mesa-nocomb vs ours):      PASS  320x240  strict 0.322% (247 px >16)  tolerant 0.117% (90 px)  max 41  mean 1.71  diff diff/libgl.f550.png
+arm                         full      view  view_low       hud
+mesa-full                  11.99      8.60     11.85     25.54
+mesa-nocomb                11.81      8.39     11.92     25.48
+ours                       10.52      7.22     11.11     23.73
+== timedemo frame 700
+path  (mesa-full vs mesa-nocomb): PASS  320x240  strict 0.020% (15 px >16)  tolerant 0.007% (5 px)  max 17  mean 0.93  diff diff/path.f700.png
+libGL (mesa-nocomb vs ours):      PASS  320x240  strict 0.352% (270 px >16)  tolerant 0.133% (102 px)  max 49  mean 1.61  diff diff/libgl.f700.png
+arm                         full      view  view_low       hud
+mesa-full                  21.41     20.15     18.96     26.46
+mesa-nocomb                20.81     19.43     18.40     26.31
+ours                       20.13     18.99     17.86     24.69
+== timedemo frame 850
+path  (mesa-full vs mesa-nocomb): PASS  320x240  strict 0.078% (60 px >16)  tolerant 0.025% (19 px)  max 33  mean 0.59  diff diff/path.f850.png
+libGL (mesa-nocomb vs ours):      PASS  320x240  strict 0.375% (288 px >16)  tolerant 0.155% (119 px)  max 49  mean 1.25  diff diff/libgl.f850.png
+arm                         full      view  view_low       hud
+mesa-full                  11.47      7.69     11.85     26.59
+mesa-nocomb                11.19      7.40     11.33     26.32
+ours                       10.63      7.15     11.04     24.56
+== plain start frame 44 (the board screenshot is ~f44-48)
+libGL (mesa-nocomb vs ours):      PASS  320x240  strict 0.208% (160 px >16)  tolerant 0.061% (47 px)  max 49  mean 1.56  diff diff/plain-libgl.f44.png
+arm                         full      view  view_low       hud
+board                      17.71     16.33      5.72     23.24
+mesa-full                  19.12     17.53      6.68     25.47
+mesa-nocomb                18.72     17.10      6.17     25.23
+ours                       17.89     16.49      5.77     23.49
+== plain start frame 48 (the board screenshot is ~f44-48)
+libGL (mesa-nocomb vs ours):      PASS  320x240  strict 0.185% (142 px >16)  tolerant 0.056% (43 px)  max 49  mean 1.52  diff diff/plain-libgl.f48.png
+arm                         full      view  view_low       hud
+board                      17.71     16.33      5.72     23.24
+mesa-full                  18.52     16.77      6.68     25.53
+mesa-nocomb                18.11     16.32      6.17     25.29
+ours                       17.33     15.78      5.81     23.56
