@@ -40,3 +40,17 @@ prim5 320x240 | 4.4083 | tripwire | 4.3219
 prim6 320x240 | 5.7784 | tripwire | 5.6651
 prim7 320x240 | 3.5273 | tripwire | 3.4581
 prim8 320x240 | 3.7243 | tripwire | 3.6513
+# phase 3a (2026-09-26): geo.sh and glxgears_q.c, newlib libm (the
+# default build); the geometry-lever results + 2%
+geo1 320x240 | 0.2024 | tripwire | phase 3a final 0.1984 + 2%
+geo1 640x400 | 0.6772 | tripwire | phase 3a final 0.6639 + 2%
+geo3 320x240 | 2.6399 | tripwire | phase 3a final 2.5881 + 2%
+geo4 320x240 | 0.6481 | tripwire | phase 3a final 0.6354 + 2%
+geo5 320x240 | 0.7980 | tripwire | phase 3a final 0.7824 + 2%
+geo6 320x240 | 3.8946 | tripwire | phase 3a final 3.8182 + 2%
+geo7 320x240 | 3.9001 | tripwire | phase 3a final 3.8236 + 2%
+geo8 320x240 | 0.5651 | tripwire | phase 3a final 0.5540 + 2%
+glxgears 300x300 | 1.1465 | tripwire | phase 3a final 1.1240 + 2%
+# phase 3a pixel levers (2026-09-26): glxgears drawn into two colour
+# buffers in turn, as GLX does for a 300x300 window (geo.sh); + 2%
+glxgears-2buf 300x300 | 0.9888 | tripwire | phase 3a pixel final 0.9694 + 2%

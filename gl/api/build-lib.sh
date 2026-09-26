@@ -46,6 +46,13 @@ TGLFP=""
 # glu.c is dropped (plan 2.3: GLU is Mesa's libGLU) and ostinygl.c is
 # replaced by source/s31_ctx.c.
 # the rasteriser is hot: -O2. The ABI layer is thin wrappers and cold stubs: -Os.
+# (phase 3a G01: -fno-math-errno measured inert - GCC already emits a bare
+# fsqrt.s for sqrtf here; gears/teapot/glxgears instruction counts were
+# identical to the last digit, .text -16 B - so it is not used.
+# -fsingle-precision-constant likewise: after G01's explicit float edits
+# every TinyGL object it compiles is byte-identical to the build without
+# it, so it buys nothing and would silently narrow any future double
+# constant)
 TGLFLAGS="$COMMON $TGLFP -O2 -std=gnu99 -fvisibility=hidden -DNDEBUG -DTGL_FEATURE_RENDER_BITS=16 \
 	-I$GL/tinygl/include -I$GL/tinygl/source \
 	-Wno-unused-but-set-variable"
@@ -80,7 +87,7 @@ echo "--- compiling TinyGL core, the GL ABI layer and GLX ($JOBS jobs)"
 # S31GL_TGLCOLD (set, even empty) replaces the list: gl/bench/build_q.sh
 # compiles a pre-F3 baseline tree with it empty, as that tree's own
 # build script built every TinyGL file -O2 (review P5b)
-TGLCOLD=${S31GL_TGLCOLD-" raster_sel texture s31_pixels s31_state get s31_rpos s31_draw "}
+TGLCOLD=${S31GL_TGLCOLD-" raster_sel texture s31_pixels s31_state get s31_rpos s31_draw s31_zepoch "}
 for f in "$GL"/tinygl/source/*.c; do
 	b=$(basename "$f" .c)
 	case $b in glu|ostinygl) continue ;; esac
@@ -90,10 +97,19 @@ for f in "$GL"/tinygl/source/*.c; do
 	esac
 done
 
+# gl_attrib.c (generated: glVertex*, glNormal*, glColor*, glTexCoord* ...)
+# is nothing but tail calls into TinyGL, once per vertex attribute in
+# immediate mode. With a frame pointer each built and tore down a frame
+# before its tail call - 4 of glVertex3f's 10 instructions - and the frame
+# is gone at the tail call anyway, so backtraces lose nothing without it
+# (phase 3a G14)
 for f in "$GL"/api/*.c; do
 	b=$(basename "$f" .c)
 	[ $b = procs ] && continue      # needs the generated table: below
-	echo "$CC $APIFLAGS -c '$f' -o '$OBJ/api_$b.o'" >> "$CMDS"
+	case $b in
+	gl_attrib) echo "$CC $APIFLAGS -fomit-frame-pointer -c '$f' -o '$OBJ/api_$b.o'" >> "$CMDS" ;;
+	*) echo "$CC $APIFLAGS -c '$f' -o '$OBJ/api_$b.o'" >> "$CMDS" ;;
+	esac
 done
 
 GLXOBJ=""

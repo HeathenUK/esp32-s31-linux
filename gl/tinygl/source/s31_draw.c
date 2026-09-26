@@ -24,6 +24,7 @@
 #include "zpipe.h"
 #include "raster_int.h"
 #include "s31_pixels.h"
+#include "s31_fmath.h"
 
 #define PACK565(R, G, B) ((PIXEL)((((R) & 0xf8) << 8) | (((G) & 0xfc) << 3) | ((B) >> 3)))
 
@@ -60,11 +61,11 @@ static float fog_factor(GLContext *c, float d)
     f = c->fog_end != c->fog_start ? (c->fog_end - d) / (c->fog_end - c->fog_start) : 1.0f;
     break;
   case GL_EXP:
-    f = expf(-c->fog_density * d);
+    f = s31_expf(-c->fog_density * d);
     break;
   default:
     f = c->fog_density * d;
-    f = expf(-f * f);
+    f = s31_expf(-f * f);
     break;
   }
   return f < 0.0f ? 0.0f : (f > 1.0f ? 1.0f : f);
@@ -144,6 +145,12 @@ static PixPipe *pix_begin(GLContext *c)
     pp->tidx = 0;
   }
   pp->z = raster_zp(c->raster_pos[2]);
+  /* phase 3a G03 (s31_zepoch.c): the raster depth at the epoch's farthest
+     step under GL_LESS with stale pixels about, and the epoch's base */
+  if ((int)pp->z < c->zb->zguard) zep_materialise(c);
+  pp->z += zep_prim(c, pp->z);
+  /* the dirty box (s31_zepoch.c): a pixel rectangle may land anywhere */
+  if (c->pipe.bact) zdb_grow(c, 0, 0, c->zb->xsize, c->zb->ysize);
   pp->fq = c->fog_enabled ? fog_factor(c, c->raster_fogz) * 255.0f : 255.0f;
   return pp;
 }
@@ -511,6 +518,11 @@ void glopDrawPixels(GLContext *c, GLParam *p)
     if (z == NULL) { gl_set_error(c, e); return; }
     if ((pp = pix_begin(c)) != NULL) {
       raster_col8(c, col);
+      /* phase 3a G03 (s31_zepoch.c): per-pixel depths, any of which may
+         be anything - the buffer goes back to the plain mapping (the
+         depths above are plain), and the next clear is a real one */
+      zep_demote(c);
+      zep_prim(c, 0x3fffffffu);
       draw_image(c, pp, NULL, w, h, z, col);
     }
     gl_free(z);
@@ -588,13 +600,17 @@ void glopCopyPixels(GLContext *c, GLParam *p)
     unsigned int *z = gl_malloc(w * h * sizeof(*z));
     unsigned char col[4];
     if (z == NULL) { gl_set_error(c, GL_OUT_OF_MEMORY); return; }
+    /* phase 3a G03 (s31_zepoch.c): as glDrawPixels of GL_DEPTH_COMPONENT -
+       back to the plain mapping first, then plain depths */
+    zep_demote(c);
+    zep_prim(c, 0x3fffffffu);
     for (j = 0; j < h; j++) {
       int row = zb->ysize - 1 - (y + j);
       for (i = 0; i < w; i++) {
         int wx = x + i;
-        unsigned int v = (row >= 0 && row < zb->ysize && wx >= 0 && wx < zb->xsize) ?
-                         zb->zbuf[row * zb->xsize + wx] : 0;
-        float d = 1.0f - (float)v * (1.0f / 65535.0f);
+        /* outside the buffer: 1.0, as a stored 0 was */
+        float d = (row >= 0 && row < zb->ysize && wx >= 0 && wx < zb->xsize) ?
+                  zep_depth(zb, zb->zbuf[row * zb->xsize + wx]) : 1.0f;
         d = d * c->depth_scale + c->depth_bias;
         d = d < 0.0f ? 0.0f : (d > 1.0f ? 1.0f : d);
         z[j * w + i] = raster_zp(d);
@@ -652,7 +668,7 @@ void tgl_read_pixels(int x, int y, int w, int h, int format, int type, void *pix
       for (xx = x0; xx < x1; ) {
         int n = x1 - xx < 256 ? x1 - xx : 256;
         for (i = 0; i < n; i++) {
-          float d = 1.0f - (float)zr[xx + i] * (1.0f / 65535.0f);
+          float d = zep_depth(zb, zr[xx + i]);
           v[i] = d * c->depth_scale + c->depth_bias;
         }
         s31_pack_span(&k, xx - x, j, n, v);

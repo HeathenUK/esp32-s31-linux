@@ -1,0 +1,28 @@
+--- enum values: TinyGL header against Khronos
+enumcmp: 0 mismatches
+--- compiling TinyGL core, the GL ABI layer and GLX (8 jobs)
+--- export surface (mkstubs.py)
+mkstubs: 667 exported GL names: 455 implemented, 212 stubs
+--- linking /src/gl/out-host/libGL.so.1
+--- tests (headless_gears, core_test, raster_gate, glx_prims, glx_reopen), in parallel
+-rwxr-xr-x 1 root root  76776 Sep 26 04:07 /src/gl/out-host/core_test
+-rwxr-xr-x 1 root root  72704 Sep 26 04:07 /src/gl/out-host/headless_gears
+-rwxr-xr-x 1 root root 423504 Sep 26 04:07 /src/gl/out-host/libGL.so.1
+-rwxr-xr-x 1 root root  72824 Sep 26 04:07 /src/gl/out-host/raster_gate
+--- core_test
+PASS destroying the current context releases it
+PASS no current context: glGetString = NULL, draws ignored
+core_test: 185 passed, 0 failed
+--- raster_gate
+ok   texel phase general RGB REPLACE + alpha test: 2x magnified wrong: 0 (want 0)
+ok   texel phase general RGB REPLACE + alpha test: negative texcoords wrong: 0 (want 0)
+raster_gate: 51 passed, 0 failed
+--- headless_gears md5
+38859f0c896efe6b12bc68e0fe3afe1f  /tmp/hg.ppm
+--- fmath_test, f2d_test (host arm64 in the rig)
+sincos_deg(90) = 1 -0; (180) -0 -1; (270) -1 0; (-90) -1 0
+sin_deg: max 0.915 ulp (old path 8388044.8 ulp where |ref| > 1e-3), cos_deg: max 0.915 ulp (old 8385052.1); max abs 5.46e-08 (old 0.000976)
+powf: max 134.26 ulp, max rel 8.39e-06 (libm powf 0.51 ulp)
+expf: max 1.077 ulp over [-87.3, 88] (libm expf 0.502)
+fmath_test: PASS
+f2d/i2d: 4299173934 tested, 0 mismatches

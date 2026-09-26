@@ -5,3 +5,11 @@
 /bench/out*/
 /bench/base/
 /out-san/
+/bench/base3a/
+/bench/base3p/
+/bench/base3r/
+/bench/base3pa/
+/bench/finala/
+/bench/base3ra/
+/bench/qemu/*.dylib
+/bench/out-*.log

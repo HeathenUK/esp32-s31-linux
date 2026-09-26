@@ -1,0 +1,9 @@
+# glref run: impl=ours name=b1 frame=2 display=:97
+# cmd: /src/gl/out-host/glu_check_903 1
+# libGL.so.1 resolves to:
+#   	libGLU.so.1 => /src/gl/ref-apps/prefix/lib/libGLU.so.1 (0x0000e4443d740000)
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000e4443d6d0000)
+libGL: context 1 created (pid 957, comm glu_check_903)
+glu tess combined 1 vertices
+glu error after page 1: 0x0
+glref: ok at swap 2 -> /src/artifacts/gl/phase3a/final/pixels/ours/b1.f2

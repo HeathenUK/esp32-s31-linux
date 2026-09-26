@@ -1,0 +1,83 @@
+suite: phase3a/final/suite, impl=ours, 58 runs, 10 at a time
+  ours glxinfo f0: exit (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/glxinfo.f0.png
+  ours glxheads f3: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/glxheads.f3.png
+  ours glxgears f20: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/glxgears.f20.png
+  ours glxheads f20: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/glxheads.f20.png
+  ours glxgears f3: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/glxgears.f3.png
+  ours glxheads f60: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/glxheads.f60.png
+  ours glxgears f60: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/glxgears.f60.png
+  ours manywin f60: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/manywin.f60.png
+  ours manywin f4: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/manywin.f4.png
+  ours manywin f20: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/manywin.f20.png
+  ours multictx f20: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/multictx.f20.png
+  ours glxgears_fbconfig f3: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/glxgears_fbconfig.f3.png
+  ours glxgears_fbconfig f20: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/glxgears_fbconfig.f20.png
+  ours glxgears_fbconfig f60: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/glxgears_fbconfig.f60.png
+  ours gears f3: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/gears.f3.png
+  ours gears f20: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/gears.f20.png
+  ours offset f1: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/offset.f1.png
+  ours morph3d f3: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/morph3d.f3.png
+  ours gears f60: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/gears.f60.png
+  ours morph3d f20: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/morph3d.f20.png
+  ours bounce f20: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/bounce.f20.png
+  ours bounce f3: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/bounce.f3.png
+  ours spectex f3: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/spectex.f3.png
+  ours morph3d f60: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/morph3d.f60.png
+  ours bounce f60: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/bounce.f60.png
+  ours spectex f20: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/spectex.f20.png
+  ours spectex f60: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/spectex.f60.png
+  ours geartrain f3: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/geartrain.f3.png
+  ours geartrain f20: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/geartrain.f20.png
+  ours geartrain f60: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/geartrain.f60.png
+  ours terrain f3: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/terrain.f3.png
+  ours ipers f3: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/ipers.f3.png
+  ours terrain f20: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/terrain.f20.png
+  ours tunnel f3: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/tunnel.f3.png
+  ours terrain f60: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/terrain.f60.png
+  ours ipers f20: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/ipers.f20.png
+  ours tunnel f20: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/tunnel.f20.png
+  ours tunnel f60: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/tunnel.f60.png
+  ours fire f3: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/fire.f3.png
+  ours teapot f3: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/teapot.f3.png
+  ours fire f20: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/fire.f20.png
+  ours teapot f20: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/teapot.f20.png
+  ours texcyl f3: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/texcyl.f3.png
+  ours texcyl f20: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/texcyl.f20.png
+  ours texcyl f60: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/texcyl.f60.png
+  ours ipers f60: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/ipers.f60.png
+  ours teapot f60: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/teapot.f60.png
+  ours fire f60: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/fire.f60.png
+  ours isosurf f1: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/isosurf.f1.png
+  ours testgl f3: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/testgl.f3.png
+  ours testgl2 f3: error (rc=2) -> /src/artifacts/gl/phase3a/final/suite/ours/testgl2.f3.png
+  ours testgl f20: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/testgl.f20.png
+  ours testgl2 f20: error (rc=2) -> /src/artifacts/gl/phase3a/final/suite/ours/testgl2.f20.png
+  ours testgl2 f60: error (rc=2) -> /src/artifacts/gl/phase3a/final/suite/ours/testgl2.f60.png
+  ours testgl f60: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/testgl.f60.png
+  ours rrootage f3: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/rrootage.f3.png
+  ours rrootage f60: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/rrootage.f60.png
+  ours rrootage f300: ok (rc=0) -> /src/artifacts/gl/phase3a/final/suite/ours/rrootage.f300.png
+report: /src/artifacts/gl/phase3a/final/suite/report.md
+  glxgears           PASS
+  glxinfo            PASS
+  glxheads           PASS
+  manywin            PASS
+  multictx           PASS
+  offset             PASS
+  glxgears_fbconfig  PASS
+  gears              PASS
+  morph3d            PASS
+  bounce             PASS
+  spectex            PASS
+  geartrain          PASS
+  ipers              PASS
+  terrain            PASS
+  tunnel             PASS
+  fire               FAIL
+  teapot             FAIL
+  texcyl             PASS
+  isosurf            PASS
+  testgl             FAIL
+  testgl2            ERROR
+  rrootage           MISSING-SYMBOL
+  xlite load arm: 22 load, 0 missing -> /src/artifacts/gl/phase3a/final/suite/xlite-load.md

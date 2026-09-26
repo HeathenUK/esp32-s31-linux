@@ -8,14 +8,15 @@
 set -e
 if [ -z "$S31GL_IN_RIG" ]; then
 	REPO=$(cd "$(dirname "$0")/.." && pwd)
-	exec docker run --rm -e S31GL_IN_RIG=1 -e S31GL_NO_GLX -v "$REPO":/src -w /src \
+	exec docker run --rm -e S31GL_IN_RIG=1 -e S31GL_NO_GLX -e S31GL_HOST_DEFS -v "$REPO":/src -w /src \
 		s31-glref:latest sh /src/gl/host-build.sh "$@"
 fi
 
 GL=/src/gl
 CC=gcc
 NM=nm
-ARCHFLAGS=""
+# S31GL_HOST_DEFS: extra -D flags for a diagnostic host build (phase 3a)
+ARCHFLAGS="${S31GL_HOST_DEFS:-}"
 XINC=""
 XLIBS="-lXext -lX11"
 OBJ=/tmp/s31gl-host
@@ -38,6 +39,9 @@ $CC -O2 -Wall -I$GL/include -I$GL/api $GL/tests/core_test.c \
 	-Wl,-rpath,'$ORIGIN' & pids="$pids $!"
 $CC -O2 -Wall -I$GL/include -I$GL/api $GL/tests/raster_gate.c \
 	-o $GL/out-host/raster_gate -L$GL/out-host -l:libGL.so.1 -lm \
+	-Wl,-rpath,'$ORIGIN' & pids="$pids $!"
+$CC -O2 -Wall -I$GL/include -I$GL/api $GL/tests/zepoch_test.c \
+	-o $GL/out-host/zepoch_test -L$GL/out-host -l:libGL.so.1 -lm \
 	-Wl,-rpath,'$ORIGIN' & pids="$pids $!"
 # no rpath: LD_LIBRARY_PATH picks the implementation (tools/glref/run.sh)
 if [ -z "$S31GL_NO_GLX" ]; then

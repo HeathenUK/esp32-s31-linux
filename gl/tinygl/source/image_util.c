@@ -70,8 +70,10 @@ void gl_resizeImage(unsigned char *dest,int xsize_dest,int ysize_dest,
     for(x=0;x<xsize_dest;x++) {
       xi=(int) x1;
       yi=(int) y1;
-      xf=(int) ((x1 - floor(x1)) * INTERP_NORM);
-      yf=(int) ((y1 - floor(y1)) * INTERP_NORM);
+      /* s31 (phase 3a G01): x1, y1 >= 0, so floor is the truncation
+         already taken; floor() was a double call and a double product */
+      xf=(int) ((x1 - (float)xi) * INTERP_NORM);
+      yf=(int) ((y1 - (float)yi) * INTERP_NORM);
       
       if ((xf+yf) <= INTERP_NORM) {
 	for(j=0;j<3;j++) {

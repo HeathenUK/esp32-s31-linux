@@ -1,0 +1,10 @@
+# glref run: impl=ours name=terrain frame=3 display=:95
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/demos/terrain -geometry 320x240+0+0
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000fed57b370000)
+#   	libGLU.so.1 => /src/gl/ref-apps/prefix/lib/libGLU.so.1 (0x0000fed57b2c0000)
+#   	libglut.so.3 => /src/gl/ref-apps/prefix/lib/libglut.so.3 (0x0000fed57b1e0000)
+libGL: context 1 created (pid 3199, comm terrain)
+libGL: approximated GL_LINEAR / mipmap texture filters by nearest sampling of level 0
+libGL: approximated GL_LINEAR texture filter by nearest sampling
+glref: ok at swap 3 -> /src/artifacts/gl/phase3a/final/suite/ours/terrain.f3

@@ -1,0 +1,20 @@
+# glref run: impl=mesa name=p4 frame=2 display=:94
+# cmd: /src/gl/out-host/glx_pixels 4
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /lib/aarch64-linux-gnu/libGL.so.1 (0x0000ee649d170000)
+#   	libGLdispatch.so.0 => /lib/aarch64-linux-gnu/libGLdispatch.so.0 (0x0000ee649cc00000)
+#   	libGLX.so.0 => /lib/aarch64-linux-gnu/libGLX.so.0 (0x0000ee649cba0000)
+query eye plane S: 1.732 1.000 0.000 0.500
+query object plane T: 0.000 2.000 1.000 0.500
+query gen mode S: 0x2400
+query gen enabled: 1 1 0 0
+query clip plane 1: 0.643 -0.766 0.300 1.100
+query clip enabled: 1 1 0
+error after glTexImage1D: 0x0
+query 1D: bound 1 width 16 enabled 1
+read teximage 1D (5-bit): 0 2 4 6 8 10 12 14 16 18 20 22 24 26 28 30
+read stipple: 85 85 85 85 170 170 170 170
+query line stipple: 0xff 1 enabled 0
+query polygon stipple enabled 0
+error after page 4: 0x0
+glref: ok at swap 2 -> /src/artifacts/gl/phase3a/final/pixels/mesa/p4.f2

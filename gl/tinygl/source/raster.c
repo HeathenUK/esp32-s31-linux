@@ -161,7 +161,8 @@ typedef struct { int x, y, z, r, g, b, a; float s, t, f, q; } LinePt;
 static void to_lp(GLContext *c, LinePt *l, const GLVertex *v)
 {
   float q = 1.0f / v->pc.W;
-  l->x = v->zp.x; l->y = v->zp.y; l->z = v->zp.z;
+  /* the stored depth: plus the depth epoch's base (s31_zepoch.c) */
+  l->x = v->zp.x; l->y = v->zp.y; l->z = v->zp.z + (int)c->zb->zoff;
   l->r = c816(v->zp.r, ZB_POINT_RED_MIN, KR);
   l->g = c816(v->zp.g, ZB_POINT_GREEN_MIN, KG);
   l->b = c816(v->zp.b, ZB_POINT_BLUE_MIN, KB);
@@ -318,6 +319,11 @@ void gl_general_point(GLContext *c, GLVertex *v)
   int w = c->point_w, x0, x1, y0, y1, y;
   ZSpan sp;
 
+  /* phase 3a G03 (s31_zepoch.c); to_lp adds the epoch's base */
+  if (v->zp.z < zb->zguard) zep_materialise(c);
+  zep_prim(c, (unsigned int)v->zp.z);
+  if (c->pipe.bact)            /* the dirty box: the square either side */
+    zdb_grow(c, v->zp.x - w, v->zp.y - w, v->zp.x + w + 1, v->zp.y + w + 1);
   if (c->pipe_dirty) gl_build_pipe(c);
   c->pipe.stip_on = 0;
   to_lp(c, &q, v);

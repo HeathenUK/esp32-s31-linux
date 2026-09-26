@@ -1,0 +1,8 @@
+# glref run: impl=ours name=glxgears frame=3 display=:95
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/xdemos/glxgears -geometry 320x240+0+0
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000f44606700000)
+libGL: context 1 created (pid 1304, comm glxgears)
+Running synchronized to the vertical refresh.  The framerate should be
+approximately the same as the monitor refresh rate.
+glref: ok at swap 3 -> /src/artifacts/gl/phase3a/final/suite/ours/glxgears.f3

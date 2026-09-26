@@ -131,34 +131,32 @@ void ZFN(ZB_fillTriangleSmooth)(ZBuffer *zb,
     rgb=(rgb+drgbdx) & ( ~ 0x00200800);		\
 }
 
+/* s31 (phase 3a): two pixels a turn, the odd one first, the end a
+   pointer (see the generic line in ztriangle.h: spans are short, so the
+   span's overhead is what costs); x2 is the last pixel */
 #define DRAW_LINE()							   \
 {									   \
-  register unsigned short *pz;					   \
-  register PIXEL *pp;					   \
-  register unsigned int tmp,z,zz,rgb,drgbdx;				   \
-  register int n;							   \
-  n=x2 - x1;							   \
+  unsigned short *pz;							   \
+  PIXEL *pp, *ppe;							   \
+  unsigned int tmp,z,zz,rgb,drgbdx;					   \
   pp=pp1+x1;								   \
+  ppe=pp1+x2+1;								   \
   pz=pz1+x1;								   \
   z=z1;									   \
-  rgb=((unsigned int)r1 << 16) & 0xFFC00000;						   \
+  rgb=((unsigned int)r1 << 16) & 0xFFC00000;				   \
   rgb|=(g1 >> 5) & 0x000007FF;						   \
-  rgb|=((unsigned int)b1 << 5) & 0x001FF000;						   \
+  rgb|=((unsigned int)b1 << 5) & 0x001FF000;				   \
   drgbdx=_drgbdx;							   \
-  while (n>=3) {							   \
-    PUT_PIXEL(0);							   \
-    PUT_PIXEL(1);							   \
-    PUT_PIXEL(2);							   \
-    PUT_PIXEL(3);							   \
-    pz+=4;								   \
-    pp+=4;								   \
-    n-=4;								   \
-  }									   \
-  while (n>=0) {							   \
+  if (!((x2 - x1) & 1)) {						   \
     PUT_PIXEL(0);							   \
     pz+=1;								   \
     pp+=1;								   \
-    n-=1;								   \
+  }									   \
+  while (pp != ppe) {							   \
+    PUT_PIXEL(0);							   \
+    PUT_PIXEL(1);							   \
+    pz+=2;								   \
+    pp+=2;								   \
   }									   \
 }
 

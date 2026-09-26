@@ -150,7 +150,7 @@ int Matrix_Inv(float *r,float *m,int n)
 			max=m[j*n+j];
 			k=j;
 			for(i=j+1;i<n;i++)
-				if (fabs(m[i*n+j])>fabs(max)) {
+				if (fabsf(m[i*n+j])>fabsf(max)) {
 					 k=i;
 					 max=m[i*n+j];
 				}
@@ -203,14 +203,13 @@ void gl_M4_Inv(M4 *a,M4 *b)
   Matrix_Inv(&a->m[0][0],&tmp.m[0][0],4);
 }
 
-void gl_M4_Rotate(M4 *a,float t,int u)
+/* s31 (phase 3a G01): takes sin and cos (glopRotate computes them in
+   float, from degrees); it took the angle and called libm sin/cos in double */
+void gl_M4_RotateSC(M4 *a,float s,float c,int u)
 {
-	 float s,c;
 	 int v,w;
    if ((v=u+1)>2) v=0;
 	 if ((w=v+1)>2) w=0;
-	 s=sin(t);
-	 c=cos(t);
 	 gl_M4_Id(a);
 	 a->m[v][v]=c;	a->m[v][w]=-s;
 	 a->m[w][v]=s;	a->m[w][w]=c;
@@ -245,7 +244,9 @@ void gl_M3_Inv(M3 *a,M3 *m)
 int gl_V3_Norm(V3 *a)
 {
 	float n;
-	n=sqrt(a->X*a->X+a->Y*a->Y+a->Z*a->Z);
+	/* s31 (phase 3a G01): sqrtf, a bare fsqrt.s; sqrt was a soft-double
+	   libcall (with two conversions) on every lit vertex under GL_NORMALIZE */
+	n=sqrtf(a->X*a->X+a->Y*a->Y+a->Z*a->Z);
 	if (n==0) return 1;
 	a->X/=n;
 	a->Y/=n;

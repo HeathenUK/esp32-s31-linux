@@ -48,6 +48,7 @@ void glopEnableDisable(GLContext *c,GLParam *p)
        was left stale when lighting was switched off without a matrix
        change in between */
     c->matrix_model_projection_updated=1;
+    c->xf_dirty |= 2;   /* s31 (phase 3a G14) */
     break;
   case GL_COLOR_MATERIAL:
     c->color_material_enabled=v;

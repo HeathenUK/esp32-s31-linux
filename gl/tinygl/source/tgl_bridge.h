@@ -104,6 +104,7 @@ int tgl_ctx_depth_bytes(void *ctx);    /* bytes of depth allocated now */
 void tgl_ctx_release_depth(void *ctx);
 int tgl_ctx_bind_depth(void *ctx, void *depth); /* caller-owned depth, NULL: private */
 void tgl_ctx_set_doublebuffer(void *ctx, int on);
+void tgl_ctx_set_retained(void *ctx, int on);  /* phase 3a dirty boxes */
 void tgl_ctx_arm(void *ctx);            /* frame hook before the next access */
 
 /* glPush/PopAttrib and glPush/PopClientAttrib: the stacks live in the

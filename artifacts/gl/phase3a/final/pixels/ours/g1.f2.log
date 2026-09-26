@@ -1,0 +1,8 @@
+# glref run: impl=ours name=g1 frame=2 display=:96
+# cmd: /src/gl/out-host/glu_check_deb 1
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000f2c696f00000)
+libGL: context 1 created (pid 492, comm glu_check_deb)
+glu tess combined 1 vertices
+glu error after page 1: 0x0
+glref: ok at swap 2 -> /src/artifacts/gl/phase3a/final/pixels/ours/g1.f2

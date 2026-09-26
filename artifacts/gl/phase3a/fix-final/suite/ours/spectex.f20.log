@@ -1,0 +1,10 @@
+# glref run: impl=ours name=spectex frame=20 display=:96
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/demos/spectex -geometry 320x240+0+0
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000efb5a4a00000)
+#   	libGLU.so.1 => /src/gl/ref-apps/prefix/lib/libGLU.so.1 (0x0000efb5a4950000)
+#   	libglut.so.3 => /src/gl/ref-apps/prefix/lib/libglut.so.3 (0x0000efb5a4870000)
+libGL: context 1 created (pid 2558, comm spectex)
+libGL: context 2 created (pid 2558, comm spectex)
+libGL: context 3 created (pid 2558, comm spectex)
+glref: ok at swap 20 -> /src/artifacts/gl/phase3a/fix-final/suite/ours/spectex.f20

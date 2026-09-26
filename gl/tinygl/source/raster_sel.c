@@ -193,6 +193,12 @@ void gl_update_raster(GLContext *c)
   else c->draw_fill_inner = gl_draw_triangle_fill;
   c->draw_fill = (c->offset_states & TGL_OFFSET_FILL) && !skip ?
                  gl_draw_triangle_offset : c->draw_fill_inner;
+
+  /* phase 3a G03 (s31_zepoch.c): stale depth epochs under this depth
+     state - GL_LESS gets the far-step check (the fillers, ztri_zepoch),
+     GEQUAL / EQUAL / NOTEQUAL materialise now */
+  zep_guard(c);
+  zep_track_target(c);
 }
 
 /* the general path's stage list and constants for the state

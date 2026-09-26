@@ -1,0 +1,1 @@
+PASS  320x240  strict 0.000% (0 px >16)  tolerant 0.000% (0 px)  max 8  mean 0.08  diff /src/artifacts/gl/phase3a/final/raster/diff-3.png

@@ -7,9 +7,15 @@
 unsigned long dcalls;
 #define NW 22
 static unsigned long dc[NW];
+/* DWRAP_NONE (S31_BENCH_NOWRAP, review 3a m2): no wrappers, the counters
+   stay 0 - for instruction counts without the ~8 a call they add */
+#ifdef DWRAP_NONE
+#define W(i, n, R, sig, args)
+#else
 #define W(i, n, R, sig, args) \
 	extern R __real_##n sig; \
 	R __wrap_##n sig { dcalls++; dc[i]++; return __real_##n args; }
+#endif
 W(0, __muldf3, double, (double a, double b), (a, b))
 W(1, __adddf3, double, (double a, double b), (a, b))
 W(2, __subdf3, double, (double a, double b), (a, b))
@@ -32,6 +38,25 @@ W(18, __floatsidf, double, (int a), (a))
 W(19, __floatunsidf, double, (unsigned a), (a))
 W(20, __fixdfsi, int, (double a), (a))
 W(21, __fixunsdfsi, unsigned, (double a), (a))
+/* QDUMP: the per-name counts since dc_mark(), divided by n */
+static unsigned long dmark[NW];
+void dc_mark(void)
+{
+	int i;
+	for (i = 0; i < NW; i++) dmark[i] = dc[i];
+}
+void dump_dcalls_since(const char *name, int w, int h, int n)
+{
+	static const char *dn[NW] = { "muldf3", "adddf3", "subdf3", "divdf3",
+		"extendsfdf2", "sqrt", "sin", "cos", "pow", "floor", "truncdfsf2",
+		"ltdf2", "ledf2", "gtdf2", "gedf2", "eqdf2", "nedf2", "unorddf2",
+		"floatsidf", "floatunsidf", "fixdfsi", "fixunsdfsi" };
+	int i;
+	printf("%s %dx%d dcalls/frame:", name, w, h);
+	for (i = 0; i < NW; i++)
+		if (dc[i] != dmark[i]) printf(" %s=%lu", dn[i], (dc[i] - dmark[i]) / n);
+	printf("\n");
+}
 void dump_dcalls(void)
 {
 	static const char *dn[NW] = { "muldf3", "adddf3", "subdf3", "divdf3",

@@ -1,18 +1,35 @@
 #include "zgl.h"
 #include "s31_pixels.h"
 #include <stdio.h>
+
+/* s31 (phase 3a G14): while executing (not compiling a list, not printing
+   ops) the per-vertex ops run their glop directly: gl_add_op's context
+   call, flag tests and op-table indirect call cost ~29 instructions per
+   call (gl/bench prof.sh, teapot), per vertex and per normal in immediate
+   mode. exec_flag is 0 only while compiling, so it needs no test. */
+#define GL_RUN(name, p) do { \
+    GLContext *c_ = gl_ctx; \
+    if (!(c_->compile_flag | c_->print_flag)) glop##name(c_, p); \
+    else gl_add_op(p); \
+  } while (0)
+
 /* glVertex */
 
 void glVertex4f(float x,float y,float z,float w)
 {
   GLParam p[5];
 
+  GLContext *c=gl_ctx;
+  /* s31 (phase 3a G14): executing: the vertex op itself (vertex.c) */
+  if (!(c->compile_flag | c->print_flag)) {
+    gl_vertex4f(x,y,z,w,c);
+    return;
+  }
   p[0].op=OP_Vertex;
   p[1].f=x;
   p[2].f=y;
   p[3].f=z;
   p[4].f=w;
-
   gl_add_op(p);
 }
 
@@ -37,11 +54,19 @@ void glNormal3f(float x,float y,float z)
 {
   GLParam p[4];
 
+  GLContext *c=gl_ctx;
+  /* s31 (phase 3a G14): executing: glopNormal's two lines, here */
+  if (!(c->compile_flag | c->print_flag)) {
+    c->current_normal.X=x;
+    c->current_normal.Y=y;
+    c->current_normal.Z=z;
+    c->current_normal.W=0;
+    return;
+  }
   p[0].op=OP_Normal;
   p[1].f=x;
   p[2].f=y;
   p[3].f=z;
-
   gl_add_op(p);
 }
 
@@ -56,14 +81,32 @@ void glNormal3fv(float *v)
    a negative or >1 component wrapped the integer colour. */
 static inline float clamp01(float v)
 {
-  return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+  /* s31 (phase 3a G14): fmax.s/fmin.s, no branches; NaN clamps to 0 */
+  return fminf(fmaxf(v, 0.0f), 1.0f);
 }
 
 void glColor4f(float r,float g,float b,float a)
 {
   GLParam p[8];
   float rc=clamp01(r),gc=clamp01(g),bc=clamp01(b);
+  GLContext *c=gl_ctx;
 
+  /* s31 (phase 3a G14): executing: glopColor's stores, here */
+  if (!(c->compile_flag | c->print_flag)) {
+    c->current_color.X=r;
+    c->current_color.Y=g;
+    c->current_color.Z=b;
+    c->current_color.W=a;
+    c->longcurrent_color[0]=(unsigned int) (rc * (ZB_POINT_RED_MAX - ZB_POINT_RED_MIN) +
+                                            ZB_POINT_RED_MIN);
+    c->longcurrent_color[1]=(unsigned int) (gc * (ZB_POINT_GREEN_MAX - ZB_POINT_GREEN_MIN) +
+                                            ZB_POINT_GREEN_MIN);
+    c->longcurrent_color[2]=(unsigned int) (bc * (ZB_POINT_BLUE_MAX - ZB_POINT_BLUE_MIN) +
+                                            ZB_POINT_BLUE_MIN);
+    if (c->color_material_enabled)
+      gl_color_material(c,r,g,b,a);
+    return;
+  }
   p[0].op=OP_Color;
   p[1].f=r;
   p[2].f=g;
@@ -120,12 +163,20 @@ void glTexCoord4f(float s,float t,float r,float q)
 {
   GLParam p[5];
 
+  GLContext *c=gl_ctx;
+  /* s31 (phase 3a G14): executing: glopTexCoord's stores, here */
+  if (!(c->compile_flag | c->print_flag)) {
+    c->current_tex_coord.X=s;
+    c->current_tex_coord.Y=t;
+    c->current_tex_coord.Z=r;
+    c->current_tex_coord.W=q;
+    return;
+  }
   p[0].op=OP_TexCoord;
   p[1].f=s;
   p[2].f=t;
   p[3].f=r;
   p[4].f=q;
-
   gl_add_op(p);
 }
 
@@ -146,7 +197,7 @@ void glEdgeFlag(int flag)
   p[0].op=OP_EdgeFlag;
   p[1].i=flag;
 
-  gl_add_op(p);
+  GL_RUN(EdgeFlag, p);
 }
 
 /* misc */
@@ -259,7 +310,7 @@ void glBegin(int mode)
   p[0].op=OP_Begin;
   p[1].i=mode;
 
-  gl_add_op(p);
+  GL_RUN(Begin, p);
 }
 
 void glEnd(void)
@@ -268,7 +319,7 @@ void glEnd(void)
 
   p[0].op=OP_End;
 
-  gl_add_op(p);
+  GL_RUN(End, p);
 }
 
 /* matrix */

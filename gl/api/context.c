@@ -107,6 +107,12 @@ s31gl_ctx *s31gl_get_current(void)
 	return current;
 }
 
+void s31gl_set_retained(s31gl_ctx *ctx, int retained)
+{
+	if (ctx)
+		tgl_ctx_set_retained(ctx->tgl, retained);
+}
+
 void s31gl_set_doublebuffer(s31gl_ctx *ctx, int doublebuffer)
 {
 	if (ctx)

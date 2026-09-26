@@ -31,6 +31,11 @@ s31gl_ctx *glxi_core_create(s31gl_ctx *share, struct __GLXcontextRec *c)
 		return NULL;
 	/* GL_DOUBLEBUFFER and the default GL_DRAW_BUFFER follow the config */
 	s31gl_set_doublebuffer(ctx, c->db);
+	/* phase 3a dirty boxes: the drawables' colour buffers are ours alone
+	 * (the X server only reads a ShmPutImage segment - xshim copies out
+	 * of it, lvdesk/xshim.c "COPY. Always."; XPutImage copies before it
+	 * returns), so a full clear may leave what nothing drew into */
+	s31gl_set_retained(ctx, 1);
 	h.user = c;
 	h.frame_begin = glxi_hook_frame_begin;
 	h.viewport = glxi_hook_viewport;

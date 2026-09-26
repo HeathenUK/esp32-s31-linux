@@ -49,7 +49,7 @@ fi
 CC=/src/toolchain/riscv32-esp-linux-musl/bin/riscv32-esp-linux-musl-gcc
 if [ ! -x "$CC" ]; then
 	REPO=$(cd "$(dirname "$0")/.." && pwd)
-	exec "$REPO/docker/build.sh" "S31GL_NO_GLX=$S31GL_NO_GLX S31GL_TGL_FRAMEPTR=$S31GL_TGL_FRAMEPTR sh /src/gl/build.sh"
+	exec "$REPO/docker/build.sh" "S31GL_NO_GLX=$S31GL_NO_GLX S31GL_TGL_FRAMEPTR=$S31GL_TGL_FRAMEPTR S31GL_IMAGE=$S31GL_IMAGE sh /src/gl/build.sh"
 fi
 SYSROOT=/src/build/buildroot/host/riscv32-buildroot-linux-musl/sysroot
 GL=/src/gl
@@ -59,7 +59,9 @@ ARCHFLAGS="-march=rv32imafc_zicsr_zifencei_zba_zbb_zbc_zbs -mabi=ilp32"
 XINC="-isystem $SYSROOT/usr/include"
 XLIBS="-L$SYSROOT/usr/lib -Wl,-rpath-link,$SYSROOT/usr/lib -lXext -lX11"
 OBJ=/tmp/s31gl-rv32
-OUT=/src/images/libGL.so.1
+# S31GL_IMAGE: where the stripped library goes (default the flash staging
+# copy /src/images/libGL.so.1; an experiment can keep it out of there)
+OUT=${S31GL_IMAGE:-/src/images/libGL.so.1}
 TEST=$GL/out-rv32/headless_gears
 mkdir -p $GL/out-rv32
 rm -f $TEST $GL/out-rv32/core_test $GL/out-rv32/*.qemu $GL/out-rv32/libGL.so.1.unstripped
@@ -83,12 +85,14 @@ $CC -O2 $ARCHFLAGS -c $GL/tests/qemu_libc.c -o $OBJ/qemu_libc.o & pids="$pids $!
 $CC -O2 -Wall $ARCHFLAGS -I$GL/include -I$GL/api -c $GL/tests/raster_gate.c \
 	-o $OBJ/raster_gate.o & pids="$pids $!"
 $CC -O2 $ARCHFLAGS -I$GL/tinygl/source -c $GL/tests/d2f_test.c -o $OBJ/d2f_test.o & pids="$pids $!"
+$CC -O2 -Wall $ARCHFLAGS -I$GL/include -I$GL/api -c $GL/tests/zepoch_test.c \
+	-o $OBJ/zepoch_test.o & pids="$pids $!"
 waitall
 ( $CC -static $ARCHFLAGS -o $TEST $OBJ/headless_gears.o $(cat $OBJ/core.list) -lm && $STRIP $TEST ) &
 pids="$pids $!"
 ( $CC -static $ARCHFLAGS -o $GL/out-rv32/core_test $OBJ/core_test.o $(cat $OBJ/core.list) -lm &&
 	$STRIP $GL/out-rv32/core_test ) & pids="$pids $!"
-for t in headless_gears core_test d2f_test raster_gate; do
+for t in headless_gears core_test d2f_test raster_gate zepoch_test; do
 	$CC -static $ARCHFLAGS -o $GL/out-rv32/$t.qemu $OBJ/$t.o $OBJ/qemu_libc.o \
 		$(cat $OBJ/core.list) -lm & pids="$pids $!"
 done

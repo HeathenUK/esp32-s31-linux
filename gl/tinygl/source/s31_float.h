@@ -42,10 +42,52 @@ static inline float s31_d2f_bits(double d)
   return (float)d;
 }
 
+/* s31 (phase 3a G01): the widening conversions the glGet*dv queries
+   make, on the bits as well: exact for every input (float and int are
+   subsets of double); zero, denormals, inf and NaN fall back */
+static inline double s31_f2d_bits(float f)
+{
+  unsigned int b, e;
+  unsigned long long r;
+  double d;
+
+  memcpy(&b, &f, 4);
+  e = (b >> 23) & 0xff;
+  if (e - 1u < 254u) {
+    r = ((unsigned long long)((b & 0x80000000u) | ((e + 896u) << 20) |
+                              ((b & 0x7fffffu) >> 3)) << 32) |
+        ((unsigned long long)(b & 7u) << 29);
+    memcpy(&d, &r, 8);
+    return d;
+  }
+  return (double)f;
+}
+
+static inline double s31_i2d_bits(int i)
+{
+  unsigned int u, s, lz;
+  unsigned long long m, r;
+  double d;
+
+  if (i == 0) return 0.0;
+  s = i < 0 ? 0x80000000u : 0;
+  u = i < 0 ? 0u - (unsigned int)i : (unsigned int)i;
+  lz = (unsigned int)__builtin_clz(u);
+  m = (unsigned long long)u << (lz + 21);      /* leading 1 at bit 52 */
+  r = ((unsigned long long)(s | ((1054u - lz) << 20)) << 32) |
+      (m & 0xfffffffffffffull);
+  memcpy(&d, &r, 8);
+  return d;
+}
+
 #if defined(__riscv) && (!defined(__riscv_flen) || __riscv_flen < 64)
 #define s31_d2f(d) s31_d2f_bits(d)
+#define s31_f2d(f) s31_f2d_bits(f)
+#define s31_i2d(i) s31_i2d_bits(i)
 #else
 #define s31_d2f(d) ((float)(d))
+#define s31_f2d(f) ((double)(f))
+#define s31_i2d(i) ((double)(i))
 #endif
 
 #endif /* S31_FLOAT_H */

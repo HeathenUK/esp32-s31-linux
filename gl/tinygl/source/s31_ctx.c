@@ -17,11 +17,19 @@
 
 static GLContext *null_ctx;     /* current when nothing is */
 
+/* phase 3a dirty boxes (s31_zepoch.c): bumped whenever a context is made
+   current or a buffer is bound to one - a full clear only trusts what it
+   recorded itself when nothing of the sort happened since */
+unsigned int tgl_bind_serial;
+
 static ZBuffer *zb_new(void)
 {
   ZBuffer *zb = gl_zalloc(sizeof(ZBuffer));
   if (zb == NULL) return NULL;
   zb->mode = ZB_MODE_5R6G5B;
+  zb->ztop = ~0u;               /* no depth epoch yet (s31_zepoch.c) */
+  zb->cur = -1;                 /* no colour buffer recorded (dirty boxes) */
+  zb->zmaxp = &zb->zmax_none;
   return zb;
 }
 
@@ -32,6 +40,7 @@ static void zb_drop_depth(ZBuffer *zb)
   if (!zb->zbuf_ext) gl_free(zb->zbuf);
   zb->zbuf = NULL;
   zb->zbuf_ext = 0;
+  zb->zst = NULL;               /* re-attached with the next buffer */
 }
 
 static void zb_free(ZBuffer *zb)
@@ -52,6 +61,11 @@ static GLContext *ctx_new(GLContext *share)
   c = gl_ctx;
   gl_ctx = prev;
   if (c == NULL) { zb_free(zb); return NULL; }
+  zdb_reset(c);                     /* phase 3a: nothing drawn, not retained */
+  c->pipe.zchk = ~0u;               /* phase 3a G03: no depth state yet */
+  c->pipe.zoff = 0;
+  c->pipe.zact = 0;
+  c->pipe.zctx = c;
 
   if (share != NULL) {
     /* glXCreateContext share_list: display lists and texture objects */
@@ -132,6 +146,16 @@ int tgl_ctx_bind(void *ctx, void *pixels, int width, int height, int pitch)
   zb = c->zb;
   c->ready = 0;
   c->armed = 1;
+  /* phase 3a dirty boxes: another buffer of the same shape (GLX's
+     ping-pong) keeps each buffer's record; anything else forgets them */
+  if (pixels != NULL && zb->pbuf != NULL && pixels != zb->pbuf &&
+      width == zb->xsize && height == zb->ysize && pitch == zb->linesize) {
+    zdb_rebind(c);
+  } else if (pixels != zb->pbuf || width != zb->xsize || height != zb->ysize ||
+             (pixels && pitch != zb->linesize)) {
+    tgl_bind_serial++;
+    zdb_invalidate(zb);
+  }
   if (pixels == NULL && (width == 0 || height == 0)) {
     /* unbind: keep the size and the depth buffer for the rebind */
     zb->pbuf = NULL;
@@ -171,6 +195,7 @@ void tgl_ctx_set_prepare(void *ctx, int (*prepare)(void *user), void *user)
 
 void tgl_ctx_make_current(void *ctx)
 {
+  if ((ctx ? (GLContext *)ctx : null_ctx) != gl_ctx) tgl_bind_serial++;
   gl_ctx = ctx ? (GLContext *)ctx : null_ctx;
   gl_ctx->ready = 0;
   gl_ctx->armed = 1;
@@ -208,6 +233,7 @@ void tgl_ctx_release_depth(void *ctx)
 {
   GLContext *c = ctx;
   if (c == NULL) return;
+  tgl_bind_serial++;
   zb_drop_depth(c->zb);
   c->ready = 0;
 }
@@ -228,11 +254,25 @@ int tgl_ctx_bind_depth(void *ctx, void *depth)
   zb = c->zb;
   if (depth != NULL && (zb->xsize <= 0 || zb->ysize <= 0)) return -1;
   if (depth == zb->zbuf && zb->zbuf_ext == (depth != NULL)) return 0;
+  tgl_bind_serial++;
   zb_drop_depth(zb);
   zb->zbuf = depth;
   zb->zbuf_ext = depth != NULL;
   c->ready = 0;
   return 0;
+}
+
+/* phase 3a dirty boxes (s31_zepoch.c): the caller writes nothing into the
+   bound colour buffer between frames, so a full clear may skip what was not
+   drawn into */
+void tgl_ctx_set_retained(void *ctx, int on)
+{
+  GLContext *c = ctx;
+  if (c == NULL) return;
+  c->zb->retained = on != 0;
+  zdb_invalidate(c->zb);
+  tgl_bind_serial++;
+  zdb_reset(c);
 }
 
 void tgl_ctx_set_doublebuffer(void *ctx, int on)
@@ -264,14 +304,19 @@ int gl_prepare_slow(GLContext *c)
   if (zb->pbuf == NULL || zb->xsize <= 0 || zb->ysize <= 0)
     return 0;
   if (zb->zbuf == NULL) {
-    zb->zbuf = gl_malloc(zb->xsize * zb->ysize * sizeof(unsigned short));
+    /* ZB_DEPTH_TAIL: the depth epochs' state follows the values */
+    int bytes = zb->xsize * zb->ysize * (int)sizeof(unsigned short) + ZB_DEPTH_TAIL;
+    zb->zbuf = gl_malloc(bytes);
     if (zb->zbuf == NULL) {
       gl_set_error(c, GL_OUT_OF_MEMORY);
       return 0;
     }
-    /* GL leaves new depth undefined; far is the useful value */
-    memset(zb->zbuf, 0, zb->xsize * zb->ysize * sizeof(unsigned short));
+    /* GL leaves new depth undefined; far is the useful value (and a zero
+       state is "plain, nothing stale") */
+    memset(zb->zbuf, 0, bytes);
   }
+  /* phase 3a G03: this context's depth mapping follows the buffer's */
+  zep_attach(c);
   c->ready = 1;
   return 1;
 }

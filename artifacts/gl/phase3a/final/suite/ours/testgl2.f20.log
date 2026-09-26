@@ -1,0 +1,6 @@
+# glref run: impl=ours name=testgl2 frame=20 display=:96
+# cmd: /src/gl/ref-apps/build/sdl2-test/testgl2 --geometry 320x240
+# libGL.so.1 resolves to:
+libGL: context 1 created (pid 4624, comm testgl2)
+libGL: context 2 created (pid 4624, comm testgl2)
+INFO: Could not load GL functions

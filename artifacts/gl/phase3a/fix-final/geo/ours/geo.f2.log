@@ -1,0 +1,6 @@
+# glref run: impl=ours name=geo frame=2 display=:91
+# cmd: /tmp/glx_geo
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000e5b7a8780000)
+libGL: context 1 created (pid 90, comm glx_geo)
+glref: ok at swap 2 -> /src/artifacts/gl/phase3a/fix-final/geo/ours/geo.f2

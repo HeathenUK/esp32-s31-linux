@@ -311,7 +311,7 @@ void GLAPIENTRY glGetTexGendv(GLenum coord, GLenum pname, GLdouble *params)
 		return;
 	}
 	for (i = 0; i < n; i++)
-		params[i] = (GLdouble)v[i];
+		params[i] = s31_f2d(v[i]);
 }
 
 /* ------------------------------------------------------------ clip planes */
@@ -334,7 +334,7 @@ void GLAPIENTRY glGetClipPlane(GLenum plane, GLdouble *equation)
 		return;
 	}
 	for (i = 0; i < 4; i++)
-		equation[i] = (GLdouble)f[i];
+		equation[i] = s31_f2d(f[i]);
 }
 
 /* ------------------------------------------------------------ stipple */

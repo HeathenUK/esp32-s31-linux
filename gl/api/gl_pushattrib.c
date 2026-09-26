@@ -534,7 +534,7 @@ void GLAPIENTRY glPopAttrib(void)
 	if (mask & GL_DEPTH_BUFFER_BIT) {
 		glDepthFunc(a->depth_func);
 		glDepthMask(a->depth_mask ? GL_TRUE : GL_FALSE);
-		glClearDepth(a->depth_clear);
+		glClearDepth(s31_f2d(a->depth_clear));   /* s31: no __extendsfdf2 */
 	}
 	if (mask & GL_COLOR_BUFFER_BIT) {
 		glAlphaFunc(a->alpha_func, a->alpha_ref);
@@ -561,7 +561,7 @@ void GLAPIENTRY glPopAttrib(void)
 	if (mask & GL_VIEWPORT_BIT) {
 		glViewport(a->viewport[0], a->viewport[1], a->viewport[2],
 			   a->viewport[3]);
-		glDepthRange(a->depth_range[0], a->depth_range[1]);
+		glDepthRange(s31_f2d(a->depth_range[0]), s31_f2d(a->depth_range[1]));
 	}
 	if (mask & GL_TRANSFORM_BIT) {
 		GLint mode;

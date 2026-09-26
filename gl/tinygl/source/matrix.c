@@ -1,4 +1,5 @@
 #include "zgl.h"
+#include "s31_fmath.h"
 
 void gl_print_matrix( const float *m)
 {
@@ -15,6 +16,9 @@ static inline void gl_matrix_update(GLContext *c)
      projection update when the texture matrix changed next, and never
      re-evaluated apply_texture_matrix */
   c->matrix_model_projection_updated=1;
+  /* s31 (phase 3a G14): vertex.c re-reads the projection's shape */
+  if (c->matrix_mode == 1)
+    c->xf_dirty |= 2;
 }
 
 
@@ -123,10 +127,15 @@ void glopRotate(GLContext *c,GLParam *p)
 {
   M4 m;
   float u[3];
-  float angle;
+  float sint, cost;
   int dir_code;
 
-  angle = p[1].f * M_PI / 180.0;
+  /* s31 (phase 3a G01): sin and cos of the angle in degrees, in float
+     (s31_fmath.c). It was angle * M_PI / 180.0 in double, then libm sin
+     and cos in double (musl's sinf/cosf compute in double as well): about
+     20 soft-double calls per glRotate, reduced in radians after rounding
+     the angle to float */
+  s31_sincos_deg(p[1].f, &sint, &cost);
   u[0]=p[2].f;
   u[1]=p[3].f;
   u[2]=p[4].f;
@@ -139,32 +148,23 @@ void glopRotate(GLContext *c,GLParam *p)
     gl_M4_Id(&m);
     break;
   case 4:
-    if (u[0] < 0) angle=-angle;
-    gl_M4_Rotate(&m,angle,0);
+    gl_M4_RotateSC(&m,u[0] < 0 ? -sint : sint,cost,0);
     break;
   case 2:
-    if (u[1] < 0) angle=-angle;
-    gl_M4_Rotate(&m,angle,1);
+    gl_M4_RotateSC(&m,u[1] < 0 ? -sint : sint,cost,1);
     break;
   case 1:
-    if (u[2] < 0) angle=-angle;
-    gl_M4_Rotate(&m,angle,2);
+    gl_M4_RotateSC(&m,u[2] < 0 ? -sint : sint,cost,2);
     break;
   default:
     {
-      float cost, sint;
-
       /* normalize vector */
       float len = u[0]*u[0]+u[1]*u[1]+u[2]*u[2];
       if (len == 0.0f) return;
-      len = 1.0f / sqrt(len);
+      len = 1.0f / sqrtf(len);
       u[0] *= len;
       u[1] *= len;
       u[2] *= len;
-
-      /* store cos and sin values */
-      cost=cos(angle);
-      sint=sin(angle);
 
       /* fill in the values */
       m.m[3][0]=m.m[3][1]=m.m[3][2]=

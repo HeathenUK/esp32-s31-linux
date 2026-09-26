@@ -75,6 +75,11 @@ typedef struct GLLight {
   float cos_spot_cutoff;
   V3 norm_spot_direction;
   V3 norm_position;
+  /* s31 (phase 3a G02): specular red, green or blue is not zero */
+  int has_specular;
+  /* s31 (phase 3a G02): ambient * material ambient, per material side,
+     while !c->light_dirty (light.c gl_light_products) */
+  V3 amb_prod[2];
   /* we use a linked list to know which are the enabled lights */
   int enabled;
   struct GLLight *next,*prev;
@@ -89,7 +94,11 @@ typedef struct GLMaterial {
 
   /* computed values */
   int shininess_i;
-  int do_specular;  
+  /* s31 (phase 3a G02): specular red, green or blue is not zero (the
+     specular term of a light is skipped when either side's is zero: it
+     would add exactly 0), and the specular table last used */
+  int do_specular;
+  struct GLSpecBuf *specbuf;
 } GLMaterial;
 
 
@@ -213,8 +222,7 @@ typedef struct GLContext {
   /* Z buffer */
   ZBuffer *zb;
 
-  /* lights */
-  GLLight lights[MAX_LIGHTS];
+  /* lights (s31 phase 3a: the array itself is at the end of the struct) */
   GLLight *first_light;
   V4 ambient_light_model;
   int local_light_model;
@@ -275,7 +283,6 @@ typedef struct GLContext {
   int select_hits;
 
   /* names */
-  unsigned int name_stack[MAX_NAME_STACK_DEPTH];
   int name_stack_size;
 
   /* clear */
@@ -341,7 +348,6 @@ typedef struct GLContext {
   int prepare_busy;
   int (*prepare)(void *user); /* GLX frame_begin: supplies/validates colour */
   void *prepare_user;
-  M4 matrix_proj_eff;         /* S * P when viewport.guard (see GLViewport) */
   M4 *proj_used;              /* &matrix_proj_eff or matrix_stack_ptr[1] */
   int vp_initialized;         /* first buffer bind sets viewport + scissor */
   int doublebuffer;           /* GL_DOUBLEBUFFER, set by the GLX layer */
@@ -410,31 +416,73 @@ typedef struct GLContext {
      here is read on a path that uses none of it: glopVertex tests
      vtx_extra where it tested raster_fog, and texgen rides on
      apply_texture_matrix (bit 1) */
+  /* s31 (phase 3a) hot per-vertex state, kept below the 2 kB that RV32
+     loads reach from the context pointer (see the note at the end). G02: emission + ambient * scene ambient, per material side, and the
+     lights' amb_prod, valid while light_dirty is 0; glMaterial, glLight,
+     glLightModel and enabling a light set it */
+  V3 light_base[2];
+  int light_dirty;
+  /* G14: the shape of the matrices the lit vertex path multiplies by
+     (vertex.c gl_xf_kind): TGL_XF_* of proj_used, found at glBegin when
+     xf_dirty bit 1 says the projection (or the guard, or the path) changed
+     (matrix.c, vertex.c gl_eval_viewport, misc.c), and whether the
+     modelview is affine (gl_normal_matrix) */
+  int xf_proj, xf_mv_affine, xf_dirty;
   int vtx_extra;              /* 1: fog factor, 2: user clip planes (s31_xform.c) */
   int clip_plane_mask;        /* enabled GL_CLIP_PLANEi, bit i */
-  V4 clip_plane_eye[6];       /* eye coordinates, as glGetClipPlane reports */
-  V4 clip_plane_clip[6];      /* the same planes in clip coordinates (proj_used) */
   int texgen_mask;            /* GL_TEXTURE_GEN_S/T/R/Q enabled, bits 0-3 */
   int texgen_mode[4];
-  V4 texgen_obj[4], texgen_eye[4];
   int texgen_eye_needed;      /* a mode reads eye coordinates or the eye normal */
-  M4 texgen_mv_inv;           /* transposed inverse modelview, when lighting is off */
   float raster_color[4], raster_tex[4], raster_distance;
   float raster_fogz;          /* |z_e|: the fog distance of pixel fragments, as vertices use */
   float pixel_zoom[2];
   float xfer_scale[4], xfer_bias[4], depth_scale, depth_bias;
   int index_shift, index_offset, map_color, map_stencil;
   int xfer_active;            /* some scale/bias is not the identity */
-  unsigned int poly_stipple[32]; /* row y%32; bit i = window x%32 == i */
   int poly_stipple_enabled, line_stipple_enabled, line_stipple_counter;
   int tex_enables;            /* bit 0 GL_TEXTURE_2D, bit 1 GL_TEXTURE_1D */
   GLTexture *current_texture_1d;
   GLTexture *tex1d_default;   /* this context's default 1D object */
   void *pixpipe;              /* s31_draw.c: the pixel paths' stage list, cached */
   unsigned int pipe_serial;   /* bumped by gl_build_pipe: the cache's key */
+
+  /* s31 (phase 3a). Layout: GLContext is ~4.8 kB and RV32 loads reach
+     +-2 kB from a base register; a field past 2 kB costs an extra addi at
+     each use, so a field inserted in front of hot ones can cost glopVertex
+     an instruction per vertex (measured: +4.8 k per teapot frame). Cold
+     state goes HERE, at the end; hot state below 2 kB (check with DWARF:
+     artifacts/gl/phase3a/LEVERS.md, "context layout") */
+  /* G02: the modelview matrix_model_view_inv was computed from (bit
+     patterns), so an unchanged modelview is not inverted again */
+  unsigned int mvinv_src[16];
+  int mvinv_valid;
+  /* G14: glDrawElements' post-transform vertex cache (arrays.c):
+     TGL_VCACHE vertices, direct-mapped by index, valid for one call
+     (vc_gen); allocated at the first glDrawElements */
+  GLVertex *vc;
+  int *vc_idx;
+  unsigned int *vc_tag;
+  unsigned int vc_gen;
+  /* (phase 3a) cold arrays moved here from the middle, so the hot fields
+     sit below 2 kB: selection names, the guard's S * P (read through
+     proj_used), the user clip planes and texgen planes (read only when
+     enabled), the polygon stipple */
+  unsigned int name_stack[MAX_NAME_STACK_DEPTH];
+  M4 matrix_proj_eff;         /* S * P when viewport.guard (see GLViewport) */
+  V4 clip_plane_eye[6];       /* eye coordinates, as glGetClipPlane reports */
+  V4 clip_plane_clip[6];      /* the same planes in clip coordinates (proj_used) */
+  V4 texgen_obj[4], texgen_eye[4];
+  M4 texgen_mv_inv;           /* transposed inverse modelview, when lighting is off */
+  unsigned int poly_stipple[32]; /* row y%32; bit i = window x%32 == i */
+  /* the lights, reached through first_light / l pointers, not by offset
+     from c: 16 x 136 B that sat between c and every hot field */
+  GLLight lights[MAX_LIGHTS];
 } GLContext;
 
-extern GLContext *gl_ctx;
+/* s31 (phase 3a G14): hidden in the declaration too, so every entry point
+   reaches it PC-relative (auipc + lw) instead of through the GOT (one
+   more load); nothing outside libGL.so names it */
+extern GLContext *gl_ctx __attribute__((visibility("hidden")));
 
 void gl_add_op(GLParam *p);
 /* s31: while compiling, hand a gl_malloc'd block to the list being built;
@@ -456,6 +504,26 @@ static inline int gl_prepare(GLContext *c)
 /* s31: begin_type that discards every vertex (bad mode, no buffer, off-screen) */
 #define TGL_BEGIN_DISCARD 0x7fff
 void gl_eval_viewport(GLContext *c);
+/* s31_zepoch.c (phase 3a G03): depth epochs */
+void zep_guard(GLContext *c);
+void zep_sync(GLContext *c);
+void zep_track_target(GLContext *c);
+void zep_attach(GLContext *c);
+void zep_materialise(GLContext *c);
+void zep_demote(GLContext *c);
+unsigned int zep_prim(GLContext *c, unsigned int m);
+unsigned int zep_clear_value(GLContext *c, float cd);
+unsigned int zep_clear_rect_value(GLContext *c, float cd);
+float zep_depth(const ZBuffer *zb, unsigned int s);
+int zep_clear(GLContext *c, float cd);
+/* phase 3a dirty boxes (s31_zepoch.c) */
+extern unsigned int tgl_bind_serial;
+void zdb_grow(GLContext *c, int x0, int y0, int x1, int y1);
+void zdb_reset(GLContext *c);
+void zdb_clear_colour(GLContext *c, unsigned int v);
+void zdb_fold(GLContext *c, int colour_reset, int depth_reset);
+void zdb_rebind(GLContext *c);
+void zdb_invalidate(ZBuffer *zb);
 void gl_warn_once(const char *what);
 /* s31: "libGL: approximated <what>", once: an honoured feature drawn by a
    documented approximation (not a gap: tools/glref does not count it) */
@@ -472,9 +540,9 @@ int s31_client_state(GLContext *c, int array);   /* arrays.c; -1 = not one */
    already right: clipped vertices, and the provoking vertex of GL_FLAT. */
 static inline int gl_zp_chan(float v, int lo, int hi)
 {
-  if (v <= 0.0f) return lo;
-  if (v >= 1.0f) return hi;
-  return (int)(v * (hi - lo) + lo);
+  /* s31 (phase 3a G14): fmax.s/fmin.s instead of two branches; the same
+     integer for every number (0 -> lo, 1 -> hi exactly) */
+  return (int)(fminf(fmaxf(v, 0.0f), 1.0f) * (hi - lo) + lo);
 }
 static inline void gl_zp_color(ZBufferPoint *zp, const V4 *col)
 {
@@ -517,6 +585,18 @@ void gl_update_xform(GLContext *c);   /* glBegin, matrices changed: planes, texg
 void gl_texgen_coords(GLContext *c, const V4 *obj, const V4 *eye,
                       const V3 *en, const V4 *in, V4 *out);
 #define TGL_CLIP_USER_SHIFT 6
+/* 64 (9,984 B with the tags, allocated at a context's first glDrawElements):
+   the 33-wide bench grid (gl/bench geo3) runs 34% fewer instructions than
+   with no cache (4.03 -> 2.65 M a frame); 32 entries gave only -6%
+   (3.78 M), because a grid row no longer fits and the next row misses
+   (LEVERS.md G14) */
+#ifndef TGL_VCACHE
+#define TGL_VCACHE 64           /* power of two; 148 B each */
+#endif
+/* the zero pattern of a 4x4 matrix (row-major), vertex.c */
+#define TGL_XF_GENERAL 0
+#define TGL_XF_PERSP   1   /* glFrustum's: rows (a 0 b 0)(0 c d 0)(0 0 e f)(0 0 g 0) */
+#define TGL_XF_ORTHO   2   /* glOrtho's:   rows (a 0 0 b)(0 c 0 d)(0 0 e f)(0 0 0 g) */
 /* texture.c */
 GLTexture *gl_tex_target(GLContext *c, int target);  /* bound object, NULL: bad target */
 
@@ -545,6 +625,10 @@ void glopTranslate(GLContext *c,GLParam *p);*/
 void gl_add_select(GLContext *c,unsigned int zmin,unsigned int zmax);
 void gl_enable_disable_light(GLContext *c,int light,int v);
 void gl_shade_vertex(GLContext *c,GLVertex *v);
+void gl_color_material(GLContext *c, float r, float g, float b, float a);
+/* vertex.c (phase 3a G14): glopVertex for glDrawElements' vertex cache */
+void gl_vertex_indexed(GLContext *c, GLParam *p, const GLVertex *hit, GLVertex *save);
+void gl_vertex4f(float x, float y, float z, float w, GLContext *c);  /* glopVertex's body */
 
 void glInitTextures(GLContext *c);
 void glEndTextures(GLContext *c);

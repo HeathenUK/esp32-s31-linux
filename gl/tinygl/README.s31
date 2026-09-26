@@ -320,6 +320,8 @@ A pixel centre exactly on a diagonal edge can still go to the other
 triangle than Mesa's: the y flip of the window transform is float, so the
 tie is not exact - but both paths decide it the same way.)
 
+(Superseded 2026-09-26 by phase 3a G01, below: the per-frame and
+per-vertex soft-double sites are gone.)
 Not changed yet (plan stage 3): the soft-double sites TinyGL has always had
 (gl_clipcode's CLIP_EPSILON, sqrt/pow in lighting, sin/cos in glRotate,
 the specular table's pow; 1.0/W per vertex in gl_transform_to_viewport and
@@ -328,3 +330,83 @@ GCC narrows a double division of floats - and are written 1.0f now). After --gc-
 has 20 __extendsfdf2, 18 __truncdfsf2, 8 __muldf3, 3 __divdf3, 1
 __floatsidf, 1 __gedf2 call sites plus pow x4, sincos x3, cos x2, sqrt x2
 (objdump of gl/out-rv32/libGL.so.1.unstripped, 2026-09-25).
+
+Phase 3a, geometry levers (2026-09-26; measurements and decisions in
+artifacts/gl/phase3a/LEVERS.md):
+- G01, no soft double left on a per-frame or per-vertex path. glRotate,
+  GL_SPOT_CUTOFF, the spot exponent, the specular table and the fog
+  factors use s31_fmath.c: sin/cos of DEGREES reduced exactly by multiples
+  of 90 (<= 0.92 ulp, exact 0 and +-1 at multiples of 90), a float pow
+  (<= 8.4e-6 relative) and exp (<= 1.08 ulp), measured by
+  gl/tests/fmath_test.c. gl_V3_Norm and glRotate's axis use sqrtf. The
+  glGet*dv widenings are bit-exact integer code (s31_float.h s31_f2d /
+  s31_i2d, gl/tests/f2d_test.c: all 2^32 floats). What is left in the
+  objects: the s31_d2f/f2d special-value fallbacks, gl_print_* (debug)
+  and fmodf for |angle| >= 2^23 degrees.
+- G02: the specular term is skipped when the material's or the light's
+  specular colour is zero (bit-exact); the material caches its specular
+  table; the normal matrix is the 3x3 cofactor inverse of an affine
+  modelview, recomputed only when the modelview's bits change; emission +
+  scene ambient and each light's ambient product are computed per state
+  change; colour clamps are fmin/fmax; glColor under GL_COLOR_MATERIAL
+  writes the material directly.
+- G14: immediate-mode glVertex/glNormal/glColor/glTexCoord/glBegin/glEnd
+  run their op directly while not compiling; list replay calls the vertex
+  op directly; the strips and the fan stop copying 148-byte vertices; the
+  projection's glFrustum/glOrtho zeros and an affine modelview's w row are
+  skipped per vertex; glDrawElements has a 64-entry post-transform vertex
+  cache; GLContext is laid out so every hot field is within the 2 kB an
+  RV32 load reaches (cold arrays and the lights at the end).
+- Correctness fixes found on the way:
+  - glVertex4 with w != 1 (and size-4 vertex arrays): both vertex paths
+    assumed w = 1 and drew the vertex at (x, y, z) instead of (x/w, ...);
+    now the full product (gl/tests/glx_geo.c rows 0-1).
+  - GL_LIGHT1..7 defaulted to LIGHT0's white diffuse and specular; GL
+    1.3 table 6.9 says (0,0,0,1). morph3d's frames are now 0.000% from
+    Mesa (were 0.016-0.034%).
+  - glopDisableClientState cleared the wrong bits (unreachable: the entry
+    point sets the state directly).
+- Known and unchanged: Gouraud colour is interpolated linearly in screen
+  space, so a triangle whose vertices have different w (glVertex4, or
+  perspective) differs from Mesa's perspective-correct colour (glx_geo row
+  0, testgl frame 60); the specular table quantises the highlight (a few
+  pixels per lit sphere, glx_geo row 3).
+
+
+Phase 3a, pixel side (2026-09-26; measured on the host only, see
+artifacts/gl/phase3a/LEVERS.md part B):
+- Clears (zbuffer.c ZB_fill16): every 16-bit fill is aligned 32-bit stores,
+  sixteen a loop turn (RV32 without D has no wider scalar store); 1.13
+  instructions a store, against 1.5 for TinyGL's memset_16.
+- Depth epochs (G03, s31_zepoch.c): a full glClear of depth to 1.0 usually
+  writes nothing - the next frame stores every depth as TinyGL's own value
+  plus a base above everything already in the buffer, so what was left
+  behind compares as the clear value. Exact, not the classic ping-pong
+  (which lets a pixel drawn two frames ago occlude): depth tests, stored
+  values and depth read back are bit for bit the plain 16-bit ones, and no
+  depth bit is given up; the rare cases where a stale pixel would not act
+  as 1.0 (a GL_LESS/GEQUAL/EQUAL/NOTEQUAL fragment at the far plane) and a
+  scene that no longer fits above the base are handled by rewriting the
+  buffer first (materialise / demote). The state lives after the depth
+  values (S31GL_DEPTH_TAIL bytes, s31gl.h), so contexts sharing a
+  drawable's depth agree. S31GL_ZTRICK=0 turns it off.
+- Dirty rows: with a retained colour buffer (s31gl_set_retained; the GLX
+  layer sets it) a full clear writes only the rows drawn into since that
+  buffer's last full clear to the same value - per colour buffer, so GLX's
+  two ping-pong SHM segments each keep their own record - and a real depth
+  clear only the rows drawn since the last one. Triangles record their
+  rows in the fillers (ztri.h ztri_rows); lines and points their box with
+  the width; pixel rectangles the whole buffer. A frame whose rows covered
+  90% or more stops recording for 16 frames. S31GL_DIRTYBOX=0 turns it off.
+- Fillers: the flat and Gouraud span loops do two pixels a turn with the
+  odd one first and an end pointer (no count, no remainder loop to set up:
+  spans are short - gears 4.8 pixels); the rows end at a depth-row pointer;
+  ztri_setup sorts scalars instead of indexing stack arrays. Every output
+  pixel is the same.
+- Measured and not kept: 32-bit paired colour/depth stores in the flat
+  filler (+6.8% instructions on gears, -33% of its stores); the x extent in
+  the dirty box (+0.2-0.6% instructions for a further -20% of glxgears'
+  clear stores: a board A/B decides it); the textured filler's remainder
+  as an end-pointer loop (+0.1-0.4%); depth epochs by fixed halves or by
+  shrinking precision (one or two apps' error against Mesa grew: geartrain
+  0.030 -> 0.047%).

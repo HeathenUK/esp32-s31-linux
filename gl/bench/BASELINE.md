@@ -267,3 +267,68 @@ RAM (RV32 sizeof): GLTexture 288 -> 148 B (one stored image instead of
 MAX_TEXTURE_LEVELS, lfmt 16-bit; review P6), GLVertex 144 -> 148 B
 (ZBufferPoint gained fx, fy, q and lost sz, tz; the two-sided back colours
 share dead storage), GLContext 4,688 -> 4,700 B.
+
+## Phase 3a: geometry levers G01, G02, G14 (2026-09-26)
+
+Full report: artifacts/gl/phase3a/LEVERS.md. New in the harness:
+- `S31_BENCH_LIBM=musl` links the board toolchain's musl math objects
+  (build_q.sh; every other script follows): a libm call costs what it does
+  on the board, and musl's double-inside float functions are counted. The
+  lever tables use it; limits.txt stays newlib (the default).
+- geo.sh + geo.c (clear-heavy geo1 at 320x240 and 640x400, indexed mesh
+  geo3, rotations geo4, mech-like geo5, specular + spot geo6, colour
+  material geo7, strip assembly probe geo8) and glxgears_q.c (stock
+  glxgears' drawing at 300x300); bench.sh runs geo.sh and limits.txt has
+  tripwires for them.
+- prof.sh/prof.py (per-function instructions, loads, stores and bytes of
+  the counted frames, from q_ui.c's q_mark() calls; PROF_FN= lists a
+  function's blocks), foot.sh FOOT_IMAGES= and a runtime (libm/libgcc)
+  footprint, dcensus.sh (soft-double call sites per object), levers.py
+  (per-lever table), rawdiff.py/raw2png.py (frames), suitecmp.py (two
+  glref suite runs), brsize.sh (Buildroot-mode sizes of base3a and gl/).
+- dwrap.c prints the per-name soft-double breakdown (dcalls.txt).
+
+Result (musl libm, M insn/frame): gears 320 1.7656 -> 1.1774 (-33%),
+glxgears-like 300 1.7046 -> 1.1240 (-34%), teapotf 320 5.2775 -> 2.6789
+(-49%), texobj 320 0.4165 -> 0.3997; frames identical except one pixel of
+gears 640. With newlib (limits.txt): gears 320 2.6152 -> 1.1774, 43 lines
+within limits, 0 over. Soft-double calls per frame: gears 4577 -> 8 (the
+demo's own), teapotf 19344 -> 0.
+
+## Phase 3a, pixel side: the clears and the fillers (2026-09-26)
+
+Full report: artifacts/gl/phase3a/LEVERS.md part B. Before = the tree
+geometry left (gl/bench/base3p; it reproduces part A's final exactly).
+
+New in the harness:
+- **glxgears-2buf 300x300** (geo.sh, q_ui.c -DQ_BUFS=2): two colour
+  buffers bound in turn, as GLX now presents a small drawable. It has a
+  tripwire in limits.txt.
+- q_ui.c marks its buffer retained (s31gl_set_retained, weak).
+- **S31_BENCH_DEFS** (build_q.sh): -D flags for the library objects.
+- **BRSIZE_TREES** (brsize.sh): which trees the size check compares.
+- **gl/tests/zepoch_test.c + run-zepoch.sh**: the epochs and dirty rows
+  against everything off, frame for frame.
+
+Result (musl libm, M insn per frame):
+
+| case | before | after | change |
+|---|---|---|---|
+| gears 320 | 1.1774 | 1.0300 | -12.5% |
+| gears 640 | 2.2813 | 1.8794 | -17.6% |
+| glxgears-like 300 | 1.1240 | 0.9652 | -14.1% |
+| teapotf 320 | 2.6789 | 2.5676 | -4.2% |
+| texobj 320 | 0.3997 | 0.3251 | -18.7% |
+| clear-heavy 320 (geo1) | 0.1984 | 0.0971 | -51.1% |
+
+- Every frame hash is unchanged.
+- Bytes written per frame: glxgears 847 -> 563 kB, clear-heavy 337 ->
+  85 kB (prof.sh; the clears are memory-bound on the board).
+- With newlib: 44 lines within limits.txt, 0 over.
+- The levers:
+  - ZB_fill16, the 32-bit clear loop;
+  - G03 exact depth epochs;
+  - dirty rows;
+  - two-pixel flat and Gouraud span loops;
+  - row end pointers;
+  - ztri_setup's scalar sort.

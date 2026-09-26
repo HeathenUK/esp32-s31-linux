@@ -86,6 +86,23 @@ typedef struct ZPipe {
   /* triangles never write outside this: viewport, scissor and buffer
      (x0 y0 x1 y1, rows from the top) */
   int box[4];
+  /* phase 3a G03 (s31_zepoch.c), for ztri_setup: the depth epoch's base
+     << 14, added to every triangle's depth plane, and the highest plain
+     vertex depth a triangle may have without zep_tri_check (a new zmax, or
+     a depth that does not fit above zoff); ctx is the GLContext */
+  unsigned int zoff, zchk;
+  unsigned int zguard;  /* ZBuffer.zguard's copy: a triangle below it first
+                           materialises the epoch (GL_LESS, stale pixels) */
+  int zact;             /* zchk != ~0 or zoff != 0: ztri_zepoch has work */
+  void *zctx;
+  /* phase 3a dirty boxes (s31_zepoch.c): what has been drawn into since
+     the last full clear (x0 y0 x1 y1), recorded while bact */
+  int db[4];
+  int bact;
+  /* the rows a triangle may cover without zdb_tri (ztri_rows): db[1] and
+     db[3] with rows-only boxes; with x boxes (S31GL_DIRTYBOX=2) an empty
+     range, so every triangle takes zdb_tri */
+  int dbc[2];
   int st_spec;                         /* the secondary colour is interpolated */
   /* the state gl_update_raster decided on, for gl_build_pipe */
   int dsel, afunc, nocolor, clamp_s, clamp_t;
@@ -99,6 +116,23 @@ typedef struct ZPipe {
   ZBuffer *zb;
   int stip_on;
 } ZPipe;
+
+/* phase 3a G03 (s31_zepoch.c): a triangle whose highest plain depth m is
+   above zchk - a new zmax, or a depth that does not fit above the epoch's
+   base (the buffer goes back to the plain mapping first). m = ~0: a sliver
+   whose depth gradient saturated (its depths are meaningless) */
+void zep_tri_check(ZPipe *p, unsigned int m);
+/* a triangle whose depth gradient saturated (review 3a R4): bounds, or
+   failing that demotes, from its rows */
+struct ZTri;
+void zep_tri_sliver(ZPipe *p, const struct ZTri *T);
+void zep_tri_far(ZPipe *p);
+/* phase 3a dirty boxes: a triangle's rows (or, S31GL_DIRTYBOX=2, its
+   box) grow the box being drawn */
+/* (ya, yb: the triangle's rows; x0, dx1, dx2: its top vertex's window x
+   and the other two's offsets from it, for S31GL_DIRTYBOX=2 - scalars, not
+   the ZTri: passing &T from the fillers cost them a callee-saved register) */
+void zdb_tri(ZPipe *p, int ya, int yb, float x0, float dx1, float dx2);
 
 enum { ZP_N_Z = 1, ZP_N_RGBA = 2, ZP_N_Q = 4, ZP_N_F = 8, ZP_N_ST = 16,
        ZP_N_SPEC = 32 };

@@ -101,7 +101,67 @@ typedef struct {
     /* s31: the colour of the next flat-shaded triangle (clip.c) */
     int flat_color;
     struct ZPipe *pipe;       /* s31: the general fragment path (zpipe.h) */
+
+    /* s31 (phase 3a G03): depth epochs (s31_zepoch.c). zst is the state
+       at the tail of the depth memory (ZB_DEPTH_TAIL), shared by every
+       context bound to it; the rest is this context's copy, synchronised
+       from it (zser). Vertex depth (zp.z) is always TinyGL's plain value;
+       the rasterisers store it plus zoff */
+    struct ZDepthState *zst;
+    unsigned int zser;        /* zst->serial the fields below follow */
+    unsigned int zoff;        /* the epoch's base << 14: added to every stored depth */
+    unsigned int ztop;        /* the highest plain zp.z that still fits above zoff */
+    unsigned int *zmaxp;      /* &zst->zmax while depth is written, else zmax_none */
+    unsigned int zmax_none;
+    int zguard;               /* 0, or: a GL_LESS primitive with a plain zp.z
+                                 below it must see stale pixels as 1.0 */
+
+    /* s31 (phase 3a): dirty boxes (s31_zepoch.c "dirty boxes"). With a
+       retained colour buffer (the caller never writes it: GLX), a full
+       clear writes only the box drawn into since the last full clear to the
+       same value. Boxes are x0 y0 x1 y1, rows from the top, x1/y1 past the
+       end; the one being drawn is ZPipe.db */
+    int retained;
+    struct ZColourSlot {      /* colour, per buffer (GLX ping-pongs two) */
+        PIXEL *buf;
+        int box[4], valid;    /* drawn into since its last full clear ... */
+        unsigned int val, ser;/* ... to val, at bind serial ser */
+    } cs[2];
+    int cur;                  /* cs[] of pbuf, or -1 */
+    int zdb_skip;             /* frames left without recording (s31_zepoch.c) */
+    int dzbox[4], dzvalid;    /* depth: drawn into since the last real clear */
+    unsigned int dzval, dzser;
+    unsigned short *dzbuf;
 } ZBuffer;
+
+/* s31 (phase 3a G03): depth epochs. A full glClear of depth to 1.0 does
+   not write the buffer when the values drawn since the last real clear
+   leave room above them: the next epoch stores every depth plus a base
+   above the highest value written (zmax), so everything left from before
+   compares as farther than anything drawn now - it reads as the clear
+   value. Details and the exact rules: s31_zepoch.c. The state lives after
+   the depth values, so a depth buffer shared by several contexts (GLX: the
+   drawable's) carries it; all zero is "plain 16-bit mapping, nothing
+   stale", which is what calloc gives. */
+typedef struct ZDepthState {
+    unsigned int serial;      /* bumped at every change of base/stale */
+    unsigned int zmax;        /* highest stored depth << 14 since the last real clear */
+    unsigned short base;      /* the epoch's lowest stored value (0: plain) */
+    unsigned char stale;      /* pixels from an earlier epoch may be left */
+    unsigned char backoff;    /* full clears left that stay real (s31_zepoch.c) */
+    unsigned int magic;       /* ZEP_MAGIC (the top 24 bits) once the core
+                                 has taken the state over (zep_attach):
+                                 anything else - the caller's zeroes, or old
+                                 depth values where a resized buffer's tail
+                                 now falls - is not trusted, and the first
+                                 full clear is real. The low byte: how many
+                                 demotions/materialisations in a row (the
+                                 backoff doubles with each) */
+} ZDepthState;
+/* bytes to allocate after the w*h depth values: the state, 4-aligned */
+#define ZB_DEPTH_TAIL 20
+#define ZB_DEPTH_STATE(zbuf, npix) \
+  ((ZDepthState *)(((unsigned long)((unsigned short *)(zbuf) + (npix)) + 3) & ~3ul))
 
 typedef struct {
   int x,y,z;     /* integer coordinates in the zbuffer */
@@ -181,6 +241,9 @@ void ZB_plot_lt(ZBuffer *zb, ZBufferPoint *p);
 /* s31: glClear inside a rectangle (scissor), with colour and depth masks */
 void ZB_clear_rect(ZBuffer *zb, int x0, int y0, int x1, int y1,
                    int clear_z, int z, int clear_color, int color, int cmask);
+/* s31: the colour fill of glClear (and any 16-bit fill): n pixels of
+   val from p, any alignment */
+void ZB_fill16(unsigned short *p, unsigned int val, int n);
 
 typedef void (*ZB_fillTriangleFunc)(ZBuffer  *,
 	    ZBufferPoint *,ZBufferPoint *,ZBufferPoint *);

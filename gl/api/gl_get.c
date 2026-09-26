@@ -97,7 +97,7 @@ void GLAPIENTRY glGetDoublev(GLenum pname, GLdouble *params)
 	float fv[16];
 	n = get(pname, iv, fv, &kind);
 	for (i = 0; i < n; i++)
-		params[i] = kind == TGL_GET_INT ? (GLdouble)iv[i] : (GLdouble)fv[i];
+		params[i] = kind == TGL_GET_INT ? s31_i2d(iv[i]) : s31_f2d(fv[i]);
 }
 
 void GLAPIENTRY glGetBooleanv(GLenum pname, GLboolean *params)

@@ -591,9 +591,11 @@ int glxi_surf_alloc(struct glxi_surf *s, VisualID vid, int screen, int db)
 	s->cur = 0;
 	s->pixels = s->buf[0].pixels;
 	/* The drawable's depth buffer, shared by every context current on it.
-	 * calloc: 0 is the far plane, as the core's private buffer starts. A
-	 * failure is not fatal: the core then allocates a private one. */
-	s->depth = calloc((size_t)s->bw * s->bh, 2);
+	 * calloc: 0 is the far plane, as the core's private buffer starts,
+	 * and S31GL_DEPTH_TAIL zero bytes after it hold the core's depth
+	 * epoch state (s31gl.h). A failure is not fatal: the core then
+	 * allocates a private one. */
+	s->depth = calloc((size_t)s->bw * s->bh * 2 + S31GL_DEPTH_TAIL, 1);
 	s->last_w = s->w;
 	s->last_h = s->h;
 	s->last_nbuf = s->nbuf;

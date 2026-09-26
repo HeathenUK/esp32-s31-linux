@@ -221,7 +221,8 @@ glEnableClientState(GLenum array)
 void
 glopDisableClientState(GLContext *c, GLParam *p)
 {
-  c->client_states &= p[1].i;
+  c->client_states &= ~p[1].i;   /* s31 (phase 3a): was &= (never reached:
+                                    glDisableClientState sets state directly) */
 }
 
 void
@@ -342,6 +343,20 @@ static int index_at(const void *indices, int type, int i)
   }
 }
 
+/* s31 (phase 3a G14): the vertex cache's storage, at the first use */
+static int vcache_ready(GLContext *c)
+{
+  char *b;
+  if (c->vc) return 1;
+  b = gl_zalloc(TGL_VCACHE * (sizeof(GLVertex) + sizeof(int) + sizeof(unsigned int)));
+  if (!b) return 0;                /* no cache: the uncached path */
+  c->vc = (GLVertex *)b;
+  c->vc_idx = (int *)(b + TGL_VCACHE * sizeof(GLVertex));
+  c->vc_tag = (unsigned int *)(c->vc_idx + TGL_VCACHE);
+  c->vc_gen = 0;
+  return 1;
+}
+
 /*
  * erysdren
  */
@@ -364,10 +379,43 @@ void glopDrawElements(GLContext *c, GLParam *p)
 	param_mode[1].i = mode;
 
 	glopBegin(c, param_mode);
-	for (i = 0; i < count; i++)
-	{
-		param_ptr[1].i = index_at(indices, type, i);
-		glopArrayElement(c, param_ptr);
+	/* s31 (phase 3a G14): a post-transform vertex cache. An indexed mesh
+	   names each vertex several times (a grid ~6), and TinyGL fetched,
+	   transformed, lit and projected it every time. Within one call
+	   nothing can change the result, so the processed vertex is kept,
+	   direct-mapped by its index (TGL_VCACHE entries: a grid row of up to
+	   TGL_VCACHE - 1 vertices is still there for the next row), and a hit
+	   copies it into the primitive. Only with a vertex array (else no
+	   vertex is emitted) and a live primitive. The current colour, normal
+	   and texture coordinate after the call are those of the last miss,
+	   not the last index: GL 1.3 2.8 leaves them undefined. */
+	if ((c->client_states & VERTEX_ARRAY) && c->begin_type != TGL_BEGIN_DISCARD &&
+	    count > 3 && vcache_ready(c)) {
+		unsigned int gen = ++c->vc_gen;
+		for (i = 0; i < count; i++) {
+			int idx = index_at(indices, type, i);
+			int s = idx & (TGL_VCACHE - 1);
+			if (c->vc_tag[s] == gen && c->vc_idx[s] == idx) {
+				gl_vertex_indexed(c, NULL, &c->vc[s], NULL);
+			} else {
+				GLParam col[8], nor[4], tex[5], edge[2], ver[5];
+				int states = c->client_states;
+				array_element_params(c, idx, col, nor, tex, edge, ver);
+				if (states & COLOR_ARRAY) glopColor(c, col);
+				if (states & NORMAL_ARRAY) glopNormal(c, nor);
+				if (states & TEXCOORD_ARRAY) glopTexCoord(c, tex);
+				if (states & EDGEFLAG_ARRAY) glopEdgeFlag(c, edge);
+				c->vc_tag[s] = gen;
+				c->vc_idx[s] = idx;
+				gl_vertex_indexed(c, ver, NULL, &c->vc[s]);
+			}
+		}
+	} else {
+		for (i = 0; i < count; i++)
+		{
+			param_ptr[1].i = index_at(indices, type, i);
+			glopArrayElement(c, param_ptr);
+		}
 	}
 	glopEnd(c, NULL);
 }

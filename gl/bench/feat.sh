@@ -12,15 +12,19 @@ B=$TC/bin; L=$TC/riscv32-esp-elf/lib; MULTI=rv32imac_zicsr_zifencei_zaamo_zalrsc
 BOARD="-Os -march=rv32imafc_zicsr_zifencei_zaamo_zalrsc_zba_zbb_zbc_zbs -mabi=ilp32 -mtune=esp-base"
 # every soft-double libcall and double math function (wraps.txt, dwrap.c)
 WR=$(tr ' ' '\n' < "$HERE/wraps.txt" | grep . | sed 's/^/-Wl,--wrap=/' | tr '\n' ' ')
+# S31_BENCH_NOWRAP=1 (review 3a m2): no soft-double counting wrappers (~8
+# instructions a call inside the counted frames); dcalls then reads 0
+[ -n "$S31_BENCH_NOWRAP" ] && WR=
 cd "$OUT"
+LM="-lm"; [ -f libmuslm.a ] && LM="$PWD/libmuslm.a -lm"
 for k in 1 2 3 4 5; do
 	$B/riscv32-esp-elf-gcc $BOARD -O2 -w -I$HERE/../include -I$HERE/../api -I$HERE/../tinygl/examples -DQW=320 -DQH=240 -DQFEAT=$k \
-		-c "$HERE/q_ui.c" -o demo/q_ui_f$k.o
+		$S31_BENCH_QDEFS -c "$HERE/q_ui.c" -o demo/q_ui_f$k.o
 	for d in gears texobj; do
 		$B/riscv32-esp-elf-gcc -march=rv32imac_zicsr_zifencei_zaamo_zalrsc -mabi=ilp32 \
 			-specs=semihost.specs -nostartfiles -T "$HERE/qemu/link.ld" \
 			"$HERE/qemu/crt.S" "$L/$MULTI/crt0.o" demo/$d.o demo/q_ui_f$k.o \
-			demo/dwrap.o $(cat obj/core.list) $WR -Wl,--gc-sections -lm \
+			demo/dwrap.o $(cat obj/core.list) $WR -Wl,--gc-sections $LM \
 			-o f_${d}_$k.elf 2>&1 | grep -v "RWX\|LOAD segment" || true &
 	done
 done

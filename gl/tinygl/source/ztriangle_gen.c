@@ -44,8 +44,10 @@ void ZB_fillTriangleGeneral(ZBuffer *zb, const ZVtxG *a, const ZVtxG *b,
 
   (void)textured;
   if (!ztri_setup(&T, a->x, a->y, a->z, b->x, b->y, b->z, c->x, c->y, c->z,
-                  p->box))
+                  p))
     return;
+  ztri_zepoch(&T, p, a->z, b->z, c->z);
+  ztri_rows(&T, p);
   v0 = pv[T.o[0]]; v1 = pv[T.o[1]]; v2 = pv[T.o[2]];
 
   /* only the planes the chosen stages read (ZPipe.need, gl_build_pipe),

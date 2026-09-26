@@ -100,8 +100,19 @@ static void gl_add_select1(GLContext *c,int z1,int z2,int z3)
 static void zb_plot_in(GLContext *c,ZBufferPoint *p)
 {
   const int *b=c->pipe.box;
-  if (p->x >= b[0] && p->x < b[2] && p->y >= b[1] && p->y < b[3])
-    c->zb_plot(c->zb,p);
+  /* phase 3a G03 (s31_zepoch.c): stored depth is plus the epoch's base */
+  if (p->z < c->zb->zguard) zep_materialise(c);
+  if (c->pipe.bact) zdb_grow(c,p->x,p->y,p->x+1,p->y+1);   /* dirty box */
+  if (p->x >= b[0] && p->x < b[2] && p->y >= b[1] && p->y < b[3]) {
+    unsigned int off = zep_prim(c,(unsigned int)p->z);
+    if (off) {
+      ZBufferPoint q=*p;
+      q.z += (int)off;
+      c->zb_plot(c->zb,&q);
+    } else {
+      c->zb_plot(c->zb,p);
+    }
+  }
 }
 
 void gl_draw_point(GLContext *c,GLVertex *p0)
@@ -193,6 +204,17 @@ void gl_set_provoking_flat(GLContext *c, GLVertex *v)
 static void gl_zb_line(GLContext *c,GLVertex *va,GLVertex *vb)
 {
   ZBufferPoint fa,fb,*a=&va->zp,*b=&vb->zp;
+  /* phase 3a G03 (s31_zepoch.c): a line that can reach the depth epoch's
+     farthest step under GL_LESS */
+  unsigned int off;
+  if ((a->z < b->z ? a->z : b->z) < c->zb->zguard) zep_materialise(c);
+  if (c->pipe.bact) {
+    /* the dirty box (s31_zepoch.c): the ends, and the width either side */
+    int w=c->line_w;
+    zdb_grow(c,(a->x < b->x ? a->x : b->x)-w,(a->y < b->y ? a->y : b->y)-w,
+             (a->x > b->x ? a->x : b->x)+w+1,(a->y > b->y ? a->y : b->y)+w+1);
+  }
+  off=zep_prim(c,(unsigned int)(a->z > b->z ? a->z : b->z));
   if (c->raster_gen_lines) {
     /* s31: blending, fog, depth func/mask, texture, width ... */
     if (!c->raster_skip)
@@ -206,9 +228,10 @@ static void gl_zb_line(GLContext *c,GLVertex *va,GLVertex *vb)
     const int *bx=c->pipe.box;
     int out=a->x < bx[0] || a->x >= bx[2] || a->y < bx[1] || a->y >= bx[3] ||
             b->x < bx[0] || b->x >= bx[2] || b->y < bx[1] || b->y >= bx[3];
-    if (out || c->current_shade_model != GL_SMOOTH) {
+    if (out || off || c->current_shade_model != GL_SMOOTH) {
       fa=*a; fb=*b;
       a=&fa; b=&fb;
+      fa.z+=(int)off; fb.z+=(int)off;   /* the epoch's base (s31_zepoch.c) */
     }
     if (out) {
       fa.x=fa.x < bx[0] ? bx[0] : (fa.x >= bx[2] ? bx[2]-1 : fa.x);

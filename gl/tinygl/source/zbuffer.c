@@ -59,7 +59,7 @@ ZBuffer *ZB_open(int xsize, int ysize, int mode,
 
     size = zb->xsize * zb->ysize * sizeof(unsigned short);
 
-    zb->zbuf = gl_malloc(size);
+    zb->zbuf = gl_zalloc(size + ZB_DEPTH_TAIL);   /* s31: the epoch state */
     if (zb->zbuf == NULL)
 	goto error;
 
@@ -76,6 +76,13 @@ ZBuffer *ZB_open(int xsize, int ysize, int mode,
     }
 
     zb->current_texture = NULL;
+    /* s31: the plain depth mapping, no epoch state yet (s31_zepoch.c) */
+    zb->zst = NULL;
+    zb->zmaxp = &zb->zmax_none;
+    zb->zoff = 0;
+    zb->zguard = 0;
+    zb->ztop = ~0u;
+    zb->cur = -1;
 
     return zb;
   error:
@@ -111,7 +118,7 @@ void ZB_resize(ZBuffer * zb, void *frame_buffer, int xsize, int ysize)
     size = zb->xsize * zb->ysize * sizeof(unsigned short);
 
     gl_free(zb->zbuf);
-    zb->zbuf = gl_malloc(size);
+    zb->zbuf = gl_zalloc(size + ZB_DEPTH_TAIL);   /* s31: the epoch state */
 
     if (zb->frame_buffer_allocated)
 	gl_free(zb->pbuf);
@@ -419,37 +426,46 @@ void ZB_copyFrameBuffer(ZBuffer * zb, void *buf,
 
 
 /*
- * adr must be aligned on an 'int'
+ * s31 (phase 3a): the 16-bit fill every clear uses. The pixels are
+ * written as aligned 32-bit words (RV32 without D has no wider scalar
+ * store), sixteen a loop turn: 18 instructions per 64 bytes, against 28 for
+ * TinyGL's four-word loop (which also kept an index), so the loop overhead
+ * is 2 instructions per 16 stores. An odd first pixel (a row of an
+ * odd-width buffer starts 2 bytes off a word, and a misaligned word store
+ * traps on this core) and an odd last pixel are single halfword stores.
  */
+void ZB_fill16(unsigned short *p, unsigned int val, int n)
+{
+    unsigned int v, *w, *e;
+
+    if (n <= 0)
+	return;
+    val &= 0xffffu;
+    if ((unsigned long)p & 2) {
+	*p++ = (unsigned short)val;
+	n--;
+    }
+    v = val | (val << 16);
+    w = (unsigned int *)p;
+    e = w + ((n >> 1) & ~15);
+    while (w != e) {
+	w[0] = v; w[1] = v; w[2] = v; w[3] = v;
+	w[4] = v; w[5] = v; w[6] = v; w[7] = v;
+	w[8] = v; w[9] = v; w[10] = v; w[11] = v;
+	w[12] = v; w[13] = v; w[14] = v; w[15] = v;
+	w += 16;
+    }
+    e = w + ((n >> 1) & 15);
+    while (w != e)
+	*w++ = v;
+    if (n & 1)
+	*(unsigned short *)w = (unsigned short)val;
+}
+
+/* TinyGL's name for it (count pixels; any alignment now) */
 void memset_16(void *adr, int val, int count)
 {
-    int i, n;
-    unsigned int v, *p;   /* s31: unsigned - val << 16 overflowed int (UBSan) */
-    unsigned short *q;
-
-    /* s31: rows of an odd-width buffer start 2 bytes off a word; a
-       misaligned word store traps on this core, so align first */
-    if (((unsigned long)adr & 2) && count > 0) {
-	*(unsigned short *)adr = val;
-	adr = (char *)adr + 2;
-	count--;
-    }
-    p = adr;
-    v = (unsigned int)val | ((unsigned int)val << 16);
-
-    n = count >> 3;
-    for (i = 0; i < n; i++) {
-	p[0] = v;
-	p[1] = v;
-	p[2] = v;
-	p[3] = v;
-	p += 4;
-    }
-
-    q = (unsigned short *) p;
-    n = count & 7;
-    for (i = 0; i < n; i++)
-	*q++ = val;
+    ZB_fill16(adr, (unsigned int)val, count);
 }
 
 void memset_32(void *adr, int val, int count)
@@ -514,12 +530,12 @@ void ZB_clear(ZBuffer * zb, int clear_z, int z,
     PIXEL *pp;
 
     if (clear_z) {
-	memset_16(zb->zbuf, z, zb->xsize * zb->ysize);
+	ZB_fill16(zb->zbuf, z, zb->xsize * zb->ysize);
     }
 #if TGL_FEATURE_RENDER_BITS == 16
     /* s31: a contiguous buffer is cleared in one pass */
     if (clear_color && zb->linesize == zb->xsize * PSZB) {
-	memset_16(zb->pbuf, RGB_TO_PIXEL(r, g, b), zb->xsize * zb->ysize);
+	ZB_fill16(zb->pbuf, RGB_TO_PIXEL(r, g, b), zb->xsize * zb->ysize);
 	clear_color = 0;
     }
 #endif

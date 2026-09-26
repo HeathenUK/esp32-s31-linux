@@ -1,0 +1,10 @@
+/usr/bin/ld: /lib/aarch64-linux-gnu/libasan.so.8: warning: the use of `tmpnam_r' is dangerous, better use `mkstemp'
+/usr/bin/ld: /lib/aarch64-linux-gnu/libasan.so.8: warning: the use of `tmpnam' is dangerous, better use `mkstemp'
+/usr/bin/ld: /lib/aarch64-linux-gnu/libasan.so.8: warning: the use of `tempnam' is dangerous, better use `mkstemp'
+/usr/bin/ld: /lib/aarch64-linux-gnu/libasan.so.8: warning: the use of `tmpnam_r' is dangerous, better use `mkstemp'
+/usr/bin/ld: /lib/aarch64-linux-gnu/libasan.so.8: warning: the use of `tmpnam' is dangerous, better use `mkstemp'
+/usr/bin/ld: /lib/aarch64-linux-gnu/libasan.so.8: warning: the use of `tempnam' is dangerous, better use `mkstemp'
+/usr/bin/ld: /lib/aarch64-linux-gnu/libasan.so.8: warning: the use of `tmpnam_r' is dangerous, better use `mkstemp'
+/usr/bin/ld: /lib/aarch64-linux-gnu/libasan.so.8: warning: the use of `tmpnam' is dangerous, better use `mkstemp'
+/usr/bin/ld: /lib/aarch64-linux-gnu/libasan.so.8: warning: the use of `tempnam' is dangerous, better use `mkstemp'
+san: clean (383 log lines; core_test: 185 passed, 0 failed raster_gate: 51 passed, 0 failed )

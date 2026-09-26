@@ -2,6 +2,7 @@
 #include "msghandling.h"
 #include <math.h>
 #include <stdlib.h>
+#include "s31_fmath.h"
 
 static void calc_buf(GLSpecBuf *buf, const float shininess)
 {
@@ -10,7 +11,9 @@ static void calc_buf(GLSpecBuf *buf, const float shininess)
   val = 0.0f;
   inc = 1.0f/SPECULAR_BUFFER_SIZE;
   for (i = 0; i <= SPECULAR_BUFFER_SIZE; i++) {
-    buf->buf[i] = pow(val, shininess);
+    /* s31 (phase 3a G01): float pow; pow() was 1,025 soft-double calls
+       (and their conversions) per new shininess */
+    buf->buf[i] = s31_powf(val, shininess);
     val += inc;
   }
 }

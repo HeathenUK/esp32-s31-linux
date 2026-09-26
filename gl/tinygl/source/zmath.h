@@ -42,7 +42,7 @@ void gl_M4_Inv(M4 *a,M4 *b);
 void gl_M4_Mul(M4 *c,M4 *a,M4 *b);
 void gl_M4_MulLeft(M4 *c,M4 *a);
 void gl_M4_Transpose(M4 *a,M4 *b);
-void gl_M4_Rotate(M4 *c,float t,int u);
+void gl_M4_RotateSC(M4 *c,float s,float co,int u);
 int  gl_V3_Norm(V3 *a);
 
 V3 gl_V3_New(float x,float y,float z);

@@ -1,4 +1,5 @@
 #include "zgl.h"
+#include "s31_fmath.h"
 
 void glopNormal(GLContext * c, GLParam * p)
 {
@@ -38,17 +39,8 @@ void glopColor(GLContext * c, GLParam * p)
     c->longcurrent_color[1] = p[6].ui;
     c->longcurrent_color[2] = p[7].ui;
 
-    if (c->color_material_enabled) {
-	GLParam q[7];
-	q[0].op = OP_Material;
-	q[1].i = c->current_color_material_mode;
-	q[2].i = c->current_color_material_type;
-	q[3].f = p[1].f;
-	q[4].f = p[2].f;
-	q[5].f = p[3].f;
-	q[6].f = p[4].f;
-	glopMaterial(c, q);
-    }
+    if (c->color_material_enabled)   /* s31 (phase 3a G02): light.c */
+	gl_color_material(c, p[1].f, p[2].f, p[3].f, p[4].f);
 }
 
 
@@ -165,6 +157,84 @@ void gl_eval_viewport(GLContext * c)
 
     /* the composed projection depends on the guard */
     c->matrix_model_projection_updated = 1;
+    c->xf_dirty |= 2;   /* s31 (phase 3a G14): proj_used may change */
+}
+
+/* s31 (phase 3a G02): the normal matrix, the transposed inverse of the
+   modelview, whose upper 3x3 is all the lighting (and texgen) reads.
+   - Recomputed only when the modelview's bits changed since the last time
+     (a projection or texture matrix change, or a glPush/glPopMatrix pair,
+     set matrix_model_projection_updated too).
+   - An affine modelview (last row 0 0 0 1, every application's) takes the
+     3x3 cofactor inverse: 9 products of 2, one divide. That is the upper
+     3x3 of the 4x4 inverse exactly, as GL 1.3 2.10.3 defines it; the
+     general 4x4 Gauss-Jordan (gl_M4_Inv), with its pivot search, stays for
+     projective modelviews and singular ones, as before. */
+static void gl_normal_matrix(GLContext * c)
+{
+    const M4 *mv = c->matrix_stack_ptr[0];
+    const float *a = &mv->m[0][0];
+    float *r = &c->matrix_model_view_inv.m[0][0];
+    float c00, c01, c02, det;
+    unsigned int b[16];
+    int i;
+
+    memcpy(b, a, sizeof b);
+    if (c->mvinv_valid && memcmp(b, c->mvinv_src, sizeof b) == 0)
+	return;
+    memcpy(c->mvinv_src, b, sizeof b);
+    c->mvinv_valid = 1;
+    /* (G14: gl_vertex_transform skips an affine modelview's w row) */
+    c->xf_mv_affine = a[12] == 0.0f && a[13] == 0.0f && a[14] == 0.0f && a[15] == 1.0f;
+    if (c->xf_mv_affine) {
+	c00 = a[5] * a[10] - a[6] * a[9];
+	c01 = a[6] * a[8] - a[4] * a[10];
+	c02 = a[4] * a[9] - a[5] * a[8];
+	det = a[0] * c00 + a[1] * c01 + a[2] * c02;
+	if (det != 0.0f && det - det == 0.0f) {
+	    float id = 1.0f / det;
+	    /* r[i][j] = inverse[j][i] = cofactor(a[i][j]) / det */
+	    r[0] = c00 * id;
+	    r[1] = c01 * id;
+	    r[2] = c02 * id;
+	    r[4] = (a[2] * a[9] - a[1] * a[10]) * id;
+	    r[5] = (a[0] * a[10] - a[2] * a[8]) * id;
+	    r[6] = (a[1] * a[8] - a[0] * a[9]) * id;
+	    r[8] = (a[1] * a[6] - a[2] * a[5]) * id;
+	    r[9] = (a[2] * a[4] - a[0] * a[6]) * id;
+	    r[10] = (a[0] * a[5] - a[1] * a[4]) * id;
+	    r[3] = r[7] = r[11] = 0.0f;
+	    for (i = 12; i < 15; i++)
+		r[i] = -(r[i - 12] * a[3] + r[i - 8] * a[7] + r[i - 4] * a[11]);
+	    r[15] = 1.0f;
+	    return;
+	}
+    }
+    {
+	M4 tmp;
+	gl_M4_Inv(&tmp, (M4 *) mv);
+	gl_M4_Transpose(&c->matrix_model_view_inv, &tmp);
+    }
+}
+
+/* s31 (phase 3a G14): which zeros a matrix has, so the per-vertex
+   products can skip them. A product by an exact zero adds exactly 0, so
+   the result is unchanged (only the sign of a zero, and inf/NaN inputs,
+   could differ). glFrustum and glOrtho matrices, and the viewport guard's
+   S * P of them (the guard mixes the last row, (0 0 g 0) or (0 0 0 g), into
+   rows 0 and 1 without breaking the pattern), are the cases that matter;
+   anything else is general. */
+static int gl_xf_kind(const M4 *mm)
+{
+    const float *m = &mm->m[0][0];
+    if (m[1] == 0.0f && m[4] == 0.0f && m[8] == 0.0f && m[9] == 0.0f &&
+	m[12] == 0.0f && m[13] == 0.0f) {
+	if (m[3] == 0.0f && m[7] == 0.0f && m[15] == 0.0f)
+	    return TGL_XF_PERSP;
+	if (m[2] == 0.0f && m[6] == 0.0f && m[14] == 0.0f)
+	    return TGL_XF_ORTHO;
+    }
+    return TGL_XF_GENERAL;
 }
 
 /* S * P for the guard: rows 0 and 1 of P mixed with row 3 */
@@ -202,11 +272,11 @@ void gl_vertex_fog(GLContext * c, GLVertex * v)
 	f = (c->fog_end - d) * c->fog_scale;
 	break;
     case GL_EXP:
-	f = expf(-c->fog_density * d);
+	f = s31_expf(-c->fog_density * d);   /* s31: musl expf is double inside */
 	break;
     default:                    /* GL_EXP2 */
 	f = c->fog_density * d;
-	f = expf(-f * f);
+	f = s31_expf(-f * f);
 	break;
     }
     v->fog = f < 0.0f ? 0.0f : (f > 1.0f ? 1.0f : f);
@@ -215,7 +285,6 @@ void gl_vertex_fog(GLContext * c, GLVertex * v)
 void glopBegin(GLContext * c, GLParam * p)
 {
     int type;
-    M4 tmp;
 
     /* s31: GL errors instead of asserts; never draw without a buffer */
     if (c->in_begin) {
@@ -257,9 +326,14 @@ void glopBegin(GLContext * c, GLParam * p)
 	}
 
 	if (c->lighting_enabled) {
-	    /* precompute inverse modelview */
-	    gl_M4_Inv(&tmp, c->matrix_stack_ptr[0]);
-	    gl_M4_Transpose(&c->matrix_model_view_inv, &tmp);
+	    /* s31 (phase 3a G14): the projection's shape (gl_vertex_transform),
+	       when it may have changed */
+	    if (c->xf_dirty & 2) {
+		c->xf_proj = gl_xf_kind(c->proj_used);
+		c->xf_dirty &= ~2;
+	    }
+	    /* precompute inverse modelview (s31: gl_normal_matrix) */
+	    gl_normal_matrix(c);
 	    if (c->rescale_normal_enabled) {
 		/* s31: GL_RESCALE_NORMAL (GL 1.3 2.10.3): 1 / |third row of
 		   the inverse modelview| = its transpose's third column */
@@ -319,9 +393,27 @@ void glopBegin(GLContext * c, GLParam * p)
     }
 }
 
+/* s31 (phase 3a G14): a vertex whose w is not 1 (glVertex4 with w != 1,
+   a vertex array of size 4): the full products. TinyGL's transforms below
+   assume w = 1 - both paths ignored w (a correctness bug: every such
+   vertex was drawn as if w were 1). Out of line: it is rare. */
+static void __attribute__((noinline)) gl_vertex_transform_w(GLContext * c, GLVertex * v)
+{
+    if (c->lighting_enabled) {
+	gl_M4_MulV4(&v->ec, c->matrix_stack_ptr[0], &v->coord);
+	gl_M4_MulV4(&v->pc, c->proj_used, &v->ec);
+    } else {
+	gl_M4_MulV4(&v->pc, &c->matrix_model_projection, &v->coord);
+    }
+}
+
 /* coords, tranformation , clip code and projection */
 /* TODO : handle all cases */
-static inline void gl_vertex_transform(GLContext * c, GLVertex * v)
+/* s31 (phase 3a G14): always inlined - it has two callers now, glopVertex
+   and the vertex cache's gl_vertex_indexed, and out of line it cost
+   glopVertex a call and its spills on every vertex (+1.4% gears) */
+static inline __attribute__((always_inline))
+void gl_vertex_transform(GLContext * c, GLVertex * v)
 {
     float *m;
     V4 *n;
@@ -329,26 +421,55 @@ static inline void gl_vertex_transform(GLContext * c, GLVertex * v)
     if (c->lighting_enabled) {
 	/* eye coordinates needed for lighting */
 
-	m = &c->matrix_stack_ptr[0]->m[0][0];
-	v->ec.X = (v->coord.X * m[0] + v->coord.Y * m[1] +
-		   v->coord.Z * m[2] + m[3]);
-	v->ec.Y = (v->coord.X * m[4] + v->coord.Y * m[5] +
-		   v->coord.Z * m[6] + m[7]);
-	v->ec.Z = (v->coord.X * m[8] + v->coord.Y * m[9] +
-		   v->coord.Z * m[10] + m[11]);
-	v->ec.W = (v->coord.X * m[12] + v->coord.Y * m[13] +
-		   v->coord.Z * m[14] + m[15]);
+	float ex, ey, ez, ew;
 
-	/* projection coordinates (s31: proj_used carries the viewport guard) */
+	if (__builtin_expect(v->coord.W != 1.0f, 0)) {
+	    gl_vertex_transform_w(c, v);
+	    goto normal;
+	}
+	m = &c->matrix_stack_ptr[0]->m[0][0];
+	ex = (v->coord.X * m[0] + v->coord.Y * m[1] +
+		   v->coord.Z * m[2] + m[3]);
+	ey = (v->coord.X * m[4] + v->coord.Y * m[5] +
+		   v->coord.Z * m[6] + m[7]);
+	ez = (v->coord.X * m[8] + v->coord.Y * m[9] +
+		   v->coord.Z * m[10] + m[11]);
+	/* s31 (phase 3a G14): an affine modelview's w row is 0 0 0 1 */
+	if (c->xf_mv_affine)
+	    ew = 1.0f;
+	else
+	    ew = (v->coord.X * m[12] + v->coord.Y * m[13] +
+		   v->coord.Z * m[14] + m[15]);
+	v->ec.X = ex; v->ec.Y = ey; v->ec.Z = ez; v->ec.W = ew;
+
+	/* projection coordinates (s31: proj_used carries the viewport guard;
+	   phase 3a G14: glFrustum's and glOrtho's zeros skipped) */
 	m = &c->proj_used->m[0][0];
-	v->pc.X = (v->ec.X * m[0] + v->ec.Y * m[1] +
-		   v->ec.Z * m[2] + v->ec.W * m[3]);
-	v->pc.Y = (v->ec.X * m[4] + v->ec.Y * m[5] +
-		   v->ec.Z * m[6] + v->ec.W * m[7]);
-	v->pc.Z = (v->ec.X * m[8] + v->ec.Y * m[9] +
-		   v->ec.Z * m[10] + v->ec.W * m[11]);
-	v->pc.W = (v->ec.X * m[12] + v->ec.Y * m[13] +
-		   v->ec.Z * m[14] + v->ec.W * m[15]);
+	/* The kept terms are written as the explicit fmaf chain GCC
+	   contracted the general 4-term sum below into (the first product
+	   fused with the second, then each further product fused onto the
+	   sum): with the zero terms dropped that is fmaf(last kept, sum of
+	   the first) - so the clip coordinates are bit-identical to the
+	   general branch's. A plain `a*b + c*d` lets GCC fuse the other
+	   product and round differently (review 3a R3: +-1 LSB depth on lit
+	   geometry). */
+	if (c->xf_proj == TGL_XF_PERSP) {
+	    v->pc.X = fmaf(ez, m[2], ex * m[0]);
+	    v->pc.Y = fmaf(ez, m[6], ey * m[5]);
+	    v->pc.Z = fmaf(ew, m[11], ez * m[10]);
+	    v->pc.W = ez * m[14];
+	} else if (c->xf_proj == TGL_XF_ORTHO) {
+	    v->pc.X = fmaf(ew, m[3], ex * m[0]);
+	    v->pc.Y = fmaf(ew, m[7], ey * m[5]);
+	    v->pc.Z = fmaf(ew, m[11], ez * m[10]);
+	    v->pc.W = ew * m[15];
+	} else {
+	    v->pc.X = (ex * m[0] + ey * m[1] + ez * m[2] + ew * m[3]);
+	    v->pc.Y = (ex * m[4] + ey * m[5] + ez * m[6] + ew * m[7]);
+	    v->pc.Z = (ex * m[8] + ey * m[9] + ez * m[10] + ew * m[11]);
+	    v->pc.W = (ex * m[12] + ey * m[13] + ez * m[14] + ew * m[15]);
+	}
+      normal:
 
 	m = &c->matrix_model_view_inv.m[0][0];
 	n = &c->current_normal;
@@ -358,7 +479,21 @@ static inline void gl_vertex_transform(GLContext * c, GLVertex * v)
 	v->normal.Z = (n->X * m[8] + n->Y * m[9] + n->Z * m[10]);
 
 	if (c->normalize_enabled) {
-	    gl_V3_Norm(&v->normal);
+	    /* s31 (phase 3a G02): gl_V3_Norm's arithmetic, inline: the call
+	       clobbered every FP register (all caller-saved under ilp32), so
+	       the clip coordinates were reloaded after it */
+	    /* (one reciprocal and three products instead of three divides was
+	       measured +3 instructions a call under qemu - the constant 1.0f
+	       costs 2 - with identical frames; its only gain would be fdiv.s
+	       latency, which the instruction count cannot see: not kept until
+	       a board A/B, artifacts/gl/phase3a/LEVERS.md G02b) */
+	    float nx = v->normal.X, ny = v->normal.Y, nz = v->normal.Z;
+	    float nn = sqrtf(nx * nx + ny * ny + nz * nz);
+	    if (nn != 0) {
+		v->normal.X = nx / nn;
+		v->normal.Y = ny / nn;
+		v->normal.Z = nz / nn;
+	    }
 	} else if (c->rescale_normal_enabled) {
 	    v->normal.X *= c->rescale;     /* s31 */
 	    v->normal.Y *= c->rescale;
@@ -366,9 +501,13 @@ static inline void gl_vertex_transform(GLContext * c, GLVertex * v)
 	}
     } else {
 	/* no eye coordinates needed, no normal */
-	/* NOTE: W = 1 is assumed */
+	/* NOTE: W = 1 is assumed (s31: glopVertex sends w != 1 to
+	   gl_vertex_transform_w) */
 	m = &c->matrix_model_projection.m[0][0];
 
+	if (__builtin_expect(v->coord.W != 1.0f, 0)) {
+	    gl_vertex_transform_w(c, v);
+	} else {
 	v->pc.X = (v->coord.X * m[0] + v->coord.Y * m[1] +
 		   v->coord.Z * m[2] + m[3]);
 	v->pc.Y = (v->coord.X * m[4] + v->coord.Y * m[5] +
@@ -381,15 +520,24 @@ static inline void gl_vertex_transform(GLContext * c, GLVertex * v)
 	    v->pc.W = (v->coord.X * m[12] + v->coord.Y * m[13] +
 		       v->coord.Z * m[14] + m[15]);
 	}
+	}
     }
 
     v->clip_code = gl_clipcode(v->pc.X, v->pc.Y, v->pc.Z, v->pc.W);
 }
 
-void glopVertex(GLContext * c, GLParam * p)
+/* s31 (phase 3a G14): the body of glopVertex, also instantiated for
+   glDrawElements' post-transform vertex cache (arrays.c): hit != NULL
+   copies an already transformed and lit vertex into the slot instead of
+   computing it from p; save != NULL keeps a copy of the computed vertex
+   before primitive assembly (which may change its edge flag). glopVertex
+   passes NULL for both, so its code is what it was. */
+static inline __attribute__((always_inline))
+void gl_vertex_core(GLContext * c, float x, float y, float z, float w,
+                    const GLVertex * hit, GLVertex * save)
 {
     GLVertex *v;
-    int n, i, cnt;
+    int n, cnt;
 
     if (!c->in_begin) {
 	/* s31: glVertex outside glBegin/glEnd is undefined; ignore it */
@@ -423,10 +571,14 @@ void glopVertex(GLContext * c, GLParam * p)
     v = &c->vertex[n];
     n++;
 
-    v->coord.X = p[1].f;
-    v->coord.Y = p[2].f;
-    v->coord.Z = p[3].f;
-    v->coord.W = p[4].f;
+    if (hit) {
+	*v = *hit;
+	goto assemble;
+    }
+    v->coord.X = x;
+    v->coord.Y = y;
+    v->coord.Z = z;
+    v->coord.W = w;
 
     gl_vertex_transform(c, v);
 
@@ -464,7 +616,10 @@ void glopVertex(GLContext * c, GLParam * p)
     /* edge flag */
 
     v->edge_flag = c->current_edge_flag;
+    if (save)
+	*save = *v;
 
+  assemble:
     switch (c->begin_type) {
     case GL_POINTS:
 	gl_draw_point(c, &c->vertex[0]);
@@ -478,15 +633,29 @@ void glopVertex(GLContext * c, GLParam * p)
 	    n = 0;
 	}
 	break;
+    /* s31 (phase 3a G14): the strips and the fan no longer copy vertices
+       (a GLVertex is 148 B: ~75 instructions a copy, one or two per vertex).
+       Instead new vertices are written alternately into two slots and the
+       primitive is drawn from wherever its vertices are:
+       - line strip/loop: slot 0 keeps the first vertex (the loop closes on
+         it), the rest alternate between slots 1 and 2;
+       - triangle fan: the centre stays in slot 0, the rest alternate
+         between 1 and 2;
+       - quad strip: pairs alternate between slots 0,1 and 2,3.
+       Vertex order, provoking vertex and edge flags are those of the
+       copying version. */
     case GL_LINE_STRIP:
     case GL_LINE_LOOP:
-	if (n == 1) {
-	    c->vertex[2] = c->vertex[0];
-	} else if (n == 2) {
+	if (cnt == 2) {
 	    gl_set_provoking(c, &c->vertex[1]);
 	    gl_draw_line(c, &c->vertex[0], &c->vertex[1]);
-	    c->vertex[0] = c->vertex[1];
+	} else if (n == 3) {               /* newest in slot 2 */
+	    gl_set_provoking(c, &c->vertex[2]);
+	    gl_draw_line(c, &c->vertex[1], &c->vertex[2]);
 	    n = 1;
+	} else if (cnt > 2) {              /* newest in slot 1 */
+	    gl_set_provoking(c, &c->vertex[1]);
+	    gl_draw_line(c, &c->vertex[2], &c->vertex[1]);
 	}
 	break;
 
@@ -516,11 +685,13 @@ void glopVertex(GLContext * c, GLParam * p)
 	}
 	break;
     case GL_TRIANGLE_FAN:
-	if (n == 3) {
+	if (n == 3) {                      /* previous in 1, newest in 2 */
 	    gl_set_provoking(c, &c->vertex[2]);
 	    gl_draw_triangle(c, &c->vertex[0], &c->vertex[1], &c->vertex[2]);
-	    c->vertex[1] = c->vertex[2];
-	    n = 2;
+	    n = 1;
+	} else if (cnt >= 3) {             /* previous in 2, newest in 1 */
+	    gl_set_provoking(c, &c->vertex[1]);
+	    gl_draw_triangle(c, &c->vertex[0], &c->vertex[2], &c->vertex[1]);
 	}
 	break;
 
@@ -537,13 +708,15 @@ void glopVertex(GLContext * c, GLParam * p)
 	break;
 
     case GL_QUAD_STRIP:
-	if (n == 4) {
+	if (n == 4) {                      /* old pair in 0,1, new in 2,3 */
 	    gl_set_provoking(c, &c->vertex[3]);
 	    gl_draw_triangle(c, &c->vertex[0], &c->vertex[1], &c->vertex[2]);
 	    gl_draw_triangle(c, &c->vertex[1], &c->vertex[3], &c->vertex[2]);
-	    for (i = 0; i < 2; i++)
-		c->vertex[i] = c->vertex[i + 2];
-	    n = 2;
+	    n = 0;
+	} else if (n == 2 && cnt >= 4) {   /* old pair in 2,3, new in 0,1 */
+	    gl_set_provoking(c, &c->vertex[1]);
+	    gl_draw_triangle(c, &c->vertex[2], &c->vertex[3], &c->vertex[0]);
+	    gl_draw_triangle(c, &c->vertex[3], &c->vertex[1], &c->vertex[0]);
 	}
 	break;
     case GL_POLYGON:
@@ -556,6 +729,30 @@ void glopVertex(GLContext * c, GLParam * p)
     c->vertex_n = n;
 }
 
+/* s31 (phase 3a G14): the vertex op with its coordinates as arguments.
+   glVertex (api.c, while executing) and display-list replay (list.c) call
+   it directly; under the ilp32 ABI the floats arrive in integer
+   registers, so nothing is stored to an op array and loaded back, and
+   with the context last glVertex4f passes its a0-a3 through unmoved */
+void gl_vertex4f(float x, float y, float z, float w, GLContext * c)
+{
+    gl_vertex_core(c, x, y, z, w, NULL, NULL);
+}
+
+void glopVertex(GLContext * c, GLParam * p)
+{
+    gl_vertex4f(p[1].f, p[2].f, p[3].f, p[4].f, c);
+}
+
+/* arrays.c: glDrawElements through the vertex cache */
+void gl_vertex_indexed(GLContext * c, GLParam * p, const GLVertex * hit, GLVertex * save)
+{
+    if (hit)
+	gl_vertex_core(c, 0, 0, 0, 1, hit, NULL);
+    else
+	gl_vertex_core(c, p[1].f, p[2].f, p[3].f, p[4].f, NULL, save);
+}
+
 void glopEnd(GLContext * c, GLParam * param)
 {
     if (!c->in_begin) {
@@ -565,8 +762,11 @@ void glopEnd(GLContext * c, GLParam * param)
 
     if (c->begin_type == GL_LINE_LOOP) {
 	if (c->vertex_cnt >= 3) {
-	    gl_set_provoking(c, &c->vertex[2]);
-	    gl_draw_line(c, &c->vertex[0], &c->vertex[2]);
+	    /* s31 (phase 3a G14): the first vertex is in slot 0, the last in
+	       slot 1 or 2 (glopVertex); closes last -> first */
+	    GLVertex *last = &c->vertex[c->vertex_n == 1 ? 2 : 1];
+	    gl_set_provoking(c, &c->vertex[0]);
+	    gl_draw_line(c, last, &c->vertex[0]);
 	}
     } else if (c->begin_type == GL_POLYGON) {
 	int i = c->vertex_cnt;

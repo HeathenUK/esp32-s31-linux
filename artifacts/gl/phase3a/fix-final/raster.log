@@ -1,0 +1,7 @@
+page 1: PASS  320x240  strict 0.000% (0 px >16)  tolerant 0.000% (0 px)  max 9  mean 0.48  diff /src/artifacts/gl/phase3a/fix-final/raster/diff-1.png
+page 2: PASS  320x240  strict 0.043% (33 px >16)  tolerant 0.004% (3 px)  max 17  mean 0.27  diff /src/artifacts/gl/phase3a/fix-final/raster/diff-2.png
+page 3: PASS  320x240  strict 0.000% (0 px >16)  tolerant 0.000% (0 px)  max 8  mean 0.08  diff /src/artifacts/gl/phase3a/fix-final/raster/diff-3.png
+page 4: FAIL  320x240  strict 2.210% (1697 px >16)  tolerant 1.724% (1324 px)  max 231  mean 1.44  diff /src/artifacts/gl/phase3a/fix-final/raster/diff-4.png
+page 5: PASS  320x240  strict 4.552% (3496 px >16)  tolerant 0.066% (51 px)  max 255  mean 4.64  diff /src/artifacts/gl/phase3a/fix-final/raster/diff-5.png
+page 6: PASS  320x240  strict 1.660% (1275 px >16)  tolerant 0.000% (0 px)  max 255  mean 1.27  diff /src/artifacts/gl/phase3a/fix-final/raster/diff-6.png
+page 6 glGet answers: DIFFER (log-diff-6.txt)

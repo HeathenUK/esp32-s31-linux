@@ -213,6 +213,10 @@ void glopCallList(GLContext *c,GLParam *p)
     if (op == OP_EndList) break;
     if (op == OP_NextBuffer) {
       p=(GLParam *)p[1].p;
+    } else if (op == OP_Vertex) {
+      /* s31 (phase 3a G14): the commonest op, straight to its body */
+      gl_vertex4f(p[1].f,p[2].f,p[3].f,p[4].f,c);
+      p+=5;
     } else {
       op_table_func[op](c,p);
       p+=op_table_size[op];

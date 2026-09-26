@@ -88,8 +88,13 @@ void glInit(void *zbuffer1)
   for(i=0;i<MAX_LIGHTS;i++) {
     GLLight *l=&c->lights[i];
     l->ambient=gl_V4_New(0,0,0,1);
-    l->diffuse=gl_V4_New(1,1,1,1);
-    l->specular=gl_V4_New(1,1,1,1);
+    /* s31 (phase 3a): GL 1.3 table 6.9 - LIGHT0's diffuse and specular are
+       (1,1,1,1), every other light's (0,0,0,1). TinyGL gave all of them
+       LIGHT0's, so enabling GL_LIGHT1 without setting its colours lit the
+       scene white where Mesa adds nothing (gl/tests/glx_geo.c row 3) */
+    l->diffuse=i == 0 ? gl_V4_New(1,1,1,1) : gl_V4_New(0,0,0,1);
+    l->specular=l->diffuse;
+    l->has_specular=i == 0;
     l->position=gl_V4_New(0,0,1,0);
     l->norm_position=gl_V3_New(0,0,1);
     l->spot_direction=gl_V3_New(0,0,-1);
@@ -102,6 +107,7 @@ void glInit(void *zbuffer1)
     l->enabled=0;
   }
   c->first_light=NULL;
+  c->light_dirty=1;   /* s31: light.c gl_light_products */
   c->ambient_light_model=gl_V4_New(0.2,0.2,0.2,1);
   c->local_light_model=0;
   c->lighting_enabled=0;
@@ -115,6 +121,8 @@ void glInit(void *zbuffer1)
     m->diffuse=gl_V4_New(0.8,0.8,0.8,1);
     m->specular=gl_V4_New(0,0,0,1);
     m->shininess=0;
+    m->do_specular=0;       /* s31: specular 0 */
+    m->specbuf=NULL;
   }
   c->current_color_material_mode=GL_FRONT_AND_BACK;
   c->current_color_material_type=GL_AMBIENT_AND_DIFFUSE;
@@ -184,6 +192,7 @@ void glInit(void *zbuffer1)
   glLoadIdentity();
 
   c->matrix_model_projection_updated=1;
+  c->xf_dirty=-1;   /* s31 (phase 3a G14) */
 
   /* opengl 1.1 arrays */
   c->client_states = 0;
@@ -214,6 +223,7 @@ void glClose(void)
   endSharedState(c);
 
   gl_free(c->vertex);
+  gl_free(c->vc);   /* s31 (phase 3a G14): arrays.c vertex cache (one block) */
 
   for(i=0;i<3;i++) {
     gl_free(c->matrix_stack[i]);

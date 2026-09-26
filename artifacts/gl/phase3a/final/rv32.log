@@ -1,0 +1,27 @@
+--- enum values: TinyGL header against Khronos
+enumcmp: 0 mismatches
+--- compiling TinyGL core, the GL ABI layer and GLX (8 jobs)
+--- export surface (mkstubs.py)
+mkstubs: 667 exported GL names: 455 implemented, 212 stubs
+--- linking /src/gl/out-rv32/libGL.so.1
+-rwxr-xr-x 1 builder builder 226804 Sep 26 04:09 /src/gl/out-rv32/libGL.so.1
+--- headless_gears, core_test (static: the core objects of libGL.so.1, no X)
+    and their qemu-user variants (scalar mem*/str*: qemu has no ESP PIE), in parallel
+-rwxr-xr-x 1 builder builder 243276 Sep 26 04:09 /src/gl/out-rv32/core_test
+-rwxr-xr-x 1 builder builder 459208 Sep 26 04:09 /src/gl/out-rv32/core_test.qemu
+-rwxr-xr-x 1 builder builder 420400 Sep 26 04:09 /src/gl/out-rv32/d2f_test.qemu
+-rwxr-xr-x 1 builder builder 227024 Sep 26 04:09 /src/gl/out-rv32/headless_gears
+-rwxr-xr-x 1 builder builder 512224 Sep 26 04:09 /src/gl/out-rv32/headless_gears.qemu
+-rwxr-xr-x 1 builder builder 423004 Sep 26 04:09 /src/gl/out-rv32/raster_gate.qemu
+--- core_test (RV32 qemu-user)
+PASS destroying the current context releases it
+PASS no current context: glGetString = NULL, draws ignored
+core_test: 183 passed, 0 failed
+--- raster_gate (RV32 qemu-user)
+ok   texel phase general RGB REPLACE + alpha test: 2x magnified wrong: 0 (want 0)
+ok   texel phase general RGB REPLACE + alpha test: negative texcoords wrong: 0 (want 0)
+raster_gate: 51 passed, 0 failed
+--- d2f_test (RV32 qemu-user)
+d2f: 49987811 tested, 0 mismatches
+--- headless_gears (RV32 qemu-user)
+38859f0c896efe6b12bc68e0fe3afe1f  /tmp/hg.ppm

@@ -103,43 +103,50 @@ static inline void ztri_edge(float xa, float ya, float xb, float yb, int r,
    from the top). Returns 0 when it covers no row. */
 static inline int ztri_setup(ZTri *T, float xa, float ya, int za,
                              float xb, float yb, int zb, float xc, float yc,
-                             int zc, const int *box)
+                             int zc, const ZPipe *pipe)
 {
+  const int *box = pipe->box;
   /* every vertex is inside the box: the clipper cut the triangle to the
      clip volume, which maps to the box (vertex.c, the viewport guard), and
      clamps the vertices it makes (clip.c updateTmp), so no covered pixel
      centre can lie outside and the rows need no per-span clip */
-  float XS[3] = { xa, xb, xc }, YS[3] = { ya, yb, yc };
-  int ZS[3] = { za, zb, zc };
-  int i0 = 0, i1 = 1, i2 = 2, t, r0, r1, r2, k;
+  /* s31 (phase 3a): the sort moves scalars (x, y, z and the index)
+     instead of indexing stack arrays - the same values, so the same
+     arithmetic below, without the arrays' stores and reloads */
+  float x0 = xa, y0 = ya, x1 = xb, y1 = yb, x2 = xc, y2 = yc, tf;
+  int z0 = za, z1 = zb, z2 = zc, i0 = 0, i1 = 1, i2 = 2, t, r0, r1, r2, k;
   float area, d1, d2, gzx, gzy;
   int el, del, es0, des0, es1, des1, v1left;
   unsigned int zr;
 
+#define ZTRI_SWAP(a, b) do { tf = x##a; x##a = x##b; x##b = tf; \
+    tf = y##a; y##a = y##b; y##b = tf; t = z##a; z##a = z##b; z##b = t; \
+    t = i##a; i##a = i##b; i##b = t; } while (0)
   /* sort by y; ties keep the argument order */
-  if (YS[i1] < YS[i0]) { t = i0; i0 = i1; i1 = t; }
-  if (YS[i2] < YS[i1]) { t = i1; i1 = i2; i2 = t; }
-  if (YS[i1] < YS[i0]) { t = i0; i0 = i1; i1 = t; }
+  if (y1 < y0) ZTRI_SWAP(0, 1);
+  if (y2 < y1) ZTRI_SWAP(1, 2);
+  if (y1 < y0) ZTRI_SWAP(0, 1);
+#undef ZTRI_SWAP
   T->o[0] = i0; T->o[1] = i1; T->o[2] = i2;
-  T->x0 = XS[i0]; T->y0 = YS[i0];
-  T->dx1 = XS[i1] - XS[i0]; T->dy1 = YS[i1] - YS[i0];
-  T->dx2 = XS[i2] - XS[i0]; T->dy2 = YS[i2] - YS[i0];
+  T->x0 = x0; T->y0 = y0;
+  T->dx1 = x1 - x0; T->dy1 = y1 - y0;
+  T->dx2 = x2 - x0; T->dy2 = y2 - y0;
   area = fmaf(T->dx1, T->dy2, -(T->dx2 * T->dy1));
   if (!(area != 0.0f) || !(T->dy2 > 0.0f)) return 0;   /* also NaN */
   T->ia = 1.0f / area;
 
   /* rows whose centre y + 1/2 is in [y0, y2); the upper part's end at y1 */
-  r0 = ztri_ceil(YS[i0] - 0.5f);
-  r1 = ztri_ceil(YS[i1] - 0.5f);
-  r2 = ztri_ceil(YS[i2] - 0.5f);
+  r0 = ztri_ceil(y0 - 0.5f);
+  r1 = ztri_ceil(y1 - 0.5f);
+  r2 = ztri_ceil(y2 - 0.5f);
   if (r0 >= r2 || r2 <= box[1] || r0 >= box[3]) return 0;
 
 
   /* the edges, each at its own first row */
-  ztri_edge(XS[i0], YS[i0], XS[i2], YS[i2], r0, &el, &del);
+  ztri_edge(x0, y0, x2, y2, r0, &el, &del);
   es0 = des0 = es1 = des1 = 0;
-  if (r1 > r0) ztri_edge(XS[i0], YS[i0], XS[i1], YS[i1], r0, &es0, &des0);
-  if (r2 > r1) ztri_edge(XS[i1], YS[i1], XS[i2], YS[i2], r1, &es1, &des1);
+  if (r1 > r0) ztri_edge(x0, y0, x1, y1, r0, &es0, &des0);
+  if (r2 > r1) ztri_edge(x1, y1, x2, y2, r1, &es1, &des1);
   /* v1 is left of the long edge when the area is negative (y grows down) */
   v1left = area < 0.0f;
 
@@ -166,22 +173,71 @@ static inline int ztri_setup(ZTri *T, float xa, float ya, int za,
   }
 
   /* the depth plane, referenced to the centre of the top vertex's pixel */
-  T->px = ztri_floor(XS[i0]);
-  T->py = ztri_floor(YS[i0]);
-  T->ox = (float)T->px + 0.5f - XS[i0];
-  T->oy = (float)T->py + 0.5f - YS[i0];
-  d1 = (float)(ZS[i1] - ZS[i0]);
-  d2 = (float)(ZS[i2] - ZS[i0]);
+  T->px = ztri_floor(x0);
+  T->py = ztri_floor(y0);
+  T->ox = (float)T->px + 0.5f - x0;
+  T->oy = (float)T->py + 0.5f - y0;
+  d1 = (float)(z1 - z0);
+  d2 = (float)(z2 - z0);
   gzx = fmaf(d1, T->dy2, -(d2 * T->dy1)) * T->ia;
   gzy = fmaf(d2, T->dx1, -(d1 * T->dx2)) * T->ia;
   T->dzdx = ztri_f2i(gzx);
   T->dzdy = ztri_f2i(gzy);
   /* wrapping: a sliver's gradients saturate, and its depth is then
      meaningless but defined */
-  zr = (unsigned int)ZS[i0] + (unsigned int)ztri_floor(fmaf(gzx, T->ox, gzy * T->oy) + 0.5f);
+  zr = (unsigned int)z0 + (unsigned int)ztri_floor(fmaf(gzx, T->ox, gzy * T->oy) + 0.5f);
   T->zc = zr - (unsigned int)T->dzdx * (unsigned int)T->px -
           (unsigned int)T->dzdy * (unsigned int)T->py;
   return 1;
+}
+
+/* phase 3a G03 (s31_zepoch.c), after ztri_setup, with the triangle's
+   three plain vertex depths: record the highest depth the triangle can
+   store, then move its plane up by the depth epoch's base. A covered pixel
+   centre is inside the triangle, so its plane value is at most the
+   highest vertex's (the integer plane's rounding is under 1/10 of a stored
+   step); a gradient of 2^30 or more has saturated (a sliver) and its
+   values are meaningless: ~0. The base is an integer added to the plane,
+   so every stored value is TinyGL's plain one plus the base, bit for bit. */
+static inline void ztri_zepoch(ZTri *T, const ZPipe *pipe, int za, int zb, int zc)
+{
+  /* nothing to record and no base (no epoch can follow this frame's
+     depths, or depth is not written): one load and branch */
+  if (pipe->zact) {
+    unsigned int m = (unsigned int)za, m1 = (unsigned int)zb, m2 = (unsigned int)zc, n;
+    /* the lowest depth first: at the epoch's farthest step under GL_LESS
+       with stale pixels about, the epoch is materialised (s31_zepoch.c) */
+    n = m1 < m ? m1 : m;
+    n = m2 < n ? m2 : n;
+    if (n < pipe->zguard) zep_tri_far((ZPipe *)pipe);
+    m = m1 > m ? m1 : m;
+    m = m2 > m ? m2 : m;
+    if (__builtin_expect((((unsigned int)T->dzdx + (1u << 30)) |
+                          ((unsigned int)T->dzdy + (1u << 30))) >> 31, 0))
+      /* a sliver: its plane's values are not bounded by its vertices -
+         zep_tri_sliver bounds them from its rows instead (review 3a R4).
+         Passing T here costs the flat filler ~0.5 instruction a triangle
+         (GCC keeps &T in a callee-saved register: gears +0.08%, glxgears
+         +0.1%); an empty-asm copy of T, a cold attribute and moving this
+         record keeping into ztri_setup (+0.6%) were measured no better */
+      zep_tri_sliver((ZPipe *)pipe, T);
+    else if (m > pipe->zchk)
+      zep_tri_check((ZPipe *)pipe, m);
+    T->zc += pipe->zoff;
+  }
+}
+
+/* phase 3a dirty boxes (s31_zepoch.c): the rows the triangle can cover,
+   [part 0's first, part 1's end), both already inside the box. dbc is the
+   recorded rows (an empty range under S31GL_DIRTYBOX=2, whose x extent
+   zdb_tri works out from the vertices, off this path) */
+static inline void ztri_rows(const ZTri *T, const ZPipe *pipe)
+{
+  if (pipe->bact) {
+    int ya = T->part[0].ya, yb = T->part[1].yb;
+    if (ya < pipe->dbc[0] || yb > pipe->dbc[1])
+      zdb_tri((ZPipe *)pipe, ya, yb, T->x0, T->dx1, T->dx2);
+  }
 }
 
 /* first and one-past-last pixel of a row from the edges' 16.16 x: the

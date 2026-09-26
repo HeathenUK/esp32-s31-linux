@@ -1,0 +1,1 @@
+FAIL  320x240  strict 3.380% (2596 px >16)  tolerant 2.331% (1790 px)  max 222  mean 5.79  diff /src/artifacts/gl/phase3a/fix-final/geo/diff.png

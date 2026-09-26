@@ -18,10 +18,9 @@
 {
   ZTri T_;
   ZBufferPoint *pv_[3];
-  unsigned short *pz1;
+  unsigned short *pz1, *pze1_;
   PIXEL *pp1;
   int part, y_, ye_, xl_, dxl_, xr_, dxr_, x1, x2;
-  const int *box_ = zb->pipe->box;
 
 #ifdef INTERP_Z
   unsigned int zy_, z1;
@@ -37,8 +36,10 @@
 #endif
 
   if (!ztri_setup(&T_, p0->fx, p0->fy, p0->z, p1->fx, p1->fy, p1->z,
-                  p2->fx, p2->fy, p2->z, box_))
+                  p2->fx, p2->fy, p2->z, zb->pipe))
     return;
+  ztri_zepoch(&T_, zb->pipe, p0->z, p1->z, p2->z);
+  ztri_rows(&T_, zb->pipe);
   pv_[0] = p0; pv_[1] = p1; pv_[2] = p2;
 
 #ifdef INTERP_Z
@@ -107,10 +108,14 @@
     by_ = bc_ + (unsigned int)dbdy * (unsigned int)y_;
 #endif
 
-    for (; y_ < ye_; y_++) {
+    /* s31 (phase 3a): the rows end at a depth-row pointer, not a count (the
+       textured filler still steps y_ for its planes) */
+    pze1_ = pz1 + (ye_ - y_) * zb->xsize;
+    for (; pz1 != pze1_; ) {
+      /* s31 (phase 3a): x2 is one past the last pixel here, and the
+         DRAW_LINE macros get it as the last pixel (x2 - 1) */
       ZTRI_SPAN(xl_, xr_, x1, x2);
-      x2--;                                   /* the last pixel */
-      if (x2 >= x1) {
+      if (x2 > x1) {
 #ifdef INTERP_Z
         z1 = zy_ + (unsigned int)dzdx * (unsigned int)x1;
 #endif
@@ -128,42 +133,39 @@
         }
 #endif
 #ifndef DRAW_LINE
-      /* generic draw line */
+      /* generic draw line (the flat fillers). s31 (phase 3a): the spans
+         are short (gears: 4.8 pixels), so what costs is the span, not the
+         pixel: two pixels a turn, the odd one first, and the end is a
+         pointer - no count, no remainder loop to set up. (Review 3a,
+         measured: on 640-pixel spans - geo10 640x400, one full-screen
+         quad - this costs +1.0% of the frame against TinyGL's four a
+         turn; a four-a-turn loop for long spans is untried.) */
       {
-          register PIXEL *pp;
-          register int n;
+          PIXEL *pp = (PIXEL *)((char *)pp1 + x1 * PSZB);
 #ifdef INTERP_Z
-          register unsigned short *pz;
-          register unsigned int z,zz;
+          unsigned short *pz = pz1 + x1;
+          unsigned int z = z1, zz;
 #endif
+          PIXEL *ppe = (PIXEL *)((char *)pp1 + x2 * PSZB);
 
-          n=x2 - x1;
-          pp=(PIXEL *)((char *)pp1 + x1 * PSZB);
+          if ((x2 - x1) & 1) {
+              PUT_PIXEL(0);
 #ifdef INTERP_Z
-          pz=pz1+x1;
-          z=z1;
+              pz += 1;
 #endif
-          while (n>=3) {
+              pp = (PIXEL *)((char *)pp + PSZB);
+          }
+          while (pp != ppe) {
               PUT_PIXEL(0);
               PUT_PIXEL(1);
-              PUT_PIXEL(2);
-              PUT_PIXEL(3);
 #ifdef INTERP_Z
-              pz+=4;
+              pz += 2;
 #endif
-              pp=(PIXEL *)((char *)pp + 4 * PSZB);
-              n-=4;
-          }
-          while (n>=0) {
-              PUT_PIXEL(0);
-#ifdef INTERP_Z
-              pz+=1;
-#endif
-              pp=(PIXEL *)((char *)pp + PSZB);
-              n-=1;
+              pp = (PIXEL *)((char *)pp + 2 * PSZB);
           }
       }
 #else
+      x2--;                                   /* the last pixel */
       DRAW_LINE();
 #endif
       }
@@ -176,6 +178,9 @@
 #endif
       pp1=(PIXEL *)((char *)pp1 + zb->linesize);
       pz1+=zb->xsize;
+#ifdef INTERP_STZ
+      y_++;
+#endif
     }
   }
 }

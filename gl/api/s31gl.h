@@ -109,6 +109,14 @@ S31GL_API s31gl_ctx *s31gl_get_current(void);
    GL_READ_BUFFER (GL_BACK or GL_FRONT). Default: double-buffered. */
 S31GL_API void s31gl_set_doublebuffer(s31gl_ctx *ctx, int doublebuffer);
 
+/* Phase 3a (dirty boxes): the caller promises that nothing but the core
+   writes into the colour buffers it binds to ctx (the GLX layer's SHM and
+   malloc'd buffers: the X server only reads them). A full glClear then
+   writes only what was drawn into since the last full clear to the same
+   value. Default 0: a caller that fills its own buffer between frames
+   keeps every clear whole. */
+S31GL_API void s31gl_set_retained(s31gl_ctx *ctx, int retained);
+
 /* bytes the core holds for ctx's depth buffer right now (0 until the first
    draw); for RSS accounting in gates */
 S31GL_API int s31gl_depth_bytes(s31gl_ctx *ctx);
@@ -117,13 +125,25 @@ S31GL_API int s31gl_depth_bytes(s31gl_ctx *ctx);
    caller-owned one (s31gl_bind_depth) is only forgotten */
 S31GL_API void s31gl_release_depth(s31gl_ctx *ctx);
 
+/* bytes the caller allocates after the w * h depth values of
+   s31gl_bind_depth: the core's depth-epoch state (phase 3a G03,
+   gl/tinygl/source/s31_zepoch.c; ZB_DEPTH_TAIL in zbuffer.h) */
+#define S31GL_DEPTH_TAIL 20
+
 /* Render depth into caller-owned memory: w * h 16-bit values for the size
-   bound by the last s31gl_bind_color, initialised by the caller (0 is the
-   far plane). GL's depth buffer belongs to the drawable, so the GLX layer
-   gives every context current on one window the same one. The core never
-   frees it; a bind_color that changes the size forgets it, so rebind after
-   one. NULL returns to a private, lazily allocated buffer. 0 = success,
-   -1 = no size bound. */
+   bound by the last s31gl_bind_color, followed by S31GL_DEPTH_TAIL bytes.
+   Their contents may be anything (GL leaves a depth buffer undefined until
+   it is cleared): the core takes the tail over at the first bind (a magic
+   word) and makes the first full depth clear after that a real one. The
+   tail then holds the state every context bound to the same memory
+   shares, so while the core may be using it the caller must not write the
+   memory. To hand the core memory whose contents it did not write at this
+   size - a buffer reused after a resize down and back up, say - zero the
+   tail (or all of it) first. GL's depth buffer belongs to the drawable, so
+   the GLX layer gives every context current on one window the same one.
+   The core never frees it; a bind_color that changes the size forgets it,
+   so rebind after one. NULL returns to a private, lazily allocated buffer.
+   0 = success, -1 = no size bound. */
 S31GL_API int s31gl_bind_depth(s31gl_ctx *ctx, void *depth);
 
 #ifdef __cplusplus
