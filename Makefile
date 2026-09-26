@@ -945,7 +945,15 @@ XIP_ROOTFS_IMG := $(BUILD_DIR)/rootfs-xip.cramfs
 # mkxipstage.py prints one "root matched nothing" warning - harmless. libGLU
 # and freeglut are NOT listed yet: their flash cost is unmeasured and the
 # image has ~504 KB left (docs/gl-packaging.md section 5).
-XIP_ROOTS_GL ?= usr/lib/libGL.so.1.2.0
+# 2026-09-26: libGL LEFT this image. After phase 5 its hot code overflows the
+# 16 KB I-cache and every miss is an 80 MHz SPI-flash read. QuakeSpasm
+# timedemo demo1, fullscreen, fresh boots: 5.3-6.3 fps with libGL in XIP
+# against 7.3-7.4 fps with the same library loaded from the card, where its
+# pages execute from PSRAM (docs/gl-plan-2026-09-25.md, "XIP is now the
+# bottleneck"). It now runs from the SD root's /usr/lib (page cache: only
+# touched pages, clean and evictable). Put it back only if a measured
+# S31GL_RAMTEXT build beats the card.
+XIP_ROOTS_GL ?=
 XIP_ROOTS ?= bin/busybox usr/sbin/wpa_supplicant usr/sbin/iw usr/bin/lvdesk \
 	usr/lib/alsa-lib/libasound_module_pcm_s31route.so \
 	usr/bin/s31-coex usr/bin/s31swapon usr/lib/libSDL-1.2.so.0.11.4 \
