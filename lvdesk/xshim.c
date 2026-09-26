@@ -40,6 +40,7 @@
 #include <poll.h>
 #include <sys/eventfd.h>
 #include "../xlite/xring.h"
+#include "../gl/glx/zc_proto.h"
 
 #include <sys/ioctl.h>
 #include <drm/drm.h>
@@ -281,6 +282,22 @@ struct res {
 	 * from, and the byte in each just past the image: rs_revoke() */
 	uint32_t rs_seg[2], rs_flag[2];
 	/*
+	 * P2 ZERO-COPY (XLITE-ZC, see zc_request()). On a render-scaled
+	 * window: the client's GEM pixmaps it renders into (zc_pix), the
+	 * sequence number of the newest frame the PPA has finished reading
+	 * (zc_consumed, published into every buffer's control row), the pixmap
+	 * last presented, and whether that present was a flip still on the
+	 * CRTC (zc_live: the rs surface is stale and the desktop must not
+	 * present it). On such a pixmap: its framebuffer, the window it
+	 * serves, and the byte offset of its control row past the image.
+	 */
+	uint32_t zc_pix[ZC_MAXBUF];
+	uint32_t zc_consumed, zc_last;
+	struct zc_fence zc_fence;	/* zc_proto.h: an async read owed */
+	uint8_t zc_live;
+	uint8_t zc_vm;		/* the buffers serve a VidMode fullscreen */
+	uint32_t zc_fb, zc_of, zc_ctl;
+	/*
 	 * WM_PROTOCOLS lists WM_DELETE_WINDOW (ICCCM 4.1.2.7): the client
 	 * wants to be ASKED to close, not have its connection cut. See
 	 * xshim_window_request_close().
@@ -352,6 +369,9 @@ struct cli {
 	int nrfd;
 
 	int up;				/* connection setup completed */
+	/* the peer's pid (SO_PEERCRED): SDL 1.2 holds two connections, and
+	 * zero-copy asks on the one that did not create the window */
+	int pid;
 	uint32_t seq;
 	uint8_t *in;			/* cli_in[slot], INBUF bytes */
 	size_t n;
@@ -888,6 +908,8 @@ static void late_present_drain(void)
 }
 static int trace_on(void);
 static void px_release(struct res *r);
+static void zc_pix_release(struct res *p);
+static void zc_unlive(struct res *w);
 static int px_share(struct res *r);
 static int canary_on(void);
 
@@ -1729,6 +1751,7 @@ static void px_release(struct res *r)
 	if (r->gem_src) {
 		int fd = kms_get_fd();
 
+		zc_pix_release(r);	/* its framebuffer first (CRTC safe) */
 		munmap(r->px, r->gem_len);
 		if (r->shm_fd >= 0) {		/* the exported dma-buf */
 			close(r->shm_fd);
@@ -6228,6 +6251,10 @@ static void HOTTEXT mitshm_request(struct cli *c, const uint8_t *r, int len)
 			break;
 		}
 		nshmput++;
+		/* an ordinary frame: the mode buffer shows again
+		 * (kms_fs_dirty puts it back on the CRTC) */
+		if (d->zc_live)
+			zc_unlive(d);
 		/*
 		 * RENDER SCALE: our libGL's whole half-size frame goes into the
 		 * window's half-size surface (rscale_request()). Anything else -
@@ -6956,9 +6983,15 @@ static void rs_upscale(struct res *w, int x, int y, int cw, int ch)
  * word just past the image, and the server writes 1 there. libGL reads it
  * at each present (glx_present.c glxi_surf_revoked) and reallocates native.
  */
+static void zc_set_all(struct res *w, int k, uint32_t v);
+static void zc_sync_rs(struct res *w);
+static void zc_unlive(struct res *w);
+
 static void rs_revoke(struct res *w)
 {
 	int k;
+
+	zc_set_all(w, ZC_W_REVOKED, 1);	/* the zero-copy buffers too */
 
 	for (k = 0; k < 2; k++) {
 		struct shmseg *sg = w->rs_seg[k] ? shmseg_find(w->rs_seg[k]) : NULL;
@@ -6990,6 +7023,7 @@ static void rs_go_live(struct res *w, int on)
 		w->rs_live = 1;
 		wr_touch(sf);		/* the next put re-sends every row */
 	} else {
+		zc_sync_rs(w);		/* the frame on the CRTC, if zero-copy */
 		if (sf->px_scanout)
 			unalias_res(sf, 1);
 		w->rs_live = 0;
@@ -7009,6 +7043,7 @@ static void rs_drop(struct res *w)
 
 	if (!sf)
 		return;
+	zc_unlive(w);			/* the surface goes: nothing to sync */
 	if (w->rs_live) {
 		if (sf->px_scanout)
 			unalias_res(sf, 0);
@@ -7082,6 +7117,490 @@ static void rscale_request(struct cli *c, const uint8_t *r, int len)
 	}
 }
 
+/* ------------------------------------------------------- zero-copy (P2) */
+
+/*
+ * ZERO-COPY FULLSCREEN - XLITE-SHM minor 5 (docs/gl-plan-2026-09-25.md
+ * section 5 P2; board test: artifacts/gl/phase6/ZEROCOPY.txt).
+ *
+ * Under render scale (above) a fullscreen GL frame still costs the desktop a
+ * copy: libGL renders 400x240 into a MIT-SHM segment and ShmPutImage copies
+ * and row-hashes its 192 kB into the scanout-aliased mode buffer, about 17% of
+ * CPU0 under GLQuake fullscreen. Here the client renders straight into GEM
+ * dumb buffers instead, each one ADDFB'd, and presenting a frame is flipping
+ * its framebuffer onto the CRTC (kms.c kms_zc_flip). No copy in user space.
+ *
+ *   ZeroCopy  CARD8 major (XLITE-SHM), CARD8 5, CARD16 length 4 or 5,
+ *             CARD32 window, CARD32 pixmap, CARD8 op, CARD8 pad[3],
+ *             (op 1 only, length 5) CARD32 seq
+ *     op 0 ALLOC   re-home `pixmap` - the client's own, depth 16, exactly
+ *                  the window's render-scale size - as a 16-bpp GEM dumb
+ *                  buffer (the bpp-2 variant of win8_gem_alloc()), with a
+ *                  control row past the image. Reply: BYTE granted,
+ *                  BYTE version (1), CARD16 pitch, CARD32 control-row byte
+ *                  offset, CARD32 mapping length. The client then maps it
+ *                  with XLITE-SHM GetPixmapFd, which exports the GEM
+ *                  handle as a dma-buf through PRIME (px_share()) - the
+ *                  existing path, no new descriptor passing.
+ *     op 1 PRESENT frame `seq` is in `pixmap`. No reply.
+ *   Discovered by the name "XLITE-ZC" (same major), which LVDESK_NOZC=1 and
+ *   XSHIM_RENDERSCALE=0 hide. Minor 4 stays unused: it is the rejected
+ *   HoldSegments patch (artifacts/gl/present/hold/). Granted only while the
+ *   window holds a render-scale grant - the owner's policy: panel-size
+ *   fullscreen only - and at most three buffers per window. The pixmaps are
+ *   freed with FreePixmap (or with the client).
+ *
+ * THE CONTROL ROW (uint32 words at the offset in the reply, in EVERY buffer
+ * of the window, written only by us):
+ *   [0] 'ZC01'   [1] consumed: the newest seq whose buffer the PPA has
+ *   finished reading and nothing will read again   [2] revoked: the render
+ *   scale is gone (rs_revoke - the same meaning as the SHM flag word)
+ *   [3] declined: the desktop would not flip (drop zero-copy, keep the scale)
+ * The client waits for consumed >= a buffer's last seq before writing it
+ * again. Every PRESENT is handled to completion inside this request - the
+ * flip's commit scales the buffer synchronously - so after any round trip
+ * the fence is already there: the client's XSync fallback can never hang.
+ *
+ * NOT an xring_hdr word, which the plan named: the ring is per connection
+ * (SDL 1.2 holds two), optional (XSHIM_RING=0), and private to xlite -
+ * libGL speaks public Xlib. A row in the buffer itself is reachable by
+ * exactly the two parties that share the buffer, on any transport.
+ *
+ * FALLBACKS, all automatic. A PRESENT while the window is not being scanned
+ * out scaled (entering or leaving fullscreen, the desktop refused the half-
+ * size mode) is copied into the render-scale surface exactly as a
+ * ShmPutImage would be, and follows it from there (upscaled into the
+ * window, or presented through the alias). If the desktop is scanning the
+ * window out and still refuses the flip, the frame is copied the same way
+ * and word [3] tells libGL to go back to MIT-SHM. Leaving fullscreen revokes
+ * (word [2]); the frame on the CRTC is copied back into the surface first,
+ * so the last frame is not lost (zc_sync_rs).
+ */
+static int zc_on(void)
+{
+	static int v = -1;
+
+	if (v < 0) {
+		v = getenv("LVDESK_NOZC") == NULL;
+		fprintf(stderr, "xshim: zero-copy fullscreen GL %s\n",
+			v ? "ON" : "OFF (LVDESK_NOZC=1)");
+	}
+	return v && rscale_on();
+}
+
+static int (*zc_cb)(uint32_t win, uint32_t fb, int w, int h);
+static unsigned long zc_n_flip, zc_n_same, zc_n_copy, zc_n_alloc;
+
+static volatile uint32_t *zc_ctl(struct res *p)
+{
+	if (!p || !p->zc_fb || !p->px || !p->gem_src ||
+	    (size_t)p->zc_ctl + 16 > p->gem_len)
+		return NULL;
+	return (volatile uint32_t *)((uint8_t *)p->px + p->zc_ctl);
+}
+
+/* Word `k` of every buffer of window w (1 consumed, 2 revoked, 3 declined). */
+static void zc_set_all(struct res *w, int k, uint32_t v)
+{
+	int i;
+
+	if (!w)
+		return;
+	for (i = 0; i < ZC_MAXBUF; i++) {
+		struct res *p = w->zc_pix[i] ? res_find(w->zc_pix[i]) : NULL;
+		volatile uint32_t *ctl = p && p->type == R_PIXMAP &&
+					 p->zc_of == w->id ? zc_ctl(p) : NULL;
+
+		if (ctl)
+			__atomic_store_n(&ctl[k], v, __ATOMIC_SEQ_CST);
+	}
+}
+
+static void zc_publish(struct res *w, uint32_t consumed)
+{
+	w->zc_consumed = consumed;
+	zc_set_all(w, ZC_W_CONSUMED, consumed);
+}
+
+/*
+ * VIDMODE FULLSCREEN is the other fullscreen a GL client reaches, and the one
+ * QuakeSpasm (SDL 1.2) takes: XF86VidMode switches to, say, 320x240, the
+ * desktop scans the covering top-level out as that mode (lvdesk
+ * xwin_on_mode), and the scanout alias makes the ShmPutImage copy the
+ * present. The GL drawable qualifies when it IS the whole mode buffer: owned
+ * by the client that switched, 16 bpp, at 0,0 of a top-level exactly the
+ * mode's size and as large as it. Its buffers are then the window's size and
+ * flip onto the CRTC as the mode's framebuffer; any mode change revokes them
+ * (zc_vm_revoke_all, from vm_switch).
+ */
+/* Two client slots of one process (SDL 1.2's display and graphics
+ * connections), or one slot. */
+static int zc_same_proc(int a, int b)
+{
+	if (a == b)
+		return a >= 0;
+	return a >= 0 && b >= 0 && a < MAXCLI && b < MAXCLI &&
+	       cli[a].fd >= 0 && cli[b].fd >= 0 && cli[a].pid > 0 &&
+	       cli[a].pid == cli[b].pid;
+}
+
+static int zc_vm_ok(struct res *w)
+{
+	struct res *t;
+
+	if (!vm_cur || !w || w->type != R_WINDOW ||
+	    !zc_same_proc(w->owner, vm_cli) ||
+	    (w->bpp ? w->bpp : 2) != 2 || !w->buf || w->ax || w->ay)
+		return 0;
+	t = top_of(w);
+	return t && t->type == R_WINDOW && t->w == vm_modes[vm_cur].w &&
+	       t->h == vm_modes[vm_cur].h && w->w == t->w && w->h == t->h &&
+	       w->buf == t;
+}
+
+/* The buffer size zero-copy would be granted at for w, 0 = not eligible. */
+static int zc_grant_size(struct res *w, int *bw, int *bh)
+{
+	if (!zc_on() || !w || w->type != R_WINDOW)
+		return 0;
+	if (w->rs && !w->rs_of && w->parent == ROOT_ID) {
+		*bw = w->rs->w;
+		*bh = w->rs->h;
+		return 1;
+	}
+	if (zc_vm_ok(w)) {
+		*bw = w->w;
+		*bh = w->h;
+		return 2;
+	}
+	return 0;
+}
+
+/* Is w being scanned out whole right now, so a flip may show it? */
+static int zc_showable(struct res *w)
+{
+	if (w->zc_vm)
+		return zc_vm_ok(w);
+	return w->rs && w->rs_live && vm_native && vm_native_win == w->id;
+}
+
+/* The top-level whose presentation a flip replaces (lvdesk asks by it). */
+static uint32_t zc_shown_top;
+
+static void zc_unlive(struct res *w)
+{
+	struct res *t;
+
+	if (!w)
+		return;
+	w->zc_live = 0;
+	t = top_of(w);
+	if (t && zc_shown_top == t->id)
+		zc_shown_top = 0;
+}
+
+/*
+ * A zero-copy frame's pixels into where an ordinary put would have left
+ * them: the render-scale surface, or the VidMode window's own rows.
+ */
+static int zc_into_win(struct res *w, struct res *p)
+{
+	struct res *sf = w->zc_vm ? w->buf : w->rs;
+	int y, ox = w->zc_vm ? w->ax : 0, oy = w->zc_vm ? w->ay : 0;
+	int cw = w->zc_vm ? w->w : (sf ? sf->w : 0);
+	int ch = w->zc_vm ? w->h : (sf ? sf->h : 0);
+
+	if (!sf || !sf->px || sf->bpp != 2 || !p || p->type != R_PIXMAP ||
+	    !p->px || p->w != cw || p->h != ch || ox + cw > sf->w ||
+	    oy + ch > sf->h)
+		return 0;
+	for (y = 0; y < ch; y++)
+		memcpy(sf->px + (size_t)(oy + y) * sf->w + ox,
+		       (const uint8_t *)p->px + (size_t)y * p->w * 2,
+		       (size_t)cw * 2);
+	wr_touch(sf);			/* the row hashes no longer describe it */
+	sf->hole = 0;
+	sf->dirty = 1;
+	return 1;
+}
+
+/*
+ * The CRTC shows a zero-copy buffer and the window's surface is stale: copy
+ * that frame back, so whatever presents the window next (the alias, the 2x
+ * upscale, leaving fullscreen) starts from the frame the panel shows. Only
+ * at transitions - never per frame.
+ */
+static void zc_sync_rs(struct res *w)
+{
+	if (!w || !w->zc_live)
+		return;
+	zc_unlive(w);
+	zc_into_win(w, w->zc_last ? res_find(w->zc_last) : NULL);
+}
+
+/* A mode switch: every VidMode zero-copy window goes back to MIT-SHM. */
+static void zc_vm_revoke_all(void)
+{
+	int i;
+
+	for (i = 0; i < MAXRES; i++) {
+		struct res *w = &res[i];
+
+		if (w->type != R_WINDOW || !w->zc_vm)
+			continue;
+		zc_sync_rs(w);		/* into the alias, before it goes */
+		zc_set_all(w, ZC_W_REVOKED, 1);
+	}
+}
+
+/* A zero-copy pixmap's pixels are about to go (px_release). */
+static void zc_pix_release(struct res *p)
+{
+	struct res *w = p->zc_of ? res_find(p->zc_of) : NULL;
+	int i;
+
+	if (!p->zc_fb)
+		return;
+	if (w && w->type == R_WINDOW) {
+		if (w->zc_live && w->zc_last == p->id)
+			zc_sync_rs(w);	/* before the mode buffer goes back */
+		for (i = 0; i < ZC_MAXBUF; i++)
+			if (w->zc_pix[i] == p->id)
+				w->zc_pix[i] = 0;
+		if (w->zc_last == p->id)
+			w->zc_last = 0;
+	}
+	kms_zc_release(p->zc_fb);
+	p->zc_fb = 0;
+	p->zc_of = 0;
+	p->zc_ctl = 0;
+}
+
+/*
+ * The 16-bpp GEM buffer, with one control row past the image and padding
+ * that staggers consecutive buffers by 8 KB in the 64 KB 2-way D-cache: CMA
+ * hands out contiguous page runs, and 48 pages is a whole number of 32 KB
+ * cache ways, so two buffers (or a buffer and the desktop's 400x240 mode
+ * buffer, which the fallback copy streams together) would otherwise be
+ * congruent line for line - the M2 aliasing (memory "3-stream penalty is
+ * cache aliasing": 238-294 ms congruent against 9.4-14 offset). 8 KB per
+ * buffer.
+ */
+static int zc_gem_alloc(struct res *p, int w, int h)
+{
+	struct drm_mode_create_dumb cs;
+	struct drm_mode_map_dumb ms;
+	int fd = kms_get_fd();
+	uint32_t pitch = (uint32_t)w * 2, fb;
+	void *m;
+
+	if (fd < 0 || w <= 0 || h <= 0)
+		return 0;
+	memset(&cs, 0, sizeof cs);
+	cs.width = w;
+	cs.height = zc_alloc_rows(pitch, (uint32_t)h);
+	cs.bpp = 16;
+	if (ioctl(fd, DRM_IOCTL_MODE_CREATE_DUMB, &cs) < 0) {
+		fprintf(stderr, "xshim: zero-copy CREATE_DUMB %dx%u: %s\n",
+			w, cs.height, strerror(errno));
+		return 0;
+	}
+	/* the pixmap is presented with the stride w*2 (GetPixmapFd), and
+	 * the framebuffer must agree with it */
+	if (cs.pitch != pitch)
+		goto drop;
+	memset(&ms, 0, sizeof ms);
+	ms.handle = cs.handle;
+	if (ioctl(fd, DRM_IOCTL_MODE_MAP_DUMB, &ms) < 0)
+		goto drop;
+	m = mmap(NULL, cs.size, PROT_READ | PROT_WRITE, MAP_SHARED, fd,
+		 ms.offset);
+	if (m == MAP_FAILED)
+		goto drop;
+	fb = kms_zc_addfb(cs.handle, w, h, pitch);
+	if (!fb) {
+		munmap(m, cs.size);
+		goto drop;
+	}
+	/* CREATE_DUMB does not promise zeroed pages (win8_gem_alloc) */
+	memset(m, 0, cs.size);
+	px_release(p);			/* the memfd it was born with */
+	p->px = m;
+	p->canary = 0;
+	p->bpp = 2;
+	p->gem_src = cs.handle;
+	p->gem_len = cs.size;
+	p->zc_fb = fb;
+	p->zc_ctl = zc_ctl_offset(pitch, (uint32_t)h);
+	/* NOT a hole: the client writes these pages behind our back, so
+	 * nothing may assume they are still zero */
+	p->hole = 0;
+	mem_pix += (size_t)w * h * 2; n_pix++;
+	wr_touch(p);
+	return 1;
+drop:
+	{
+		struct drm_mode_destroy_dumb dd;
+
+		memset(&dd, 0, sizeof dd);
+		dd.handle = cs.handle;
+		ioctl(fd, DRM_IOCTL_MODE_DESTROY_DUMB, &dd);
+	}
+	return 0;
+}
+
+/* The frame the ordinary way: into the render-scale surface, as a
+ * ShmPutImage of the whole half-size frame would put it. */
+static void zc_copy_frame(struct res *w, struct res *p)
+{
+	struct res *sf = w->rs;
+
+	zc_unlive(w);
+	zc_n_copy++;
+	if (!zc_into_win(w, p))
+		return;			/* the grant went: this frame is dropped */
+	if (w->zc_vm) {
+		damage_add(w, 0, 0, w->w, w->h);
+	} else {
+		damage_add(sf, 0, 0, sf->w, sf->h);
+		if (!w->rs_live)
+			rs_upscale(w, 0, 0, sf->w, sf->h);
+	}
+	w->dirty = 1;
+	if (late_present_on())
+		late_present_queue(w->id);
+	else
+		notify_draw(w);
+}
+
+static void zc_request(struct cli *c, const uint8_t *r, int len)
+{
+	uint8_t d24[24];
+	struct res *w = len >= 16 ? res_find(get32(r + 4)) : NULL;
+	struct res *p = len >= 16 ? res_find(get32(r + 8)) : NULL;
+	int op = len >= 16 ? r[12] : -1;
+	int me = (int)(c - cli);
+
+	if (op == ZC_OP_PRESENT) {		/* no reply */
+		uint32_t seq = len >= 20 ? get32(r + 16) : 0;
+		int k = 0;
+
+		if (!w || w->type != R_WINDOW || !p || p->type != R_PIXMAP ||
+		    p->owner != me || p->zc_of != w->id || !p->zc_fb || !p->px)
+			return;
+		if (zc_showable(w) && zc_cb)
+			k = zc_cb(w->id, p->zc_fb, p->w, p->h);
+		if (k == ZC_HOW_FLIPPED || k == ZC_HOW_SAMEFB) {
+			struct res *t = top_of(w);
+
+			if (k == ZC_HOW_FLIPPED)
+				zc_n_flip++;	/* the PPA has read it */
+			else
+				zc_n_same++;	/* read by the next PPA op */
+			w->zc_live = 1;
+			w->zc_last = p->id;
+			zc_shown_top = t ? t->id : 0;
+		} else {
+			k = ZC_HOW_COPIED;
+			if (zc_showable(w))
+				zc_set_all(w, ZC_W_DECLINED, 1);
+			zc_copy_frame(w, p);
+		}
+		zc_publish(w, zc_fence_after(&w->zc_fence, k, seq));
+		return;
+	}
+	memset(d24, 0, sizeof d24);
+	if (op == ZC_OP_QUERY) {
+		int bw = 0, bh = 0, kind = w && zc_same_proc(w->owner, me) ?
+			 zc_grant_size(w, &bw, &bh) : 0;
+
+		d24[0] = kind ? 1 : 0;
+		d24[1] = 1;
+		put16(d24 + 2, (uint16_t)(kind ? bw : 0));
+		put16(d24 + 4, (uint16_t)(kind ? bh : 0));
+		send_reply(c, 0, d24, NULL, 0);
+		return;
+	}
+	{
+		int bw = 0, bh = 0, kind = 0;
+
+		if (op == ZC_OP_ALLOC && w && zc_same_proc(w->owner, me))
+			kind = zc_grant_size(w, &bw, &bh);
+		/* one kind per window's buffers: a stale set is refused */
+		if (kind && w->zc_vm != (kind == 2)) {
+			int i, any = 0;
+
+			for (i = 0; i < ZC_MAXBUF; i++)
+				any |= w->zc_pix[i] != 0;
+			if (any)
+				kind = 0;
+			else
+				w->zc_vm = kind == 2;
+		}
+		if (!kind || !p || p->type != R_PIXMAP || p->owner != me ||
+		    p->depth != 16 || p->bpp != 2 || p->w != bw || p->h != bh)
+			p = NULL;
+	}
+	if (op == ZC_OP_ALLOC && p && !p->gem_src && !p->px_shared &&
+	    !p->alias && !p->px_adopted && !p->px_scanout && !p->zc_of) {
+		int i, slot = -1;
+
+		for (i = 0; i < ZC_MAXBUF; i++) {
+			struct res *q = w->zc_pix[i] ?
+					res_find(w->zc_pix[i]) : NULL;
+
+			if (!q || q->type != R_PIXMAP || q->zc_of != w->id)
+				w->zc_pix[i] = 0;	/* a stale id */
+			if (!w->zc_pix[i] && slot < 0)
+				slot = i;
+		}
+		if (slot >= 0 && zc_gem_alloc(p, p->w, p->h)) {
+			volatile uint32_t *ctl;
+
+			p->zc_of = w->id;
+			w->zc_pix[slot] = p->id;
+			ctl = zc_ctl(p);
+			if (ctl) {
+				ctl[ZC_W_CONSUMED] = w->zc_consumed;
+				ctl[ZC_W_REVOKED] = 0;
+				ctl[ZC_W_DECLINED] = 0;
+				__atomic_store_n(&ctl[ZC_W_MAGIC], ZC_MAGIC,
+						 __ATOMIC_SEQ_CST);
+			}
+			zc_n_alloc++;
+			d24[0] = 1;
+			d24[1] = 1;
+			put16(d24 + 2, (uint16_t)(p->w * 2));
+			put32(d24 + 4, p->zc_ctl);
+			put32(d24 + 8, (uint32_t)p->gem_len);
+		}
+	}
+	send_reply(c, 0, d24, NULL, 0);
+	/* once per buffer, never per frame */
+	fprintf(stderr, "xshim: zero-copy 0x%x buffer 0x%x %s\n",
+		w ? w->id : 0, p ? p->id : 0, d24[0] ? "granted (GEM)" :
+		"refused");
+}
+
+void xshim_on_zc(int (*cb)(uint32_t win, uint32_t fb, int w, int h))
+{
+	zc_cb = cb;
+}
+
+/* The desktop must not present this window itself: a zero-copy buffer is on
+ * the CRTC and the window's surface is stale (lvdesk fs_present()). */
+int xshim_window_zc_live(uint32_t id)
+{
+	return id && id == zc_shown_top;
+}
+
+void xshim_zc_report(void)
+{
+	fprintf(stderr, "xshim: zero-copy buffers %lu, presents: flip %lu, "
+		"same-fb %lu, copied %lu\n", zc_n_alloc, zc_n_flip, zc_n_same,
+		zc_n_copy);
+}
+
 static void HOTTEXT xshm_request(struct cli *c, const uint8_t *r, int len)
 {
 	uint8_t d24[24];
@@ -7108,6 +7627,10 @@ static void HOTTEXT xshm_request(struct cli *c, const uint8_t *r, int len)
 
 		if (r[1] == 3) {
 			rscale_request(c, r, len);
+			return;
+		}
+		if (r[1] == ZC_MINOR) {
+			zc_request(c, r, len);
 			return;
 		}
 		if (r[1] == 1) {
@@ -7446,6 +7969,16 @@ static void handle(struct cli *c, const uint8_t *r, int len)
 		 * name "absent" and never answers an unknown minor at all.
 		 */
 		if (n == 12 && !memcmp(r + 8, "XLITE-RSCALE", 12)) {
+			d24[0] = 1;
+			d24[1] = XSHM_MAJOR;
+			d24[2] = 0;
+			d24[3] = 0;
+		}
+		/*
+		 * "This XLITE-SHM has ZeroCopy (minor 5)", the same way:
+		 * zc_request(). Hidden by LVDESK_NOZC=1, the A/B toggle.
+		 */
+		if (n == 8 && !memcmp(r + 8, "XLITE-ZC", 8) && zc_on()) {
 			d24[0] = 1;
 			d24[1] = XSHM_MAJOR;
 			d24[2] = 0;
@@ -9544,10 +10077,13 @@ static void vm_mode_record(uint8_t *m, int i)
 	put32(m + 44, 0);			/* privsize */
 }
 
+static void zc_vm_revoke_all(void);
+
 static void vm_switch(int idx, int owner)
 {
 	if (idx == vm_cur)
 		return;
+	zc_vm_revoke_all();	/* before the mode buffer goes (zc_request) */
 	vm_cur = idx;
 	vm_cli = idx ? owner : -1;
 	fprintf(stderr, "xshim: video mode %ux%u (client %d)\n",
@@ -11547,6 +12083,15 @@ void xshim_poll_ready(const int *ready, int nready)
 					cli[j].out = cli_out[j];
 					cli[j].fd = fd;
 					cli[j].efd_rd = cli[j].efd_wr = -1;
+					{
+						struct ucred uc;
+						socklen_t ul = sizeof uc;
+
+						if (getsockopt(fd, SOL_SOCKET,
+							       SO_PEERCRED, &uc,
+							       &ul) == 0)
+							cli[j].pid = uc.pid;
+					}
 					fprintf(stderr,
 						"xshim: client %d connected\n",
 						j);

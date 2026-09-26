@@ -627,6 +627,15 @@ int kms_cursor_move(int x, int y)
  */
 static uint32_t fs_fb_id, fs_handle;
 static size_t fs_size;
+/*
+ * P2 ZERO-COPY (docs/gl-plan-2026-09-25.md section 5; kms_zc_* below): the
+ * framebuffer on the CRTC while fullscreen is either our own mode buffer
+ * (fs_fb_id) or one of a GL client's GEM buffers. fs_mode is the mode that
+ * kms_fs_enter() set, so a flip is a SETCRTC with the identical mode - a
+ * plane-only commit, never a modeset.
+ */
+static uint32_t cur_fs_fb;
+static struct drm_mode_modeinfo fs_mode;
 uint8_t *kms_fs_map;
 uint32_t kms_fs_pitch, kms_fs_w, kms_fs_h;
 
@@ -745,10 +754,13 @@ int kms_fs_enter(int w, int h, int bpp)
 	if (kms_setcrtc(fs_fb_id, &m) < 0) {
 		perror("kms: fs SETCRTC");
 		kms_fs_free();
+		cur_fs_fb = 0;
 		if (kms_setcrtc(kms_fb_id, &native_mode) < 0)
 			perror("kms: SETCRTC (restore)");
 		return -1;
 	}
+	cur_fs_fb = fs_fb_id;
+	fs_mode = m;
 	kms_fs_w = w;
 	kms_fs_h = h;
 	printf("kms: fullscreen %dx%d, fb %u pitch %u\n", w, h, fs_fb_id,
@@ -762,6 +774,7 @@ void kms_fs_leave(void)
 		return;
 	if (kms_setcrtc(kms_fb_id, &native_mode) < 0)
 		perror("kms: SETCRTC (leave fullscreen)");
+	cur_fs_fb = 0;
 	kms_fs_free();
 	printf("kms: fullscreen off\n");
 }
@@ -779,6 +792,19 @@ int kms_fs_dirty(int x1, int y1, int x2, int y2)
 	if (y2 >= (int)kms_fs_h) y2 = kms_fs_h - 1;
 	if (x1 > x2 || y1 > y2)
 		return 0;
+	/*
+	 * A GL client's zero-copy buffer is on the CRTC (kms_zc_flip) and this
+	 * frame came the ordinary way, into our mode buffer: put the mode
+	 * buffer back. The flip's commit scales the whole of it
+	 * synchronously, so it is also this frame's present.
+	 */
+	if (cur_fs_fb && cur_fs_fb != fs_fb_id) {
+		if (kms_setcrtc(fs_fb_id, &fs_mode) == 0) {
+			cur_fs_fb = fs_fb_id;
+			return 0;
+		}
+		perror("kms: SETCRTC (zero-copy -> mode buffer)");
+	}
 	/*
 	 * FULLSCREEN PRESENT WITHOUT AN ATOMIC COMMIT (plan G15, 2026-09-26).
 	 * DIRTYFB on the mode buffer is a full atomic commit - state
@@ -832,4 +858,111 @@ int kms_fs_dirty(int x1, int y1, int x2, int y2)
 	d.num_clips = 1;
 	d.clips_ptr = (uint64_t)(uintptr_t)&clip;
 	return ioctl(kms_fd, DRM_IOCTL_MODE_DIRTYFB, &d);
+}
+
+/*
+ * P2 ZERO-COPY FULLSCREEN PRESENT (docs/gl-plan-2026-09-25.md section 5,
+ * artifacts/gl/phase6/ZEROCOPY.txt). A render-scaled fullscreen GL client
+ * draws straight into GEM dumb buffers that xshim made for it (XLITE-ZC,
+ * xshim.c zc_request); each one is a framebuffer of its own, and presenting a
+ * frame is making its framebuffer the CRTC's. There is no copy anywhere in
+ * user space.
+ *
+ * The flip is a SETCRTC with the mode kms_fs_enter() set. Same mode, same
+ * connector, so the atomic helpers see no modeset - only the primary plane's
+ * fb changes - and the driver's pipe_update takes its new-fb branch: flush
+ * the whole source from the D-cache and scale it into the private scanout
+ * buffer with the SYNCHRONOUS esp32s31_ppa_scale_rect(), which drains any
+ * async job first. So when this returns the engine has read every byte of
+ * the buffer, which is the whole of the client's consumed fence. Nothing
+ * reads the plane's fb again afterwards: the cursor is hidden in fullscreen
+ * (cursor_vis_update), and the only other present of this CRTC,
+ * kms_fs_dirty(), puts our mode buffer back first.
+ *
+ * NOT PRESENT_MODE_FB, whose source is only ever the fb on the CRTC: the
+ * kernel (#393) has no way to name a different source without a commit. The
+ * commit is the cost of double buffering - about 2.2 ms per present (0071
+ * README: 0.55-0.62 ms pipe_update + ~1.6 ms of commit), against today's
+ * 192 kB copy and row hash in ShmPutImage plus PRESENT_MODE_FB.
+ *
+ * Returns 2 when flipped (the buffer is consumed on return), 1 when the fb
+ * was already on the CRTC and was re-presented with PRESENT_MODE_FB (async:
+ * consumed only by the NEXT PPA op), 0 when this CRTC is not in a state to
+ * show it - the caller copies the frame the old way instead.
+ */
+uint32_t kms_zc_addfb(uint32_t handle, int w, int h, uint32_t pitch)
+{
+	struct drm_mode_fb_cmd fb;
+
+	if (kms_fd < 0)
+		return 0;
+	memset(&fb, 0, sizeof(fb));
+	fb.width = w;
+	fb.height = h;
+	fb.pitch = pitch;
+	fb.bpp = 16;
+	fb.depth = 16;
+	fb.handle = handle;
+	if (ioctl(kms_fd, DRM_IOCTL_MODE_ADDFB, &fb) < 0) {
+		perror("kms: zero-copy ADDFB");
+		return 0;
+	}
+	return fb.fb_id;
+}
+
+int kms_zc_flip(uint32_t fb, int w, int h)
+{
+	static int said;
+
+	if (kms_fd < 0 || !fb || !fs_fb_id || !kms_fs_map ||
+	    kms_fs_bpp != 16 || (int)kms_fs_w != w || (int)kms_fs_h != h)
+		return 0;
+	if (cur_fs_fb == fb) {
+		struct drm_esp32s31_present2 pr = {
+			0, 0, (uint32_t)w, (uint32_t)h,
+			DRM_ESP32S31_PRESENT_MODE_FB
+		};
+
+		return ioctl(kms_fd, DRM_IOCTL_ESP32S31_PRESENT2, &pr) == 0 ?
+		       1 : 0;
+	}
+	if (kms_setcrtc(fb, &fs_mode) < 0) {
+		if (said < 4) {
+			said++;
+			perror("kms: zero-copy flip (SETCRTC)");
+		}
+		return 0;
+	}
+	cur_fs_fb = fb;
+	if (!said) {
+		said = 1;
+		printf("kms: zero-copy fullscreen: client buffers flip onto the CRTC (fb %u)\n",
+		       fb);
+		fflush(stdout);
+	}
+	return 2;
+}
+
+/* Before a zero-copy buffer goes: never RMFB the fb the CRTC shows (DRM
+ * would switch the CRTC off). The mode buffer goes back first. */
+void kms_zc_release(uint32_t fb)
+{
+	if (kms_fd < 0 || !fb)
+		return;
+	if (cur_fs_fb == fb) {
+		if (fs_fb_id && kms_setcrtc(fs_fb_id, &fs_mode) == 0) {
+			cur_fs_fb = fs_fb_id;
+		} else {
+			/* no mode buffer to go back to: the desktop */
+			if (kms_setcrtc(kms_fb_id, &native_mode) < 0)
+				perror("kms: SETCRTC (zero-copy release)");
+			cur_fs_fb = 0;
+		}
+	}
+	ioctl(kms_fd, DRM_IOCTL_MODE_RMFB, &fb);
+}
+
+int kms_zc_current(uint32_t fb)
+{
+	return fb && cur_fs_fb == fb;
 }

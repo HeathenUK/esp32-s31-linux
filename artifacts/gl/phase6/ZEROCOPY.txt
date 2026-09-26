@@ -1,0 +1,197 @@
+P2 ZERO-COPY FULLSCREEN PRESENT - design, host proof, and the board test
+========================================================================
+2026-09-26. Plan: docs/gl-plan-2026-09-25.md section 5 (P2) and "To do" item 2.
+Host-side only so far: NOTHING below has run on the board.
+
+WHAT IT DOES
+------------
+Today (P1 + G04), panel-size fullscreen GL renders 400x240 into a MIT-SHM
+segment and xshim's ShmPutImage copies and row-hashes the 192 kB into the
+scanout-aliased mode buffer, then lvdesk PRESENT_MODE_FBs it. P2 removes the
+user-space copy:
+
+  libGL                        xshim (lvdesk process)          kernel #393
+  -----                        ----------------------          -----------
+  XCreatePixmap x2 (bw x bh)
+  XLITE-ZC QUERY  ------------> eligible? size?
+  XLITE-ZC ALLOC(pix) --------> re-home pix as a 16-bpp GEM dumb
+                                buffer (+control row, +8 KB
+                                stagger), ADDFB it
+  XliteShmMap(pix) -----------> GetPixmapFd -> PRIME dma-buf
+  render frame N into buf[i]
+  XLITE-ZC PRESENT(pix, N) ---> lvdesk xwin_on_zc ->
+                                kms_zc_flip: SETCRTC(fb_i,       plane-only commit:
+                                same mode)                        flush + SYNCHRONOUS
+                                                                  PPA scale of fb_i
+                                publish consumed = N in the
+                                control row of every buffer
+  frame N+1 into buf[i^1]: waits for consumed >= its last seq
+  (normally already true: it was published a whole frame ago)
+
+Eligible drawables (xshim zc_grant_size):
+  (a) a render-scale grant (panel-size EWMH fullscreen, glxgears
+      -fullscreen): buffers are the half-size 400x240;
+  (b) a VidMode fullscreen (SDL 1.2: QuakeSpasm -fullscreen, 320x240): the
+      drawable at 0,0 covering a top-level that is exactly the mode; buffers
+      are the window size. SDL 1.2 renders GL on its SECOND connection, so
+      ownership is "same process" (SO_PEERCRED pid), not "same connection".
+
+Files:
+  gl/glx/zc_proto.h        the shared protocol arithmetic (fence rule,
+                           control-row layout, stagger rows) - both halves
+                           and the test include it
+  gl/glx/glx_present.c     zc_query/zc_alloc/zc_wait, present, revoke
+  gl/glx/glx_int.h         buf[3], zc fields
+  lvdesk/xshim.c           zc_request (XLITE-SHM minor 5, "XLITE-ZC"),
+                           fallbacks, zc_pix_release, VidMode revoke
+  lvdesk/kms.c/.h          kms_zc_addfb/flip/release; kms_fs_dirty puts the
+                           mode buffer back when a P1 frame arrives
+  lvdesk/lvdesk.c          xwin_on_zc (the flip, fsg timing), fs_present
+                           skips a window whose ZC buffer is on the CRTC,
+                           SIGUSR1 report lines
+  gl/glx/test/zc_test.c    host model of the fence protocol
+
+DEVIATION FROM THE PLAN TEXT: the fence is a control row past each GEM
+buffer's image, not a spare xring_hdr word. The ring is per connection (SDL
+1.2 has two), optional (XSHIM_RING=0) and private to xlite; libGL speaks
+public Xlib. The buffer row is shared by exactly the two parties that need it,
+on any transport. Words: [0] 'ZC01' [1] consumed [2] revoked [3] declined.
+
+WHY THE FENCE IS SAFE WITH TWO BUFFERS: a flip is a commit whose new-fb
+branch (esp32s31-lcd.c pipe_update) flushes the source and scales it with the
+SYNCHRONOUS esp32s31_ppa_scale_rect, which drains any async job first. When
+the SETCRTC returns, the PPA has read the whole buffer. Nothing re-reads the
+fb on the CRTC afterwards: the cursor is hidden in fullscreen
+(cursor_vis_update: fs_active -> hide), and the only other present of the
+CRTC (kms_fs_dirty) puts lvdesk's mode buffer back first. The one async case
+(re-presenting the fb already on the CRTC with PRESENT_MODE_FB; our libGL
+never does it, it alternates) publishes seq-1 and stays owed until a flip -
+a copy fallback is a CPU memcpy and drains nothing (zc_fence_after).
+
+RUNTIME TOGGLES (A/B on one binary)
+  LVDESK_NOZC=1        server: hides "XLITE-ZC", refuses every ALLOC -> P1
+  S31GL_ZC=0           libGL: never asks -> P1
+  S31GL_ZCBUFS=3       libGL: three buffers instead of two
+  (XSHIM_RENDERSCALE=0 and S31GL_NOSHM=1 also turn it off)
+
+FALLBACKS (each reviewed; * = exercised on the host)
+  * server without XLITE-ZC (stock X, Xvfb, old lvdesk): no query, MIT-SHM
+    (host rig run-host.sh: all three arms PASS against Xvfb)
+  - no XliteShmMap (stock libX11): dlsym NULL -> MIT-SHM
+  - QUERY refused / size mismatch / ALLOC refused / CREATE_DUMB or ADDFB
+    fails (CMA) / map mismatch / bad magic: every pixmap made so far is
+    freed, MIT-SHM for this allocation
+  - window leaves fullscreen: rs_go_live(0) copies the frame on the CRTC back
+    into the surface (zc_sync_rs), sets [2]; libGL presents the frame in
+    hand (server copies it) and remakes buffers native (P1)
+  - VidMode change or exit: vm_switch -> zc_vm_revoke_all, same as above
+  - desktop refuses the flip while scanning the window out: frame copied the
+    P1 way, [3] set; libGL goes back to MIT-SHM for this drawable for good
+  - not yet scanned out (entry transient): frame copied into the surface /
+    window rows exactly as a ShmPutImage would be (upscaled if not live)
+  - a P1 frame arrives while a ZC fb is on the CRTC: ShmPutImage clears
+    zc_live; kms_fs_dirty SETCRTCs the mode buffer back (sync scale)
+  - fence not there after poll + XSync + 50 ms: "fence stuck" logged once,
+    drawable leaves ZC (* model: "one buffer presented twice")
+  - client frees a ZC pixmap / dies while its fb is on the CRTC:
+    zc_pix_release syncs the frame into the surface, SETCRTCs the mode buffer
+    back (never RMFB the fb on the CRTC), then RMFB + DESTROY_DUMB
+
+HOST PROOF (what is proven)
+  - lvdesk builds for the board (lvdesk/build.sh in the container; -Wall
+    -Wextra clean on every new line; stripped binary 985,836 bytes).
+  - libGL builds for the board (gl/build.sh, -Wall, 0 warnings) and for the
+    host rig (gl/host-build.sh).
+  - glxtest on Xvfb (gl/glx/test/run-host.sh), MIT-SHM / NOSHM / SHMBUFS=2:
+    ALL PASS - the P1 path is intact after buf[3] and the free/present
+    refactor, and the no-extension fallback works.
+  - gl/glx/test/zc_test.c (cc -O2 -Wall -I gl/glx gl/glx/test/zc_test.c):
+    discrete-event model of client and server with random server lag and
+    live toggling, 2 and 3 buffers, across the uint32 wrap, seeded from a
+    stale consumed value: every PPA/copy read sees exactly the presented,
+    fully written frame; no stuck wait while buffers alternate; broken
+    alternation falls back instead of hanging. VALIDATED BOTH WAYS: breaking
+    either fence rule (same-fb publishes seq; copy ignores the owed async
+    read) makes the model report torn reads. Also the stagger arithmetic
+    (400x240 -> 251 rows = 50 pages = 8 KB mod 32 KB).
+
+NOT PROVEN - the board has to answer these
+  1. That SETCRTC with the identical mode is a plane-only commit on this
+     driver (no modeset: no "scanout started" per frame, no flicker).
+  2. The flip's cost: ~2.2 ms commit (0071 README) + the synchronous scale
+     (engine time, lvdesk sleeps inside the client's request) against the
+     192 kB copy+hash it removes. The plan's rule is fps never lower.
+  3. PRIME dma-buf mmap of a 16-bpp GEM pixmap from the client (the 8-bit
+     CLUT window path uses the same export).
+  4. QuakeSpasm eligibility: that SDL 1.2's GL window is at 0,0 of an
+     FSwindow exactly the mode's size, with buf == top (zc_vm_ok), and that
+     the two connections' pids match.
+  5. CMA headroom: +2 x 204,800 B (x3: 614,400) of CMA, while the 2 x 192 kB
+     SHM segments (ordinary RAM) go away. lvdesk's own mode buffer (192 kB
+     CMA) stays allocated.
+  6. xlite's XliteShmMap cache has 16 slots; if full, a freed ZC pixmap's
+     mapping is never unmapped and its GEM stays alive (CMA leak). Watch
+     CmaFree across repeated launches.
+
+THE BOARD TEST (fresh boot per arm; kernel #393, no kernel change needed)
+-------------------------------------------------------------------------
+Build on the host from this branch:
+    ./docker/build.sh /src/lvdesk/build.sh          -> lvdesk/lvdesk.bin
+    S31GL_IMAGE=/src/gl/out-rv32/libGL.so.1.zc ./gl/build.sh
+Deploy (scripts/board/deploy.py, Wi-Fi): lvdesk.bin -> /root/lvdesk.new,
+libGL.so.1.zc -> /root/zc/libGL.so.1. Verify both by md5 on the board.
+
+Harness note: gl-arm.sh counts presents as xshim's "MIT-SHM ShmPutImage"
+count, which is ZERO under zero-copy. Count with the fsg "lvdesk: frames N"
+line instead (fsg_note runs for both paths) - and validate that on the P1
+arm first (frames delta ~= ShmPutImage delta), or a ZC arm reads 0 fps.
+
+A. glxgears -fullscreen (render scale, panel size), 6 runs x 10 s, run 1
+   discarded, GLLIB=/root/zc:
+     p1     LVENV="LVDESK_NOZC=1"         (control: today's P1)
+     p1lib  GLENV="S31GL_ZC=0"            (library toggle; must equal p1)
+     zc2    (default)
+     zc3    GLENV="S31GL_ZCBUFS=3"
+   Record per run: fps (frames/s), glxgears and lvdesk CPU% (/proc ticks),
+   fsg gap histogram (<25 <50 <100 <200 <400 >=400 ms) and the "dirty ms"
+   buckets (under ZC these time the flip ioctl), CmaFree from /proc/meminfo
+   before launch and mid-run. Confirm the arm by its log, or it measured
+   nothing:
+     lvdesk.log  "xshim: zero-copy 0x... buffer 0x... granted (GEM)" x2 (x3)
+                 "kms: zero-copy fullscreen: client buffers flip onto the CRTC"
+     SIGUSR1     "lvdesk: zero-copy presents N, refused 0" (N ~= frames)
+                 "xshim: zero-copy buffers 2, presents: flip N, same-fb 0,
+                  copied <small>"
+     client      S31GL_TRACE=1: "buffers 400x240 (render scale 2x,
+                 server-scaled), zero-copy x2" and at exit the wait counters
+                 (event/fence should be ~all; XSync/fence-poll near 0)
+     dmesg       "scanout started" only at fullscreen entry, not per frame
+   The p1 arm must show "zero-copy presents 0" and no "granted".
+   Look at it: screenshot-hw.py mid-run, and mjpegrec 10 s for flicker or
+   tearing (the one-colour-per-frame tear checker from plan 9.5 if handy).
+
+B. QuakeSpasm fullscreen (VidMode 320x240), glquake-arm.sh, timedemo demo1,
+   fresh boot per arm, p1 (LVENV="LVDESK_NOZC=1") vs zc2: fps, lvdesk CPU,
+   CmaFree, gaps, and the same log confirmations (buffers 320x240, no
+   render scale). If "refused": zc_vm_ok's conditions (point 4 above) -
+   S31GL_TRACE=1 prints the refusal.
+
+C. Transitions (correctness, one boot is fine):
+   - quit glxgears / QuakeSpasm while ZC is live, 10 launches: desktop
+     returns, never black; CmaFree back to baseline each time (leak check,
+     point 6)
+   - QuakeSpasm mode change (vid_restart / a different vid_width): the
+     revoke path; the game keeps rendering
+   - LVDESK_NOFULLSCREEN=1: every frame falls back, the window is correct
+   - LVDESK_NOFSPRESENT=1 with ZC: ZC flips are unaffected (SETCRTC), P1
+     frames use DIRTYFB
+
+D. Regression (fresh boot): x11-compat-gate2 PASS, x11-compat-gate PASS,
+   prboom fullscreen + windowed timedemo, windowed glxgears 300x300 (the
+   QUERY is one round trip per buffer allocation only; fps unchanged),
+   sdlquake.
+
+GATE: fps never lower than p1 in any arm (plan section 5). If zc2 loses and
+zc3 wins, make 3 the default (zc_bufs()); if both lose, ship with
+LVDESK_NOZC=1 in /etc/lvdesk.env and record the numbers here and beside
+kms_zc_flip.
