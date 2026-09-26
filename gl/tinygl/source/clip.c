@@ -141,6 +141,7 @@ void gl_set_provoking_flat(GLContext *c, GLVertex *v)
   gl_zp_color(&t, &v->color);
   c->flat_r = t.r; c->flat_g = t.g; c->flat_b = t.b;
   c->flat_vtx = v;   /* s31: its alpha, for the general path (raster.c) */
+  c->flat_ok = 0;    /* phase 6 V5: set_flat once per provoking vertex */
 }
 
 /* s31: GL_FLAT lines take the provoking vertex's colour (gl_set_provoking);
@@ -412,10 +413,12 @@ static void gl_draw_triangle_twoside(GLContext *c,
     ZBufferPoint t;
     gl_zp_color(&t,&fv->color);
     c->flat_r=t.r; c->flat_g=t.g; c->flat_b=t.b;
+    c->flat_ok=0;   /* phase 6 V5 */
   }
   c->draw_triangle_back(c,p0,p1,p2);
   if (fown) { fv->color=fcol; fv->spec=fsp; }
   c->flat_r=fr; c->flat_g=fg; c->flat_b=fb;
+  c->flat_ok=0;   /* phase 6 V5: the front colours again */
   for (i=0;i<3;i++) {
     v[i]->color=col[i]; v[i]->spec=sp[i];
     v[i]->zp.r=zc[i][0]; v[i]->zp.g=zc[i][1]; v[i]->zp.b=zc[i][2];

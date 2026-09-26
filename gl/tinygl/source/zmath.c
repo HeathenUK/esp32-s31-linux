@@ -29,35 +29,42 @@ int gl_M4_IsId(M4 *a)
   return 1;
 }
 
+/* s31 (phase 6 V4): c = a * b with b held in registers and each row of a
+   loaded before that row of c is stored - so c may be a (gl_M4_MulLeft),
+   and no copy of it is made. Each element is TinyGL's own sum as GCC
+   compiled it: s = 0, then s = fma(a[i][k], b[k][j], s) for k = 0..3 (the
+   loops' contracted s += a*b, which starts from +0 - fmaf(x, y, 0) is not
+   x * y for a -0 product, so the zero is kept). The rolled loops were ~570
+   instructions a product at -Os (the struct copy, three loop levels); this
+   is ~115. Under ilp32 every F register is caller-saved: holding b costs
+   no saves. */
+static void __attribute__((noinline)) m4_mul_rows(float *c, const float *a, const float *b)
+{
+  float b00 = b[0], b01 = b[1], b02 = b[2], b03 = b[3];
+  float b10 = b[4], b11 = b[5], b12 = b[6], b13 = b[7];
+  float b20 = b[8], b21 = b[9], b22 = b[10], b23 = b[11];
+  float b30 = b[12], b31 = b[13], b32 = b[14], b33 = b[15];
+  int i;
+
+  for (i = 0; i < 4; i++, a += 4, c += 4) {
+    float a0 = a[0], a1 = a[1], a2 = a[2], a3 = a[3];
+    float s0 = fmaf(a3, b30, fmaf(a2, b20, fmaf(a1, b10, fmaf(a0, b00, 0.0f))));
+    float s1 = fmaf(a3, b31, fmaf(a2, b21, fmaf(a1, b11, fmaf(a0, b01, 0.0f))));
+    float s2 = fmaf(a3, b32, fmaf(a2, b22, fmaf(a1, b12, fmaf(a0, b02, 0.0f))));
+    float s3 = fmaf(a3, b33, fmaf(a2, b23, fmaf(a1, b13, fmaf(a0, b03, 0.0f))));
+    c[0] = s0; c[1] = s1; c[2] = s2; c[3] = s3;
+  }
+}
+
 void gl_M4_Mul(M4 *c,M4 *a,M4 *b)
 {
-  int i,j,k;
-  float s;
-  for(i=0;i<4;i++)
-    for(j=0;j<4;j++) {
-      s=0.0;
-      for(k=0;k<4;k++) s+=a->m[i][k]*b->m[k][j];
-      c->m[i][j]=s;
-    }
+  m4_mul_rows(&c->m[0][0], &a->m[0][0], &b->m[0][0]);
 }
 
 /* c=c*a */
 void gl_M4_MulLeft(M4 *c,M4 *b)
 {
-  int i,j,k;
-  float s;
-  M4 a;
-
-  /*memcpy(&a, c, 16*sizeof(float));
-  */
-  a=*c;
-
-  for(i=0;i<4;i++)
-    for(j=0;j<4;j++) {
-      s=0.0;
-      for(k=0;k<4;k++) s+=a.m[i][k]*b->m[k][j];
-      c->m[i][j]=s;
-    }
+  m4_mul_rows(&c->m[0][0], &c->m[0][0], &b->m[0][0]);
 }
 
 void gl_M4_Move(M4 *a,M4 *b)

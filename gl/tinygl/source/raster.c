@@ -96,6 +96,7 @@ static void set_flat(GLContext *c)
     p->flatspec[1] = (unsigned char)(f816(c->flat_vtx->spec.Y) >> ZP_CSHIFT);
     p->flatspec[2] = (unsigned char)(f816(c->flat_vtx->spec.Z) >> ZP_CSHIFT);
   }
+  c->flat_ok = 1;
 }
 
 /* ------------------------------------------------------------ triangles */
@@ -107,7 +108,9 @@ void gl_draw_triangle_general(GLContext *c, GLVertex *p0, GLVertex *p1,
 
   if (c->pipe_dirty) gl_build_pipe(c);
   c->pipe.stip_on = 1;                /* polygon stipple applies */
-  if (c->current_shade_model != GL_SMOOTH) set_flat(c);
+  /* phase 6 V5: once per provoking vertex (clip.c gl_set_provoking_flat
+     clears flat_ok), not per triangle: a GL_POLYGON's n - 2 share it */
+  if (c->current_shade_model != GL_SMOOTH && !c->flat_ok) set_flat(c);
   to_vg(c, &g[0], p0);
   to_vg(c, &g[1], p1);
   to_vg(c, &g[2], p2);
@@ -121,7 +124,9 @@ void gl_draw_triangle_mt(GLContext *c, GLVertex *p0, GLVertex *p1, GLVertex *p2)
 
   if (c->pipe_dirty) gl_build_pipe(c);
   c->pipe.stip_on = 1;                /* polygon stipple applies */
-  if (c->current_shade_model != GL_SMOOTH) set_flat(c);
+  /* phase 6 V5: once per provoking vertex (clip.c gl_set_provoking_flat
+     clears flat_ok), not per triangle: a GL_POLYGON's n - 2 share it */
+  if (c->current_shade_model != GL_SMOOTH && !c->flat_ok) set_flat(c);
   to_vg(c, &g[0], p0);
   to_vg(c, &g[1], p1);
   to_vg(c, &g[2], p2);
@@ -434,6 +439,7 @@ static void gl_aa_point(GLContext *c, GLVertex *v)
     p->flat[1] = (unsigned char)(q.g >> ZP_CSHIFT);
     p->flat[2] = (unsigned char)(q.b >> ZP_CSHIFT);
     p->flat[3] = (unsigned char)(q.a >> ZP_CSHIFT);
+    c->flat_ok = 0;   /* phase 6 V5: not flat_vtx's any more */
   }
   x->cv_rr = rr;
   x->cov_kind = 2;
@@ -656,6 +662,7 @@ void gl_general_point(GLContext *c, GLVertex *v)
     p->flat[1] = (unsigned char)(q.g >> ZP_CSHIFT);
     p->flat[2] = (unsigned char)(q.b >> ZP_CSHIFT);
     p->flat[3] = (unsigned char)(q.a >> ZP_CSHIFT);
+    c->flat_ok = 0;   /* phase 6 V5: not flat_vtx's any more */
   }
   if (w & 1) {
     /* odd: centred on the pixel holding the point - TinyGL's snapped
