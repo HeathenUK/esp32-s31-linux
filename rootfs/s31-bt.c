@@ -80,10 +80,9 @@ struct dev {
 	 * Which bearers this device offers. BlueZ populates Class only for
 	 * BR/EDR devices and Appearance only for LE ones, so the two
 	 * properties discriminate the bearers without juggling discovery
-	 * filters. This matters because LE is broken on this silicon
-	 * (see docs/current-state.md, "BLE HID on the S31"): a dual-mode
-	 * device must be paired over classic, and an LE-only one has to be
-	 * refused with an explanation rather than a generic failure.
+	 * filters. A dual-mode device is paired over classic; an LE-only
+	 * one over LE (broken until the 2026-09-25 radio-firmware fix, see
+	 * docs/current-state.md, "BLE HID on the S31").
 	 */
 	int bredr, le;
 	unsigned int appearance;
@@ -170,6 +169,14 @@ static const char *dev_kind(const struct dev *d)
 
 	if (d->audio)
 		return "audio";
+	/* LE devices carry a GAP appearance instead of a class of device */
+	if (!d->class && (d->appearance >> 6) == 0x0f) {
+		switch (d->appearance & 0x3f) {
+		case 1: return "keyboard";
+		case 2: return "mouse";
+		case 3: case 4: return "gamepad";
+		}
+	}
 	if (major == 5 || d->hid) {
 		if (minor & 0x10)
 			return "keyboard";
@@ -187,6 +194,7 @@ static const char *dev_kind(const struct dev *d)
 static int dev_interesting(const struct dev *d)
 {
 	return d->paired || d->audio || d->hid ||
+	       (d->appearance >> 6) == 0x0f ||	/* LE HID by appearance */
 	       ((d->class >> 8) & 0x1f) == 4 || ((d->class >> 8) & 0x1f) == 5;
 }
 
@@ -605,14 +613,13 @@ static void adapter_call(const char *member)
 }
 
 /*
- * Which bearer to discover on. This board's LE pairing dies in the kernel's
- * SMP ("security requested but not available", recorded 2026-09-01 and
- * again 2026-09-04), and every device we care about - headphones, the
- * 8BitDo keyboard - is dual-mode and pairs fine over BR/EDR, which is how
- * the runbook did it in bluetoothctl (menu scan -> transport bredr). So
- * discovery is BR/EDR by default; bluez then knows the device on that
- * bearer only and Pair goes the classic route. "scan on le|auto" is there
- * for when SMP is fixed.
+ * Which bearer to discover on. Until 2026-09-25 LE pairing died with a MIC
+ * failure after SMP (a radio-firmware fault, fixed by the IDF 048ec57f
+ * loader: the 8BitDo keyboard now pairs and encrypts over LE and its HoG
+ * input comes up), so discovery used to be BR/EDR only - which made every
+ * LE-only device (BLE mice, most modern keyboards) invisible to Scan. It is
+ * "auto" (interleaved BR/EDR + LE) now; "scan on bredr|le" still narrows
+ * it. Dual-mode devices are still paired over classic (see "pair").
  */
 static void set_discovery_transport(const char *transport)
 {
@@ -1940,8 +1947,8 @@ static void cmd(struct cli *c, char *line)
 				if (devs[i].used && !devs[i].paired)
 					devs[i].rssi = 0;
 			set_discovery_transport(d3 && (!strcmp(d3, "le") ||
-						       !strcmp(d3, "auto")) ?
-						d3 : "bredr");
+						       !strcmp(d3, "bredr")) ?
+						d3 : "auto");
 			adapter_call("StartDiscovery");
 			scan_stop_at = (int)(now_us() / 1000000) + 45;
 		} else if (!on && discovering) {
@@ -1957,22 +1964,15 @@ static void cmd(struct cli *c, char *line)
 		}
 		if (!strcmp(a, "pair")) {
 			/*
-			 * Prefer classic. LE pairing on this controller
-			 * completes SMP and then dies with a MIC failure -
-			 * Espressif's own esp_hid_host example fails the same
-			 * way on this silicon, so it is not ours to fix. A
-			 * dual-mode device is therefore paired over BR/EDR,
-			 * which works; an LE-only device is still attempted,
-			 * because the blob may be fixed, but the UI is told
-			 * up front that this is the unsupported path.
+			 * Prefer classic for a dual-mode device: headphones
+			 * need BR/EDR for A2DP, and it is the path every
+			 * dual-mode device here was validated on. LE-only
+			 * devices pair over LE, which works since the
+			 * 2026-09-25 radio-firmware fix (MIC failure gone).
 			 */
 			event("BEARER %s %s", d->addr, dev_bearer(d));
 			if (d->bredr)
 				set_discovery_transport("bredr");
-			else if (d->le)
-				event("WARN %s le-only - LE security is broken "
-				      "in this radio firmware; pairing may fail",
-				      d->addr);
 			event("PAIRING %s", d->addr);
 		}
 		dev_call(d, a);
