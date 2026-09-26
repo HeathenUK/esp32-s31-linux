@@ -561,7 +561,7 @@ void gl_vertex_transform(GLContext * c, GLVertex * v)
    passes NULL for both, so its code is what it was. */
 static inline __attribute__((always_inline))
 void gl_vertex_core(GLContext * c, float x, float y, float z, float w,
-                    const GLVertex * hit, GLVertex * save, int mt)
+                    const GLVertex * hit, GLVertex * save, int mt, int inl)
 {
     GLVertex *v;
     int n, cnt;
@@ -651,7 +651,12 @@ void gl_vertex_core(GLContext * c, float x, float y, float z, float w,
 
     /* precompute the mapping to the viewport */
     if (v->clip_code == 0)
-	gl_ttv(c, v);	/* s31 (phase 6 V1): inline, s31_ttv.h */
+	/* s31 (phase 6 V1): inline (s31_ttv.h) in glVertex's instance; the
+	   glDrawElements instances keep the call (+~240 B each otherwise) */
+	if (inl)
+	    gl_ttv(c, v);
+	else
+	    gl_transform_to_viewport(c, v);
 
     /* edge flag */
 
@@ -779,7 +784,7 @@ void gl_vertex_core(GLContext * c, float x, float y, float z, float w,
    with the context last glVertex4f passes its a0-a3 through unmoved */
 void gl_vertex4f(float x, float y, float z, float w, GLContext * c)
 {
-    gl_vertex_core(c, x, y, z, w, NULL, NULL, 0);
+    gl_vertex_core(c, x, y, z, w, NULL, NULL, 0, 1);
 }
 
 void glopVertex(GLContext * c, GLParam * p)
@@ -793,17 +798,17 @@ void glopVertex(GLContext * c, GLParam * p)
 void gl_vertex_indexed(GLContext * c, GLParam * p, const GLVertex * hit, GLVertex * save)
 {
     if (hit)
-	gl_vertex_core(c, 0, 0, 0, 1, hit, NULL, 0);
+	gl_vertex_core(c, 0, 0, 0, 1, hit, NULL, 0, 0);
     else
-	gl_vertex_core(c, p[1].f, p[2].f, p[3].f, p[4].f, NULL, save, 0);
+	gl_vertex_core(c, p[1].f, p[2].f, p[3].f, p[4].f, NULL, save, 0, 0);
 }
 
 void gl_vertex_indexed_mt(GLContext * c, GLParam * p, const GLVertex * hit, GLVertex * save)
 {
     if (hit)
-	gl_vertex_core(c, 0, 0, 0, 1, hit, NULL, 1);
+	gl_vertex_core(c, 0, 0, 0, 1, hit, NULL, 1, 0);
     else
-	gl_vertex_core(c, p[1].f, p[2].f, p[3].f, p[4].f, NULL, save, 1);
+	gl_vertex_core(c, p[1].f, p[2].f, p[3].f, p[4].f, NULL, save, 1, 0);
 }
 
 void glopEnd(GLContext * c, GLParam * param)
