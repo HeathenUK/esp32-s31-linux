@@ -1,0 +1,173 @@
+# glref run: impl=ours name=review frame=2 display=:91
+# cmd: /src/artifacts/gl/phase5/review-spec/out/glx_review
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000ed5f5d5d0000)
+libGL: context 1 created (pid 90, comm glx_review)
+info ext GL_ARB_multitexture GL_ARB_texture_env_add GL_ARB_texture_env_combine GL_EXT_bgra GL_EXT_blend_color GL_EXT_blend_equation_separate GL_EXT_blend_func_separate GL_EXT_blend_minmax GL_EXT_blend_subtract GL_EXT_stencil_wrap GL_EXT_texture_env_add GL_EXT_texture_env_combine GL_EXT_texture_object GL_EXT_vertex_array
+info getproc ActiveTextureARB 1 MultiTexCoord2fARB 1 ClientActiveTextureARB 1
+read grey getteximage 39 39 39
+query grey ifmt 0x1907
+query grey lumsize>0 0
+query grey redsize>0 1
+error grey sub: 0x0
+read grey sub red 255 0 0
+read grey sub blue 255 0 0
+read grey untouched 181 182 181
+read grey after sub getteximage 255 0 0 / 181 182 181
+read rgba-grey replace 206 202 206
+read rgba-grey decal 49 49 247
+read rgba-grey blend 8 0 189
+read rgba-grey combine srcalpha 255 255 255
+read rgba-grey sub a0 66 65 66
+read rgba-grey sub a128 33 40 49
+read rgba-grey sub keep 197 198 197
+read rgba-grey getteximage a 0 64 128 255
+read pal before 82 194 16
+read pal sub 0 0 255 0
+read pal sub 37 148 146 74
+read pal sub 63 255 65 123
+read pal getteximage 37 148 144 74 255
+error mip sub: 0x0
+read mip l1 sub 0 0 4 255
+read mip l1 sub 5 82 4 173
+read mip l1 sub 15 247 4 8
+read mip l0 after l1 sub 0 121 58
+read mip l0 after l1 sub b 255 8 58
+read mip l1 getteximage 5 80 7 175
+error copy grey: 0x0
+read copy into grey a 255 130 0
+read copy into grey b 0 65 255
+error copy lum: 0x0
+read copy into LUMINANCE a 255 255 255
+read copy into LUMINANCE b 0 0 0
+error copy pal: 0x0
+read copy into pal 255 130 0
+read copy into pal keep 33 231 16
+error copyteximage lum: 0x0
+read copyteximage lum a 255 255 255
+read copyteximage lum b 0 0 0
+read alpha getteximage 9 0 0 0 36
+read alpha getteximage L 9 0
+read intensity getteximage 9 36 0 0 255
+query intensity size>0 1
+error storage: 0x0
+query proxy 256 w 256
+query proxy 256 ifmt 0x1908
+info proxy 512 w 0
+info max texture size 256
+error proxy: 0x0
+query u1 stack 3
+query u0 stack 1
+query u0 texmat 1.00 0.00
+query u1 texmat 5.00 2.00 3.00
+query u1 texmat pop 1.00 2.00 3.00
+error u1 stack underflow: 0x504
+query matrix mode 0x1702
+query texbit pop active 0x84c1
+query texbit pop u0 bind 0
+query texbit pop u0 mode 0x1e01
+query texbit pop u0 combine 0x1e01
+query texbit pop u0 scale 1.00
+query texbit pop u0 envcolor 0.00 0.00
+query texbit pop u0 gen 0x2400
+query texbit pop u1 bind 0
+query texbit pop u1 mode 0x2100
+query texbit pop u1 src1a 0x8578
+query texbit pop u1 gen 0x2400
+query texbit pop u1 plane 0.00 1.00 0.00 0.00
+error texbit: 0x0
+query u1 env 0x8571 = 0x2100
+query u1 env 0x8572 = 0x2100
+query u1 env 0x8580 = 0x1702
+query u1 env 0x8581 = 0x8578
+query u1 env 0x8582 = 0x8576
+query u1 env 0x8588 = 0x1702
+query u1 env 0x8589 = 0x8578
+query u1 env 0x858a = 0x8576
+query u1 env 0x8590 = 0x300
+query u1 env 0x8591 = 0x300
+query u1 env 0x8592 = 0x302
+query u1 env 0x8598 = 0x302
+query u1 env 0x8599 = 0x302
+query u1 env 0x859a = 0x302
+query u1 ascale 1.00
+query u1 rgbscale int 1
+error alpha operand src_color: 0x500
+error rgb scale 3: 0x501
+error alpha scale 0.5: 0x501
+error combine decal: 0x500
+error source zero: 0x500
+query u1 rgbscale 2 int 2
+query u1 tc1f 0.750 0.000 0.000 1.000
+query u0 tc4f 0.500 0.250 0.125 2.000
+query u1 tc3sv 3.000 4.000 5.000 1.000
+query u1 tc after current pop 3.000 4.000
+query u1 bind after delete 0
+query u0 tc array size 4 type 0x1406 en 0
+query u1 tc array size 3 type 0x1402 en 1
+query u1 tc stride 12
+query client0 active1 array en 0
+query u1 ptr interleaved 1
+query u1 size interleaved 2
+query u0 ptr after u1 interleaved 0
+query u0 en after u1 interleaved 0
+error arrays: 0x0
+query list compile active 0x84c0
+query list compile client 0x84c1
+query list call active 0x84c1
+query list call client 0x84c0
+query list call u1 mode 0xbe2
+query list call u1 tc 0.300 0.700
+query enable pop active 0x84c0
+query enable pop u1 gens 0 1d 0
+query enable pop u0 gent 0
+error lists: 0x0
+read u1 array texmat 0 132 65 132
+read u1 array texmat 1 255 130 255
+read u1 array texmat 9 255 130 255
+read u1 texgen addsigned 0 0 0 132
+read u1 texgen addsigned 1 0 0 0
+read u1 texgen addsigned 38 255 255 132
+read u1 subtract x2 0 0 0 0
+read u1 subtract x2 1 0 0 0
+read u1 subtract x2 36 255 255 0
+read list mod 0 0 0 66
+read list mod 1 0 0 132
+read list mod 44 132 130 66
+error render: 0x0
+query getproc core ClientActiveTexture 1 ActiveTexture 1 MultiTexCoord2f 1
+error clamp to edge: 0x0
+query wrap s 0x812f
+read tyr world 0 0 45 0
+read tyr world 1 8 45 8
+read tyr world 2 41 45 41
+read tyr world 3 181 77 181
+error tyr: 0x0
+info conv L8 rgb grey redsize before 8
+info conv L8 rgb grey redsize after 5
+query conv L8 rgb grey untouched texels changed 74 of 255 worst 9
+info conv L8 rgba grey redsize before 8
+info conv L8 rgba grey redsize after 5
+query conv L8 rgba grey untouched texels changed 74 of 255 worst 9
+info conv P8 rgba 255 colours redsize before 8
+info conv P8 rgba 255 colours redsize after 8
+query conv P8 rgba 255 colours untouched texels changed 0 of 255 worst 0
+query conv P8 257th colour untouched texels changed 217 of 511 worst 9
+info conv P8 redsize before 8 after 5
+read incomplete u0 0 255 0
+read incomplete u1 over u0 255 0 0
+query u1 envcolor default 0.00 0.00 0.00 0.00
+error active texture 7: 0x500
+info active after 7 0x84c1
+error incomplete: 0x0
+info proxy 512 w 0
+info max texture size 256
+info conv L8 rgb grey redsize before 8
+info conv L8 rgb grey redsize after 5
+info conv L8 rgba grey redsize before 8
+info conv L8 rgba grey redsize after 5
+info conv P8 rgba 255 colours redsize before 8
+info conv P8 rgba 255 colours redsize after 8
+info conv P8 redsize before 8 after 5
+info active after 7 0x84c1
+glref: ok at swap 2 -> /src/artifacts/gl/phase5/review-spec/out/ours/review.f2

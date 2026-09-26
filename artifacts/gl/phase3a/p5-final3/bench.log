@@ -1,0 +1,90 @@
+--- library objects from /Users/gadyke/esp32-s31-linux/gl (its own gl/api/build-lib.sh, S31GL_OBJONLY)
+q_gears_320.elf .text 310706
+gears 320x240: 1.0267 Minsn/frame, 8 soft-double calls/frame, fb 7e942cf0
+gears 640x400: 1.8764 Minsn/frame, 8 soft-double calls/frame, fb e0cf02fa
+teapot 320x240: 2.5545 Minsn/frame, 0 soft-double calls/frame, fb 14cc7f25
+teapot 640x400: 3.0411 Minsn/frame, 0 soft-double calls/frame, fb 405fc945
+texobj 320x240: 0.3551 Minsn/frame, 0 soft-double calls/frame, fb bf39f57c
+texobj 640x400: 1.1102 Minsn/frame, 0 soft-double calls/frame, fb d0419553
+feat1 gears 320x240: 4.3574 Minsn/frame, 8 soft-double calls/frame, fb 6175f39f
+feat1 texobj 320x240: 1.8294 Minsn/frame, 0 soft-double calls/frame, fb c901c573
+feat2 gears 320x240: 3.4461 Minsn/frame, 8 soft-double calls/frame, fb b4db45e0
+feat2 texobj 320x240: 1.5214 Minsn/frame, 0 soft-double calls/frame, fb bf39f57c
+feat3 gears 320x240: 3.4326 Minsn/frame, 8 soft-double calls/frame, fb c3e49441
+feat3 texobj 320x240: 1.8765 Minsn/frame, 0 soft-double calls/frame, fb bf39f57c
+feat4 gears 320x240: 1.0267 Minsn/frame, 8 soft-double calls/frame, fb 7e942cf0
+feat4 texobj 320x240: 0.3552 Minsn/frame, 0 soft-double calls/frame, fb bf39f57c
+feat5 gears 320x240: 2.9376 Minsn/frame, 8 soft-double calls/frame, fb c3e49441
+feat5 texobj 320x240: 2.3949 Minsn/frame, 0 soft-double calls/frame, fb bf39f57c
+pix0 320x240: 0.0004 Minsn/frame, 0 soft-double calls/frame, fb 6ad58dc5
+pix1 320x240: 2.0189 Minsn/frame, 0 soft-double calls/frame, fb 29208dc5
+pix2 320x240: 6.1382 Minsn/frame, 0 soft-double calls/frame, fb c7dd63a5
+pix3 320x240: 0.3636 Minsn/frame, 0 soft-double calls/frame, fb 204052c5
+pix4 320x240: 1.0112 Minsn/frame, 0 soft-double calls/frame, fb bee0e451
+pix5 320x240: 1.6999 Minsn/frame, 0 soft-double calls/frame, fb 6ad58dc5
+pix6 320x240: 0.9181 Minsn/frame, 0 soft-double calls/frame, fb 6ad58dc5
+pix7 320x240: 0.1369 Minsn/frame, 0 soft-double calls/frame, fb 6ad58dc5
+pix8 320x240: 1.2433 Minsn/frame, 0 soft-double calls/frame, fb 6ad58dc5
+prim0 320x240: 0.0009 Minsn/frame, 0 soft-double calls/frame, fb 6ad58dc5
+prim1 320x240: 0.4361 Minsn/frame, 0 soft-double calls/frame, fb ba431f47
+prim2 320x240: 5.0637 Minsn/frame, 0 soft-double calls/frame, fb 5dd3ea0a
+prim3 320x240: 8.2177 Minsn/frame, 0 soft-double calls/frame, fb 507192d0
+prim4 320x240: 0.9969 Minsn/frame, 0 soft-double calls/frame, fb e8361405
+prim5 320x240: 4.2282 Minsn/frame, 0 soft-double calls/frame, fb e8361405
+prim6 320x240: 5.5697 Minsn/frame, 0 soft-double calls/frame, fb 944e091d
+prim7 320x240: 3.0510 Minsn/frame, 0 soft-double calls/frame, fb 68ba4f99
+prim8 320x240: 3.0829 Minsn/frame, 0 soft-double calls/frame, fb 1d2dc285
+geo1 320x240: 0.0941 Minsn/frame, 0 soft-double calls/frame, fb 902d9af9
+geo1 640x400: 0.3346 Minsn/frame, 0 soft-double calls/frame, fb 49106443
+geo10 320x240: 1.1874 Minsn/frame, 0 soft-double calls/frame, fb f5fd99c5
+geo10 640x400: 3.8465 Minsn/frame, 0 soft-double calls/frame, fb 8abf45c5
+geo11 320x240: 2.2482 Minsn/frame, 0 soft-double calls/frame, fb 012e9425
+geo12 320x240: 3.3685 Minsn/frame, 0 soft-double calls/frame, fb 63cdcca5
+geo3 320x240: 2.4103 Minsn/frame, 0 soft-double calls/frame, fb 85ec9ac5
+geo4 320x240: 0.5219 Minsn/frame, 0 soft-double calls/frame, fb 1dee1745
+geo5 320x240: 0.7068 Minsn/frame, 0 soft-double calls/frame, fb 34acaa65
+geo6 320x240: 3.6726 Minsn/frame, 0 soft-double calls/frame, fb a3adbd45
+geo7 320x240: 3.6595 Minsn/frame, 0 soft-double calls/frame, fb 6917ea72
+geo8 320x240: 0.4669 Minsn/frame, 0 soft-double calls/frame, fb 0f865524
+geo9 320x240: 1.1442 Minsn/frame, 0 soft-double calls/frame, fb f5fd99c5
+geo9 640x400: 3.7025 Minsn/frame, 0 soft-double calls/frame, fb 8abf45c5
+glxgears 300x300: 0.9624 Minsn/frame, 8 soft-double calls/frame, fb 4f97d1af
+glxgears-2buf 300x300: 0.9627 Minsn/frame, 8 soft-double calls/frame, fb 4f97d1af
+filt1 320x240: 0.6378 Minsn/frame, 0 soft-double calls/frame, fb 106fac3d
+filt1 640x400: 2.0596 Minsn/frame, 0 soft-double calls/frame, fb d6b55a45
+filt10 320x240: 2.7567 Minsn/frame, 0 soft-double calls/frame, fb fbb962e3
+filt11 320x240: 16.2925 Minsn/frame, 0 soft-double calls/frame, fb a010e2db
+filt11 640x400: 52.1301 Minsn/frame, 0 soft-double calls/frame, fb 4ad0d9c8
+filt2 320x240: 4.0223 Minsn/frame, 0 soft-double calls/frame, fb 5a05fedd
+filt2 640x400: 13.2579 Minsn/frame, 0 soft-double calls/frame, fb f165bc37
+filt3 320x240: 4.2442 Minsn/frame, 0 soft-double calls/frame, fb 11feccf7
+filt3 640x400: 13.9028 Minsn/frame, 0 soft-double calls/frame, fb 9bc3d68c
+filt4 320x240: 6.4070 Minsn/frame, 0 soft-double calls/frame, fb 5bdc93d2
+filt4 640x400: 19.4298 Minsn/frame, 0 soft-double calls/frame, fb 17ecc739
+filt5 320x240: 7.1441 Minsn/frame, 0 soft-double calls/frame, fb 58e4fbd9
+filt6 320x240: 39.8957 Minsn/frame, 0 soft-double calls/frame, fb 0af25f3a
+filt7 320x240: 1.7044 Minsn/frame, 0 soft-double calls/frame, fb 3406c289
+filt8 320x240: 1.1966 Minsn/frame, 0 soft-double calls/frame, fb 75232306
+filt9 320x240: 1.9548 Minsn/frame, 0 soft-double calls/frame, fb a65cf263
+p4v1 320x240: 4.6112 Minsn/frame, 0 soft-double calls/frame, fb e8361405
+p4v2 320x240: 5.4213 Minsn/frame, 0 soft-double calls/frame, fb ac280585
+p4v3 320x240: 0.1489 Minsn/frame, 0 soft-double calls/frame, fb be18454d
+p4v4 320x240: 4.2244 Minsn/frame, 0 soft-double calls/frame, fb 1e32bd85
+p4v5 320x240: 4.3120 Minsn/frame, 0 soft-double calls/frame, fb 9cd1e9c5
+p4v6 320x240: 11.1803 Minsn/frame, 0 soft-double calls/frame, fb f8043eea
+p4v7 320x240: 19.5788 Minsn/frame, 0 soft-double calls/frame, fb 4c2bea95
+p4v8 320x240: 0.7434 Minsn/frame, 0 soft-double calls/frame, fb 262c8ab9
+bench: texobj 320x240 0.3551 > guard limit 0.3268
+bench: texobj 640x400 1.1102 > guard limit 1.0130
+bench: feat5 texobj 320x240 2.3949 > tripwire limit 2.2552
+bench: pix2 320x240 6.1382 > tripwire limit 5.4461
+bench: pix6 320x240 0.9181 > tripwire limit 0.7378
+bench: prim8 320x240 3.0829 > guard limit 3.0675
+bench: filt6 320x240 39.8957 > tripwire limit 38.1606
+bench: p4v6 320x240 11.1803 > tripwire limit 10.7390
+bench: p4v7 320x240 19.5788 > tripwire limit 18.6238
+bench: p4v8 320x240 0.7434 > tripwire limit 0.7253
+bench: filt11 320x240 16.2925 > tripwire limit 15.0538
+bench: filt11 640x400 52.1301 > tripwire limit 47.9234
+bench: 56 lines within limits.txt, 12 over
+EXIT 1

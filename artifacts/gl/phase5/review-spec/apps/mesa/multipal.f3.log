@@ -1,0 +1,9 @@
+# glref run: impl=mesa name=multipal frame=3 display=:96
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/tests/multipal
+# libGL.so.1 resolves to:
+#   	libGLU.so.1 => /src/gl/ref-apps/prefix/lib/libGLU.so.1 (0x0000f9fb85790000)
+#   	libglut.so.3 => /src/gl/ref-apps/prefix/lib/libglut.so.3 (0x0000f9fb856b0000)
+#   	libGL.so.1 => /lib/aarch64-linux-gnu/libGL.so.1 (0x0000f9fb853f0000)
+#   	libGLdispatch.so.0 => /lib/aarch64-linux-gnu/libGLdispatch.so.0 (0x0000f9fb84d00000)
+#   	libGLX.so.0 => /lib/aarch64-linux-gnu/libGLX.so.0 (0x0000f9fb84ca0000)
+Sorry, GL_EXT_paletted_texture not supported by this renderer.

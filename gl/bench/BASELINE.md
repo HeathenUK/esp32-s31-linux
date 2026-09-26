@@ -464,3 +464,24 @@ What the proxy does not model:
 - **A fused filler:** `gl/tests/run-qsr-ab.sh` renders every frame with the
   general path forced and with the fused one (once the library has such a
   switch) and requires 0 differing frames.
+
+### Phase-5 final (2026-09-26, after the review fixes; artifacts/gl/phase5/REPORT.txt)
+
+Trace p5a (QuakeSpasm with GL_ARB_multitexture, case 1), `qsreplay.sh`,
+M instructions per counted frame, windows 0 / 1; texture bytes after load /
+at end:
+
+| configuration | phase-4 final | O2 | P5c (review tree) | **final** | texture B |
+|---|---|---|---|---|---|
+| default (trilinear) | 57.89 / 61.40 | 36.66 / 38.07 | 37.97 / 38.94 | **37.82 / 38.67** | 4,892,320 -> **3,635,120** / 3,657,000 |
+| `S31GL_TEXFILTER=0` | 26.93 / 27.22 | 16.75 / 16.31 | 17.61 / 17.32 | **17.47 / 17.05** | 4,644,124 -> **3,259,237** / 3,281,117 |
+
+Peak library heap 6,901,096 -> 5,681,952 B. The final column is the review
+tree plus the O7 word loops and the s31_cap_index memo: all 84 frame
+hashes identical to the review tree's in both configurations. Per-mode
+numbers, the phase-4 (no multitexture) trace and the default-build bench
+table against limits.txt: artifacts/gl/phase5/REPORT.txt.
+
+Code size (Buildroot flags, `BRSIZE_TREES=... brsize.sh`): .text
+p4final 170,034 -> O1 209,436 -> O2 223,790 -> final 300,130 B; stripped
+276,096 -> 411,264 B.

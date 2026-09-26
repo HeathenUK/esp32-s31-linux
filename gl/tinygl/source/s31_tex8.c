@@ -44,6 +44,21 @@
  * the 8-bit texels. An L8 texture's alpha mode only grows (none, bits,
  * A8), every level with it.
  *
+ * KNOWN DEVIATION (phase 5 review S3, measured, not fixed): GL fixes a
+ * level's internal resolution at glTexImage time; here a glTexSubImage2D
+ * or glCopyTexSubImage2D that an L8/P8 texture cannot hold converts it to
+ * RGB565, which requantises texels the call did not touch (by at most one
+ * 565 step: a 16x16 grey ramp plus one colour texel changed 74 of 255
+ * untouched texels, worst 9; a 257th colour into a 256-colour P8 image
+ * 217 of 511, worst 9; Mesa 0 - artifacts/gl/phase5/review-spec
+ * glx_review.c conv_one / conv_p8), and GL_TEXTURE_RED_SIZE then reads 5
+ * instead of 8 (it reports what is stored). Within logcmp's +-16, so no
+ * gate sees it; on the board it brings DARKNESS defect A back for any
+ * lightmap block that once receives a coloured texel, and doubles that
+ * texture's bytes. The exact alternative is to convert to the W32
+ * reference layout (S31GL_TEX8=2's TGL_ST_W32) instead of 565: 4 B a
+ * texel, so an owner decision against the memory bar.
+ *
  * No double (F without D). Upload is not a per-pixel path, but QuakeSpasm
  * updates lightmaps every frame: grey data into an L8 level is a store,
  * no palette search.
@@ -359,7 +374,10 @@ typedef struct {
 
 static void t8_scan_init(T8Scan *s, int want)
 {
-  memset(s->h, 0, sizeof s->h);
+  /* only the palette search reads the hash (t8_idx, want != 0): the
+     per-frame L8 lightmap updates skip clearing it (and a 1 kB libc
+     memset, O7) */
+  if (want) memset(s->h, 0, sizeof s->h);
   s->n = 0;
   s->grey = s->a255 = s->abin = 1;
   s->want = want;
@@ -418,7 +436,13 @@ static void t8_row(const S31Unpack *u, int cls, int lum, int sx, int sy, int n,
       !lum && (cls == TGL_TEXF_RGBA || cls == TGL_TEXF_RGB)) {
     /* QuakeSpasm's every upload: the client's words as they are (an RGB
        class: alpha 255) */
-    memcpy(out, u->base + sy * u->pitch + sx * 4, (size_t)n * 4);
+    const unsigned char *src = u->base + sy * u->pitch + sx * 4;
+    /* O7: a word loop when the client row is aligned (per-frame lightmap
+       rows are 64 B and up: libc memcpy would take the ESP PIE path) */
+    if (((unsigned long)src & 3) == 0)
+      s31_wcopy(out, src, n);
+    else
+      memcpy(out, src, (size_t)n * 4);
     if (cls == TGL_TEXF_RGB)
       for (x = 0; x < n; x++) out[x] |= 0xff000000u;
     return;

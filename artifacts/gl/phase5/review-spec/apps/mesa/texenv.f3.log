@@ -1,0 +1,19 @@
+# glref run: impl=mesa name=texenv frame=3 display=:92
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/demos/texenv
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /lib/aarch64-linux-gnu/libGL.so.1 (0x0000fb4ee82a0000)
+#   	libGLU.so.1 => /src/gl/ref-apps/prefix/lib/libGLU.so.1 (0x0000fb4ee81f0000)
+#   	libglut.so.3 => /src/gl/ref-apps/prefix/lib/libglut.so.3 (0x0000fb4ee8110000)
+#   	libGLdispatch.so.0 => /lib/aarch64-linux-gnu/libGLdispatch.so.0 (0x0000fb4ee7dc0000)
+#   	libGLX.so.0 => /lib/aarch64-linux-gnu/libGLX.so.0 (0x0000fb4ee7d60000)
+texenv - texture environment and internal format test
+
+  [c] - cycle through background colors
+  [g] - toggle background
+  [b] - toggle blend
+  [s] - toggle smooth shading
+  [t] - toggle texturing
+  [i] - toggle information display
+  up/down - select row
+  left/right - change row's internal format
+glref: stalled at swap 1 -> /src/artifacts/gl/phase5/review-spec/apps/mesa/texenv.f3

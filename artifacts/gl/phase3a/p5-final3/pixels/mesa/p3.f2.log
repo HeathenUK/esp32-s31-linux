@@ -1,0 +1,29 @@
+# glref run: impl=mesa name=p3 frame=2 display=:94
+# cmd: /src/gl/out-host/glx_pixels 3
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /lib/aarch64-linux-gnu/libGL.so.1 (0x0000e93e57ed0000)
+#   	libGLdispatch.so.0 => /lib/aarch64-linux-gnu/libGLdispatch.so.0 (0x0000e93e57960000)
+#   	libGLX.so.0 => /lib/aarch64-linux-gnu/libGLX.so.0 (0x0000e93e57900000)
+read rgba (0,0): 255 0 0 255 255 0 0 255
+read rgba (40,40): 123 0 132 255 123 0 132 255
+read rgba (79,79): 0 0 255 255 0 0 255 255
+read rgb packed row 0: 0 0 0 0 0 0 0 0 0 0 0 0
+read rgb packed pad: 85 85
+read bgra: 132 0 123 255 132 0 123 255
+read float: 1.000 0.508 0.516 1.000 0.508 0.516
+read luminance: 255 255 251 255 255 255 255 251
+read 565 (5-bit) 0: 15 15 0
+read 565 (5-bit) 1: 11 18 1
+read 565 (5-bit) 2: 4 15 11
+read alpha: 255 255 255 255
+read transfer: 64 0 128 255 64 0 128 255
+read outside corner: 119 119 119 119
+read depth: 0.89 0.69 0.49 0.11
+error after glCopyPixels(GL_STENCIL) (INVALID_OPERATION, no stencil): 0x502
+error after glCopyTexImage2D: 0x0
+error after glCopyTexSubImage2D: 0x0
+error after glReadPixels(GL_STENCIL_INDEX) (INVALID_OPERATION): 0x502
+error after glReadPixels(RGBA, 565) (INVALID_OPERATION): 0x502
+error after glReadPixels(width -4) (INVALID_VALUE): 0x501
+error after page 3: 0x0
+glref: ok at swap 2 -> /src/artifacts/gl/phase3a/p5-final3/pixels/mesa/p3.f2

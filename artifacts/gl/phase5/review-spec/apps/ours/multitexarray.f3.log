@@ -1,0 +1,7 @@
+# glref run: impl=ours name=multitexarray frame=3 display=:95
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/tests/multitexarray
+# libGL.so.1 resolves to:
+#   	libglut.so.3 => /src/gl/ref-apps/prefix/lib/libglut.so.3 (0x0000f0727a3b0000)
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000f07279f50000)
+libGL: context 1 created (pid 352, comm multitexarray)
+glref: stalled at swap 1 -> /src/artifacts/gl/phase5/review-spec/apps/ours/multitexarray.f3

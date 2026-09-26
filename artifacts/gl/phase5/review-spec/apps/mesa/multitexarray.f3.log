@@ -1,0 +1,8 @@
+# glref run: impl=mesa name=multitexarray frame=3 display=:93
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/tests/multitexarray
+# libGL.so.1 resolves to:
+#   	libglut.so.3 => /src/gl/ref-apps/prefix/lib/libglut.so.3 (0x0000e03e60cf0000)
+#   	libGL.so.1 => /lib/aarch64-linux-gnu/libGL.so.1 (0x0000e03e60830000)
+#   	libGLdispatch.so.0 => /lib/aarch64-linux-gnu/libGLdispatch.so.0 (0x0000e03e60530000)
+#   	libGLX.so.0 => /lib/aarch64-linux-gnu/libGLX.so.0 (0x0000e03e604d0000)
+glref: stalled at swap 1 -> /src/artifacts/gl/phase5/review-spec/apps/mesa/multitexarray.f3

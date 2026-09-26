@@ -13,6 +13,41 @@
 #include "zfeatures.h"
 #include "zpipe.h"
 
+/* s31 (phase 5, O7): fixed-size word copy and compare for the per-vertex and
+   per-glBegin blocks (64 to 156 bytes). A libc memcpy/memcmp of 64 bytes
+   or more takes musl's ESP PIE path, and on the lent CPU (hart0) that traps
+   and bounces the task back (artifacts/gl/glquake/LIBGL-OPPORTUNITIES.md
+   O7). The empty asm makes each word opaque, so GCC's loop-distribution
+   pass cannot turn the loop back into a memcpy call. n is in words; both
+   blocks 4-aligned. */
+typedef unsigned int s31_w32 __attribute__((may_alias));
+static inline void s31_wcopy(void *dst, const void *src, int n)
+{
+  s31_w32 *d = (s31_w32 *)dst;
+  const s31_w32 *s = (const s31_w32 *)src;
+  /* unrolled: a plain word loop measured +15% on gl/bench geo11 (vertex
+     cache hits) against newlib's memcpy in the proxy */
+#pragma GCC unroll 8
+  for (; n > 0; n--) {
+    unsigned int w = *s++;
+    __asm__("" : "+r"(w));
+    *d++ = w;
+  }
+}
+/* 1 when the n words differ */
+static inline int s31_wdiff(const void *a, const void *b, int n)
+{
+  const s31_w32 *x = (const s31_w32 *)a, *y = (const s31_w32 *)b;
+  unsigned int acc = 0;
+#pragma GCC unroll 8
+  for (; n > 0; n--) {
+    unsigned int w = *x++ ^ *y++;
+    __asm__("" : "+r"(w));
+    acc |= w;
+  }
+  return acc != 0;
+}
+
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif

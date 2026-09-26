@@ -1,0 +1,142 @@
+mesa references: regenerating (stamp changed or --refresh-ref)
+suite: phase3a/p5-final3/suite, impl=ours, 116 runs, 10 at a time
+  ours glxinfo f0: exit (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/glxinfo.f0.png
+  mesa glxinfo f0: exit (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/glxinfo.f0.png
+  ours glxgears f20: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/glxgears.f20.png
+  ours glxheads f3: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/glxheads.f3.png
+  ours glxgears f3: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/glxgears.f3.png
+  ours glxgears f60: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/glxgears.f60.png
+  mesa glxheads f3: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/glxheads.f3.png
+  mesa glxgears f3: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/glxgears.f3.png
+  mesa glxgears f20: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/glxgears.f20.png
+  mesa glxgears f60: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/glxgears.f60.png
+  mesa glxheads f20: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/glxheads.f20.png
+  ours glxheads f20: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/glxheads.f20.png
+  ours glxheads f60: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/glxheads.f60.png
+  mesa glxheads f60: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/glxheads.f60.png
+  ours manywin f4: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/manywin.f4.png
+  mesa manywin f4: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/manywin.f4.png
+  ours manywin f20: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/manywin.f20.png
+  mesa manywin f20: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/manywin.f20.png
+  mesa manywin f60: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/manywin.f60.png
+  ours manywin f60: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/manywin.f60.png
+  ours offset f1: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/offset.f1.png
+  ours multictx f20: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/multictx.f20.png
+  mesa offset f1: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/offset.f1.png
+  mesa glxgears_fbconfig f3: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/glxgears_fbconfig.f3.png
+  ours glxgears_fbconfig f3: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/glxgears_fbconfig.f3.png
+  mesa glxgears_fbconfig f20: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/glxgears_fbconfig.f20.png
+  ours glxgears_fbconfig f20: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/glxgears_fbconfig.f20.png
+  ours glxgears_fbconfig f60: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/glxgears_fbconfig.f60.png
+  mesa gears f3: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/gears.f3.png
+  mesa glxgears_fbconfig f60: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/glxgears_fbconfig.f60.png
+  ours gears f3: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/gears.f3.png
+  mesa multictx f20: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/multictx.f20.png
+  mesa gears f20: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/gears.f20.png
+  ours gears f20: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/gears.f20.png
+  ours gears f60: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/gears.f60.png
+  mesa gears f60: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/gears.f60.png
+  mesa morph3d f3: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/morph3d.f3.png
+  ours morph3d f3: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/morph3d.f3.png
+  mesa morph3d f20: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/morph3d.f20.png
+  ours morph3d f20: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/morph3d.f20.png
+  mesa morph3d f60: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/morph3d.f60.png
+  ours morph3d f60: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/morph3d.f60.png
+  ours bounce f3: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/bounce.f3.png
+  mesa bounce f3: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/bounce.f3.png
+  mesa bounce f20: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/bounce.f20.png
+  ours bounce f20: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/bounce.f20.png
+  ours bounce f60: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/bounce.f60.png
+  mesa bounce f60: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/bounce.f60.png
+  ours spectex f3: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/spectex.f3.png
+  mesa spectex f3: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/spectex.f3.png
+  ours spectex f20: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/spectex.f20.png
+  mesa spectex f20: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/spectex.f20.png
+  mesa spectex f60: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/spectex.f60.png
+  ours spectex f60: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/spectex.f60.png
+  ours geartrain f3: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/geartrain.f3.png
+  mesa geartrain f3: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/geartrain.f3.png
+  ours geartrain f20: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/geartrain.f20.png
+  ours geartrain f60: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/geartrain.f60.png
+  ours ipers f3: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/ipers.f3.png
+  mesa geartrain f20: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/geartrain.f20.png
+  ours ipers f20: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/ipers.f20.png
+  mesa ipers f3: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/ipers.f3.png
+  ours terrain f3: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/terrain.f3.png
+  mesa terrain f3: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/terrain.f3.png
+  ours terrain f20: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/terrain.f20.png
+  mesa geartrain f60: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/geartrain.f60.png
+  mesa terrain f20: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/terrain.f20.png
+  ours tunnel f3: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/tunnel.f3.png
+  ours terrain f60: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/terrain.f60.png
+  mesa ipers f20: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/ipers.f20.png
+  ours ipers f60: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/ipers.f60.png
+  ours tunnel f20: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/tunnel.f20.png
+  mesa tunnel f3: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/tunnel.f3.png
+  mesa terrain f60: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/terrain.f60.png
+  mesa tunnel f20: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/tunnel.f20.png
+  ours tunnel f60: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/tunnel.f60.png
+  ours fire f3: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/fire.f3.png
+  mesa fire f3: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/fire.f3.png
+  ours fire f20: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/fire.f20.png
+  mesa tunnel f60: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/tunnel.f60.png
+  ours teapot f3: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/teapot.f3.png
+  mesa fire f20: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/fire.f20.png
+  mesa teapot f3: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/teapot.f3.png
+  ours teapot f20: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/teapot.f20.png
+  ours fire f60: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/fire.f60.png
+  mesa teapot f20: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/teapot.f20.png
+  ours texcyl f3: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/texcyl.f3.png
+  mesa texcyl f3: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/texcyl.f3.png
+  mesa ipers f60: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/ipers.f60.png
+  mesa texcyl f20: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/texcyl.f20.png
+  ours texcyl f20: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/texcyl.f20.png
+  ours teapot f60: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/teapot.f60.png
+  mesa texcyl f60: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/texcyl.f60.png
+  ours texcyl f60: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/texcyl.f60.png
+  mesa fire f60: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/fire.f60.png
+  mesa teapot f60: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/teapot.f60.png
+  mesa testgl f3: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/testgl.f3.png
+  ours isosurf f1: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/isosurf.f1.png
+  mesa isosurf f1: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/isosurf.f1.png
+  ours testgl f3: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/testgl.f3.png
+  mesa testgl f20: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/testgl.f20.png
+  ours testgl f20: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/testgl.f20.png
+  mesa testgl2 f3: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/testgl2.f3.png
+  mesa testgl f60: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/testgl.f60.png
+  ours testgl2 f3: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/testgl2.f3.png
+  ours testgl f60: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/testgl.f60.png
+  mesa testgl2 f20: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/testgl2.f20.png
+  ours testgl2 f20: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/testgl2.f20.png
+  ours testgl2 f60: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/testgl2.f60.png
+  mesa testgl2 f60: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/testgl2.f60.png
+  ours rrootage f3: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/rrootage.f3.png
+  ours rrootage f60: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/rrootage.f60.png
+  mesa rrootage f3: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/rrootage.f3.png
+  ours rrootage f300: ok (rc=0) -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/rrootage.f300.png
+  mesa rrootage f60: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/rrootage.f60.png
+  mesa rrootage f300: ok (rc=0) -> /src/artifacts/gl/ref-mesa/mesa/rrootage.f300.png
+report: /src/artifacts/gl/phase3a/p5-final3/suite/report.md
+  glxgears           PASS
+  glxinfo            PASS
+  glxheads           PASS
+  manywin            EXACT
+  multictx           PASS
+  offset             PASS
+  glxgears_fbconfig  PASS
+  gears              PASS
+  morph3d            PASS
+  bounce             PASS
+  spectex            PASS
+  geartrain          PASS
+  ipers              PASS
+  terrain            PASS
+  tunnel             PASS
+  fire               PASS
+  teapot             PASS
+  texcyl             PASS
+  isosurf            PASS
+  testgl             PASS
+  testgl2            PASS
+  rrootage           PASS
+  xlite load arm: 22 load, 0 missing -> /src/artifacts/gl/phase3a/p5-final3/suite/xlite-load.md

@@ -1,0 +1,18 @@
+# glref run: impl=ours name=texenv frame=3 display=:97
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/demos/texenv
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000e096a27a0000)
+#   	libGLU.so.1 => /src/gl/ref-apps/prefix/lib/libGLU.so.1 (0x0000e096a26f0000)
+#   	libglut.so.3 => /src/gl/ref-apps/prefix/lib/libglut.so.3 (0x0000e096a2610000)
+libGL: context 1 created (pid 354, comm texenv)
+texenv - texture environment and internal format test
+
+  [c] - cycle through background colors
+  [g] - toggle background
+  [b] - toggle blend
+  [s] - toggle smooth shading
+  [t] - toggle texturing
+  [i] - toggle information display
+  up/down - select row
+  left/right - change row's internal format
+glref: stalled at swap 1 -> /src/artifacts/gl/phase5/review-spec/apps/ours/texenv.f3

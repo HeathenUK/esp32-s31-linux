@@ -1,0 +1,1 @@
+FAIL  320x240  strict 2.234% (1716 px >16)  tolerant 1.716% (1318 px)  max 231  mean 1.17  diff /src/artifacts/gl/phase3a/p5-final3/raster/diff-4.png

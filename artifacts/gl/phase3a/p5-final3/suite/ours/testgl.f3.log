@@ -1,0 +1,22 @@
+# glref run: impl=ours name=testgl frame=3 display=:96
+# cmd: /src/gl/ref-apps/build/sdl12-test/testgl
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000eb147fa90000)
+libGL: context 1 created (pid 6712, comm testgl)
+libGL: context 2 created (pid 6712, comm testgl)
+testgl: SDL error 'Surface doesn't have a colorkey'
+Screen BPP: 16
+
+Vendor     : s31
+Renderer   : Software Rasterizer
+Version    : 1.1 s31-tinygl
+Extensions : GL_ARB_multitexture GL_ARB_texture_env_add GL_ARB_texture_env_combine GL_EXT_bgra GL_EXT_blend_color GL_EXT_blend_equation_separate GL_EXT_blend_func_separate GL_EXT_blend_minmax GL_EXT_blend_subtract GL_EXT_stencil_wrap GL_EXT_texture_env_add GL_EXT_texture_env_combine GL_EXT_texture_object GL_EXT_vertex_array
+
+SDL_GL_RED_SIZE: requested 5, got 5
+SDL_GL_GREEN_SIZE: requested 5, got 6
+SDL_GL_BLUE_SIZE: requested 5, got 5
+SDL_GL_DEPTH_SIZE: requested 16, got 16
+SDL_GL_DOUBLEBUFFER: requested 1, got 1
+app gained mouse focus
+app gained input focus
+glref: ok at swap 3 -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/testgl.f3

@@ -2,6 +2,8 @@
 #include "zgl.h"
 #include "s31_fmath.h"
 
+_Static_assert(offsetof(GLVertex, tex_coord1) % 4 == 0, "GLVertex prefix is whole words");
+
 void glopNormal(GLContext * c, GLParam * p)
 {
     V3 v;
@@ -197,13 +199,12 @@ static void gl_normal_matrix(GLContext * c)
     const float *a = &mv->m[0][0];
     float *r = &c->matrix_model_view_inv.m[0][0];
     float c00, c01, c02, det;
-    unsigned int b[16];
     int i;
 
-    memcpy(b, a, sizeof b);
-    if (c->mvinv_valid && memcmp(b, c->mvinv_src, sizeof b) == 0)
+    /* s31 (O7): word loops, not libc mem* at 64 B (zgl.h s31_wcopy) */
+    if (c->mvinv_valid && !s31_wdiff(a, c->mvinv_src, 16))
 	return;
-    memcpy(c->mvinv_src, b, sizeof b);
+    s31_wcopy(c->mvinv_src, a, 16);
     c->mvinv_valid = 1;
     /* (G14: gl_vertex_transform skips an affine modelview's w row) */
     c->xf_mv_affine = a[12] == 0.0f && a[13] == 0.0f && a[14] == 0.0f && a[15] == 1.0f;
@@ -599,7 +600,7 @@ void gl_vertex_core(GLContext * c, float x, float y, float z, float w,
 	/* s31 (phase 5 O1): texture unit 1's coordinates only when it is
 	   on - they are the vertex's last field, so a frame without it copies
 	   what it copied before */
-	memcpy(v, hit, offsetof(GLVertex, tex_coord1));
+	s31_wcopy(v, hit, (int)(offsetof(GLVertex, tex_coord1) / 4));	/* O7 */
 	if (mt)
 	    v->tex_coord1 = hit->tex_coord1;
 	goto assemble;
@@ -646,7 +647,7 @@ void gl_vertex_core(GLContext * c, float x, float y, float z, float w,
 
     v->edge_flag = c->current_edge_flag;
     if (save) {
-	memcpy(save, v, offsetof(GLVertex, tex_coord1));
+	s31_wcopy(save, v, (int)(offsetof(GLVertex, tex_coord1) / 4));	/* O7 */
 	if (mt)
 	    save->tex_coord1 = v->tex_coord1;
     }

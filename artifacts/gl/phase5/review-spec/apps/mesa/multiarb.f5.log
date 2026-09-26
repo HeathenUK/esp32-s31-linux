@@ -1,0 +1,11 @@
+# glref run: impl=mesa name=multiarb frame=5 display=:91
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/demos/multiarb
+# libGL.so.1 resolves to:
+#   	libGLU.so.1 => /src/gl/ref-apps/prefix/lib/libGLU.so.1 (0x0000fbc6190f0000)
+#   	libglut.so.3 => /src/gl/ref-apps/prefix/lib/libglut.so.3 (0x0000fbc619010000)
+#   	libGL.so.1 => /lib/aarch64-linux-gnu/libGL.so.1 (0x0000fbc618d50000)
+#   	libGLdispatch.so.0 => /lib/aarch64-linux-gnu/libGLdispatch.so.0 (0x0000fbc618660000)
+#   	libGLX.so.0 => /lib/aarch64-linux-gnu/libGLX.so.0 (0x0000fbc618600000)
+8 texture units supported
+16384 x 16384 max texture size
+glref: ok at swap 5 -> /src/artifacts/gl/phase5/review-spec/apps/mesa/multiarb.f5

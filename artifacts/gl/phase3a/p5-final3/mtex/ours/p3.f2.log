@@ -1,0 +1,36 @@
+# glref run: impl=ours name=p3 frame=2 display=:97
+# cmd: /src/gl/out-host/glx_mtex 3
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000fbf5d3190000)
+libGL: context 1 created (pid 353, comm glx_mtex)
+query ext multitexture 1 combine 1 env_add 1
+query units>=2 1
+query u1 texmatrix 1.7321 1.0000 -0.7500 0.5000
+query u1 stack 2
+query u0 stack 1
+query u0 texmatrix 1.0000 0.0000 0.0000 0.0000
+query u1 combine_rgb 0x8575
+query u1 src0_rgb 0x8576
+query u1 op0_rgb 0x303
+query u1 op2_rgb 0x301
+query u1 combine_alpha 0x84e7
+query u1 op0_alpha 0x303
+query u1 rgb_scale 4
+query u1 alpha_scale 2
+query u1 rgb_scale_i 4
+query u1 binding 1
+query u0 combine_rgb 0x2100
+query u0 rgb_scale 1
+query u0 binding 1
+query u0 src2_alpha 0x8576
+query u0 op1_rgb 0x300
+error rgb_scale 3: 0x501
+error alpha_scale 0.5: 0x501
+error combine_rgb blend: 0x500
+error op0_alpha src_color: 0x500
+error mode combine: 0x0
+query active 0x84c0
+error active in begin: 0x502
+query active after 0x84c0
+error page: 0x0
+glref: ok at swap 2 -> /src/artifacts/gl/phase3a/p5-final3/mtex/ours/p3.f2

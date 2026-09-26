@@ -14,6 +14,7 @@
 #                 of the values exact)
 #   qsr-fused.log gl/tests/run-qsr-fused.sh (phase 5 O2: every QuakeSpasm
 #                 trace, fused fillers vs S31GL_FUSED=0, frame hashes)
+#   bench.log     gl/bench/bench.sh against limits.txt (phase 5 review P2)
 #   rv32.log      gl/build.sh (RV32, library to gl/out-rv32/, NOT /src/images),
 #                 then core_test, raster_gate, d2f_test and headless_gears under
 #                 qemu-user (s31-glref-qemu)
@@ -78,3 +79,8 @@ fi
 } > "$A/rv32.log" 2>&1
 grep -E "passed|failed|PASS|FAIL|mismatch|tested|error|/tmp/" "$A/rv32.log" | head -20
 rm -rf $F
+# phase 5 review P2: gl/bench instruction counts against limits.txt (the
+# default build; reported, not failing - artifacts/gl/phase5/REPORT.txt
+# lists the lines still over, pending the owner's sign-off)
+gl/bench/bench.sh "$R/gl" "$R/gl/bench/out-3a-$L" > "$A/bench.log" 2>&1
+echo "bench: exit $?, $(grep '^bench: .* within' "$A/bench.log")"

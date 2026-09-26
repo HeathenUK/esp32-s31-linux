@@ -1,0 +1,1 @@
+PASS  320x240  strict 0.193% (148 px >16)  tolerant 0.029% (22 px)  max 251  mean 2.70  diff /src/artifacts/gl/phase3a/p5-final3/pixels/diff-p4.png

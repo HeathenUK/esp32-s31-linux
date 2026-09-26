@@ -724,3 +724,52 @@ gl/tests/run-qsr-fused.sh, every full frame of ten QuakeSpasm traces).
 - Cost: .text 209,436 -> 223,790 B (Buildroot flags; 3 kB of it cold
   selection code), zpipe_fused.o 6.2 -> 18.2 kB. Other heap +192 B (the
   blend tables, at the first such batch). ZPipeX +24 B (off the hot 2 kB).
+
+Phase 5, P5c (2026-09-26): precision, texel storage, fused 8-bit fillers
+(s31_tex8.c, zpipe_fused8.h, s31_tfilt_int.h; report
+artifacts/gl/phase5/p5c/REPORT-P5C.txt, final numbers
+artifacts/gl/phase5/REPORT.txt).
+- Rounding like Mesa: every float / 8-bit to 565 conversion, the clear
+  colour, glColor to the fragment colour, glDrawPixels, the texenv and
+  blend products (div255r MUL8 / MIX8 / MULS8, ADDS8). glx_prec 72.94 ->
+  99.35% of the values exact vs Mesa (gated in run-3a at >= 99.3).
+  -DS31GL_P4ARITH builds the phase-4 arithmetic (the bar-2 compat arm).
+- Texel storage chosen per texture at its first level (S31GL_TEX8, default
+  1): greyscale RGBA (r == g == b) as L8 with an alpha mode of none / 1-bit
+  / A8; <= 256 distinct colours as P8 indices + an RGBA8 palette; opaque
+  RGBA without the A8 plane; the rest RGB565 (+A8). S31GL_TEX8=0 is the
+  phase-4 565 storage, =2 the unpacked 32-bit reference (TGL_ST_W32) the
+  fused_test and qsr-fused gates compare the 8-bit fetch against,
+  bit-identical. See the KNOWN DEVIATION note at the top of s31_tex8.c: a
+  sub-image an L8 / P8 texture cannot hold converts it to 565 (review S3).
+- The trilinear lerp (LERPT) adds a bias of 12/32 in G and B and 11/32 in R
+  instead of rounding. That was tuned against the suite bar on three apps
+  (fire, ipers, teapot; artifacts/gl/phase5/p5c/x4), and the comment in
+  s31_tfilt_int.h calls it fragile. S31GL_FILT8=1 (8-bit filters on 565
+  textures) is the honest-precision arm at +44% instructions; off.
+- Phase 5 review O7 (LIBGL-OPPORTUNITIES.md): no per-frame or per-vertex
+  path calls libc memcpy / memcmp / memset at 64 bytes or more (musl's ESP
+  PIE path, which bounces off the lent CPU). zgl.h s31_wcopy / s31_wdiff
+  are word loops with an opaque word (an empty asm) so GCC's loop
+  distribution cannot turn them back into calls: the modelview-inverse
+  cache in glBegin (64 B copy + compare), the glDrawElements vertex cache
+  hit / save (the 148-B GLVertex prefix), glLoadMatrixf / glMultMatrixf
+  (64 B, RV32 only: GLParam is 8 B on a 64-bit host), the S31Unpack copy
+  per glTexImage / glTexSubImage (68 B), aligned client rows in t8_row;
+  the L8 lightmap update no longer clears the unused 1 kB palette hash.
+  gl/tests/memchk-pie.sh lists every mem* call with a constant size >= 64
+  in the RV32 library; what remains is setup, glXChoose*, the pixel paths
+  (glBitmap, glDrawPixels, glRasterPos) and the P8 palette scan.
+  QuakeSpasm trace: -0.4% / -0.7% default, -0.8% / -1.6% TEXFILTER=0, frame
+  hashes identical.
+- s31_cap_index (glEnable / glDisable) has a 64-slot direct-mapped memo,
+  verified against caps[] (review P5: 0.23 M instructions a QuakeSpasm
+  frame in the linear search).
+- Cost: .text 223,790 (O2) -> 300,130 B, stripped 333,440 -> 411,264 B
+  (Buildroot flags, gl/bench/brsize.sh); 83 of the 115 fused / 8-bit
+  functions do not run on the QuakeSpasm default or TEXFILTER=0 replays.
+- Not done, owner decisions: GL_MAX_TEXTURE_SIZE stays 256 (TyrQuake 0.71
+  GL's 320x24 status bar draws white: it does not clamp; review S1), the
+  8-bit storage and rounded blend's cost on small textures and
+  glCopyTexSubImage2D (review P2, bench limits over), per-level texel kinds
+  (review P4).

@@ -1,0 +1,1 @@
+FAIL  320x240  strict 4.824% (3705 px >16)  tolerant 4.824% (3705 px)  max 231  mean 13.11  diff /src/artifacts/gl/phase3a/p5-final3/pixels/diff-g3.png

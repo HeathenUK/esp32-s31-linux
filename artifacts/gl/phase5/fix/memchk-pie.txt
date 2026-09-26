@@ -1,0 +1,12 @@
+BIG memcpy 260 pix_build 1
+BIG memcpy 64 gl_M4_Inv 1
+BIG memset 1024 t8_scan_init.constprop.0 1
+BIG memset 112 glXChooseVisual 1
+BIG memset 112 glXChooseFBConfig 1
+BIG memset 128 s31_state_init 1
+BIG memset 164 glopRasterPos 1
+BIG memset 232 draw_image 1
+BIG memset 232 glopBitmap 2
+BIG memset 256 t8_compact.isra.0 1
+BIG memset 68 s31_unpack_fb 1
+total calls 101 const>=64 12

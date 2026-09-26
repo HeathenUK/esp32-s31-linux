@@ -1,0 +1,8 @@
+# glref run: impl=ours name=terrain frame=3 display=:90
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/demos/terrain -geometry 320x240+0+0
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000e30c662f0000)
+#   	libGLU.so.1 => /src/gl/ref-apps/prefix/lib/libGLU.so.1 (0x0000e30c66240000)
+#   	libglut.so.3 => /src/gl/ref-apps/prefix/lib/libglut.so.3 (0x0000e30c66160000)
+libGL: context 1 created (pid 4749, comm terrain)
+glref: ok at swap 3 -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/terrain.f3

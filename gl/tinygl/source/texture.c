@@ -343,6 +343,8 @@ static int tex_level_store(GLContext *c, GLTexture *t, int level, int iw, int ih
 /* s31: glTexImage2D and glTexImage1D (a W x 1 image, plan F7). src: the
    source already set up (glCopyTexImage: the colour buffer), or NULL for
    the op's own format/type/pixels */
+_Static_assert(sizeof(S31Unpack) % 4 == 0, "S31Unpack is whole words");
+
 int gl_tex_image_src(GLContext *c, GLParam *p, const S31Unpack *src)
 {
   int target=p[1].i;
@@ -391,7 +393,7 @@ int gl_tex_image_src(GLContext *c, GLParam *p, const S31Unpack *src)
   }
   /* (S31_PACKED_RGBA: compiled into a display list, api.c) */
   if (src) {
-    u = *src;
+    s31_wcopy(&u, src, (int)(sizeof u / 4));	/* O7: not a 68-B libc memcpy */
   } else {
     e = s31_unpack_setup(c, &u, width, height, format, type, pixels);
     if (e) { gl_set_error(c, e); return 0; }
@@ -513,7 +515,7 @@ int gl_tex_subimage_src(GLContext *c, GLParam *p, const S31Unpack *src)
     return 0;
   }
   if (src) {
-    u = *src;
+    s31_wcopy(&u, src, (int)(sizeof u / 4));	/* O7: not a 68-B libc memcpy */
   } else {
     e = s31_unpack_setup(c, &u, width, height, format, type, pixels);
     if (e) { gl_set_error(c, e); return 0; }

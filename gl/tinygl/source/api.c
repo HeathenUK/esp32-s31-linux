@@ -1,6 +1,7 @@
 #include "zgl.h"
 #include "s31_pixels.h"
 #include "s31_ramtext.h"
+
 #include <stdio.h>
 
 /* s31 (phase 3a G14): while executing (not compiling a list, not printing
@@ -349,7 +350,10 @@ void glLoadMatrixf(const float *m)
   int i;
 
   p[0].op=OP_LoadMatrix;
-  for(i=0;i<16;i++) p[i+1].f=m[i];
+  if (sizeof(GLParam) == 4)	/* the board: O7, not a 64-B libc memcpy */
+    s31_wcopy(&p[1], m, 16);
+  else
+    for(i=0;i<16;i++) p[i+1].f=m[i];
 
   gl_add_op(p);
 }
@@ -369,7 +373,10 @@ void glMultMatrixf(const float *m)
   int i;
 
   p[0].op=OP_MultMatrix;
-  for(i=0;i<16;i++) p[i+1].f=m[i];
+  if (sizeof(GLParam) == 4)	/* the board: O7, not a 64-B libc memcpy */
+    s31_wcopy(&p[1], m, 16);
+  else
+    for(i=0;i<16;i++) p[i+1].f=m[i];
 
   gl_add_op(p);
 }

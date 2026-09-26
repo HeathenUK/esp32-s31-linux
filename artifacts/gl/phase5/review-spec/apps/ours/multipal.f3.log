@@ -1,0 +1,8 @@
+# glref run: impl=ours name=multipal frame=3 display=:94
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/tests/multipal
+# libGL.so.1 resolves to:
+#   	libGLU.so.1 => /src/gl/ref-apps/prefix/lib/libGLU.so.1 (0x0000ec32eb2e0000)
+#   	libglut.so.3 => /src/gl/ref-apps/prefix/lib/libglut.so.3 (0x0000ec32eb200000)
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000ec32eafa0000)
+libGL: context 1 created (pid 323, comm multipal)
+Sorry, GL_EXT_paletted_texture not supported by this renderer.

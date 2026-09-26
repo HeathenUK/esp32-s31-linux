@@ -73,12 +73,26 @@ static const struct cap {
 };
 #define NCAPS ((int)(sizeof(caps) / sizeof(caps[0])))
 
+/* s31 (phase 5 review P5): a direct-mapped memo in front of the linear
+   search - glEnable/glDisable called it ~0.23 M instructions per QuakeSpasm
+   frame. Each slot holds index + 1 of the last cap that hashed there and is
+   verified against caps[], so a collision or a racing writer (one byte, from
+   another context's thread) costs a search, never a wrong answer. */
+static unsigned char cap_memo[64];
+
 int s31_cap_index(int cap)
 {
   int i;
+  unsigned int h;
   if (cap >= GL_LIGHT0 && cap < GL_LIGHT0 + MAX_LIGHTS) return NCAPS;
+  h = ((unsigned int)cap ^ ((unsigned int)cap >> 6) ^ ((unsigned int)cap >> 12)) & 63;
+  i = cap_memo[h];
+  if (i && caps[i - 1].cap == cap) return i - 1;
   for (i = 0; i < NCAPS; i++)
-    if (caps[i].cap == cap) return i;
+    if (caps[i].cap == cap) {
+      cap_memo[h] = (unsigned char)(i + 1);
+      return i;
+    }
   return -1;
 }
 

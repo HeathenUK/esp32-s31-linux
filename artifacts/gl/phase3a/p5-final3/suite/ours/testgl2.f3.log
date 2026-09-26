@@ -1,0 +1,20 @@
+# glref run: impl=ours name=testgl2 frame=3 display=:99
+# cmd: /src/gl/ref-apps/build/sdl2-test/testgl2 --geometry 320x240
+# libGL.so.1 resolves to:
+libGL: context 1 created (pid 7047, comm testgl2)
+libGL: context 2 created (pid 7047, comm testgl2)
+INFO: Screen BPP    : 16
+INFO: Swap Interval : 0
+INFO: Window Size   : 320,240
+INFO: Draw Size     : 320,240
+INFO: 
+INFO: Vendor        : s31
+INFO: Renderer      : Software Rasterizer
+INFO: Version       : 1.1 s31-tinygl
+INFO: Extensions    : GL_ARB_multitexture GL_ARB_texture_env_add GL_ARB_texture_env_combine GL_EXT_bgra GL_EXT_blend_color GL_EXT_blend_equation_separate GL_EXT_blend_func_separate GL_EXT_blend_minmax GL_EXT_blend_subtract GL_EXT_stencil_wrap GL_EXT_texture_env_add GL_EXT_texture_env_combine GL_EXT_texture_object GL_EXT_vertex_array
+INFO: 
+INFO: SDL_GL_RED_SIZE: requested 5, got 5
+INFO: SDL_GL_GREEN_SIZE: requested 5, got 6
+INFO: SDL_GL_BLUE_SIZE: requested 5, got 5
+INFO: SDL_GL_DEPTH_SIZE: requested 16, got 16
+glref: ok at swap 3 -> /src/artifacts/gl/phase3a/p5-final3/suite/ours/testgl2.f3

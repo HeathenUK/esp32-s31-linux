@@ -1,0 +1,14 @@
+gen.py dispatch (direct): 52 entry points
+gen.py dispatch (null): 52 entry points
+qsr gl window 0 frames 100-139: 37.8213 Minsn/frame min 27.9627 max 46.8950 (frame 124), 0 dcalls/frame, hashes 0/40 same as live, tex 3635120 B heap 39760 B at start
+qsr gl window 1 frames 400-439: 38.6659 Minsn/frame min 30.5361 max 49.1248 (frame 412), 0 dcalls/frame, hashes 0/40 same as live, tex 3657000 B heap 42384 B at start
+qsr gl load: 219.18 Minsn before frame 98 (355 state-only frames in all: 333.94 Minsn), warm-up 152.86 Minsn
+qsr gl heap: texture 3635120 B, other 39760 B after the load phase; at the end texture 3657000 B, other 42400 B; peak 5681952 B, 1060 allocations
+qsr gl peak: texture 5642384 B, other 39568 B, in frame 13
+qsr gl done: 439 frames, 84 full: 0 same as live, 84 differ
+qsr gl-null window 0 frames 100-139: 0.2429 Minsn/frame min 0.0908 max 0.4488 (frame 124), 0 dcalls/frame, hashes 0/40 same as live, tex 0 B heap 39568 B at start
+qsr gl-null window 1 frames 400-439: 0.1370 Minsn/frame min 0.0686 max 0.2013 (frame 415), 0 dcalls/frame, hashes 0/40 same as live, tex 0 B heap 39568 B at start
+qsr gl-null load: 2.21 Minsn before frame 98 (355 state-only frames in all: 6.23 Minsn), warm-up 0.75 Minsn
+qsr gl-null heap: texture 0 B, other 39568 B after the load phase; at the end texture 0 B, other 39584 B; peak 39584 B, 39 allocations
+qsr gl-null peak: texture 0 B, other 39584 B, in frame 440
+qsr gl-null done: 439 frames, 84 full: 0 same as live, 84 differ

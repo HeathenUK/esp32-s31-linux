@@ -1,0 +1,19 @@
+# glref run: impl=ours name=p4 frame=2 display=:97
+# cmd: /src/gl/out-host/glx_pixels 4
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000e9c9a33c0000)
+libGL: context 1 created (pid 484, comm glx_pixels)
+query eye plane S: 1.732 1.000 0.000 0.500
+query object plane T: 0.000 2.000 1.000 0.500
+query gen mode S: 0x2400
+query gen enabled: 1 1 0 0
+query clip plane 1: 0.643 -0.766 0.300 1.100
+query clip enabled: 1 1 0
+error after glTexImage1D: 0x0
+query 1D: bound 1 width 16 enabled 1
+read teximage 1D (5-bit): 0 2 4 6 8 10 12 14 16 18 20 22 24 26 28 30
+read stipple: 85 85 85 85 170 170 170 170
+query line stipple: 0xff 1 enabled 0
+query polygon stipple enabled 0
+error after page 4: 0x0
+glref: ok at swap 2 -> /src/artifacts/gl/phase3a/p5-final3/pixels/ours/p4.f2
