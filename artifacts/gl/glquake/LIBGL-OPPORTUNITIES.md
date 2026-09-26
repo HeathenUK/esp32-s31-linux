@@ -233,3 +233,37 @@ The platform levers measured in the same work are in README.md:
   about 1.5% at best.
 
 None of them compares with O1 and O2.
+
+### O7. No libc PIE routine on a per-frame path (found by the glxgears dips, 2026-09-26)
+
+musl's libc.so here uses PIE (hart 1's SIMD) in strcmp, memcmp, memchr,
+memrchr and in **memcpy from 64 bytes up** (memcpy+0x4e calls a 128-bit
+esp.vld/esp.vst copier). Linux CPU1 is the lent hart 0, which has no PIE: a
+client that reaches one of these there traps, and the kernel moves it to
+CPU0 (esp32s31_pie_bounce), onto the desktop's or its own partner's CPU.
+Whenever the scheduler places the GL client on CPU1, that is what sends it
+back and starts the client/desktop ping-pong behind the fullscreen dips
+(artifacts/gl/dips/README.md).
+
+- **Where, measured.** rootfs/nopie.so in stock glxgears -fullscreen:
+  **6,159 memcmp calls in ~40 s (about 4 per frame) from one site**, libGL
+  +0x2839c (the shipped 927239ee), which is `glopBegin` ->
+  gl/tinygl/source/vertex.c:203-205:
+  `memcpy(b, a, sizeof b); if (c->mvinv_valid && memcmp(b, c->mvinv_src, sizeof b) == 0)`
+  - both 64 bytes, i.e. both on the PIE path. The #394 trap log shows
+  glxgears trapping at libc+0x107b0 from libc+0x5894a (that memcpy).
+  raster_sel.c:225 (`memcmp(key, x->st_key, sizeof key)`) is the other
+  libGL memcmp; it did not show in the count.
+- **Fix (library round, gl/ is not the board agent's to edit).** Either an
+  open-coded 16-word compare/copy for the modelview cache (it is a fixed
+  64-byte, 4-aligned block, so a word loop is as fast as anything and never
+  traps), or the same dispatch lvdesk now uses (lvdesk/lentcpu.c): read the
+  thread's rseq cpu_id (one load; register the rseq area once per thread,
+  fall back to scalar if the syscall fails) and call libc's PIE routine,
+  resolved once with dlsym(RTLD_NEXT), only when on CPU0; scalar otherwise.
+  For a 64-byte block the word loop is the simpler and sufficient choice;
+  dispatch is the pattern for large copies (texture uploads, glReadPixels).
+- **Gain.** Not a throughput lever: glxgears on CPU1 without a trap is a
+  stable placement instead of a bounce, which is what shortens the clusters.
+  Measure with scripts/board/swt-arm.sh (long frames and PIE bounces per
+  window) before and after.

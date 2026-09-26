@@ -1,0 +1,20 @@
+ARM stock1-win glpre= render_scale=1 shmbufs=2 mode=win runs=5 bin=/usr/bin/lvdesk lib=/usr/lib lvenv= glenv= #393 SMP Sat Sep 26 12:31:02 UTC 2026 up 237.30
+RUN 1 fps 51.7 gears 98% lvdesk 83% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+252 frames in 5.0 seconds = 50.377 FPS 245 frames in 5.0 seconds = 48.865 FPS 276 frames in 5.0 seconds = 55.081 FPS 
+RUN 2 fps 51.8 gears 97% lvdesk 83% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+251 frames in 5.0 seconds = 50.061 FPS 245 frames in 5.0 seconds = 48.858 FPS 278 frames in 5.0 seconds = 55.413 FPS 
+RUN 3 fps 50.8 gears 98% lvdesk 82% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+254 frames in 5.0 seconds = 50.673 FPS 238 frames in 5.0 seconds = 47.586 FPS 271 frames in 5.0 seconds = 54.089 FPS 
+RUN 4 fps 49.2 gears 96% lvdesk 81% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+247 frames in 5.0 seconds = 49.259 FPS 229 frames in 5.0 seconds = 45.649 FPS 266 frames in 5.0 seconds = 52.998 FPS 
+RUN 5 fps 51.8 gears 98% lvdesk 84% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+252 frames in 5.0 seconds = 50.213 FPS 242 frames in 5.0 seconds = 48.296 FPS 277 frames in 5.0 seconds = 55.252 FPS 
+xshim: render scale for panel-size GL windows ON
+xshim: render scale 0x200002 150x150 refused
+xshim: render scale 0x200002 150x150 refused
+xshim: render scale 0x200002 150x150 refused
+xshim: render scale 0x200002 150x150 refused
+xshim: render scale 0x200002 150x150 refused
+              total        used        free      shared  buff/cache   available
+Mem:          15336        9824        3312         152        2200        2800
+DONE

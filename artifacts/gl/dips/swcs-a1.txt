@@ -1,0 +1,28 @@
+# cpushare over 40s, USER_HZ ticks
+3808 glxgears 1117
+2841 lvdesk 1109
+105 sh 1124
+75 kworker/0:2-events_freezable 39
+69 sh 344
+33 sh 1101
+26 s31-bt 324
+19 rcu_sched 13
+6 wpa_supplicant 358
+4 migration/1 19
+3 kworker/1:1-mm_percpu_wq 1031
+2 sleep 1156
+2 kworker/1:0H-kblockd 712
+2 jbd2/mmcblk0-8 68
+1 migration/0 16
+1 kworker/u9:3-pm 482
+1 kworker/u9:0-pm 23
+1 kworker/u10:1-flush-179:0 38
+1 kworker/0:0H-mmc_complete 752
+1 kthreadd 2
+1 ksoftirqd/0 12
+1 kcompactd0 29
+1 hwrng 37
+1 crond 340
+1 busybox 439
+TOTAL user=5890 nice=0 system=1302 idle=1207 iowait=1 irq=0 softirq=6 all=8406
+IDLE_PERCENT 14  BUSY_PERCENT 85

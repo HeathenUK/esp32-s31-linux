@@ -1,0 +1,122 @@
+snprintf 19744 2
+strcmp 3b544 2
+snprintf 2cbcc 1
+strstr 16006 2
+snprintf 16206 2
+memcmp 38c74 1
+printf 1a3b8 2
+sscanf 27a0c 1
+printf 2c3f2 1
+printf 17a94 1
+printf 1b894 2
+printf 15a94 1
+printf 15b36 1
+strcmp 3b502 1
+snprintf 161a4 2
+printf 24da4 1
+sscanf 15ee8 3
+fprintf 36ee8 1
+strcmp 39ace 2
+fprintf 32ece 1
+sscanf 15ff8 2
+fprintf aa89a 1
+printf 159de 1
+puts 26108 1
+fprintf aa990 1
+printf 159fe 1
+printf 12f42 1
+fprintf 3e7e4 1
+strcmp 191e4 2
+sscanf 27e6c 1
+fprintf 36e6c 1
+fprintf 36db0 1
+strcmp 3c4f4 2
+fprintf aa962 1
+printf 17a04 4
+sscanf 1508c 102
+strcmp 247d0 1
+printf 2c272 1
+fgets 19258 3
+printf 2cc58 1
+fgets 19ee0 16
+fprintf 12b82 1
+puts 13ec6 1
+fprintf 2bb68 1
+snprintf 2bf34 8
+sscanf 15078 108
+printf 13e5e 1
+memcmp 3bc5e 1
+printf 159a2 1
+sscanf 27a44 1
+printf 25ce6 1
+printf 15ae6 96
+printf 1596e 1
+fprintf 15b54 1
+printf 2a498 1
+puts 2613a 1
+printf 15a7e 1
+printf 12dc2 1
+sscanf 15064 114
+strstr 2beec 1
+snprintf 19a16 64
+sscanf 16016 2
+snprintf 16216 2
+puts 2cf5a 1
+printf 15a6a 1
+fprintf 2e5ae 1
+snprintf 150f2 6
+snprintf 1a1e8 64
+strstr 15fe8 2
+strstr 18070 32
+sscanf 15056 120
+fprintf 36e56 1
+fgets 1503c 126
+sscanf 27980 1
+printf 15a22 1
+snprintf 196c4 2
+fprintf a9490 2
+sscanf 15fd4 2
+puts 1b0fe 1
+sscanf 15efe 3
+fprintf 314fe 1
+sscanf 277a0 1
+snprintf 24a28 1
+fprintf 36e0e 1
+fgets 2bf52 1
+memcmp 3d262 1
+snprintf 19504 1
+puts 2c704 1
+sscanf 15048 126
+printf 12e2e 1
+snprintf 19c2e 7
+sscanf 15ed0 4
+fprintf 339fa 1
+strstr 1993e 6
+sscanf 19282 2
+fprintf 36dc6 1
+memchr 14c68 2
+snprintf 956ccef0 97
+fprintf 36d92 1
+puts 12f78 1
+dropped 0
+--- maps
+00010000-000fd000 r-xp 00000000 b3:00 2653       /root/lvdesk.new
+000fd000-000fe000 r--p 000ec000 b3:00 2653       /root/lvdesk.new
+000fe000-000ff000 rw-p 000ed000 b3:00 2653       /root/lvdesk.new
+000ff000-0020c000 rw-p 00000000 00:00 0 
+01719000-0171a000 ---p 00000000 00:00 0          [heap]
+0171a000-0171b000 rw-p 00000000 00:00 0          [heap]
+95528000-95529000 r--s 00000000 b3:00 619        /etc/localtime
+95529000-955e5000 rw-s 00000000 00:07 137        /dev/dri/card0
+955e5000-956c7000 r-xp 00000000 00:19 438856     /usr/lib/libasound.so.2.0.0
+956c7000-956cb000 r--p 000e2000 00:19 438856     /usr/lib/libasound.so.2.0.0
+956cb000-956cc000 rw-p 000e6000 00:19 438856     /usr/lib/libasound.so.2.0.0
+956cc000-956ce000 r-xp 00000000 b3:00 2614       /root/nopie.so
+956ce000-956cf000 r--p 00001000 b3:00 2614       /root/nopie.so
+956cf000-956d0000 rw-p 00002000 b3:00 2614       /root/nopie.so
+956d0000-956d4000 r--p 00000000 00:00 0          [vvar]
+956d4000-956d5000 r-xp 00000000 00:00 0          [vdso]
+956d5000-9577d000 r-xp 00000000 00:19 4170416    /usr/lib/libc.so
+9577d000-9577f000 rw-p 000a7000 00:19 4170416    /usr/lib/libc.so
+9577f000-95780000 rw-p 00000000 00:00 0 
+9d1ba000-9d1db000 rw-p 00000000 00:00 0          [stack]

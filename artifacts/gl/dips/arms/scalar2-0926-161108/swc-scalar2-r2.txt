@@ -1,0 +1,128 @@
+SWT scalar2-r2 frames=1500 skip=300 bin=/root/lvdesk.new lvenv=LVDESK_LENTCPU=scalar glenv= #393 SMP Sat Sep 26 12:31:02 UTC 2026 up 149.51
+LV 520 520
+--- before 165.95
+cpu  11893 38 7460 13093 89 0 294 0 0 0
+cpu0 7496 14 3781 5010 26 0 252 0 0 0
+cpu1 4397 24 3679 8083 63 0 42 0 0 0
+           CPU0       CPU1       
+  9:      49197      26768 ESP32-S31 CLIC local INTC   5 Edge      riscv-timer
+ 11:          0          0 ESP32S31-CLIC  33 Level     20348000.dma-controller
+ 12:          0          0 ESP32S31-CLIC  36 Level     20348000.dma-controller
+ 13:          0          0 ESP32S31-CLIC  34 Level     20348000.dma-controller
+ 14:          0          0 ESP32S31-CLIC  37 Level     20348000.dma-controller
+ 15:          0          0 ESP32S31-CLIC  35 Level     20348000.dma-controller
+ 16:          0          0 ESP32S31-CLIC  38 Level     20348000.dma-controller
+ 17:          0          0 ESP32S31-CLIC  22 Level     20343000.dma-controller
+ 18:          0          0 ESP32S31-CLIC  27 Level     20343000.dma-controller
+ 19:          0          0 ESP32S31-CLIC  23 Level     20343000.dma-controller
+ 20:          0          0 ESP32S31-CLIC  28 Level     20343000.dma-controller
+ 21:          0          0 ESP32S31-CLIC  24 Level     20343000.dma-controller
+ 22:          0          0 ESP32S31-CLIC  29 Level     20343000.dma-controller
+ 23:          0          0 ESP32S31-CLIC  25 Level     20343000.dma-controller
+ 24:          0          0 ESP32S31-CLIC  30 Level     20343000.dma-controller
+ 25:         24          0 ESP32S31-CLIC  26 Level     20343000.dma-controller
+ 26:       2288          0 ESP32S31-CLIC  31 Level     20343000.dma-controller
+ 27:          0          0 ESP32S31-CLIC  43 Level     esp32s31-jpeg
+ 28:       3430          0 ESP32S31-CLIC  32 Level     20345000.pixel-accelerator
+ 29:        518          0 ESP32S31-CLIC  40 Edge      2f06af80.wireless
+ 30:       6926          0 ESP32S31-CLIC  21 Level     20386000.i2c
+ 31:       8113          0 ESP32S31-CLIC  42 Level     esp32s31-lcd
+ 32:       8931          0 ESP32S31-CLIC  16 Level     dw-mci
+IPI0:       327        196  Rescheduling interrupts
+IPI1:      7147      10624  Function call interrupts
+IPI2:         0          0  CPU stop interrupts
+IPI3:         0          0  CPU stop (for crash dump) interrupts
+IPI4:        52          3  IRQ work interrupts
+IPI5:         0          0  Timer broadcast interrupts
+IPI6:         0          0  CPU backtrace interrupts
+IPI7:         0          0  KGDB roundup interrupts
+workingset_refault_anon 26
+workingset_refault_file 4640
+pgsteal_kswapd 9080
+pgsteal_direct 751
+pgsteal_khugepaged 0
+pgsteal_proactive 0
+pgsteal_anon 80
+pgsteal_file 9751
+pgscan_kswapd 12359
+pgscan_direct 979
+pgscan_khugepaged 0
+pgscan_proactive 0
+pgscan_anon 896
+pgscan_file 12442
+pswpin 26
+pswpout 101
+allocstall_normal 17
+allocstall_movable 0
+pgmajfault 485
+pgscan_direct_throttle 0
+compact_stall 3
+PIEB0 1130
+--- after 232.16 waited 0
+PIEB1 1133
+cpu  20865 38 8910 16042 92 0 314 0 0 0
+cpu0 11270 14 4532 7162 26 0 272 0 0 0
+cpu1 9595 24 4378 8880 66 0 42 0 0 0
+           CPU0       CPU1       
+  9:      64915      35018 ESP32-S31 CLIC local INTC   5 Edge      riscv-timer
+ 11:          0          0 ESP32S31-CLIC  33 Level     20348000.dma-controller
+ 12:          0          0 ESP32S31-CLIC  36 Level     20348000.dma-controller
+ 13:          0          0 ESP32S31-CLIC  34 Level     20348000.dma-controller
+ 14:          0          0 ESP32S31-CLIC  37 Level     20348000.dma-controller
+ 15:          0          0 ESP32S31-CLIC  35 Level     20348000.dma-controller
+ 16:          0          0 ESP32S31-CLIC  38 Level     20348000.dma-controller
+ 17:          0          0 ESP32S31-CLIC  22 Level     20343000.dma-controller
+ 18:          0          0 ESP32S31-CLIC  27 Level     20343000.dma-controller
+ 19:          0          0 ESP32S31-CLIC  23 Level     20343000.dma-controller
+ 20:          0          0 ESP32S31-CLIC  28 Level     20343000.dma-controller
+ 21:          0          0 ESP32S31-CLIC  24 Level     20343000.dma-controller
+ 22:          0          0 ESP32S31-CLIC  29 Level     20343000.dma-controller
+ 23:          0          0 ESP32S31-CLIC  25 Level     20343000.dma-controller
+ 24:          0          0 ESP32S31-CLIC  30 Level     20343000.dma-controller
+ 25:         24          0 ESP32S31-CLIC  26 Level     20343000.dma-controller
+ 26:       2288          0 ESP32S31-CLIC  31 Level     20343000.dma-controller
+ 27:          0          0 ESP32S31-CLIC  43 Level     esp32s31-jpeg
+ 28:       6267          0 ESP32S31-CLIC  32 Level     20345000.pixel-accelerator
+ 29:        686          0 ESP32S31-CLIC  40 Edge      2f06af80.wireless
+ 30:       9794          0 ESP32S31-CLIC  21 Level     20386000.i2c
+ 31:      11525          0 ESP32S31-CLIC  42 Level     esp32s31-lcd
+ 32:       9078          0 ESP32S31-CLIC  16 Level     dw-mci
+IPI0:       337        198  Rescheduling interrupts
+IPI1:      8721      12252  Function call interrupts
+IPI2:         0          0  CPU stop interrupts
+IPI3:         0          0  CPU stop (for crash dump) interrupts
+IPI4:        52          3  IRQ work interrupts
+IPI5:         0          0  Timer broadcast interrupts
+IPI6:         0          0  CPU backtrace interrupts
+IPI7:         0          0  KGDB roundup interrupts
+workingset_refault_anon 26
+workingset_refault_file 4642
+pgsteal_kswapd 9101
+pgsteal_direct 751
+pgsteal_khugepaged 0
+pgsteal_proactive 0
+pgsteal_anon 83
+pgsteal_file 9769
+pgscan_kswapd 12380
+pgscan_direct 979
+pgscan_khugepaged 0
+pgscan_proactive 0
+pgscan_anon 899
+pgscan_file 12460
+pswpin 26
+pswpout 101
+allocstall_normal 17
+allocstall_movable 0
+pgmajfault 487
+pgscan_direct_throttle 0
+compact_stall 3
+lvdesk: frames 2980  gaps <25:1914 <50:891 <100:39 <200:1 <400:0 >=400:1
+lvdesk: present us last 0 worst 0 | expand 0/0 dirty 0/0
+lvdesk: dirty ms <1:2847 <3:0 <6:0 <12:0 >=12:0
+lvdesk: long frames (>=30 ms) n=96: f135:33ms/mf0/d0 f136:51ms/mf0/d0 f138:47ms/mf0/d0 f139:59ms/mf0/d0 f140:69ms/mf0/d0 f141:63ms/mf0/d0 f142:69ms/mf0/d0 f143:74ms/mf0/d0 f144:49ms/mf0/d0 f145:72ms/mf0/d0 f146:63ms/mf0/d0 f147:50ms/mf0/d0 f148:73ms/mf0/d0 f149:44ms/mf0/d0 f150:64ms/mf0/d0 f151:44ms/mf0/d0 f152:122ms/mf1/d0 f154:64ms/mf0/d0 f155:71ms/mf0/d0 f156:78ms/mf0/d0 f157:48ms/mf0/d0 f158:82ms/mf0/d0 f159:69ms/mf0/d0 f160:56ms/mf0/d0 f161:87ms/mf0/d0 f162:70ms/mf0/d0 f163:47ms/mf0/d0 f164:35ms/mf0/d0 f165:51ms/mf0/d0 f166:48ms/mf0/d0 f167:55ms/mf0/d0 f168:84ms/mf0/d0 f169:50ms/mf0/d0 f170:71ms/mf0/d0 f171:74ms/mf0/d0 f179:30ms/mf0/d0 f211:30ms/mf0/d0 f219:31ms/mf0/d0 f254:35ms/mf0/d0 f258:30ms/mf0/d0 f271:30ms/mf0/d0 f301:31ms/mf0/d0 f305:30ms/mf0/d0 f322:31ms/mf0/d0 f326:33ms/mf0/d0 f329:30ms/mf0/d0 f330:30ms/mf0/d0 f347:31ms/mf0/d0 f359:34ms/mf0/d0 f360:33ms/mf0/d0 f363:31ms/mf0/d0 f374:33ms/mf0/d0 f384:30ms/mf0/d0 f392:30ms/mf0/d0 f404:32ms/mf0/d0 f408:34ms/mf0/d0 f417:32ms/mf0/d0 f419:32ms/mf0/d0 f433:31ms/mf0/d0 f436:30ms/mf0/d0 f446:30ms/mf0/d0 f449:34ms/mf0/d0 f466:31ms/mf0/d0 f479:32ms/mf0/d0 f483:31ms/mf0/d0 f495:30ms/mf0/d0 f499:30ms/mf0/d0 f507:45ms/mf0/d0 f511:30ms/mf0/d0 f515:32ms/mf0/d0 f520:31ms/mf0/d0 f531:32ms/mf0/d0 f539:33ms/mf0/d0 f557:30ms/mf0/d0 f561:34ms/mf0/d0 f565:30ms/mf0/d0 f569:35ms/mf0/d0 f572:32ms/mf0/d0 f573:35ms/mf0/d0 f577:31ms/mf0/d0 f581:31ms/mf0/d0 f584:30ms/mf0/d0 f585:32ms/mf0/d0 f593:30ms/mf0/d0 f601:30ms/mf0/d0 f604:31ms/mf0/d0 f617:30ms/mf0/d0 f625:30ms/mf0/d0 f629:35ms/mf0/d0 f642:31ms/mf0/d0 f646:31ms/mf0/d0 f658:30ms/mf0/d0 f659:35ms/mf0/d0 f663:30ms/mf0/d0 f666:30ms/mf0/d0 f671:30ms/mf0/d0
+xshim: 2982 MIT-SHM ShmPutImage, 0 identical (no rows changed)
+250 frames in 5.0 seconds = 49.888 FPS
+249 frames in 5.0 seconds = 49.631 FPS
+247 frames in 5.0 seconds = 49.295 FPS
+229 frames in 5.0 seconds = 45.448 FPS
+SWTDONE

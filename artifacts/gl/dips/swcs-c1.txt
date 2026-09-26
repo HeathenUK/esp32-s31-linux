@@ -1,0 +1,20 @@
+# cpushare over 40s, USER_HZ ticks
+3767 glxgears 1810
+2725 lvdesk 1802
+125 sh 1817
+97 sh 344
+78 kworker/0:2-events_freezable 1713
+32 sh 1793
+29 rcu_sched 13
+26 s31-bt 324
+7 wpa_supplicant 358
+7 kcompactd0 29
+6 migration/1 19
+3 kworker/u9:0-pm 23
+3 jbd2/mmcblk0-8 68
+2 kworker/1:2-mm_percpu_wq 1798
+1 kworker/u10:2-pm 42
+1 kworker/0:0H-kblockd 752
+1 ksoftirqd/0 12
+TOTAL user=5632 nice=0 system=1499 idle=1236 iowait=6 irq=0 softirq=9 all=8382
+IDLE_PERCENT 14  BUSY_PERCENT 85

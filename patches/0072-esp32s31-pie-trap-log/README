@@ -1,0 +1,28 @@
+esp32s31: esp32s31_pie_log - print the next N lent-CPU PIE traps (diagnostic)
+
+Files (whole files): arch/riscv/kernel/esp32s31-ext.c.
+
+core_param esp32s31_pie_log (0644, default 0). Writing N makes the next N
+PIE traps on the lent CPU (Linux CPU1 = hart 0) print one line each:
+
+  s31pie <comm>[<pid>] pc <epc> ra <ra> sp <sp> s0 <s0>: <8 user stack words>
+
+and the value counts down to 0. pc/ra resolve against the process's maps
+(an offset into libc.so or the binary). Nothing else changes: with the
+parameter at 0 the trap path gains one READ_ONCE.
+
+Built as kernel #394 (2026-09-26, images/diag-394-pielog-*) to find what
+makes the glxgears fullscreen dips. It showed that musl's memcpy is a PIE
+user too - libc+0x5894a (memcpy+0x4e) jal libc+0x107b0, a 128-bit
+esp.vld/esp.vst copier placed after strcmp, taken from 64 bytes up - which
+the "PIE in exactly four functions" note had missed; lvdesk and glxgears
+both trapped there. See docs/gl-plan-2026-09-25.md (glxgears dips) and
+lvdesk/lentcpu.c.
+
+TRAP of the instrument itself: every line it prints is read by klogd and
+written by syslogd, both static busybox with PIE string code, so on the lent
+CPU they trap in turn and consume the budget (35 klogd + 26 syslogd of 101
+lines in the first capture). Keep N small, or read the task names first.
+
+NOT shipped: the board runs #393 (patches/0071). The source is in the port
+tree with the parameter defaulting to 0, so a rebuild carries it harmlessly.
