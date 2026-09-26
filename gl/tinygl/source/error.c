@@ -46,6 +46,12 @@ void gl_warn_once(const char *what)
   fprintf(stderr, "libGL: unimplemented %s\n", what);
 }
 
+void gl_note_once(const char *what)
+{
+  if (!first_time(what)) return;
+  fprintf(stderr, "libGL: approximated %s\n", what);
+}
+
 void tgl_warn_once(const char *what)
 {
   gl_warn_once(what);

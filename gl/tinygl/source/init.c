@@ -38,7 +38,7 @@ void endSharedState(GLContext *c)
     GLTexture *t=s->texture_hash_table[i], *t1;
     while (t != NULL) {
       t1=t->next;
-      for (j=0;j<MAX_TEXTURE_LEVELS;j++)
+      for (j=0;j<TGL_STORED_LEVELS;j++)
         if (t->images[j].pixmap) gl_free(t->images[j].pixmap);
       gl_free(t);
       t=t1;
@@ -218,6 +218,8 @@ void glClose(void)
   for(i=0;i<3;i++) {
     gl_free(c->matrix_stack[i]);
   }
+  free_texture_detached(c->tex1d_default);   /* s31: the 1D default object */
+  gl_free(c->pixpipe);                       /* s31: s31_draw.c's cache */
   /* s31: the specular tables were leaked */
   for (b=c->specbuf_first; b != NULL; b=b1) { b1=b->next; gl_free(b); }
 

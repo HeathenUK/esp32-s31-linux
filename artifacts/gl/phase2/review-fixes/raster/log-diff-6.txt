@@ -1,0 +1,8 @@
+8c8
+< query mip 8x8 level 4: 0x0 fmt 0x1908 red no alpha no
+---
+> query mip 8x8 level 4: 0x0 fmt 0x1 red no alpha no
+11c11
+< error after 512x512 glTexImage2D: 0x0
+---
+> error after 512x512 glTexImage2D: 0x501

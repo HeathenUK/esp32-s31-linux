@@ -171,15 +171,18 @@ void glopRotate(GLContext *c,GLParam *p)
         m.m[0][3]=m.m[1][3]=m.m[2][3]=0.0f;
       m.m[3][3]=1.0f;
 
-      /* do the math */
+      /* do the math. s31: m is row-major (m[row][col], v' = m v); upstream
+         filled it column-major, so a rotation about any axis but x, y or z
+         turned by -angle (found against Mesa by gl/tests/glx_pixels.c
+         page 4, the same transposition as glopOrtho's) */
       m.m[0][0]=u[0]*u[0]+cost*(1-u[0]*u[0]);
-      m.m[1][0]=u[0]*u[1]*(1-cost)-u[2]*sint;
-      m.m[2][0]=u[2]*u[0]*(1-cost)+u[1]*sint;
-      m.m[0][1]=u[0]*u[1]*(1-cost)+u[2]*sint;
+      m.m[0][1]=u[0]*u[1]*(1-cost)-u[2]*sint;
+      m.m[0][2]=u[2]*u[0]*(1-cost)+u[1]*sint;
+      m.m[1][0]=u[0]*u[1]*(1-cost)+u[2]*sint;
       m.m[1][1]=u[1]*u[1]+cost*(1-u[1]*u[1]);
-      m.m[2][1]=u[1]*u[2]*(1-cost)-u[0]*sint;
-      m.m[0][2]=u[2]*u[0]*(1-cost)-u[1]*sint;
-      m.m[1][2]=u[1]*u[2]*(1-cost)+u[0]*sint;
+      m.m[1][2]=u[1]*u[2]*(1-cost)-u[0]*sint;
+      m.m[2][0]=u[2]*u[0]*(1-cost)-u[1]*sint;
+      m.m[2][1]=u[1]*u[2]*(1-cost)+u[0]*sint;
       m.m[2][2]=u[2]*u[2]+cost*(1-u[2]*u[2]);
     }
   }

@@ -1,11 +1,11 @@
-# glref run: impl=mesa name=teapot frame=3 display=:91
+# glref run: impl=mesa name=teapot frame=3 display=:96
 # cmd: /src/gl/ref-apps/build/mesa-demos/src/demos/teapot -geometry 320x240+0+0
 # libGL.so.1 resolves to:
-#   	libGL.so.1 => /lib/aarch64-linux-gnu/libGL.so.1 (0x0000f6db4d8e0000)
-#   	libGLU.so.1 => /src/gl/ref-apps/prefix/lib/libGLU.so.1 (0x0000f6db4d830000)
-#   	libglut.so.3 => /src/gl/ref-apps/prefix/lib/libglut.so.3 (0x0000f6db4d750000)
-#   	libGLdispatch.so.0 => /lib/aarch64-linux-gnu/libGLdispatch.so.0 (0x0000f6db4d350000)
-#   	libGLX.so.0 => /lib/aarch64-linux-gnu/libGLX.so.0 (0x0000f6db4d2f0000)
+#   	libGL.so.1 => /lib/aarch64-linux-gnu/libGL.so.1 (0x0000e640602d0000)
+#   	libGLU.so.1 => /src/gl/ref-apps/prefix/lib/libGLU.so.1 (0x0000e64060220000)
+#   	libglut.so.3 => /src/gl/ref-apps/prefix/lib/libglut.so.3 (0x0000e64060140000)
+#   	libGLdispatch.so.0 => /lib/aarch64-linux-gnu/libGLdispatch.so.0 (0x0000e6405fd40000)
+#   	libGLX.so.0 => /lib/aarch64-linux-gnu/libGLX.so.0 (0x0000e6405fce0000)
 Teapot V1.2
 Written by David Bucciarelli (tech.hmw@plus.it)
 glref: ok at swap 3 -> /src/artifacts/gl/ref-mesa/mesa/teapot.f3

@@ -65,6 +65,9 @@ void tgl_glBindTexture(int target, int texture);
 void tgl_glTexImage2D(int target, int level, int components, int width,
                       int height, int border, int format, int type,
                       void *pixels);
+void tgl_glTexSubImage2D(int target, int level, int xoffset, int yoffset,
+                         int width, int height, int format, int type,
+                         const void *pixels);
 void tgl_glTexEnvi(int target, int pname, int param);
 void tgl_glTexParameteri(int target, int pname, int param);
 void tgl_glPixelStorei(int pname, int param);
@@ -151,8 +154,11 @@ enum {
   S31_ST_READ_BUFFER,      /* i */
   S31_ST_TEXENV_COLOR,     /* f: r g b a */
   S31_ST_LIST_BASE,        /* i */
+  S31_ST_PIXEL_ZOOM,       /* f: xfactor, yfactor */
+  S31_ST_PIXEL_TRANSFER,   /* pname in a, value in b (tgl_state_pf) */
 };
 void tgl_state_alpha(int func, float ref);
+void tgl_state_pf(int code, int pname, float v);   /* p[2].i = pname, p[3].f = v */
 
 /* queries: s31_get.c */
 enum { TGL_GET_INT = 0, TGL_GET_FLOAT = 1, TGL_GET_COLOR = 2 };
@@ -170,6 +176,29 @@ int tgl_get_tex_level_parameter(int target, int level, int pname, int *iv);
 void tgl_tex_parameterf(int target, int pname, const float *v, int n);
 void *tgl_get_pointer(int pname);      /* glGetPointerv */
 void tgl_edge_flag_pointer(int stride, const void *pointer);
+
+/* ---- plan F7: s31_xform.c, s31_draw.c, texture.c ---- */
+/* glRasterPos (window 0: object coordinates) and glWindowPos (window 1) */
+void tgl_raster_pos(float x, float y, float z, float w, int window);
+/* glPush/PopAttrib: 14 floats, pos[4] colour[4] texcoord[4] distance valid */
+void tgl_raster_state(float *v, int set);
+void tgl_clip_plane(int plane, const float *eq);
+int tgl_get_clip_plane(int plane, float *eq);             /* 4 or -1 */
+/* v NULL: pname GL_TEXTURE_GEN_MODE with iparam */
+void tgl_tex_gen(int coord, int pname, int iparam, const float *v);
+int tgl_get_tex_gen(int coord, int pname, float *v);      /* count or -1 */
+void tgl_polygon_stipple(const unsigned char *mask);      /* unpacked per GL_UNPACK_* */
+void tgl_get_polygon_stipple(unsigned char *mask);        /* packed per GL_PACK_* */
+void tgl_bitmap(int w, int h, float xorig, float yorig, float xmove,
+                float ymove, const unsigned char *bits);
+void tgl_draw_pixels(int w, int h, int format, int type, const void *pixels);
+void tgl_copy_pixels(int x, int y, int w, int h, int type);
+void tgl_read_pixels(int x, int y, int w, int h, int format, int type, void *pixels);
+/* glCopyTexImage1D/2D (sub 0) and glCopyTexSubImage1D/2D (sub 1) */
+void tgl_copy_tex(int target, int level, int ifmt, int x, int y, int w, int h,
+                  int border, int xoff, int yoff, int sub);
+void tgl_get_tex_image(int target, int level, int format, int type, void *pixels);
+int tgl_pixel_transfer_get(int pname, float *v);          /* 1 or -1 */
 
 #ifdef __cplusplus
 }

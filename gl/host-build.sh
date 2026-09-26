@@ -22,21 +22,29 @@ OBJ=/tmp/s31gl-host
 OUT=$GL/out-host/libGL.so.1
 mkdir -p $GL/out-host
 rm -f $GL/out-host/headless_gears $GL/out-host/core_test $GL/out-host/libGL.so \
-	$GL/out-host/glx_prims
+	$GL/out-host/glx_prims $GL/out-host/raster_gate
 export GL CC NM ARCHFLAGS XINC XLIBS OBJ OUT
 sh $GL/api/build-lib.sh
 ln -s libGL.so.1 $GL/out-host/libGL.so
 
-echo "--- headless_gears (links the shipped libGL.so.1)"
+echo "--- tests (headless_gears, core_test, raster_gate, glx_prims, glx_reopen), in parallel"
+# each a background job; any failure fails the build (wait on every pid)
+pids=""
 $CC -O2 -Wall -I$GL/include -I$GL/api $GL/tests/headless_gears.c \
 	-o $GL/out-host/headless_gears -L$GL/out-host -l:libGL.so.1 -lm \
-	-Wl,-rpath,'$ORIGIN'
+	-Wl,-rpath,'$ORIGIN' & pids="$pids $!"
 $CC -O2 -Wall -I$GL/include -I$GL/api $GL/tests/core_test.c \
 	-o $GL/out-host/core_test -L$GL/out-host -l:libGL.so.1 -lm -ldl \
-	-Wl,-rpath,'$ORIGIN'
+	-Wl,-rpath,'$ORIGIN' & pids="$pids $!"
+$CC -O2 -Wall -I$GL/include -I$GL/api $GL/tests/raster_gate.c \
+	-o $GL/out-host/raster_gate -L$GL/out-host -l:libGL.so.1 -lm \
+	-Wl,-rpath,'$ORIGIN' & pids="$pids $!"
 # no rpath: LD_LIBRARY_PATH picks the implementation (tools/glref/run.sh)
-[ -n "$S31GL_NO_GLX" ] || $CC -O2 -Wall -I$GL/include $GL/tests/glx_prims.c \
-	-o $GL/out-host/glx_prims -L$GL/out-host -lGL -lX11
-[ -n "$S31GL_NO_GLX" ] || $CC -O2 -Wall -I$GL/include $GL/tests/glx_reopen.c \
-	-o $GL/out-host/glx_reopen -L$GL/out-host -lGL -lX11
-ls -l $OUT $GL/out-host/headless_gears $GL/out-host/core_test
+if [ -z "$S31GL_NO_GLX" ]; then
+	$CC -O2 -Wall -I$GL/include $GL/tests/glx_prims.c \
+		-o $GL/out-host/glx_prims -L$GL/out-host -lGL -lX11 & pids="$pids $!"
+	$CC -O2 -Wall -I$GL/include $GL/tests/glx_reopen.c \
+		-o $GL/out-host/glx_reopen -L$GL/out-host -lGL -lX11 & pids="$pids $!"
+fi
+for p in $pids; do wait $p; done
+ls -l $OUT $GL/out-host/headless_gears $GL/out-host/core_test $GL/out-host/raster_gate

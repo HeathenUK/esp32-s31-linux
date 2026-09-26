@@ -1,11 +1,11 @@
 # glref run: impl=mesa name=ipers frame=60 display=:91
 # cmd: /src/gl/ref-apps/build/mesa-demos/src/demos/ipers -geometry 320x240+0+0
 # libGL.so.1 resolves to:
-#   	libGL.so.1 => /lib/aarch64-linux-gnu/libGL.so.1 (0x0000fd918b550000)
-#   	libGLU.so.1 => /src/gl/ref-apps/prefix/lib/libGLU.so.1 (0x0000fd918b4a0000)
-#   	libglut.so.3 => /src/gl/ref-apps/prefix/lib/libglut.so.3 (0x0000fd918b3c0000)
-#   	libGLdispatch.so.0 => /lib/aarch64-linux-gnu/libGLdispatch.so.0 (0x0000fd918afc0000)
-#   	libGLX.so.0 => /lib/aarch64-linux-gnu/libGLX.so.0 (0x0000fd918af60000)
+#   	libGL.so.1 => /lib/aarch64-linux-gnu/libGL.so.1 (0x0000e1923d030000)
+#   	libGLU.so.1 => /src/gl/ref-apps/prefix/lib/libGLU.so.1 (0x0000e1923cf80000)
+#   	libglut.so.3 => /src/gl/ref-apps/prefix/lib/libglut.so.3 (0x0000e1923cea0000)
+#   	libGLdispatch.so.0 => /lib/aarch64-linux-gnu/libGLdispatch.so.0 (0x0000e1923caa0000)
+#   	libGLX.so.0 => /lib/aarch64-linux-gnu/libGLX.so.0 (0x0000e1923ca40000)
 IperS V1.0
 Written by David Bucciarelli (tech.hmw@plus.it)
 glref: ok at swap 60 -> /src/artifacts/gl/ref-mesa/mesa/ipers.f60

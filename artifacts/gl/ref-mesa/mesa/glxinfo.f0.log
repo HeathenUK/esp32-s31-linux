@@ -1,11 +1,11 @@
-# glref run: impl=mesa name=glxinfo frame=0 display=:92
+# glref run: impl=mesa name=glxinfo frame=0 display=:95
 # cmd: /src/gl/ref-apps/build/mesa-demos/src/xdemos/glxinfo
 # libGL.so.1 resolves to:
-#   	libGL.so.1 => /lib/aarch64-linux-gnu/libGL.so.1 (0x0000efdc9bd20000)
-#   	libGLdispatch.so.0 => /lib/aarch64-linux-gnu/libGLdispatch.so.0 (0x0000efdc9b860000)
-#   	libGLX.so.0 => /lib/aarch64-linux-gnu/libGLX.so.0 (0x0000efdc9b800000)
-name of display: :92
-display: :92  screen: 0
+#   	libGL.so.1 => /lib/aarch64-linux-gnu/libGL.so.1 (0x0000e6f637b30000)
+#   	libGLdispatch.so.0 => /lib/aarch64-linux-gnu/libGLdispatch.so.0 (0x0000e6f637670000)
+#   	libGLX.so.0 => /lib/aarch64-linux-gnu/libGLX.so.0 (0x0000e6f637610000)
+name of display: :95
+display: :95  screen: 0
 direct rendering: Yes
 server glx vendor string: SGI
 server glx version string: 1.4
@@ -65,14 +65,14 @@ Extended renderer info (GLX_MESA_query_renderer):
     Max GLES[23] profile version: 3.2
 Memory info (GL_ATI_meminfo):
     VBO free memory - total: 63 MB, largest block: 63 MB
-    VBO free aux. memory - total: 15122 MB, largest block: 15122 MB
+    VBO free aux. memory - total: 14878 MB, largest block: 14878 MB
     Texture free memory - total: 63 MB, largest block: 63 MB
-    Texture free aux. memory - total: 15122 MB, largest block: 15122 MB
+    Texture free aux. memory - total: 14878 MB, largest block: 14878 MB
     Renderbuffer free memory - total: 63 MB, largest block: 63 MB
-    Renderbuffer free aux. memory - total: 15122 MB, largest block: 15122 MB
+    Renderbuffer free aux. memory - total: 14878 MB, largest block: 14878 MB
 Memory info (GL_NVX_gpu_memory_info):
-    Dedicated video memory: 4294388477 MB
-    Total available memory: 4294404434 MB
+    Dedicated video memory: 4294132938 MB
+    Total available memory: 4294148896 MB
     Currently available dedicated video memory: 63 MB
 OpenGL vendor string: Mesa
 OpenGL renderer string: llvmpipe (LLVM 19.1.7, 128 bits)

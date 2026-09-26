@@ -1,0 +1,7 @@
+# glref run: impl=ours name=geartrain frame=3 display=:95
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/demos/geartrain -geometry 320x240+0+0
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000e1620a830000)
+#   	libglut.so.3 => /src/gl/ref-apps/prefix/lib/libglut.so.3 (0x0000e1620a750000)
+libGL: context 1 created (pid 2476, comm geartrain)
+glref: ok at swap 3 -> /src/artifacts/gl/f3f6/suite-final/ours/geartrain.f3

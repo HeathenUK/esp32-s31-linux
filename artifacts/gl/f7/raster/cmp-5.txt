@@ -1,0 +1,1 @@
+PASS  320x240  strict 3.363% (2583 px >16)  tolerant 0.059% (45 px)  max 255  mean 3.43  diff /src/artifacts/gl/f7/raster/diff-5.png

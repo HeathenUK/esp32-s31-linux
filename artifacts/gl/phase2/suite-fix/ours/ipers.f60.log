@@ -1,0 +1,12 @@
+# glref run: impl=ours name=ipers frame=60 display=:91
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/demos/ipers -geometry 320x240+0+0
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000fa5713ae0000)
+#   	libGLU.so.1 => /src/gl/ref-apps/prefix/lib/libGLU.so.1 (0x0000fa5713a30000)
+#   	libglut.so.3 => /src/gl/ref-apps/prefix/lib/libglut.so.3 (0x0000fa5713950000)
+IperS V1.0
+Written by David Bucciarelli (tech.hmw@plus.it)
+libGL: context 1 created (pid 2952, comm ipers)
+libGL: approximated GL_LINEAR / mipmap texture filters by nearest sampling of level 0
+libGL: approximated GL_LINEAR texture filter by nearest sampling
+glref: ok at swap 60 -> /src/artifacts/gl/phase2/suite-fix/ours/ipers.f60

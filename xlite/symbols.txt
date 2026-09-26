@@ -18,6 +18,7 @@ _XReadPad
 _XReply
 _XSend
 _XSetLastRequestRead
+_XUnknownNativeEvent
 _XUnlockMutex_fn
 _XVIDtoVisual
 XAddConnectionWatch
@@ -118,6 +119,7 @@ XFree
 XFreeColormap
 XFreeColors
 XFreeCursor
+XFreeEventData
 XFreeFont
 XFreeFontInfo
 XFreeFontSet
@@ -130,6 +132,7 @@ XGetAtomName
 XGetDefault
 XGetErrorDatabaseText
 XGetErrorText
+XGetEventData
 XGetFontProperty
 XGetGCValues
 XGetGeometry
@@ -140,12 +143,16 @@ XGetInputFocus
 XGetKeyboardMapping
 XGetModifierMapping
 XGetPointerControl
+XGetPointerMapping
 XGetRGBColormaps
 XGetSelectionOwner
+XGetTextProperty
 XGetVisualInfo
 XGetWindowAttributes
 XGetWindowProperty
 XGetWMHints
+XGetWMIconName
+XGetWMName
 XGetWMNormalHints
 XGrabButton
 XGrabKey
@@ -206,6 +213,7 @@ XkbVirtualModsToReal
 XKeysymToKeycode
 XKeysymToString
 XKillClient
+XLastKnownRequestProcessed
 XListDepths
 XListPixmapFormats
 XLoadFont
@@ -306,10 +314,12 @@ XSetICFocus
 XSetICValues
 XSetInputFocus
 XSetLocaleModifiers
+XSetNormalHints
 XSetPlaneMask
 XSetRegion
 XSetRGBColormaps
 XSetSelectionOwner
+XSetStandardProperties
 XSetStipple
 XSetSubwindowMode
 XSetTile
@@ -328,6 +338,7 @@ XSetWMNormalHints
 XSetWMProperties
 XSetWMProtocols
 XStoreBytes
+XStoreColor
 XStoreColors
 XStringToKeysym
 XSubtractRegion

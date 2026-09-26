@@ -1,0 +1,7 @@
+# glref run: impl=ours name=bounce frame=3 display=:90
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/demos/bounce -geometry 320x240+0+0
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000f6237ef50000)
+#   	libglut.so.3 => /src/gl/ref-apps/prefix/lib/libglut.so.3 (0x0000f6237ee70000)
+libGL: context 1 created (pid 2267, comm bounce)
+glref: ok at swap 3 -> /src/artifacts/gl/phase2/suite-fix/ours/bounce.f3

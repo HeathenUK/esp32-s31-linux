@@ -1,0 +1,7 @@
+# glref run: impl=ours name=gears frame=20 display=:98
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/demos/gears -geometry 320x240+0+0
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000fb63c4040000)
+#   	libglut.so.3 => /src/gl/ref-apps/prefix/lib/libglut.so.3 (0x0000fb63c3f60000)
+libGL: context 1 created (pid 1716, comm gears)
+glref: ok at swap 20 -> /src/artifacts/gl/f3f6/suite-1/ours/gears.f20

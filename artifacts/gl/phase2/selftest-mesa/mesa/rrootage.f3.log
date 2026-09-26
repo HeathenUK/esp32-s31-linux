@@ -1,0 +1,82 @@
+# glref run: impl=mesa name=rrootage frame=3 display=:96
+# cmd: /src/gl/ref-apps/build/rrootage/rr -lowres -window -nosound
+# libGL.so.1 resolves to:
+#   	libGLU.so.1 => /src/gl/ref-apps/prefix/lib/libGLU.so.1 (0x0000efaf73860000)
+#   	libGL.so.1 => /lib/aarch64-linux-gnu/libGL.so.1 (0x0000efaf73760000)
+#   	libGLdispatch.so.0 => /lib/aarch64-linux-gnu/libGLdispatch.so.0 (0x0000efaf73040000)
+#   	libGLX.so.0 => /lib/aarch64-linux-gnu/libGLX.so.0 (0x0000efaf72fe0000)
+/usr/share/games/rRootage/normal/growround.xml
+/usr/share/games/rRootage/normal/forward_3way.xml
+/usr/share/games/rRootage/normal/grow.xml
+/usr/share/games/rRootage/normal/spread2blt.xml
+/usr/share/games/rRootage/normal/22way.xml
+/usr/share/games/rRootage/normal/88way.xml
+/usr/share/games/rRootage/normal/allround.xml
+/usr/share/games/rRootage/normal/57way.xml
+/usr/share/games/rRootage/normal/beewinder.xml
+/usr/share/games/rRootage/normal/[ketsui]_r4_boss_rb_rockets.xml
+/usr/share/games/rRootage/normal/[Guwange]_round_2_boss_circle_fire.xml
+/usr/share/games/rRootage/normal/[Psyvariar]_X-A_boss_opening.xml
+/usr/share/games/rRootage/normal/mnway.xml
+/usr/share/games/rRootage/normal/nway.xml
+/usr/share/games/rRootage/normal/wide_spread.xml
+/usr/share/games/rRootage/normal/[Progear]_round_3_boss_wave_bullets.xml
+/usr/share/games/rRootage/normal/[daiouzyou]_r1_boss_2.xml
+/usr/share/games/rRootage/normal/[daiouzyou]_r1_boss_1.xml
+--------
+/usr/share/games/rRootage/reversible/roll2way.xml
+/usr/share/games/rRootage/reversible/[ketsui]_r3_boss_fastspread.xml
+/usr/share/games/rRootage/reversible/rollbar.xml
+/usr/share/games/rRootage/reversible/roll4way.xml
+/usr/share/games/rRootage/reversible/nwroll.xml
+/usr/share/games/rRootage/reversible/spread_bf.xml
+/usr/share/games/rRootage/reversible/2round.xml
+/usr/share/games/rRootage/reversible/4way.xml
+/usr/share/games/rRootage/reversible/[daiouzyou]_r1_boss_3.xml
+/usr/share/games/rRootage/reversible/shotgun.xml
+/usr/share/games/rRootage/reversible/double_roll_seeds.xml
+--------
+/usr/share/games/rRootage/morph/fire_slowshot.xml
+/usr/share/games/rRootage/morph/6gt.xml
+/usr/share/games/rRootage/morph/wide.xml
+/usr/share/games/rRootage/morph/divide.xml
+/usr/share/games/rRootage/morph/[ketsui]_r4_boss_change_aim.xml
+/usr/share/games/rRootage/morph/aim_accel_90deg.xml
+/usr/share/games/rRootage/morph/slowdown.xml
+/usr/share/games/rRootage/morph/change_straight.xml
+/usr/share/games/rRootage/morph/side_back_shot.xml
+/usr/share/games/rRootage/morph/reverse.xml
+/usr/share/games/rRootage/morph/backshot.xml
+/usr/share/games/rRootage/morph/[Guwange]_round_4_boss_eye_ball.xml
+/usr/share/games/rRootage/morph/[ketsui]_r1_boss_bit_shot.xml
+/usr/share/games/rRootage/morph/bar.xml
+--------
+/usr/share/games/rRootage/simple/16way.xml
+/usr/share/games/rRootage/simple/sidenway.xml
+/usr/share/games/rRootage/simple/rollbar.xml
+/usr/share/games/rRootage/simple/2way2side.xml
+/usr/share/games/rRootage/simple/rollway.xml
+/usr/share/games/rRootage/simple/naim.xml
+/usr/share/games/rRootage/simple/nway.xml
+/usr/share/games/rRootage/simple/8way.xml
+/usr/share/games/rRootage/simple/side_cracker.xml
+/usr/share/games/rRootage/simple/roll_battery.xml
+/usr/share/games/rRootage/simple/aim.xml
+/usr/share/games/rRootage/simple/sideshot.xml
+--------
+/usr/share/games/rRootage/morph_heavy/[Progear]_round_1_boss_grow_bullets.xml
+/usr/share/games/rRootage/morph_heavy/88way.xml
+/usr/share/games/rRootage/morph_heavy/fire_vrt.xml
+/usr/share/games/rRootage/morph_heavy/side_front_shot.xml
+/usr/share/games/rRootage/morph_heavy/oval.xml
+/usr/share/games/rRootage/morph_heavy/[ketsui]_r4_boss_rb_rockets.xml
+/usr/share/games/rRootage/morph_heavy/[Progear]_round_5_middle_boss_rockets.xml
+/usr/share/games/rRootage/morph_heavy/[ketsui]_r2_boss_rkt.xml
+/usr/share/games/rRootage/morph_heavy/[Guwange]_round_4_boss_eye_ball.xml
+/usr/share/games/rRootage/morph_heavy/side_cracker.xml
+/usr/share/games/rRootage/morph_heavy/[Progear]_round_3_boss_wave_bullets.xml
+/usr/share/games/rRootage/morph_heavy/roll_slow.xml
+--------
+/usr/share/games/rRootage/psy/bar_s.xml
+--------
+glref: ok at swap 3 -> /src/artifacts/gl/phase2/selftest-mesa/mesa/rrootage.f3

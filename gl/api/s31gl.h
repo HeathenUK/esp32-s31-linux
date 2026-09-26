@@ -23,8 +23,8 @@
  * Buffers and the frame hook
  *   Nothing is allocated for pixels by create, make_current or bind. At the
  *   first colour/depth access after make_current, bind_color or frame_end
- *   (a clear, any primitive; later stages add DrawPixels, Bitmap,
- *   CopyPixels, ReadPixels and CopyTex*) the core calls hooks.frame_begin
+ *   (a clear, any primitive, glBitmap, glDrawPixels, glCopyPixels,
+ *   glReadPixels, glCopyTexImage/SubImage) the core calls hooks.frame_begin
  *   ONCE. The hook may bind (or rebind) the colour buffer - that is how it
  *   is allocated lazily - and may wait for the previous frame's present.
  *   Then, if a colour buffer is bound, the depth buffer is allocated if

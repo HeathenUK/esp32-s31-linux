@@ -1,0 +1,42 @@
+# gl/bench/limits.txt - bench.sh fails when a line's M instructions per
+# frame exceed its limit. Two kinds (review P4/P5d):
+#  guard     the plan's guard (section 2.2): baseline f522dad, measured by
+#            this harness (gl/bench/base, pinned flags), + 1%
+#  tripwire  the general path, the pixel paths and the per-primitive bench
+#            (feat.sh, pix.sh, prim.sh): the value after the review fixes
+#            (2026-09-26) + 2%, so a regression there fails the run too
+# name WxH | limit | kind | reference value
+gears 320x240 | 2.6604 | guard | base 2.6341
+gears 640x400 | 3.7694 | guard | base 3.7321
+texobj 320x240 | 0.4148 | guard | base 0.4107
+texobj 640x400 | 1.2814 | guard | base 1.2687
+teapot 320x240 | 10.6219 | tripwire | base 10.3125 + 3% (not guarded by the plan)
+teapot 640x400 | 11.4249 | tripwire | base 11.0921 + 3% (not guarded by the plan)
+feat1 gears 320x240 | 5.8137 | tripwire | 5.6997
+feat1 texobj 320x240 | 2.3012 | tripwire | 2.2561
+feat2 gears 320x240 | 5.0366 | tripwire | 4.9378
+feat2 texobj 320x240 | 2.0674 | tripwire | 2.0269
+feat3 gears 320x240 | 5.0237 | tripwire | 4.9252
+feat3 texobj 320x240 | 1.9927 | tripwire | 1.9536
+feat4 gears 320x240 | 2.6680 | tripwire | 2.6157
+feat4 texobj 320x240 | 0.4229 | tripwire | 0.4146
+feat5 gears 320x240 | 5.3887 | tripwire | 5.2830
+feat5 texobj 320x240 | 2.2552 | tripwire | 2.2110
+pix0 320x240 | 0.0590 | tripwire | 0.0578
+pix1 320x240 | 1.9309 | tripwire | 1.8930
+pix2 320x240 | 5.4461 | tripwire | 5.3393
+pix3 320x240 | 0.3853 | tripwire | 0.3777
+pix4 320x240 | 1.0448 | tripwire | 1.0243
+pix5 320x240 | 1.7932 | tripwire | 1.7580
+pix6 320x240 | 0.7378 | tripwire | 0.7233
+pix7 320x240 | 0.2063 | tripwire | 0.2023
+pix8 320x240 | 1.1537 | tripwire | 1.1311
+prim0 320x240 | 0.1182 | tripwire | 0.1159
+prim1 320x240 | 0.5213 | tripwire | 0.5111
+prim2 320x240 | 5.2307 | tripwire | 5.1281
+prim3 320x240 | 8.4424 | tripwire | 8.2769
+prim4 320x240 | 1.2414 | tripwire | 1.2171
+prim5 320x240 | 4.4083 | tripwire | 4.3219
+prim6 320x240 | 5.7784 | tripwire | 5.6651
+prim7 320x240 | 3.5273 | tripwire | 3.4581
+prim8 320x240 | 3.7243 | tripwire | 3.6513

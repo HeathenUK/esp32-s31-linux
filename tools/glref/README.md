@@ -34,6 +34,7 @@ Rebuild the image after editing the Dockerfile:
 | file | what it does |
 |---|---|
 | `build-apps.sh` | Builds GLU 9.0.3, freeglut 3.8.0 and mesa-demos 9.0.0 (the board's versions) into `gl/ref-apps/` (gitignored, ~90 MB). Idempotent; `--force` rebuilds. Ends by checking that every binary needs `libGL.so.1` and **nothing** from glvnd (`libOpenGL.so.0`/`libGLX.so.0`). |
+| `build-games.sh` | The stage-5 corpus, from upstream tarballs in `gl/ref-apps/`, each by its own build system: SDL 1.2.15 `test/testgl`, SDL2 2.32.10 `test/testgl2`, rRootage 0.23a (against the rig's SDL: sdl12-compat over SDL2 2.32.4). The knobs used and why (and why GLtron 0.70 is not built) are in its header. suite.sh runs it; `$SB` in apps.txt is its build directory. |
 | `pkgconfig/gl.pc`, `glx.pc` | Make meson/cmake link `-lGL` only. Debian's `glx.pc` says `-lGLX` and its libGLU links `libOpenGL.so.0`; either would bind GL calls to glvnd and make the Mesa/ours swap by `LD_LIBRARY_PATH` impossible. On the board, `s31-libgl`'s own `gl.pc`/`glx.pc` do the same job. |
 | `capture.c` | The `LD_PRELOAD` shim (built on demand by run.sh into `gl/ref-apps/build/glref/capture.so`). See below. |
 | `run.sh` | One app, one implementation, one frame: private Xvfb on `:90-:99`, the shim, a timeout, then a status file. |
@@ -61,6 +62,18 @@ Rebuild the image after editing the Dockerfile:
   connection it opened, the shim `XSync`s that connection first, so the app
   sees an infinitely fast server - the same one under both
   implementations.
+- **Apps that load GL themselves** (SDL: `dlopen("libGL.so.1")`, then
+  `dlsym(handle, "glXGetProcAddressARB")` and everything else through it)
+  bypass LD_PRELOAD. The shim therefore also interposes `dlsym`: an app
+  asking any handle for a hooked GLX name gets the hook, and the handle is
+  kept so the hook reaches the real function. Lookups from GL/X/libc
+  libraries (glvnd's vendor lookups) are forwarded untouched. Adding this
+  changed none of the 57 existing reference images or statuses.
+- **sdl12-compat.** The rig's SDL 1.2 is sdl12-compat; on a GL with FBOs
+  (Mesa, not ours) it renders SDL_OPENGL apps into an FBO and swaps once
+  inside SDL_SetVideoMode, which put every Mesa frame one swap and 16 ms
+  ahead. run.sh sets `SDL12COMPAT_OPENGL_SCALING=0` for both arms (the
+  board's SDL 1.2.15 has no such path).
 - **Capture.** `glXSwapBuffers` (also when fetched by `glXGetProcAddress`)
   calls the real swap, `XSync`s the app's display, and after the Nth swap
   reads the window's on-screen rectangle **from the root window over a
@@ -85,7 +98,8 @@ Rebuild the image after editing the Dockerfile:
 
 Environment knobs (run.sh passes them through): `GLREF_TIMEOUT` (s, 60),
 `GLREF_CAPTURE`, `GLREF_STALL_MS`, `GLREF_FRAME_NS`, `GLREF_TRACE=1` (log every
-swap with its drawable and virtual time), `GLREF_OURS` (directory holding our
+swap with its drawable and virtual time, and every virtual-time advance with
+the library that slept), `GLREF_OURS` (directory holding our
 `libGL.so.1`, default `/src/gl/out-host`), `GLREF_RUN_DIR`, `GLREF_CWD`
 (default: the mesa-demos source `src/demos`, whose `../data/` the demos
 load their textures from).
@@ -185,5 +199,11 @@ for all 18 apps.
   jumps. An app that depends on a pipe from a helper thread arriving later
   than that could still be non-deterministic. None of the current targets
   does.
-- **SDL**: SDL apps (stage 5) are not in `apps.txt` yet. The mechanism covers
-  them: SDL_Delay goes through `nanosleep` from libSDL, which is app-side.
+- **SDL**: testgl, testgl2 and rRootage are in `apps.txt` (2026-09-26,
+  artifacts/gl/phase2/SUITE.md). The "SDL 1.2" arm is sdl12-compat, i.e.
+  SDL2's GLX loader, not SDL 1.2.15's SDL_x11gl.c: the board's SDL 1.2.15
+  (with Buildroot's patches) does not compile on this LP64 host
+  (`_XData32` prototype conflict under LONG64).
+- **xlite load arm and SDL**: the rig's libSDL2 links libX11 directly, the
+  board's is `SDL_VIDEO_DRIVER_X11_DYNAMIC`, so the host SDL2's own imports
+  (Xdbe*, Xutf8*) are listed but not counted.

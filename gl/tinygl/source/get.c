@@ -44,13 +44,14 @@ int tgl_get(int pname, int *iv, float *fv, int *kind)
   case GL_CURRENT_RASTER_POSITION:
     for (i = 0; i < 4; i++) fv[i] = c->raster_pos[i];
     *kind = TGL_GET_FLOAT; n = 4; break;
+  /* s31: the raster position of glRasterPos / glWindowPos (s31_xform.c) */
   case GL_CURRENT_RASTER_COLOR:
-    for (i = 0; i < 4; i++) fv[i] = c->current_color.v[i];
+    for (i = 0; i < 4; i++) fv[i] = c->raster_color[i];
     *kind = TGL_GET_COLOR; n = 4; break;
-  case GL_CURRENT_RASTER_DISTANCE: F1(0.0f); break;
+  case GL_CURRENT_RASTER_DISTANCE: F1(c->raster_distance); break;
   case GL_CURRENT_RASTER_INDEX: I1(1); break;
   case GL_CURRENT_RASTER_TEXTURE_COORDS:
-    fv[0] = fv[1] = fv[2] = 0.0f; fv[3] = 1.0f;
+    for (i = 0; i < 4; i++) fv[i] = c->raster_tex[i];
     *kind = TGL_GET_FLOAT; n = 4; break;
   case GL_CURRENT_RASTER_POSITION_VALID: I1(c->raster_valid); break;
   case GL_EDGE_FLAG: I1(c->current_edge_flag != 0); break;
@@ -127,7 +128,7 @@ int tgl_get(int pname, int *iv, float *fv, int *kind)
     *kind = TGL_GET_COLOR; n = 4; break;
   case GL_LIGHT_MODEL_LOCAL_VIEWER: I1(c->local_light_model != 0); break;
   case GL_LIGHT_MODEL_TWO_SIDE: I1(c->light_model_two_side != 0); break;
-  case GL_LIGHT_MODEL_COLOR_CONTROL: I1(GL_SINGLE_COLOR); break;
+  case GL_LIGHT_MODEL_COLOR_CONTROL: I1(c->color_control); break;
 
   /* rasterisation */
   case GL_POINT_SIZE: F1(c->point_size); break;
@@ -144,7 +145,9 @@ int tgl_get(int pname, int *iv, float *fv, int *kind)
   /* texturing */
   case GL_TEXTURE_BINDING_2D:
     I1(c->current_texture ? c->current_texture->handle : 0); break;
-  case GL_TEXTURE_BINDING_1D: case GL_TEXTURE_BINDING_3D: I1(0); break;
+  case GL_TEXTURE_BINDING_1D:
+    I1(c->current_texture_1d ? c->current_texture_1d->handle : 0); break;
+  case GL_TEXTURE_BINDING_3D: I1(0); break;
   case GL_ACTIVE_TEXTURE: I1(GL_TEXTURE0); break;
 
   /* pixel operations */
@@ -205,14 +208,16 @@ int tgl_get(int pname, int *iv, float *fv, int *kind)
   case GL_PACK_ALIGNMENT: I1(c->pack_alignment); break;
   case GL_PACK_IMAGE_HEIGHT: I1(c->pack_image_height); break;
   case GL_PACK_SKIP_IMAGES: I1(c->pack_skip_images); break;
-  case GL_MAP_COLOR: case GL_MAP_STENCIL: I1(0); break;
-  case GL_INDEX_SHIFT: case GL_INDEX_OFFSET: I1(0); break;
+  /* s31: glPixelTransfer / glPixelZoom (s31_state.c) */
+  case GL_MAP_COLOR: I1(c->map_color); break;
+  case GL_MAP_STENCIL: I1(c->map_stencil); break;
+  case GL_INDEX_SHIFT: I1(c->index_shift); break;
+  case GL_INDEX_OFFSET: I1(c->index_offset); break;
   case GL_RED_SCALE: case GL_GREEN_SCALE: case GL_BLUE_SCALE:
   case GL_ALPHA_SCALE: case GL_DEPTH_SCALE: case GL_ZOOM_X: case GL_ZOOM_Y:
-    F1(1.0f); break;
   case GL_RED_BIAS: case GL_GREEN_BIAS: case GL_BLUE_BIAS:
   case GL_ALPHA_BIAS: case GL_DEPTH_BIAS:
-    F1(0.0f); break;
+    tgl_pixel_transfer_get(pname, fv); *kind = TGL_GET_FLOAT; n = 1; break;
   case GL_PIXEL_MAP_I_TO_I_SIZE: case GL_PIXEL_MAP_S_TO_S_SIZE:
   case GL_PIXEL_MAP_I_TO_R_SIZE: case GL_PIXEL_MAP_I_TO_G_SIZE:
   case GL_PIXEL_MAP_I_TO_B_SIZE: case GL_PIXEL_MAP_I_TO_A_SIZE:
@@ -239,12 +244,12 @@ int tgl_get(int pname, int *iv, float *fv, int *kind)
 
   /* implementation limits: what this rasteriser really does */
   case GL_MAX_LIGHTS: I1(MAX_LIGHTS); break;
-  case GL_MAX_CLIP_PLANES: I1(6); break;            /* accepted, not honoured */
+  case GL_MAX_CLIP_PLANES: I1(6); break;            /* s31_xform.c, clip.c */
   case GL_MAX_MODELVIEW_STACK_DEPTH: I1(MAX_MODELVIEW_STACK_DEPTH); break;
   case GL_MAX_PROJECTION_STACK_DEPTH: I1(MAX_PROJECTION_STACK_DEPTH); break;
   case GL_MAX_TEXTURE_STACK_DEPTH: I1(MAX_TEXTURE_STACK_DEPTH); break;
   case GL_SUBPIXEL_BITS: I1(0); break;               /* integer vertices */
-  case GL_MAX_TEXTURE_SIZE: I1(256); break;          /* every texture is 256x256 */
+  case GL_MAX_TEXTURE_SIZE: I1(256); break;          /* texture.c TEX_SIZE: native sizes up to it */
   case GL_MAX_3D_TEXTURE_SIZE: I1(0); break;
   case GL_MAX_CUBE_MAP_TEXTURE_SIZE: I1(0); break;
   case GL_MAX_PIXEL_MAP_TABLE: I1(32); break;
@@ -256,9 +261,11 @@ int tgl_get(int pname, int *iv, float *fv, int *kind)
   case GL_MAX_CLIENT_ATTRIB_STACK_DEPTH: I1(16); break;
   case GL_MAX_ELEMENTS_VERTICES: case GL_MAX_ELEMENTS_INDICES: I1(4096); break;
   case GL_MAX_TEXTURE_UNITS: I1(1); break;
+  /* s31: integer widths and sizes are drawn (raster.c), aliased; the
+     smooth ranges are the same because GL_*_SMOOTH is drawn aliased */
   case GL_ALIASED_POINT_SIZE_RANGE: case GL_POINT_SIZE_RANGE:
   case GL_ALIASED_LINE_WIDTH_RANGE: case GL_LINE_WIDTH_RANGE:
-    fv[0] = fv[1] = 1.0f; *kind = TGL_GET_FLOAT; n = 2; break;
+    fv[0] = 1.0f; fv[1] = 64.0f; *kind = TGL_GET_FLOAT; n = 2; break;
   case GL_POINT_SIZE_GRANULARITY: case GL_LINE_WIDTH_GRANULARITY:
     F1(1.0f); break;
   case GL_SAMPLE_BUFFERS: case GL_SAMPLES: I1(0); break;

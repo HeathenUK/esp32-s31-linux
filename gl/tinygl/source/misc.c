@@ -36,6 +36,7 @@ void glopEnableDisable(GLContext *c,GLParam *p)
   /* s31: every capability is recorded for glIsEnabled; the ones the
      rasteriser does not honour yet say so once */
   s31_cap_record(c, code, v);
+  c->raster_dirty = 1;   /* s31: raster.c chooses the fillers again */
 
   switch(code) {
   case GL_CULL_FACE:
@@ -52,13 +53,58 @@ void glopEnableDisable(GLContext *c,GLParam *p)
     c->color_material_enabled=v;
       break;
   case GL_TEXTURE_2D:
-    c->texture_2d_enabled=v;
+  case GL_TEXTURE_1D:
+    /* s31: texture_2d_enabled means "a texture target is enabled"
+       (the vertex path carries texcoords); raster.c picks the object,
+       2D over 1D as GL 3.8.15 orders them */
+    {
+      int bit = code == GL_TEXTURE_2D ? 1 : 2;
+      if (v) c->tex_enables |= bit; else c->tex_enables &= ~bit;
+      c->texture_2d_enabled = c->tex_enables != 0;
+    }
+    break;
+  /* s31: plan F7 */
+  case GL_CLIP_PLANE0: case GL_CLIP_PLANE1: case GL_CLIP_PLANE2:
+  case GL_CLIP_PLANE3: case GL_CLIP_PLANE4: case GL_CLIP_PLANE5:
+    if (v) c->clip_plane_mask |= 1 << (code - GL_CLIP_PLANE0);
+    else c->clip_plane_mask &= ~(1 << (code - GL_CLIP_PLANE0));
+    c->matrix_model_projection_updated = 1;   /* glBegin: clip-space planes */
+    break;
+  case GL_TEXTURE_GEN_S: case GL_TEXTURE_GEN_T:
+  case GL_TEXTURE_GEN_R: case GL_TEXTURE_GEN_Q:
+    if (v) c->texgen_mask |= 1 << (code - GL_TEXTURE_GEN_S);
+    else c->texgen_mask &= ~(1 << (code - GL_TEXTURE_GEN_S));
+    c->matrix_model_projection_updated = 1;   /* glBegin: apply_texture_matrix */
+    break;
+  case GL_POLYGON_STIPPLE:
+    c->poly_stipple_enabled = v;
+    break;
+  case GL_LINE_STIPPLE:
+    c->line_stipple_enabled = v;
     break;
   case GL_NORMALIZE:
     c->normalize_enabled=v;
     break;
   case GL_DEPTH_TEST:
     c->depth_test = v;
+    break;
+  /* s31: honoured by raster.c / zpipe.c (plan F5, F6) */
+  case GL_BLEND:
+    c->blend_enabled = v;
+    break;
+  case GL_ALPHA_TEST:
+    c->alpha_test_enabled = v;
+    break;
+  case GL_FOG:
+    c->fog_enabled = v;
+    break;
+  case GL_SCISSOR_TEST:
+    c->scissor_enabled = v;
+    c->viewport.updated = 1;   /* the scissor box clips like the viewport */
+    break;
+  case GL_RESCALE_NORMAL:
+    c->rescale_normal_enabled = v;
+    c->matrix_model_projection_updated = 1;
     break;
   case GL_POLYGON_OFFSET_FILL:
     if (v) c->offset_states |= TGL_OFFSET_FILL;
@@ -88,6 +134,7 @@ void glopShadeModel(GLContext *c,GLParam *p)
 {
   int code=p[1].i;
   c->current_shade_model=code;
+  c->raster_dirty = 1;   /* s31: flat/smooth colour stage */
 }
 
 void glopCullFace(GLContext *c,GLParam *p)

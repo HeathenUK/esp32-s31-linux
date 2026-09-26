@@ -161,8 +161,13 @@ void glopLightModel(GLContext *c,GLParam *p)
     c->light_model_two_side = (int)p[2].f;
     break;
   case GL_LIGHT_MODEL_COLOR_CONTROL:
-    if ((int)p[2].f == GL_SEPARATE_SPECULAR_COLOR)
-      gl_warn_once("GL_SEPARATE_SPECULAR_COLOR");
+    /* s31: honoured (gl_shade_vertex, zpipe.c) */
+    if ((int)p[2].f != GL_SINGLE_COLOR && (int)p[2].f != GL_SEPARATE_SPECULAR_COLOR) {
+      gl_set_error(c, GL_INVALID_ENUM);
+      break;
+    }
+    c->color_control = (int)p[2].f;
+    c->raster_dirty = 1;
     break;
   default:
     gl_set_error(c, GL_INVALID_ENUM);
@@ -195,20 +200,21 @@ void gl_enable_disable_light(GLContext *c,int light,int v)
 }
 
 /* non optimized lightening model */
-void gl_shade_vertex(GLContext *c,GLVertex *v)
+/* s31: one side's colour: material m, normal n, into *col (and *scol, the
+   secondary colour, with GL_SEPARATE_SPECULAR_COLOR). gl_shade_vertex
+   calls it once for the front, and with GL_LIGHT_MODEL_TWO_SIDE once more
+   for the back with the back material and -n (GL 1.3 2.13.1; review G5:
+   TinyGL lit both sides with |n.l| and the front material) */
+static inline __attribute__((always_inline))
+void shade_side(GLContext *c, const GLVertex *v, const GLMaterial *m, V3 n,
+                V4 *col, V3 *scol)
 {
   float R,G,B,A;
-  GLMaterial *m;
+  float SR=0.0f,SG=0.0f,SB=0.0f;   /* s31: secondary colour (separate specular) */
+  int sep = c->raster_sepspec;
   GLLight *l;
-  V3 n,s,d;
+  V3 s,d;
   float dist,tmp,att,dot,dot_spot,dot_spec;
-  int twoside = c->light_model_two_side;
-
-  m=&c->materials[0];
-
-  n.X=v->normal.X;
-  n.Y=v->normal.Y;
-  n.Z=v->normal.Z;
 
   R=m->emission.v[0]+m->ambient.v[0]*c->ambient_light_model.v[0];
   G=m->emission.v[1]+m->ambient.v[1]*c->ambient_light_model.v[1];
@@ -245,7 +251,6 @@ void gl_shade_vertex(GLContext *c,GLVertex *v)
 				     dist*l->attenuation[2]));
     }
     dot=d.X*n.X+d.Y*n.Y+d.Z*n.Z;
-    if (twoside && dot < 0) dot = -dot;
     if (dot>0) {
       /* diffuse light */
       lR+=dot * l->diffuse.v[0] * m->diffuse.v[0];
@@ -257,7 +262,6 @@ void gl_shade_vertex(GLContext *c,GLVertex *v)
         dot_spot=-(d.X*l->norm_spot_direction.v[0]+
                    d.Y*l->norm_spot_direction.v[1]+
                    d.Z*l->norm_spot_direction.v[2]);
-        if (twoside && dot_spot < 0) dot_spot = -dot_spot;
         if (dot_spot < l->cos_spot_cutoff) {
           /* no contribution */
           continue;
@@ -287,7 +291,6 @@ void gl_shade_vertex(GLContext *c,GLVertex *v)
         s.Z=d.Z+1.0f;
       }
       dot_spec=n.X*s.X+n.Y*s.Y+n.Z*s.Z;
-      if (twoside && dot_spec < 0) dot_spec = -dot_spec;
       if (dot_spec>0) {
         GLSpecBuf *specbuf;
         int idx;
@@ -303,9 +306,16 @@ void gl_shade_vertex(GLContext *c,GLVertex *v)
         idx = (int)(dot_spec*SPECULAR_BUFFER_SIZE);
         if (idx > SPECULAR_BUFFER_SIZE) idx = SPECULAR_BUFFER_SIZE;
         dot_spec = specbuf->buf[idx];
-        lR+=dot_spec * l->specular.v[0] * m->specular.v[0];
-        lG+=dot_spec * l->specular.v[1] * m->specular.v[1];
-        lB+=dot_spec * l->specular.v[2] * m->specular.v[2];
+        if (sep) {
+          /* s31: GL_SEPARATE_SPECULAR_COLOR: added after texturing */
+          SR+=att * dot_spec * l->specular.v[0] * m->specular.v[0];
+          SG+=att * dot_spec * l->specular.v[1] * m->specular.v[1];
+          SB+=att * dot_spec * l->specular.v[2] * m->specular.v[2];
+        } else {
+          lR+=dot_spec * l->specular.v[0] * m->specular.v[0];
+          lG+=dot_spec * l->specular.v[1] * m->specular.v[1];
+          lB+=dot_spec * l->specular.v[2] * m->specular.v[2];
+        }
       }
     }
 
@@ -314,9 +324,36 @@ void gl_shade_vertex(GLContext *c,GLVertex *v)
     B+=att * lB;
   }
 
-  v->color.v[0]=clampf(R,0,1);
-  v->color.v[1]=clampf(G,0,1);
-  v->color.v[2]=clampf(B,0,1);
-  v->color.v[3]=A;
+  col->v[0]=clampf(R,0,1);
+  col->v[1]=clampf(G,0,1);
+  col->v[2]=clampf(B,0,1);
+  col->v[3]=A;
+  if (sep) {
+    /* the normal is not needed any more (zgl.h GLVertex) */
+    scol->X=clampf(SR,0,1);
+    scol->Y=clampf(SG,0,1);
+    scol->Z=clampf(SB,0,1);
+  }
+}
+
+void gl_shade_vertex(GLContext *c,GLVertex *v)
+{
+  V3 n = v->normal;               /* v->spec may overwrite it */
+  if (c->light_model_two_side) {
+    /* stored after the front: color_back and spec_back share the object
+       and eye coordinates' storage (zgl.h), which the front pass reads.
+       Two inlined bodies here and one below: 2.4 kB of flash for the rare
+       two-sided case, where one out-of-line body, or one inlined body in
+       a loop over the sides, cost gears 1.2% (measured, gl/bench) */
+    V3 nb, sb;
+    V4 cb;
+    nb.X = -n.X; nb.Y = -n.Y; nb.Z = -n.Z;
+    shade_side(c, v, &c->materials[1], nb, &cb, &sb);
+    shade_side(c, v, &c->materials[0], n, &v->color, &v->spec);
+    v->color_back = cb;
+    v->spec_back = sb;
+    return;
+  }
+  shade_side(c, v, &c->materials[0], n, &v->color, &v->spec);
 }
 

@@ -1,0 +1,14 @@
+# glref run: impl=ours name=fire frame=3 display=:91
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/demos/fire -geometry 320x240+0+0
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000ff7969ec0000)
+#   	libGLU.so.1 => /src/gl/ref-apps/prefix/lib/libGLU.so.1 (0x0000ff7969e10000)
+#   	libglut.so.3 => /src/gl/ref-apps/prefix/lib/libglut.so.3 (0x0000ff7969d30000)
+Fire V1.5
+Written by David Bucciarelli (tech.hmw@plus.it)
+libGL: context 1 created (pid 3413, comm fire)
+libGL: approximated GL_LINEAR / mipmap texture filters by nearest sampling of level 0
+libGL: approximated GL_LINEAR texture filter by nearest sampling
+libGL: unimplemented glRasterPos2i
+libGL: unimplemented glBitmap
+glref: ok at swap 3 -> /src/artifacts/gl/f3f6/suite-final/ours/fire.f3

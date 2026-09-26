@@ -1,10 +1,10 @@
-# glref run: impl=mesa name=morph3d frame=60 display=:93
+# glref run: impl=mesa name=morph3d frame=60 display=:96
 # cmd: /src/gl/ref-apps/build/mesa-demos/src/demos/morph3d -geometry 320x240+0+0
 # libGL.so.1 resolves to:
-#   	libGL.so.1 => /lib/aarch64-linux-gnu/libGL.so.1 (0x0000e6450c630000)
-#   	libglut.so.3 => /src/gl/ref-apps/prefix/lib/libglut.so.3 (0x0000e6450c550000)
-#   	libGLdispatch.so.0 => /lib/aarch64-linux-gnu/libGLdispatch.so.0 (0x0000e6450c150000)
-#   	libGLX.so.0 => /lib/aarch64-linux-gnu/libGLX.so.0 (0x0000e6450c0f0000)
+#   	libGL.so.1 => /lib/aarch64-linux-gnu/libGL.so.1 (0x0000e6c1a9280000)
+#   	libglut.so.3 => /src/gl/ref-apps/prefix/lib/libglut.so.3 (0x0000e6c1a91a0000)
+#   	libGLdispatch.so.0 => /lib/aarch64-linux-gnu/libGLdispatch.so.0 (0x0000e6c1a8da0000)
+#   	libGLX.so.0 => /lib/aarch64-linux-gnu/libGLX.so.0 (0x0000e6c1a8d40000)
 Morph 3D - Shows morphing platonic polyhedra
 Author: Marcelo Fernandes Vianna (vianna@cat.cbpf.br)
 

@@ -1,0 +1,62 @@
+# glref run: impl=ours name=glxinfo frame=0 display=:97
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/xdemos/glxinfo
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000e0889f3f0000)
+libGL: context 1 created (pid 1172, comm glxinfo)
+name of display: :97
+display: :97  screen: 0
+direct rendering: Yes
+server glx vendor string: S31 libGL (TinyGL, client-side)
+server glx version string: 1.4
+server glx extensions:
+    GLX_ARB_get_proc_address, GLX_EXT_swap_control, GLX_MESA_swap_control, 
+    GLX_SGI_swap_control
+client glx vendor string: S31 libGL (TinyGL, client-side)
+client glx version string: 1.4
+client glx extensions:
+    GLX_ARB_get_proc_address, GLX_EXT_swap_control, GLX_MESA_swap_control, 
+    GLX_SGI_swap_control
+GLX version: 1.4
+GLX extensions:
+    GLX_ARB_get_proc_address, GLX_EXT_swap_control, GLX_MESA_swap_control, 
+    GLX_SGI_swap_control
+OpenGL vendor string: s31
+OpenGL renderer string: Software Rasterizer
+OpenGL version string: 1.1 s31-tinygl
+OpenGL extensions:
+    GL_EXT_bgra, GL_EXT_texture_object, GL_EXT_vertex_array
+
+8 GLX Visuals
+    visual  x   bf lv rg d st  colorbuffer  sr ax dp st accumbuffer  ms  sw cav
+  id dep cl sp  sz l  ci b ro  r  g  b  a F gb bf th cl  r  g  b  a ns b ap eat
+----------------------------------------------------------------------------
+0x021 16 tc  0  16  0 r  y .   5  6  5  0 .  .  0 16  0  0  0  0  0  0 0 .  None
+0x1bd 16 tc  0  16  0 r  y .   5  6  5  0 .  .  0 16  0  0  0  0  0  0 0 .  None
+0x1be 16 tc  0  16  0 r  y .   5  6  5  0 .  .  0 16  0  0  0  0  0  0 0 .  None
+0x1bf 16 tc  0  16  0 r  y .   5  6  5  0 .  .  0 16  0  0  0  0  0  0 0 .  None
+0x1c0 16 tc  0  16  0 r  y .   5  6  5  0 .  .  0 16  0  0  0  0  0  0 0 .  None
+0x1c1 16 tc  0  16  0 r  y .   5  6  5  0 .  .  0 16  0  0  0  0  0  0 0 .  None
+0x1c2 16 tc  0  16  0 r  y .   5  6  5  0 .  .  0 16  0  0  0  0  0  0 0 .  None
+0x1c3 16 tc  0  16  0 r  y .   5  6  5  0 .  .  0 16  0  0  0  0  0  0 0 .  None
+
+16 GLXFBConfigs:
+    visual  x   bf lv rg d st  colorbuffer  sr ax dp st accumbuffer  ms  sw cav
+  id dep cl sp  sz l  ci b ro  r  g  b  a F gb bf th cl  r  g  b  a ns b ap eat
+----------------------------------------------------------------------------
+0x001 16 tc  0  16  0 r  y .   5  6  5  0 .  .  0 16  0  0  0  0  0  0 0 .  Slow
+0x002 16 tc  0  16  0 r  . .   5  6  5  0 .  .  0 16  0  0  0  0  0  0 0 .  Slow
+0x003 16 tc  0  16  0 r  y .   5  6  5  0 .  .  0 16  0  0  0  0  0  0 0 .  Slow
+0x004 16 tc  0  16  0 r  . .   5  6  5  0 .  .  0 16  0  0  0  0  0  0 0 .  Slow
+0x005 16 tc  0  16  0 r  y .   5  6  5  0 .  .  0 16  0  0  0  0  0  0 0 .  Slow
+0x006 16 tc  0  16  0 r  . .   5  6  5  0 .  .  0 16  0  0  0  0  0  0 0 .  Slow
+0x007 16 tc  0  16  0 r  y .   5  6  5  0 .  .  0 16  0  0  0  0  0  0 0 .  Slow
+0x008 16 tc  0  16  0 r  . .   5  6  5  0 .  .  0 16  0  0  0  0  0  0 0 .  Slow
+0x009 16 tc  0  16  0 r  y .   5  6  5  0 .  .  0 16  0  0  0  0  0  0 0 .  Slow
+0x00a 16 tc  0  16  0 r  . .   5  6  5  0 .  .  0 16  0  0  0  0  0  0 0 .  Slow
+0x00b 16 tc  0  16  0 r  y .   5  6  5  0 .  .  0 16  0  0  0  0  0  0 0 .  Slow
+0x00c 16 tc  0  16  0 r  . .   5  6  5  0 .  .  0 16  0  0  0  0  0  0 0 .  Slow
+0x00d 16 tc  0  16  0 r  y .   5  6  5  0 .  .  0 16  0  0  0  0  0  0 0 .  Slow
+0x00e 16 tc  0  16  0 r  . .   5  6  5  0 .  .  0 16  0  0  0  0  0  0 0 .  Slow
+0x00f 16 tc  0  16  0 r  y .   5  6  5  0 .  .  0 16  0  0  0  0  0  0 0 .  Slow
+0x010 16 tc  0  16  0 r  . .   5  6  5  0 .  .  0 16  0  0  0  0  0  0 0 .  Slow
+

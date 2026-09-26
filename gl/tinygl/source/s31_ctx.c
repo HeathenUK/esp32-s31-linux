@@ -174,6 +174,9 @@ void tgl_ctx_make_current(void *ctx)
   gl_ctx = ctx ? (GLContext *)ctx : null_ctx;
   gl_ctx->ready = 0;
   gl_ctx->armed = 1;
+  /* s31: a shared texture may have been re-uploaded (and reallocated)
+     while another context was current: choose the fillers again */
+  gl_ctx->raster_dirty = 1;
 }
 
 /* the frame was presented: call the frame hook before the next access */

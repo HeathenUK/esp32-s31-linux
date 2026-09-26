@@ -1,0 +1,8 @@
+# glref run: impl=ours name=offset frame=1 display=:90
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/xdemos/offset
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000e1368c240000)
+libGL: context 1 created (pid 1459, comm offset)
+GL_DEPTH_BITS = 16
+using 1.1 offset
+glref: ok at swap 1 -> /src/artifacts/gl/f3f6/suite-2/ours/offset.f1

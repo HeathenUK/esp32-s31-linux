@@ -1,4 +1,5 @@
 #include "zgl.h"
+#include "s31_pixels.h"
 #include <stdio.h>
 /* glVertex */
 
@@ -597,11 +598,29 @@ void glClearDepth(float depth)
 
 /* textures */
 
+/* s31: inside glNewList the pixels are unpacked NOW, with the pixel store
+   state of this moment, and the list keeps the copy (GL 1.3 5.4): the
+   application may free or reuse its buffer after the call */
+static void *list_pixels(int width, int height, int *format, int *type, void *pixels)
+{
+  GLContext *c = gl_get_context();
+  void *blk;
+  if (!c->compile_flag || pixels == NULL) return pixels;
+  blk = s31_unpack_copy(c, width, height, *format, *type, pixels);
+  if (blk == NULL) return pixels;       /* the error is raised at execution */
+  gl_list_own(c, blk);
+  *format = S31_PACKED_RGBA;
+  *type = GL_UNSIGNED_BYTE;
+  return (char *)blk + S31_BLOCK_HDR;
+}
+
 void glTexImage2D( int target, int level, int components,
                    int width, int height, int border,
                    int format, int type, void *pixels)
 {
   GLParam p[10];
+
+  pixels = list_pixels(width, height, &format, &type, pixels);
 
   p[0].op=OP_TexImage2D;
   p[1].i=target;
@@ -617,6 +636,27 @@ void glTexImage2D( int target, int level, int components,
   gl_add_op(p);
 }
 
+
+void tgl_glTexSubImage2D(int target, int level, int xoffset, int yoffset,
+                         int width, int height, int format, int type,
+                         const void *pixels)
+{
+  GLParam p[10];
+  void *px = list_pixels(width, height, &format, &type, (void *)pixels);
+
+  p[0].op=OP_TexSubImage2D;
+  p[1].i=target;
+  p[2].i=level;
+  p[3].i=xoffset;
+  p[4].i=yoffset;
+  p[5].i=width;
+  p[6].i=height;
+  p[7].i=format;
+  p[8].i=type;
+  p[9].p=px;
+
+  gl_add_op(p);
+}
 
 void glBindTexture(int target,int texture)
 {

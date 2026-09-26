@@ -1,0 +1,3 @@
+__muldf3 __adddf3 __subdf3 __divdf3 __extendsfdf2 __truncdfsf2 sqrt sin cos pow floor
+__ltdf2 __ledf2 __gtdf2 __gedf2 __eqdf2 __nedf2 __unorddf2
+__floatsidf __floatunsidf __fixdfsi __fixunsdfsi

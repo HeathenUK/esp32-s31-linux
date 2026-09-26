@@ -1,0 +1,7 @@
+# glref run: impl=ours name=multictx frame=20 display=:90
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/xdemos/multictx
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000efa67e0b0000)
+libGL: context 1 created (pid 1288, comm multictx)
+libGL: context 2 created (pid 1288, comm multictx)
+glref: ok at swap 20 -> /src/artifacts/gl/f7/suite/ours/multictx.f20

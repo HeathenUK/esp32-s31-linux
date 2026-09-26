@@ -21,6 +21,7 @@
  * XLITE_IMPL(_XAllocScratch) XLITE_IMPL(_XAllocTemp) XLITE_IMPL(_XFreeTemp)
  * XLITE_IMPL(_XGetAsyncReply) XLITE_IMPL(_XDeqAsyncHandler)
  * XLITE_IMPL(_XFlushGCCache) XLITE_IMPL(_XInitImageFuncPtrs)
+ * XLITE_IMPL(_XUnknownNativeEvent) XLITE_IMPL(_XData32) XLITE_IMPL(_XRead32)
  */
 #include "xlite.h"
 
@@ -262,14 +263,22 @@ Status _XReply(Display *dpy, xReply *rep, int extra, Bool discard)
 		}
 	}
 	free(ex);
-	dpy->last_request_read = dpy->request;
+	/* last_request_read was advanced by the read itself (xlite_seen). It
+	 * used to be set to pub.request here, which claimed too much whenever
+	 * another thread had queued a request since this one. */
 	return 1;
 }
 
+/*
+ * The extension libraries' wire-to-event converters call this with the event
+ * they are decoding, to learn its full serial. Widen it against the requests
+ * sent and move last_request_read, as Xlib does.
+ */
 unsigned long _XSetLastRequestRead(Display *dpy, xGenericReply *rep)
 {
-	(void)rep;
-	return dpy->last_request_read;
+	if (!rep)
+		return dpy->last_request_read;
+	return xlite_seen(XD(dpy), rep->sequenceNumber);
 }
 
 /* ----------------------------------------------------------- odds & ends */
@@ -332,3 +341,57 @@ void _XDeqAsyncHandler(Display *dpy, _XAsyncHandler *handler)
 void _XFlushGCCache(Display *dpy, GC gc) { (void)dpy; (void)gc; }
 
 int _XInitImageFuncPtrs(XImage *image) { (void)image; return 1; }
+
+/*
+ * An extension library's event-to-wire converter, asked about an event type
+ * it does not own, falls back to this. Nothing here converts events back to
+ * the wire (XESetEventToWire is a no-op, xlite_ext.c), so "not converted" is
+ * the whole answer - and the one Xlib gives. Stock libXi imports it, so
+ * without it libXi.so.6 cannot be loaded at all: libglut links libXi, and
+ * musl binds every symbol at load, so every GLUT program died before main
+ * (GL phase 1).
+ */
+Status _XUnknownNativeEvent(Display *dpy, XEvent *re, xEvent *event)
+{
+	(void)dpy; (void)re; (void)event;
+	return 0;
+}
+
+#ifdef LONG64
+/*
+ * Data32 / _XRead32 for 64-bit longs. Xlibint.h makes both plain macros over
+ * Data/_XRead on ILP32 - the board - and only an LP64 libX11 has them as
+ * functions, so they exist here only there. That is what lets the host rig
+ * (tools/glref/xlite-load.sh) load the host's libXi against xlite; the RV32
+ * library, like real Xlib on ILP32, does not export them.
+ *
+ * `len` is in wire bytes: 4 per item, each item a long in client memory.
+ */
+int _XData32(Display *dpy, _Xconst long *data, unsigned len)
+{
+	CARD32 buf[64];
+
+	while (len >= 4) {
+		unsigned n = len > sizeof(buf) ? (unsigned)sizeof(buf) : len & ~3u;
+		unsigned i;
+
+		for (i = 0; i < n / 4; i++)
+			buf[i] = (CARD32)*data++;
+		_XSend(dpy, (const char *)buf, n);
+		len -= n;
+	}
+	return 0;
+}
+
+void _XRead32(Display *dpy, long *data, long len)
+{
+	CARD32 *wire = (CARD32 *)data;
+	long i, n = len / 4;
+
+	/* Read the 32-bit items into the front of the caller's longs, then
+	 * widen from the end so no item is overwritten before it is moved. */
+	_XRead(dpy, (char *)data, len);
+	for (i = n - 1; i >= 0; i--)
+		data[i] = (long)wire[i];
+}
+#endif

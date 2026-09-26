@@ -40,6 +40,8 @@ ADD_OP(PopName,0,"")
 ADD_OP(LoadName,1,"%d")
 
 ADD_OP(TexImage2D,9,"%d %d %d %d %d %d %d %d %d")
+/* s31: plan F3 */
+ADD_OP(TexSubImage2D,9,"%d %d %d %d %d %d %d %d %d")
 ADD_OP(BindTexture,2,"%C %d")
 ADD_OP(TexEnv,7,"%C %C %C %f %f %f %f")
 ADD_OP(TexParameter,7,"%C %C %C %f %f %f %f")
@@ -74,5 +76,15 @@ ADD_OP(PolygonOffset, 2, "%f %f")
 /* s31: one opcode for the fixed-function state TinyGL did not track
    (depth func/mask, blend, alpha, scissor, fog, ...); s31_state.c */
 ADD_OP(State, 5, "%d %f %f %f %f")
+
+/* s31: plan F7 (s31_xform.c, s31_draw.c) */
+ADD_OP(ClipPlane, 5, "%d %f %f %f %f")
+ADD_OP(TexGen, 7, "%d %C %C %f %f %f %f")
+ADD_OP(RasterPos, 5, "%f %f %f %f %d")
+ADD_OP(Bitmap, 8, "%d %d %f %f %f %f %p %d")
+ADD_OP(DrawPixels, 5, "%d %d %C %C %p")
+ADD_OP(CopyPixels, 5, "%d %d %d %d %C")
+ADD_OP(CopyTex, 11, "%C %d %C %d %d %d %d %d %d %d %d")
+ADD_OP(PolygonStipple, 32, "")
 
 #undef ADD_OP

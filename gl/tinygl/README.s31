@@ -88,35 +88,196 @@ Buffers and contexts (s31_ctx.c, see gl/api/s31gl.h for the contract):
 
 State (s31_state.c, get.c): every GL 1.3 fixed-function value is recorded
 for glGet* / glIsEnabled, validated, and list-compilable (one new opcode,
-OP_State). What the rasteriser HONOURS today:
+OP_State). What the rasteriser HONOURS today (plan F3-F6, 2026-09-26):
 
-  honoured      depth test on/off, glDepthMask (triangles: ztriangle_nt.c /
-                ztriangle_nw.c are the fillers specialised at compile time,
-                chosen per triangle - the default fillers are byte-for-byte
-                unchanged), glClearDepth (clear.c: TinyGL cleared to 0 and
-                GL's default is 1.0; stored as (1 - d) * 0xffff since Z grows
-                towards the viewer), glClearColor clamping, the viewport,
-                stencil state (there are no stencil bits, so ignoring it is
-                exact), glHint (a hint), GL_DITHER/GL_MULTISAMPLE (no effect
-                by definition here).
+  honoured      depth test with all 8 functions and glDepthMask on every
+                primitive; glDepthRange; glClearDepth (clear.c: stored as
+                (1 - d) * 0xffff since Z grows towards the viewer); blending
+                (every GL 1.3 factor; destination alpha is 1, there is no
+                alpha plane); glAlphaFunc (all 8); glColorMask (drawing and
+                glClear); fog LINEAR/EXP/EXP2; glScissor (drawing and
+                glClear); glPolygonOffset (GL_FILL); glLineWidth and
+                glPointSize (nearest integer, aliased); the texture
+                environments REPLACE, MODULATE (the default), DECAL, BLEND
+                (with GL_TEXTURE_ENV_COLOR) and ADD for every base format;
+                GL_CLAMP / GL_CLAMP_TO_EDGE / GL_REPEAT; GL_SEPARATE_SPECULAR_
+                COLOR; GL_RESCALE_NORMAL; texture completeness (an
+                incomplete texture is off, as GL 3.8.10 says); stencil state
+                (there are no stencil bits, so ignoring it is exact);
+                glHint; GL_DITHER/GL_MULTISAMPLE (no effect by definition);
+                GL_LIGHT_MODEL_TWO_SIDE (the back material and -n on
+                back-facing polygons, light.c / clip.c; it was |n.l| on the
+                front material); glPushAttrib(GL_TEXTURE_BIT) with the bound
+                objects' filters, wraps, border colour and priority.
+  approximated  (prints "libGL: approximated ..." once; tools/glref does not
+                count it as a gap) GL_LINEAR and the mipmap filters, drawn
+                as nearest sampling of level 0.
+                Not printed: the texture q (glTexCoord4, texgen Q) divides
+                s and t per vertex - exact when q is the same at every
+                vertex of a primitive; where it varies (projective
+                texturing) s/q, t/q are interpolated with 1/w's perspective,
+                not q/w's. Fragment alpha is 8 bits, so the alpha test
+                compares a/255 with the reference exactly (texels are
+                exact) but cannot tell a vertex alpha of 0.5 from 128/255
+                (raster_sel.c). Fog is per vertex (EXP/EXP2 differ from
+                Mesa's per-fragment fog on large polygons); Gouraud colour
+                is linear in screen space (a quad whose corner colours are
+                affine in object space shows its split diagonal under
+                perspective, testgl frame 60).
+                Plan F7 (2026-09-26, see "Pixel paths" below): the raster
+                position, glBitmap, glDrawPixels, glReadPixels,
+                glCopyPixels, glCopyTexImage/SubImage 1D/2D, glPixelZoom,
+                glPixelTransfer scale/bias, texgen S/T/R (OBJECT_LINEAR,
+                EYE_LINEAR, SPHERE_MAP), six user clip planes, polygon and
+                line stipple, 1D textures, glGetTexImage.
   recorded only (prints "libGL: unimplemented ..." once when used):
-                blending, alpha test, fog, scissor, colour mask, logic op,
-                depth func other than LESS/LEQUAL, depth range, line width
-                and point size other than 1, stipples, clip planes, texgen,
-                texenv modes other than REPLACE/DECAL (GL_MODULATE, GL's
-                default, draws as REPLACE), CLAMP wrap (drawn as REPEAT),
-                separate specular. These are the plan's F4-F8.
+                logic op, smooth points/lines/polygons (drawn aliased),
+                GL_COMBINE (drawn as MODULATE), 3D/cube textures, texture
+                borders (dropped), GL_NORMAL_MAP / GL_REFLECTION_MAP
+                texgen (cube maps), GL_MAP_COLOR (pixel maps; glPixelMap
+                is a stub), glDrawPixels(GL_COLOR_INDEX), the evaluators
+                (glMap*, glEvalMesh*: GLU's NURBS draws through them) and
+                feedback. These are the plan's F8.
 
-Textures (texture.c, s31_pixels.c): glTexImage2D accepts every GL 1.3
-format/type in s31_pixels.c and honours GL_UNPACK_ALIGNMENT, ROW_LENGTH,
-SKIP_ROWS, SKIP_PIXELS and SWAP_BYTES; it samples the application's image
-straight into the rasteriser's single 256x256 RGB565 image, so no
-full-size copy is made. NULL pixels allocate a black image. Levels > 0 are
-accepted and dropped. GL_PROXY_TEXTURE_2D answers glGetTexLevelParameteriv
-(0 above 256, GL_MAX_TEXTURE_SIZE) so GLU's gluBuild2DMipmaps behaves.
-Uploads up to 2048 are accepted and sampled down (lenient: GL says
-INVALID_VALUE above the max). Not done yet (plan F3/G13): native sizes,
-alpha, glTexSubImage2D, copying pixel data compiled into display lists.
+Rasteriser paths (raster.c, raster_sel.c, zpipe.h/zpipe.c,
+ztriangle_gen.c). gl_update_raster runs at glBegin when any state that
+matters changed (c->raster_dirty) and picks, once per batch, never per
+pixel:
+- tier 1: TinyGL's own fused fillers (ztriangle.c), their per-pixel loops
+  unchanged,
+  for untextured flat/smooth triangles and textures whose environment is
+  the texel (REPLACE/DECAL of an opaque texture, MODULATE by a white vertex
+  colour - checked per triangle), REPEAT wrap, depth LEQUAL (TinyGL's >=,
+  with or without the write), strict LESS (ztriangle_lt.c) or off, and no
+  blending, alpha test, fog or colour mask. A frame that uses no new
+  feature runs only this; gl/bench/BASELINE.md has the proof.
+- the general path: a fixed list of stage functions chosen for the state
+  (depth test -> colour -> texel index -> texenv -> colour sum -> fog ->
+  alpha test -> depth write -> blend/mask/store), each a straight loop over
+  a 32-pixel chunk. A disabled feature has no stage. Every attribute is a
+  plane equation; textures and fog are divided by w (perspective-correct).
+  Lines and points take it too when textured, wide, depth-masked or with
+  any fragment feature; line pixels are gathered into spans (raster.c
+  gl_general_line: ~125 instructions a blended pixel, was ~310).
+ONE scan conversion for both (ztri.h; review P1/G1, 2026-09-26). GL 1.3
+Appendix A rule 2: changing blend, alpha test, depth function or mask must
+not change the fragments a primitive generates or their depth - and those
+are the state changes that move a triangle between the paths. Both
+therefore take coverage and depth from ztri_setup: GL window coordinates
+(zp.fx/fy, not TinyGL's snapped x/y), pixel centres, the top-left rule (a
+mesh covers each pixel once; TinyGL's inclusive spans drew shared edges
+twice, which blending shows), 16.16 edges stepped from each edge's own
+first row (so triangles sharing an edge agree to the bit), and one integer
+depth plane per triangle, z = zc + dzdx x + dzdy y. The float code feeding
+those integers uses explicit fmaf, so -ffp-contract cannot make two inlined
+copies differ. Multipass (an opaque pass on tier 1, then GL_EQUAL or
+LEQUAL blended on the general path: TyrQuake's lightmaps) lands on the
+same pixels, and meshes that mix paths per triangle have no cracks:
+gl/tests/raster_gate.c checks both, and the texel phase below.
+Textures on both paths sample the texel under the pixel centre (GL
+nearest): TinyGL's [0,1] "texture squeeze", which hid the missing centre
+offset, is gone (review G2: a 1:1 RGB texture sampled the neighbouring row
+over half the image), and a triangle with a negative REPEAT coordinate is
+moved by whole periods so the int conversion floors. q = 1/w is computed
+once per vertex (review P2; the per-triangle copies and divides are gone).
+Lines and size-1 points use the pixel holding the vertex's GL window
+position (TinyGL's (w - 1/2)/2 mapping was up to 1.25 px from it, beyond
+what polygon offset covers for lines drawn over an offset fill). Facing
+and polygon offset read the float position too: the snapped one called
+sub-pixel triangles degenerate and dropped them, a crack now that
+neighbours no longer overlap.
+Measured on the host rig against Mesa: gl/tests/glx_raster.c (6 pages of
+feature cells, gl/tests/run-raster.sh), ASan/UBSan clean
+(gl/tests/run-san.sh).
+
+Textures (texture.c, s31_pixels.c), plan F3: every texture is stored at
+its own power-of-two size up to GL_MAX_TEXTURE_SIZE 256 - RGB565, plus an
+A8 plane only when the format has alpha (ALPHA, LUMINANCE_ALPHA,
+INTENSITY, RGBA and 2/4; gl/bench/texfmt.c measured it against ARGB4444).
+Non-power-of-two or larger than 256 is GL_INVALID_VALUE, as GL 1.1 says,
+with one "libGL:" line; the proxy answers what a real upload would accept
+(GLU's gluBuild2DMipmaps depends on it). glTexImage2D and glTexSubImage2D
+accept every GL 1.3 format/type in s31_pixels.c and honour every
+GL_UNPACK_* parameter; inside glNewList the pixels are unpacked at compile
+time and the list owns the copy. Levels > 0 are validated and recorded
+(completeness, glGetTexLevelParameter) but not stored: the mipmap filters
+sample level 0. The fixed-point s/t layout keeps GL_REPEAT to masks, the
+same three operations per pixel as TinyGL's 256x256 constants (zbuffer.h);
+|texcoord| up to 512 repeats is exact. Level L is at most 256 >> L, for
+proxies and real uploads (review G3: GLU's closestFit probes level 1, and a
+level-blind proxy made gluBuild2DMipmaps of a 384 or 512 image return
+success with no texture); a proxy remembers its level and border. The
+common uploads (UNSIGNED_BYTE RGB, RGBA, LUMINANCE, no pixel transfer) are
+converted straight from the client's bytes, one loop per stored class
+(review P7: 12-17 instructions a texel, were 25-31). A texture object is
+148 bytes on RV32 (was 288): one stored image, not MAX_TEXTURE_LEVELS.
+
+Pixel paths (plan F7: s31_draw.c, s31_pixels.c, s31_rpos.c, s31_xform.c;
+gl/api/gl_pixels.c):
+- glRasterPos* goes through the modelview and projection with GL's own
+  viewport transform (the full viewport, window y up); a position outside
+  the view volume or a user clip plane is invalid, and invalid positions
+  drop glBitmap (no move either) and glDrawPixels / glCopyPixels. The
+  raster colour is the lit colour when lighting is on (the secondary colour
+  folded in: there is no colour sum on the pixel paths), texcoords take
+  texgen and the texture matrix, GL_CURRENT_RASTER_DISTANCE is the eye
+  distance. glWindowPos* (GL 1.4, ARB and MESA names, MESA's 4-component
+  ones) set it directly. All are compiled into display lists; glBitmap and
+  glDrawPixels unpack their data at compile time and the list owns the copy.
+- Fragments of glBitmap / glDrawPixels / glCopyPixels take the raster
+  depth, the raster texcoords' texel and |z_e| fog, and pass the same
+  per-fragment stages as primitives (zpipe.c: depth, texenv, fog, alpha,
+  blend, colour mask; not the polygon stipple). The stage list is derived
+  from the general path's and cached per context (c->pixpipe, keyed by
+  pipe_serial). With no fragment operation enabled - bitmap text, 2D
+  overlays - pixels are stored directly. Pixel rectangles clip to the
+  buffer and the scissor box, never to the viewport.
+- glBitmap: every GL_UNPACK_* parameter for GL_BITMAP (LSB_FIRST,
+  SKIP_PIXELS in bits, ROW_LENGTH, ALIGNMENT); placed at floor(raster -
+  origin + 1e-4), as Mesa does; a row is read 32 pixels at a time and its
+  runs found with ctz. gl/bench/pix.sh: 8x13 glyphs cost ~2.3 k
+  instructions each with nothing enabled, ~6.6 k blended.
+- glDrawPixels: every format/type s31_pixels.c unpacks, GL_DEPTH_COMPONENT
+  (depth fragments with the raster colour), glPixelZoom by GL's pixel-
+  square rule (any factor, negative flips). GL_STENCIL_INDEX is
+  GL_INVALID_OPERATION (no stencil buffer).
+- glReadPixels: from the one colour buffer (the back buffer the next swap
+  presents; GL_READ_BUFFER is recorded, not honoured), RGB565 expanded
+  with rounding (v * 255 / 31); every GL_PACK_* parameter, the GL 1.3
+  formats (LUMINANCE = R + G + B, clamped), types including the packed
+  ones and FLOAT, GL_DEPTH_COMPONENT; only the part inside the buffer is
+  written. Not compiled into lists (GL 5.4).
+- glPixelTransfer scale and bias apply on every path: glDrawPixels,
+  glTexImage/SubImage (teapot), glReadPixels, glCopyPixels, glCopyTexImage.
+- glCopyTexImage2D/1D and glCopyTexSubImage2D/1D read the colour buffer
+  when they execute (compiled into lists as commands).
+- Texgen (s31_xform.c): per vertex only when enabled - it rides on the
+  apply_texture_matrix test glopVertex already made; sphere map uses the
+  eye normal (normalised under GL_NORMALIZE) and the unit eye position.
+- User clip planes: stored in eye coordinates (glGetClipPlane), tested in
+  clip space (plane times the inverse of the projection in use, so clipper-
+  made vertices need nothing extra); clip-code bits 6..11 in clip.c for
+  triangles, lines and points. The per-vertex test is behind the vtx_extra
+  test that replaced raster_fog: nothing added to a frame without them.
+- Polygon stipple: a stage of the general path (zpipe.c), polygons only,
+  the depth write moved after it; the pattern unpacked per GL_UNPACK_*.
+  Line stipple: the general line path; the counter restarts per GL_LINES
+  segment and at a strip's first segment, runs on along a strip, and is
+  counted from the first vertex. Both force the general path only while
+  enabled.
+- 1D textures (texture.c): their own binding and default object; stored
+  as W x 1 and drawn by the same paths (GL_TEXTURE_2D wins when both are
+  enabled). glGetTexImage reads levels > 0 as what is drawn (level 0
+  sampled at the level's size).
+- Known differences from Mesa llvmpipe, by design: Mesa draws neither fog
+  on glBitmap nor on glDrawPixels (its bitmap quad carries fog coordinate
+  0); GL 3.10 says the fragments are fogged, as here. Mesa's bitmap cache
+  draws a cached glBitmap with state changed after the call (gl/tests/
+  glx_pixels.c flushes around state changes so its reference is GL's).
+  Lines keep TinyGL's inclusive last pixel (GL's diamond rule drops it).
+Tests: gl/tests/glx_pixels.c (4 pages) and gl/tests/glu_check.c (the real
+Mesa GLU: Debian's libglu1-mesa, statically, and the board's GLU 9.0.3)
+against Mesa by gl/tests/run-pixels.sh; gl/tests/core_test.c test_f7.
 
 Vertex arrays (arrays.c, rewritten): byte strides (0 = packed), every GL
 1.1 type (colour as UNSIGNED_BYTE, GL_DOUBLE via s31_d2f), the edge-flag
@@ -137,6 +298,10 @@ artifacts/gl/phase1/INTEGRATION.md):
 - matrix.c glopOrtho: upstream filled the row-major M4 column-major, so
   every asymmetric glOrtho (glOrtho(0,w,h,0) of every 2D app) was
   transposed, translation in the w row. Symmetric ortho hid it.
+- matrix.c glopRotate (found 2026-09-26 by gl/tests/glx_pixels.c page 4):
+  the same transposition for any axis other than x, y or z, so such a
+  rotation turned by -angle (glRotatef(35, 1, 1, 0)). Axis rotations -
+  gears, the bench demos - were right and are unchanged.
 - GL_FLAT provoking vertex (GL 1.5 table 2.12): the flat fillers read p2
   AFTER their y sort, and the quad/quad-strip/strip decompositions did not
   keep the provoking vertex in p2. vertex.c records it (gl_set_provoking);
@@ -147,16 +312,19 @@ artifacts/gl/phase1/INTEGRATION.md):
 - zline.h: smooth lines started at p2's colour and stepped from p1.
 - zfeatures.h: only the 16-bit output format is compiled (the others were
   dead code, and 8-bit dithering could exit(1)).
-- vertex.c glopBegin: a textured draw with the default GL_MODULATE (or
-  BLEND/ADD) says once that it is drawn as REPLACE.
-Known, not changed: the (size - 0.5) / 2 viewport scale with inclusive
-spans places exact-integer edges up to one pixel from GL's (the strict
-column of tools/glref); an exact transform needs a top-left fill rule.
+- (superseded by plan F4: GL_MODULATE and the other environments are drawn)
+(Superseded 2026-09-26 by ztri.h: tier 1 no longer snaps vertices or
+uses the (size - 0.5) / 2 scale for triangles, so exact-integer edges land
+where GL's do and a units-only glPolygonOffset works on slanted planes.
+A pixel centre exactly on a diagonal edge can still go to the other
+triangle than Mesa's: the y flip of the window transform is float, so the
+tie is not exact - but both paths decide it the same way.)
 
 Not changed yet (plan stage 3): the soft-double sites TinyGL has always had
 (gl_clipcode's CLIP_EPSILON, sqrt/pow in lighting, sin/cos in glRotate,
-the specular table's pow, 1.0/W per vertex in gl_transform_to_viewport and
-1.0/fz per triangle in ztriangle.h). After --gc-sections the RV32 library
+the specular table's pow; 1.0/W per vertex in gl_transform_to_viewport and
+1.0/fz per triangle in ztriangle.h were float in the object code already -
+GCC narrows a double division of floats - and are written 1.0f now). After --gc-sections the RV32 library
 has 20 __extendsfdf2, 18 __truncdfsf2, 8 __muldf3, 3 __divdf3, 1
 __floatsidf, 1 __gedf2 call sites plus pow x4, sincos x3, cos x2, sqrt x2
 (objdump of gl/out-rv32/libGL.so.1.unstripped, 2026-09-25).

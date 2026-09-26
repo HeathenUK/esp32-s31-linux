@@ -1,0 +1,1 @@
+FAIL  320x240  strict 4.125% (3168 px >16)  tolerant 1.044% (802 px)  max 255  mean 5.25  diff /src/artifacts/gl/phase1/prims/diff.png

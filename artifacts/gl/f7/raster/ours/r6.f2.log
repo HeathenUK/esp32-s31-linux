@@ -1,0 +1,26 @@
+# glref run: impl=ours name=r6 frame=2 display=:90
+# cmd: /src/gl/out-host/glx_raster 6
+# libGL.so.1 resolves to:
+#   	libGLU.so.1 => /src/gl/ref-apps/prefix/lib/libGLU.so.1 (0x0000ece2613c0000)
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000ece261360000)
+libGL: context 1 created (pid 630, comm glx_raster)
+libGL: approximated GL_LINEAR / mipmap texture filters by nearest sampling of level 0
+libGL: unimplemented texture larger than GL_MAX_TEXTURE_SIZE 256 (GL_INVALID_VALUE)
+error after 64x64 RGBA: 0x0
+query 64x64 level 0: 64x64 fmt 0x1908 red yes alpha yes
+error after glTexSubImage2D: 0x0
+error after glTexSubImage2D outside the image (INVALID_VALUE): 0x501
+error after glTexSubImage2D of a missing level (INVALID_OPERATION): 0x502
+query mip 8x8 level 1: 4x4 fmt 0x1907 red yes alpha no
+query mip 8x8 level 3: 1x1 fmt 0x1907 red yes alpha no
+query mip 8x8 level 4: 0x0 fmt 0x1 red no alpha no
+gluBuild2DMipmaps -> 0
+query glu 100x60 level 0: 128x64 fmt 0x1907 red yes alpha no
+error after 512x512 glTexImage2D: 0x501
+query proxy 256 level 0: 256x256 fmt 0x1907 red yes alpha no
+query proxy 128x32 level 0: 128x32 fmt 0x1908 red yes alpha yes
+query alpha 16 level 0: 16x16 fmt 0x1906 red no alpha yes
+query luminance 16 level 0: 16x16 fmt 0x1909 red no alpha no
+error after the queries: 0x0
+error after the frame: 0x0
+glref: ok at swap 2 -> /src/artifacts/gl/f7/raster/ours/r6.f2

@@ -37,6 +37,46 @@ void ZB_plot_nz(ZBuffer * zb, ZBufferPoint * p)
 #endif
 }
 
+/* s31: GL_LESS (strict) lines and points, zline.h again with ZCMP > */
+#define ZCMP_LT(z,zpix) ((z) > (zpix))
+void ZB_plot_lt(ZBuffer * zb, ZBufferPoint * p)
+{
+    unsigned short *pz = zb->zbuf + (p->y * zb->xsize + p->x);
+    PIXEL *pp = (PIXEL *) ((char *) zb->pbuf + zb->linesize * p->y + p->x * PSZB);
+    int zz = p->z >> ZB_POINT_Z_FRAC_BITS;
+    if (ZCMP_LT(zz, *pz)) {
+	*pp = RGB_TO_PIXEL(p->r, p->g, p->b);
+	*pz = zz;
+    }
+}
+
+#undef ZCMP
+#define ZCMP ZCMP_LT
+#define INTERP_Z
+static void ZB_line_flat_z_lt(ZBuffer * zb, ZBufferPoint * p1, ZBufferPoint * p2,
+                              int color)
+{
+#include "zline.h"
+}
+#define INTERP_Z
+#define INTERP_RGB
+static void ZB_line_interp_z_lt(ZBuffer * zb, ZBufferPoint * p1, ZBufferPoint * p2)
+{
+#include "zline.h"
+}
+#undef ZCMP
+#define ZCMP(z,zpix) ((z) >= (zpix))
+
+void ZB_line_z_lt(ZBuffer * zb, ZBufferPoint * p1, ZBufferPoint * p2)
+{
+    int color1 = RGB_TO_PIXEL(p1->r, p1->g, p1->b);
+    int color2 = RGB_TO_PIXEL(p2->r, p2->g, p2->b);
+    if (color1 == color2)
+        ZB_line_flat_z_lt(zb, p1, p2, color1);
+    else
+        ZB_line_interp_z_lt(zb, p1, p2);
+}
+
 #define INTERP_Z
 static void ZB_line_flat_z(ZBuffer * zb, ZBufferPoint * p1, ZBufferPoint * p2, 
                            int color)

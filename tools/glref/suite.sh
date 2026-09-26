@@ -45,8 +45,10 @@ REFDIR=$A/ref-mesa
 MD=/src/gl/ref-apps/build/mesa-demos
 XD=$MD/src/xdemos
 GD=$MD/src/demos
+SB=/src/gl/ref-apps/build
 
 sh $G/build-apps.sh >/dev/null || { echo "reference apps failed to build" >&2; exit 2; }
+sh $G/build-games.sh >/dev/null || { echo "stage-5 apps failed to build" >&2; exit 2; }
 
 if [ "$IMPL" = ours ] && [ ! -e "${GLREF_OURS:-/src/gl/out-host}/libGL.so.1" ]; then
     echo "our libGL is not built yet: ${GLREF_OURS:-/src/gl/out-host}/libGL.so.1 missing" >&2
@@ -58,7 +60,9 @@ stamp() {
     {
         dpkg-query -W -f '${Version}\n' libgl1-mesa-dri 2>/dev/null
         md5sum $G/capture.c $G/apps.txt $G/run.sh
-        for f in $XD/* $GD/*; do [ -f "$f" ] && [ -x "$f" ] && md5sum "$f"; done
+        for f in $XD/* $GD/* $SB/sdl12-test/testgl $SB/sdl2-test/testgl2 $SB/rrootage/rr; do
+            [ -f "$f" ] && [ -x "$f" ] && md5sum "$f"
+        done
     } | md5sum | cut -d' ' -f1
 }
 STAMP=$(stamp)
@@ -85,7 +89,7 @@ while IFS='|' read -r name kind cap frames cmd; do
     kind=$(echo "$kind" | tr -d ' ')
     cap=$(echo "$cap" | tr -d ' ')
     frames=$(echo "$frames" | sed 's/^ *//; s/ *$//')
-    cmd=$(echo "$cmd" | sed 's/^ *//; s/ *$//' | sed "s|\$XD|$XD|g; s|\$GD|$GD|g")
+    cmd=$(echo "$cmd" | sed 's/^ *//; s/ *$//' | sed "s|\$XD|$XD|g; s|\$GD|$GD|g; s|\$SB|$SB|g")
     if [ -n "$APPS" ]; then
         case " $APPS " in *" $name "*) ;; *) continue ;; esac
     fi

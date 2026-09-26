@@ -1,0 +1,16 @@
+# glref run: impl=mesa name=isosurf frame=1 display=:93
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/demos/isosurf
+# libGL.so.1 resolves to:
+#   	libGLU.so.1 => /src/gl/ref-apps/prefix/lib/libGLU.so.1 (0x0000f6f193c80000)
+#   	libglut.so.3 => /src/gl/ref-apps/prefix/lib/libglut.so.3 (0x0000f6f193ba0000)
+#   	libGL.so.1 => /lib/aarch64-linux-gnu/libGL.so.1 (0x0000f6f1938e0000)
+#   	libGLdispatch.so.0 => /lib/aarch64-linux-gnu/libGLdispatch.so.0 (0x0000f6f1931f0000)
+#   	libGLX.so.0 => /lib/aarch64-linux-gnu/libGLX.so.0 (0x0000f6f193190000)
+primitive (0x10000): GL_TRIANGLE_STRIP, 
+render style (0x20): glVertex, 
+enabling normal arrays
+new flags (0x8a92c29): glVertex, GL_TRIANGLE_STRIP, lit, 
+7179 vertices, 7177 triangles
+Nr unique vertex/normal pairs: 2723
+num_tri_verts: 21531
+glref: ok at swap 1 -> /src/artifacts/gl/phase2/selftest-mesa-2/mesa/isosurf.f1

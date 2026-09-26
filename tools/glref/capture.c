@@ -41,6 +41,7 @@
  */
 #define _GNU_SOURCE
 #include <dlfcn.h>
+#include <link.h>
 #include <errno.h>
 #include <poll.h>
 #include <pthread.h>
@@ -81,7 +82,29 @@ typedef void (*glref_fp)(void);
 static glref_fp (*real_glXGetProcAddress)(const GLubyte *);
 static glref_fp (*real_glXGetProcAddressARB)(const GLubyte *);
 
-#define RESOLVE(n) do { if (!real_##n) real_##n = dlsym(RTLD_NEXT, #n); } while (0)
+/* The real dlsym, and the next definition of a name after this shim. SDL
+ * (2, and 1.2 through sdl12-compat) dlopen()s libGL.so.1 RTLD_LOCAL, where
+ * RTLD_NEXT cannot see it, so a GLX name falls back to the handle the app
+ * looked GLX up in (gl_handle, recorded by the dlsym interposer at the end). */
+typedef void *(*dlsym_fn)(void *, const char *);
+static dlsym_fn real_dlsym;
+static void *gl_handle;
+static dlsym_fn get_real_dlsym(void)
+{
+    static const char *const vers[] = { "GLIBC_2.34", "GLIBC_2.17", "GLIBC_2.2.5", NULL };
+    for (int i = 0; !real_dlsym && vers[i]; i++)
+        real_dlsym = (dlsym_fn)dlvsym(RTLD_NEXT, "dlsym", vers[i]);
+    return real_dlsym;
+}
+static void *next_sym(const char *n)
+{
+    void *p = get_real_dlsym()(RTLD_NEXT, n);
+    void *h = __atomic_load_n(&gl_handle, __ATOMIC_ACQUIRE);
+    if (!p && h)
+        p = real_dlsym(h, n);
+    return p;
+}
+#define RESOLVE(n) do { if (!real_##n) real_##n = next_sym(#n); } while (0)
 
 /* ------------------------------------------------------------ virtual time */
 
@@ -97,11 +120,19 @@ static int64_t vnow(void)
     return __atomic_load_n(&swaps, __ATOMIC_RELAXED) * frame_ns +
            __atomic_load_n(&slept_ns, __ATOMIC_RELAXED);
 }
-static void vadvance(int64_t ns)
+static int trace;
+static void vadvance_at(int64_t ns, const char *fn, void *ra)
 {
     if (ns > 0)
         __atomic_add_fetch(&slept_ns, ns, __ATOMIC_RELAXED);
+    if (trace && ns > 0) {      /* GLREF_TRACE: who advanced the virtual clock */
+        Dl_info di;
+        const char *lib = ra && dladdr(ra, &di) && di.dli_fname ? di.dli_fname : "?";
+        fprintf(stderr, "glref: %s from %s advances virtual time %lld us\n", fn, lib,
+                (long long)(ns / 1000));
+    }
 }
+#define vadvance(ns) vadvance_at((ns), __func__, __builtin_return_address(0))
 
 /* Is the caller at return address ra library code that must keep real time? */
 static const char *extra_real;
@@ -460,7 +491,6 @@ static const char *out_stem;
 static int64_t want_frame = 1;
 static int cap_screen;
 static int64_t stall_ms = 4000;
-static int trace;
 
 static pthread_mutex_t cap_mu = PTHREAD_MUTEX_INITIALIZER;
 static Display *cdpy;              /* our private connection */
@@ -710,6 +740,57 @@ glref_fp glXGetProcAddress(const GLubyte *name)
     if (h) return h;
     RESOLVE(glXGetProcAddress);
     return real_glXGetProcAddress ? real_glXGetProcAddress(name) : NULL;
+}
+
+/* dlsym. An app that loads GL itself (SDL) fetches glXGetProcAddressARB with
+ * dlsym() on its own dlopen handle and every other GLX entry point through
+ * that. Neither goes through the dynamic linker's symbol lookup, so without
+ * this the shim never saw such an app's swaps. When the APP (caller_is_app)
+ * asks any handle for a hooked GLX name it gets the hook, and the handle is
+ * remembered for next_sym(). Everything else - and every lookup made from a
+ * GL/X/libc library, so glvnd's vendor lookups are untouched - is forwarded.
+ * RTLD_NEXT from another object (a second preload, say) is answered by
+ * walking the link map after the caller. Each object is looked up through a
+ * handle from dlopen(RTLD_NOLOAD): the bare link_map of an object loaded at
+ * startup has no search list, and glibc's dlsym crashes on it. */
+void *dlsym(void *handle, const char *name)
+{
+    dlsym_fn rd = get_real_dlsym();
+    void *ra = __builtin_return_address(0);
+    if (!rd)
+        return NULL;
+    if (handle == RTLD_NEXT) {
+        Dl_info di;
+        struct link_map *lm = NULL;
+        if (!dladdr1(ra, &di, (void **)&lm, RTLD_DL_LINKMAP) || !lm)
+            return NULL;
+        if (di.dli_fbase == self_base)
+            return rd(RTLD_NEXT, name);
+        for (struct link_map *l = lm->l_next; l; l = l->l_next) {
+            void *h, *p;
+            if (!l->l_name || !l->l_name[0])
+                continue;
+            h = dlopen(l->l_name, RTLD_LAZY | RTLD_NOLOAD);
+            if (!h)
+                continue;               /* the vDSO, for one */
+            p = rd(h, name);
+            dlclose(h);
+            if (p)
+                return p;
+        }
+        return NULL;
+    }
+    if (name && caller_is_app(ra)) {
+        void *h = (void *)hooked_proc((const GLubyte *)name);
+        if (!h && !strcmp(name, "glXGetProcAddressARB")) h = (void *)glXGetProcAddressARB;
+        if (!h && !strcmp(name, "glXGetProcAddress")) h = (void *)glXGetProcAddress;
+        if (h) {
+            if (handle != RTLD_DEFAULT)
+                __atomic_store_n(&gl_handle, handle, __ATOMIC_RELEASE);
+            return h;
+        }
+    }
+    return rd(handle, name);
 }
 
 __attribute__((constructor)) static void glref_init(void)

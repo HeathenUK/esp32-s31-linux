@@ -1,0 +1,8 @@
+# glref run: impl=ours name=r2 frame=2 display=:92
+# cmd: /src/gl/out-host/glx_raster 2
+# libGL.so.1 resolves to:
+#   	libGLU.so.1 => /src/gl/ref-apps/prefix/lib/libGLU.so.1 (0x0000efc826d20000)
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000efc826cc0000)
+libGL: context 1 created (pid 484, comm glx_raster)
+error after the frame: 0x0
+glref: ok at swap 2 -> /src/artifacts/gl/f7/raster/ours/r2.f2

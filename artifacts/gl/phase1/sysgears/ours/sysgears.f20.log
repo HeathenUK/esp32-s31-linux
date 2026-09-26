@@ -1,8 +1,8 @@
 # glref run: impl=ours name=sysgears frame=20 display=:90
 # cmd: /usr/bin/glxgears -geometry 320x240+0+0
 # libGL.so.1 resolves to:
-#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000e8c4ebde0000)
-libGL: context 1 created (pid 209, comm glxgears)
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000efb311070000)
+libGL: context 1 created (pid 208, comm glxgears)
 Running synchronized to the vertical refresh.  The framerate should be
 approximately the same as the monitor refresh rate.
 glref: ok at swap 20 -> /src/artifacts/gl/phase1/sysgears/ours/sysgears.f20

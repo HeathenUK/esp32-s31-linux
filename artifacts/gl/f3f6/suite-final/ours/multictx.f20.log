@@ -1,0 +1,9 @@
+# glref run: impl=ours name=multictx frame=20 display=:99
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/xdemos/multictx
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000e0ba5f210000)
+libGL: context 1 created (pid 1294, comm multictx)
+libGL: context 2 created (pid 1294, comm multictx)
+libGL: unimplemented glPolygonStipple
+libGL: unimplemented glEnable(GL_POLYGON_STIPPLE)
+glref: ok at swap 20 -> /src/artifacts/gl/f3f6/suite-final/ours/multictx.f20

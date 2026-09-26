@@ -70,21 +70,27 @@ cp $OUT $GL/out-rv32/libGL.so.1.unstripped   # symbols for profiles / addr2line
 $STRIP $OUT
 ls -l $OUT
 
-echo "--- headless_gears (static: the core objects of libGL.so.1, no X)"
+echo "--- headless_gears, core_test (static: the core objects of libGL.so.1, no X)"
+echo "    and their qemu-user variants (scalar mem*/str*: qemu has no ESP PIE), in parallel"
+# every step a background job, each waited on, so a failure fails the build
+waitall() { for p in $pids; do wait $p; done; pids=""; }
+pids=""
 $CC -O2 -Wall $ARCHFLAGS -I$GL/include -I$GL/api -c $GL/tests/headless_gears.c \
-	-o $OBJ/headless_gears.o
-$CC -static $ARCHFLAGS -o $TEST $OBJ/headless_gears.o $(cat $OBJ/core.list) -lm
-$STRIP $TEST
+	-o $OBJ/headless_gears.o & pids="$pids $!"
 $CC -O2 -Wall $ARCHFLAGS -I$GL/include -I$GL/api -c $GL/tests/core_test.c \
-	-o $OBJ/core_test.o
-$CC -static $ARCHFLAGS -o $GL/out-rv32/core_test $OBJ/core_test.o $(cat $OBJ/core.list) -lm
-$STRIP $GL/out-rv32/core_test
-
-echo "--- qemu-user variants (scalar mem*/str*: qemu has no ESP PIE)"
-$CC -O2 $ARCHFLAGS -c $GL/tests/qemu_libc.c -o $OBJ/qemu_libc.o
-$CC -O2 $ARCHFLAGS -I$GL/tinygl/source -c $GL/tests/d2f_test.c -o $OBJ/d2f_test.o
-for t in headless_gears core_test d2f_test; do
+	-o $OBJ/core_test.o & pids="$pids $!"
+$CC -O2 $ARCHFLAGS -c $GL/tests/qemu_libc.c -o $OBJ/qemu_libc.o & pids="$pids $!"
+$CC -O2 -Wall $ARCHFLAGS -I$GL/include -I$GL/api -c $GL/tests/raster_gate.c \
+	-o $OBJ/raster_gate.o & pids="$pids $!"
+$CC -O2 $ARCHFLAGS -I$GL/tinygl/source -c $GL/tests/d2f_test.c -o $OBJ/d2f_test.o & pids="$pids $!"
+waitall
+( $CC -static $ARCHFLAGS -o $TEST $OBJ/headless_gears.o $(cat $OBJ/core.list) -lm && $STRIP $TEST ) &
+pids="$pids $!"
+( $CC -static $ARCHFLAGS -o $GL/out-rv32/core_test $OBJ/core_test.o $(cat $OBJ/core.list) -lm &&
+	$STRIP $GL/out-rv32/core_test ) & pids="$pids $!"
+for t in headless_gears core_test d2f_test raster_gate; do
 	$CC -static $ARCHFLAGS -o $GL/out-rv32/$t.qemu $OBJ/$t.o $OBJ/qemu_libc.o \
-		$(cat $OBJ/core.list) -lm
+		$(cat $OBJ/core.list) -lm & pids="$pids $!"
 done
+waitall
 ls -l $TEST $GL/out-rv32/core_test $GL/out-rv32/*.qemu

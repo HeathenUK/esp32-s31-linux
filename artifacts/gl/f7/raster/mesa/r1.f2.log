@@ -1,0 +1,9 @@
+# glref run: impl=mesa name=r1 frame=2 display=:93
+# cmd: /src/gl/out-host/glx_raster 1
+# libGL.so.1 resolves to:
+#   	libGLU.so.1 => /src/gl/ref-apps/prefix/lib/libGLU.so.1 (0x0000f76f6b4c0000)
+#   	libGL.so.1 => /lib/aarch64-linux-gnu/libGL.so.1 (0x0000f76f6b3c0000)
+#   	libGLdispatch.so.0 => /lib/aarch64-linux-gnu/libGLdispatch.so.0 (0x0000f76f6aba0000)
+#   	libGLX.so.0 => /lib/aarch64-linux-gnu/libGLX.so.0 (0x0000f76f6ab40000)
+error after the frame: 0x0
+glref: ok at swap 2 -> /src/artifacts/gl/f7/raster/mesa/r1.f2

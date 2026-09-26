@@ -313,6 +313,19 @@ int XStoreColors(Display *dpy, Colormap cmap, XColor *defs, int n)
 	return 1;
 }
 
+/*
+ * One entry: the same StoreColors request as XStoreColors, so the two agree.
+ * xshim applies it to its one 8-bit palette (pixels 0-255, whatever the
+ * colormap), which only PseudoColor windows are drawn through; nothing a
+ * TrueColor window shows reads it. freeglut calls this only from glutSetColor
+ * in colour-index mode, and our GLX offers no colour-index visual.
+ */
+XLITE_IMPL(XStoreColor)
+int XStoreColor(Display *dpy, Colormap cmap, XColor *def)
+{
+	return XStoreColors(dpy, cmap, def, 1);
+}
+
 XLITE_IMPL(XSetWindowColormap)
 int XSetWindowColormap(Display *dpy, Window w, Colormap c)
 {
@@ -1160,6 +1173,14 @@ unsigned long XNextRequest(Display *dpy)
 	return dpy->request + 1;
 }
 
+/* The function form of LastKnownRequestProcessed(): the highest serial any
+ * reply, error or event has shown the server to have finished (xlite_seen). */
+XLITE_IMPL(XLastKnownRequestProcessed)
+unsigned long XLastKnownRequestProcessed(Display *dpy)
+{
+	return dpy->last_request_read;
+}
+
 XLITE_IMPL(XQueryFont)
 XFontStruct *XQueryFont(Display *dpy, XID fid) { return font_by_id(dpy, fid); }
 
@@ -1279,8 +1300,18 @@ int XChangeProperty(Display *dpy, Window w, Atom prop, Atom type, int fmt,
 	p32(r + 12, type);
 	r[16] = fmt;
 	p32(r + 20, nelem);
-	if (bytes > 0)
+	if (bytes > 0 && fmt == 32 && sizeof(long) != 4) {
+		/* format 32 data is an array of long (Xlib's Data32): with
+		   8-byte longs (the LP64 host rig) each is packed to CARD32.
+		   Dead code on the board, where long is the wire's 4 bytes
+		   (review X1) */
+		const long *l = (const long *)data;
+		int i;
+		for (i = 0; i < nelem; i++)
+			p32(r + 24 + 4 * i, (uint32_t)l[i]);
+	} else if (bytes > 0) {
 		memcpy(r + 24, data, bytes);
+	}
 	xlite_send(x, r);
 	return 1;
 }
@@ -1324,7 +1355,19 @@ int XGetWindowProperty(Display *dpy, Window w, Atom prop, long off, long len,
 	*type = g32(hdr + 8);
 	*after = g32(hdr + 12);
 	*nitems = g32(hdr + 16);
-	if (*nitems && extra) {
+	if (*nitems && extra && *fmt == 32 && sizeof(long) != 4) {
+		/* format 32 comes back as an array of long (Xlib's _XRead32:
+		   each CARD32 sign-extended from int); LP64 only (review X1) */
+		size_t i, n = *nitems, have = nextra / 4;
+		long *l = malloc(n * sizeof(long) + 1);
+
+		if (l) {
+			for (i = 0; i < n; i++)
+				l[i] = i < have ? (long)(int32_t)g32(extra + 4 * i) : 0;
+			((unsigned char *)l)[n * sizeof(long)] = 0;
+		}
+		*data = (unsigned char *)l;
+	} else if (*nitems && extra) {
 		size_t n = *nitems * (*fmt / 8);
 
 		*data = malloc(n + 1);
@@ -2503,6 +2546,27 @@ int XGetPointerControl(Display *dpy, int *num, int *den, int *thresh)
 	return 1;
 }
 
+/*
+ * The pointer's button map, answered locally: xshim is the only server and
+ * delivers buttons 1-3 and the wheel as 4/5 (lvdesk's pointer), never
+ * remapped, so the map is the identity over five. freeglut's
+ * glutDeviceGet(GLUT_NUM_MOUSE_BUTTONS) is the caller, with nmap 0, and
+ * wants only the count. Asking the server would be a round trip for a
+ * constant, and xshim does not implement GetPointerMapping.
+ */
+#define XLITE_NBUTTONS	5
+
+XLITE_IMPL(XGetPointerMapping)
+int XGetPointerMapping(Display *dpy, unsigned char *map, int nmap)
+{
+	int i;
+
+	(void)dpy;
+	for (i = 0; map && i < nmap && i < XLITE_NBUTTONS; i++)
+		map[i] = (unsigned char)(i + 1);
+	return XLITE_NBUTTONS;
+}
+
 XLITE_IMPL(XChangePointerControl)
 int XChangePointerControl(Display *dpy, Bool do_accel, Bool do_thresh,
 			  int num, int den, int thresh)
@@ -2669,8 +2733,8 @@ Pixmap XCreateBitmapFromData(Display *dpy, Drawable d, const char *data,
  * get/modify/set on it four times per window (SDL_x11window.c:863-872,
  * :886-895, :923-932, :1098-1115); the zeroed answer this used to give threw
  * away the earlier fields on each round. XSetWMNormalHints (xlite_key.c)
- * sends the XSizeHints struct raw as 18 longs, and on ilp32 that is exactly
- * the 72-byte wire layout, so the reply copies straight back into it.
+ * sends the 18 fields as longs, in the wire order, and they are read back
+ * field by field.
  */
 XLITE_IMPL(XGetWMNormalHints)
 Status XGetWMNormalHints(Display *dpy, Window w, XSizeHints *hints,
@@ -2693,8 +2757,22 @@ Status XGetWMNormalHints(Display *dpy, Window w, XSizeHints *hints,
 		XFree(data);
 		return 0;
 	}
-	if (hints)
-		memcpy(hints, data, 18 * sizeof(long));
+	if (hints) {
+		/* field by field: the struct is longs and ints, the property
+		   18 CARD32 in this order (ICCCM 4.1.2.3); a raw copy was right
+		   only where both are 4 bytes (review X1) */
+		const long *d = (const long *)data;
+		hints->flags = d[0];
+		hints->x = (int)d[1]; hints->y = (int)d[2];
+		hints->width = (int)d[3]; hints->height = (int)d[4];
+		hints->min_width = (int)d[5]; hints->min_height = (int)d[6];
+		hints->max_width = (int)d[7]; hints->max_height = (int)d[8];
+		hints->width_inc = (int)d[9]; hints->height_inc = (int)d[10];
+		hints->min_aspect.x = (int)d[11]; hints->min_aspect.y = (int)d[12];
+		hints->max_aspect.x = (int)d[13]; hints->max_aspect.y = (int)d[14];
+		hints->base_width = (int)d[15]; hints->base_height = (int)d[16];
+		hints->win_gravity = (int)d[17];
+	}
 	XFree(data);
 	/* The mask Xlib reports for an 18-long property. */
 	if (supplied)
@@ -2709,9 +2787,9 @@ Status XGetWMNormalHints(Display *dpy, Window w, XSizeHints *hints,
  * result without a NULL check (st x.c:1750-1756, reached from xbell() on a
  * BEL while unfocused and from the FocusIn handler at x.c:1779-1783), and
  * SDL2's SDL_FlashWindow does the same - so with the stub this was a
- * segfault on focus. XSetWMHints sends the XWMHints struct raw as 9 longs
- * (36 bytes on ilp32: flags, input, initial_state, icon_pixmap, icon_window,
- * icon_x, icon_y, icon_mask, window_group), which is the wire order too.
+ * segfault on focus. XSetWMHints sends the 9 fields as longs (flags, input,
+ * initial_state, icon_pixmap, icon_window, icon_x, icon_y, icon_mask,
+ * window_group), which is the wire order too.
  * Absent -> NULL, as Xlib.
  */
 XLITE_IMPL(XGetWMHints)
@@ -2732,8 +2810,18 @@ XWMHints *XGetWMHints(Display *dpy, Window w)
 	}
 	h = malloc(sizeof(*h));
 	if (h) {
+		/* field by field, as XGetWMNormalHints (review X1; the raw copy
+		   of 9 longs also overran the 56-byte LP64 struct) */
+		const long *d = (const long *)data;
 		memset(h, 0, sizeof(*h));
-		memcpy(h, data, 9 * sizeof(long));
+		h->flags = d[0];
+		h->input = (Bool)d[1];
+		h->initial_state = (int)d[2];
+		h->icon_pixmap = (Pixmap)(unsigned long)(uint32_t)d[3];
+		h->icon_window = (Window)(unsigned long)(uint32_t)d[4];
+		h->icon_x = (int)d[5]; h->icon_y = (int)d[6];
+		h->icon_mask = (Pixmap)(unsigned long)(uint32_t)d[7];
+		h->window_group = (XID)(unsigned long)(uint32_t)d[8];
 	}
 	XFree(data);
 	return h;
@@ -3203,7 +3291,6 @@ void *XliteShmMap(Display *dpy, Pixmap p, int *w, int *h, int *stride, int *bpp)
  * trip here would reinstate exactly the cost this path exists to remove. */
 void XliteShmDamaged(Display *dpy, Pixmap p)
 {
-	struct xdpy *x = (struct xdpy *)dpy;
 	int major = xshm_major(dpy);
 
 	if (!major)

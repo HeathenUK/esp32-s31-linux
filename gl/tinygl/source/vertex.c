@@ -91,6 +91,27 @@ void gl_eval_viewport(GLContext * c)
     iy0 = y0 < 0 ? 0 : y0;
     iy1 = y1 > bh ? bh : y1;
 
+    /* s31: the scissor box (plan F6) clips here too, at no per-pixel
+       cost: the guard below makes the clipper cut primitives to it, and
+       rast_box bounds what lines and points widen into */
+    {
+        int bx0 = 0, by0 = 0, bx1 = bw, by1 = bh;
+        if (c->scissor_enabled) {
+            int sx0 = c->scissor[0], sx1 = c->scissor[0] + c->scissor[2];
+            int sy0 = bh - (c->scissor[1] + c->scissor[3]), sy1 = bh - c->scissor[1];
+            if (sx0 > bx0) bx0 = sx0;
+            if (sx1 < bx1) bx1 = sx1;
+            if (sy0 > by0) by0 = sy0;
+            if (sy1 < by1) by1 = sy1;
+        }
+        c->rast_box[0] = bx0; c->rast_box[1] = by0;
+        c->rast_box[2] = bx1; c->rast_box[3] = by1;
+        if (ix0 < bx0) ix0 = bx0;
+        if (ix1 > bx1) ix1 = bx1;
+        if (iy0 < by0) iy0 = by0;
+        if (iy1 > by1) iy1 = by1;
+    }
+
     v->empty = (ix1 <= ix0 || iy1 <= iy0);
     v->guard = !v->empty && (ix0 != x0 || ix1 != x1 || iy0 != y0 || iy1 != y1);
 
@@ -111,6 +132,19 @@ void gl_eval_viewport(GLContext * c)
     } else {
         isx = sx; itx = tx; isy = sy; ity = ty;
     }
+    /* s31: GL's own mapping of the full viewport, x_w = (x_ndc + 1) w/2 +
+       x0, seen through the guard's S (x' = gx0 x + gx1): the general
+       filler (ztriangle_gen.c) samples pixel centres against it */
+    {
+        float gx0 = v->guard ? v->gx[0] : 1.0f, gx1 = v->guard ? v->gx[1] : 0.0f;
+        float gy0 = v->guard ? v->gy[0] : 1.0f, gy1 = v->guard ? v->gy[1] : 0.0f;
+        v->ex[0] = (float)v->xsize * 0.5f / gx0;
+        v->ex[1] = (float)x0 + (float)v->xsize * 0.5f - v->ex[0] * gx1;
+        v->ey[0] = -(float)v->ysize * 0.5f / gy0;
+        v->ey[1] = (float)y0 + (float)v->ysize * 0.5f - v->ey[0] * gy1;
+    }
+    c->pipe.box[0] = ix0; c->pipe.box[1] = iy0;
+    c->pipe.box[2] = ix1; c->pipe.box[3] = iy1;
 
     v->trans.X = itx;
     v->trans.Y = ity;
@@ -119,6 +153,15 @@ void gl_eval_viewport(GLContext * c)
     v->scale.X = isx;
     v->scale.Y = isy;
     v->scale.Z = -((zsize - 0.5f) / 2.0f);
+
+    /* s31: glDepthRange (plan F6). Window depth d = n + (f - n)(z_ndc + 1)/2
+       is stored as (1 - d) * Z (clear.c), so the default above is the
+       n = 0, f = 1 case of this */
+    if (c->depth_range[0] != 0.0f || c->depth_range[1] != 1.0f) {
+        float zr = zsize - 0.5f, n = c->depth_range[0], f = c->depth_range[1];
+        v->scale.Z = -zr * (f - n) * 0.5f;
+        v->trans.Z = zr * (1.0f - n - (f - n) * 0.5f) + ((1 << ZB_POINT_Z_FRAC_BITS)) / 2;
+    }
 
     /* the composed projection depends on the guard */
     c->matrix_model_projection_updated = 1;
@@ -138,6 +181,35 @@ static void gl_guard_projection(GLContext * c)
         e->m[2][j] = p->m[2][j];
         e->m[3][j] = p->m[3][j];
     }
+}
+
+/* s31: GL 1.3 3.10: f from the eye-space distance, approximated by |z_e|
+   as GL allows (and Mesa does), clamped to [0,1]. Float only. */
+void gl_vertex_fog(GLContext * c, GLVertex * v)
+{
+    float ez, d, f;
+
+    if (c->lighting_enabled) {
+	ez = v->ec.Z;
+    } else {
+	float *m = &c->matrix_stack_ptr[0]->m[0][0];
+	ez = v->coord.X * m[8] + v->coord.Y * m[9] + v->coord.Z * m[10] +
+	     v->coord.W * m[11];
+    }
+    d = fabsf(ez);
+    switch (c->fog_mode) {
+    case GL_LINEAR:
+	f = (c->fog_end - d) * c->fog_scale;
+	break;
+    case GL_EXP:
+	f = expf(-c->fog_density * d);
+	break;
+    default:                    /* GL_EXP2 */
+	f = c->fog_density * d;
+	f = expf(-f * f);
+	break;
+    }
+    v->fog = f < 0.0f ? 0.0f : (f > 1.0f ? 1.0f : f);
 }
 
 void glopBegin(GLContext * c, GLParam * p)
@@ -170,17 +242,10 @@ void glopBegin(GLContext * c, GLParam * p)
     if (c->viewport.empty && c->render_mode != GL_SELECT)
 	type = TGL_BEGIN_DISCARD;
     c->begin_type = type;
-    /* s31: GL_MODULATE is the DEFAULT texture environment, so an app that
-       never calls glTexEnv (manywin) is drawn as GL_REPLACE without having
-       made a call we could warn at: say so at the first textured draw */
-    if (c->texture_2d_enabled && c->texenv_mode != GL_REPLACE &&
-	c->texenv_mode != GL_DECAL) {
-	static char warned;   /* per glBegin: no warn-list scan once said */
-	if (!warned) {
-	    warned = 1;
-	    gl_warn_once("texturing with GL_TEXTURE_ENV_MODE other than GL_REPLACE/GL_DECAL (drawn as GL_REPLACE)");
-	}
-    }
+    /* s31: the rasteriser path for this state (raster.c): one load and
+       branch per glBegin while nothing changed */
+    if (c->raster_dirty)
+	gl_update_raster(c);
 
     if (c->matrix_model_projection_updated) {
 
@@ -195,6 +260,13 @@ void glopBegin(GLContext * c, GLParam * p)
 	    /* precompute inverse modelview */
 	    gl_M4_Inv(&tmp, c->matrix_stack_ptr[0]);
 	    gl_M4_Transpose(&c->matrix_model_view_inv, &tmp);
+	    if (c->rescale_normal_enabled) {
+		/* s31: GL_RESCALE_NORMAL (GL 1.3 2.10.3): 1 / |third row of
+		   the inverse modelview| = its transpose's third column */
+		float *mi = &c->matrix_model_view_inv.m[0][0];
+		float l = mi[2] * mi[2] + mi[6] * mi[6] + mi[10] * mi[10];
+		c->rescale = l > 0.0f ? 1.0f / sqrtf(l) : 1.0f;
+	    }
 	} else {
 	    float *m = &c->matrix_model_projection.m[0][0];
 	    /* precompute projection matrix */
@@ -207,8 +279,12 @@ void glopBegin(GLContext * c, GLParam * p)
 		c->matrix_model_projection_no_w_transform = 1;
 	}
 
-	/* test if the texture matrix is not Identity */
-	c->apply_texture_matrix = !gl_M4_IsId(c->matrix_stack_ptr[2]);
+	/* test if the texture matrix is not Identity; s31: bit 1 is texgen,
+	   and the clip planes and texgen's matrices follow the matrices */
+	c->apply_texture_matrix = (!gl_M4_IsId(c->matrix_stack_ptr[2])) |
+	                          (c->texgen_mask ? 2 : 0);
+	if (c->clip_plane_mask | c->texgen_mask)
+	    gl_update_xform(c);
 
 	c->matrix_model_projection_updated = 0;
     }
@@ -225,7 +301,7 @@ void glopBegin(GLContext * c, GLParam * p)
 	    c->draw_triangle_front = gl_draw_triangle_line;
 	    break;
 	default:
-	    c->draw_triangle_front = gl_draw_triangle_fill;
+	    c->draw_triangle_front = c->draw_fill;   /* s31: raster.c */
 	    break;
 	}
 
@@ -237,7 +313,7 @@ void glopBegin(GLContext * c, GLParam * p)
 	    c->draw_triangle_back = gl_draw_triangle_line;
 	    break;
 	default:
-	    c->draw_triangle_back = gl_draw_triangle_fill;
+	    c->draw_triangle_back = c->draw_fill;
 	    break;
 	}
     }
@@ -283,6 +359,10 @@ static inline void gl_vertex_transform(GLContext * c, GLVertex * v)
 
 	if (c->normalize_enabled) {
 	    gl_V3_Norm(&v->normal);
+	} else if (c->rescale_normal_enabled) {
+	    v->normal.X *= c->rescale;     /* s31 */
+	    v->normal.Y *= c->rescale;
+	    v->normal.Z *= c->rescale;
 	}
     } else {
 	/* no eye coordinates needed, no normal */
@@ -350,7 +430,26 @@ void glopVertex(GLContext * c, GLParam * p)
 
     gl_vertex_transform(c, v);
 
+    /* tex coords */
+
+    if (c->texture_2d_enabled) {
+	/* s31: the texture matrix and texgen (plan F7) out of line */
+	if (c->apply_texture_matrix) {
+	    gl_vertex_texcoord(c, v);
+	} else {
+	    v->tex_coord = c->current_tex_coord;
+	}
+    }
+    /* s31: the fog factor (only on the general path, plan F6) and the
+       user clip planes (plan F7): one test where there was one */
+    if (c->vtx_extra)
+	gl_vertex_extra(c, v);
+
     /* color */
+    /* s31: last of the per-vertex work - texgen (the normal, which the
+       secondary colour overwrites) and fog (the eye coordinates, which
+       the two-sided back colours overwrite) read what lighting may clobber
+       (zgl.h GLVertex) */
 
     if (c->lighting_enabled) {
 	gl_shade_vertex(c, v);
@@ -358,15 +457,6 @@ void glopVertex(GLContext * c, GLParam * p)
 	v->color = c->current_color;
     }
 
-    /* tex coords */
-
-    if (c->texture_2d_enabled) {
-	if (c->apply_texture_matrix) {
-	    gl_M4_MulV4(&v->tex_coord, c->matrix_stack_ptr[2], &c->current_tex_coord);
-	} else {
-	    v->tex_coord = c->current_tex_coord;
-	}
-    }
     /* precompute the mapping to the viewport */
     if (v->clip_code == 0)
 	gl_transform_to_viewport(c, v);

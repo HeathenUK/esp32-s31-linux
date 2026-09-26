@@ -1,0 +1,17 @@
+# glref run: impl=ours name=p1 frame=2 display=:96
+# cmd: /src/gl/out-host/glx_pixels 1
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000e96693600000)
+libGL: context 1 created (pid 471, comm glx_pixels)
+query raster after bitmap: valid 1 pos 4.000 204.000 0.5000 1.000 col 1.000 0.000 0.000 1.000 tex 0.000 0.000 0.000 1.000 dist 204.039
+query raster after moves: valid 1 pos 70.000 212.000 0.5000 1.000 col 1.000 1.000 0.000 1.000 tex 0.000 0.000 0.000 1.000 dist 228.035
+query raster after text: valid 1 pos 244.000 218.000 0.5000 1.000 col 1.000 1.000 1.000 1.000 tex 0.000 0.000 0.000 1.000 dist 304.611
+query raster frustum: valid 1 pos 15.000 175.000 0.5556 2.000 col 1.000 0.300 0.300 1.000 tex 0.000 0.000 0.000 1.000 dist 2.121
+query raster invalid: valid 0 pos 23.333 181.333 0.7407 3.000 col 1.000 0.300 0.300 1.000 tex 0.000 0.000 0.000 1.000 dist 3.048
+query raster invalid after bitmap: valid 0 pos 23.333 181.333 0.7407 3.000 col 1.000 0.300 0.300 1.000 tex 0.000 0.000 0.000 1.000 dist 3.048
+query raster w 2: valid 1 pos 55.000 175.000 0.5556 4.000 col 0.300 1.000 0.300 1.000 tex 0.000 0.000 0.000 1.000 dist 4.243
+query raster windowpos: valid 1 pos 86.000 166.000 0.4000 1.000 col 1.000 0.800 0.200 1.000 tex 0.000 0.000 0.000 1.000 dist 0.000
+query raster lit: valid 1 pos 124.000 164.000 0.5000 1.000 col 0.797 0.366 0.233 1.000 tex 0.000 0.000 0.000 1.000 dist 205.602
+query raster popped: valid 1 pos 44.000 124.000 0.5000 1.000 col 0.200 1.000 0.200 1.000 tex 0.000 0.000 0.000 1.000 dist 131.575
+error after page 1: 0x0
+glref: ok at swap 2 -> /src/artifacts/gl/phase2/pixels/ours/p1.f2

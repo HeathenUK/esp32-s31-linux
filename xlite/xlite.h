@@ -150,6 +150,10 @@ unsigned char *xlite_req(struct xdpy *x, int opcode, int detail, int words);
 int xlite_reply(struct xdpy *x, uint32_t seq, unsigned char *hdr,
 		unsigned char **extra, size_t *nextra);
 void xlite_queue(struct xdpy *x, const unsigned char *ev);
+/* Full serial of a 16-bit wire sequence number (xlite.c); xlite_seen also
+ * advances pub.last_request_read to it. */
+unsigned long xlite_widen(struct xdpy *x, unsigned seq16);
+unsigned long xlite_seen(struct xdpy *x, unsigned seq16);
 int xlite_read_more(struct xdpy *x, int block);
 void xlite_ring_bell(struct xdpy *x);
 void xlite_ring_take_fd(struct xdpy *x);

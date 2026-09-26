@@ -1,0 +1,8 @@
+# glref run: impl=mesa name=geartrain frame=60 display=:91
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/demos/geartrain -geometry 320x240+0+0
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /lib/aarch64-linux-gnu/libGL.so.1 (0x0000fc9a0bf90000)
+#   	libglut.so.3 => /src/gl/ref-apps/prefix/lib/libglut.so.3 (0x0000fc9a0beb0000)
+#   	libGLdispatch.so.0 => /lib/aarch64-linux-gnu/libGLdispatch.so.0 (0x0000fc9a0bab0000)
+#   	libGLX.so.0 => /lib/aarch64-linux-gnu/libGLX.so.0 (0x0000fc9a0ba50000)
+glref: ok at swap 60 -> /src/artifacts/gl/phase2/selftest-mesa-2/mesa/geartrain.f60

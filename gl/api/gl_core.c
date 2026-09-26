@@ -669,6 +669,14 @@ void GLAPIENTRY glTexImage2D(GLenum target, GLint level, GLint internalformat,
 			 border, (int)format, (int)type, (void *)pixels);
 }
 
+void GLAPIENTRY glTexSubImage2D(GLenum target, GLint level, GLint xoffset,
+				GLint yoffset, GLsizei width, GLsizei height,
+				GLenum format, GLenum type, const GLvoid *pixels)
+{
+	tgl_glTexSubImage2D((int)target, level, xoffset, yoffset, width, height,
+			    (int)format, (int)type, pixels);
+}
+
 void GLAPIENTRY glTexEnvi(GLenum target, GLenum pname, GLint param)
 {
 	if (pname == GL_TEXTURE_ENV_COLOR) {

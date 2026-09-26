@@ -1,0 +1,1 @@
+PASS  320x240  strict 0.682% (524 px >16)  tolerant 0.049% (38 px)  max 231  mean 3.04  diff /src/artifacts/gl/f7/pixels/diff-b1.png

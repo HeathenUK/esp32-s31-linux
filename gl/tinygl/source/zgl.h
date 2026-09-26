@@ -11,6 +11,7 @@
 #include "zbuffer.h"
 #include "zmath.h"
 #include "zfeatures.h"
+#include "zpipe.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -104,6 +105,10 @@ typedef struct GLViewport {
   int guard;                   /* 1: proj_eff = S * P is in use */
   int empty;                   /* 1: nothing of the viewport is on the buffer */
   float gx[2], gy[2];          /* S: x' = gx0*x + gx1*w, y' = gy0*y + gy1*w */
+  /* s31: GL's exact window transform of the (guarded) clip coordinates,
+     for the general filler: x = ex[0] * X/W + ex[1], y (rows from the top)
+     = ey[0] * Y/W + ey[1] */
+  float ex[2], ey[2];
 } GLViewport;
 
 typedef union {
@@ -122,17 +127,27 @@ typedef struct GLParamBuffer {
 typedef struct GLList {
   GLParamBuffer *first_op_buffer;
   /* TODO: extensions for an hash table or a better allocating scheme */
+  void *owned;   /* s31: pixel data compiled into the list (gl_list_own) */
 } GLList;
 
 typedef struct GLVertex {
   int edge_flag;
-  V3 normal;
-  V4 coord;
+  /* s31: the normal is dead once the vertex is lit, so with
+     GL_SEPARATE_SPECULAR_COLOR the same storage holds the secondary
+     (specular) colour (light.c) - the vertex does not grow */
+  union { V3 normal; V3 spec; };
+  /* s31: the object coordinates are dead once the vertex is lit (lighting
+     runs last in glopVertex), so with GL_LIGHT_MODEL_TWO_SIDE the back
+     material's colour takes their storage, and the back secondary colour
+     that of the eye coordinates (light.c; the vertex does not grow: it is
+     copied along every strip) */
+  union { V4 coord; V4 color_back; };
   V4 tex_coord;
   V4 color;
+  float fog;            /* s31: GL fog factor f in [0,1] (general path only) */
   
   /* computed values */
-  V4 ec;                /* eye coordinates */
+  union { V4 ec; V3 spec_back; };   /* eye coordinates */
   V4 pc;                /* coordinates in the normalized volume */
   int clip_code;        /* clip code */
   ZBufferPoint zp;      /* integer coordinates for the rasterization */
@@ -147,14 +162,35 @@ typedef struct GLImage {
 
 #define TEXTURE_HASH_TABLE_SIZE 256
 
+/* s31: stored format classes (texture.c): what the texenv needs to know */
+enum { TGL_TEXF_RGB,        /* RGB565, no alpha: RGB, LUMINANCE, 3, 1 ... */
+       TGL_TEXF_RGBA,       /* RGB565 + A8: RGBA, LUMINANCE_ALPHA, 4, 2 ... */
+       TGL_TEXF_ALPHA,      /* A8 (colour plane white): ALPHA */
+       TGL_TEXF_INTENSITY   /* I in the colour plane and in A8 */
+};
+
+#define TGL_STORED_LEVELS 1
 typedef struct GLTexture {
-  GLImage images[MAX_TEXTURE_LEVELS];
+  /* s31: only level 0 is stored (the other levels are recorded in lw, lh,
+     lfmt): one image, not MAX_TEXTURE_LEVELS - 120 bytes a texture object
+     (review P6; a TyrQuake-class app has hundreds) */
+  GLImage images[TGL_STORED_LEVELS];
   int handle;
   struct GLTexture *next,*prev;
-  /* s31: what the application specified, for glGet* and later stages */
-  int width, height, internal_format; /* level 0 as uploaded, before resampling */
+  /* s31: what the application specified, for glGet* */
+  int width, height, internal_format; /* level 0 as specified (incl. border) */
   int min_filter, mag_filter, wrap_s, wrap_t;
   float priority;
+  /* s31 (plan F3): level 0 at its own power-of-two size */
+  unsigned char *alpha;     /* A8 plane after the colour plane, or NULL */
+  int ws, hs;               /* log2 of the stored width and height */
+  int fbits;                /* fraction bits of s/t (texture.c) */
+  int fmt;                  /* TGL_TEXF_* */
+  int border;               /* of level 0 */
+  /* every level as specified (width 0: none), for completeness and for
+     glGetTexLevelParameter; levels > 0 are not stored */
+  unsigned short lw[MAX_TEXTURE_LEVELS], lh[MAX_TEXTURE_LEVELS];
+  unsigned short lfmt[MAX_TEXTURE_LEVELS];   /* internal formats fit 16 bits */
 } GLTexture;
 
 
@@ -334,16 +370,76 @@ typedef struct GLContext {
   int vertex_array_type, color_array_type, normal_array_type, texcoord_array_type;
   int vertex_array_bstride, color_array_bstride, normal_array_bstride, texcoord_array_bstride;
   int edge_flag_array_stride; void *edge_flag_array;
-  int proxy_width, proxy_height, proxy_format;
+  int proxy_width, proxy_height, proxy_format, proxy_border, proxy_level;
   float raster_pos[4];
   int raster_valid;
   int flat_r, flat_g, flat_b; /* GL_FLAT: the provoking vertex's colour, zp scale */
   struct tgl_attrib_slots attrib; /* glPush/PopAttrib stacks (gl/api/gl_pushattrib.c) */
+
+  /* s31 (plan F3-F6): which rasteriser path draws, chosen at glBegin by
+     raster.c gl_update_raster whenever raster_dirty */
+  GLVertex *flat_vtx;         /* the provoking vertex (alpha, general path) */
+  int raster_fog;             /* fog factor per vertex (general path + GL_FOG) */
+  int blend_enabled, alpha_test_enabled, fog_enabled, scissor_enabled;
+  int rescale_normal_enabled;
+  int color_control;          /* GL_LIGHT_MODEL_COLOR_CONTROL */
+  int raster_sepspec;         /* secondary colour kept apart (light.c, zpipe.c) */
+  float rescale;              /* GL_RESCALE_NORMAL factor (vertex.c) */
+  int raster_dirty;
+  int pipe_dirty;             /* the general path's stages need building */
+  int raster_general;         /* GL_FILL triangles take the general path */
+  int raster_gen_lines, raster_gen_points;
+  int raster_need_attr;       /* clipping keeps alpha and fog */
+  int raster_skip;            /* nothing can pass: depth/alpha GL_NEVER ... */
+  gl_draw_triangle_func draw_fill, draw_fill_inner;
+  /* tier 1: TinyGL's fillers for the depth state (LEQUAL, off, no write,
+     strict LESS), and its line and point routines */
+  ZB_fillTriangleFunc zb_flat, zb_smooth;
+  ZB_fillTriangleFunc zb_map;
+  void (*zb_line)(ZBuffer *, ZBufferPoint *, ZBufferPoint *);
+  void (*zb_plot)(ZBuffer *, ZBufferPoint *);
+  int tex_active;             /* GL_TEXTURE_2D on and the texture complete */
+  float tex_sscale, tex_tscale; /* texcoord 1.0 in s/t fixed point */
+  int tex_smax, tex_tmax;       /* the same as ints */
+  float fog_scale;            /* 1 / (end - start) */
+  int line_w, point_w;        /* integer widths */
+  int rast_box[4];            /* buffer and scissor: x0 y0 x1 y1, rows from the top */
+  ZPipe pipe;
+
+  /* s31 (plan F7): pixel paths and the remaining vertex state. Nothing
+     here is read on a path that uses none of it: glopVertex tests
+     vtx_extra where it tested raster_fog, and texgen rides on
+     apply_texture_matrix (bit 1) */
+  int vtx_extra;              /* 1: fog factor, 2: user clip planes (s31_xform.c) */
+  int clip_plane_mask;        /* enabled GL_CLIP_PLANEi, bit i */
+  V4 clip_plane_eye[6];       /* eye coordinates, as glGetClipPlane reports */
+  V4 clip_plane_clip[6];      /* the same planes in clip coordinates (proj_used) */
+  int texgen_mask;            /* GL_TEXTURE_GEN_S/T/R/Q enabled, bits 0-3 */
+  int texgen_mode[4];
+  V4 texgen_obj[4], texgen_eye[4];
+  int texgen_eye_needed;      /* a mode reads eye coordinates or the eye normal */
+  M4 texgen_mv_inv;           /* transposed inverse modelview, when lighting is off */
+  float raster_color[4], raster_tex[4], raster_distance;
+  float raster_fogz;          /* |z_e|: the fog distance of pixel fragments, as vertices use */
+  float pixel_zoom[2];
+  float xfer_scale[4], xfer_bias[4], depth_scale, depth_bias;
+  int index_shift, index_offset, map_color, map_stencil;
+  int xfer_active;            /* some scale/bias is not the identity */
+  unsigned int poly_stipple[32]; /* row y%32; bit i = window x%32 == i */
+  int poly_stipple_enabled, line_stipple_enabled, line_stipple_counter;
+  int tex_enables;            /* bit 0 GL_TEXTURE_2D, bit 1 GL_TEXTURE_1D */
+  GLTexture *current_texture_1d;
+  GLTexture *tex1d_default;   /* this context's default 1D object */
+  void *pixpipe;              /* s31_draw.c: the pixel paths' stage list, cached */
+  unsigned int pipe_serial;   /* bumped by gl_build_pipe: the cache's key */
 } GLContext;
 
 extern GLContext *gl_ctx;
 
 void gl_add_op(GLParam *p);
+/* s31: while compiling, hand a gl_malloc'd block to the list being built;
+   it is freed with the list. 0 = not compiling (the caller keeps it). */
+int gl_list_own(GLContext *c, void *block);
 
 /* s31: error recording. The first error sticks until glGetError reads it. */
 static inline void gl_set_error(GLContext *c, int e)
@@ -361,6 +457,9 @@ static inline int gl_prepare(GLContext *c)
 #define TGL_BEGIN_DISCARD 0x7fff
 void gl_eval_viewport(GLContext *c);
 void gl_warn_once(const char *what);
+/* s31: "libGL: approximated <what>", once: an honoured feature drawn by a
+   documented approximation (not a gap: tools/glref does not count it) */
+void gl_note_once(const char *what);
 /* s31_state.c */
 int s31_cap_index(int cap);          /* -1: not a GL capability */
 void s31_cap_record(GLContext *c, int cap, int v);
@@ -383,6 +482,7 @@ static inline void gl_zp_color(ZBufferPoint *zp, const V4 *col)
   zp->g = gl_zp_chan(col->v[1], ZB_POINT_GREEN_MIN, ZB_POINT_GREEN_MAX);
   zp->b = gl_zp_chan(col->v[2], ZB_POINT_BLUE_MIN, ZB_POINT_BLUE_MAX);
 }
+
 /* GL_FLAT takes the whole primitive's colour from one vertex (GL 1.5 table
    2.12: the last vertex of a line, triangle or quad, the first of a
    polygon). TinyGL's fillers read p2, which clipping and the quad/strip
@@ -394,6 +494,31 @@ static inline void gl_set_provoking(GLContext *c, GLVertex *v)
   if (c->current_shade_model != GL_SMOOTH)
     gl_set_provoking_flat(c, v);
 }
+
+/* raster.c */
+void gl_update_raster(GLContext *c);
+void gl_draw_triangle_general(GLContext *c, GLVertex *p0, GLVertex *p1, GLVertex *p2);
+void gl_draw_triangle_modwhite(GLContext *c, GLVertex *p0, GLVertex *p1, GLVertex *p2);
+void gl_draw_triangle_offset(GLContext *c, GLVertex *p0, GLVertex *p1, GLVertex *p2);
+/* lines and points of the general path; the colour of a flat line is the
+   provoking vertex's (c->flat_vtx) */
+void gl_general_line(GLContext *c, GLVertex *a, GLVertex *b, int flat);
+void gl_general_point(GLContext *c, GLVertex *p);
+/* texture.c */
+int gl_texture_complete(const GLTexture *t);
+/* vertex.c: GL fog factor of a vertex */
+void gl_vertex_fog(GLContext *c, GLVertex *v);
+
+/* s31_xform.c (plan F7) */
+void gl_vertex_extra(GLContext *c, GLVertex *v);     /* vtx_extra: fog, clip planes */
+void gl_vertex_texcoord(GLContext *c, GLVertex *v);  /* texgen and/or texture matrix */
+int gl_user_clipcode(const GLContext *c, const V4 *pc);  /* bits 6.. */
+void gl_update_xform(GLContext *c);   /* glBegin, matrices changed: planes, texgen */
+void gl_texgen_coords(GLContext *c, const V4 *obj, const V4 *eye,
+                      const V3 *en, const V4 *in, V4 *out);
+#define TGL_CLIP_USER_SHIFT 6
+/* texture.c */
+GLTexture *gl_tex_target(GLContext *c, int target);  /* bound object, NULL: bad target */
 
 /* clip.c */
 void gl_transform_to_viewport(GLContext *c,GLVertex *v);
@@ -424,6 +549,8 @@ void gl_shade_vertex(GLContext *c,GLVertex *v);
 void glInitTextures(GLContext *c);
 void glEndTextures(GLContext *c);
 GLTexture *alloc_texture(GLContext *c,int h);
+GLTexture *alloc_texture_detached(void);   /* s31: not in the name table */
+void free_texture_detached(GLTexture *t);
 
 /* image_util.c */
 void gl_convertRGB_to_5R6G5B(unsigned short *pixmap,unsigned char *rgb,

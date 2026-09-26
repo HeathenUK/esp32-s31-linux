@@ -382,17 +382,40 @@ int XSetIconName(Display *dpy, Window w, const char *name)
 XLITE_IMPL(XSetWMNormalHints)
 void XSetWMNormalHints(Display *dpy, Window w, XSizeHints *h)
 {
-	if (h)
-		XChangeProperty(dpy, w, XA_WM_NORMAL_HINTS, XA_WM_SIZE_HINTS,
-				32, PropModeReplace, (unsigned char *)h, 18);
+	/* the 18 CARD32 of WM_NORMAL_HINTS (ICCCM 4.1.2.3) as format-32 longs,
+	   field by field: the struct mixes long and int, so its raw bytes
+	   are the wire's only where both are 4 bytes (review X1) */
+	long d[18];
+
+	if (!h)
+		return;
+	d[0] = h->flags;
+	d[1] = h->x; d[2] = h->y; d[3] = h->width; d[4] = h->height;
+	d[5] = h->min_width; d[6] = h->min_height;
+	d[7] = h->max_width; d[8] = h->max_height;
+	d[9] = h->width_inc; d[10] = h->height_inc;
+	d[11] = h->min_aspect.x; d[12] = h->min_aspect.y;
+	d[13] = h->max_aspect.x; d[14] = h->max_aspect.y;
+	d[15] = h->base_width; d[16] = h->base_height;
+	d[17] = h->win_gravity;
+	XChangeProperty(dpy, w, XA_WM_NORMAL_HINTS, XA_WM_SIZE_HINTS,
+			32, PropModeReplace, (unsigned char *)d, 18);
 }
 
 XLITE_IMPL(XSetWMHints)
 int XSetWMHints(Display *dpy, Window w, XWMHints *h)
 {
-	if (h)
-		XChangeProperty(dpy, w, XA_WM_HINTS, XA_WM_HINTS, 32,
-				PropModeReplace, (unsigned char *)h, 9);
+	/* the 9 CARD32 of WM_HINTS, field by field (as XSetWMNormalHints) */
+	long d[9];
+
+	if (!h)
+		return 1;
+	d[0] = h->flags; d[1] = h->input; d[2] = h->initial_state;
+	d[3] = (long)h->icon_pixmap; d[4] = (long)h->icon_window;
+	d[5] = h->icon_x; d[6] = h->icon_y;
+	d[7] = (long)h->icon_mask; d[8] = (long)h->window_group;
+	XChangeProperty(dpy, w, XA_WM_HINTS, XA_WM_HINTS, 32,
+			PropModeReplace, (unsigned char *)d, 9);
 	return 1;
 }
 
@@ -431,14 +454,143 @@ void XSetWMProperties(Display *dpy, Window w, XTextProperty *name,
 	(void)argv; (void)argc;
 }
 
+/*
+ * WM_COMMAND: argv as one STRING, each argument NUL-terminated. A generated
+ * stub until XSetStandardProperties needed it.
+ */
+XLITE_IMPL(XSetCommand)
+int XSetCommand(Display *dpy, Window w, char **argv, int argc)
+{
+	size_t n = 0, l;
+	char *buf, *p;
+	int i;
+
+	for (i = 0; argv && i < argc; i++)
+		n += (argv[i] ? strlen(argv[i]) : 0) + 1;
+	buf = malloc(n ? n : 1);
+	if (!buf)
+		return 0;
+	for (p = buf, i = 0; argv && i < argc; i++) {
+		l = argv[i] ? strlen(argv[i]) : 0;
+		memcpy(p, argv[i] ? argv[i] : "", l);
+		p[l] = 0;
+		p += l + 1;
+	}
+	XChangeProperty(dpy, w, XA_WM_COMMAND, XA_STRING, 8, PropModeReplace,
+			(unsigned char *)buf, (int)n);
+	free(buf);
+	return 1;
+}
+
+/*
+ * The pre-ICCCM (X10/R3) hint calls, which mesa-demos' glxgears, glxheads,
+ * manywin and a dozen other xdemos still use: musl binds every import at load,
+ * so without these each of them died before main.
+ *
+ * XSetNormalHints is WM_NORMAL_HINTS with the R3 subset of flags. Xlib writes
+ * the old 15-long form; this writes the 18-long ICCCM form with the fields R3
+ * never had (base size, gravity) left unset, because that is the form every
+ * reader accepts - including XGetWMNormalHints here, which reads 18.
+ */
+XLITE_IMPL(XSetNormalHints)
+int XSetNormalHints(Display *dpy, Window w, XSizeHints *hints)
+{
+	XSizeHints h;
+
+	if (!hints)
+		return 1;
+	h = *hints;
+	h.flags &= USPosition | USSize | PPosition | PSize | PMinSize |
+		   PMaxSize | PResizeInc | PAspect;
+	h.base_width = h.base_height = 0;
+	h.win_gravity = 0;
+	XSetWMNormalHints(dpy, w, &h);
+	return 1;
+}
+
+/*
+ * The R3 all-in-one: name, icon name, icon pixmap, command line and size
+ * hints, each only if given. Built from the calls above, in Xlib's order.
+ */
+XLITE_IMPL(XSetStandardProperties)
+int XSetStandardProperties(Display *dpy, Window w, const char *name,
+			   const char *icon_name, Pixmap icon_pixmap,
+			   char **argv, int argc, XSizeHints *hints)
+{
+	if (name)
+		XStoreName(dpy, w, name);
+	if (icon_name)
+		XSetIconName(dpy, w, icon_name);
+	if (argv)
+		XSetCommand(dpy, w, argv, argc);
+	if (hints)
+		XSetNormalHints(dpy, w, hints);
+	if (icon_pixmap != None) {
+		XWMHints wh;
+
+		memset(&wh, 0, sizeof(wh));
+		wh.flags = IconPixmapHint;
+		wh.icon_pixmap = icon_pixmap;
+		XSetWMHints(dpy, w, &wh);
+	}
+	return 1;
+}
+
+/*
+ * Text properties read back. An existing property always comes back with a
+ * value, NUL-terminated, even when it is empty - Xlib allocates nitems + 1 -
+ * because callers strcmp() it straight away (freeglut's spaceball probe does,
+ * fg_spaceball_x11.c:395). Absent: False, with everything cleared.
+ */
+XLITE_IMPL(XGetTextProperty)
+Status XGetTextProperty(Display *dpy, Window w, XTextProperty *tp, Atom prop)
+{
+	Atom type = None;
+	int fmt = 0;
+	unsigned long n = 0, after = 0;
+	unsigned char *data = NULL;
+
+	if (XGetWindowProperty(dpy, w, prop, 0, 1000000L, False,
+			       AnyPropertyType, &type, &fmt, &n, &after,
+			       &data) == Success && type != None) {
+		if (!data)
+			data = calloc(1, 1);
+		if (data) {
+			tp->value = data;
+			tp->encoding = type;
+			tp->format = fmt;
+			tp->nitems = n;
+			return 1;
+		}
+	}
+	free(data);
+	tp->value = NULL;
+	tp->encoding = None;
+	tp->format = 0;
+	tp->nitems = 0;
+	return 0;
+}
+
+XLITE_IMPL(XGetWMName)
+Status XGetWMName(Display *dpy, Window w, XTextProperty *tp)
+{
+	return XGetTextProperty(dpy, w, tp, XA_WM_NAME);
+}
+
+XLITE_IMPL(XGetWMIconName)
+Status XGetWMIconName(Display *dpy, Window w, XTextProperty *tp)
+{
+	return XGetTextProperty(dpy, w, tp, XA_WM_ICON_NAME);
+}
+
 XLITE_IMPL(XSetTransientForHint)
 int XSetTransientForHint(Display *dpy, Window w, Window prop)
 {
-	unsigned char b[4];
+	/* format 32 is an array of long (XChangeProperty packs it) */
+	long v = (long)prop;
 
-	b[0] = prop; b[1] = prop >> 8; b[2] = prop >> 16; b[3] = prop >> 24;
 	return XChangeProperty(dpy, w, XA_WM_TRANSIENT_FOR, XA_WINDOW, 32,
-			       PropModeReplace, b, 1);
+			       PropModeReplace, (unsigned char *)&v, 1);
 }
 
 XLITE_IMPL(XSetWMProtocols)

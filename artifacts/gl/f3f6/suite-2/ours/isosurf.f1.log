@@ -1,0 +1,21 @@
+# glref run: impl=ours name=isosurf frame=1 display=:99
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/demos/isosurf
+# libGL.so.1 resolves to:
+#   	libGLU.so.1 => /src/gl/ref-apps/prefix/lib/libGLU.so.1 (0x0000f7a28fe50000)
+#   	libglut.so.3 => /src/gl/ref-apps/prefix/lib/libglut.so.3 (0x0000f7a28fd70000)
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000f7a28fb50000)
+libGL: context 1 created (pid 3924, comm isosurf)
+libGL: unimplemented glClipPlane
+libGL: unimplemented glPolygonStipple
+libGL: unimplemented glTexGeni
+primitive (0x10000): GL_TRIANGLE_STRIP, 
+render style (0x20): glVertex, 
+enabling normal arrays
+new flags (0x8a92c29): glVertex, GL_TRIANGLE_STRIP, lit, 
+libGL: context 2 created (pid 3924, comm isosurf)
+libGL: context 3 created (pid 3924, comm isosurf)
+7179 vertices, 7177 triangles
+Compiled vertex arrays not supported by this renderer
+Nr unique vertex/normal pairs: 2723
+num_tri_verts: 21531
+glref: ok at swap 1 -> /src/artifacts/gl/f3f6/suite-2/ours/isosurf.f1

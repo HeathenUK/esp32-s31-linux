@@ -35,6 +35,7 @@ P=$R/prefix
 MD=$R/build/mesa-demos
 XD=$MD/src/xdemos
 GD=$MD/src/demos
+SB=$R/build
 XL=$R/build/xlite-host
 G=/src/tools/glref
 
@@ -79,7 +80,7 @@ nload=0 nmiss=0
 while IFS='|' read -r name kind cap frames cmd; do
     name=$(echo "$name" | tr -d ' ')
     case $name in ''|'#'*) continue ;; esac
-    bin=$(echo "$cmd" | sed 's/^ *//' | cut -d' ' -f1 | sed "s|\$XD|$XD|g; s|\$GD|$GD|g")
+    bin=$(echo "$cmd" | sed 's/^ *//' | cut -d' ' -f1 | sed "s|\$XD|$XD|g; s|\$GD|$GD|g; s|\$SB|$SB|g")
     if [ ! -x "$bin" ]; then
         echo "| $name | NOT-BUILT | $bin |" >>"$OUTMD"
         continue
@@ -90,8 +91,18 @@ while IFS='|' read -r name kind cap frames cmd; do
     und=$(LD_LIBRARY_PATH=$LIBPATH ldd -r "$bin" 2>&1 |
         sed -n 's/^undefined symbol: \([^ \t]*\)[ \t]*(\(.*\))$/\1 (\2)/p' |
         sed "s|$R/||g; s|/usr/lib/[^ ]*/||g; s|$OURS/||g; s|$XL/||g" | sort -u)
+    # The rig's libSDL2 links libX11/libXext directly; the board's SDL2
+    # 2.32.10 is SDL_VIDEO_DRIVER_X11_DYNAMIC (it dlopen()s them and dlsym()s
+    # each function, optional ones allowed to be absent), so the host SDL2's
+    # own imports say nothing about the board and are listed, not counted.
+    sdl=$(echo "$und" | grep 'libSDL2-2.0.so' | sed 's/ (.*//' | tr '\n' ' ' | sed 's/ *$//')
+    und=$(echo "$und" | grep -v 'libSDL2-2.0.so' | sed '/^$/d')
     if [ -z "$und" ]; then
-        echo "| $name | LOADS | |" >>"$OUTMD"
+        if [ -n "$sdl" ]; then
+            echo "| $name | LOADS | host SDL2 only, not counted (board SDL2 binds X11 at run time): $sdl |" >>"$OUTMD"
+        else
+            echo "| $name | LOADS | |" >>"$OUTMD"
+        fi
         nload=$((nload + 1))
     else
         list=$(echo "$und" | tr '\n' ';' | sed 's/;$//; s/;/, /g')

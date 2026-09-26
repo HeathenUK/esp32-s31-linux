@@ -1,0 +1,1 @@
+PASS  320x240  strict 2.234% (1716 px >16)  tolerant 0.003% (2 px)  max 230  mean 2.83  diff /src/artifacts/gl/phase2/raster/diff-2.png

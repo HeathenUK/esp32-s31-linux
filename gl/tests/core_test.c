@@ -525,6 +525,14 @@ static void test_textures(void)
 	ident();
 	glEnable(GL_TEXTURE_2D);
 	glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+	/* GL 3.8.10: the default GL_NEAREST_MIPMAP_LINEAR with levels 0 and 1
+	   of a 16x16 texture (2..4 missing) is incomplete: untextured, as Mesa
+	   draws it */
+	glClear(GL_COLOR_BUFFER_BIT);
+	quad(-1, -1, 1, 1);
+	CHECK(PX(W / 2, H / 2) == 0xffff, "incomplete mipmap chain draws untextured (0x%04x)",
+	      PX(W / 2, H / 2));
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 	glClear(GL_COLOR_BUFFER_BIT);
 	glBegin(GL_QUADS);
 	glTexCoord2f(0, 0); glVertex2f(-1, -1);
@@ -539,6 +547,7 @@ static void test_textures(void)
 		lum[i] = 0x80;
 	glBindTexture(GL_TEXTURE_2D, t[1]);
 	glTexImage2D(GL_TEXTURE_2D, 0, 1, 8, 8, 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, lum);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 	glClear(GL_COLOR_BUFFER_BIT);
 	glBegin(GL_TRIANGLES);
 	glTexCoord2f(0, 0); glVertex2f(-1, -1);
@@ -552,6 +561,7 @@ static void test_textures(void)
 	glBindTexture(GL_TEXTURE_2D, t3);
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 4, 4, 0, GL_RGB, GL_UNSIGNED_SHORT_5_6_5, rgb565);
 	CHECK(glGetError() == GL_NO_ERROR, "UNSIGNED_SHORT_5_6_5 upload");
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 	glClear(GL_COLOR_BUFFER_BIT);
 	quad(-1, -1, 1, 1);
 	CHECK(PX(3, 3) == 0x001f, "565 texture (0x%04x)", PX(3, 3));
@@ -573,6 +583,184 @@ static void test_textures(void)
 	CHECK(!glIsTexture(t[0]), "glDeleteTextures");
 	glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
 	CHECK(glGetError() == GL_NO_ERROR, "no error from the texture tests");
+}
+
+/* plan F3-F6: the GL error rules of the texture store and exact results of
+   the fragment operations (compared with Mesa pixel by pixel in
+   glx_raster.c; these are the ones that also run on RV32 under qemu) */
+/* the whole viewport, texcoords 0..1 */
+static void tquad(void)
+{
+	glBegin(GL_QUADS);
+	glTexCoord2f(0, 0); glVertex2f(-1, -1); glTexCoord2f(1, 0); glVertex2f(1, -1);
+	glTexCoord2f(1, 1); glVertex2f(1, 1); glTexCoord2f(0, 1); glVertex2f(-1, 1);
+	glEnd();
+}
+
+static void test_raster_features(void)
+{
+	static unsigned char img[16 * 16 * 4], big[32 * 32 * 4];
+	GLuint t, list;
+	GLint v;
+	int i;
+
+	ident();
+	glDisable(GL_DEPTH_TEST);
+	glDisable(GL_CULL_FACE);
+	glDisable(GL_LIGHTING);
+	glShadeModel(GL_SMOOTH);
+	for (i = 0; i < 16 * 16 * 4; i++) img[i] = (unsigned char)(i * 7);
+	for (i = 0; i < 32 * 32; i++) {
+		big[i * 4 + 0] = (unsigned char)(i & 31) * 8; big[i * 4 + 1] = (unsigned char)((i >> 5) * 8);
+		big[i * 4 + 2] = 0x40; big[i * 4 + 3] = 0xff;
+	}
+	glGenTextures(1, &t);
+	glBindTexture(GL_TEXTURE_2D, t);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+	/* GL 1.1: power-of-two sizes only, up to GL_MAX_TEXTURE_SIZE */
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 12, 8, 0, GL_RGBA, GL_UNSIGNED_BYTE, img);
+	CHECK(glGetError() == GL_INVALID_VALUE, "12x8 texture: GL_INVALID_VALUE");
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 512, 4, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+	CHECK(glGetError() == GL_INVALID_VALUE, "512 wide: GL_INVALID_VALUE");
+	glTexImage2D(GL_PROXY_TEXTURE_2D, 0, GL_RGB, 512, 4, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+	glGetTexLevelParameteriv(GL_PROXY_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &v);
+	CHECK(glGetError() == GL_NO_ERROR && v == 0, "512 wide proxy: width 0, no error");
+	glTexImage2D(GL_TEXTURE_2D, 9, GL_RGB, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, img);
+	CHECK(glGetError() == GL_INVALID_VALUE, "level 9 (> log2 256): GL_INVALID_VALUE");
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE_ALPHA, 16, 8, 0, GL_RGBA, GL_UNSIGNED_BYTE, img);
+	CHECK(glGetError() == GL_NO_ERROR, "16x8 LUMINANCE_ALPHA upload");
+	glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_INTERNAL_FORMAT, &v);
+	CHECK(v == GL_LUMINANCE_ALPHA, "GL_TEXTURE_INTERNAL_FORMAT = 0x%x", v);
+	glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &v);
+	CHECK(v == 8, "GL_TEXTURE_HEIGHT = %d (native size, no resampling)", v);
+	glTexSubImage2D(GL_TEXTURE_2D, 0, 10, 0, 8, 8, GL_RGBA, GL_UNSIGNED_BYTE, img);
+	CHECK(glGetError() == GL_INVALID_VALUE, "glTexSubImage2D past the edge: GL_INVALID_VALUE");
+	glTexSubImage2D(GL_TEXTURE_2D, 2, 0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, img);
+	CHECK(glGetError() == GL_INVALID_OPERATION, "glTexSubImage2D of a missing level: GL_INVALID_OPERATION");
+
+	/* REPLACE of a 32x32 RGB texture uploaded through ROW_LENGTH/SKIP from
+	   a 32-wide image: texel (x, y) of the 8x8 is big(x + 4, y + 2) */
+	glPixelStorei(GL_UNPACK_ROW_LENGTH, 32);
+	glPixelStorei(GL_UNPACK_SKIP_PIXELS, 4);
+	glPixelStorei(GL_UNPACK_SKIP_ROWS, 2);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 8, 8, 0, GL_RGBA, GL_UNSIGNED_BYTE, big);
+	glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+	glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+	glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+	glEnable(GL_TEXTURE_2D);
+	glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+	glClear(GL_COLOR_BUFFER_BIT);
+	tquad();
+	/* screen bottom-left texel (0, 0) = big(4, 2): r = 32, g = 16 */
+	CHECK(PX(1, H - 2) == (((32 & 0xf8) << 8) | ((16 & 0xfc) << 3) | (0x40 >> 3)),
+	      "UNPACK_ROW_LENGTH/SKIP_* upload (0x%04x)", PX(1, H - 2));
+	/* GL_MODULATE by white is the texel (tier 1), by 0.5 grey half of it */
+	glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+	glColor3f(1, 1, 1);
+	glClear(GL_COLOR_BUFFER_BIT);
+	tquad();
+	CHECK(PX(1, H - 2) == (((32 & 0xf8) << 8) | ((16 & 0xfc) << 3) | (0x40 >> 3)),
+	      "MODULATE by white = the texel (0x%04x)", PX(1, H - 2));
+	glColor3f(0, 1, 0);
+	glClear(GL_COLOR_BUFFER_BIT);
+	tquad();
+	CHECK(PX(1, H - 2) == ((16 & 0xfc) << 3), "MODULATE by green (0x%04x)", PX(1, H - 2));
+	glColor3f(1, 1, 1);
+	/* a display list keeps the pixels of the moment it was compiled */
+	list = glGenLists(1);
+	glNewList(list, GL_COMPILE);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 16, 16, 0, GL_RGBA, GL_UNSIGNED_BYTE, big);
+	glEndList();
+	memset(big, 0, sizeof big);
+	glCallList(list);
+	glDeleteLists(list, 1);
+	glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+	glClear(GL_COLOR_BUFFER_BIT);
+	tquad();
+	CHECK(PX(W - 2, 1) != 0, "glTexImage2D in a display list copied the pixels (0x%04x)", PX(W - 2, 1));
+	glDisable(GL_TEXTURE_2D);
+	glDeleteTextures(1, &t);
+
+	/* blending: ONE, ONE of 0.5 red over 0.5 red; SRC_ALPHA, 1-SRC_ALPHA */
+	glClearColor(0.5f, 0, 0, 1);
+	glClear(GL_COLOR_BUFFER_BIT);
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_ONE, GL_ONE);
+	glColor4f(0.5f, 0, 0, 1);
+	quad(-1, -1, 1, 1);
+	CHECK((PX(W / 2, H / 2) >> 11) >= 30, "ONE,ONE adds (0x%04x)", PX(W / 2, H / 2));
+	glClearColor(0, 0, 0, 1);
+	glClear(GL_COLOR_BUFFER_BIT);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	glColor4f(0, 1, 0, 0.5f);
+	quad(-1, -1, 1, 1);
+	v = (PX(W / 2, H / 2) >> 5) & 63;
+	CHECK(v >= 30 && v <= 33, "SRC_ALPHA,1-SRC_ALPHA halves (g6 = %d)", v);
+	glDisable(GL_BLEND);
+	/* the diagonal of a blended quad is not drawn twice */
+	CHECK(count_px(PX(W / 2, H / 2)) == W * H, "blended quad: every pixel once (%d of %d)",
+	      count_px(PX(W / 2, H / 2)), W * H);
+	/* alpha test: GL_NEVER draws nothing, GREATER against the alpha */
+	glClear(GL_COLOR_BUFFER_BIT);
+	glEnable(GL_ALPHA_TEST);
+	glAlphaFunc(GL_NEVER, 0);
+	glColor4f(1, 1, 1, 1);
+	quad(-1, -1, 1, 1);
+	CHECK(count_px(0) == W * H, "alpha test GL_NEVER draws nothing");
+	glAlphaFunc(GL_GREATER, 0.5f);
+	glColor4f(1, 1, 1, 0.4f);
+	quad(-1, -1, 1, 1);
+	CHECK(count_px(0) == W * H, "alpha 0.4 fails GREATER 0.5");
+	glColor4f(1, 1, 1, 0.6f);
+	quad(-1, -1, 1, 1);
+	CHECK(count_px(0xffff) == W * H, "alpha 0.6 passes GREATER 0.5");
+	glDisable(GL_ALPHA_TEST);
+	/* depth: strict GL_LESS rejects equal depth; GL_GREATER; the mask */
+	glEnable(GL_DEPTH_TEST);
+	glClearDepth(1.0);
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+	glDepthFunc(GL_LESS);
+	glColor3f(1, 0, 0);
+	quad(-1, -1, 1, 1);
+	glColor3f(0, 1, 0);
+	quad(-1, -1, 1, 1);
+	CHECK(count_px(0xf800) == W * H, "GL_LESS: equal depth fails (%d red)", count_px(0xf800));
+	glDepthFunc(GL_LEQUAL);
+	quad(-1, -1, 1, 1);
+	CHECK(count_px(0x07e0) == W * H, "GL_LEQUAL: equal depth passes");
+	glDepthFunc(GL_GREATER);
+	glColor3f(0, 0, 1);
+	glBegin(GL_QUADS);
+	glVertex3f(-1, -1, 0.5f); glVertex3f(1, -1, 0.5f); glVertex3f(1, 1, 0.5f); glVertex3f(-1, 1, 0.5f);
+	glEnd();
+	CHECK(count_px(0x001f) == W * H, "GL_GREATER: farther passes");
+	glDepthFunc(GL_LESS);
+	glDisable(GL_DEPTH_TEST);
+	/* colour mask and scissor on glClear */
+	glClearColor(1, 1, 1, 1);
+	glColorMask(GL_FALSE, GL_TRUE, GL_FALSE, GL_TRUE);
+	glClearColor(0, 0, 0, 1);
+	glClear(GL_COLOR_BUFFER_BIT);
+	CHECK(count_px(0x001f) == W * H, "glClear under glColorMask(0,1,0) keeps red and blue");
+	glColorMask(1, 1, 1, 1);
+	glEnable(GL_SCISSOR_TEST);
+	glScissor(4, 4, 8, 8);
+	glClearColor(1, 1, 1, 1);
+	glClear(GL_COLOR_BUFFER_BIT);
+	CHECK(count_px(0xffff) == 64 && PX(4, H - 5) == 0xffff && PX(3, H - 5) == 0x001f,
+	      "glClear inside the scissor box only (%d)", count_px(0xffff));
+	glDisable(GL_SCISSOR_TEST);
+	glClearColor(0, 0, 0, 0);
+	/* separate specular is state glGet reports */
+	glLightModeli(GL_LIGHT_MODEL_COLOR_CONTROL, GL_SEPARATE_SPECULAR_COLOR);
+	glGetIntegerv(GL_LIGHT_MODEL_COLOR_CONTROL, &v);
+	CHECK(v == GL_SEPARATE_SPECULAR_COLOR, "GL_LIGHT_MODEL_COLOR_CONTROL = 0x%x", v);
+	glLightModeli(GL_LIGHT_MODEL_COLOR_CONTROL, GL_SINGLE_COLOR);
+	glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+	glColor3f(1, 1, 1);
+	CHECK(glGetError() == GL_NO_ERROR, "no error left by the raster feature tests");
+	CHECK(canary_intact(), "canaries intact after the raster feature tests");
 }
 
 static void test_arrays(void)
@@ -648,13 +836,13 @@ static void test_procs_and_stubs(void)
 		      "glBlendEquation / glBlendFuncSeparate are not exported");
 		CHECK(dlsym(self, "glCreateShader") != NULL && dlsym(self, "glWindowPos2i") != NULL &&
 		      dlsym(self, "glGenBuffers") != NULL && dlsym(self, "glRasterPos3d") != NULL,
-		      "unimplemented GL 1.x-2.0 names are exported (eager binding)");
+		      "GL 1.x-2.0 names (implemented or not) are exported (eager binding)");
 	}
 	sh = glCreateShader(GL_VERTEX_SHADER);
 	CHECK(sh == 0 && glGetError() == GL_INVALID_OPERATION, "stub glCreateShader: 0 + GL_INVALID_OPERATION");
 	glCreateShader(GL_VERTEX_SHADER);	/* must not print again */
 	glGetError();
-	glRasterPos2i(0, 0);
+	glEvalCoord1f(0);
 	CHECK(glGetError() == GL_NO_ERROR, "fixed-function stub is a silent no-op (no error)");
 	CHECK(glAreTexturesResident(0, NULL, NULL) == GL_TRUE, "glAreTexturesResident");
 }
@@ -773,6 +961,247 @@ static void test_push_pop_attrib(void)
 	glDisable(GL_DEPTH_TEST);
 }
 
+
+/* plan F7: the raster position, pixel rectangles, texgen, clip planes,
+ * stipple, 1D textures and their queries (the images are compared with
+ * Mesa by gl/tests/run-pixels.sh; these are the exact-value checks) */
+static void win_ortho(void)
+{
+	glViewport(0, 0, W, H);
+	glMatrixMode(GL_PROJECTION);
+	glLoadIdentity();
+	glOrtho(0, W, 0, H, -1, 1);
+	glMatrixMode(GL_MODELVIEW);
+	glLoadIdentity();
+}
+
+/* window (x, y), y up */
+#define WPX(x, y) PX(x, H - 1 - (y))
+
+static void test_f7(void)
+{
+	static const unsigned char glyph[3] = { 0xA0, 0x40, 0xE0 };	/* 3x3, bottom row first */
+	unsigned char rgba[4 * 4 * 4], back[4 * 4 * 4], st[128], st2[128];
+	GLfloat fv[4];
+	GLdouble eq[4] = { 1, 0, 0, -10 }, got[4];
+	GLint iv[4], i, ok;
+	GLuint list, tex;
+
+	canary_fill();
+	s31gl_bind_color(s31gl_get_current(), &PX(0, 0), W, H, PITCH);
+	win_ortho();
+	glGetError();
+	glClearColor(0, 0, 0, 0);
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+	/* raster position through the matrices; the colour is latched */
+	glColor3f(1, 0, 0);
+	glRasterPos2i(10, 20);
+	glColor3f(0, 1, 0);
+	glGetFloatv(GL_CURRENT_RASTER_POSITION, fv);
+	glGetIntegerv(GL_CURRENT_RASTER_POSITION_VALID, iv);
+	CHECK(fabsf(fv[0] - 10) < 1e-3f && fabsf(fv[1] - 20) < 1e-3f && fabsf(fv[2] - .5f) < 1e-4f &&
+	      fv[3] == 1 && iv[0] == 1, "glRasterPos2i(10, 20): window %g %g %g w %g valid %d",
+	      fv[0], fv[1], fv[2], fv[3], iv[0]);
+	glGetFloatv(GL_CURRENT_RASTER_COLOR, fv);
+	CHECK(fv[0] == 1 && fv[1] == 0, "the raster colour is the colour at glRasterPos");
+	/* glBitmap: bits, origin, move; colour; unpack alignment 1 */
+	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+	glBitmap(3, 3, 1, 0, 5, 2, glyph);
+	CHECK(WPX(9, 20) == 0xf800 && WPX(10, 20) == 0 && WPX(11, 20) == 0xf800 &&
+	      WPX(9, 21) == 0 && WPX(10, 21) == 0xf800 && WPX(11, 21) == 0 &&
+	      WPX(9, 22) == 0xf800 && WPX(10, 22) == 0xf800 && WPX(11, 22) == 0xf800 &&
+	      WPX(8, 20) == 0 && WPX(12, 22) == 0,
+	      "glBitmap draws its bits at raster - origin in the raster colour");
+	glGetFloatv(GL_CURRENT_RASTER_POSITION, fv);
+	CHECK(fabsf(fv[0] - 15) < 1e-3f && fabsf(fv[1] - 22) < 1e-3f, "glBitmap moves the raster position");
+	/* invalid: outside the view volume, no draw, no move */
+	glRasterPos3f(5, 5, 3);
+	glGetIntegerv(GL_CURRENT_RASTER_POSITION_VALID, iv);
+	glBitmap(3, 3, 0, 0, 9, 9, glyph);
+	CHECK(iv[0] == 0 && count_px(0xf800) == 6, "a clipped raster position is invalid; glBitmap is dropped");
+	/* glWindowPos */
+	glColor3f(0, 0, 1);
+	glWindowPos2i(40, 30);
+	glGetFloatv(GL_CURRENT_RASTER_POSITION, fv);
+	glGetIntegerv(GL_CURRENT_RASTER_POSITION_VALID, iv);
+	CHECK(fv[0] == 40 && fv[1] == 30 && fv[2] == 0 && iv[0] == 1, "glWindowPos2i");
+
+	/* glDrawPixels / glReadPixels round trip, with pack/unpack state */
+	for (i = 0; i < 16; i++) {
+		rgba[4 * i] = (unsigned char)(i * 16 + 8); rgba[4 * i + 1] = (unsigned char)(255 - i * 16);
+		rgba[4 * i + 2] = (unsigned char)(i & 1 ? 255 : 0); rgba[4 * i + 3] = 255;
+	}
+	glRasterPos2i(2, 2);
+	glDrawPixels(4, 4, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+	glPixelStorei(GL_PACK_ALIGNMENT, 1);
+	memset(back, 0, sizeof back);
+	glReadPixels(2, 2, 4, 4, GL_RGBA, GL_UNSIGNED_BYTE, back);
+	for (ok = 1, i = 0; i < 64; i++)
+		if (abs(back[i] - rgba[i]) > 8) ok = 0;
+	CHECK(ok, "glDrawPixels + glReadPixels RGBA round trip within the 565 step");
+	CHECK(WPX(2, 2) == (((8 >> 3) << 11) | ((255 >> 2) << 5)), "glDrawPixels lower left pixel 0x%04x", WPX(2, 2));
+	glPixelStorei(GL_PACK_SKIP_PIXELS, 1);
+	glPixelStorei(GL_PACK_ROW_LENGTH, 5);
+	memset(back, 0x33, sizeof back);
+	glReadPixels(2, 2, 4, 1, GL_RGB, GL_UNSIGNED_BYTE, back);
+	CHECK(back[0] == 0x33 && back[1] == 0x33 && back[2] == 0x33 && abs(back[3] - 8) <= 8 &&
+	      back[15] == 0x33, "glReadPixels honours GL_PACK_SKIP_PIXELS");
+	glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
+	glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+	/* glPixelTransfer on draws, glPixelZoom */
+	glPixelTransferf(GL_RED_SCALE, 0);
+	glPixelTransferf(GL_BLUE_BIAS, 1);
+	glRasterPos2i(20, 2);
+	glDrawPixels(4, 4, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+	glGetFloatv(GL_RED_SCALE, fv);
+	glGetFloatv(GL_BLUE_BIAS, fv + 1);
+	CHECK((WPX(20, 2) & 0xf81f) == 0x001f && fv[0] == 0 && fv[1] == 1,
+	      "glPixelTransfer scale/bias applied and reported (0x%04x)", WPX(20, 2));
+	glPixelTransferf(GL_RED_SCALE, 1);
+	glPixelTransferf(GL_BLUE_BIAS, 0);
+	glPixelZoom(2, 3);
+	glRasterPos2i(30, 2);
+	glDrawPixels(4, 4, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+	glGetFloatv(GL_ZOOM_Y, fv);
+	CHECK(WPX(30, 2) == WPX(31, 4) && WPX(37, 13) == WPX(36, 11) && WPX(30, 2) != WPX(32, 2) &&
+	      WPX(38, 2) == 0 && fv[0] == 3, "glPixelZoom(2, 3) replicates pixels");
+	glPixelZoom(1, 1);
+	/* glCopyPixels */
+	glRasterPos2i(50, 2);
+	glCopyPixels(2, 2, 4, 4, GL_COLOR);
+	CHECK(WPX(50, 2) == WPX(2, 2) && WPX(53, 5) == WPX(5, 5), "glCopyPixels copies the rectangle");
+	/* a display list keeps its pixels and bits */
+	list = glGenLists(1);
+	glNewList(list, GL_COMPILE);
+	glRasterPos2i(2, 40);
+	glDrawPixels(4, 4, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+	glBitmap(3, 3, 0, 0, 0, 0, glyph);
+	glEndList();
+	memset(rgba, 0, sizeof rgba);
+	glCallList(list);
+	CHECK(WPX(5, 40) == WPX(5, 2) && WPX(3, 43) == WPX(3, 5) && WPX(2, 40) == 0x001f &&
+	      WPX(3, 40) == WPX(3, 2), "glDrawPixels and glBitmap in a list keep their copies");
+	glDeleteLists(list, 1);
+	/* glCopyTexImage2D + glGetTexImage */
+	glGenTextures(1, &tex);
+	glBindTexture(GL_TEXTURE_2D, tex);
+	glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 2, 2, 4, 4, 0);
+	glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, iv);
+	memset(back, 0, sizeof back);
+	glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, back);
+	glReadPixels(2, 2, 4, 4, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+	CHECK(iv[0] == 4 && memcmp(back, rgba, 64) == 0 && glGetError() == GL_NO_ERROR,
+	      "glCopyTexImage2D from the colour buffer; glGetTexImage reads it back exactly");
+	glDeleteTextures(1, &tex);
+	/* depth reads */
+	glEnable(GL_DEPTH_TEST);
+	glDepthFunc(GL_ALWAYS);
+	glBegin(GL_QUADS);
+	glVertex3f(0, 0, .5f); glVertex3f(8, 0, .5f); glVertex3f(8, 8, .5f); glVertex3f(0, 8, .5f);
+	glEnd();
+	glDisable(GL_DEPTH_TEST);
+	glDepthFunc(GL_LESS);
+	glReadPixels(3, 3, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT, fv);
+	CHECK(fabsf(fv[0] - .25f) < .002f, "glReadPixels(GL_DEPTH_COMPONENT) %g (.25)", fv[0]);
+	/* errors */
+	glDrawPixels(2, 2, GL_STENCIL_INDEX, GL_UNSIGNED_BYTE, rgba);
+	CHECK(glGetError() == GL_INVALID_OPERATION, "glDrawPixels(GL_STENCIL_INDEX): no stencil -> INVALID_OPERATION");
+	glReadPixels(0, 0, 2, 2, GL_RGBA, GL_UNSIGNED_SHORT_5_6_5, rgba);
+	CHECK(glGetError() == GL_INVALID_OPERATION, "glReadPixels(RGBA, 565) -> INVALID_OPERATION");
+	glBegin(GL_POINTS);
+	glReadPixels(0, 0, 1, 1, GL_RGB, GL_UNSIGNED_BYTE, rgba);
+	glEnd();
+	CHECK(glGetError() == GL_INVALID_OPERATION, "glReadPixels inside glBegin -> INVALID_OPERATION");
+	glPixelTransferf(GL_TEXTURE_2D, 1);
+	CHECK(glGetError() == GL_INVALID_ENUM, "glPixelTransfer(bad pname) -> INVALID_ENUM");
+
+	/* texgen state */
+	glTexGeni(GL_R, GL_TEXTURE_GEN_MODE, GL_SPHERE_MAP);
+	CHECK(glGetError() == GL_INVALID_ENUM, "glTexGen(GL_R, GL_SPHERE_MAP) -> INVALID_ENUM");
+	glGetTexGeniv(GL_S, GL_TEXTURE_GEN_MODE, iv);
+	glGetTexGenfv(GL_T, GL_OBJECT_PLANE, fv);
+	CHECK(iv[0] == GL_EYE_LINEAR && fv[0] == 0 && fv[1] == 1, "texgen defaults: EYE_LINEAR, T plane (0 1 0 0)");
+	glMatrixMode(GL_MODELVIEW);
+	glLoadIdentity();
+	glTranslatef(2, 0, 0);
+	fv[0] = 1; fv[1] = 0; fv[2] = 0; fv[3] = 0;
+	glTexGenfv(GL_S, GL_EYE_PLANE, fv);
+	glGetTexGenfv(GL_S, GL_EYE_PLANE, fv);
+	CHECK(fv[0] == 1 && fv[3] == -2, "glTexGen(GL_EYE_PLANE) is transformed by the inverse modelview (%g %g)",
+	      fv[0], fv[3]);
+	/* clip planes */
+	glClipPlane(GL_CLIP_PLANE2, eq);
+	glGetClipPlane(GL_CLIP_PLANE2, got);
+	glLoadIdentity();
+	CHECK(got[0] == 1 && got[3] == -12, "glClipPlane is stored in eye coordinates (%g %g)", got[0], got[3]);
+	glClear(GL_COLOR_BUFFER_BIT);
+	eq[0] = -1; eq[3] = 32;           /* keep x <= 32 */
+	glClipPlane(GL_CLIP_PLANE0, eq);
+	glEnable(GL_CLIP_PLANE0);
+	glColor3f(1, 1, 1);
+	quad(8, 8, 56, 40);
+	glDisable(GL_CLIP_PLANE0);
+	CHECK(WPX(20, 20) == 0xffff && WPX(31, 20) == 0xffff && WPX(34, 20) == 0 && canary_intact(),
+	      "a user clip plane cuts a quad at x = 32");
+	glGetIntegerv(GL_MAX_CLIP_PLANES, iv);
+	CHECK(iv[0] == 6 && !glIsEnabled(GL_CLIP_PLANE0), "GL_MAX_CLIP_PLANES 6");
+
+	/* polygon stipple: round trip and drawing */
+	for (i = 0; i < 128; i++) st[i] = (unsigned char)(i & 4 ? 0xF0 : 0x0F);
+	glPolygonStipple(st);
+	memset(st2, 0, sizeof st2);
+	glPixelStorei(GL_PACK_ALIGNMENT, 4);
+	glGetPolygonStipple(st2);
+	CHECK(memcmp(st, st2, 128) == 0, "glPolygonStipple / glGetPolygonStipple round trip");
+	glClear(GL_COLOR_BUFFER_BIT);
+	glEnable(GL_POLYGON_STIPPLE);
+	quad(0, 0, 32, 8);
+	glDisable(GL_POLYGON_STIPPLE);
+	CHECK(WPX(0, 0) == 0 && WPX(4, 0) == 0xffff && WPX(0, 1) == 0xffff && WPX(4, 1) == 0 &&
+	      WPX(0, 2) == 0 && WPX(12, 2) == 0xffff && WPX(8, 3) == 0xffff &&
+	      glIsEnabled(GL_POLYGON_STIPPLE) == 0, "GL_POLYGON_STIPPLE masks fragments by window position");
+
+	/* 1D textures */
+	glGenTextures(1, &tex);
+	glBindTexture(GL_TEXTURE_1D, tex);
+	glTexImage1D(GL_TEXTURE_1D, 0, GL_RGB, 4, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+	glGetIntegerv(GL_TEXTURE_BINDING_1D, iv);
+	glGetTexLevelParameteriv(GL_TEXTURE_1D, 0, GL_TEXTURE_WIDTH, iv + 1);
+	glGetTexLevelParameteriv(GL_TEXTURE_1D, 0, GL_TEXTURE_HEIGHT, iv + 2);
+	glGetIntegerv(GL_TEXTURE_BINDING_2D, iv + 3);
+	CHECK(iv[0] == (GLint)tex && iv[1] == 4 && iv[2] == 1 && iv[3] == 0 && glGetError() == GL_NO_ERROR,
+	      "glTexImage1D: its own binding, 4 x 1");
+	glTexImage1D(GL_TEXTURE_1D, 0, GL_RGB, 5, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+	CHECK(glGetError() == GL_INVALID_VALUE, "glTexImage1D(width 5) -> INVALID_VALUE");
+	glDeleteTextures(1, &tex);
+	glGetIntegerv(GL_TEXTURE_BINDING_1D, iv);
+	CHECK(iv[0] == 0, "deleting the bound 1D texture binds the default");
+
+	/* glPushAttrib keeps the raster position, clip planes and texgen */
+	glRasterPos2i(7, 9);
+	glPushAttrib(GL_CURRENT_BIT | GL_TRANSFORM_BIT | GL_TEXTURE_BIT | GL_PIXEL_MODE_BIT |
+		     GL_POLYGON_STIPPLE_BIT);
+	glRasterPos2i(1, 1);
+	eq[0] = 0; eq[1] = 1; eq[2] = 0; eq[3] = 5;
+	glClipPlane(GL_CLIP_PLANE2, eq);
+	glTexGeni(GL_S, GL_TEXTURE_GEN_MODE, GL_OBJECT_LINEAR);
+	glPixelZoom(4, 4);
+	memset(st2, 0xff, sizeof st2);
+	glPolygonStipple(st2);
+	glPopAttrib();
+	glGetFloatv(GL_CURRENT_RASTER_POSITION, fv);
+	glGetClipPlane(GL_CLIP_PLANE2, got);
+	glGetTexGeniv(GL_S, GL_TEXTURE_GEN_MODE, iv);
+	glGetFloatv(GL_ZOOM_X, fv + 2);
+	glGetPolygonStipple(st2);
+	CHECK(fabsf(fv[0] - 7) < 1e-3f && got[0] == 1 && got[3] == -12 && iv[0] == GL_EYE_LINEAR &&
+	      fv[2] == 1 && memcmp(st, st2, 128) == 0,
+	      "PopAttrib restores the raster position, clip plane, texgen mode, zoom, stipple");
+	CHECK(glGetError() == GL_NO_ERROR && canary_intact(), "no GL error; the canaries are intact");
+	glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+}
+
 int main(void)
 {
 	s31gl_ctx *ctx = s31gl_create_context(NULL);
@@ -784,9 +1213,11 @@ int main(void)
 	test_fuzz();
 	test_lists();
 	test_textures();
+	test_raster_features();
 	test_arrays();
 	test_procs_and_stubs();
 	test_push_pop_attrib();
+	test_f7();
 	s31gl_make_current(NULL);
 	s31gl_destroy_context(ctx);
 	test_lazy_and_hooks();

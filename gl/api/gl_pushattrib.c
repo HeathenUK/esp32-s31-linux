@@ -12,22 +12,27 @@
  * is one malloc of about 1.3 kB, freed at the pop.
  *
  * Coverage, per GL 1.3 table 6.x, of what the core records:
- *   CURRENT     colour, normal, texture coordinates, edge flag (raster
- *               position: glRasterPos is not implemented yet, F7)
+ *   CURRENT     colour, normal, texture coordinates, edge flag, the
+ *               raster position with its colour, texcoords, distance and
+ *               valid bit (plan F7)
  *   POINT LINE  size/width, smooth enables, stipple pattern and enable
  *   POLYGON     cull enable/mode, front face, polygon mode, offset factor/
- *               units and enables, smooth/stipple enables (the stipple
- *               pattern itself is a stub)
+ *               units and enables, smooth/stipple enables
+ *   POLYGON_STIPPLE the pattern
  *   LIGHTING    lighting and colour-material enables and parameters, shade
  *               model, light model, both materials, every light (position
  *               restored in eye coordinates, as stored)
  *   FOG DEPTH_BUFFER COLOR_BUFFER STENCIL_BUFFER ACCUM_BUFFER SCISSOR
  *   VIEWPORT TRANSFORM (matrix mode, normalize, rescale, clip-plane
- *               enables; plane equations are stubs) HINT LIST (list base)
- *   TEXTURE     texture enables, the GL_TEXTURE_2D binding, texenv mode and
- *               colour, texgen enables (texgen modes are stubs)
+ *               enables and equations, restored in eye coordinates) HINT
+ *               LIST (list base)
+ *   TEXTURE     texture enables, the GL_TEXTURE_1D and 2D bindings, texenv
+ *               mode and colour, texgen enables, modes and planes (eye
+ *               planes restored in eye coordinates)
+ *   PIXEL_MODE  pixel transfer scale/bias/shift/offset/map flags, zoom,
+ *               read buffer
  *   ENABLE      every capability glIsEnabled knows
- *   EVAL MULTISAMPLE PIXEL_MODE: their enables only (the rest is stubs)
+ *   EVAL MULTISAMPLE: their enables only (the rest is stubs)
  *   client PIXEL_STORE: every pack/unpack parameter; client VERTEX_ARRAY:
  *               the six array enables, and the vertex, normal, colour and
  *               texcoord pointers
@@ -147,9 +152,49 @@ struct attrib {
 	/* LIST */
 	GLint list_base;
 	/* TEXTURE */
-	GLint tex2d, texenv_mode;
+	GLint tex2d, tex1d, texenv_mode;
 	GLfloat texenv_color[4];
+	GLint gen_mode[4];
+	GLfloat gen_obj[4][4], gen_eye[4][4];
+	/* TEXTURE: the bound objects' own parameters (GL 1.3 table 6.16),
+	   [0] the 2D binding, [1] the 1D one (review G8) */
+	GLint tp_min[2], tp_mag[2], tp_ws[2], tp_wt[2];
+	GLfloat tp_border[2][4], tp_prio[2];
+	/* CURRENT: the raster position (tgl_raster_state) */
+	GLfloat raster[14];
+	/* TRANSFORM: the clip planes, eye coordinates */
+	GLdouble clip[6][4];
+	/* POLYGON_STIPPLE */
+	GLubyte stipple[128];
+	/* PIXEL_MODE */
+	GLfloat xfer[16];
+	GLint read_buffer;
 };
+
+/* glPixelTransfer names, then GL_ZOOM_X/Y (the PIXEL_MODE group) */
+static const GLenum xfer_names[16] = {
+	GL_MAP_COLOR, GL_MAP_STENCIL, GL_INDEX_SHIFT, GL_INDEX_OFFSET,
+	GL_RED_SCALE, GL_RED_BIAS, GL_GREEN_SCALE, GL_GREEN_BIAS,
+	GL_BLUE_SCALE, GL_BLUE_BIAS, GL_ALPHA_SCALE, GL_ALPHA_BIAS,
+	GL_DEPTH_SCALE, GL_DEPTH_BIAS, GL_ZOOM_X, GL_ZOOM_Y,
+};
+
+/* eye-space state (light positions, clip planes, eye planes) is written
+   back through an identity modelview, saved and reloaded rather than
+   pushed so a full matrix stack cannot overflow */
+static void eye_begin(GLint *mode, GLfloat *mv)
+{
+	glGetIntegerv(GL_MATRIX_MODE, mode);
+	glMatrixMode(GL_MODELVIEW);
+	glGetFloatv(GL_MODELVIEW_MATRIX, mv);
+	glLoadIdentity();
+}
+
+static void eye_end(GLint mode, const GLfloat *mv)
+{
+	glLoadMatrixf(mv);
+	glMatrixMode(mode);
+}
 
 static const GLenum hints[5] = {
 	GL_PERSPECTIVE_CORRECTION_HINT, GL_POINT_SMOOTH_HINT,
@@ -232,6 +277,32 @@ void GLAPIENTRY glPushAttrib(GLbitfield mask)
 		glGetFloatv(GL_CURRENT_NORMAL, a->normal);
 		glGetFloatv(GL_CURRENT_TEXTURE_COORDS, a->texcoord);
 		glGetIntegerv(GL_EDGE_FLAG, &a->edge);
+		tgl_raster_state(a->raster, 0);
+	}
+	if (mask & GL_POLYGON_STIPPLE_BIT) {
+		/* through the default pack state, whatever the client's is */
+		GLint st[5];
+		glGetIntegerv(GL_PACK_ROW_LENGTH, &st[0]);
+		glGetIntegerv(GL_PACK_SKIP_ROWS, &st[1]);
+		glGetIntegerv(GL_PACK_SKIP_PIXELS, &st[2]);
+		glGetIntegerv(GL_PACK_ALIGNMENT, &st[3]);
+		glGetIntegerv(GL_PACK_LSB_FIRST, &st[4]);
+		glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+		glPixelStorei(GL_PACK_SKIP_ROWS, 0);
+		glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
+		glPixelStorei(GL_PACK_ALIGNMENT, 4);
+		glPixelStorei(GL_PACK_LSB_FIRST, 0);
+		glGetPolygonStipple(a->stipple);
+		glPixelStorei(GL_PACK_LSB_FIRST, st[4]);
+		glPixelStorei(GL_PACK_ROW_LENGTH, st[0]);
+		glPixelStorei(GL_PACK_SKIP_ROWS, st[1]);
+		glPixelStorei(GL_PACK_SKIP_PIXELS, st[2]);
+		glPixelStorei(GL_PACK_ALIGNMENT, st[3]);
+	}
+	if (mask & GL_PIXEL_MODE_BIT) {
+		for (i = 0; i < 16; i++)
+			glGetFloatv(xfer_names[i], &a->xfer[i]);
+		glGetIntegerv(GL_READ_BUFFER, &a->read_buffer);
 	}
 	if (mask & GL_POINT_BIT)
 		glGetFloatv(GL_POINT_SIZE, &a->point_size);
@@ -310,8 +381,11 @@ void GLAPIENTRY glPushAttrib(GLbitfield mask)
 		glGetIntegerv(GL_VIEWPORT, a->viewport);
 		glGetFloatv(GL_DEPTH_RANGE, a->depth_range);
 	}
-	if (mask & GL_TRANSFORM_BIT)
+	if (mask & GL_TRANSFORM_BIT) {
 		glGetIntegerv(GL_MATRIX_MODE, &a->matrix_mode);
+		for (i = 0; i < 6; i++)
+			glGetClipPlane(GL_CLIP_PLANE0 + i, a->clip[i]);
+	}
 	if (mask & GL_HINT_BIT)
 		for (i = 0; i < 5; i++)
 			glGetIntegerv(hints[i], &a->hint[i]);
@@ -319,8 +393,23 @@ void GLAPIENTRY glPushAttrib(GLbitfield mask)
 		glGetIntegerv(GL_LIST_BASE, &a->list_base);
 	if (mask & GL_TEXTURE_BIT) {
 		glGetIntegerv(GL_TEXTURE_BINDING_2D, &a->tex2d);
+		glGetIntegerv(GL_TEXTURE_BINDING_1D, &a->tex1d);
 		glGetTexEnviv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, &a->texenv_mode);
 		glGetTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, a->texenv_color);
+		for (i = 0; i < 4; i++) {
+			glGetTexGeniv(GL_S + i, GL_TEXTURE_GEN_MODE, &a->gen_mode[i]);
+			glGetTexGenfv(GL_S + i, GL_OBJECT_PLANE, a->gen_obj[i]);
+			glGetTexGenfv(GL_S + i, GL_EYE_PLANE, a->gen_eye[i]);
+		}
+		for (i = 0; i < 2; i++) {
+			GLenum tg = i ? GL_TEXTURE_1D : GL_TEXTURE_2D;
+			glGetTexParameteriv(tg, GL_TEXTURE_MIN_FILTER, &a->tp_min[i]);
+			glGetTexParameteriv(tg, GL_TEXTURE_MAG_FILTER, &a->tp_mag[i]);
+			glGetTexParameteriv(tg, GL_TEXTURE_WRAP_S, &a->tp_ws[i]);
+			glGetTexParameteriv(tg, GL_TEXTURE_WRAP_T, &a->tp_wt[i]);
+			glGetTexParameterfv(tg, GL_TEXTURE_BORDER_COLOR, a->tp_border[i]);
+			glGetTexParameterfv(tg, GL_TEXTURE_PRIORITY, &a->tp_prio[i]);
+		}
 	}
 	a->next = sl->attrib_top;
 	sl->attrib_top = a;
@@ -390,14 +479,10 @@ void GLAPIENTRY glPopAttrib(void)
 		/* positions are stored in eye coordinates: write them back
 		 * through an identity modelview (saved and reloaded rather
 		 * than pushed, so a full matrix stack cannot overflow) */
-		glGetIntegerv(GL_MATRIX_MODE, &mode);
-		glMatrixMode(GL_MODELVIEW);
-		glGetFloatv(GL_MODELVIEW_MATRIX, mv);
-		glLoadIdentity();
+		eye_begin(&mode, mv);
 		for (i = 0; i < a->nlights; i++)
 			set_light(i, &a->light[i]);
-		glLoadMatrixf(mv);
-		glMatrixMode(mode);
+		eye_end(mode, mv);
 	}
 	if (mask & GL_CURRENT_BIT) {
 		/* glColor under GL_COLOR_MATERIAL would also write the
@@ -412,6 +497,32 @@ void GLAPIENTRY glPopAttrib(void)
 		glNormal3fv(a->normal);
 		glTexCoord4fv(a->texcoord);
 		glEdgeFlag(a->edge ? GL_TRUE : GL_FALSE);
+		tgl_raster_state(a->raster, 1);
+	}
+	if (mask & GL_POLYGON_STIPPLE_BIT) {
+		GLint st[6];
+		glGetIntegerv(GL_UNPACK_ROW_LENGTH, &st[0]);
+		glGetIntegerv(GL_UNPACK_SKIP_ROWS, &st[1]);
+		glGetIntegerv(GL_UNPACK_SKIP_PIXELS, &st[2]);
+		glGetIntegerv(GL_UNPACK_ALIGNMENT, &st[3]);
+		glGetIntegerv(GL_UNPACK_LSB_FIRST, &st[4]);
+		glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+		glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+		glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+		glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+		glPixelStorei(GL_UNPACK_LSB_FIRST, 0);
+		glPolygonStipple(a->stipple);
+		glPixelStorei(GL_UNPACK_ROW_LENGTH, st[0]);
+		glPixelStorei(GL_UNPACK_SKIP_ROWS, st[1]);
+		glPixelStorei(GL_UNPACK_SKIP_PIXELS, st[2]);
+		glPixelStorei(GL_UNPACK_ALIGNMENT, st[3]);
+		glPixelStorei(GL_UNPACK_LSB_FIRST, st[4]);
+	}
+	if (mask & GL_PIXEL_MODE_BIT) {
+		for (i = 0; i < 14; i++)
+			glPixelTransferf(xfer_names[i], a->xfer[i]);
+		glPixelZoom(a->xfer[14], a->xfer[15]);
+		glReadBuffer(a->read_buffer);
 	}
 	if (mask & GL_FOG_BIT) {
 		glFogfv(GL_FOG_COLOR, a->fog_color);
@@ -452,17 +563,46 @@ void GLAPIENTRY glPopAttrib(void)
 			   a->viewport[3]);
 		glDepthRange(a->depth_range[0], a->depth_range[1]);
 	}
-	if (mask & GL_TRANSFORM_BIT)
+	if (mask & GL_TRANSFORM_BIT) {
+		GLint mode;
+		GLfloat mv[16];
+
+		eye_begin(&mode, mv);
+		for (i = 0; i < 6; i++)
+			glClipPlane(GL_CLIP_PLANE0 + i, a->clip[i]);
+		eye_end(mode, mv);
 		glMatrixMode(a->matrix_mode);
+	}
 	if (mask & GL_HINT_BIT)
 		for (i = 0; i < 5; i++)
 			glHint(hints[i], a->hint[i]);
 	if (mask & GL_LIST_BIT)
 		glListBase(a->list_base);
 	if (mask & GL_TEXTURE_BIT) {
+		GLint mode;
+		GLfloat mv[16];
+
 		glBindTexture(GL_TEXTURE_2D, a->tex2d);
+		glBindTexture(GL_TEXTURE_1D, a->tex1d);
+		/* onto the objects just rebound: the ones bound at the push */
+		for (i = 0; i < 2; i++) {
+			GLenum tg = i ? GL_TEXTURE_1D : GL_TEXTURE_2D;
+			glTexParameteri(tg, GL_TEXTURE_MIN_FILTER, a->tp_min[i]);
+			glTexParameteri(tg, GL_TEXTURE_MAG_FILTER, a->tp_mag[i]);
+			glTexParameteri(tg, GL_TEXTURE_WRAP_S, a->tp_ws[i]);
+			glTexParameteri(tg, GL_TEXTURE_WRAP_T, a->tp_wt[i]);
+			glTexParameterfv(tg, GL_TEXTURE_BORDER_COLOR, a->tp_border[i]);
+			glTexParameterf(tg, GL_TEXTURE_PRIORITY, a->tp_prio[i]);
+		}
 		glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, a->texenv_mode);
 		glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, a->texenv_color);
+		eye_begin(&mode, mv);
+		for (i = 0; i < 4; i++) {
+			glTexGeni(GL_S + i, GL_TEXTURE_GEN_MODE, a->gen_mode[i]);
+			glTexGenfv(GL_S + i, GL_OBJECT_PLANE, a->gen_obj[i]);
+			glTexGenfv(GL_S + i, GL_EYE_PLANE, a->gen_eye[i]);
+		}
+		eye_end(mode, mv);
 	}
 	free(a);
 }

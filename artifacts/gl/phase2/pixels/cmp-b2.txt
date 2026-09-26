@@ -1,0 +1,1 @@
+PASS  320x240  strict 1.069% (821 px >16)  tolerant 0.072% (55 px)  max 214  mean 2.34  diff /src/artifacts/gl/phase2/pixels/diff-b2.png

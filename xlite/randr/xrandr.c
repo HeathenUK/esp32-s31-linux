@@ -547,3 +547,24 @@ Status XRRSetScreenConfigAndRate(Display *dpy, XRRScreenConfiguration *config,
 {
 	return RRSetConfigFailed;
 }
+
+/*
+ * The rest of the 1.0 set freeglut's game mode links (fg_gamemode_x11.c).
+ * XRRGetScreenInfo above never hands out a configuration, so freeglut stops
+ * at "XRRGetScreenInfo failed" and these are reached only by a client that
+ * ignores that; they answer consistently with it: no timestamps, and a
+ * configuration change that fails and changes nothing.
+ */
+Time XRRConfigTimes(XRRScreenConfiguration *config, Time *config_timestamp)
+{
+	if (config_timestamp)
+		*config_timestamp = CurrentTime;
+	return CurrentTime;
+}
+
+Status XRRSetScreenConfig(Display *dpy, XRRScreenConfiguration *config,
+			  Drawable draw, int size_index, Rotation rotation,
+			  Time timestamp)
+{
+	return RRSetConfigFailed;
+}

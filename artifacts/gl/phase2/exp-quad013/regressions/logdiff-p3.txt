@@ -1,0 +1,9 @@
+- mesa: read rgba (40,40): 123 0 132 255 123 0 132 255
++ ours: read rgba (40,40): 123 255 132 255 123 251 132 255
+- mesa: read bgra: 132 0 123 255 132 0 123 255
++ ours: read bgra: 132 255 123 255 132 251 123 255
+- mesa: read 565 (5-bit) 1: 11 18 1
++ ours: read 565 (5-bit) 1: 12 20 1
+- mesa: read 565 (5-bit) 2: 4 15 11
++ ours: read 565 (5-bit) 2: 4 24 11
+22 lines compared, 4 differ

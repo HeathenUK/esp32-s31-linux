@@ -43,6 +43,12 @@ static void delete_list(GLContext *c,int list)
   l=find_list(c,list);
   if (l == NULL) return;
   
+  /* s31: pixel data the list copied at compile time */
+  while (l->owned != NULL) {
+    void *n = *(void **)l->owned;
+    gl_free(l->owned);
+    l->owned = n;
+  }
   /* free param buffer */
   pb=l->first_op_buffer;
   while (pb!=NULL) {
@@ -143,6 +149,19 @@ void gl_compile_op(GLContext *c,GLParam *p)
     index++;
   }
   c->current_op_buffer_index=index;
+}
+
+/* s31: blocks carry their chain pointer in a header of their own
+   (s31_list_block below), so the op keeps a plain pointer to the data */
+int gl_list_own(GLContext *c, void *block)
+{
+  GLList *l;
+  if (!c->compile_flag || block == NULL) return 0;
+  l = find_list(c, c->list_index);
+  if (l == NULL) return 0;
+  *(void **)block = l->owned;
+  l->owned = block;
+  return 1;
 }
 
 void gl_add_op(GLParam *p)

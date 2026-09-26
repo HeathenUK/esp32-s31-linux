@@ -1,0 +1,18 @@
+# glref run: impl=ours name=glxheads frame=3 display=:96
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/xdemos/glxheads
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000f392a3c20000)
+libGL: context 1 created (pid 1076, comm glxheads)
+glxheads: exercise multiple GLX connections (any key = exit)
+Usage:
+  glxheads xdisplayname ...
+Example:
+  glxheads :0 mars:0 venus:1
+Name: :96
+  Display:     0xab6646a5c370
+  Window:      0x200002
+  Context:     0xab6646a68ae0
+  GL_VERSION:  1.1 s31-tinygl
+  GL_VENDOR:   s31
+  GL_RENDERER: Software Rasterizer
+glref: ok at swap 3 -> /src/artifacts/gl/f7/suite/ours/glxheads.f3

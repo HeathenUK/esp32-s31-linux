@@ -5,8 +5,10 @@
 #          exit:   run to exit (no image); pass = clean exit, no missing symbol
 # capture  window (the swapped GL window, clipped to the screen) or screen
 # frames   blank = the suite default (3 20 60)
-# $XD = mesa-demos xdemos build dir, $GD = GLUT demos build dir. Apps run with
-# cwd = the mesa-demos SOURCE src/demos, so the demos' ../data/ files resolve.
+# $XD = mesa-demos xdemos build dir, $GD = GLUT demos build dir, $SB =
+# gl/ref-apps/build (the stage-5 corpus of tools/glref/build-games.sh). Apps
+# run with cwd = the mesa-demos SOURCE src/demos, so the demos' ../data/ files
+# resolve.
 #
 # Stock sizes where the app has no size switch: glxheads 300x300,
 # glxgears_fbconfig 300x300, manywin 4 x 90x90, offset 900x300 (clipped to
@@ -35,3 +37,10 @@ fire              | frames | window |         | $GD/fire -geometry 320x240+0+0
 teapot            | frames | window |         | $GD/teapot -geometry 320x240+0+0
 texcyl            | frames | window |         | $GD/texcyl -geometry 320x240+0+0
 isosurf           | frames | window | 1       | $GD/isosurf
+# Stage 5 (tools/glref/build-games.sh): SDL's own GL tests and rRootage, built
+# by their own build systems against the rig's SDL (sdl12-compat over SDL2).
+# testgl is 640x480 (no size switch); testgl2 takes SDLTest's --geometry.
+# rRootage: its stock -lowres (320x240), -window and -nosound switches.
+testgl            | frames | window |         | $SB/sdl12-test/testgl
+testgl2           | frames | window |         | $SB/sdl2-test/testgl2 --geometry 320x240
+rrootage          | frames | window | 3 60 300 | $SB/rrootage/rr -lowres -window -nosound

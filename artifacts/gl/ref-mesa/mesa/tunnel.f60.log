@@ -1,11 +1,11 @@
-# glref run: impl=mesa name=tunnel frame=60 display=:92
+# glref run: impl=mesa name=tunnel frame=60 display=:90
 # cmd: /src/gl/ref-apps/build/mesa-demos/src/demos/tunnel -geometry 320x240+0+0
 # libGL.so.1 resolves to:
-#   	libGL.so.1 => /lib/aarch64-linux-gnu/libGL.so.1 (0x0000e5d25aec0000)
-#   	libGLU.so.1 => /src/gl/ref-apps/prefix/lib/libGLU.so.1 (0x0000e5d25ae10000)
-#   	libglut.so.3 => /src/gl/ref-apps/prefix/lib/libglut.so.3 (0x0000e5d25ad30000)
-#   	libGLdispatch.so.0 => /lib/aarch64-linux-gnu/libGLdispatch.so.0 (0x0000e5d25a930000)
-#   	libGLX.so.0 => /lib/aarch64-linux-gnu/libGLX.so.0 (0x0000e5d25a8d0000)
+#   	libGL.so.1 => /lib/aarch64-linux-gnu/libGL.so.1 (0x0000f284bd3e0000)
+#   	libGLU.so.1 => /src/gl/ref-apps/prefix/lib/libGLU.so.1 (0x0000f284bd330000)
+#   	libglut.so.3 => /src/gl/ref-apps/prefix/lib/libglut.so.3 (0x0000f284bd250000)
+#   	libGLdispatch.so.0 => /lib/aarch64-linux-gnu/libGLdispatch.so.0 (0x0000f284bce50000)
+#   	libGLX.so.0 => /lib/aarch64-linux-gnu/libGLX.so.0 (0x0000f284bcdf0000)
 Tunnel V1.5
 Written by David Bucciarelli (tech.hmw@plus.it)
 glref: ok at swap 60 -> /src/artifacts/gl/ref-mesa/mesa/tunnel.f60

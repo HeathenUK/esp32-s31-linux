@@ -1,0 +1,11 @@
+# glref run: impl=mesa name=fire frame=20 display=:91
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/demos/fire -geometry 320x240+0+0
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /lib/aarch64-linux-gnu/libGL.so.1 (0x0000f1f596f70000)
+#   	libGLU.so.1 => /src/gl/ref-apps/prefix/lib/libGLU.so.1 (0x0000f1f596ec0000)
+#   	libglut.so.3 => /src/gl/ref-apps/prefix/lib/libglut.so.3 (0x0000f1f596de0000)
+#   	libGLdispatch.so.0 => /lib/aarch64-linux-gnu/libGLdispatch.so.0 (0x0000f1f5969e0000)
+#   	libGLX.so.0 => /lib/aarch64-linux-gnu/libGLX.so.0 (0x0000f1f596980000)
+Fire V1.5
+Written by David Bucciarelli (tech.hmw@plus.it)
+glref: ok at swap 20 -> /src/artifacts/gl/phase2/selftest-mesa-2/mesa/fire.f20

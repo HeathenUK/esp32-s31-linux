@@ -1,0 +1,18 @@
+# glref run: impl=ours name=morph3d frame=3 display=:93
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/demos/morph3d -geometry 320x240+0+0
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000edfb63360000)
+#   	libglut.so.3 => /src/gl/ref-apps/prefix/lib/libglut.so.3 (0x0000edfb63280000)
+libGL: context 1 created (pid 1824, comm morph3d)
+Morph 3D - Shows morphing platonic polyhedra
+Author: Marcelo Fernandes Vianna (vianna@cat.cbpf.br)
+
+  [1]    - Tetrahedron
+  [2]    - Hexahedron (Cube)
+  [3]    - Octahedron
+  [4]    - Dodecahedron
+  [5]    - Icosahedron
+[SPACE]  - Toggle colored faces
+[RETURN] - Toggle smooth/flat shading
+ [ESC]   - Quit
+glref: ok at swap 3 -> /src/artifacts/gl/f7/suite/ours/morph3d.f3

@@ -23,10 +23,6 @@
 /* ------------------------------------------------------------------ wire */
 
 static void p16(unsigned char *p, unsigned v) { p[0] = v; p[1] = v >> 8; }
-static void p32(unsigned char *p, unsigned long v)
-{
-	p[0] = v; p[1] = v >> 8; p[2] = v >> 16; p[3] = v >> 24;
-}
 static unsigned g16(const unsigned char *p) { return p[0] | (p[1] << 8); }
 static unsigned long g32(const unsigned char *p)
 {
@@ -229,13 +225,58 @@ static int xlite_default_ioerror(Display *d)
 int (*xlite_errh)(Display *, XErrorEvent *) = xlite_default_error;
 int (*xlite_ioerrh)(Display *) = xlite_default_ioerror;
 
+/*
+ * Sequence numbers. The wire carries only the low 16 bits; the full serial is
+ * pub.request's, and every message read off the wire says how far the server
+ * has got. Stock Xlib widens each one against the last request SENT and keeps
+ * the high-water mark in last_request_read, which is what
+ * LastKnownRequestProcessed() reads. xlite used to hand out the raw 16 bits
+ * and to set last_request_read only in _XReply, so XSync and events never
+ * moved it: libGL's "was that put already processed?" test
+ * (gl/glx/glx_present.c, LastKnownRequestProcessed >= the put's serial) could
+ * never succeed after the app ate the ShmCompletion, and every such frame
+ * paid an extra XSync round trip (phase 1 review R1).
+ *
+ * Widening picks the largest serial <= pub.request with those low bits, which
+ * is exact while fewer than 65,536 requests are in flight - the same bound
+ * Xlib's _XSetLastRequestRead has. A number the client has not sent yet (only
+ * a broken server could say one) does not move anything.
+ */
+unsigned long xlite_widen(struct xdpy *x, unsigned seq16)
+{
+	unsigned long req = x->pub.request;
+	unsigned long v = (req & ~0xFFFFUL) | (seq16 & 0xFFFF);
+
+	if (v > req) {
+		if (v < 0x10000)	/* never sent: do not trust it */
+			return x->pub.last_request_read;
+		v -= 0x10000;
+	}
+	return v;
+}
+
+/* Widen the serial of a message read off the wire and advance
+ * last_request_read to it (never backwards). */
+unsigned long xlite_seen(struct xdpy *x, unsigned seq16)
+{
+	unsigned long v = xlite_widen(x, seq16);
+
+	if ((long)(v - x->pub.last_request_read) > 0)
+		x->pub.last_request_read = v;
+	return v;
+}
+
 static void decode(struct xdpy *x, const unsigned char *e, XEvent *ev)
 {
 	int type = e[0] & 0x7F;
 
 	memset(ev, 0, sizeof(*ev));
 	ev->type = type;
-	ev->xany.serial = g16(e + 2);
+	/* KeymapNotify is the one event with no sequence number: its bytes
+	 * 1-31 are the key vector. Everything else carries one, widened like
+	 * Xlib's, so a serial compares with NextRequest() directly. */
+	ev->xany.serial = type == KeymapNotify ? x->pub.last_request_read
+					       : xlite_widen(x, g16(e + 2));
 	ev->xany.send_event = (e[0] & 0x80) != 0;
 	ev->xany.display = &x->pub;
 
@@ -345,6 +386,11 @@ static void decode(struct xdpy *x, const unsigned char *e, XEvent *ev)
 		ev->xselection.target = g32(e + 16);
 		ev->xselection.property = g32(e + 20);
 		break;
+	case GenericEvent:
+		/* X Generic Event: only the header is kept (XGetEventData). */
+		ev->xgeneric.extension = e[1];
+		ev->xgeneric.evtype = g16(e + 8);
+		break;
 	default:
 		ev->xany.window = g32(e + 4);
 		{
@@ -429,14 +475,15 @@ void xlite_queue(struct xdpy *x, const unsigned char *e)
 		write(x->wake[1], "", 1);
 }
 
-static void deliver_error(struct xdpy *x, const unsigned char *e)
+static void deliver_error(struct xdpy *x, const unsigned char *e,
+			  unsigned long serial)
 {
 	XErrorEvent ee;
 
 	memset(&ee, 0, sizeof(ee));
 	ee.type = 0;
 	ee.display = &x->pub;
-	ee.serial = g16(e + 2);
+	ee.serial = serial;
 	ee.error_code = e[1];
 	ee.resourceid = g32(e + 4);
 	ee.minor_code = g16(e + 8);
@@ -667,11 +714,35 @@ int xlite_read_more(struct xdpy *x, int block)
 	return 1;
 }
 
+/* Drop the first `off` bytes of the input buffer. */
+static void in_consume(struct xdpy *x, size_t off)
+{
+	if (off) {
+		memmove(x->in, x->in + off, x->inlen - off);
+		x->inlen -= off;
+	}
+}
+
+/* Has the server got PAST request `want`? (serials compared mod 2^32) */
+static int seq_after(unsigned long serial, uint32_t want)
+{
+	return (int32_t)((uint32_t)serial - want) > 0;
+}
+
 /*
  * Pull whole messages out of the input buffer. If `want` is non-zero, stop
  * when the reply with that sequence number arrives and hand it back; every
  * event met on the way is queued rather than discarded, which is what makes a
  * round trip safe to do from inside an event loop.
+ *
+ * Every message advances last_request_read (xlite_seen), and the wait for
+ * `want` ENDS, returning 0, when the answer is an X error for that request -
+ * or when anything numbered after it arrives, which proves the server
+ * finished it without replying. It used to wait for the reply regardless, so
+ * a request answered with an error (a GetGeometry of a destroyed window, a
+ * QueryExtension-less server's BadRequest) hung the client for ever in poll()
+ * (GL phase 1). Xlib's _XReply does the same: hand the error to the handler
+ * and return failure.
  */
 static int pump_ex(struct xdpy *x, uint32_t want, unsigned char *hdr,
 		   unsigned char **extra, size_t *nextra, int block)
@@ -682,8 +753,10 @@ static int pump_ex(struct xdpy *x, uint32_t want, unsigned char *hdr,
 		while (x->inlen - off >= 32) {
 			const unsigned char *m = x->in + off;
 			size_t need = 32;
+			unsigned long serial;
 
-			if (m[0] == 1)			/* reply */
+			if (m[0] == 1 ||		/* reply */
+			    (m[0] & 0x7F) == GenericEvent)	/* XGE: may be longer */
 				need = 32 + g32(m + 4) * 4;
 			if (x->inlen - off < need) {
 				if (!xlite_ingrow(x, off + need))
@@ -691,11 +764,31 @@ static int pump_ex(struct xdpy *x, uint32_t want, unsigned char *hdr,
 				break;
 			}
 			if (m[0] == 0) {
-				deliver_error(x, m);
-			} else if (m[0] == 1) {
-				uint32_t seq = g16(m + 2);
+				unsigned char err[32];
 
-				if (want && seq == (want & 0xFFFF)) {
+				/*
+				 * Take the error out of the buffer BEFORE the
+				 * handler runs: a handler may make requests
+				 * and round trips of its own, which pump this
+				 * same buffer.
+				 */
+				serial = xlite_seen(x, g16(m + 2));
+				memcpy(err, m, 32);
+				in_consume(x, off + 32);
+				off = 0;
+				deliver_error(x, err, serial);
+				if (want && !seq_after(want, serial)) {
+					if (xlite_tr())
+						fprintf(stderr, "xlite: request %u "
+							"answered with an error\n",
+							want & 0xFFFF);
+					return 0;
+				}
+				continue;
+			}
+			if (m[0] == 1) {
+				serial = xlite_seen(x, g16(m + 2));
+				if (want && (uint32_t)serial == want) {
 					memcpy(hdr, m, 32);
 					*nextra = need - 32;
 					if (*nextra) {
@@ -706,22 +799,28 @@ static int pump_ex(struct xdpy *x, uint32_t want, unsigned char *hdr,
 					} else {
 						*extra = NULL;
 					}
-					off += need;
-					memmove(x->in, x->in + off,
-						x->inlen - off);
-					x->inlen -= off;
+					in_consume(x, off + need);
 					return 1;
 				}
-				xlite_note("unmatched reply seq %u", seq);
+				xlite_note("unmatched reply seq %u", g16(m + 2));
 			} else {
+				serial = (m[0] & 0x7F) == KeymapNotify ?
+					 x->pub.last_request_read :
+					 xlite_seen(x, g16(m + 2));
 				xlite_queue(x, m);
 			}
 			off += need;
+			if (want && seq_after(serial, want)) {
+				/* The server is past `want` and sent no reply
+				 * for it: one will never come. */
+				xlite_note("no reply to request %u (server at %u)",
+					   want & 0xFFFF,
+					   (unsigned)(serial & 0xFFFF));
+				in_consume(x, off);
+				return 0;
+			}
 		}
-		if (off) {
-			memmove(x->in, x->in + off, x->inlen - off);
-			x->inlen -= off;
-		}
+		in_consume(x, off);
 		if (!want && x->qhead != x->qtail)
 			return 0;
 		if (!block)
@@ -1330,8 +1429,10 @@ static long ev_mask_for(int type)
  * warp generates, and every key typed while it waited vanished - which is
  * why a grabbed game went deaf to its keyboard.
  */
-static int queue_take(struct xdpy *x, int (*pred)(const XEvent *, long),
-		      long arg, XEvent *out)
+/* The first queued event `pred` accepts, copied to `out`; removed from the
+ * queue unless `keep` (the XPeek* forms). */
+static int queue_match(struct xdpy *x, int (*pred)(const XEvent *, long),
+		       long arg, XEvent *out, int keep)
 {
 	int i, idx = x->qhead, n = x->pub.qlen;
 
@@ -1341,6 +1442,8 @@ static int queue_take(struct xdpy *x, int (*pred)(const XEvent *, long),
 		if (!pred(&x->q[idx], arg))
 			continue;
 		*out = x->q[idx];
+		if (keep)
+			return 1;
 		for (j = idx;; j = (j + 1) % x->qcap) {
 			int nx = (j + 1) % x->qcap;
 
@@ -1357,6 +1460,12 @@ static int queue_take(struct xdpy *x, int (*pred)(const XEvent *, long),
 	return 0;
 }
 
+static int queue_take(struct xdpy *x, int (*pred)(const XEvent *, long),
+		      long arg, XEvent *out)
+{
+	return queue_match(x, pred, arg, out, 0);
+}
+
 static int pred_mask(const XEvent *e, long mask)
 {
 	return (ev_mask_for(e->type) & mask) != 0;
@@ -1367,20 +1476,21 @@ static int pred_type(const XEvent *e, long type)
 	return e->type == (int)type;
 }
 
-/* Blocking: read until an event `pred` accepts is queued, then take it. */
-static int take_wait(struct xdpy *x, int (*pred)(const XEvent *, long),
-		     long arg, XEvent *ev)
+/* Blocking: read until an event `pred` accepts is queued, then take it -
+ * or, with `keep`, copy it and leave it queued. */
+static int match_wait(struct xdpy *x, int (*pred)(const XEvent *, long),
+		      long arg, XEvent *ev, int keep)
 {
 	for (;;) {
 		int got;
 
 		xlite_out_acquire();
-		got = queue_take(x, pred, arg, ev);
+		got = queue_match(x, pred, arg, ev, keep);
 		if (!got) {
 			xlite_flush(x);
 			while (xlite_read_more(x, 0))
 				pump_ex(x, 0, NULL, NULL, NULL, 0);
-			got = queue_take(x, pred, arg, ev);
+			got = queue_match(x, pred, arg, ev, keep);
 		}
 		xlite_out_release();
 		if (got)
@@ -1399,6 +1509,12 @@ static int take_wait(struct xdpy *x, int (*pred)(const XEvent *, long),
 			}
 		}
 	}
+}
+
+static int take_wait(struct xdpy *x, int (*pred)(const XEvent *, long),
+		     long arg, XEvent *ev)
+{
+	return match_wait(x, pred, arg, ev, 0);
 }
 
 /* Non-blocking: whatever has arrived, take a match if there is one. */
@@ -1445,6 +1561,51 @@ int XIfEvent(Display *d, XEvent *ev, Bool (*f)(Display *, XEvent *, XPointer),
 	struct ifev s = { d, f, a };
 
 	return take_wait(XD(d), pred_if, (long)&s, ev);
+}
+
+/*
+ * XPeekIfEvent waits like XIfEvent and leaves the event queued. freeglut
+ * waits for its new window's MapNotify this way (fg_window_x11.c:445); the
+ * generated stub returned at once with the caller's buffer untouched.
+ */
+XLITE_IMPL(XPeekIfEvent)
+int XPeekIfEvent(Display *d, XEvent *ev,
+		 Bool (*f)(Display *, XEvent *, XPointer), XPointer a)
+{
+	struct ifev s = { d, f, a };
+
+	return match_wait(XD(d), pred_if, (long)&s, ev, 1);
+}
+
+/*
+ * Push an event back onto the HEAD of the queue, so it is the next one read.
+ * freeglut fakes its window's first ConfigureNotify this way
+ * (fg_window_x11.c:311) so the app's reshape callback sets up the viewport
+ * and projection; with the stub it never ran, and a GLUT demo drew its scene
+ * outside the default view volume - a black window - until something resized
+ * it.
+ */
+XLITE_IMPL(XPutBackEvent)
+int XPutBackEvent(Display *d, XEvent *ev)
+{
+	struct xdpy *x = XD(d);
+	int ok = 1;
+
+	xlite_out_acquire();
+	if (x->pub.qlen + 1 >= x->qcap && !queue_grow(x)) {
+		fprintf(stderr, "xlite: event ring cannot grow - "
+			"XPutBackEvent dropped a type %d event\n", ev->type);
+		ok = 0;
+	} else {
+		x->qhead = (x->qhead + x->qcap - 1) % x->qcap;
+		x->q[x->qhead] = *ev;
+		x->pub.qlen++;
+	}
+	xlite_out_release();
+	if (ok && x->wake[1] >= 0 && write(x->wake[1], "", 1) < 0) {
+		/* full: the waiter is already awake */
+	}
+	return 0;
 }
 
 XLITE_IMPL(XCheckIfEvent)
@@ -1497,6 +1658,28 @@ Bool XCheckTypedEvent(Display *d, int type, XEvent *ev)
  * argument reinstalls the default - exactly Xlib's contract, and the one the
  * SDL handlers above rely on when they chain to the previous handler.
  */
+/*
+ * GenericEvent cookies. Xlib fetches a cookie's payload through a converter
+ * the owning extension library registered with XESetWireToEventCookie; that
+ * hook is a no-op here (xlite_ext.c) and xshim advertises no extension that
+ * sends generic events (no XInputExtension, no Present), so there is never a
+ * cookie this library understands. False is Xlib's answer for exactly that
+ * case, and freeglut and SDL2 then skip the event. Nothing is ever attached,
+ * so there is nothing to free.
+ */
+XLITE_IMPL(XGetEventData)
+Bool XGetEventData(Display *d, XGenericEventCookie *cookie)
+{
+	(void)d; (void)cookie;
+	return False;
+}
+
+XLITE_IMPL(XFreeEventData)
+void XFreeEventData(Display *d, XGenericEventCookie *cookie)
+{
+	(void)d; (void)cookie;
+}
+
 XLITE_IMPL(XSetErrorHandler)
 int (*XSetErrorHandler(int (*h)(Display *, XErrorEvent *)))(Display *,
 							    XErrorEvent *)

@@ -86,15 +86,37 @@ typedef struct {
     PIXEL *current_texture;
     int zbuf_ext;  /* s31: zbuf belongs to the caller (the GLX drawable), never freed here */
 
+    /* s31: the bound texture's native size (plan F3). The texel of
+       fixed-point (s, t) is at byte offset
+         ((t & tex_tmask) | (s & tex_smask)) >> tex_shift
+       from current_texture: s holds the column at bits [F, F+ws), t the
+       row at bits [F+ws, F+ws+hs) (gl_transform_to_viewport scales them
+       so), which is the same three operations per pixel as TinyGL's fixed
+       256x256 layout; the masks give GL_REPEAT. See texture.c. */
+    int tex_smask, tex_tmask, tex_shift;
+    /* s31: one GL_REPEAT period of s and of t in that fixed point (a power
+       of two): the textured filler adds whole periods to a triangle with a
+       negative coordinate, so its int conversion floors (ztriangle.h) */
+    int tex_speriod, tex_tperiod;
+    /* s31: the colour of the next flat-shaded triangle (clip.c) */
+    int flat_color;
+    struct ZPipe *pipe;       /* s31: the general fragment path (zpipe.h) */
 } ZBuffer;
 
 typedef struct {
   int x,y,z;     /* integer coordinates in the zbuffer */
   int s,t;       /* coordinates for the mapping */
   int r,g,b;     /* color indexes */
-  
-  float sz,tz;   /* temporary coordinates for mapping */
+
+  /* s31: the triangle fillers' vertex (ztri.h): GL window coordinates,
+     rows from the top, pixel centres at +1/2 - not TinyGL's snapped x, y,
+     which lines and points still use - and q = 1/w for the perspective
+     division (gl_transform_to_viewport computes all three once per vertex;
+     review P1/G1, P2) */
+  float fx,fy,q;
 } ZBufferPoint;
+
+
 
 /* zbuffer.c */
 
@@ -137,9 +159,6 @@ void ZB_fillTriangleFlat(ZBuffer *zb,
 void ZB_fillTriangleSmooth(ZBuffer *zb,
 		   ZBufferPoint *p1,ZBufferPoint *p2,ZBufferPoint *p3);
 
-void ZB_fillTriangleMapping(ZBuffer *zb,
-		    ZBufferPoint *p1,ZBufferPoint *p2,ZBufferPoint *p3);
-
 void ZB_fillTriangleMappingPerspective(ZBuffer *zb,
                     ZBufferPoint *p0,ZBufferPoint *p1,ZBufferPoint *p2);
 
@@ -152,6 +171,16 @@ void ZB_fillTriangleFlat_nw(ZBuffer *zb, ZBufferPoint *p1,ZBufferPoint *p2,ZBuff
 void ZB_fillTriangleSmooth_nw(ZBuffer *zb, ZBufferPoint *p1,ZBufferPoint *p2,ZBufferPoint *p3);
 void ZB_fillTriangleMappingPerspective_nw(ZBuffer *zb, ZBufferPoint *p0,ZBufferPoint *p1,ZBufferPoint *p2);
 void ZB_plot_nz(ZBuffer *zb,ZBufferPoint *p);
+/* s31: ztriangle_lt.c, GL_LESS (strict) with depth writes */
+void ZB_fillTriangleFlat_lt(ZBuffer *zb, ZBufferPoint *p1,ZBufferPoint *p2,ZBufferPoint *p3);
+void ZB_fillTriangleSmooth_lt(ZBuffer *zb, ZBufferPoint *p1,ZBufferPoint *p2,ZBufferPoint *p3);
+void ZB_fillTriangleMappingPerspective_lt(ZBuffer *zb, ZBufferPoint *p0,ZBufferPoint *p1,ZBufferPoint *p2);
+/* s31: zline.c, GL_LESS lines and points */
+void ZB_line_z_lt(ZBuffer *zb, ZBufferPoint *p1, ZBufferPoint *p2);
+void ZB_plot_lt(ZBuffer *zb, ZBufferPoint *p);
+/* s31: glClear inside a rectangle (scissor), with colour and depth masks */
+void ZB_clear_rect(ZBuffer *zb, int x0, int y0, int x1, int y1,
+                   int clear_z, int z, int clear_color, int color, int cmask);
 
 typedef void (*ZB_fillTriangleFunc)(ZBuffer  *,
 	    ZBufferPoint *,ZBufferPoint *,ZBufferPoint *);

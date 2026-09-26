@@ -1,4 +1,5 @@
 #include "zgl.h"
+#include "ztri.h"
 
 /* fill triangle profile */
 /* #define PROFILE */
@@ -15,11 +16,25 @@ void gl_transform_to_viewport(GLContext *c,GLVertex *v)
   float winv;
 
   /* coordinates */
-  winv=1.0/v->pc.W;
-  v->zp.x= (int) ( v->pc.X * winv * c->viewport.scale.X 
-                   + c->viewport.trans.X );
-  v->zp.y= (int) ( v->pc.Y * winv * c->viewport.scale.Y 
-                   + c->viewport.trans.Y );
+  /* s31: 1/w in float (it was 1.0/W: a double divide and two conversions
+     per vertex, F without D), kept as zp.q for the textured fillers, and
+     GL's own window position zp.fx/fy, which the triangle fillers of both
+     rasteriser paths scan-convert (ztri.h); the snapped x, y below are for
+     TinyGL's lines and points */
+  winv=1.0f/v->pc.W;
+  v->zp.q=winv;
+  v->zp.fx=v->pc.X * winv * c->viewport.ex[0] + c->viewport.ex[1];
+  v->zp.fy=v->pc.Y * winv * c->viewport.ey[0] + c->viewport.ey[1];
+  /* s31: the integer position lines and points use is the pixel holding
+     the vertex in that same GL window position (TinyGL mapped with a
+     half-pixel shrink, (w - 1/2)/2, up to 1.25 px from it: a line drawn
+     over an offset fill then sampled the fill's depth up to 1.25 px away,
+     more than glPolygonOffset's factor term covers). A vertex on the
+     right or bottom clip plane is at x = x1 exactly, one past the box:
+     TinyGL's line and plot routines, which write without a test, are
+     handed positions checked against the box (gl_zb_line, zb_plot_in) */
+  v->zp.x = ztri_floor(v->zp.fx);
+  v->zp.y = ztri_floor(v->zp.fy);
   v->zp.z= (int) ( v->pc.Z * winv * c->viewport.scale.Z 
                    + c->viewport.trans.Z );
   /* color */
@@ -40,10 +55,27 @@ void gl_transform_to_viewport(GLContext *c,GLVertex *v)
   /* texture */
 
   if (c->texture_2d_enabled) {
-    v->zp.s=(int)(v->tex_coord.X * (ZB_POINT_S_MAX - ZB_POINT_S_MIN) 
-                  + ZB_POINT_S_MIN);
-    v->zp.t=(int)(v->tex_coord.Y * (ZB_POINT_T_MAX - ZB_POINT_T_MIN) 
-                  + ZB_POINT_T_MIN);
+    /* s31: the bound texture's own fixed point (zbuffer.h, texture.c):
+       column at bits [F, F+ws) of s, row at [F+ws, F+ws+hs) of t, so the
+       masks repeat it; kept inside the int range (GL_REPEAT is exact for
+       |texcoord| < 2^31 / tex_tscale >= 512 repeats) */
+    float fs = v->tex_coord.X * c->tex_sscale;
+    float ft = v->tex_coord.Y * c->tex_tscale;
+    /* s31: glTexCoord4 / texgen q (review G7): the texel is (s/q, t/q).
+       Divided here, per vertex: exact when q is the same at every vertex
+       of the primitive, the usual case; where q varies (projective
+       texturing) s/q and t/q are then interpolated with the perspective
+       of 1/w rather than of q/w (README.s31, approximated) */
+    if (v->tex_coord.W != 1.0f) {
+      float iq = v->tex_coord.W > 1.0e-6f || v->tex_coord.W < -1.0e-6f ?
+                 1.0f / v->tex_coord.W : 1.0e6f;
+      fs *= iq;
+      ft *= iq;
+    }
+    fs = fminf(fmaxf(fs, -2.0e9f), 2.0e9f);
+    ft = fminf(fmaxf(ft, -2.0e9f), 2.0e9f);
+    v->zp.s=(int)fs;
+    v->zp.t=(int)ft;
   }
 }
 
@@ -62,15 +94,25 @@ static void gl_add_select1(GLContext *c,int z1,int z2,int z3)
 
 /* point */
 
+/* s31: a size-1 point of tier 1 (ZB_plot writes without a test): only
+   inside the box - a point on the right or bottom edge of the viewport is
+   one pixel past it */
+static void zb_plot_in(GLContext *c,ZBufferPoint *p)
+{
+  const int *b=c->pipe.box;
+  if (p->x >= b[0] && p->x < b[2] && p->y >= b[1] && p->y < b[3])
+    c->zb_plot(c->zb,p);
+}
+
 void gl_draw_point(GLContext *c,GLVertex *p0)
 {
   if (p0->clip_code == 0) {
     if (c->render_mode == GL_SELECT) {
       gl_add_select(c,p0->zp.z,p0->zp.z);
-    } else if (c->depth_test) {
-      ZB_plot(c->zb,&p0->zp);
+    } else if (c->raster_gen_points) {
+      if (!c->raster_skip) gl_general_point(c,p0);   /* s31 */
     } else {
-      ZB_plot_nz(c->zb,&p0->zp);   /* s31 */
+      zb_plot_in(c,&p0->zp);   /* s31: raster.c, for the depth state */
     }
   }
 }
@@ -87,6 +129,15 @@ static inline void interpolate(GLVertex *q,GLVertex *p0,GLVertex *p1,float t)
   q->color.v[0]=p0->color.v[0] + (p1->color.v[0]-p0->color.v[0])*t;
   q->color.v[1]=p0->color.v[1] + (p1->color.v[1]-p0->color.v[1])*t;
   q->color.v[2]=p0->color.v[2] + (p1->color.v[2]-p0->color.v[2])*t;
+  /* s31: alpha, fog and texture coordinates of a clipped line end */
+  q->color.v[3]=p0->color.v[3] + (p1->color.v[3]-p0->color.v[3])*t;
+  q->fog=p0->fog + (p1->fog-p0->fog)*t;
+  q->tex_coord.X=p0->tex_coord.X + (p1->tex_coord.X-p0->tex_coord.X)*t;
+  q->tex_coord.Y=p0->tex_coord.Y + (p1->tex_coord.Y-p0->tex_coord.Y)*t;
+  q->tex_coord.W=p0->tex_coord.W + (p1->tex_coord.W-p0->tex_coord.W)*t;
+  q->spec.X=p0->spec.X + (p1->spec.X-p0->spec.X)*t;
+  q->spec.Y=p0->spec.Y + (p1->spec.Y-p0->spec.Y)*t;
+  q->spec.Z=p0->spec.Z + (p1->spec.Z-p0->spec.Z)*t;
 }
 
 /*
@@ -111,28 +162,65 @@ static inline int ClipLine1(float denom,float num,float *tmin,float *tmax)
   return 1;
 }
 
+/* s31 (plan F7): the user clip planes, in clip space (s31_xform.c):
+   d(t) = d1 + t (d2 - d1) >= 0 */
+static int clip_line_user(GLContext *c,GLVertex *p1,GLVertex *p2,
+                          float *tmin,float *tmax)
+{
+  int i;
+  for (i = 0; i < 6; i++) {
+    const float *q = c->clip_plane_clip[i].v;
+    float d1, d2;
+    if (!(c->clip_plane_mask & (1 << i))) continue;
+    d1 = q[0]*p1->pc.X + q[1]*p1->pc.Y + q[2]*p1->pc.Z + q[3]*p1->pc.W;
+    d2 = q[0]*p2->pc.X + q[1]*p2->pc.Y + q[2]*p2->pc.Z + q[3]*p2->pc.W;
+    if (!ClipLine1(d2 - d1, -d1, tmin, tmax)) return 0;
+  }
+  return 1;
+}
+
 /* s31: out of line: 9 call sites in vertex.c, and code size is time in XIP */
 void gl_set_provoking_flat(GLContext *c, GLVertex *v)
 {
   ZBufferPoint t;
   gl_zp_color(&t, &v->color);
   c->flat_r = t.r; c->flat_g = t.g; c->flat_b = t.b;
+  c->flat_vtx = v;   /* s31: its alpha, for the general path (raster.c) */
 }
 
 /* s31: GL_FLAT lines take the provoking vertex's colour (gl_set_provoking);
    TinyGL interpolated whenever the two ends differed */
-static void gl_zb_line(GLContext *c,ZBufferPoint *a,ZBufferPoint *b)
+static void gl_zb_line(GLContext *c,GLVertex *va,GLVertex *vb)
 {
-  ZBufferPoint fa,fb;
-  if (c->current_shade_model != GL_SMOOTH) {
-    fa=*a; fb=*b;
-    fa.r=fb.r=c->flat_r; fa.g=fb.g=c->flat_g; fa.b=fb.b=c->flat_b;
-    a=&fa; b=&fb;
+  ZBufferPoint fa,fb,*a=&va->zp,*b=&vb->zp;
+  if (c->raster_gen_lines) {
+    /* s31: blending, fog, depth func/mask, texture, width ... */
+    if (!c->raster_skip)
+      gl_general_line(c,va,vb,c->current_shade_model != GL_SMOOTH);
+    return;
   }
-  if (c->depth_test)
-    ZB_line_z(c->zb,a,b);
-  else
-    ZB_line(c->zb,a,b);
+  {
+    /* s31: TinyGL's line writes every pixel between the ends without a
+       test: an end one past the box (on the right or bottom clip plane,
+       clip.c gl_transform_to_viewport) is moved onto its last pixel */
+    const int *bx=c->pipe.box;
+    int out=a->x < bx[0] || a->x >= bx[2] || a->y < bx[1] || a->y >= bx[3] ||
+            b->x < bx[0] || b->x >= bx[2] || b->y < bx[1] || b->y >= bx[3];
+    if (out || c->current_shade_model != GL_SMOOTH) {
+      fa=*a; fb=*b;
+      a=&fa; b=&fb;
+    }
+    if (out) {
+      fa.x=fa.x < bx[0] ? bx[0] : (fa.x >= bx[2] ? bx[2]-1 : fa.x);
+      fa.y=fa.y < bx[1] ? bx[1] : (fa.y >= bx[3] ? bx[3]-1 : fa.y);
+      fb.x=fb.x < bx[0] ? bx[0] : (fb.x >= bx[2] ? bx[2]-1 : fb.x);
+      fb.y=fb.y < bx[1] ? bx[1] : (fb.y >= bx[3] ? bx[3]-1 : fb.y);
+    }
+  }
+  if (c->current_shade_model != GL_SMOOTH) {
+    fa.r=fb.r=c->flat_r; fa.g=fb.g=c->flat_g; fa.b=fb.b=c->flat_b;
+  }
+  c->zb_line(c->zb,a,b);   /* s31: raster.c, for the depth state */
 }
 
 void gl_draw_line(GLContext *c,GLVertex *p1,GLVertex *p2)
@@ -149,7 +237,7 @@ void gl_draw_line(GLContext *c,GLVertex *p1,GLVertex *p2)
     if (c->render_mode == GL_SELECT) {
       gl_add_select1(c,p1->zp.z,p2->zp.z,p2->zp.z);
     } else {
-      gl_zb_line(c,&p1->zp,&p2->zp);
+      gl_zb_line(c,p1,p2);
     }
   } else if ( (cc1&cc2) != 0 ) {
     return;
@@ -170,7 +258,8 @@ void gl_draw_line(GLContext *c,GLVertex *p1,GLVertex *p2)
         ClipLine1(dy+dw,-y1-w1,&tmin,&tmax) &&
         ClipLine1(-dy+dw,y1-w1,&tmin,&tmax) &&
         ClipLine1(dz+dw,-z1-w1,&tmin,&tmax) && 
-        ClipLine1(-dz+dw,z1-w1,&tmin,&tmax)) {
+        ClipLine1(-dz+dw,z1-w1,&tmin,&tmax) &&
+        (c->clip_plane_mask == 0 || clip_line_user(c,p1,p2,&tmin,&tmax))) {
 
       interpolate(&q1,p1,p2,tmin);
       interpolate(&q2,p1,p2,tmax);
@@ -185,7 +274,7 @@ void gl_draw_line(GLContext *c,GLVertex *p1,GLVertex *p2)
       if (c->render_mode == GL_SELECT)
         gl_add_select1(c,q1.zp.z,q2.zp.z,q2.zp.z);
       else
-        gl_zb_line(c,&q1.zp,&q2.zp);
+        gl_zb_line(c,&q1,&q2);
     }
   }
 }
@@ -240,8 +329,22 @@ float (*clip_proc[6])(V4 *,V4 *,V4 *)=  {
     clip_zmin,clip_zmax
 };
 
+/* s31 (plan F7): the intersection with user plane k (clip space) */
+static float clip_user(GLContext *c,int k,V4 *out,V4 *a,V4 *b)
+{
+  const float *q = c->clip_plane_clip[k].v;
+  float da = q[0]*a->X + q[1]*a->Y + q[2]*a->Z + q[3]*a->W;
+  float db = q[0]*b->X + q[1]*b->Y + q[2]*b->Z + q[3]*b->W;
+  float t = da != db ? da / (da - db) : 0.0f;
+  int i;
+  for (i = 0; i < 4; i++) out->v[i] = a->v[i] + t * (b->v[i] - a->v[i]);
+  return t;
+}
+
+/* done: the user plane just clipped against, whose bit the new vertex
+   must not carry (it lies on the plane; rounding could say outside) */
 static inline void updateTmp(GLContext *c,
-			     GLVertex *q,GLVertex *p0,GLVertex *p1,float t)
+			     GLVertex *q,GLVertex *p0,GLVertex *p1,float t,int done)
 {
   if (c->current_shade_model == GL_SMOOTH) {
     q->color.v[0]=p0->color.v[0] + (p1->color.v[0]-p0->color.v[0])*t;
@@ -252,15 +355,48 @@ static inline void updateTmp(GLContext *c,
     q->color.v[1]=p0->color.v[1];
     q->color.v[2]=p0->color.v[2];
   }
+  if (c->lighting_enabled && c->light_model_two_side) {
+    /* s31: the back colours too (gl_draw_triangle_twoside) */
+    int k;
+    for (k = 0; k < 4; k++)
+      q->color_back.v[k]=p0->color_back.v[k] + (p1->color_back.v[k]-p0->color_back.v[k])*t;
+    q->spec_back.X=p0->spec_back.X + (p1->spec_back.X-p0->spec_back.X)*t;
+    q->spec_back.Y=p0->spec_back.Y + (p1->spec_back.Y-p0->spec_back.Y)*t;
+    q->spec_back.Z=p0->spec_back.Z + (p1->spec_back.Z-p0->spec_back.Z)*t;
+  }
+  if (c->raster_need_attr) {
+    /* s31: alpha (flat or not: GL_FLAT takes the provoking vertex's in
+       the filler) and the fog factor */
+    q->color.v[3]=p0->color.v[3] + (p1->color.v[3]-p0->color.v[3])*t;
+    q->fog=p0->fog + (p1->fog-p0->fog)*t;
+    if (c->raster_sepspec) {
+      q->spec.X=p0->spec.X + (p1->spec.X-p0->spec.X)*t;
+      q->spec.Y=p0->spec.Y + (p1->spec.Y-p0->spec.Y)*t;
+      q->spec.Z=p0->spec.Z + (p1->spec.Z-p0->spec.Z)*t;
+    }
+  }
 
   if (c->texture_2d_enabled) {
     q->tex_coord.X=p0->tex_coord.X + (p1->tex_coord.X-p0->tex_coord.X)*t;
     q->tex_coord.Y=p0->tex_coord.Y + (p1->tex_coord.Y-p0->tex_coord.Y)*t;
+    /* s31: q too (gl_transform_to_viewport divides by it) */
+    q->tex_coord.W=p0->tex_coord.W + (p1->tex_coord.W-p0->tex_coord.W)*t;
   }
 
   q->clip_code=gl_clipcode(q->pc.X,q->pc.Y,q->pc.Z,q->pc.W);
+  if (c->clip_plane_mask)
+    q->clip_code |= gl_user_clipcode(c,&q->pc) & ~done;
   if (q->clip_code==0) {
+    const int *b=c->pipe.box;
     gl_transform_to_viewport(c,q);
+    /* s31: a vertex the clipper made lies on a plane of the clip volume,
+       which maps to the edge of pipe.box, up to the rounding of the
+       intersection - which grows with the far vertex's magnitude. The
+       triangle fillers (ztri.h) rely on every vertex being inside the box,
+       so clamp it there: exact for the vertices the clipper passed whole,
+       and only these can stray */
+    q->zp.fx=fminf(fmaxf(q->zp.fx,(float)b[0]),(float)b[2]);
+    q->zp.fy=fminf(fmaxf(q->zp.fy,(float)b[1]),(float)b[3]);
     /* s31: without lighting gl_transform_to_viewport takes the CURRENT
        colour (the last glColor), not this clipped vertex's */
     if (!c->lighting_enabled)
@@ -270,6 +406,47 @@ static inline void updateTmp(GLContext *c,
 
 static void gl_draw_triangle_clip(GLContext *c,
                                   GLVertex *p0,GLVertex *p1,GLVertex *p2,int clip_bit);
+
+/* s31: GL_LIGHT_MODEL_TWO_SIDE (GL 1.3 2.13.1; review G5). light.c lit
+   every vertex twice, front and back; a back-facing triangle is drawn with
+   the back colours, swapped in for this triangle only (strips share
+   vertices), including the flat colour of the provoking vertex. Only
+   back-facing triangles with two-sided lighting on come here: front faces
+   and every other state pay nothing. */
+static void gl_draw_triangle_twoside(GLContext *c,
+                                     GLVertex *p0,GLVertex *p1,GLVertex *p2)
+{
+  GLVertex *v[3]={p0,p1,p2};
+  GLVertex *fv=c->current_shade_model != GL_SMOOTH ? c->flat_vtx : NULL;
+  V4 col[3], fcol;
+  V3 sp[3], fsp;
+  int zc[3][3], i, fr=c->flat_r, fg=c->flat_g, fb=c->flat_b;
+  int fown = fv != NULL && fv != p0 && fv != p1 && fv != p2;
+
+  for (i=0;i<3;i++) {
+    col[i]=v[i]->color; sp[i]=v[i]->spec;
+    zc[i][0]=v[i]->zp.r; zc[i][1]=v[i]->zp.g; zc[i][2]=v[i]->zp.b;
+    v[i]->color=v[i]->color_back; v[i]->spec=v[i]->spec_back;
+    gl_zp_color(&v[i]->zp,&v[i]->color);
+  }
+  if (fown) {
+    /* a clipped piece: the provoking vertex is the original one */
+    fcol=fv->color; fsp=fv->spec;
+    fv->color=fv->color_back; fv->spec=fv->spec_back;
+  }
+  if (fv) {
+    ZBufferPoint t;
+    gl_zp_color(&t,&fv->color);
+    c->flat_r=t.r; c->flat_g=t.g; c->flat_b=t.b;
+  }
+  c->draw_triangle_back(c,p0,p1,p2);
+  if (fown) { fv->color=fcol; fv->spec=fsp; }
+  c->flat_r=fr; c->flat_g=fg; c->flat_b=fb;
+  for (i=0;i<3;i++) {
+    v[i]->color=col[i]; v[i]->spec=sp[i];
+    v[i]->zp.r=zc[i][0]; v[i]->zp.g=zc[i][1]; v[i]->zp.b=zc[i][2];
+  }
+}
 
 void gl_draw_triangle(GLContext *c,
                       GLVertex *p0,GLVertex *p1,GLVertex *p2)
@@ -286,8 +463,11 @@ void gl_draw_triangle(GLContext *c,
   /* we handle the non clipped case here to go faster */
   if (co==0) {
     
-      norm=(float)(p1->zp.x-p0->zp.x)*(float)(p2->zp.y-p0->zp.y)-
-        (float)(p2->zp.x-p0->zp.x)*(float)(p1->zp.y-p0->zp.y);
+      /* s31: from the window position the fillers scan-convert (ztri.h):
+         the snapped one called a sub-pixel triangle degenerate and dropped
+         it, a hole in a fine mesh, although it may cover a pixel centre */
+      norm=(p1->zp.fx-p0->zp.fx)*(p2->zp.fy-p0->zp.fy)-
+        (p2->zp.fx-p0->zp.fx)*(p1->zp.fy-p0->zp.fy);
       
       if (norm == 0) return;
 
@@ -302,7 +482,10 @@ void gl_draw_triangle(GLContext *c,
           c->draw_triangle_front(c,p0,p1,p2);
         } else if (c->current_cull_face == GL_FRONT) {
           if (front != 0) return;
-          c->draw_triangle_back(c,p0,p1,p2);
+          if (c->lighting_enabled && c->light_model_two_side)
+            gl_draw_triangle_twoside(c,p0,p1,p2);
+          else
+            c->draw_triangle_back(c,p0,p1,p2);
         } else {
           return;
         }
@@ -310,6 +493,8 @@ void gl_draw_triangle(GLContext *c,
         /* no culling */
         if (front) {
           c->draw_triangle_front(c,p0,p1,p2);
+        } else if (c->lighting_enabled && c->light_model_two_side) {
+          gl_draw_triangle_twoside(c,p0,p1,p2);
         } else {
           c->draw_triangle_back(c,p0,p1,p2);
         }
@@ -322,10 +507,13 @@ void gl_draw_triangle(GLContext *c,
   }
 }
 
+#define CLIP_AT(o,a,b) (clip_bit < 6 ? clip_proc[clip_bit](o,a,b) : \
+                         clip_user(c,clip_bit - TGL_CLIP_USER_SHIFT,o,a,b))
+
 static void gl_draw_triangle_clip(GLContext *c,
                                   GLVertex *p0,GLVertex *p1,GLVertex *p2,int clip_bit)
 {
-  int co,c_and,co1,cc[3],edge_flag_tmp,clip_mask;
+  int co,c_and,co1,cc[3],edge_flag_tmp,clip_mask,nbits,done;
   GLVertex tmp1,tmp2,*q[3];
   float tt;
   
@@ -341,13 +529,15 @@ static void gl_draw_triangle_clip(GLContext *c,
     /* the triangle is completely outside */
     if (c_and!=0) return;
 
-    /* find the next direction to clip */
-    while (clip_bit < 6 && (co & (1 << clip_bit)) == 0)  {
+    /* find the next direction to clip; s31: bits 6.. are the user
+       planes (plan F7) */
+    nbits = c->clip_plane_mask ? TGL_CLIP_USER_SHIFT + 6 : 6;
+    while (clip_bit < nbits && (co & (1 << clip_bit)) == 0)  {
       clip_bit++;
     }
 
     /* this test can be true only in case of rounding errors */
-    if (clip_bit == 6) {
+    if (clip_bit == nbits) {
 #if 0
       printf("Error:\n");
       printf("%f %f %f %f\n",p0->pc.X,p0->pc.Y,p0->pc.Z,p0->pc.W);
@@ -359,6 +549,7 @@ static void gl_draw_triangle_clip(GLContext *c,
   
     clip_mask = 1 << clip_bit;
     co1=(cc[0] ^ cc[1] ^ cc[2]) & clip_mask;
+    done = clip_bit >= TGL_CLIP_USER_SHIFT ? clip_mask : 0;
     
     if (co1)  { 
       /* one point outside */
@@ -367,11 +558,11 @@ static void gl_draw_triangle_clip(GLContext *c,
       else if (cc[1] & clip_mask) { q[0]=p1; q[1]=p2; q[2]=p0; }
       else { q[0]=p2; q[1]=p0; q[2]=p1; }
       
-      tt=clip_proc[clip_bit](&tmp1.pc,&q[0]->pc,&q[1]->pc);
-      updateTmp(c,&tmp1,q[0],q[1],tt);
+      tt=CLIP_AT(&tmp1.pc,&q[0]->pc,&q[1]->pc);
+      updateTmp(c,&tmp1,q[0],q[1],tt,done);
 
-      tt=clip_proc[clip_bit](&tmp2.pc,&q[0]->pc,&q[2]->pc);
-      updateTmp(c,&tmp2,q[0],q[2],tt);
+      tt=CLIP_AT(&tmp2.pc,&q[0]->pc,&q[2]->pc);
+      updateTmp(c,&tmp2,q[0],q[2],tt,done);
 
       tmp1.edge_flag=q[0]->edge_flag;
       edge_flag_tmp=q[2]->edge_flag;
@@ -389,11 +580,11 @@ static void gl_draw_triangle_clip(GLContext *c,
       else if ((cc[1] & clip_mask)==0) { q[0]=p1; q[1]=p2; q[2]=p0; } 
       else { q[0]=p2; q[1]=p0; q[2]=p1; }
       
-      tt=clip_proc[clip_bit](&tmp1.pc,&q[0]->pc,&q[1]->pc);
-      updateTmp(c,&tmp1,q[0],q[1],tt);
+      tt=CLIP_AT(&tmp1.pc,&q[0]->pc,&q[1]->pc);
+      updateTmp(c,&tmp1,q[0],q[1],tt,done);
 
-      tt=clip_proc[clip_bit](&tmp2.pc,&q[0]->pc,&q[2]->pc);
-      updateTmp(c,&tmp2,q[0],q[2],tt);
+      tt=CLIP_AT(&tmp2.pc,&q[0]->pc,&q[2]->pc);
+      updateTmp(c,&tmp2,q[0],q[2],tt,done);
       
       tmp1.edge_flag=1;
       tmp2.edge_flag=q[2]->edge_flag;
@@ -435,38 +626,28 @@ void gl_draw_triangle_fill(GLContext *c,
     
   /* s31: an enabled texture without an image draws untextured (GL: an
      incomplete texture disables texturing), instead of reading NULL */
-  /* s31: depth test off / depth mask off select their own fillers
-     (ztriangle_nt.c, ztriangle_nw.c); TinyGL always tested and wrote Z */
-  int zv = !c->depth_test ? 1 : (!c->depth_mask ? 2 : 0);
-  if (c->texture_2d_enabled && c->current_texture->images[0].pixmap) {
+  /* s31: the fillers for the depth state - LEQUAL (TinyGL's), test off
+     (ztriangle_nt.c), mask off (ztriangle_nw.c), strict LESS
+     (ztriangle_lt.c) - are chosen once per glBegin (raster.c); TinyGL
+     always tested >= and wrote Z */
+  if (c->tex_active) {
+    /* s31: the texture is complete and its environment is the texel
+       (raster.c); zbuffer.h's masks carry its own size. The vertices go
+       as they are: the filler samples pixel centres, so TinyGL's texture
+       squeeze and its per-triangle copies are gone (review G2, P2) */
 #ifdef PROFILE
     count_triangles_textured++;
 #endif
-    ZB_setTexture(c->zb,c->current_texture->images[0].pixmap);
-    if (zv == 0) ZB_fillTriangleMappingPerspective(c->zb,&p0->zp,&p1->zp,&p2->zp);
-    else if (zv == 1) ZB_fillTriangleMappingPerspective_nt(c->zb,&p0->zp,&p1->zp,&p2->zp);
-    else ZB_fillTriangleMappingPerspective_nw(c->zb,&p0->zp,&p1->zp,&p2->zp);
+    c->zb_map(c->zb,&p0->zp,&p1->zp,&p2->zp);
   } else if (c->current_shade_model == GL_SMOOTH) {
-    if (zv == 0) ZB_fillTriangleSmooth(c->zb,&p0->zp,&p1->zp,&p2->zp);
-    else if (zv == 1) ZB_fillTriangleSmooth_nt(c->zb,&p0->zp,&p1->zp,&p2->zp);
-    else ZB_fillTriangleSmooth_nw(c->zb,&p0->zp,&p1->zp,&p2->zp);
+    c->zb_smooth(c->zb,&p0->zp,&p1->zp,&p2->zp);
   } else {
-    /* s31: the flat fillers colour from whichever vertex their y sort
-       leaves in p2. Give all three the provoking vertex's colour
-       (gl_set_provoking) for this triangle only: the vertices may be
-       shared with the next triangle of a strip. */
-    ZBufferPoint *v[3]={&p0->zp,&p1->zp,&p2->zp};
-    int sv[3][3],i;
-    for (i=0;i<3;i++) {
-      sv[i][0]=v[i]->r; sv[i][1]=v[i]->g; sv[i][2]=v[i]->b;
-      v[i]->r=c->flat_r; v[i]->g=c->flat_g; v[i]->b=c->flat_b;
-    }
-    if (zv == 0) ZB_fillTriangleFlat(c->zb,v[0],v[1],v[2]);
-    else if (zv == 1) ZB_fillTriangleFlat_nt(c->zb,v[0],v[1],v[2]);
-    else ZB_fillTriangleFlat_nw(c->zb,v[0],v[1],v[2]);
-    for (i=0;i<3;i++) {
-      v[i]->r=sv[i][0]; v[i]->g=sv[i][1]; v[i]->b=sv[i][2];
-    }
+    /* s31: the provoking vertex's colour (gl_set_provoking), handed to the
+       flat filler through the ZBuffer: TinyGL's took whichever vertex its
+       y sort left last, and copying the colour into all three vertices
+       (shared along a strip) cost 18 loads and stores a triangle */
+    c->zb->flat_color=RGB_TO_PIXEL(c->flat_r,c->flat_g,c->flat_b);
+    c->zb_flat(c->zb,&p0->zp,&p1->zp,&p2->zp);
   }
 }
 
@@ -475,9 +656,9 @@ void gl_draw_triangle_fill(GLContext *c,
 void gl_draw_triangle_line(GLContext *c,
                            GLVertex *p0,GLVertex *p1,GLVertex *p2)
 {
-    if (p0->edge_flag) gl_zb_line(c,&p0->zp,&p1->zp);
-    if (p1->edge_flag) gl_zb_line(c,&p1->zp,&p2->zp);
-    if (p2->edge_flag) gl_zb_line(c,&p2->zp,&p0->zp);
+    if (p0->edge_flag) gl_zb_line(c,p0,p1);
+    if (p1->edge_flag) gl_zb_line(c,p1,p2);
+    if (p2->edge_flag) gl_zb_line(c,p2,p0);
 }
 
 
@@ -486,10 +667,17 @@ void gl_draw_triangle_line(GLContext *c,
 void gl_draw_triangle_point(GLContext *c,
                             GLVertex *p0,GLVertex *p1,GLVertex *p2)
 {
-  void (*plot)(ZBuffer *,ZBufferPoint *) = c->depth_test ? ZB_plot : ZB_plot_nz;
-  if (p0->edge_flag) plot(c->zb,&p0->zp);
-  if (p1->edge_flag) plot(c->zb,&p1->zp);
-  if (p2->edge_flag) plot(c->zb,&p2->zp);
+  if (c->raster_gen_points) {
+    /* s31 */
+    if (c->raster_skip) return;
+    if (p0->edge_flag) gl_general_point(c,p0);
+    if (p1->edge_flag) gl_general_point(c,p1);
+    if (p2->edge_flag) gl_general_point(c,p2);
+    return;
+  }
+  if (p0->edge_flag) zb_plot_in(c,&p0->zp);
+  if (p1->edge_flag) zb_plot_in(c,&p1->zp);
+  if (p2->edge_flag) zb_plot_in(c,&p2->zp);
 }
 
 

@@ -541,3 +541,29 @@ void ZB_clear(ZBuffer * zb, int clear_z, int z,
 	}
     }
 }
+
+/* s31: glClear with the scissor box [x0,x1) x [y0,y1) (rows from the top)
+   and the write masks: cmask is the RGB565 bits GL_COLOR_WRITEMASK lets
+   through (0xffff: all). Only called when one of them is not the default,
+   so ZB_clear above stays the common case. */
+void ZB_clear_rect(ZBuffer *zb, int x0, int y0, int x1, int y1,
+                   int clear_z, int z, int clear_color, int color, int cmask)
+{
+    int x, y, n = x1 - x0;
+
+    if (n <= 0 || y1 <= y0)
+	return;
+    for (y = y0; y < y1; y++) {
+	if (clear_z)
+	    memset_16(zb->zbuf + y * zb->xsize + x0, z, n);
+	if (clear_color) {
+	    PIXEL *pp = (PIXEL *)((char *)zb->pbuf + y * zb->linesize) + x0;
+	    if (cmask == 0xffff) {
+		memset_16(pp, color, n);
+	    } else {
+		for (x = 0; x < n; x++)
+		    pp[x] = (PIXEL)((color & cmask) | (pp[x] & ~cmask));
+	    }
+	}
+    }
+}

@@ -1,0 +1,15 @@
+# glref run: impl=ours name=teapot frame=20 display=:97
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/demos/teapot -geometry 320x240+0+0
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000f1ce9b600000)
+#   	libGLU.so.1 => /src/gl/ref-apps/prefix/lib/libGLU.so.1 (0x0000f1ce9b550000)
+#   	libglut.so.3 => /src/gl/ref-apps/prefix/lib/libglut.so.3 (0x0000f1ce9b470000)
+Teapot V1.2
+Written by David Bucciarelli (tech.hmw@plus.it)
+libGL: context 1 created (pid 3676, comm teapot)
+libGL: approximated GL_LINEAR / mipmap texture filters by nearest sampling of level 0
+libGL: approximated GL_LINEAR texture filter by nearest sampling
+libGL: unimplemented glPixelTransferf
+libGL: unimplemented glRasterPos2i
+libGL: unimplemented glBitmap
+glref: ok at swap 20 -> /src/artifacts/gl/f3f6/suite-1/ours/teapot.f20

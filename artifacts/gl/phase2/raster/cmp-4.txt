@@ -1,0 +1,1 @@
+FAIL  320x240  strict 2.956% (2270 px >16)  tolerant 1.598% (1227 px)  max 231  mean 2.24  diff /src/artifacts/gl/phase2/raster/diff-4.png

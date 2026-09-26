@@ -1,0 +1,9 @@
+      1 libGL: unimplemented glEnable(GL_AUTO_NORMAL)
+      1 libGL: unimplemented glEnable(evaluator map)
+      1 libGL: unimplemented glEvalCoord2f
+      1 libGL: unimplemented glEvalMesh1
+      1 libGL: unimplemented glEvalMesh2
+      1 libGL: unimplemented glMap1f
+      1 libGL: unimplemented glMap2f
+      1 libGL: unimplemented glMapGrid1f
+      1 libGL: unimplemented glMapGrid2d

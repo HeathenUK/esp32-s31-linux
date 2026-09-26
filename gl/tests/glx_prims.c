@@ -328,6 +328,7 @@ int main(int argc, char **argv)
 		if (e.type == MapNotify) break;
 	}
 	ctx = glXCreateContext(d, vi, NULL, True);
+	XFree(vi);
 	glXMakeCurrent(d, win, ctx);
 	for (f = 0; f < frames; f++) {
 		draw();

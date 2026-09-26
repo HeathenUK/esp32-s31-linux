@@ -1,3 +1,7 @@
 # build outputs (gl/host-build.sh, gl/build.sh): never commit them
 /out-host/
 /out-rv32/
+# gl/bench outputs and the baseline source snapshot it measures against
+/bench/out*/
+/bench/base/
+/out-san/

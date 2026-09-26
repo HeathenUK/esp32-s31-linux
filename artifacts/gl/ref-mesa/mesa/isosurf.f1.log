@@ -1,11 +1,11 @@
 # glref run: impl=mesa name=isosurf frame=1 display=:90
 # cmd: /src/gl/ref-apps/build/mesa-demos/src/demos/isosurf
 # libGL.so.1 resolves to:
-#   	libGLU.so.1 => /src/gl/ref-apps/prefix/lib/libGLU.so.1 (0x0000ed6084190000)
-#   	libglut.so.3 => /src/gl/ref-apps/prefix/lib/libglut.so.3 (0x0000ed60840b0000)
-#   	libGL.so.1 => /lib/aarch64-linux-gnu/libGL.so.1 (0x0000ed6083df0000)
-#   	libGLdispatch.so.0 => /lib/aarch64-linux-gnu/libGLdispatch.so.0 (0x0000ed6083700000)
-#   	libGLX.so.0 => /lib/aarch64-linux-gnu/libGLX.so.0 (0x0000ed60836a0000)
+#   	libGLU.so.1 => /src/gl/ref-apps/prefix/lib/libGLU.so.1 (0x0000fa0642f00000)
+#   	libglut.so.3 => /src/gl/ref-apps/prefix/lib/libglut.so.3 (0x0000fa0642e20000)
+#   	libGL.so.1 => /lib/aarch64-linux-gnu/libGL.so.1 (0x0000fa0642b60000)
+#   	libGLdispatch.so.0 => /lib/aarch64-linux-gnu/libGLdispatch.so.0 (0x0000fa0642470000)
+#   	libGLX.so.0 => /lib/aarch64-linux-gnu/libGLX.so.0 (0x0000fa0642410000)
 primitive (0x10000): GL_TRIANGLE_STRIP, 
 render style (0x20): glVertex, 
 enabling normal arrays

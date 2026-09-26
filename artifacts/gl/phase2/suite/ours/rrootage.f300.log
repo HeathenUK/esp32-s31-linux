@@ -1,0 +1,85 @@
+# glref run: impl=ours name=rrootage frame=300 display=:90
+# cmd: /src/gl/ref-apps/build/rrootage/rr -lowres -window -nosound
+# libGL.so.1 resolves to:
+#   	libGLU.so.1 => /src/gl/ref-apps/prefix/lib/libGLU.so.1 (0x0000e2b179550000)
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000e2b1794f0000)
+libGL: context 1 created (pid 4708, comm rr)
+libGL: context 2 created (pid 4708, comm rr)
+libGL: unimplemented glEnable(GL_LINE_SMOOTH)
+libGL: approximated GL_LINEAR texture filter by nearest sampling
+libGL: approximated GL_LINEAR / mipmap texture filters by nearest sampling of level 0
+/usr/share/games/rRootage/normal/growround.xml
+/usr/share/games/rRootage/normal/forward_3way.xml
+/usr/share/games/rRootage/normal/grow.xml
+/usr/share/games/rRootage/normal/spread2blt.xml
+/usr/share/games/rRootage/normal/22way.xml
+/usr/share/games/rRootage/normal/88way.xml
+/usr/share/games/rRootage/normal/allround.xml
+/usr/share/games/rRootage/normal/57way.xml
+/usr/share/games/rRootage/normal/beewinder.xml
+/usr/share/games/rRootage/normal/[ketsui]_r4_boss_rb_rockets.xml
+/usr/share/games/rRootage/normal/[Guwange]_round_2_boss_circle_fire.xml
+/usr/share/games/rRootage/normal/[Psyvariar]_X-A_boss_opening.xml
+/usr/share/games/rRootage/normal/mnway.xml
+/usr/share/games/rRootage/normal/nway.xml
+/usr/share/games/rRootage/normal/wide_spread.xml
+/usr/share/games/rRootage/normal/[Progear]_round_3_boss_wave_bullets.xml
+/usr/share/games/rRootage/normal/[daiouzyou]_r1_boss_2.xml
+/usr/share/games/rRootage/normal/[daiouzyou]_r1_boss_1.xml
+--------
+/usr/share/games/rRootage/reversible/roll2way.xml
+/usr/share/games/rRootage/reversible/[ketsui]_r3_boss_fastspread.xml
+/usr/share/games/rRootage/reversible/rollbar.xml
+/usr/share/games/rRootage/reversible/roll4way.xml
+/usr/share/games/rRootage/reversible/nwroll.xml
+/usr/share/games/rRootage/reversible/spread_bf.xml
+/usr/share/games/rRootage/reversible/2round.xml
+/usr/share/games/rRootage/reversible/4way.xml
+/usr/share/games/rRootage/reversible/[daiouzyou]_r1_boss_3.xml
+/usr/share/games/rRootage/reversible/shotgun.xml
+/usr/share/games/rRootage/reversible/double_roll_seeds.xml
+--------
+/usr/share/games/rRootage/morph/fire_slowshot.xml
+/usr/share/games/rRootage/morph/6gt.xml
+/usr/share/games/rRootage/morph/wide.xml
+/usr/share/games/rRootage/morph/divide.xml
+/usr/share/games/rRootage/morph/[ketsui]_r4_boss_change_aim.xml
+/usr/share/games/rRootage/morph/aim_accel_90deg.xml
+/usr/share/games/rRootage/morph/slowdown.xml
+/usr/share/games/rRootage/morph/change_straight.xml
+/usr/share/games/rRootage/morph/side_back_shot.xml
+/usr/share/games/rRootage/morph/reverse.xml
+/usr/share/games/rRootage/morph/backshot.xml
+/usr/share/games/rRootage/morph/[Guwange]_round_4_boss_eye_ball.xml
+/usr/share/games/rRootage/morph/[ketsui]_r1_boss_bit_shot.xml
+/usr/share/games/rRootage/morph/bar.xml
+--------
+/usr/share/games/rRootage/simple/16way.xml
+/usr/share/games/rRootage/simple/sidenway.xml
+/usr/share/games/rRootage/simple/rollbar.xml
+/usr/share/games/rRootage/simple/2way2side.xml
+/usr/share/games/rRootage/simple/rollway.xml
+/usr/share/games/rRootage/simple/naim.xml
+/usr/share/games/rRootage/simple/nway.xml
+/usr/share/games/rRootage/simple/8way.xml
+/usr/share/games/rRootage/simple/side_cracker.xml
+/usr/share/games/rRootage/simple/roll_battery.xml
+/usr/share/games/rRootage/simple/aim.xml
+/usr/share/games/rRootage/simple/sideshot.xml
+--------
+/usr/share/games/rRootage/morph_heavy/[Progear]_round_1_boss_grow_bullets.xml
+/usr/share/games/rRootage/morph_heavy/88way.xml
+/usr/share/games/rRootage/morph_heavy/fire_vrt.xml
+/usr/share/games/rRootage/morph_heavy/side_front_shot.xml
+/usr/share/games/rRootage/morph_heavy/oval.xml
+/usr/share/games/rRootage/morph_heavy/[ketsui]_r4_boss_rb_rockets.xml
+/usr/share/games/rRootage/morph_heavy/[Progear]_round_5_middle_boss_rockets.xml
+/usr/share/games/rRootage/morph_heavy/[ketsui]_r2_boss_rkt.xml
+/usr/share/games/rRootage/morph_heavy/[Guwange]_round_4_boss_eye_ball.xml
+/usr/share/games/rRootage/morph_heavy/side_cracker.xml
+/usr/share/games/rRootage/morph_heavy/[Progear]_round_3_boss_wave_bullets.xml
+/usr/share/games/rRootage/morph_heavy/roll_slow.xml
+--------
+/usr/share/games/rRootage/psy/bar_s.xml
+--------
+glref: ok at swap 300 -> /src/artifacts/gl/phase2/suite/ours/rrootage.f300

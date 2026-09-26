@@ -1,0 +1,45 @@
+# glref run: impl=ours name=manywin frame=4 display=:97
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/xdemos/manywin 4
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000f4ca4f740000)
+libGL: context 1 created (pid 1100, comm manywin)
+libGL: context 2 created (pid 1100, comm manywin)
+libGL: context 3 created (pid 1100, comm manywin)
+libGL: context 4 created (pid 1100, comm manywin)
+4 windows
+0, 0
+Name: 0
+  Display:     0xc5b22a934370
+  Window:      0x200002
+  Context:     0xc5b22a940ae0
+  GL_VERSION:  1.1 s31-tinygl
+  GL_VENDOR:   s31
+  GL_RENDERER: Software Rasterizer
+100, 0
+sharing
+Name: 1
+  Display:     0xc5b22a94b820
+  Window:      0x400002
+  Context:     0xc5b22a957ec0
+  GL_VERSION:  1.1 s31-tinygl
+  GL_VENDOR:   s31
+  GL_RENDERER: Software Rasterizer
+200, 0
+sharing
+Name: 2
+  Display:     0xc5b22a959db0
+  Window:      0x600002
+  Context:     0xc5b22a9671a0
+  GL_VERSION:  1.1 s31-tinygl
+  GL_VENDOR:   s31
+  GL_RENDERER: Software Rasterizer
+300, 0
+sharing
+Name: 3
+  Display:     0xc5b22a969080
+  Window:      0x800002
+  Context:     0xc5b22a976310
+  GL_VERSION:  1.1 s31-tinygl
+  GL_VENDOR:   s31
+  GL_RENDERER: Software Rasterizer
+glref: ok at swap 4 -> /src/artifacts/gl/f3f6/suite-2/ours/manywin.f4

@@ -18,22 +18,23 @@ static const struct cap {
   int cap;
   unsigned char native, warn, dflt;
 } caps[] = {
-  { GL_ALPHA_TEST, 0, 1, 0 },
+  { GL_ALPHA_TEST, 0, 0, 0 },         /* honoured (zpipe.c) */
   { GL_AUTO_NORMAL, 0, 1, 0 },
-  { GL_BLEND, 0, 1, 0 },
-  { GL_CLIP_PLANE0, 0, 1, 0 }, { GL_CLIP_PLANE1, 0, 1, 0 },
-  { GL_CLIP_PLANE2, 0, 1, 0 }, { GL_CLIP_PLANE3, 0, 1, 0 },
-  { GL_CLIP_PLANE4, 0, 1, 0 }, { GL_CLIP_PLANE5, 0, 1, 0 },
+  { GL_BLEND, 0, 0, 0 },              /* honoured (zpipe.c) */
+  /* honoured (s31_xform.c, clip.c: plan F7) */
+  { GL_CLIP_PLANE0, 0, 0, 0 }, { GL_CLIP_PLANE1, 0, 0, 0 },
+  { GL_CLIP_PLANE2, 0, 0, 0 }, { GL_CLIP_PLANE3, 0, 0, 0 },
+  { GL_CLIP_PLANE4, 0, 0, 0 }, { GL_CLIP_PLANE5, 0, 0, 0 },
   { GL_COLOR_LOGIC_OP, 0, 1, 0 },
   { GL_LOGIC_OP, 0, 0, 0 },           /* = GL_INDEX_LOGIC_OP; no colour-index mode */
   { GL_COLOR_MATERIAL, 1, 0, 0 },
   { GL_CULL_FACE, 1, 0, 0 },
   { GL_DEPTH_TEST, 1, 0, 0 },
   { GL_DITHER, 0, 0, 1 },             /* dithering is implementation-defined */
-  { GL_FOG, 0, 1, 0 },
+  { GL_FOG, 0, 0, 0 },                /* honoured (zpipe.c) */
   { GL_LIGHTING, 1, 0, 0 },
   { GL_LINE_SMOOTH, 0, 1, 0 },
-  { GL_LINE_STIPPLE, 0, 1, 0 },
+  { GL_LINE_STIPPLE, 0, 0, 0 },      /* honoured (raster.c, plan F7) */
   { GL_MAP1_COLOR_4, 0, 1, 0 }, { GL_MAP1_INDEX, 0, 1, 0 },
   { GL_MAP1_NORMAL, 0, 1, 0 }, { GL_MAP1_TEXTURE_COORD_1, 0, 1, 0 },
   { GL_MAP1_TEXTURE_COORD_2, 0, 1, 0 }, { GL_MAP1_TEXTURE_COORD_3, 0, 1, 0 },
@@ -50,16 +51,19 @@ static const struct cap {
   { GL_POLYGON_OFFSET_LINE, 1, 0, 0 },
   { GL_POLYGON_OFFSET_POINT, 1, 0, 0 },
   { GL_POLYGON_SMOOTH, 0, 1, 0 },
-  { GL_POLYGON_STIPPLE, 0, 1, 0 },
-  { GL_SCISSOR_TEST, 0, 1, 0 },
+  { GL_POLYGON_STIPPLE, 0, 0, 0 },   /* honoured (zpipe.c, plan F7) */
+  { GL_SCISSOR_TEST, 0, 0, 0 },       /* honoured (vertex.c, clear.c) */
   { GL_STENCIL_TEST, 0, 0, 0 },       /* no stencil buffer: the test passes */
-  { GL_TEXTURE_1D, 0, 1, 0 },
+  { GL_TEXTURE_1D, 0, 0, 0 },        /* honoured: a W x 1 texture (texture.c) */
   { GL_TEXTURE_2D, 1, 0, 0 },
   { GL_TEXTURE_3D, 0, 1, 0 },
   { GL_TEXTURE_CUBE_MAP, 0, 1, 0 },
-  { GL_TEXTURE_GEN_Q, 0, 1, 0 }, { GL_TEXTURE_GEN_R, 0, 1, 0 },
-  { GL_TEXTURE_GEN_S, 0, 1, 0 }, { GL_TEXTURE_GEN_T, 0, 1, 0 },
-  { GL_RESCALE_NORMAL, 0, 1, 0 },
+  /* texgen (s31_xform.c, plan F7): S, T and R are generated (R is read
+     by no 1D/2D texture); Q is generated but the rasteriser does not
+     divide by q, so it says so */
+  { GL_TEXTURE_GEN_Q, 0, 1, 0 }, { GL_TEXTURE_GEN_R, 0, 0, 0 },
+  { GL_TEXTURE_GEN_S, 0, 0, 0 }, { GL_TEXTURE_GEN_T, 0, 0, 0 },
+  { GL_RESCALE_NORMAL, 0, 0, 0 },     /* honoured (vertex.c) */
   { GL_MULTISAMPLE, 0, 0, 1 },        /* no sample buffers: no effect */
   { GL_SAMPLE_ALPHA_TO_COVERAGE, 0, 0, 0 },
   { GL_SAMPLE_ALPHA_TO_ONE, 0, 0, 0 },
@@ -149,7 +153,7 @@ int s31_cap_get(GLContext *c, int cap)
   case GL_DEPTH_TEST: return c->depth_test != 0;
   case GL_LIGHTING: return c->lighting_enabled != 0;
   case GL_NORMALIZE: return c->normalize_enabled != 0;
-  case GL_TEXTURE_2D: return c->texture_2d_enabled != 0;
+  case GL_TEXTURE_2D: return c->tex_enables & 1;
   case GL_POLYGON_OFFSET_FILL: return (c->offset_states & TGL_OFFSET_FILL) != 0;
   case GL_POLYGON_OFFSET_LINE: return (c->offset_states & TGL_OFFSET_LINE) != 0;
   case GL_POLYGON_OFFSET_POINT: return (c->offset_states & TGL_OFFSET_POINT) != 0;
@@ -203,7 +207,25 @@ void s31_state_init(GLContext *c)
   c->raster_pos[0] = c->raster_pos[1] = c->raster_pos[2] = 0.0f;
   c->raster_pos[3] = 1.0f;
   c->raster_valid = 1;
+  /* s31 (plan F7) */
+  for (i = 0; i < 4; i++) {
+    c->raster_color[i] = 1.0f;
+    c->raster_tex[i] = i == 3 ? 1.0f : 0.0f;
+    c->xfer_scale[i] = 1.0f; c->xfer_bias[i] = 0.0f;
+    c->texgen_mode[i] = GL_EYE_LINEAR;
+    c->texgen_obj[i] = gl_V4_New(i == 0, i == 1, 0, 0);
+    c->texgen_eye[i] = c->texgen_obj[i];
+  }
+  c->raster_distance = 0.0f;
+  c->pixel_zoom[0] = c->pixel_zoom[1] = 1.0f;
+  c->depth_scale = 1.0f; c->depth_bias = 0.0f;
+  for (i = 0; i < 32; i++) c->poly_stipple[i] = 0xffffffffu;
+  c->tex1d_default = alloc_texture_detached();
+  c->current_texture_1d = c->tex1d_default;
   c->proj_used = c->matrix_stack_ptr[1];
+  c->raster_dirty = 1;
+  c->rescale = 1.0f;
+  c->color_control = GL_SINGLE_COLOR;
 }
 
 static int valid_func(int f)
@@ -263,25 +285,80 @@ static float clampf01(float v)
   return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
 }
 
+/* glPixelTransfer (GL 1.3 3.6.3): scale and bias are honoured on every
+   pixel path (s31_pixels.c: glDrawPixels, glTexImage, glReadPixels,
+   glCopyPixels, glCopyTexImage); the colour maps are recorded, and using
+   one says so */
+static void pixel_transfer(GLContext *c, int pname, float v)
+{
+  int i;
+  switch (pname) {
+  case GL_RED_SCALE: c->xfer_scale[0] = v; break;
+  case GL_GREEN_SCALE: c->xfer_scale[1] = v; break;
+  case GL_BLUE_SCALE: c->xfer_scale[2] = v; break;
+  case GL_ALPHA_SCALE: c->xfer_scale[3] = v; break;
+  case GL_RED_BIAS: c->xfer_bias[0] = v; break;
+  case GL_GREEN_BIAS: c->xfer_bias[1] = v; break;
+  case GL_BLUE_BIAS: c->xfer_bias[2] = v; break;
+  case GL_ALPHA_BIAS: c->xfer_bias[3] = v; break;
+  case GL_DEPTH_SCALE: c->depth_scale = v; break;
+  case GL_DEPTH_BIAS: c->depth_bias = v; break;
+  case GL_INDEX_SHIFT: c->index_shift = (int)v; break;
+  case GL_INDEX_OFFSET: c->index_offset = (int)v; break;
+  case GL_MAP_COLOR:
+    c->map_color = v != 0.0f;
+    if (c->map_color) gl_warn_once("glPixelTransfer(GL_MAP_COLOR) (pixel maps)");
+    break;
+  case GL_MAP_STENCIL: c->map_stencil = v != 0.0f; break;
+  default: break;
+  }
+  c->xfer_active = 0;
+  for (i = 0; i < 4; i++)
+    if (c->xfer_scale[i] != 1.0f || c->xfer_bias[i] != 0.0f) c->xfer_active = 1;
+}
+
+int tgl_pixel_transfer_get(int pname, float *v)
+{
+  GLContext *c = gl_get_context();
+  switch (pname) {
+  case GL_RED_SCALE: *v = c->xfer_scale[0]; return 1;
+  case GL_GREEN_SCALE: *v = c->xfer_scale[1]; return 1;
+  case GL_BLUE_SCALE: *v = c->xfer_scale[2]; return 1;
+  case GL_ALPHA_SCALE: *v = c->xfer_scale[3]; return 1;
+  case GL_RED_BIAS: *v = c->xfer_bias[0]; return 1;
+  case GL_GREEN_BIAS: *v = c->xfer_bias[1]; return 1;
+  case GL_BLUE_BIAS: *v = c->xfer_bias[2]; return 1;
+  case GL_ALPHA_BIAS: *v = c->xfer_bias[3]; return 1;
+  case GL_DEPTH_SCALE: *v = c->depth_scale; return 1;
+  case GL_DEPTH_BIAS: *v = c->depth_bias; return 1;
+  case GL_INDEX_SHIFT: *v = (float)c->index_shift; return 1;
+  case GL_INDEX_OFFSET: *v = (float)c->index_offset; return 1;
+  case GL_MAP_COLOR: *v = (float)c->map_color; return 1;
+  case GL_MAP_STENCIL: *v = (float)c->map_stencil; return 1;
+  case GL_ZOOM_X: *v = c->pixel_zoom[0]; return 1;
+  case GL_ZOOM_Y: *v = c->pixel_zoom[1]; return 1;
+  default: return -1;
+  }
+}
+
 void glopState(GLContext *c, GLParam *p)
 {
   int i;
+  /* s31: any of these may change which filler draws (raster.c) */
+  c->raster_dirty = 1;
   switch (p[1].i) {
   case S31_ST_DEPTH_FUNC:
+    /* LESS/LEQUAL: TinyGL's fillers; the rest: the general path */
     c->depth_func = p[2].i;
-    /* TinyGL tests zz >= zpix with Z inverted, which is GL_LESS/GL_LEQUAL */
-    if (p[2].i != GL_LESS && p[2].i != GL_LEQUAL)
-      gl_warn_once("glDepthFunc(other than GL_LESS/GL_LEQUAL)");
     break;
   case S31_ST_DEPTH_MASK:
+    /* triangles: the _nw fillers; lines and points: the general path */
     c->depth_mask = p[2].i != 0;
-    /* honoured by the triangle fillers (clip.c); lines still write Z */
     break;
   case S31_ST_DEPTH_RANGE:
     c->depth_range[0] = clampf01(p[2].f);
     c->depth_range[1] = clampf01(p[3].f);
-    if (c->depth_range[0] != 0.0f || c->depth_range[1] != 1.0f)
-      gl_warn_once("glDepthRange(other than 0,1)");
+    c->viewport.updated = 1;        /* the viewport's z transform */
     break;
   case S31_ST_BLEND_FUNC:
     c->blend_src = p[2].i; c->blend_dst = p[3].i;
@@ -294,19 +371,17 @@ void glopState(GLContext *c, GLParam *p)
     break;
   case S31_ST_COLOR_MASK:
     for (i = 0; i < 4; i++) c->color_mask[i] = p[2 + i].i != 0;
-    if (!c->color_mask[0] || !c->color_mask[1] || !c->color_mask[2])
-      gl_warn_once("glColorMask(GL_FALSE on a colour channel)");
     break;
   case S31_ST_SCISSOR:
     for (i = 0; i < 4; i++) c->scissor[i] = p[2 + i].i;
+    c->viewport.updated = 1;
     break;
   case S31_ST_LINE_WIDTH:
+    /* drawn at the nearest integer width (aliased) */
     c->line_width = p[2].f;
-    if (p[2].f != 1.0f) gl_warn_once("glLineWidth(other than 1)");
     break;
   case S31_ST_POINT_SIZE:
     c->point_size = p[2].f;
-    if (p[2].f != 1.0f) gl_warn_once("glPointSize(other than 1)");
     break;
   case S31_ST_LINE_STIPPLE:
     c->line_stipple_factor = p[2].i < 1 ? 1 : (p[2].i > 256 ? 256 : p[2].i);
@@ -337,6 +412,12 @@ void glopState(GLContext *c, GLParam *p)
     for (i = 0; i < 4; i++) c->texenv_color.v[i] = clampf01(p[2 + i].f);
     break;
   case S31_ST_LIST_BASE: c->list_base = p[2].i; break;
+  case S31_ST_PIXEL_ZOOM:
+    c->pixel_zoom[0] = p[2].f; c->pixel_zoom[1] = p[3].f;
+    break;
+  case S31_ST_PIXEL_TRANSFER:
+    pixel_transfer(c, p[2].i, p[3].f);
+    break;
   default: break;
   }
 }
@@ -365,6 +446,15 @@ void tgl_state_f(int code, float a, float b, float cc, float d)
   p[0].op = OP_State;
   p[1].i = code;
   p[2].f = a; p[3].f = b; p[4].f = cc; p[5].f = d;
+  state_op(p);
+}
+
+void tgl_state_pf(int code, int pname, float v)
+{
+  GLParam p[6];
+  p[0].op = OP_State;
+  p[1].i = code;
+  p[2].i = pname; p[3].f = v; p[4].i = 0; p[5].i = 0;
   state_op(p);
 }
 

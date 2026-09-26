@@ -1,0 +1,8 @@
+# glref run: impl=mesa name=bounce frame=3 display=:94
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/demos/bounce -geometry 320x240+0+0
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /lib/aarch64-linux-gnu/libGL.so.1 (0x0000e7b70be40000)
+#   	libglut.so.3 => /src/gl/ref-apps/prefix/lib/libglut.so.3 (0x0000e7b70bd60000)
+#   	libGLdispatch.so.0 => /lib/aarch64-linux-gnu/libGLdispatch.so.0 (0x0000e7b70b960000)
+#   	libGLX.so.0 => /lib/aarch64-linux-gnu/libGLX.so.0 (0x0000e7b70b900000)
+glref: ok at swap 3 -> /src/artifacts/gl/phase2/selftest-mesa-2/mesa/bounce.f3

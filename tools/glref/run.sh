@@ -51,8 +51,10 @@ SHIM_DIR=$R/build/glref
 SHIM=$SHIM_DIR/capture.so
 mkdir -p "$SHIM_DIR"
 if [ ! -e "$SHIM" ] || [ /src/tools/glref/capture.c -nt "$SHIM" ]; then
-    # build to a private name and rename: parallel runs never see half a .so
-    tmp=$SHIM.$$
+    # build to a private name and rename: parallel runs never see half a .so.
+    # mktemp, not $$: runs in different containers share the mount and can
+    # have the same pid (two containers once raced on capture.so.1)
+    tmp=$(mktemp "$SHIM.XXXXXX")
     if ! gcc -O2 -Wall -Wextra -fPIC -shared -o "$tmp" /src/tools/glref/capture.c -lX11 -ldl -lpthread; then
         echo "capture.c failed to build" >&2
         exit 2
@@ -127,8 +129,15 @@ fi
 # the preload goes on the app only, not on timeout(1).
 # LP_NUM_THREADS=0: llvmpipe's rasteriser threads made multi-context apps
 # non-deterministic (manywin: 5 of 30 Mesa runs differed, 0 of 30 without them)
+# SDL12COMPAT_OPENGL_SCALING=0: the rig's SDL 1.2 is sdl12-compat, which on a
+# GL with framebuffer objects (Mesa, not ours) renders SDL_OPENGL apps into
+# an FBO and swaps once inside SDL_SetVideoMode. That extra swap put every
+# Mesa frame of an SDL 1.2 app one swap and 16 ms of virtual time ahead of
+# ours (rRootage's game state diverged from it). Off, both run the app's own
+# frames the way SDL 1.2.15 - the board's SDL - does: no FBO, no extra swap.
 timeout -k 5 "${GLREF_TIMEOUT:-60}" env \
     LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe LP_NUM_THREADS=0 \
+    SDL12COMPAT_OPENGL_SCALING=0 \
     LD_LIBRARY_PATH="$LIBPATH" LD_BIND_NOW=1 LD_PRELOAD="$SHIM" \
     GLREF_OUT="$STEM" GLREF_FRAME="$FRAME" \
     "$@" >>"$STEM.log" 2>&1 </dev/null
