@@ -1,0 +1,30 @@
+# glref run: impl=ours name=p4 frame=2 display=:97
+# cmd: /src/gl/out-host/glx_mtex 4
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000fa8648420000)
+libGL: context 1 created (pid 362, comm glx_mtex)
+query ext multitexture 1 combine 1 env_add 1
+query units>=2 1
+query u1 texgen 2402
+query u1 gen_s on 0
+query u0 texgen 2400
+query u1 array 1
+query u1 ptr 1
+query u1 tcsize 2
+query client active 0x84c1
+query active after list 0x84c0
+query u1 binding after list 1
+query active after pop 0x84c0
+query u1 enabled after pop 1
+query u1 binding after pop 1
+query u1 mode after pop 0x2100
+query u1 tc after pop 0.500 1.000
+query u0 enabled after pop 1
+query client active after pop 0x84c1
+query u1 array after pop 1
+query u1 ptr after pop 1
+query u0 array after pop 0
+query u1 current 0.100 0.200 0.300 0.400
+query u0 current 0.500 0.600 0.700 1.000
+error page: 0x0
+glref: ok at swap 2 -> /src/artifacts/gl/phase5/mtex-c/ours/p4.f2

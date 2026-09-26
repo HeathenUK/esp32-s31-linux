@@ -190,6 +190,14 @@ S31GL_API void s31gl_stencil_zeroed(void *stencil, int w, int h);
    first draw or with no stencil bits); for RSS accounting in gates */
 S31GL_API int s31gl_stencil_bytes(s31gl_ctx *ctx);
 
+/* PHASE 5 O1/O2, for gates: how many batches gl_build_pipe gave each fused
+   filler since the last call (out[k], k = 1 ZF_WORLD, 2 ZF_ALIAS, 3
+   ZF_ALIAS_STORE, 5 a one-unit filler (O2); out[0] the batches that kept
+   the general list; out[4] the ZF_WORLD batches whose walks and depth test
+   are inline for nearest textures, out[6] for filtered ones (O2); out[7]
+   is 0), then zeroes the counts (gl/tinygl/source/zpipe_fused.c) */
+S31GL_API void s31gl_fused_stats(unsigned int out[8]);
+
 #ifdef __cplusplus
 }
 #endif

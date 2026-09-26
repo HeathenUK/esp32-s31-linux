@@ -332,3 +332,135 @@ Result (musl libm, M insn per frame):
   - two-pixel flat and Gouraud span loops;
   - row end pointers;
   - ztri_setup's scalar sort.
+
+## QuakeSpasm proxy: a replayed GL trace on the instruction counter (2026-09-26)
+
+A trace of stock QuakeSpasm 0.96.3's whole GL stream during `timedemo demo1`
+(tools/glref/gltrace, recorded on the host rig against our libGL, which
+advertises what the board's does) replayed on RV32 bare metal. The
+replayer is linked with this tree's library objects, the board flags and
+exact minstret, like every other image here.
+
+    gl/bench/qsreplay.sh [GLDIR] [OUT] [TRACE]    # ~8 s; QSR_ENV="S31GL_X=0 ..." runtime toggles
+    gl/bench/qsprof.sh OUT                        # per-function / per-object profile of the same run
+    gl/tests/run-qsr.sh [GLDIR]                   # guard: phase-4 trace, hashes and <= +0.5%
+    gl/tests/run-qsr-ab.sh "ENV_A" "ENV_B"        # bit-identity of two toggle arms (fused vs general)
+
+- **The trace.** `gl/bench/qstrace/work/p4final/qs.gltr` (gitignored, 69 MB)
+  covers:
+  - the load phase: every texture and lightmap upload, recorded by value;
+  - frames 100-139 and 400-439 in full, each window after 2 warm-up
+    frames;
+  - every other frame "state only" (tools/glref/README.md, "gltrace").
+
+  The launch is the board's: `-heapsize 12288 -zone 384`, 320x240,
+  windowed, no extensions (world and alias "case 3", Fitz renderer).
+  Recreate the trace with `gl/bench/qstrace/mkbase.sh` (the 246e832
+  snapshot in gl/bench/base5 and its host libGL, which builds bit-identical,
+  md5 d0566593...), then
+  `QS_LIBGL=/src/gl/bench/base5/out-host/libGL.so.1 tools/glref/gltrace/capture-qs.sh p4final`.
+- **The replayer** (q_replay.c, tools/glref/gltrace/replay.c and the dispatch
+  that gen.py generates from the trace's names):
+  - every record becomes a direct call with the recorded arguments;
+  - the platform half does what gl/glx/glx_core.c does: `set_doublebuffer`,
+    `set_stencil_bits` and `set_retained` per context; two RGB565 colour
+    buffers bound in turn (GLX's two SHM segments, 200 kB or less) and a
+    caller-owned depth buffer; `s31gl_frame_end` at every swap.
+
+  Frame N counts from the end of swap N-1 to swap N. The count includes
+  swap N-1's `frame_end`, as q_ui.c's frames do, and excludes the
+  replayer's hashing.
+- **Harness floor.** `qsr_null.elf` replays the same trace into empty
+  functions. It costs 0.35 / 0.24 M instructions per frame (0.6% and 0.4%
+  of the totals): the decode and call overhead the proxy adds to the
+  library's own cost.
+- **Texture bytes.** `malloc`, `calloc`, `realloc` and `free` are
+  `--wrap`'ed. A block allocated inside a texture call (`glTex*`,
+  `glBindTexture`, `glGen/DeleteTextures`, `glCopyTex*`) counts as texture
+  memory; everything else is "other" (the context, about 34 kB). An
+  independent estimate from the uploads (`tools/glref/gltrace/trace.py
+  texmem`: RGB565 plus A8 unless RGB) gives:
+  - level 0: 4,620,508 B;
+  - stored levels > 0: 236,844 B;
+  - 145 textures after the load phase;
+  - three 192 kB lightmap blocks (589,824 B).
+
+  The measured values below are those plus about 24 kB of texture objects.
+  The two agree.
+
+### Phase-4 final (246e832, gl/bench/base5; `gl/bench/qstrace/baseline-p4final.txt`)
+
+M instructions per counted frame (mean, min, max over 40 frames each):
+
+| configuration | frames 100-139 | frames 400-439 | texture B after load / at end | frames = live |
+|---|---|---|---|---|
+| **default** (phase 4: QuakeSpasm's GL_LINEAR_MIPMAP_LINEAR = trilinear, mips stored) | **57.8946** (47.30-67.87) | **61.3988** (48.99-77.25) | **4,892,320** / 4,999,144 | 84/84 |
+| `S31GL_TEXFILTER=0` (the pre-phase-4 nearest-of-level-0: the board's shipped behaviour) | **26.9329** (19.27-33.91) | **27.2208** (21.79-34.38) | **4,644,124** / 4,750,948 | 84/84 (own capture) |
+| `S31GL_MIPMAPS=0` (bilinear from level 0) | 48.9153 | 52.5580 | 4,644,124 / 4,750,948 | - |
+| `S31GL_TRILINEAR=0` (mip levels, no blend between them) | 50.7164 | 54.7733 | 4,892,320 / 4,999,144 | - |
+| `S31GL_PERSPCOLOR=0` | 57.8449 | 61.3553 | 4,892,320 / 4,999,144 | - |
+| harness floor (null) | 0.3465 | 0.2370 | - | - |
+
+- **The load phase.** The 97 frames before the first full one replay in
+  100.58 M instructions (97.58 M with `TEXFILTER=0`), texture uploads
+  included. Peak library heap is 6,897,240 B.
+- **Soft-double calls:** 0 per frame. The board's musl libm (`S31_BENCH_LIBM=musl`)
+  gives the same counts to 4 decimals: no libm call is on this path.
+- **Phase 4's filtering doubles QuakeSpasm's frame:** 57.9 M against 26.9 M
+  with the old nearest sampling, +115%. Stored mip levels cost only +5.3%
+  texture memory here (248 kB), not the +33% of a world-texture chain,
+  because lightmaps, skins and the 2D art dominate the texture bytes.
+- **Determinism.** Two runs, and newlib against musl libm, give identical
+  counts. The frame hashes of every replayed frame equal the live host
+  capture's, so the RV32 build and the host build of the library draw
+  QuakeSpasm identically.
+
+Where the default frame goes (`qsprof.sh`, all 80 counted frames, 59.65 M a
+frame; artifacts/gl/phase5/qsproxy/prof-default.txt):
+
+| object | share | top functions |
+|---|---|---|
+| s31_tfilter.o (the filters) | **51.7%** | `zx_tri_r` 18.6%, `zx_bil_ra` 17.5%, `zx_bil_r` 9.4%, `zp_run_lod` 5.0% |
+| zpipe.o (the general stages) | **34.5%** | `zo_mul2` 6.9%, `ze_replace_rgb` 4.6%, `ze_replace_rgba` 4.5%, `zo_sa_omsa` 3.9%, `zd_lequal` 3.6%, `zdw_lequal` 3.3%, `zo_store` 3.0% |
+| ztriangle_gen.o | 5.1% | `ZB_fillTriangleGeneral` |
+| vertex, clip, raster, api (geometry) | 5.3% | `gl_vertex4f` 1.9%, `gl_transform_to_viewport` 0.7% |
+| memset | 1.6% | |
+| replayer | 0.6% | |
+
+With `S31GL_TEXFILTER=0` (27.08 M a frame; prof-tf0.txt):
+
+| object | share | top functions |
+|---|---|---|
+| zpipe.o | **63.5%** | `zo_mul2` 15.3%, `ze_replace_rgba` 9.8%, `zt_rr` 8.7%, `zo_sa_omsa` 8.6%, `zd_lequal` 7.9% |
+| ztriangle.o | 9.3% | `ZB_fillTriangleMappingPerspective` (the base texture pass) |
+| ztriangle_gen.o | 8.1% | `ZB_fillTriangleGeneral` |
+| geometry | 11.1% | |
+| memset | 3.5% | |
+
+This is the shape the board profile found (artifacts/gl/glquake/LIBGL-OPPORTUNITIES.md
+1a): the general stage chain several times the base texture pass, with
+`zo_mul2`, `ze_replace_rgba`, `zt_rr` and `zd_lequal` on top.
+
+What the proxy does not model:
+- **It counts instructions, not time.** There is no PSRAM, D-cache or XIP
+  I-cache model. On the board the geometry path is fetch-bound from flash,
+  so its share of time there (immediate mode about 23% of libGL) is well
+  above its share of instructions here (about 11%).
+- **It does not include:**
+  - the GLX present (XShmPutImage, lvdesk);
+  - QuakeSpasm's own CPU;
+  - the board's SDL 1.2.15, whose start-up GL calls differ slightly from
+    sdl12-compat's.
+
+**For a lever (plan bar 5):**
+- **A lever that changes no app-visible feature:** replay the p4final trace
+  on the new tree and compare with the table. `gl/tests/run-qsr.sh` does
+  that and requires hash-identical frames.
+- **A lever that changes what QuakeSpasm sees** (GL_ARB_multitexture,
+  texture_env_combine): re-capture against the new host library
+  (`capture-qs.sh`, default `QS_LIBGL` = gl/out-host) and report the new
+  trace on the new tree against the p4final trace on base5. The texture
+  bytes come from the same `qsr ... heap:` line.
+- **A fused filler:** `gl/tests/run-qsr-ab.sh` renders every frame with the
+  general path forced and with the fused one (once the library has such a
+  switch) and requires 0 differing frames.

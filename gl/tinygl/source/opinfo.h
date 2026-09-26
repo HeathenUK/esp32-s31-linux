@@ -87,4 +87,8 @@ ADD_OP(CopyPixels, 5, "%d %d %d %d %C")
 ADD_OP(CopyTex, 11, "%C %d %C %d %d %d %d %d %d %d %d")
 ADD_OP(PolygonStipple, 32, "")
 
+/* s31: phase 5 O1, GL_ARB_multitexture (s31_mtex.c) */
+ADD_OP(ActiveTexture, 1, "%d")
+ADD_OP(MultiTexCoord, 5, "%d %f %f %f %f")
+
 #undef ADD_OP

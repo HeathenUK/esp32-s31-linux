@@ -29,8 +29,15 @@
 
 #include "zgl.h"
 #include "s31_pixels.h"
+#include "s31_tex8.h"
 
 #define TEX_SIZE 256            /* GL_MAX_TEXTURE_SIZE (get.c) */
+
+/* phase 5 O1 (s31_mtex.c): a command on the ACTIVE texture unit runs its
+   body with unit 1's state in the context fields when unit 1 is active */
+#define TU_RUN(c, call) do { \
+    if ((c)->active_tex) { tu_swap(c); call; tu_swap(c); } else { call; } \
+  } while (0)
 
 /* s31 (phase 4): the stored levels > 0 */
 void gl_tex_free_mip(GLTexture *t)
@@ -40,6 +47,7 @@ void gl_tex_free_mip(GLTexture *t)
   for (l = 1; l < MAX_TEXTURE_LEVELS; l++) gl_free(t->mip->l[l].pix);
   gl_free(t->mip);
   t->mip = NULL;
+  if (t->images[0].pixmap == NULL) { t->st = TGL_ST_565; t->a1 = 0; t->amode = 0; }
 }
 
 static GLTexture *find_texture(GLContext *c,int h)
@@ -195,6 +203,9 @@ void glDeleteTextures(int n, const unsigned int *textures)
       }
       if (t==c->current_texture_1d)
 	c->current_texture_1d=c->tex1d_default;   /* s31 */
+      /* phase 5 O1: unit 1's bindings revert to the defaults too */
+      if (t==c->tu1.tex2d) c->tu1.tex2d=find_texture(c,0);
+      if (t==c->tu1.tex1d) c->tu1.tex1d=c->tex1d_default;
       c->raster_dirty=1;   /* s31: raster.c points at its pixels */
       free_texture(c,textures[i]);
     }
@@ -216,6 +227,10 @@ void glopBindTexture(GLContext *c,GLParam *p)
   int target=p[1].i;
   int texture=p[2].i;
   GLTexture *t;
+  /* phase 5 O1: the active unit's binding - unit 1's directly (a
+     multitexturing game binds a lightmap per surface on unit 1) */
+  GLTexture **b2 = c->active_tex ? &c->tu1.tex2d : &c->current_texture;
+  GLTexture **b1 = c->active_tex ? &c->tu1.tex1d : &c->current_texture_1d;
 
   if (target != GL_TEXTURE_2D && target != GL_TEXTURE_1D) {
     if (target == GL_TEXTURE_3D || target == GL_TEXTURE_CUBE_MAP)
@@ -226,7 +241,7 @@ void glopBindTexture(GLContext *c,GLParam *p)
   }
   if (target == GL_TEXTURE_1D && texture == 0) {
     /* s31 (plan F7): the 1D default object is the context's own */
-    c->current_texture_1d = c->tex1d_default;
+    *b1 = c->tex1d_default;
     c->raster_dirty = 1;
     return;
   }
@@ -236,8 +251,8 @@ void glopBindTexture(GLContext *c,GLParam *p)
     t=alloc_texture(c,texture);
     if (t == NULL) { gl_set_error(c, GL_OUT_OF_MEMORY); return; }
   }
-  if (target == GL_TEXTURE_1D) c->current_texture_1d=t;
-  else c->current_texture=t;
+  if (target == GL_TEXTURE_1D) *b1=t;
+  else *b2=t;
   c->raster_dirty=1;
 }
 
@@ -263,33 +278,8 @@ static int valid_internal_format(int f)
   }
 }
 
-/* s31 (plan F3): base format class of an internal format */
-static int tex_class(int f, int *lum)
-{
-  *lum = 0;
-  switch (f) {
-  case GL_ALPHA: case GL_ALPHA4: case GL_ALPHA8: case GL_ALPHA12: case GL_ALPHA16:
-    return TGL_TEXF_ALPHA;
-  case 1: case GL_LUMINANCE: case GL_LUMINANCE4: case GL_LUMINANCE8:
-  case GL_LUMINANCE12: case GL_LUMINANCE16:
-    *lum = 1;
-    return TGL_TEXF_RGB;
-  case 2: case GL_LUMINANCE_ALPHA: case GL_LUMINANCE4_ALPHA4: case GL_LUMINANCE6_ALPHA2:
-  case GL_LUMINANCE8_ALPHA8: case GL_LUMINANCE12_ALPHA4:
-  case GL_LUMINANCE12_ALPHA12: case GL_LUMINANCE16_ALPHA16:
-    *lum = 1;
-    return TGL_TEXF_RGBA;
-  case GL_INTENSITY: case GL_INTENSITY4: case GL_INTENSITY8:
-  case GL_INTENSITY12: case GL_INTENSITY16:
-    *lum = 1;
-    return TGL_TEXF_INTENSITY;
-  case 3: case GL_R3_G3_B2: case GL_RGB: case GL_RGB4: case GL_RGB5: case GL_RGB8:
-  case GL_RGB10: case GL_RGB12: case GL_RGB16:
-    return TGL_TEXF_RGB;
-  default:
-    return TGL_TEXF_RGBA;
-  }
-}
+/* s31 (plan F3): base format class of an internal format (s31_tex8.c) */
+#define tex_class gl_tex_class
 
 /* log2 of a power of two, else -1 */
 static int ilog2(int v)
@@ -332,122 +322,22 @@ int gl_texture_complete(const GLTexture *t)
   return 1;
 }
 
-/* Store rows [y0, y0+h) x [x0, x0+w) of level 0 from an unpacked source
-   whose pixel (sx, sy) lands at (x0, y0). Conversion per class:
-   RGB565 truncated as TinyGL did; luminance and intensity take R (GL 1.3
-   table 3.15); alpha classes also fill the A8 plane.
-   One loop per class, the class chosen once per row (review P7: the class
-   and luminance tests ran per texel, and this file is -Os, so GCC did not
-   unswitch them; TyrQuake re-uploads lightmaps every frame). Built -O2. */
-#define T565(r, g, b) ((unsigned short)((((r) & 0xF8) << 8) | (((g) & 0xFC) << 3) | ((b) >> 3)))
-/* (phase 4: any level - pix/al are the level's planes, ws its log2 width,
-   ifmt its internal format) */
-__attribute__((optimize("O2")))
-static void tex_store_img(unsigned short *pix, unsigned char *al, int ws, int ifmt,
-                          const S31Unpack *u, int sx, int sy,
-                          int x0, int y0, int w, int h)
-{
-  unsigned char row[4 * 256];
-  int TW = 1 << ws, x, y, lum;
-  int cls = tex_class(ifmt, &lum);
-
-  /* the common uploads straight from the client's bytes, without the
-     RGBA8888 row in between: UNSIGNED_BYTE RGB / RGBA / LUMINANCE into
-     the matching stored class, no pixel transfer, not the colour buffer */
-  int direct = u->fb == NULL && u->xs == NULL && u->type == GL_UNSIGNED_BYTE &&
-    ((u->format == GL_RGB && cls == TGL_TEXF_RGB && !lum) ||
-     (u->format == GL_RGBA && cls == TGL_TEXF_RGBA && !lum) ||
-     (u->format == GL_LUMINANCE && cls == TGL_TEXF_RGB && lum));
-
-  for (y = 0; y < h; y++) {
-    unsigned short *d = pix + (y0 + y) * TW + x0;
-    unsigned char *da = al ? al + (y0 + y) * TW + x0 : NULL;
-    const unsigned char *q = row;
-    if (direct) {
-      const unsigned char *p = u->base + (sy + y) * u->pitch + sx * u->group;
-      switch (u->format) {
-      case GL_RGB:
-        for (x = 0; x < w; x++, p += 3) d[x] = T565(p[0], p[1], p[2]);
-        break;
-      case GL_RGBA:
-        for (x = 0; x < w; x++, p += 4) { d[x] = T565(p[0], p[1], p[2]); da[x] = p[3]; }
-        break;
-      default:                         /* GL_LUMINANCE */
-        for (x = 0; x < w; x++) d[x] = T565(p[x], p[x], p[x]);
-        break;
-      }
-      continue;
-    }
-    s31_unpack_row(u, sx, sy + y, w, row);
-    switch (cls) {
-    case TGL_TEXF_ALPHA:
-      for (x = 0; x < w; x++, q += 4) { d[x] = 0xffff; da[x] = q[3]; }
-      break;
-    case TGL_TEXF_INTENSITY:           /* always luminance-like: R */
-      for (x = 0; x < w; x++, q += 4) { d[x] = T565(q[0], q[0], q[0]); da[x] = q[0]; }
-      break;
-    case TGL_TEXF_RGBA:
-      if (lum)
-        for (x = 0; x < w; x++, q += 4) { d[x] = T565(q[0], q[0], q[0]); da[x] = q[3]; }
-      else
-        for (x = 0; x < w; x++, q += 4) { d[x] = T565(q[0], q[1], q[2]); da[x] = q[3]; }
-      break;
-    default:                           /* TGL_TEXF_RGB */
-      if (lum)
-        for (x = 0; x < w; x++, q += 4) d[x] = T565(q[0], q[0], q[0]);
-      else
-        for (x = 0; x < w; x++, q += 4) d[x] = T565(q[0], q[1], q[2]);
-      break;
-    }
-  }
-}
-
-static void tex_store(GLTexture *t, const S31Unpack *u, int sx, int sy,
-                      int x0, int y0, int w, int h)
-{
-  tex_store_img(t->images[0].pixmap, t->alpha, t->ws, t->internal_format,
-                u, sx, sy, x0, y0, w, h);
-}
-
 /* s31 (phase 4 F-LIN): store level L > 0 (iw x ih, log2 ws x hs, internal
-   format ifmt), from u when given. The block is reused when the level
-   keeps its shape and class. Returns 0 when it could not be stored (no
+   format ifmt), from u when given (phase 5: s31_tex8.c decides how, and
+   reuses the block when it can). Returns 0 when it could not be stored (no
    memory, or S31GL_MIPMAPS=0): the level is then only recorded, and the
    mipmap filters see an incomplete chain and sample level 0 */
 static int tex_level_store(GLContext *c, GLTexture *t, int level, int iw, int ih,
                            int ws, int hs, int ifmt, int border, int vb,
                            const S31Unpack *u, int have_pixels)
 {
-  GLMipLevel *m;
-  int lum, cls = tex_class(ifmt, &lum), has_alpha = cls != TGL_TEXF_RGB;
-  int need = iw * ih * 2 + (has_alpha ? iw * ih : 0);
-
   if (!c->mip_store) return 0;
-  if (t->mip == NULL) {
-    t->mip = gl_zalloc(sizeof(GLMipChain));
-    if (t->mip == NULL) { gl_set_error(c, GL_OUT_OF_MEMORY); return 0; }
-  }
-  m = &t->mip->l[level];
   if (iw == 0 || ih == 0) {
-    gl_free(m->pix);
-    m->pix = NULL; m->alpha = NULL;
+    if (t->mip) gl_tex8_free_level(t, level);
     return 0;
   }
-  if (m->pix == NULL || m->ws != ws || m->hs != hs || (m->alpha != NULL) != has_alpha) {
-    gl_free(m->pix);
-    m->pix = gl_malloc(need);
-    m->alpha = NULL;
-    if (m->pix == NULL) { gl_set_error(c, GL_OUT_OF_MEMORY); return 0; }
-  }
-  m->ws = (unsigned char)ws; m->hs = (unsigned char)hs;
-  m->cls = (unsigned char)cls;
-  m->alpha = has_alpha ? (unsigned char *)m->pix + iw * ih * 2 : NULL;
-  if (!have_pixels) {
-    memset(m->pix, 0, need);
-    return 1;
-  }
-  tex_store_img(m->pix, m->alpha, ws, ifmt, u, border, vb, 0, 0, iw, ih);
-  return 1;
+  c->raster_dirty = 1;
+  return gl_tex8_image(c, t, level, ws, hs, ifmt, have_pixels ? u : NULL, border, vb);
 }
 
 /* s31: glTexImage2D and glTexImage1D (a W x 1 image, plan F7). src: the
@@ -466,7 +356,7 @@ int gl_tex_image_src(GLContext *c, GLParam *p, const S31Unpack *src)
   void *pixels=p[9].p;
   GLTexture *t;
   S31Unpack u;
-  int e, ws, hs, iw, ih, lum, cls, need, has_alpha, TW, TH, maxl, is1d, proxy, vb;
+  int e, ws, hs, iw, ih, lum, cls, TW, TH, maxl, is1d, proxy, vb;
 
   is1d = target == GL_TEXTURE_1D || target == GL_PROXY_TEXTURE_1D;
   proxy = target == GL_PROXY_TEXTURE_2D || target == GL_PROXY_TEXTURE_1D;
@@ -534,7 +424,7 @@ int gl_tex_image_src(GLContext *c, GLParam *p, const S31Unpack *src)
     return 0;
   }
 
-  t = is1d ? c->current_texture_1d : c->current_texture;
+  t = gl_tex_target(c, is1d ? GL_TEXTURE_1D : GL_TEXTURE_2D);
   if (t == NULL) { gl_set_error(c, GL_OUT_OF_MEMORY); return 0; }
   c->raster_dirty = 1;
   t->lw[level] = (unsigned short)width;
@@ -554,53 +444,35 @@ int gl_tex_image_src(GLContext *c, GLParam *p, const S31Unpack *src)
 
   if (iw == 0 || ih == 0) {
     /* the null texture: incomplete, texturing is off */
-    gl_free(t->images[0].pixmap);
-    t->images[0].pixmap = NULL;
-    t->alpha = NULL;
+    gl_tex8_free_level(t, 0);
     t->lw[0] = 0;
     return 0;
   }
   cls = tex_class(components, &lum);
-  has_alpha = cls != TGL_TEXF_RGB;
   TW = iw; TH = ih;
-  /* one block: RGB565 plane, then the A8 plane when the format has alpha
-     (3 bytes a texel; opaque textures stay at 2). Reused when the shape
-     is the same (TyrQuake re-uploads its lightmaps every frame) */
-  need = TW * TH * 2 + (has_alpha ? TW * TH : 0);
-  if (t->images[0].pixmap == NULL || t->ws != ws || t->hs != hs ||
-      (t->alpha != NULL) != has_alpha) {
-    gl_free(t->images[0].pixmap);
-    t->images[0].pixmap = gl_malloc(need);
-    if (t->images[0].pixmap == NULL) {
-      gl_set_error(c, GL_OUT_OF_MEMORY);
-      t->alpha = NULL;
-      t->lw[0] = 0;
-      t->width = t->height = 0;
-      return 0;
-    }
+  /* phase 5 (s31_tex8.c): the level's block and kind; it reads level 0's
+     old shape from t, so t is updated after */
+  if (!gl_tex8_image(c, t, 0, ws, hs, components, (pixels != NULL || src != NULL) ? &u : NULL,
+                     border, vb)) {
+    gl_tex8_free_level(t, 0);
+    t->lw[0] = 0;
+    t->width = t->height = 0;
+    return 0;
   }
   t->images[0].xsize = TW;
   t->images[0].ysize = TH;
-  t->alpha = has_alpha ? (unsigned char *)t->images[0].pixmap + TW * TH * 2 : NULL;
   t->ws = ws; t->hs = hs;
   t->fmt = cls;
   /* fraction bits of the fixed-point s/t (clip.c): F + ws + hs <= 22 keeps
      9 bits of repeat headroom; 14 is TinyGL's for 256 wide */
   t->fbits = 22 - ws - hs < 14 ? 22 - ws - hs : 14;
-
-  if (pixels == NULL && src == NULL) {
-    /* contents undefined by GL; black (transparent) */
-    memset(t->images[0].pixmap, 0, need);
-    return 0;
-  }
-  /* row 0 of the source is t = 0; the border texels are skipped */
-  tex_store(t, &u, border, vb, 0, 0, TW, TH);
-  return 1;
+  (void)lum;
+  return pixels != NULL || src != NULL;
 }
 
 void glopTexImage2D(GLContext *c,GLParam *p)
 {
-  gl_tex_image_src(c, p, NULL);
+  TU_RUN(c, gl_tex_image_src(c, p, NULL));
 }
 
 /* s31: glTexSubImage2D (GL 1.3 3.8.2), with every GL_UNPACK_* parameter
@@ -660,8 +532,7 @@ int gl_tex_subimage_src(GLContext *c, GLParam *p, const S31Unpack *src)
     if (y0 + h > TH) h = TH - y0;
     if (w <= 0 || h <= 0) return 0;
     c->raster_dirty = 1;
-    tex_store_img(m->pix, m->alpha, m->ws, t->lfmt[level], &u, sx, sy, x0, y0, w, h);
-    return 1;
+    return gl_tex8_sub(c, t, level, &u, sx, sy, x0, y0, w, h);
   }
   if (t->images[0].pixmap == NULL)
     return 0;
@@ -674,19 +545,28 @@ int gl_tex_subimage_src(GLContext *c, GLParam *p, const S31Unpack *src)
   if (y0 + h > TH) h = TH - y0;
   if (w <= 0 || h <= 0) return 0;
   c->raster_dirty = 1;
-  tex_store(t, &u, sx, sy, x0, y0, w, h);
-  return 1;
+  return gl_tex8_sub(c, t, 0, &u, sx, sy, x0, y0, w, h);
 }
 
 void glopTexSubImage2D(GLContext *c,GLParam *p)
 {
-  gl_tex_subimage_src(c, p, NULL);
+  TU_RUN(c, gl_tex_subimage_src(c, p, NULL));
 }
+
+static int get_tex_level_parameter(int target, int level, int pname, int *iv);
 
 int tgl_get_tex_level_parameter(int target, int level, int pname, int *iv)
 {
   GLContext *c=gl_get_context();
-  int w, h, f, cls, lum, rgb, al;
+  int n;
+  TU_RUN(c, n = get_tex_level_parameter(target, level, pname, iv));
+  return n;
+}
+
+static int get_tex_level_parameter(int target, int level, int pname, int *iv)
+{
+  GLContext *c=gl_get_context();
+  int w, h, f, cls, lum, rgb, al, b8 = 0;
   GLTexture *t = c->current_texture;
 
   if (level < 0 || level >= MAX_TEXTURE_LEVELS) return -2;
@@ -702,6 +582,7 @@ int tgl_get_tex_level_parameter(int target, int level, int pname, int *iv)
     /* every level as specified (levels > 0 are recorded, not stored) */
     w = t->lw[level]; h = t->lh[level];
     f = t->lfmt[level];
+    b8 = gl_tex8_bits(t, level) == 8;
   } else {
     return -1;
   }
@@ -720,18 +601,35 @@ int tgl_get_tex_level_parameter(int target, int level, int pname, int *iv)
       *iv = w && level == 0 ? t->border : 0;
     return 1;
   case GL_TEXTURE_INTERNAL_FORMAT: *iv = f ? f : 1; return 1;
-  case GL_TEXTURE_RED_SIZE: case GL_TEXTURE_BLUE_SIZE: *iv = rgb ? 5 : 0; return 1;
-  case GL_TEXTURE_GREEN_SIZE: *iv = rgb ? 6 : 0; return 1;
+  /* phase 5: a P8 / L8 level holds 8 bits a channel (s31_tex8.c) */
+  case GL_TEXTURE_RED_SIZE: case GL_TEXTURE_BLUE_SIZE: *iv = rgb ? (b8 ? 8 : 5) : 0; return 1;
+  case GL_TEXTURE_GREEN_SIZE: *iv = rgb ? (b8 ? 8 : 6) : 0; return 1;
   case GL_TEXTURE_ALPHA_SIZE: *iv = al && cls != TGL_TEXF_INTENSITY ? 8 : 0; return 1;
-  case GL_TEXTURE_LUMINANCE_SIZE: *iv = w && f && lum && cls != TGL_TEXF_INTENSITY ? 5 : 0; return 1;
-  case GL_TEXTURE_INTENSITY_SIZE: *iv = w && f && cls == TGL_TEXF_INTENSITY ? 5 : 0; return 1;
+  case GL_TEXTURE_LUMINANCE_SIZE: *iv = w && f && lum && cls != TGL_TEXF_INTENSITY ? (b8 ? 8 : 5) : 0; return 1;
+  case GL_TEXTURE_INTENSITY_SIZE: *iv = w && f && cls == TGL_TEXF_INTENSITY ? (b8 ? 8 : 5) : 0; return 1;
   default: return -1;
   }
 }
 
 
-/* s31: records GL 1.3 texture environment state */
-void glopTexEnv(GLContext *c,GLParam *p)
+/* phase 5 O1: GL_ARB_texture_env_combine's values (GL 1.3 table 3.19;
+   DOT3 and the crossbar's GL_TEXTUREn sources are not in the extensions
+   advertised, so they are GL_INVALID_ENUM) */
+static int comb_func_ok(int f)
+{
+  return f == GL_REPLACE || f == GL_MODULATE || f == GL_ADD ||
+         f == GL_ADD_SIGNED || f == GL_INTERPOLATE || f == GL_SUBTRACT;
+}
+
+static int comb_src_ok(int s)
+{
+  return s == GL_TEXTURE || s == GL_CONSTANT || s == GL_PRIMARY_COLOR ||
+         s == GL_PREVIOUS;
+}
+
+/* s31: records GL 1.3 texture environment state. Phase 5 O1: of the
+   active unit (TU_RUN), with GL_COMBINE and its parameters */
+static void tex_env(GLContext *c,GLParam *p)
 {
   int target=p[1].i;
   int pname=p[2].i;
@@ -750,32 +648,96 @@ void glopTexEnv(GLContext *c,GLParam *p)
     c->raster_dirty = 1;
     return;
   }
-  if (pname != GL_TEXTURE_ENV_MODE) {
-    gl_set_error(c, GL_INVALID_ENUM);
-    return;
-  }
-  switch (param) {
-  case GL_DECAL:
-  case GL_REPLACE:
-  case GL_MODULATE:
-  case GL_BLEND:
-  case GL_ADD:
-    break;              /* s31: all honoured (zpipe.c, plan F4) */
-  case GL_COMBINE:
-    gl_warn_once("glTexEnv(GL_COMBINE) (drawn as GL_MODULATE)");
-    param = GL_MODULATE;
+  switch (pname) {
+  case GL_TEXTURE_ENV_MODE:
+    switch (param) {
+    case GL_DECAL:
+    case GL_REPLACE:
+    case GL_MODULATE:
+    case GL_BLEND:
+    case GL_ADD:
+    case GL_COMBINE:
+      break;            /* s31: all honoured (zpipe.c, plan F4, phase 5) */
+    default:
+      gl_set_error(c, GL_INVALID_ENUM);
+      return;
+    }
+    c->texenv_mode = param;
     break;
+  case GL_COMBINE_RGB:
+  case GL_COMBINE_ALPHA:
+    if (!comb_func_ok(param)) { gl_set_error(c, GL_INVALID_ENUM); return; }
+    if (pname == GL_COMBINE_RGB) c->comb.rgb = param; else c->comb.alpha = param;
+    break;
+  case GL_SOURCE0_RGB: case GL_SOURCE1_RGB: case GL_SOURCE2_RGB:
+    if (!comb_src_ok(param)) { gl_set_error(c, GL_INVALID_ENUM); return; }
+    c->comb.src[0][pname - GL_SOURCE0_RGB] = param;
+    break;
+  case GL_SOURCE0_ALPHA: case GL_SOURCE1_ALPHA: case GL_SOURCE2_ALPHA:
+    if (!comb_src_ok(param)) { gl_set_error(c, GL_INVALID_ENUM); return; }
+    c->comb.src[1][pname - GL_SOURCE0_ALPHA] = param;
+    break;
+  case GL_OPERAND0_RGB: case GL_OPERAND1_RGB: case GL_OPERAND2_RGB:
+    if (param != GL_SRC_COLOR && param != GL_ONE_MINUS_SRC_COLOR &&
+        param != GL_SRC_ALPHA && param != GL_ONE_MINUS_SRC_ALPHA) {
+      gl_set_error(c, GL_INVALID_ENUM);
+      return;
+    }
+    c->comb.op[0][pname - GL_OPERAND0_RGB] = param;
+    break;
+  case GL_OPERAND0_ALPHA: case GL_OPERAND1_ALPHA: case GL_OPERAND2_ALPHA:
+    if (param != GL_SRC_ALPHA && param != GL_ONE_MINUS_SRC_ALPHA) {
+      gl_set_error(c, GL_INVALID_ENUM);
+      return;
+    }
+    c->comb.op[1][pname - GL_OPERAND0_ALPHA] = param;
+    break;
+  case GL_RGB_SCALE:
+  case GL_ALPHA_SCALE: {
+    /* the value as given: p[4] (tgl_tex_envf, the ABI layer's float and
+       integer forms alike) */
+    float v = p[4].f;
+    if (v != 1.0f && v != 2.0f && v != 4.0f) {
+      gl_set_error(c, GL_INVALID_VALUE);
+      return;
+    }
+    c->comb.scale[pname == GL_RGB_SCALE ? 0 : 1] = v;
+    break;
+  }
   default:
     gl_set_error(c, GL_INVALID_ENUM);
     return;
   }
-  c->texenv_mode = param;
   c->raster_dirty = 1;
+}
+
+void glopTexEnv(GLContext *c,GLParam *p)
+{
+  TU_RUN(c, tex_env(c, p));
+}
+
+void tgl_tex_envf(int target, int pname, float v)
+{
+  GLParam p[8];
+  p[0].op=OP_TexEnv;
+  p[1].i=target;
+  p[2].i=pname;
+  p[3].i=(int)v;
+  p[4].f=v;
+  p[5].f=0; p[6].f=0; p[7].f=0;
+  gl_add_op(p);
 }
 
 /* s31: records GL 1.3 texture parameters on the bound texture. p[3] is an
    int, p[4..7] a float vector (border colour, priority) */
+static void tex_parameter(GLContext *c,GLParam *p);
+
 void glopTexParameter(GLContext *c,GLParam *p)
+{
+  TU_RUN(c, tex_parameter(c, p));
+}
+
+static void tex_parameter(GLContext *c,GLParam *p)
 {
   int target=p[1].i;
   int pname=p[2].i;
@@ -855,7 +817,17 @@ void tgl_tex_parameterf(int target, int pname, const float *v, int n)
   gl_add_op(p);
 }
 
+static int get_tex_parameter(int target, int pname, int *iv, float *fv, int *kind);
+
 int tgl_get_tex_parameter(int target, int pname, int *iv, float *fv, int *kind)
+{
+  GLContext *c=gl_get_context();
+  int n;
+  TU_RUN(c, n = get_tex_parameter(target, pname, iv, fv, kind));
+  return n;
+}
+
+static int get_tex_parameter(int target, int pname, int *iv, float *fv, int *kind)
 {
   GLContext *c=gl_get_context();
   GLTexture *t=gl_tex_target(c,target);
@@ -884,22 +856,47 @@ int tgl_get_tex_parameter(int target, int pname, int *iv, float *fv, int *kind)
   return 1;
 }
 
-int tgl_get_tex_env(int target, int pname, int *iv, float *fv, int *kind)
+static int get_tex_env(GLContext *c, int target, int pname, int *iv, float *fv, int *kind)
 {
-  GLContext *c=gl_get_context();
-  int i;
+  int i, v;
   if (target != GL_TEXTURE_ENV) return -1;
-  if (pname == GL_TEXTURE_ENV_MODE) {
-    iv[0] = c->texenv_mode; fv[0] = (float)c->texenv_mode;
-    *kind = TGL_GET_INT;
-    return 1;
-  }
   if (pname == GL_TEXTURE_ENV_COLOR) {
     for (i = 0; i < 4; i++) { fv[i] = c->texenv_color.v[i]; iv[i] = 0; }
     *kind = TGL_GET_COLOR;
     return 4;
   }
-  return -1;
+  *kind = TGL_GET_INT;
+  switch (pname) {
+  case GL_TEXTURE_ENV_MODE: v = c->texenv_mode; break;
+  /* phase 5 O1: the combiner's state (GL 1.3 table 6.17) */
+  case GL_COMBINE_RGB: v = c->comb.rgb; break;
+  case GL_COMBINE_ALPHA: v = c->comb.alpha; break;
+  case GL_SOURCE0_RGB: case GL_SOURCE1_RGB: case GL_SOURCE2_RGB:
+    v = c->comb.src[0][pname - GL_SOURCE0_RGB]; break;
+  case GL_SOURCE0_ALPHA: case GL_SOURCE1_ALPHA: case GL_SOURCE2_ALPHA:
+    v = c->comb.src[1][pname - GL_SOURCE0_ALPHA]; break;
+  case GL_OPERAND0_RGB: case GL_OPERAND1_RGB: case GL_OPERAND2_RGB:
+    v = c->comb.op[0][pname - GL_OPERAND0_RGB]; break;
+  case GL_OPERAND0_ALPHA: case GL_OPERAND1_ALPHA: case GL_OPERAND2_ALPHA:
+    v = c->comb.op[1][pname - GL_OPERAND0_ALPHA]; break;
+  case GL_RGB_SCALE: case GL_ALPHA_SCALE:
+    fv[0] = c->comb.scale[pname == GL_RGB_SCALE ? 0 : 1];
+    iv[0] = (int)fv[0];
+    *kind = TGL_GET_FLOAT;
+    return 1;
+  default:
+    return -1;
+  }
+  iv[0] = v; fv[0] = (float)v;
+  return 1;
+}
+
+int tgl_get_tex_env(int target, int pname, int *iv, float *fv, int *kind)
+{
+  GLContext *c=gl_get_context();
+  int n;
+  TU_RUN(c, n = get_tex_env(c, target, pname, iv, fv, kind));
+  return n;
 }
 
 void glopPixelStore(GLContext *c,GLParam *p)

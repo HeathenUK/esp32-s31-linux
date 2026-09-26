@@ -1,0 +1,10 @@
+# glref run: impl=ours name=teapot frame=60 display=:93
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/demos/teapot -geometry 320x240+0+0
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000ebb8ac620000)
+#   	libGLU.so.1 => /src/gl/ref-apps/prefix/lib/libGLU.so.1 (0x0000ebb8ac570000)
+#   	libglut.so.3 => /src/gl/ref-apps/prefix/lib/libglut.so.3 (0x0000ebb8ac490000)
+Teapot V1.2
+Written by David Bucciarelli (tech.hmw@plus.it)
+libGL: context 1 created (pid 1271, comm teapot)
+glref: ok at swap 60 -> /src/artifacts/gl/phase5/p5c/x4/TW/ours/teapot.f60

@@ -76,6 +76,10 @@ typedef struct ZSpan {
   /* the general triangle filler's runner for this triangle's spans:
      zp_run, or zp_run_lod when zpx_tri chose the level per block */
   void (*run)(ZBuffer *zb, struct ZSpan *s);
+  /* phase 5 O1: texture unit 1's s/w, t/w (its own fixed point) and their
+     x and y steps; stepped only when unit 1 is on (ZP_N_ST1). The names
+     are unit 0's with a 1 appended, so a stage macro serves both units */
+  float sz1, tz1, dszdx1, dtzdx1, dszdy1, dtzdy1;
 } ZSpan;
 
 /* the chunk being processed */
@@ -85,13 +89,22 @@ typedef struct ZFrag {
   unsigned short zz[ZP_CHUNK];         /* its depth, for the write */
   unsigned char r[ZP_CHUNK], g[ZP_CHUNK], b[ZP_CHUNK], a[ZP_CHUNK];
   unsigned int idx[ZP_CHUNK];          /* texel index */
+  /* phase 5 O1: unit 1's texel index, and the primary colour kept for a
+     unit 1 combiner that reads GL_PRIMARY_COLOR after unit 0 replaced it */
+  unsigned int idx1[ZP_CHUNK];
+  unsigned char pr[ZP_CHUNK], pg[ZP_CHUNK], pb[ZP_CHUNK], pa[ZP_CHUNK];
 } ZFrag;
 
 struct ZPipe;
 typedef int (*ZDepthFn)(const ZSpan *s, ZFrag *f);         /* returns alive */
 typedef void (*ZStageFn)(const struct ZPipe *p, const ZSpan *s, ZFrag *f);
 
-#define ZP_MAX_STAGES 10   /* the 8 stage kinds + NULL, with room */
+/* phase 5 O1: 16. The most one batch can place is 15 with NULL: stipple,
+   colour, primary save, unit 0 texel + env, unit 1 texel + env, colour sum,
+   fog, coverage, alpha test, depth write or stencil, blend - 10 was one
+   short of phase 4's own worst case (all of those but the unit 1 ones and
+   the save), which wrote NULL over ZPipe.tex */
+#define ZP_MAX_STAGES 16
 
 typedef struct ZPipe {
   ZDepthFn depth;
@@ -150,11 +163,20 @@ typedef struct ZPipe {
      2 kB) */
   int xact;
   struct ZPipeX *x;
+  /* phase 5 O1: texture unit 1's texels as its texenv stage reads them
+     (level 0, a stored level, or the filtered chunk: as tex / talpha for
+     unit 0); its sizes and masks are in ZPipeX.g1 */
+  const PIXEL *tex1;
+  const unsigned char *talpha1;
+  /* unit 1's texel indices of a pixel rectangle (s31_draw.c: every
+     fragment the raster position's texel), NULL: the chunk's own idx1 */
+  const unsigned int *idx1_px;
 } ZPipe;
 
 /* ZPipe.xact */
 enum { ZPX_TEX = 1,      /* the texel stage is chosen per triangle (LOD) */
-       ZPX_PC = 2 };     /* colour may be perspective-corrected per triangle */
+       ZPX_PC = 2,       /* colour may be perspective-corrected per triangle */
+       ZPX_TEX1 = 4 };   /* phase 5: the same for texture unit 1 */
 
 /* phase 4 (s31_tfilter.c): one stored mipmap level as the texel stages
    read it. The fixed-point s, t of the whole texture (clip.c) address it
@@ -162,18 +184,30 @@ enum { ZPX_TEX = 1,      /* the texel stage is chosen per triangle (LOD) */
    (row << ws) | column */
 typedef struct ZLevel {
   const PIXEL *pix;
-  const unsigned char *alpha;          /* A8 plane or NULL */
+  const unsigned char *alpha;          /* A8 plane or NULL (L8: its alpha) */
   int shs, sht, ws;
   int wm, hm;                          /* W-1, H-1 of the level */
+  /* phase 5 (s31_tex8.c): a level with 8-bit texels (pix NULL). k8 its
+     kind (TGL_ST_P8, L8, W32; 0: RGB565), i8 its indices (P8) or grey
+     plane (L8), pal the P8 palette, w32 the reference's words, am the L8
+     alpha mode (TGL_AM_*) */
+  const unsigned char *i8;
+  const unsigned int *pal;
+  const unsigned int *w32;
+  int k8, am;
 } ZLevel;
 
 #define ZPX_MAXLEV 11                  /* MAX_TEXTURE_LEVELS (zgl.h) */
 
-typedef struct ZPipeX {
-  /* the stages gl_build_pipe placed (index in ZPipe.st, -1: none) */
-  int slot_tex, slot_col;
-  int need0;                           /* ZPipe.need without per-triangle bits */
-  ZStageFn col_affine;                 /* the batch's colour stage */
+/* phase 4 (both units since phase 5 O1): one texture unit's filtering
+   state. The texel stage the batch placed for the unit (ZPipe.st[slot_tex]:
+   its nearest index stage, or a filtered one), the level-0 texture it
+   reads, the filter kinds (TF_*), the stored level chain, and what the
+   current triangle or chunk chose */
+typedef struct ZTexF {
+  /* where the unit's texel stage sits: in ZPipe.st, or in ZPipeX.gen_st
+     under a fused filler (phase 5); NULL: none */
+  ZStageFn *slot;
   /* the texel stage of the batch without a choice, and the level-0
      texture it reads (pixel paths and lines restore these) */
   ZStageFn tex_base;
@@ -199,9 +233,54 @@ typedef struct ZPipeX {
   unsigned char twb[ZP_CHUNK / 8];
   int lod_gen;                         /* MIN_LOD / MAX_LOD are not GL's defaults */
   /* filtered texels of the chunk: the texenv stages read them through
-     ZPipe.tex / talpha with idx[i] = i */
+     ZPipe.tex / talpha (unit 1: tex1 / talpha1) with idx[i] = i */
   PIXEL ftex[ZP_CHUNK];
   unsigned char falpha[ZP_CHUNK];
+  /* phase 5: the unit's texture has 8-bit texels (s31_tex8.c: P8, L8,
+     W32). Its texel stages - nearest in level 0 too - write each
+     fragment's texel into ftex32 as an RGBA8 word, idx[i] = i (the pixel
+     paths: ftex32[0], idx 0), and its texenv stages (zp_texenv8_fn) and
+     the combiner read it there. lvl[0] is level 0 for every such texture */
+  int t8;
+  unsigned int ftex32[ZP_CHUNK];
+} ZTexF;
+
+/* phase 5 O1: texture unit 1's size, fixed point and wraps, as ZPipe holds
+   unit 0's (the same names, so the nearest-index stages serve both) */
+typedef struct ZTexGeo {
+  int ws, hs, fbits;
+  unsigned int smask, tmask;
+  int wmax, hmax;
+  int clamp_s, clamp_t;
+  int speriod, tperiod;                /* one GL_REPEAT period of s and t */
+} ZTexGeo;
+
+/* phase 5 O1: one unit's texture environment as the combiner stage runs
+   it (zpipe.c zc_comb*): GL_COMBINE as specified, and every other mode
+   translated to the combiner program that computes exactly what the
+   unit-0 texenv stages compute (raster_sel.c comb_prog) */
+enum { ZCF_REPLACE, ZCF_MODULATE, ZCF_ADD, ZCF_ADD_SIGNED, ZCF_INTERPOLATE,
+       ZCF_SUBTRACT, ZCF_NONE };        /* ZCF_NONE: the part is not computed */
+enum { ZCS_TEXTURE, ZCS_CONSTANT, ZCS_PRIMARY, ZCS_PREVIOUS };
+enum { ZCO_COLOR, ZCO_OMCOLOR, ZCO_ALPHA, ZCO_OMALPHA };
+typedef struct ZComb {
+  unsigned char f[2];                  /* [0] RGB, [1] alpha: ZCF_* */
+  unsigned char src[2][3];             /* ZCS_* */
+  unsigned char op[2][3];              /* ZCO_* (alpha: ZCO_ALPHA / ZCO_OMALPHA) */
+  unsigned char sh[2];                 /* the scale as a shift: 0, 1, 2 */
+  unsigned char k[4];                  /* GL_TEXTURE_ENV_COLOR, 8 bits */
+  unsigned char fmt;                   /* the texture's stored class (TGL_TEXF_*) */
+  unsigned char zero_rgb;              /* GL_ALPHA base format: the texel colour is 0 */
+} ZComb;
+
+typedef struct ZPipeX {
+  /* the colour stage gl_build_pipe placed (in ZPipe.st, or ZPipeX.gen_st
+     under a fused filler; NULL: none) */
+  ZStageFn *slot_col;
+  int need0;                           /* ZPipe.need without per-triangle bits */
+  ZStageFn col_affine;                 /* the batch's colour stage */
+  /* the texture units' filtering (phase 4 F-LIN; unit 1 since phase 5) */
+  ZTexF tf[2];
   /* perspective colour: selected when the colour error of screen-affine
      interpolation could reach pc_min 8.16 units */
   float pc_min;
@@ -237,6 +316,33 @@ typedef struct ZPipeX {
      length cap (min(1, length)), the point's radius + 1/2 */
   int cov_kind;
   float cv_hw, cv_hl, cv_lcap, cv_rr;
+  /* phase 5 O1: texture unit 1's geometry, both units' combiner programs,
+     and the batch's general stage list when a fused filler runs in its
+     place (zpipe_fused.c: a chunk the fused code does not cover runs
+     these, so its pixels are the general path's by construction) */
+  ZTexGeo g1;
+  ZComb cb[2];
+  ZDepthFn gen_depth;
+  ZStageFn gen_st[ZP_MAX_STAGES];
+  int fused;                           /* ZF_* of zpipe_fused.c, 0: none */
+  /* ZF_WORLD's product tables for the scale they were made for (5 kB,
+     allocated at the first world batch; zpipe_fused.c) */
+  unsigned char *wtab;
+  int wtab_sh;
+  /* phase 5 O2 (zpipe_fused.c, the one-unit fillers): the blend tables
+     for alpha btab_a (MUL8 of every 5- and 6-bit field's expansion by a
+     and by 255 - a, 192 B, allocated at the first such batch), and
+     whether the batch's texel stage is the REPEAT bilinear one in level 0
+     with no per-triangle choice (the 1:1 sampler may replace it) */
+  unsigned char *btab;
+  int btab_a;
+  int bil0;
+  /* phase 5 O2: the runners of a batch with unit 1 (ztriangle_genmt.c):
+     zp_run_mt / zp_run_lod_mt, or under the filtered world filler the
+     same runners calling it directly (chunk: no depth stage, no list) */
+  void (*run_mt)(ZBuffer *zb, struct ZSpan *s);
+  void (*run_lod_mt)(ZBuffer *zb, struct ZSpan *s);
+  ZStageFn chunk;
 } ZPipeX;
 
 /* phase 4: the spread of the bit patterns of three q = 1/w (> 0). The
@@ -288,6 +394,16 @@ static inline int zpx_qspread_lod(float qa, float qb, float qc)
 #define ZPX_LONG_W 64
 #define ZPX_LONG_C 1024
 
+/* phase 5 P (s31_tfilter.c): a trilinear weight (ZTexF.twb) for the 565
+   stages (0..32) and the 8-bit ones (0..256) */
+#ifdef S31GL_P4ARITH
+#define ZPX_TW5(w) ((unsigned int)(w))
+#define ZPX_TW8(w) ((unsigned int)(w) << 3)
+#else
+#define ZPX_TW5(w) (((unsigned int)(w) + 4u) >> 3)
+#define ZPX_TW8(w) ((unsigned int)(w))
+#endif
+
 /* texture filter kinds (ZPipeX.kmag / kmin) */
 enum { TF_NEAREST0,   /* nearest, level 0: the batch's own texidx stage */
        TF_LINEAR0,    /* bilinear, level 0 */
@@ -314,7 +430,7 @@ void zep_tri_far(ZPipe *p);
 void zdb_tri(ZPipe *p, int ya, int yb, float x0, float dx1, float dx2);
 
 enum { ZP_N_Z = 1, ZP_N_RGBA = 2, ZP_N_Q = 4, ZP_N_F = 8, ZP_N_ST = 16,
-       ZP_N_SPEC = 32, ZP_N_PC = 64 };
+       ZP_N_SPEC = 32, ZP_N_PC = 64, ZP_N_ST1 = 128 };
 
 /* a vertex of the general filler: GL window coordinates (pixel centres at
    +0.5, rows from the top), TinyGL's integer depth, colour and alpha in 8.16, the
@@ -327,6 +443,7 @@ typedef struct {
   float s, t, q;
   float sr, sg, sb;         /* GL_SEPARATE_SPECULAR_COLOR, 8.16 */
   int si, ti;               /* s, t unprojected (zp.s, zp.t): the REPEAT shift */
+  int si1, ti1;             /* phase 5 O1: texture unit 1's, in its fixed point */
 } ZVtxG;
 
 /* stage selectors, used by raster.c (zpipe.c holds the stages) */
@@ -336,12 +453,25 @@ enum { ZP_DEPTH_NONE, ZP_DEPTH_NEVER, ZP_DEPTH_LESS, ZP_DEPTH_EQUAL,
 ZDepthFn zp_depth_fn(int zp_depth, int write);   /* write: test + write fused */
 ZStageFn zp_color_fn(int flat);
 ZStageFn zp_texidx_fn(int clamp_s, int clamp_t);
+/* phase 5 O1: texture unit 1's nearest texel index (reads ZPipeX.g1,
+   writes ZFrag.idx1) */
+ZStageFn zp_texidx1_fn(int clamp_s, int clamp_t);
+/* phase 5 O1: the combiner of unit 0 or 1 (ZPipeX.cb[unit]): GL_COMBINE,
+   and every texenv mode of unit 1 as its combiner program */
+ZStageFn zp_comb_fn(int unit);
+/* the primary colour kept for unit 1 (ZFrag.pr..pa), before unit 0's env */
+ZStageFn zp_saveprim_fn(void);
 /* texenv ops: the (mode, base format) pairs GL 1.3 table 3.22 needs */
 enum { ZP_TE_REPLACE_RGB, ZP_TE_REPLACE_RGBA, ZP_TE_MOD_RGB, ZP_TE_MOD_RGBA,
        ZP_TE_DECAL_RGBA, ZP_TE_BLEND_RGB, ZP_TE_BLEND_RGBA, ZP_TE_BLEND_I,
        ZP_TE_ALPHA_REPLACE, ZP_TE_ALPHA_MOD, ZP_TE_ADD_RGB, ZP_TE_ADD_RGBA,
-       ZP_TE_ADD_I, ZP_TE_N };
+       ZP_TE_ADD_I,
+       ZP_TE_REPLACE_RGB1,      /* phase 5: REPLACE of an RGBA texture without
+                                   its A8 plane (GLTexture.a1): alpha 255 */
+       ZP_TE_N };
 ZStageFn zp_texenv_fn(int op);
+/* phase 5: the same ops on a unit-0 texel of 8 bits (ZTexF.ftex32) */
+ZStageFn zp_texenv8_fn(int op);
 ZStageFn zp_fog_fn(void);
 ZStageFn zp_spec_fn(int flat);         /* add the secondary colour */
 ZStageFn zp_alpha_fn(int gl_func);     /* GL_LESS ... (not NEVER/ALWAYS) */
@@ -362,8 +492,18 @@ ZStageFn zp_stipple_fn(void);       /* GL_POLYGON_STIPPLE (reads ZPipe.stip_on) 
    phase 4) + colour mask */
 ZStageFn zp_out_fn(int sfactor, int dfactor, int cmask, int eq);
 
+#ifdef S31GL_CENSUS
+/* s31_census.c (a diagnostic bench build only) */
+void zp_census_chunk(const ZPipe *p, int n, int alive);
+#endif
+
 /* process one span through zb->pipe */
 void zp_run(ZBuffer *zb, ZSpan *s);
+/* phase 5 O1: the same with texture unit 1 on (steps ZSpan.sz1, tz1) */
+void zp_run_mt(ZBuffer *zb, ZSpan *s);
+/* phase 5 O2: zp_run_mt for a batch whose depth stage passes everything
+   and whose list is one fused filler (ZPipeX.chunk), called directly */
+void zp_run_mt_direct(ZBuffer *zb, ZSpan *s);
 
 /* phase 4 (s31_tfilter.c) */
 struct GLContext;
@@ -384,17 +524,43 @@ int zpx_tri(ZPipe *p, const struct ZTri *T, const ZVtxG *v0, const ZVtxG *v1,
    stage and level(s); consecutive blocks with the same choice form one
    chunk (up to ZP_CHUNK), so the stages still run per chunk */
 void zp_run_lod(ZBuffer *zb, ZSpan *s);
+void zp_run_lod_mt(ZBuffer *zb, ZSpan *s);      /* phase 5: unit 1 on */
+/* phase 5 O2: zp_run_lod_mt for a batch whose unit 1 has no per-block
+   choice, whose depth stage passes everything and whose list is one fused
+   filler (ZPipeX.chunk, called directly) */
+void zp_run_lod_mt_direct(ZBuffer *zb, ZSpan *s);
 /* lines and points: the batch's base choices (level 0, affine colour) */
 void zpx_reset(ZPipe *p);
 /* the texel stages of phase 4, for s31_draw.c's pixel paths to drop */
 int zpx_is_tex_stage(ZStageFn f);
 /* the texel stage for kind k at the batch's wraps (TF_LINEAR0 ...) */
 ZStageFn zpx_stage(int kind, int repeat, int alpha);
+ZStageFn zpx_stage_u(int unit, int kind, int repeat, int alpha);  /* phase 5 */
+/* phase 5: the texel stages of a unit whose texture has 8-bit texels
+   (TF_NEAREST0: nearest in level 0; the others as zpx_stage_u), any wrap */
+ZStageFn zpx_stage8_u(int unit, int kind);
+ZStageFn zpx_base8(const ZLevel *L, int unit);
+int zpx_is_base8(ZStageFn f, int unit);
+/* phase 5: level 0 of t as the texel stages read it (ZTexF.lvl[0]), and
+   the planes alone of any stored level (zpx_prepare sets the geometry) */
+void zpx_level0(const struct GLTexture *t, ZLevel *L);
+void zpx_level_ptrs(const struct GLTexture *t, int l, ZLevel *L);
+/* texel k of an 8-bit level as its RGBA8 word (s31_tfilt_int.h t8_fetch) */
+unsigned int zpx_t8_texel(const ZLevel *L, unsigned int k);
 ZStageFn zpx_color_pc(void);
+
+/* phase 5 O1 (zpipe_fused.c): gl_build_pipe's last step for a batch with
+   texture unit 1 - a fused filler in place of the stage list when the
+   batch's signature has one (ZPipeX.fused); S31GL_FUSED=0 never */
+void zpf_select(struct GLContext *c);
 
 /* ztriangle_gen.c: the general triangle filler (GL's pixel-centre rule,
    top-left fill convention, so shared edges are drawn once) */
 void ZB_fillTriangleGeneral(ZBuffer *zb, const ZVtxG *v0, const ZVtxG *v1,
                             const ZVtxG *v2, int textured);
+/* phase 5 O1: the same with texture unit 1's planes (the batch's runner:
+   zp_run_mt / zp_run_lod_mt, or a fused filler's) */
+void ZB_fillTriangleGeneralMT(ZBuffer *zb, const ZVtxG *v0, const ZVtxG *v1,
+                              const ZVtxG *v2, int textured);
 
 #endif

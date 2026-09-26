@@ -24,8 +24,12 @@
 #include "zpipe.h"
 #include "ztri.h"
 
-void ZB_fillTriangleGeneral(ZBuffer *zb, const ZVtxG *a, const ZVtxG *b,
-                            const ZVtxG *c, int textured)
+/* the filler, for a batch without (mt 0) or with (mt 1, phase 5 O1)
+   texture unit 1: mt 0 is exactly the phase 4 filler (every unit 1 part
+   below is dead code in it) */
+static inline __attribute__((always_inline))
+void fill_general(ZBuffer *zb, const ZVtxG *a, const ZVtxG *b, const ZVtxG *c,
+                  const int mt)
 {
   const ZPipe *p = zb->pipe;
   const ZVtxG *pv[3] = { a, b, c }, *v0, *v1, *v2;
@@ -37,19 +41,19 @@ void ZB_fillTriangleGeneral(ZBuffer *zb, const ZVtxG *a, const ZVtxG *b,
   float Rr = 0, Rg = 0, Rb = 0, Ra = 0, Rf = 0, Rs = 0, Rt = 0, Rq = 1.0f;
   float R1 = 0, R2 = 0, R3 = 0;
   float s0 = 0, s1 = 0, s2 = 0, t0 = 0, t1 = 0, t2 = 0;
+  float gs1x = 0, gs1y = 0, gt1x = 0, gt1y = 0, Rs1 = 0, Rt1 = 0;
   ZTri T;
   int part, y, ye, xl, dxl, xr, dxr, x0, x1;
   unsigned int zy = 0;
   ZSpan sp;
 
-  (void)textured;
   if (!ztri_setup(&T, a->x, a->y, a->z, b->x, b->y, b->z, c->x, c->y, c->z,
                   p))
     return;
   ztri_zepoch(&T, p, a->z, b->z, c->z);
   ztri_rows(&T, p);
   v0 = pv[T.o[0]]; v1 = pv[T.o[1]]; v2 = pv[T.o[2]];
-  sp.run = zp_run;
+  sp.run = mt ? p->x->run_mt : zp_run;
   /* phase 4 (s31_tfilter.c): this triangle's texture level(s) and filter,
      and whether its colour is perspective-corrected - one call when the
      batch has such a choice, which sets the stages and p->need */
@@ -58,7 +62,7 @@ void ZB_fillTriangleGeneral(ZBuffer *zb, const ZVtxG *a, const ZVtxG *b,
     /* a triangle whose q hardly differ keeps the affine colour: one test
        here, not a call (zpx_qspread) */
     if ((p->xact & ZPX_TEX) || x->pc_cur || zpx_qspread(v0->q, v1->q, v2->q))
-      if (zpx_tri((ZPipe *)p, &T, v0, v1, v2)) sp.run = zp_run_lod;
+      if (zpx_tri((ZPipe *)p, &T, v0, v1, v2)) sp.run = mt ? p->x->run_lod_mt : zp_run_lod;
   }
   need = p->need;
 
@@ -107,6 +111,39 @@ void ZB_fillTriangleGeneral(ZBuffer *zb, const ZVtxG *a, const ZVtxG *b,
     /* phase 4 (review 4 R1): for the level per 8-pixel block */
     sp.dszdy = gsy; sp.dtzdy = gty; sp.dfzdy = gqy;
   }
+  if (mt && (need & ZP_N_ST1)) {
+    /* phase 5 O1: texture unit 1's s/w, t/w, formed as unit 0's are (its
+       own fixed point and REPEAT periods, ZPipeX.g1) */
+    const ZTexGeo *g = &p->x->g1;
+    int sa = v0->si1, sb = v1->si1, sc = v2->si1, ta = v0->ti1, tb = v1->ti1, tc = v2->ti1;
+    int mn;
+    float u0, u1, u2, w0, w1, w2;
+    if (!g->clamp_s) {
+      mn = sa < sb ? sa : sb;
+      if (sc < mn) mn = sc;
+      if (mn < 0) {
+        unsigned int k = (unsigned int)(-mn + g->speriod - 1) & ~(unsigned int)(g->speriod - 1);
+        sa = (int)((unsigned int)sa + k); sb = (int)((unsigned int)sb + k);
+        sc = (int)((unsigned int)sc + k);
+      }
+    }
+    if (!g->clamp_t) {
+      mn = ta < tb ? ta : tb;
+      if (tc < mn) mn = tc;
+      if (mn < 0) {
+        unsigned int k = (unsigned int)(-mn + g->tperiod - 1) & ~(unsigned int)(g->tperiod - 1);
+        ta = (int)((unsigned int)ta + k); tb = (int)((unsigned int)tb + k);
+        tc = (int)((unsigned int)tc + k);
+      }
+    }
+    u0 = (float)sa * v0->q; u1 = (float)sb * v1->q; u2 = (float)sc * v2->q;
+    w0 = (float)ta * v0->q; w1 = (float)tb * v1->q; w2 = (float)tc * v2->q;
+    ZTRI_GRAD(&T, u0, u1, u2, gs1x, gs1y);
+    ZTRI_GRAD(&T, w0, w1, w2, gt1x, gt1y);
+    Rs1 = u0 + gs1x * T.ox + gs1y * T.oy;
+    Rt1 = w0 + gt1x * T.ox + gt1y * T.oy;
+    sp.dszdy1 = gs1y; sp.dtzdy1 = gt1y; sp.dfzdy = gqy;
+  }
   if (need & ZP_N_SPEC) {
     PLANE(sr, g1x, g1y, R1);
     PLANE(sg, g2x, g2y, R2);
@@ -135,6 +172,10 @@ void ZB_fillTriangleGeneral(ZBuffer *zb, const ZVtxG *a, const ZVtxG *b,
   sp.z = 0; sp.r = sp.g = sp.b = sp.a = 0;
   sp.sz = sp.tz = sp.fq = 0.0f; sp.fz = 1.0f;
   sp.sr = sp.sg = sp.sb = 0;
+  if (mt) {
+    sp.dszdx1 = gs1x; sp.dtzdx1 = gt1x;
+    sp.sz1 = sp.tz1 = 0.0f;
+  }
 
   for (part = 0; part < 2; part++) {
     y = T.part[part].ya; ye = T.part[part].yb;
@@ -165,6 +206,10 @@ void ZB_fillTriangleGeneral(ZBuffer *zb, const ZVtxG *a, const ZVtxG *b,
         sp.sz = Rs + gsx * fx + gsy * fy;
         sp.tz = Rt + gtx * fx + gty * fy;
       }
+      if (mt && (need & ZP_N_ST1)) {
+        sp.sz1 = Rs1 + gs1x * fx + gs1y * fy;
+        sp.tz1 = Rt1 + gt1x * fx + gt1y * fy;
+      }
       if (need & ZP_N_SPEC) {
         sp.sr = (int)(R1 + g1x * fx + g1y * fy);
         sp.sg = (int)(R2 + g2x * fx + g2y * fy);
@@ -184,3 +229,23 @@ void ZB_fillTriangleGeneral(ZBuffer *zb, const ZVtxG *a, const ZVtxG *b,
     }
   }
 }
+
+/* (each instance in its own object - ztriangle_genmt.c includes this file
+   with ZTRI_GEN_MT - so the single-unit one is compiled, inlined and
+   register-allocated exactly as before phase 5) */
+#ifndef ZTRI_GEN_MT
+void ZB_fillTriangleGeneral(ZBuffer *zb, const ZVtxG *a, const ZVtxG *b,
+                            const ZVtxG *c, int textured)
+{
+  (void)textured;
+  fill_general(zb, a, b, c, 0);
+}
+#else
+/* phase 5 O1 */
+void ZB_fillTriangleGeneralMT(ZBuffer *zb, const ZVtxG *a, const ZVtxG *b,
+                              const ZVtxG *c, int textured)
+{
+  (void)textured;
+  fill_general(zb, a, b, c, 1);
+}
+#endif

@@ -188,7 +188,8 @@ void tgl_edge_flag_pointer(int stride, const void *pointer);
 /* ---- plan F7: s31_xform.c, s31_draw.c, texture.c ---- */
 /* glRasterPos (window 0: object coordinates) and glWindowPos (window 1) */
 void tgl_raster_pos(float x, float y, float z, float w, int window);
-/* glPush/PopAttrib: 14 floats, pos[4] colour[4] texcoord[4] distance valid */
+/* glPush/PopAttrib: 18 floats, pos[4] colour[4] texcoord[4] distance valid,
+   then (phase 5 O1) texture unit 1's raster texcoord[4] */
 void tgl_raster_state(float *v, int set);
 void tgl_clip_plane(int plane, const float *eq);
 int tgl_get_clip_plane(int plane, float *eq);             /* 4 or -1 */
@@ -207,6 +208,16 @@ void tgl_copy_tex(int target, int level, int ifmt, int x, int y, int w, int h,
                   int border, int xoff, int yoff, int sub);
 void tgl_get_tex_image(int target, int level, int format, int type, void *pixels);
 int tgl_pixel_transfer_get(int pname, float *v);          /* 1 or -1 */
+
+/* ---- phase 5 O1: GL_ARB_multitexture, GL_ARB_texture_env_combine
+   (s31_mtex.c, texture.c) ---- */
+int tgl_max_texture_units(void);        /* 2, or 1 under S31GL_MTEX=0 */
+void tgl_active_texture(int texture);   /* GL_TEXTUREi */
+void tgl_client_active_texture(int texture);
+void tgl_multi_tex_coord(int target, float s, float t, float r, float q);
+/* glTexEnv with a float value (GL_RGB_SCALE, GL_ALPHA_SCALE) */
+void tgl_tex_envf(int target, int pname, float v);
+void tgl_fused_stats(unsigned int out[8]);   /* zpipe_fused.c: s31gl_fused_stats */
 
 #ifdef __cplusplus
 }

@@ -25,6 +25,19 @@ static const char s_extensions[] =
 	"GL_EXT_bgra GL_EXT_blend_color GL_EXT_blend_equation_separate "
 	"GL_EXT_blend_func_separate GL_EXT_blend_minmax GL_EXT_blend_subtract "
 	"GL_EXT_stencil_wrap GL_EXT_texture_object GL_EXT_vertex_array";
+/* phase 5 O1: two texture units (tinygl/source/s31_mtex.c), the combiner
+   with every function, source, operand and scale of the ARB extension
+   (zpipe.c zc_comb; the EXT extension is its subset), and GL_ADD (every
+   base format since plan F4). GL_VERSION stays 1.1: GL 1.3 also needs
+   cube maps, compressed textures, multisample, border clamp and DOT3,
+   which this library does not have. S31GL_MTEX=0 withholds them
+   (tgl_max_texture_units() is then 1) */
+static const char s_extensions_mtex[] =
+	"GL_ARB_multitexture GL_ARB_texture_env_add GL_ARB_texture_env_combine "
+	"GL_EXT_bgra GL_EXT_blend_color GL_EXT_blend_equation_separate "
+	"GL_EXT_blend_func_separate GL_EXT_blend_minmax GL_EXT_blend_subtract "
+	"GL_EXT_stencil_wrap GL_EXT_texture_env_add GL_EXT_texture_env_combine "
+	"GL_EXT_texture_object GL_EXT_vertex_array";
 
 const GLubyte *GLAPIENTRY glGetString(GLenum name)
 {
@@ -38,7 +51,9 @@ const GLubyte *GLAPIENTRY glGetString(GLenum name)
 	case GL_VENDOR: return (const GLubyte *)s_vendor;
 	case GL_RENDERER: return (const GLubyte *)s_renderer;
 	case GL_VERSION: return (const GLubyte *)s_version;
-	case GL_EXTENSIONS: return (const GLubyte *)s_extensions;
+	case GL_EXTENSIONS:
+		return (const GLubyte *)(tgl_max_texture_units() > 1 ?
+					 s_extensions_mtex : s_extensions);
 	default:
 		S31_ERR(GL_INVALID_ENUM);
 		return NULL;

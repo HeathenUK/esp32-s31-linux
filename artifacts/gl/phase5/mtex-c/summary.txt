@@ -1,0 +1,1 @@
+p5: PASS  320x240  strict 0.000% (0 px >16)  tolerant 0.000% (0 px)  max 8  mean 6.61  diff /src/artifacts/gl/phase5/mtex-c/diff-p5.png | log: 27 lines compared, 0 differ

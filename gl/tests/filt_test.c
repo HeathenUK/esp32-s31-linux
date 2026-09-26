@@ -67,10 +67,11 @@ static int canary_intact(void)
 	return 1;
 }
 
-/* the stored texel of an 8-bit RGB triple, unpacked as zpipe.c does */
+/* the stored texel of an 8-bit RGB triple, unpacked as zpipe.c does
+   (phase 5 P: stored rounded to the nearest level) */
 static void t565(const unsigned char *c, float *o)
 {
-	int r = c[0] >> 3, g = c[1] >> 2, b = c[2] >> 3;
+	int r = (c[0] * 31 + 127) / 255, g = (c[1] * 63 + 127) / 255, b = (c[2] * 31 + 127) / 255;
 	o[0] = (float)((r << 3) | (r >> 2));
 	o[1] = (float)((g << 2) | (g >> 4));
 	o[2] = (float)((b << 3) | (b >> 2));
@@ -238,6 +239,15 @@ static int is_col(unsigned short px, const unsigned char *c)
 	return close565(px, f, 1, 2);
 }
 
+/* phase 5 P: frac(lambda) as the trilinear blends take it - Mesa
+   llvmpipe's lambda, half the piecewise-linear log2 (exponent + mantissa -
+   1) of rho^2 (gl/tests/glx_prec.c band 32) */
+static float mesa_frac(float lam)
+{
+	float e = floorf(2.0f * lam), l = 0.5f * (e + powf(2.0f, 2.0f * lam - e) - 1.0f);
+	return l - floorf(l);
+}
+
 static int is_mix(unsigned short px, const unsigned char *a, const unsigned char *b, float w)
 {
 	float f[3];
@@ -273,10 +283,11 @@ static void test_mipmaps(void)
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
 	p = draw_lambda(2.0f); CHECK(is_col(p, lc[2]), "LINEAR_MIPMAP_LINEAR lambda 2: level 2 (%04x)", p);
 	p = draw_lambda(1.5f); CHECK(is_mix(p, lc[1], lc[2], 0.5f), "LINEAR_MIPMAP_LINEAR lambda 1.5: half level 1, half level 2 (%04x)", p);
-	p = draw_lambda(2.25f); CHECK(is_mix(p, lc[2], lc[3], 0.25f), "LINEAR_MIPMAP_LINEAR lambda 2.25: 3/4 level 2, 1/4 level 3 (%04x)", p);
+	p = draw_lambda(2.25f); CHECK(is_mix(p, lc[2], lc[3], mesa_frac(2.25f)), "LINEAR_MIPMAP_LINEAR lambda 2.25: level 2 and 3 by frac(Mesa's lambda) %.3f (%04x)", mesa_frac(2.25f), p);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_LINEAR);
-	/* review 4 R2: two nearest samples blended, weight round(0.2 * 32) / 32 */
-	p = draw_lambda(2.2f); CHECK(is_mix(p, lc[2], lc[3], 6.0f / 32.0f), "NEAREST_MIPMAP_LINEAR lambda 2.2: 13/16 level 2, 3/16 level 3 (%04x)", p);
+	/* review 4 R2: two nearest samples blended by frac(lambda) (phase 5 P:
+	   Mesa's lambda) */
+	p = draw_lambda(2.2f); CHECK(is_mix(p, lc[2], lc[3], mesa_frac(2.2f)), "NEAREST_MIPMAP_LINEAR lambda 2.2: level 2 and 3 by frac(Mesa's lambda) %.3f (%04x)", mesa_frac(2.2f), p);
 	p = draw_lambda(3.0f); CHECK(is_col(p, lc[3]), "NEAREST_MIPMAP_LINEAR lambda 3: level 3 (%04x)", p);
 	/* GL_TEXTURE_MIN_LOD / MAX_LOD clamp lambda (review 4 R4) */
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_NEAREST);

@@ -28,14 +28,16 @@
  *               LIST (list base)
  *   TEXTURE     texture enables, the GL_TEXTURE_1D and 2D bindings, texenv
  *               mode and colour, texgen enables, modes and planes (eye
- *               planes restored in eye coordinates)
+ *               planes restored in eye coordinates); phase 5 O1: per
+ *               texture unit, with the combiner state and the active unit
  *   PIXEL_MODE  pixel transfer scale/bias/shift/offset/map flags, zoom,
  *               read buffer
  *   ENABLE      every capability glIsEnabled knows
  *   EVAL MULTISAMPLE: their enables only (the rest is stubs)
  *   client PIXEL_STORE: every pack/unpack parameter; client VERTEX_ARRAY:
  *               the six array enables, and the vertex, normal, colour and
- *               texcoord pointers
+ *               texcoord pointers (phase 5 O1: each unit's texcoord array,
+ *               and the client-active unit)
  *
  * Inside glNewList the calls are recorded by GL, not executed; building them
  * from gets and sets cannot express that, so they are ignored there with a
@@ -109,13 +111,65 @@ struct material {
 	GLfloat amb[4], dif[4], spe[4], emi[4], shi;
 };
 
+/* phase 5 O1: the texture state of one unit (GL 1.3 table 6.15-6.17) */
+#define MAXUNITS 2
+static const GLenum comb_int[15] = {
+	GL_COMBINE_RGB, GL_COMBINE_ALPHA,
+	GL_SOURCE0_RGB, GL_SOURCE1_RGB, GL_SOURCE2_RGB,
+	GL_SOURCE0_ALPHA, GL_SOURCE1_ALPHA, GL_SOURCE2_ALPHA,
+	GL_OPERAND0_RGB, GL_OPERAND1_RGB, GL_OPERAND2_RGB,
+	GL_OPERAND0_ALPHA, GL_OPERAND1_ALPHA, GL_OPERAND2_ALPHA,
+	GL_TEXTURE_ENV_MODE,
+};
+struct texunit {
+	GLint tex2d, tex1d, env[15];
+	GLfloat texenv_color[4], rgb_scale, alpha_scale;
+	GLint gen_mode[4];
+	GLfloat gen_obj[4][4], gen_eye[4][4];
+	/* the bound objects' own parameters (GL 1.3 table 6.16), [0] the 2D
+	   binding, [1] the 1D one (review G8) */
+	GLint tp_min[2], tp_mag[2], tp_ws[2], tp_wt[2];
+	GLfloat tp_border[2][4], tp_prio[2];
+	GLfloat tp_minlod[2], tp_maxlod[2];	/* GL 1.2 (review 4 R4) */
+	GLint tp_base[2], tp_maxlev[2];
+	/* CURRENT */
+	GLfloat texcoord[4];
+	/* ENABLE / TEXTURE: the unit's capabilities (unit_caps) */
+	unsigned char en[8];
+};
+/* a unit's capabilities: saved per unit, not in the caps table above */
+static const GLenum unit_caps[8] = {
+	GL_TEXTURE_1D, GL_TEXTURE_2D, GL_TEXTURE_3D, GL_TEXTURE_CUBE_MAP,
+	GL_TEXTURE_GEN_S, GL_TEXTURE_GEN_T, GL_TEXTURE_GEN_R, GL_TEXTURE_GEN_Q,
+};
+
+static int is_unit_cap(GLenum cap)
+{
+	int k;
+	for (k = 0; k < 8; k++)
+		if (unit_caps[k] == cap)
+			return 1;
+	return 0;
+}
+
+static int nunits(void)
+{
+	GLint n = 1;
+	glGetIntegerv(GL_MAX_TEXTURE_UNITS, &n);
+	return n < 1 ? 1 : (n > MAXUNITS ? MAXUNITS : n);
+}
+
 struct attrib {
 	struct attrib *next;	/* first: see tgl_bridge.h */
 	GLbitfield mask;
 	unsigned char en[NCAPS];
 	/* CURRENT */
-	GLfloat color[4], normal[3], texcoord[4];
+	GLfloat color[4], normal[3];
 	GLint edge;
+	/* phase 5 O1: the units' state, how many, the active one */
+	int nu;
+	GLint active;
+	struct texunit tu[MAXUNITS];
 	/* POINT, LINE */
 	GLfloat point_size, line_width;
 	GLint stipple_repeat, stipple_pattern;
@@ -154,19 +208,9 @@ struct attrib {
 	GLint hint[5];
 	/* LIST */
 	GLint list_base;
-	/* TEXTURE */
-	GLint tex2d, tex1d, texenv_mode;
-	GLfloat texenv_color[4];
-	GLint gen_mode[4];
-	GLfloat gen_obj[4][4], gen_eye[4][4];
-	/* TEXTURE: the bound objects' own parameters (GL 1.3 table 6.16),
-	   [0] the 2D binding, [1] the 1D one (review G8) */
-	GLint tp_min[2], tp_mag[2], tp_ws[2], tp_wt[2];
-	GLfloat tp_border[2][4], tp_prio[2];
-	GLfloat tp_minlod[2], tp_maxlod[2];	/* GL 1.2 (review 4 R4) */
-	GLint tp_base[2], tp_maxlev[2];
-	/* CURRENT: the raster position (tgl_raster_state) */
-	GLfloat raster[14];
+	/* CURRENT: the raster position (tgl_raster_state; phase 5 O1: unit
+	   1's raster texcoords after the 14 of unit 0's) */
+	GLfloat raster[18];
 	/* TRANSFORM: the clip planes, eye coordinates */
 	GLdouble clip[6][4];
 	/* POLYGON_STIPPLE */
@@ -253,12 +297,99 @@ static void set_light(int i, const struct light *l)
 	glLightf(n, GL_QUADRATIC_ATTENUATION, l->att[2]);
 }
 
+/* phase 5 O1: one unit's part of a push, that unit active */
+static void push_unit(const struct attrib *a, struct texunit *t, GLbitfield mask)
+{
+	int i, k;
+	(void)a;
+	if (mask & (GL_ENABLE_BIT | GL_TEXTURE_BIT))
+		for (k = 0; k < 8; k++)
+			t->en[k] = glIsEnabled(unit_caps[k]);
+	if (mask & GL_CURRENT_BIT)
+		glGetFloatv(GL_CURRENT_TEXTURE_COORDS, t->texcoord);
+	if (!(mask & GL_TEXTURE_BIT))
+		return;
+	glGetIntegerv(GL_TEXTURE_BINDING_2D, &t->tex2d);
+	glGetIntegerv(GL_TEXTURE_BINDING_1D, &t->tex1d);
+	for (k = 0; k < 15; k++)
+		glGetTexEnviv(GL_TEXTURE_ENV, comb_int[k], &t->env[k]);
+	glGetTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, t->texenv_color);
+	glGetTexEnvfv(GL_TEXTURE_ENV, GL_RGB_SCALE, &t->rgb_scale);
+	glGetTexEnvfv(GL_TEXTURE_ENV, GL_ALPHA_SCALE, &t->alpha_scale);
+	for (i = 0; i < 4; i++) {
+		glGetTexGeniv(GL_S + i, GL_TEXTURE_GEN_MODE, &t->gen_mode[i]);
+		glGetTexGenfv(GL_S + i, GL_OBJECT_PLANE, t->gen_obj[i]);
+		glGetTexGenfv(GL_S + i, GL_EYE_PLANE, t->gen_eye[i]);
+	}
+	for (i = 0; i < 2; i++) {
+		GLenum tg = i ? GL_TEXTURE_1D : GL_TEXTURE_2D;
+		glGetTexParameteriv(tg, GL_TEXTURE_MIN_FILTER, &t->tp_min[i]);
+		glGetTexParameteriv(tg, GL_TEXTURE_MAG_FILTER, &t->tp_mag[i]);
+		glGetTexParameteriv(tg, GL_TEXTURE_WRAP_S, &t->tp_ws[i]);
+		glGetTexParameteriv(tg, GL_TEXTURE_WRAP_T, &t->tp_wt[i]);
+		glGetTexParameterfv(tg, GL_TEXTURE_BORDER_COLOR, t->tp_border[i]);
+		glGetTexParameterfv(tg, GL_TEXTURE_PRIORITY, &t->tp_prio[i]);
+		glGetTexParameterfv(tg, GL_TEXTURE_MIN_LOD, &t->tp_minlod[i]);
+		glGetTexParameterfv(tg, GL_TEXTURE_MAX_LOD, &t->tp_maxlod[i]);
+		glGetTexParameteriv(tg, GL_TEXTURE_BASE_LEVEL, &t->tp_base[i]);
+		glGetTexParameteriv(tg, GL_TEXTURE_MAX_LEVEL, &t->tp_maxlev[i]);
+	}
+}
+
+/* ... and of a pop */
+static void pop_unit(int u, const struct texunit *t, GLbitfield mask)
+{
+	int i, k;
+	if (mask & (GL_ENABLE_BIT | GL_TEXTURE_BIT))
+		for (k = 0; k < 8; k++) {
+			if (t->en[k])
+				glEnable(unit_caps[k]);
+			else
+				glDisable(unit_caps[k]);
+		}
+	if (mask & GL_CURRENT_BIT)
+		glMultiTexCoord4fv(GL_TEXTURE0 + u, t->texcoord);
+	if (mask & GL_TEXTURE_BIT) {
+		GLint mode;
+		GLfloat mv[16];
+
+		glBindTexture(GL_TEXTURE_2D, t->tex2d);
+		glBindTexture(GL_TEXTURE_1D, t->tex1d);
+		/* onto the objects just rebound: the ones bound at the push */
+		for (i = 0; i < 2; i++) {
+			GLenum tg = i ? GL_TEXTURE_1D : GL_TEXTURE_2D;
+			glTexParameteri(tg, GL_TEXTURE_MIN_FILTER, t->tp_min[i]);
+			glTexParameteri(tg, GL_TEXTURE_MAG_FILTER, t->tp_mag[i]);
+			glTexParameteri(tg, GL_TEXTURE_WRAP_S, t->tp_ws[i]);
+			glTexParameteri(tg, GL_TEXTURE_WRAP_T, t->tp_wt[i]);
+			glTexParameterfv(tg, GL_TEXTURE_BORDER_COLOR, t->tp_border[i]);
+			glTexParameterf(tg, GL_TEXTURE_PRIORITY, t->tp_prio[i]);
+			glTexParameterf(tg, GL_TEXTURE_MIN_LOD, t->tp_minlod[i]);
+			glTexParameterf(tg, GL_TEXTURE_MAX_LOD, t->tp_maxlod[i]);
+			glTexParameteri(tg, GL_TEXTURE_BASE_LEVEL, t->tp_base[i]);
+			glTexParameteri(tg, GL_TEXTURE_MAX_LEVEL, t->tp_maxlev[i]);
+		}
+		for (k = 0; k < 15; k++)
+			glTexEnvi(GL_TEXTURE_ENV, comb_int[k], t->env[k]);
+		glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, t->texenv_color);
+		glTexEnvf(GL_TEXTURE_ENV, GL_RGB_SCALE, t->rgb_scale);
+		glTexEnvf(GL_TEXTURE_ENV, GL_ALPHA_SCALE, t->alpha_scale);
+		eye_begin(&mode, mv);
+		for (i = 0; i < 4; i++) {
+			glTexGeni(GL_S + i, GL_TEXTURE_GEN_MODE, t->gen_mode[i]);
+			glTexGenfv(GL_S + i, GL_OBJECT_PLANE, t->gen_obj[i]);
+			glTexGenfv(GL_S + i, GL_EYE_PLANE, t->gen_eye[i]);
+		}
+		eye_end(mode, mv);
+	}
+}
+
 void GLAPIENTRY glPushAttrib(GLbitfield mask)
 {
 	struct tgl_attrib_slots *sl;
 	struct attrib *a;
 	GLint max = 16;
-	int i;
+	int i, u;
 
 	if (!usable("glPushAttrib/glPopAttrib inside a display list"))
 		return;
@@ -275,12 +406,22 @@ void GLAPIENTRY glPushAttrib(GLbitfield mask)
 	}
 	a->mask = mask;
 	for (i = 0; i < NCAPS; i++)
-		if (caps[i].groups & mask || mask & GL_ENABLE_BIT)
+		if ((caps[i].groups & mask || mask & GL_ENABLE_BIT) &&
+		    !is_unit_cap(caps[i].cap))
 			a->en[i] = glIsEnabled(caps[i].cap);
+	/* phase 5 O1: each unit's state with that unit active */
+	a->nu = nunits();
+	glGetIntegerv(GL_ACTIVE_TEXTURE, &a->active);
+	for (u = 0; u < a->nu; u++) {
+		if (a->nu > 1)
+			glActiveTexture(GL_TEXTURE0 + u);
+		push_unit(a, &a->tu[u], mask);
+	}
+	if (a->nu > 1)
+		glActiveTexture(a->active);
 	if (mask & GL_CURRENT_BIT) {
 		glGetFloatv(GL_CURRENT_COLOR, a->color);
 		glGetFloatv(GL_CURRENT_NORMAL, a->normal);
-		glGetFloatv(GL_CURRENT_TEXTURE_COORDS, a->texcoord);
 		glGetIntegerv(GL_EDGE_FLAG, &a->edge);
 		tgl_raster_state(a->raster, 0);
 	}
@@ -401,30 +542,6 @@ void GLAPIENTRY glPushAttrib(GLbitfield mask)
 			glGetIntegerv(hints[i], &a->hint[i]);
 	if (mask & GL_LIST_BIT)
 		glGetIntegerv(GL_LIST_BASE, &a->list_base);
-	if (mask & GL_TEXTURE_BIT) {
-		glGetIntegerv(GL_TEXTURE_BINDING_2D, &a->tex2d);
-		glGetIntegerv(GL_TEXTURE_BINDING_1D, &a->tex1d);
-		glGetTexEnviv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, &a->texenv_mode);
-		glGetTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, a->texenv_color);
-		for (i = 0; i < 4; i++) {
-			glGetTexGeniv(GL_S + i, GL_TEXTURE_GEN_MODE, &a->gen_mode[i]);
-			glGetTexGenfv(GL_S + i, GL_OBJECT_PLANE, a->gen_obj[i]);
-			glGetTexGenfv(GL_S + i, GL_EYE_PLANE, a->gen_eye[i]);
-		}
-		for (i = 0; i < 2; i++) {
-			GLenum tg = i ? GL_TEXTURE_1D : GL_TEXTURE_2D;
-			glGetTexParameteriv(tg, GL_TEXTURE_MIN_FILTER, &a->tp_min[i]);
-			glGetTexParameteriv(tg, GL_TEXTURE_MAG_FILTER, &a->tp_mag[i]);
-			glGetTexParameteriv(tg, GL_TEXTURE_WRAP_S, &a->tp_ws[i]);
-			glGetTexParameteriv(tg, GL_TEXTURE_WRAP_T, &a->tp_wt[i]);
-			glGetTexParameterfv(tg, GL_TEXTURE_BORDER_COLOR, a->tp_border[i]);
-			glGetTexParameterfv(tg, GL_TEXTURE_PRIORITY, &a->tp_prio[i]);
-			glGetTexParameterfv(tg, GL_TEXTURE_MIN_LOD, &a->tp_minlod[i]);
-			glGetTexParameterfv(tg, GL_TEXTURE_MAX_LOD, &a->tp_maxlod[i]);
-			glGetTexParameteriv(tg, GL_TEXTURE_BASE_LEVEL, &a->tp_base[i]);
-			glGetTexParameteriv(tg, GL_TEXTURE_MAX_LEVEL, &a->tp_maxlev[i]);
-		}
-	}
 	a->next = sl->attrib_top;
 	sl->attrib_top = a;
 	sl->attrib_depth++;
@@ -435,7 +552,8 @@ void GLAPIENTRY glPopAttrib(void)
 	struct tgl_attrib_slots *sl;
 	struct attrib *a;
 	GLbitfield mask;
-	int i;
+	GLint cur;
+	int i, u;
 
 	if (!usable("glPushAttrib/glPopAttrib inside a display list"))
 		return;
@@ -452,12 +570,23 @@ void GLAPIENTRY glPopAttrib(void)
 	/* enables first: the setters below do not depend on them, except the
 	 * current colour under GL_COLOR_MATERIAL (handled there) */
 	for (i = 0; i < NCAPS; i++)
-		if (caps[i].groups & mask || mask & GL_ENABLE_BIT) {
+		if ((caps[i].groups & mask || mask & GL_ENABLE_BIT) &&
+		    !is_unit_cap(caps[i].cap)) {
 			if (a->en[i])
 				glEnable(caps[i].cap);
 			else
 				glDisable(caps[i].cap);
 		}
+	/* phase 5 O1: each unit's with that unit active; then the active
+	   unit of the push (GL_TEXTURE_BIT) or the one active now */
+	glGetIntegerv(GL_ACTIVE_TEXTURE, &cur);
+	for (u = 0; u < a->nu; u++) {
+		if (a->nu > 1)
+			glActiveTexture(GL_TEXTURE0 + u);
+		pop_unit(u, &a->tu[u], mask);
+	}
+	if (a->nu > 1)
+		glActiveTexture(mask & GL_TEXTURE_BIT ? a->active : cur);
 	if (mask & GL_POINT_BIT)
 		glPointSize(a->point_size);
 	if (mask & GL_LINE_BIT) {
@@ -509,7 +638,6 @@ void GLAPIENTRY glPopAttrib(void)
 		if (cm)
 			glEnable(GL_COLOR_MATERIAL);
 		glNormal3fv(a->normal);
-		glTexCoord4fv(a->texcoord);
 		glEdgeFlag(a->edge ? GL_TRUE : GL_FALSE);
 		tgl_raster_state(a->raster, 1);
 	}
@@ -596,36 +724,6 @@ void GLAPIENTRY glPopAttrib(void)
 			glHint(hints[i], a->hint[i]);
 	if (mask & GL_LIST_BIT)
 		glListBase(a->list_base);
-	if (mask & GL_TEXTURE_BIT) {
-		GLint mode;
-		GLfloat mv[16];
-
-		glBindTexture(GL_TEXTURE_2D, a->tex2d);
-		glBindTexture(GL_TEXTURE_1D, a->tex1d);
-		/* onto the objects just rebound: the ones bound at the push */
-		for (i = 0; i < 2; i++) {
-			GLenum tg = i ? GL_TEXTURE_1D : GL_TEXTURE_2D;
-			glTexParameteri(tg, GL_TEXTURE_MIN_FILTER, a->tp_min[i]);
-			glTexParameteri(tg, GL_TEXTURE_MAG_FILTER, a->tp_mag[i]);
-			glTexParameteri(tg, GL_TEXTURE_WRAP_S, a->tp_ws[i]);
-			glTexParameteri(tg, GL_TEXTURE_WRAP_T, a->tp_wt[i]);
-			glTexParameterfv(tg, GL_TEXTURE_BORDER_COLOR, a->tp_border[i]);
-			glTexParameterf(tg, GL_TEXTURE_PRIORITY, a->tp_prio[i]);
-			glTexParameterf(tg, GL_TEXTURE_MIN_LOD, a->tp_minlod[i]);
-			glTexParameterf(tg, GL_TEXTURE_MAX_LOD, a->tp_maxlod[i]);
-			glTexParameteri(tg, GL_TEXTURE_BASE_LEVEL, a->tp_base[i]);
-			glTexParameteri(tg, GL_TEXTURE_MAX_LEVEL, a->tp_maxlev[i]);
-		}
-		glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, a->texenv_mode);
-		glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, a->texenv_color);
-		eye_begin(&mode, mv);
-		for (i = 0; i < 4; i++) {
-			glTexGeni(GL_S + i, GL_TEXTURE_GEN_MODE, a->gen_mode[i]);
-			glTexGenfv(GL_S + i, GL_OBJECT_PLANE, a->gen_obj[i]);
-			glTexGenfv(GL_S + i, GL_EYE_PLANE, a->gen_eye[i]);
-		}
-		eye_end(mode, mv);
-	}
 	free(a);
 }
 
@@ -655,7 +753,12 @@ struct client {
 	GLbitfield mask;
 	GLint store[16];
 	unsigned char en[6];
-	struct array_ptr v, n, c, t;
+	struct array_ptr v, n, c;
+	/* phase 5 O1: each unit's texcoord array, and the client-active unit */
+	int nu;
+	GLint cactive;
+	unsigned char ten[MAXUNITS];
+	struct array_ptr t[MAXUNITS];
 };
 
 void GLAPIENTRY glPushClientAttrib(GLbitfield mask)
@@ -696,10 +799,20 @@ void GLAPIENTRY glPushClientAttrib(GLbitfield mask)
 		glGetIntegerv(GL_COLOR_ARRAY_TYPE, &a->c.type);
 		glGetIntegerv(GL_COLOR_ARRAY_STRIDE, &a->c.stride);
 		glGetPointerv(GL_COLOR_ARRAY_POINTER, &a->c.ptr);
-		glGetIntegerv(GL_TEXTURE_COORD_ARRAY_SIZE, &a->t.size);
-		glGetIntegerv(GL_TEXTURE_COORD_ARRAY_TYPE, &a->t.type);
-		glGetIntegerv(GL_TEXTURE_COORD_ARRAY_STRIDE, &a->t.stride);
-		glGetPointerv(GL_TEXTURE_COORD_ARRAY_POINTER, &a->t.ptr);
+		a->nu = nunits();
+		glGetIntegerv(GL_CLIENT_ACTIVE_TEXTURE, &a->cactive);
+		for (i = 0; i < a->nu; i++) {
+			struct array_ptr *t = &a->t[i];
+			if (a->nu > 1)
+				glClientActiveTexture(GL_TEXTURE0 + i);
+			a->ten[i] = glIsEnabled(GL_TEXTURE_COORD_ARRAY);
+			glGetIntegerv(GL_TEXTURE_COORD_ARRAY_SIZE, &t->size);
+			glGetIntegerv(GL_TEXTURE_COORD_ARRAY_TYPE, &t->type);
+			glGetIntegerv(GL_TEXTURE_COORD_ARRAY_STRIDE, &t->stride);
+			glGetPointerv(GL_TEXTURE_COORD_ARRAY_POINTER, &t->ptr);
+		}
+		if (a->nu > 1)
+			glClientActiveTexture(a->cactive);
 	}
 	a->next = sl->client_top;
 	sl->client_top = a;
@@ -734,15 +847,27 @@ void GLAPIENTRY glPopClientAttrib(void)
 			glNormalPointer(a->n.type, a->n.stride, a->n.ptr);
 		if (a->c.ptr)
 			glColorPointer(a->c.size, a->c.type, a->c.stride, a->c.ptr);
-		if (a->t.ptr)
-			glTexCoordPointer(a->t.size, a->t.type, a->t.stride,
-					  a->t.ptr);
 		for (i = 0; i < 6; i++) {
+			if (arrays[i] == GL_TEXTURE_COORD_ARRAY)
+				continue;	/* per unit, below */
 			if (a->en[i])
 				glEnableClientState(arrays[i]);
 			else
 				glDisableClientState(arrays[i]);
 		}
+		for (i = 0; i < a->nu; i++) {
+			const struct array_ptr *t = &a->t[i];
+			if (a->nu > 1)
+				glClientActiveTexture(GL_TEXTURE0 + i);
+			if (t->ptr)
+				glTexCoordPointer(t->size, t->type, t->stride, t->ptr);
+			if (a->ten[i])
+				glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+			else
+				glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+		}
+		if (a->nu > 1)
+			glClientActiveTexture(a->cactive);
 	}
 	free(a);
 }

@@ -1,0 +1,21 @@
+# The QuakeSpasm proxy at the phase-4 final (246e832, gl/bench/base5), on
+# the trace gl/bench/qstrace/work/p4final/qs.gltr (captured against
+# base5's host libGL: tools/glref/gltrace/capture-qs.sh with
+# QS_LIBGL=/src/gl/bench/base5/out-host/libGL.so.1). gl/tests/run-qsr.sh
+# compares a tree against these lines. M instructions per counted frame
+# (qsreplay.sh, newlib libm; musl gives the same to 4 decimals).
+# (S31GL_TEXFILTER=0 is measured on its own capture, work/p4final-tf0,
+# so its hashes are checked too; the other toggles on work/p4final.)
+# arm | window | frames | Minsn/frame | min | max | texture B after load | texture B at end
+default | 0 | 100-139 | 57.8946 | 47.2963 | 67.8694 | 4892320 | 4999144
+default | 1 | 400-439 | 61.3988 | 48.9907 | 77.2487 | 4892320 | 4999144
+S31GL_TEXFILTER=0 | 0 | 100-139 | 26.9329 | 19.2711 | 33.9082 | 4644124 | 4750948
+S31GL_TEXFILTER=0 | 1 | 400-439 | 27.2208 | 21.7918 | 34.3834 | 4644124 | 4750948
+S31GL_MIPMAPS=0 | 0 | 100-139 | 48.9153 | 39.6580 | 56.6160 | 4644124 | 4750948
+S31GL_MIPMAPS=0 | 1 | 400-439 | 52.5580 | 42.9927 | 64.0998 | 4644124 | 4750948
+S31GL_TRILINEAR=0 | 0 | 100-139 | 50.7164 | 41.3411 | 58.7177 | 4892320 | 4999144
+S31GL_TRILINEAR=0 | 1 | 400-439 | 54.7733 | 44.4887 | 67.0797 | 4892320 | 4999144
+S31GL_PERSPCOLOR=0 | 0 | 100-139 | 57.8449 | 47.2344 | 67.8076 | 4892320 | 4999144
+S31GL_PERSPCOLOR=0 | 1 | 400-439 | 61.3553 | 48.9618 | 77.1916 | 4892320 | 4999144
+harness floor (null) | 0 | 100-139 | 0.3465 | 0.1492 | 0.5760 | 0 | 0
+harness floor (null) | 1 | 400-439 | 0.2370 | 0.1218 | 0.3461 | 0 | 0

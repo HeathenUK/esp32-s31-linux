@@ -737,10 +737,21 @@ void GLAPIENTRY glTexSubImage2D(GLenum target, GLint level, GLint xoffset,
 			    (int)format, (int)type, pixels);
 }
 
+/* phase 5 O1: GL_RGB_SCALE and GL_ALPHA_SCALE are floats (1.0, 2.0 or
+   4.0), whichever form sets them: the value goes to the core as given */
+static int env_scale(GLenum pname)
+{
+	return pname == GL_RGB_SCALE || pname == GL_ALPHA_SCALE;
+}
+
 void GLAPIENTRY glTexEnvi(GLenum target, GLenum pname, GLint param)
 {
 	if (pname == GL_TEXTURE_ENV_COLOR) {
 		S31_ERR(GL_INVALID_ENUM);
+		return;
+	}
+	if (env_scale(pname)) {
+		tgl_tex_envf((int)target, (int)pname, (GLfloat)param);
 		return;
 	}
 	tgl_glTexEnvi((int)target, (int)pname, param);
@@ -748,6 +759,10 @@ void GLAPIENTRY glTexEnvi(GLenum target, GLenum pname, GLint param)
 
 void GLAPIENTRY glTexEnvf(GLenum target, GLenum pname, GLfloat param)
 {
+	if (env_scale(pname)) {
+		tgl_tex_envf((int)target, (int)pname, param);
+		return;
+	}
 	glTexEnvi(target, pname, (GLint)param);
 }
 
@@ -762,7 +777,7 @@ void GLAPIENTRY glTexEnvfv(GLenum target, GLenum pname, const GLfloat *params)
 			    params[3]);
 		return;
 	}
-	glTexEnvi(target, pname, (GLint)params[0]);
+	glTexEnvf(target, pname, params[0]);
 }
 
 void GLAPIENTRY glTexEnviv(GLenum target, GLenum pname, const GLint *params)
@@ -844,17 +859,16 @@ void GLAPIENTRY glPixelStoref(GLenum pname, GLfloat param)
 	tgl_glPixelStorei((int)pname, (GLint)(param < 0 ? param - 0.5f : param + 0.5f));
 }
 
-/* one texture unit (GL_MAX_TEXTURE_UNITS = 1) */
+/* phase 5 O1: two texture units (GL_MAX_TEXTURE_UNITS = 2; one under
+   S31GL_MTEX=0), tinygl/source/s31_mtex.c */
 void GLAPIENTRY glActiveTexture(GLenum texture)
 {
-	if (texture != GL_TEXTURE0)
-		S31_ERR(GL_INVALID_ENUM);
+	tgl_active_texture((int)texture);
 }
 
 void GLAPIENTRY glClientActiveTexture(GLenum texture)
 {
-	if (texture != GL_TEXTURE0)
-		S31_ERR(GL_INVALID_ENUM);
+	tgl_client_active_texture((int)texture);
 }
 
 void GLAPIENTRY glActiveTextureARB(GLenum texture)

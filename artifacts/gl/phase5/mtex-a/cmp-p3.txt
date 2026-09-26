@@ -1,0 +1,1 @@
+PASS  320x240  strict 3.073% (2360 px >16)  tolerant 0.380% (292 px)  max 255  mean 2.93  diff /src/artifacts/gl/phase5/mtex-a/diff-p3.png

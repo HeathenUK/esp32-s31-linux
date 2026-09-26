@@ -61,12 +61,18 @@ int gl_user_clipcode(const GLContext *c, const V4 *pc)
   return code;
 }
 
+static void gl_vertex_texcoord1(GLContext *c, GLVertex *v);
+
 void gl_vertex_extra(GLContext *c, GLVertex *v)
 {
   if (c->vtx_extra & 1)
     gl_vertex_fog(c, v);
   if (c->vtx_extra & 2)
     v->clip_code |= gl_user_clipcode(c, &v->pc);
+  /* phase 5 O1: texture unit 1's coordinates. Before lighting, which
+     overwrites the normal texgen reads (zgl.h GLVertex) */
+  if (c->vtx_extra & 4)
+    gl_vertex_texcoord1(c, v);
 }
 
 void gl_update_xform(GLContext *c)
@@ -83,21 +89,39 @@ void gl_update_xform(GLContext *c)
   for (i = 0; i < 4; i++)
     if ((c->texgen_mask & (1 << i)) && c->texgen_mode[i] != GL_OBJECT_LINEAR)
       c->texgen_eye_needed = 1;
-  if (c->texgen_mask && c->texgen_eye_needed && !c->lighting_enabled)
+  /* phase 5 O1: texture unit 1's texgen, likewise */
+  c->tu1.texgen_eye_needed = 0;
+  for (i = 0; i < 4; i++)
+    if ((c->tu1.texgen_mask & (1 << i)) && c->tu1.texgen_mode[i] != GL_OBJECT_LINEAR)
+      c->tu1.texgen_eye_needed = 1;
+  if (((c->texgen_mask && c->texgen_eye_needed) ||
+       (c->tu1.texgen_mask && c->tu1.texgen_eye_needed)) && !c->lighting_enabled)
     gl_xf_mv_inv_t(c, &c->texgen_mv_inv);
+}
+
+/* phase 5 O1: glBegin with the matrices changed, once unit 1 was used:
+   unit 1's texture matrix and texgen (GLContext.tu1_apply) */
+void gl_tu1_begin(GLContext *c)
+{
+  c->tu1_apply = (!gl_M4_IsId(c->matrix_stack_ptr[3])) | (c->tu1.texgen_mask ? 2 : 0);
+  if (c->tu1.texgen_mask && !(c->clip_plane_mask | c->texgen_mask))
+    gl_update_xform(c);        /* (else glBegin just did) */
 }
 
 /* GL 1.3 2.10.4. obj, eye: the vertex; en: its eye normal (sphere map);
    in: the current texture coordinates; out may be in */
-void gl_texgen_coords(GLContext *c, const V4 *obj, const V4 *eye,
-                      const V3 *en, const V4 *in, V4 *out)
+/* (phase 5 O1: the texgen state as arguments - unit 0's is the context's
+   fields, unit 1's GLContext.tu1) */
+static void texgen_coords(int m, const int *mode, const V4 *tobj, const V4 *teye,
+                          const V4 *obj, const V4 *eye, const V3 *en,
+                          const V4 *in, V4 *out)
 {
   float sm[2] = { 0.0f, 0.0f };
-  int i, m = c->texgen_mask, sphere = 0;
+  int i, sphere = 0;
   V4 r = *in;
 
   for (i = 0; i < 4; i++)
-    if ((m & (1 << i)) && c->texgen_mode[i] == GL_SPHERE_MAP) sphere = 1;
+    if ((m & (1 << i)) && mode[i] == GL_SPHERE_MAP) sphere = 1;
   if (sphere) {
     /* u = the unit eye position, r = u - 2 n (n . u),
        m = 2 sqrt(rx^2 + ry^2 + (rz + 1)^2); s,t = r / m + 1/2 */
@@ -119,13 +143,13 @@ void gl_texgen_coords(GLContext *c, const V4 *obj, const V4 *eye,
   for (i = 0; i < 4; i++) {
     const float *p;
     if (!(m & (1 << i))) continue;
-    switch (c->texgen_mode[i]) {
+    switch (mode[i]) {
     case GL_OBJECT_LINEAR:
-      p = c->texgen_obj[i].v;
+      p = tobj[i].v;
       r.v[i] = p[0] * obj->X + p[1] * obj->Y + p[2] * obj->Z + p[3] * obj->W;
       break;
     case GL_EYE_LINEAR:
-      p = c->texgen_eye[i].v;
+      p = teye[i].v;
       r.v[i] = p[0] * eye->X + p[1] * eye->Y + p[2] * eye->Z + p[3] * eye->W;
       break;
     case GL_SPHERE_MAP:
@@ -138,6 +162,13 @@ void gl_texgen_coords(GLContext *c, const V4 *obj, const V4 *eye,
     }
   }
   *out = r;
+}
+
+void gl_texgen_coords(GLContext *c, const V4 *obj, const V4 *eye,
+                      const V3 *en, const V4 *in, V4 *out)
+{
+  texgen_coords(c->texgen_mask, c->texgen_mode, c->texgen_obj, c->texgen_eye,
+                obj, eye, en, in, out);
 }
 
 /* the eye normal of the current normal: M^-T n, normalised as GL_NORMALIZE
@@ -197,3 +228,34 @@ void gl_vertex_texcoord(GLContext *c, GLVertex *v)
     v->tex_coord = tc;
 }
 
+
+/* phase 5 O1: texture unit 1's coordinates of a vertex, as
+   gl_vertex_texcoord makes unit 0's: texgen (tu1_apply bit 1), then its
+   texture matrix (bit 0) */
+static void gl_vertex_texcoord1(GLContext *c, GLVertex *v)
+{
+  const GLTexUnit *u = &c->tu1;
+  V4 tc = u->cur_tc;
+
+  if (c->tu1_apply & 2) {
+    V4 eye;
+    V3 en = { { 0.0f, 0.0f, 1.0f } };
+    if (u->texgen_eye_needed) {
+      if (c->lighting_enabled) {
+        eye = v->ec;
+        gl_xf_eye_normal(c, &c->matrix_model_view_inv, &en);
+      } else {
+        gl_xf_eye_coords(c, &v->coord, &eye);
+        gl_xf_eye_normal(c, &c->texgen_mv_inv, &en);
+      }
+    } else {
+      eye = v->coord;
+    }
+    texgen_coords(u->texgen_mask, u->texgen_mode, u->texgen_obj, u->texgen_eye,
+                  &v->coord, &eye, &en, &tc, &tc);
+  }
+  if (c->tu1_apply & 1)
+    gl_M4_MulV4(&v->tex_coord1, c->matrix_stack_ptr[3], &tc);
+  else
+    v->tex_coord1 = tc;
+}

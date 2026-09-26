@@ -27,6 +27,9 @@
 #define TEXCOORD_ARRAY 0x0008
 #define EDGEFLAG_ARRAY 0x0010
 #define INDEX_ARRAY    0x0020
+/* phase 5 O1: texture unit 1's coordinate array (glClientActiveTexture;
+   s31_mtex.c tc_swap exchanges it with TEXCOORD_ARRAY for the queries) */
+#define TEXCOORD1_ARRAY 0x0040
 
 static int type_size(int type)
 {
@@ -147,6 +150,28 @@ static void array_element_params(GLContext *c, int idx,
   }
 }
 
+/* phase 5 O1: texture unit 1's array element (glClientActiveTexture),
+   as a glMultiTexCoord op; out of line, so an element without it costs
+   one test of the state word it already holds */
+__attribute__((noinline))
+static void array_tex1(GLContext *c, int idx, GLParam *tex1)
+{
+  const GLTexClient *a = &c->tc1;
+  float v[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+  fetch(ELEM(a->array, a->bstride, idx), a->type, a->size, 0, v);
+  tex1[0].op = OP_MultiTexCoord;
+  tex1[1].i = 1;
+  tex1[2].f = v[0]; tex1[3].f = v[1]; tex1[4].f = v[2]; tex1[5].f = v[3];
+}
+
+__attribute__((noinline))
+static void array_tex1_run(GLContext *c, int idx)
+{
+  GLParam tex1[6];
+  array_tex1(c, idx, tex1);
+  glopMultiTexCoord(c, tex1);
+}
+
 void
 glopArrayElement(GLContext *c, GLParam *param)
 {
@@ -157,6 +182,7 @@ glopArrayElement(GLContext *c, GLParam *param)
   if (states & COLOR_ARRAY) glopColor(c, col);
   if (states & NORMAL_ARRAY) glopNormal(c, nor);
   if (states & TEXCOORD_ARRAY) glopTexCoord(c, tex);
+  if (states & TEXCOORD1_ARRAY) array_tex1_run(c, param[1].i);
   if (states & EDGEFLAG_ARRAY) glopEdgeFlag(c, edge);
   if (states & VERTEX_ARRAY) glopVertex(c, ver);
 }
@@ -164,13 +190,17 @@ glopArrayElement(GLContext *c, GLParam *param)
 /* inside glNewList: the element's values become ordinary ops */
 static void compile_element(GLContext *c, int idx)
 {
-  GLParam col[8], nor[4], tex[5], edge[2], ver[5];
+  GLParam col[8], nor[4], tex[5], edge[2], ver[5], tex1[6];
   int states = c->client_states;
 
   array_element_params(c, idx, col, nor, tex, edge, ver);
   if (states & COLOR_ARRAY) gl_add_op(col);
   if (states & NORMAL_ARRAY) gl_add_op(nor);
   if (states & TEXCOORD_ARRAY) gl_add_op(tex);
+  if (states & TEXCOORD1_ARRAY) {
+    array_tex1(c, idx, tex1);
+    gl_add_op(tex1);
+  }
   if (states & EDGEFLAG_ARRAY) gl_add_op(edge);
   if (states & VERTEX_ARRAY) gl_add_op(ver);
 }
@@ -215,6 +245,8 @@ glEnableClientState(GLenum array)
   GLContext *c = gl_get_context();
   int bit = client_bit(array);
   if (!bit) { gl_set_error(c, GL_INVALID_ENUM); return; }
+  /* phase 5 O1: the texture-coordinate array of the client-active unit */
+  if (bit == TEXCOORD_ARRAY && c->client_tex) bit = TEXCOORD1_ARRAY;
   c->client_states |= bit;
 }
 
@@ -231,6 +263,7 @@ glDisableClientState(GLenum array)
   GLContext *c = gl_get_context();
   int bit = client_bit(array);
   if (!bit) { gl_set_error(c, GL_INVALID_ENUM); return; }
+  if (bit == TEXCOORD_ARRAY && c->client_tex) bit = TEXCOORD1_ARRAY;
   c->client_states &= ~bit;
 }
 
@@ -319,6 +352,16 @@ glTexCoordPointer(GLint size, GLenum type, GLsizei stride,
     gl_set_error(c, GL_INVALID_ENUM);
     return;
   }
+  if (c->client_tex) {
+    /* phase 5 O1: the client-active unit's */
+    GLTexClient *a = &c->tc1;
+    a->size = size;
+    a->type = type;
+    a->stride = stride;
+    a->bstride = stride ? stride : size * type_size(type);
+    a->array = (void *)pointer;
+    return;
+  }
   c->texcoord_array_size = size;
   c->texcoord_array_type = type;
   c->texcoord_array_stride = stride;
@@ -392,11 +435,15 @@ void glopDrawElements(GLContext *c, GLParam *p)
 	if ((c->client_states & VERTEX_ARRAY) && c->begin_type != TGL_BEGIN_DISCARD &&
 	    count > 3 && vcache_ready(c)) {
 		unsigned int gen = ++c->vc_gen;
+		/* phase 5 O1: with texture unit 1 on, the copies take its
+		   coordinates too (the vertex's last field) */
+		void (*vi)(GLContext *, GLParam *, const GLVertex *, GLVertex *) =
+			c->tu1_on ? gl_vertex_indexed_mt : gl_vertex_indexed;
 		for (i = 0; i < count; i++) {
 			int idx = index_at(indices, type, i);
 			int s = idx & (TGL_VCACHE - 1);
 			if (c->vc_tag[s] == gen && c->vc_idx[s] == idx) {
-				gl_vertex_indexed(c, NULL, &c->vc[s], NULL);
+				vi(c, NULL, &c->vc[s], NULL);
 			} else {
 				GLParam col[8], nor[4], tex[5], edge[2], ver[5];
 				int states = c->client_states;
@@ -404,10 +451,11 @@ void glopDrawElements(GLContext *c, GLParam *p)
 				if (states & COLOR_ARRAY) glopColor(c, col);
 				if (states & NORMAL_ARRAY) glopNormal(c, nor);
 				if (states & TEXCOORD_ARRAY) glopTexCoord(c, tex);
+				if (states & TEXCOORD1_ARRAY) array_tex1_run(c, idx);
 				if (states & EDGEFLAG_ARRAY) glopEdgeFlag(c, edge);
 				c->vc_tag[s] = gen;
 				c->vc_idx[s] = idx;
-				gl_vertex_indexed(c, ver, NULL, &c->vc[s]);
+				vi(c, ver, NULL, &c->vc[s]);
 			}
 		}
 	} else {

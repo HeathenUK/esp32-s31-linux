@@ -1,0 +1,1 @@
+p4: PASS  320x240  strict 1.868% (1435 px >16)  tolerant 0.539% (414 px)  max 157  mean 5.12  diff /src/artifacts/gl/phase5/mtex-b/diff-p4.png | log: 34 lines compared, 0 differ

@@ -1,0 +1,9 @@
+- mesa: error src1_rgb one: 0x0
++ ours: error src1_rgb one: 0x500
+- mesa: error active 40: 0x0
++ ours: error active 40: 0x500
+- mesa: query active 0x84e8
++ ours: query active 0x84c0
+- mesa: query active after 0x84e8
++ ours: query active after 0x84c0
+28 lines compared, 4 differ

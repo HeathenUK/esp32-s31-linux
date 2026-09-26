@@ -28,10 +28,38 @@ void glopViewport(GLContext *c,GLParam *p)
   }
 }
 
+static void enable_disable(GLContext *c,int code,int v);
+
 void glopEnableDisable(GLContext *c,GLParam *p)
 {
   int code=p[1].i;
   int v=p[2].i;
+
+  /* s31 (phase 5 O1): the texture targets and texgen are the ACTIVE
+     unit's (s31_mtex.c). Unit 1's targets directly - a multitexturing
+     game switches GL_TEXTURE_2D on unit 1 once per surface batch - its
+     texgen through the unit exchange */
+  if (c->active_tex && s31_cap_is_unit(code)) {
+    if (code == GL_TEXTURE_2D || code == GL_TEXTURE_1D) {
+      GLTexUnit *u = &c->tu1;
+      int bit = code == GL_TEXTURE_2D ? 1 : 2;   /* capbits: 1D bit 0, 2D bit 1 */
+      if (v) u->enables |= bit; else u->enables &= ~bit;
+      u->any_enabled = u->enables != 0;
+      bit = code == GL_TEXTURE_2D ? 2 : 1;
+      u->capbits = v ? u->capbits | bit : u->capbits & ~bit;
+      c->raster_dirty = 1;
+      return;
+    }
+    tu_swap(c);
+    enable_disable(c, code, v);
+    tu_swap(c);
+    return;
+  }
+  enable_disable(c, code, v);
+}
+
+static void enable_disable(GLContext *c,int code,int v)
+{
 
   /* s31: every capability is recorded for glIsEnabled; the ones the
      rasteriser does not honour yet say so once */

@@ -1,0 +1,41 @@
+# glref run: impl=mesa name=p4 frame=2 display=:90
+# cmd: /src/gl/out-host/glx_mtex 4
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /lib/aarch64-linux-gnu/libGL.so.1 (0x0000e237f72f0000)
+#   	libGLdispatch.so.0 => /lib/aarch64-linux-gnu/libGLdispatch.so.0 (0x0000e237f6e30000)
+#   	libGLX.so.0 => /lib/aarch64-linux-gnu/libGLX.so.0 (0x0000e237f6dd0000)
+query ext multitexture 1 combine 1 env_add 1
+query units>=2 1
+query u1 raster tc 0.600 0.300 0.000 1.000
+query u1 tc 0.600 0.300 0.000 1.000
+query u0 raster tc 0.200 0.800 0.000 1.000
+query bitmap u0 en2d 1 en1d 0 b2 0 b1 9 mode 0x2100 minf 0x2600
+query bitmap u1 en2d 1 en1d 0 b2 6 b1 -1 mode 0x2100 minf 0x2600
+read bitmap 16 93 8
+query u1 texmatrix 1.7321 1.0000 -0.7500 0.5000
+query u1 stack 2
+query u0 stack 1
+query u0 texmatrix 1.0000 0.0000 0.0000 0.0000
+query u1 texgen 2402
+query u1 gen_s on 0
+query u0 texgen 2400
+query u1 array 1
+query u1 ptr 1
+query u1 tcsize 2
+query client active 0x84c1
+query active after list 0x84c0
+query u1 binding after list 1
+query active after pop 0x84c0
+query u1 enabled after pop 1
+query u1 binding after pop 1
+query u1 mode after pop 0x2100
+query u1 tc after pop 0.500 1.000
+query u0 enabled after pop 1
+query client active after pop 0x84c1
+query u1 array after pop 1
+query u1 ptr after pop 1
+query u0 array after pop 0
+query u1 current 0.100 0.200 0.300 0.400
+query u0 current 0.500 0.600 0.700 1.000
+error page: 0x0
+glref: ok at swap 2 -> /src/artifacts/gl/phase5/mtex-b/mesa/p4.f2

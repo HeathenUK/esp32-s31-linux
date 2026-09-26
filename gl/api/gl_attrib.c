@@ -444,146 +444,146 @@ void GLAPIENTRY glTexCoord4dv(const GLdouble *v)
 
 void GLAPIENTRY glMultiTexCoord1s(GLenum target, GLshort s)
 {
-	if (target == GL_TEXTURE0) tgl_glTexCoord4f((GLfloat)s, 0.0f, 0.0f, 1.0f); else if (target < GL_TEXTURE0 || target > GL_TEXTURE0 + 31) S31_ERR(GL_INVALID_ENUM);
+	if (target == GL_TEXTURE0) tgl_glTexCoord4f((GLfloat)s, 0.0f, 0.0f, 1.0f); else tgl_multi_tex_coord((int)target, (GLfloat)s, 0.0f, 0.0f, 1.0f);
 }
 void GLAPIENTRY glMultiTexCoord1sv(GLenum target, const GLshort *v)
 {
-	if (target == GL_TEXTURE0) tgl_glTexCoord4f((GLfloat)v[0], 0.0f, 0.0f, 1.0f); else if (target < GL_TEXTURE0 || target > GL_TEXTURE0 + 31) S31_ERR(GL_INVALID_ENUM);
+	if (target == GL_TEXTURE0) tgl_glTexCoord4f((GLfloat)v[0], 0.0f, 0.0f, 1.0f); else tgl_multi_tex_coord((int)target, (GLfloat)v[0], 0.0f, 0.0f, 1.0f);
 }
 
 void GLAPIENTRY glMultiTexCoord1i(GLenum target, GLint s)
 {
-	if (target == GL_TEXTURE0) tgl_glTexCoord4f((GLfloat)s, 0.0f, 0.0f, 1.0f); else if (target < GL_TEXTURE0 || target > GL_TEXTURE0 + 31) S31_ERR(GL_INVALID_ENUM);
+	if (target == GL_TEXTURE0) tgl_glTexCoord4f((GLfloat)s, 0.0f, 0.0f, 1.0f); else tgl_multi_tex_coord((int)target, (GLfloat)s, 0.0f, 0.0f, 1.0f);
 }
 void GLAPIENTRY glMultiTexCoord1iv(GLenum target, const GLint *v)
 {
-	if (target == GL_TEXTURE0) tgl_glTexCoord4f((GLfloat)v[0], 0.0f, 0.0f, 1.0f); else if (target < GL_TEXTURE0 || target > GL_TEXTURE0 + 31) S31_ERR(GL_INVALID_ENUM);
+	if (target == GL_TEXTURE0) tgl_glTexCoord4f((GLfloat)v[0], 0.0f, 0.0f, 1.0f); else tgl_multi_tex_coord((int)target, (GLfloat)v[0], 0.0f, 0.0f, 1.0f);
 }
 
 void GLAPIENTRY glMultiTexCoord1f(GLenum target, GLfloat s)
 {
-	if (target == GL_TEXTURE0) tgl_glTexCoord4f(s, 0.0f, 0.0f, 1.0f); else if (target < GL_TEXTURE0 || target > GL_TEXTURE0 + 31) S31_ERR(GL_INVALID_ENUM);
+	if (target == GL_TEXTURE0) tgl_glTexCoord4f(s, 0.0f, 0.0f, 1.0f); else tgl_multi_tex_coord((int)target, s, 0.0f, 0.0f, 1.0f);
 }
 void GLAPIENTRY glMultiTexCoord1fv(GLenum target, const GLfloat *v)
 {
-	if (target == GL_TEXTURE0) tgl_glTexCoord4f(v[0], 0.0f, 0.0f, 1.0f); else if (target < GL_TEXTURE0 || target > GL_TEXTURE0 + 31) S31_ERR(GL_INVALID_ENUM);
+	if (target == GL_TEXTURE0) tgl_glTexCoord4f(v[0], 0.0f, 0.0f, 1.0f); else tgl_multi_tex_coord((int)target, v[0], 0.0f, 0.0f, 1.0f);
 }
 
 void GLAPIENTRY glMultiTexCoord1d(GLenum target, GLdouble s)
 {
-	if (target == GL_TEXTURE0) tgl_glTexCoord4f(s31_d2f(s), 0.0f, 0.0f, 1.0f); else if (target < GL_TEXTURE0 || target > GL_TEXTURE0 + 31) S31_ERR(GL_INVALID_ENUM);
+	if (target == GL_TEXTURE0) tgl_glTexCoord4f(s31_d2f(s), 0.0f, 0.0f, 1.0f); else tgl_multi_tex_coord((int)target, s31_d2f(s), 0.0f, 0.0f, 1.0f);
 }
 void GLAPIENTRY glMultiTexCoord1dv(GLenum target, const GLdouble *v)
 {
-	if (target == GL_TEXTURE0) tgl_glTexCoord4f(s31_d2f(v[0]), 0.0f, 0.0f, 1.0f); else if (target < GL_TEXTURE0 || target > GL_TEXTURE0 + 31) S31_ERR(GL_INVALID_ENUM);
+	if (target == GL_TEXTURE0) tgl_glTexCoord4f(s31_d2f(v[0]), 0.0f, 0.0f, 1.0f); else tgl_multi_tex_coord((int)target, s31_d2f(v[0]), 0.0f, 0.0f, 1.0f);
 }
 
 void GLAPIENTRY glMultiTexCoord2s(GLenum target, GLshort s, GLshort t)
 {
-	if (target == GL_TEXTURE0) tgl_glTexCoord4f((GLfloat)s, (GLfloat)t, 0.0f, 1.0f); else if (target < GL_TEXTURE0 || target > GL_TEXTURE0 + 31) S31_ERR(GL_INVALID_ENUM);
+	if (target == GL_TEXTURE0) tgl_glTexCoord4f((GLfloat)s, (GLfloat)t, 0.0f, 1.0f); else tgl_multi_tex_coord((int)target, (GLfloat)s, (GLfloat)t, 0.0f, 1.0f);
 }
 void GLAPIENTRY glMultiTexCoord2sv(GLenum target, const GLshort *v)
 {
-	if (target == GL_TEXTURE0) tgl_glTexCoord4f((GLfloat)v[0], (GLfloat)v[1], 0.0f, 1.0f); else if (target < GL_TEXTURE0 || target > GL_TEXTURE0 + 31) S31_ERR(GL_INVALID_ENUM);
+	if (target == GL_TEXTURE0) tgl_glTexCoord4f((GLfloat)v[0], (GLfloat)v[1], 0.0f, 1.0f); else tgl_multi_tex_coord((int)target, (GLfloat)v[0], (GLfloat)v[1], 0.0f, 1.0f);
 }
 
 void GLAPIENTRY glMultiTexCoord2i(GLenum target, GLint s, GLint t)
 {
-	if (target == GL_TEXTURE0) tgl_glTexCoord4f((GLfloat)s, (GLfloat)t, 0.0f, 1.0f); else if (target < GL_TEXTURE0 || target > GL_TEXTURE0 + 31) S31_ERR(GL_INVALID_ENUM);
+	if (target == GL_TEXTURE0) tgl_glTexCoord4f((GLfloat)s, (GLfloat)t, 0.0f, 1.0f); else tgl_multi_tex_coord((int)target, (GLfloat)s, (GLfloat)t, 0.0f, 1.0f);
 }
 void GLAPIENTRY glMultiTexCoord2iv(GLenum target, const GLint *v)
 {
-	if (target == GL_TEXTURE0) tgl_glTexCoord4f((GLfloat)v[0], (GLfloat)v[1], 0.0f, 1.0f); else if (target < GL_TEXTURE0 || target > GL_TEXTURE0 + 31) S31_ERR(GL_INVALID_ENUM);
+	if (target == GL_TEXTURE0) tgl_glTexCoord4f((GLfloat)v[0], (GLfloat)v[1], 0.0f, 1.0f); else tgl_multi_tex_coord((int)target, (GLfloat)v[0], (GLfloat)v[1], 0.0f, 1.0f);
 }
 
 void GLAPIENTRY glMultiTexCoord2f(GLenum target, GLfloat s, GLfloat t)
 {
-	if (target == GL_TEXTURE0) tgl_glTexCoord4f(s, t, 0.0f, 1.0f); else if (target < GL_TEXTURE0 || target > GL_TEXTURE0 + 31) S31_ERR(GL_INVALID_ENUM);
+	if (target == GL_TEXTURE0) tgl_glTexCoord4f(s, t, 0.0f, 1.0f); else tgl_multi_tex_coord((int)target, s, t, 0.0f, 1.0f);
 }
 void GLAPIENTRY glMultiTexCoord2fv(GLenum target, const GLfloat *v)
 {
-	if (target == GL_TEXTURE0) tgl_glTexCoord4f(v[0], v[1], 0.0f, 1.0f); else if (target < GL_TEXTURE0 || target > GL_TEXTURE0 + 31) S31_ERR(GL_INVALID_ENUM);
+	if (target == GL_TEXTURE0) tgl_glTexCoord4f(v[0], v[1], 0.0f, 1.0f); else tgl_multi_tex_coord((int)target, v[0], v[1], 0.0f, 1.0f);
 }
 
 void GLAPIENTRY glMultiTexCoord2d(GLenum target, GLdouble s, GLdouble t)
 {
-	if (target == GL_TEXTURE0) tgl_glTexCoord4f(s31_d2f(s), s31_d2f(t), 0.0f, 1.0f); else if (target < GL_TEXTURE0 || target > GL_TEXTURE0 + 31) S31_ERR(GL_INVALID_ENUM);
+	if (target == GL_TEXTURE0) tgl_glTexCoord4f(s31_d2f(s), s31_d2f(t), 0.0f, 1.0f); else tgl_multi_tex_coord((int)target, s31_d2f(s), s31_d2f(t), 0.0f, 1.0f);
 }
 void GLAPIENTRY glMultiTexCoord2dv(GLenum target, const GLdouble *v)
 {
-	if (target == GL_TEXTURE0) tgl_glTexCoord4f(s31_d2f(v[0]), s31_d2f(v[1]), 0.0f, 1.0f); else if (target < GL_TEXTURE0 || target > GL_TEXTURE0 + 31) S31_ERR(GL_INVALID_ENUM);
+	if (target == GL_TEXTURE0) tgl_glTexCoord4f(s31_d2f(v[0]), s31_d2f(v[1]), 0.0f, 1.0f); else tgl_multi_tex_coord((int)target, s31_d2f(v[0]), s31_d2f(v[1]), 0.0f, 1.0f);
 }
 
 void GLAPIENTRY glMultiTexCoord3s(GLenum target, GLshort s, GLshort t, GLshort r)
 {
-	if (target == GL_TEXTURE0) tgl_glTexCoord4f((GLfloat)s, (GLfloat)t, (GLfloat)r, 1.0f); else if (target < GL_TEXTURE0 || target > GL_TEXTURE0 + 31) S31_ERR(GL_INVALID_ENUM);
+	if (target == GL_TEXTURE0) tgl_glTexCoord4f((GLfloat)s, (GLfloat)t, (GLfloat)r, 1.0f); else tgl_multi_tex_coord((int)target, (GLfloat)s, (GLfloat)t, (GLfloat)r, 1.0f);
 }
 void GLAPIENTRY glMultiTexCoord3sv(GLenum target, const GLshort *v)
 {
-	if (target == GL_TEXTURE0) tgl_glTexCoord4f((GLfloat)v[0], (GLfloat)v[1], (GLfloat)v[2], 1.0f); else if (target < GL_TEXTURE0 || target > GL_TEXTURE0 + 31) S31_ERR(GL_INVALID_ENUM);
+	if (target == GL_TEXTURE0) tgl_glTexCoord4f((GLfloat)v[0], (GLfloat)v[1], (GLfloat)v[2], 1.0f); else tgl_multi_tex_coord((int)target, (GLfloat)v[0], (GLfloat)v[1], (GLfloat)v[2], 1.0f);
 }
 
 void GLAPIENTRY glMultiTexCoord3i(GLenum target, GLint s, GLint t, GLint r)
 {
-	if (target == GL_TEXTURE0) tgl_glTexCoord4f((GLfloat)s, (GLfloat)t, (GLfloat)r, 1.0f); else if (target < GL_TEXTURE0 || target > GL_TEXTURE0 + 31) S31_ERR(GL_INVALID_ENUM);
+	if (target == GL_TEXTURE0) tgl_glTexCoord4f((GLfloat)s, (GLfloat)t, (GLfloat)r, 1.0f); else tgl_multi_tex_coord((int)target, (GLfloat)s, (GLfloat)t, (GLfloat)r, 1.0f);
 }
 void GLAPIENTRY glMultiTexCoord3iv(GLenum target, const GLint *v)
 {
-	if (target == GL_TEXTURE0) tgl_glTexCoord4f((GLfloat)v[0], (GLfloat)v[1], (GLfloat)v[2], 1.0f); else if (target < GL_TEXTURE0 || target > GL_TEXTURE0 + 31) S31_ERR(GL_INVALID_ENUM);
+	if (target == GL_TEXTURE0) tgl_glTexCoord4f((GLfloat)v[0], (GLfloat)v[1], (GLfloat)v[2], 1.0f); else tgl_multi_tex_coord((int)target, (GLfloat)v[0], (GLfloat)v[1], (GLfloat)v[2], 1.0f);
 }
 
 void GLAPIENTRY glMultiTexCoord3f(GLenum target, GLfloat s, GLfloat t, GLfloat r)
 {
-	if (target == GL_TEXTURE0) tgl_glTexCoord4f(s, t, r, 1.0f); else if (target < GL_TEXTURE0 || target > GL_TEXTURE0 + 31) S31_ERR(GL_INVALID_ENUM);
+	if (target == GL_TEXTURE0) tgl_glTexCoord4f(s, t, r, 1.0f); else tgl_multi_tex_coord((int)target, s, t, r, 1.0f);
 }
 void GLAPIENTRY glMultiTexCoord3fv(GLenum target, const GLfloat *v)
 {
-	if (target == GL_TEXTURE0) tgl_glTexCoord4f(v[0], v[1], v[2], 1.0f); else if (target < GL_TEXTURE0 || target > GL_TEXTURE0 + 31) S31_ERR(GL_INVALID_ENUM);
+	if (target == GL_TEXTURE0) tgl_glTexCoord4f(v[0], v[1], v[2], 1.0f); else tgl_multi_tex_coord((int)target, v[0], v[1], v[2], 1.0f);
 }
 
 void GLAPIENTRY glMultiTexCoord3d(GLenum target, GLdouble s, GLdouble t, GLdouble r)
 {
-	if (target == GL_TEXTURE0) tgl_glTexCoord4f(s31_d2f(s), s31_d2f(t), s31_d2f(r), 1.0f); else if (target < GL_TEXTURE0 || target > GL_TEXTURE0 + 31) S31_ERR(GL_INVALID_ENUM);
+	if (target == GL_TEXTURE0) tgl_glTexCoord4f(s31_d2f(s), s31_d2f(t), s31_d2f(r), 1.0f); else tgl_multi_tex_coord((int)target, s31_d2f(s), s31_d2f(t), s31_d2f(r), 1.0f);
 }
 void GLAPIENTRY glMultiTexCoord3dv(GLenum target, const GLdouble *v)
 {
-	if (target == GL_TEXTURE0) tgl_glTexCoord4f(s31_d2f(v[0]), s31_d2f(v[1]), s31_d2f(v[2]), 1.0f); else if (target < GL_TEXTURE0 || target > GL_TEXTURE0 + 31) S31_ERR(GL_INVALID_ENUM);
+	if (target == GL_TEXTURE0) tgl_glTexCoord4f(s31_d2f(v[0]), s31_d2f(v[1]), s31_d2f(v[2]), 1.0f); else tgl_multi_tex_coord((int)target, s31_d2f(v[0]), s31_d2f(v[1]), s31_d2f(v[2]), 1.0f);
 }
 
 void GLAPIENTRY glMultiTexCoord4s(GLenum target, GLshort s, GLshort t, GLshort r, GLshort q)
 {
-	if (target == GL_TEXTURE0) tgl_glTexCoord4f((GLfloat)s, (GLfloat)t, (GLfloat)r, (GLfloat)q); else if (target < GL_TEXTURE0 || target > GL_TEXTURE0 + 31) S31_ERR(GL_INVALID_ENUM);
+	if (target == GL_TEXTURE0) tgl_glTexCoord4f((GLfloat)s, (GLfloat)t, (GLfloat)r, (GLfloat)q); else tgl_multi_tex_coord((int)target, (GLfloat)s, (GLfloat)t, (GLfloat)r, (GLfloat)q);
 }
 void GLAPIENTRY glMultiTexCoord4sv(GLenum target, const GLshort *v)
 {
-	if (target == GL_TEXTURE0) tgl_glTexCoord4f((GLfloat)v[0], (GLfloat)v[1], (GLfloat)v[2], (GLfloat)v[3]); else if (target < GL_TEXTURE0 || target > GL_TEXTURE0 + 31) S31_ERR(GL_INVALID_ENUM);
+	if (target == GL_TEXTURE0) tgl_glTexCoord4f((GLfloat)v[0], (GLfloat)v[1], (GLfloat)v[2], (GLfloat)v[3]); else tgl_multi_tex_coord((int)target, (GLfloat)v[0], (GLfloat)v[1], (GLfloat)v[2], (GLfloat)v[3]);
 }
 
 void GLAPIENTRY glMultiTexCoord4i(GLenum target, GLint s, GLint t, GLint r, GLint q)
 {
-	if (target == GL_TEXTURE0) tgl_glTexCoord4f((GLfloat)s, (GLfloat)t, (GLfloat)r, (GLfloat)q); else if (target < GL_TEXTURE0 || target > GL_TEXTURE0 + 31) S31_ERR(GL_INVALID_ENUM);
+	if (target == GL_TEXTURE0) tgl_glTexCoord4f((GLfloat)s, (GLfloat)t, (GLfloat)r, (GLfloat)q); else tgl_multi_tex_coord((int)target, (GLfloat)s, (GLfloat)t, (GLfloat)r, (GLfloat)q);
 }
 void GLAPIENTRY glMultiTexCoord4iv(GLenum target, const GLint *v)
 {
-	if (target == GL_TEXTURE0) tgl_glTexCoord4f((GLfloat)v[0], (GLfloat)v[1], (GLfloat)v[2], (GLfloat)v[3]); else if (target < GL_TEXTURE0 || target > GL_TEXTURE0 + 31) S31_ERR(GL_INVALID_ENUM);
+	if (target == GL_TEXTURE0) tgl_glTexCoord4f((GLfloat)v[0], (GLfloat)v[1], (GLfloat)v[2], (GLfloat)v[3]); else tgl_multi_tex_coord((int)target, (GLfloat)v[0], (GLfloat)v[1], (GLfloat)v[2], (GLfloat)v[3]);
 }
 
 void GLAPIENTRY glMultiTexCoord4f(GLenum target, GLfloat s, GLfloat t, GLfloat r, GLfloat q)
 {
-	if (target == GL_TEXTURE0) tgl_glTexCoord4f(s, t, r, q); else if (target < GL_TEXTURE0 || target > GL_TEXTURE0 + 31) S31_ERR(GL_INVALID_ENUM);
+	if (target == GL_TEXTURE0) tgl_glTexCoord4f(s, t, r, q); else tgl_multi_tex_coord((int)target, s, t, r, q);
 }
 void GLAPIENTRY glMultiTexCoord4fv(GLenum target, const GLfloat *v)
 {
-	if (target == GL_TEXTURE0) tgl_glTexCoord4f(v[0], v[1], v[2], v[3]); else if (target < GL_TEXTURE0 || target > GL_TEXTURE0 + 31) S31_ERR(GL_INVALID_ENUM);
+	if (target == GL_TEXTURE0) tgl_glTexCoord4f(v[0], v[1], v[2], v[3]); else tgl_multi_tex_coord((int)target, v[0], v[1], v[2], v[3]);
 }
 
 void GLAPIENTRY glMultiTexCoord4d(GLenum target, GLdouble s, GLdouble t, GLdouble r, GLdouble q)
 {
-	if (target == GL_TEXTURE0) tgl_glTexCoord4f(s31_d2f(s), s31_d2f(t), s31_d2f(r), s31_d2f(q)); else if (target < GL_TEXTURE0 || target > GL_TEXTURE0 + 31) S31_ERR(GL_INVALID_ENUM);
+	if (target == GL_TEXTURE0) tgl_glTexCoord4f(s31_d2f(s), s31_d2f(t), s31_d2f(r), s31_d2f(q)); else tgl_multi_tex_coord((int)target, s31_d2f(s), s31_d2f(t), s31_d2f(r), s31_d2f(q));
 }
 void GLAPIENTRY glMultiTexCoord4dv(GLenum target, const GLdouble *v)
 {
-	if (target == GL_TEXTURE0) tgl_glTexCoord4f(s31_d2f(v[0]), s31_d2f(v[1]), s31_d2f(v[2]), s31_d2f(v[3])); else if (target < GL_TEXTURE0 || target > GL_TEXTURE0 + 31) S31_ERR(GL_INVALID_ENUM);
+	if (target == GL_TEXTURE0) tgl_glTexCoord4f(s31_d2f(v[0]), s31_d2f(v[1]), s31_d2f(v[2]), s31_d2f(v[3])); else tgl_multi_tex_coord((int)target, s31_d2f(v[0]), s31_d2f(v[1]), s31_d2f(v[2]), s31_d2f(v[3]));
 }
 
 void GLAPIENTRY glMultiTexCoord1sARB(GLenum target, GLshort s) __attribute__((alias("glMultiTexCoord1s")));

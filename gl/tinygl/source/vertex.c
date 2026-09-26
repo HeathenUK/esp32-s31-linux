@@ -1,3 +1,4 @@
+#include <stddef.h>
 #include "zgl.h"
 #include "s31_fmath.h"
 
@@ -379,6 +380,9 @@ void glopBegin(GLContext * c, GLParam * p)
 	                          (c->texgen_mask ? 2 : 0);
 	if (c->clip_plane_mask | c->texgen_mask)
 	    gl_update_xform(c);
+	/* s31 (phase 5 O1): texture unit 1's, once an application used it */
+	if (c->mtex_used)
+	    gl_tu1_begin(c);
 
 	c->matrix_model_projection_updated = 0;
     }
@@ -554,7 +558,7 @@ void gl_vertex_transform(GLContext * c, GLVertex * v)
    passes NULL for both, so its code is what it was. */
 static inline __attribute__((always_inline))
 void gl_vertex_core(GLContext * c, float x, float y, float z, float w,
-                    const GLVertex * hit, GLVertex * save)
+                    const GLVertex * hit, GLVertex * save, int mt)
 {
     GLVertex *v;
     int n, cnt;
@@ -592,7 +596,12 @@ void gl_vertex_core(GLContext * c, float x, float y, float z, float w,
     n++;
 
     if (hit) {
-	*v = *hit;
+	/* s31 (phase 5 O1): texture unit 1's coordinates only when it is
+	   on - they are the vertex's last field, so a frame without it copies
+	   what it copied before */
+	memcpy(v, hit, offsetof(GLVertex, tex_coord1));
+	if (mt)
+	    v->tex_coord1 = hit->tex_coord1;
 	goto assemble;
     }
     v->coord.X = x;
@@ -636,8 +645,11 @@ void gl_vertex_core(GLContext * c, float x, float y, float z, float w,
     /* edge flag */
 
     v->edge_flag = c->current_edge_flag;
-    if (save)
-	*save = *v;
+    if (save) {
+	memcpy(save, v, offsetof(GLVertex, tex_coord1));
+	if (mt)
+	    save->tex_coord1 = v->tex_coord1;
+    }
 
   assemble:
     switch (c->begin_type) {
@@ -756,7 +768,7 @@ void gl_vertex_core(GLContext * c, float x, float y, float z, float w,
    with the context last glVertex4f passes its a0-a3 through unmoved */
 void gl_vertex4f(float x, float y, float z, float w, GLContext * c)
 {
-    gl_vertex_core(c, x, y, z, w, NULL, NULL);
+    gl_vertex_core(c, x, y, z, w, NULL, NULL, 0);
 }
 
 void glopVertex(GLContext * c, GLParam * p)
@@ -764,13 +776,23 @@ void glopVertex(GLContext * c, GLParam * p)
     gl_vertex4f(p[1].f, p[2].f, p[3].f, p[4].f, c);
 }
 
-/* arrays.c: glDrawElements through the vertex cache */
+/* arrays.c: glDrawElements through the vertex cache (phase 5 O1: _mt,
+   with texture unit 1 on, copies its coordinates too; the caller picks one
+   per call) */
 void gl_vertex_indexed(GLContext * c, GLParam * p, const GLVertex * hit, GLVertex * save)
 {
     if (hit)
-	gl_vertex_core(c, 0, 0, 0, 1, hit, NULL);
+	gl_vertex_core(c, 0, 0, 0, 1, hit, NULL, 0);
     else
-	gl_vertex_core(c, p[1].f, p[2].f, p[3].f, p[4].f, NULL, save);
+	gl_vertex_core(c, p[1].f, p[2].f, p[3].f, p[4].f, NULL, save, 0);
+}
+
+void gl_vertex_indexed_mt(GLContext * c, GLParam * p, const GLVertex * hit, GLVertex * save)
+{
+    if (hit)
+	gl_vertex_core(c, 0, 0, 0, 1, hit, NULL, 1);
+    else
+	gl_vertex_core(c, p[1].f, p[2].f, p[3].f, p[4].f, NULL, save, 1);
 }
 
 void glopEnd(GLContext * c, GLParam * param)

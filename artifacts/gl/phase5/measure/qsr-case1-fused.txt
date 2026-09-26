@@ -1,0 +1,92 @@
+# qsreplay p5-fused: GLDIR=/Users/gadyke/esp32-s31-linux/gl TRACE=/Users/gadyke/esp32-s31-linux/gl/bench/qstrace/work/p5mtex/qs.gltr QSR_ENV=
+libGL: context 1 created (pid 1, comm ?)
+libGL: context 2 created (pid 1, comm ?)
+qsrf 98 warm 42102604 ba97bbd4 ba97bbd4 same
+qsrf 99 warm 42516051 606eeabe 606eeabe same
+qsrf 100 count 39822025 0a073d03 0a073d03 same
+qsrf 101 count 38595163 233dab1a 233dab1a same
+qsrf 102 count 36749529 c06a8721 c06a8721 same
+qsrf 103 count 36627166 e1d461d4 e1d461d4 same
+qsrf 104 count 34897035 2ea1b090 2ea1b090 same
+qsrf 105 count 34055745 e0ded024 e0ded024 same
+qsrf 106 count 33328692 9ce0faed 9ce0faed same
+qsrf 107 count 34707628 6f5507b9 6f5507b9 same
+qsrf 108 count 36483080 45e6e4f9 45e6e4f9 same
+qsrf 109 count 37848908 b987b1de b987b1de same
+qsrf 110 count 43762829 fa9157c8 fa9157c8 same
+qsrf 111 count 43835696 024202ae 024202ae same
+qsrf 112 count 42119017 d032f354 d032f354 same
+qsrf 113 count 41904122 8d13acc4 8d13acc4 same
+qsrf 114 count 41427413 eaf3c603 eaf3c603 same
+qsrf 115 count 41095770 5674e1ef 5674e1ef same
+qsrf 116 count 45420025 989ed4ab 989ed4ab same
+qsrf 117 count 45821084 8c9272cd 8c9272cd same
+qsrf 118 count 47911348 1ed31f8b 1ed31f8b same
+qsrf 119 count 49675992 67f9cdd1 67f9cdd1 same
+qsrf 120 count 50436791 de0414a2 de0414a2 same
+qsrf 121 count 50783562 5b404923 5b404923 same
+qsrf 122 count 53661208 3b6823b0 3b6823b0 same
+qsrf 123 count 52826884 9ff4ca52 9ff4ca52 same
+qsrf 124 count 54755533 15ec5792 15ec5792 same
+qsrf 125 count 53864496 2872761b 2872761b same
+qsrf 126 count 52538692 a5d50f93 a5d50f93 same
+qsrf 127 count 50377503 6da3a2b5 6da3a2b5 same
+qsrf 128 count 47622752 4a21fa06 4a21fa06 same
+qsrf 129 count 48203710 e53d1e7c e53d1e7c same
+qsrf 130 count 41828736 0a5dafd7 0a5dafd7 same
+qsrf 131 count 40686396 c67f02aa c67f02aa same
+qsrf 132 count 40210074 c33f3bf0 c33f3bf0 same
+qsrf 133 count 45259326 a69767fe a69767fe same
+qsrf 134 count 45214731 0c77f3bf 0c77f3bf same
+qsrf 135 count 45422434 cc9cef72 cc9cef72 same
+qsrf 136 count 45957748 ea2d8a9d ea2d8a9d same
+qsrf 137 count 47420358 5ebf7388 5ebf7388 same
+qsrf 138 count 46704002 1f5ae6f7 1f5ae6f7 same
+qsrf 139 count 45310301 99a9ca62 99a9ca62 same
+qsrf 398 warm 43833019 06021f30 06021f30 same
+qsrf 399 warm 45616863 dd19c91a dd19c91a same
+qsrf 400 count 49798162 28da1d33 28da1d33 same
+qsrf 401 count 52824131 1446c727 1446c727 same
+qsrf 402 count 54491134 1a8536fb 1a8536fb same
+qsrf 403 count 56231391 f848ce05 f848ce05 same
+qsrf 404 count 56793717 27e07354 27e07354 same
+qsrf 405 count 56930938 46373c61 46373c61 same
+qsrf 406 count 56715181 d0d99dc9 d0d99dc9 same
+qsrf 407 count 56791087 67cb4a60 67cb4a60 same
+qsrf 408 count 56909330 7ffa1547 7ffa1547 same
+qsrf 409 count 57056856 68e15c8e 68e15c8e same
+qsrf 410 count 57223741 149036fc 149036fc same
+qsrf 411 count 57389708 9e9967e5 9e9967e5 same
+qsrf 412 count 57557450 61c04e40 61c04e40 same
+qsrf 413 count 53162850 ab2a0668 ab2a0668 same
+qsrf 414 count 46125743 c405902c c405902c same
+qsrf 415 count 43687126 4e52ebc6 4e52ebc6 same
+qsrf 416 count 42990873 cab02c21 cab02c21 same
+qsrf 417 count 43306084 604b9863 604b9863 same
+qsrf 418 count 40213310 f46806d4 f46806d4 same
+qsrf 419 count 39430466 bce65c33 bce65c33 same
+qsrf 420 count 38237642 19db33e1 19db33e1 same
+qsrf 421 count 37853606 4586b14f 4586b14f same
+qsrf 422 count 37460945 ea2ce1c4 ea2ce1c4 same
+qsrf 423 count 36916995 3a148b43 3a148b43 same
+qsrf 424 count 36213993 24030b20 24030b20 same
+qsrf 425 count 36202314 0ec10a82 0ec10a82 same
+qsrf 426 count 36139584 fa911bc1 fa911bc1 same
+qsrf 427 count 36304428 d0bf8f37 d0bf8f37 same
+qsrf 428 count 36373394 f4795c43 f4795c43 same
+qsrf 429 count 36785963 1fc45caa 1fc45caa same
+qsrf 430 count 36989630 edc72827 edc72827 same
+qsrf 431 count 37566856 4e71d5bf 4e71d5bf same
+qsrf 432 count 38978938 a9c934fa a9c934fa same
+qsrf 433 count 39496892 1c3be967 1c3be967 same
+qsrf 434 count 40269528 270117fd 270117fd same
+qsrf 435 count 42312203 2ec5e6d5 2ec5e6d5 same
+qsrf 436 count 42317343 fb78a62b fb78a62b same
+qsrf 437 count 41818502 c1d4fd63 c1d4fd63 same
+qsrf 438 count 42142548 20261409 20261409 same
+qsrf 439 count 40002679 205145f9 205145f9 same
+qsr p5-fused window 0 frames 100-139: 44.1293 Minsn/frame min 33.3287 max 54.7555 (frame 124), 0 dcalls/frame, hashes 40/40 same as live, tex 4892320 B heap 43176 B at start
+qsr p5-fused window 1 frames 400-439: 45.1503 Minsn/frame min 36.1396 max 57.5575 (frame 412), 0 dcalls/frame, hashes 40/40 same as live, tex 4999144 B heap 45800 B at start
+qsr p5-fused load: 116.04 Minsn before frame 98 (355 state-only frames in all: 262.28 Minsn), warm-up 174.07 Minsn
+qsr p5-fused heap: texture 4892320 B, other 43176 B after the load phase; at the end texture 4999144 B, other 45816 B; peak 6901048 B, 1025 allocations
+qsr p5-fused done: 439 frames, 84 full: 84 same as live, 0 differ

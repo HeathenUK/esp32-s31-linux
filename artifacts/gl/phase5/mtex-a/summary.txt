@@ -1,0 +1,4 @@
+p1: PASS  320x240  strict 3.178% (2441 px >16)  tolerant 0.001% (1 px)  max 255  mean 2.38  diff /src/artifacts/gl/phase5/mtex-a/diff-p1.png | log: 3 lines compared, 0 differ
+p2: PASS  320x240  strict 1.030% (791 px >16)  tolerant 0.000% (0 px)  max 198  mean 0.67  diff /src/artifacts/gl/phase5/mtex-a/diff-p2.png | log: 3 lines compared, 0 differ
+p3: PASS  320x240  strict 3.073% (2360 px >16)  tolerant 0.380% (292 px)  max 255  mean 2.93  diff /src/artifacts/gl/phase5/mtex-a/diff-p3.png | log: 28 lines compared, 4 differ
+p4: PASS  320x240  strict 1.868% (1435 px >16)  tolerant 0.539% (414 px)  max 157  mean 5.12  diff /src/artifacts/gl/phase5/mtex-a/diff-p4.png | log: 32 lines compared, 2 differ

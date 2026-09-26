@@ -1,0 +1,10 @@
+# glref run: impl=ours name=ipers frame=3 display=:92
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/demos/ipers -geometry 320x240+0+0
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000e844edd30000)
+#   	libGLU.so.1 => /src/gl/ref-apps/prefix/lib/libGLU.so.1 (0x0000e844edc80000)
+#   	libglut.so.3 => /src/gl/ref-apps/prefix/lib/libglut.so.3 (0x0000e844edba0000)
+IperS V1.0
+Written by David Bucciarelli (tech.hmw@plus.it)
+libGL: context 1 created (pid 904, comm ipers)
+glref: ok at swap 3 -> /src/artifacts/gl/phase5/p5c/x4/B14/ours/ipers.f3

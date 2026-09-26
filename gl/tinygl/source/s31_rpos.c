@@ -47,7 +47,21 @@ int tgl_get_clip_plane(int plane, float *eq)
 
 /* ------------------------------------------------------------ texgen */
 
+static void tex_gen(GLContext *c, GLParam *p);
+
+/* phase 5 O1: the active unit's (s31_mtex.c) */
 void glopTexGen(GLContext *c, GLParam *p)
+{
+  if (c->active_tex) {
+    tu_swap(c);
+    tex_gen(c, p);
+    tu_swap(c);
+  } else {
+    tex_gen(c, p);
+  }
+}
+
+static void tex_gen(GLContext *c, GLParam *p)
 {
   int i = p[1].i, pname = p[2].i;
   V4 eq = gl_V4_New(p[4].f, p[5].f, p[6].f, p[7].f);
@@ -114,15 +128,18 @@ void tgl_tex_gen(int coord, int pname, int iparam, const float *v)
 int tgl_get_tex_gen(int coord, int pname, float *v)
 {
   GLContext *c = gl_get_context();
-  int i, k;
+  int i, k, n;
   if (coord < GL_S || coord > GL_Q) return -1;
   k = coord - GL_S;
+  if (c->active_tex) tu_swap(c);     /* phase 5 O1: the active unit's */
   switch (pname) {
-  case GL_TEXTURE_GEN_MODE: v[0] = (float)c->texgen_mode[k]; return 1;
-  case GL_OBJECT_PLANE: for (i = 0; i < 4; i++) v[i] = c->texgen_obj[k].v[i]; return 4;
-  case GL_EYE_PLANE: for (i = 0; i < 4; i++) v[i] = c->texgen_eye[k].v[i]; return 4;
-  default: return -1;
+  case GL_TEXTURE_GEN_MODE: v[0] = (float)c->texgen_mode[k]; n = 1; break;
+  case GL_OBJECT_PLANE: for (i = 0; i < 4; i++) v[i] = c->texgen_obj[k].v[i]; n = 4; break;
+  case GL_EYE_PLANE: for (i = 0; i < 4; i++) v[i] = c->texgen_eye[k].v[i]; n = 4; break;
+  default: n = -1; break;
   }
+  if (c->active_tex) tu_swap(c);
+  return n;
 }
 
 /* ------------------------------------------------------------ raster position */
@@ -132,11 +149,28 @@ static float clamp01(float v)
   return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
 }
 
+static void raster_texcoords(GLContext *c, const V4 *obj, const V4 *eye)
+{
+  V4 tc = c->current_tex_coord;
+  int i;
+  if (c->texgen_mask) {
+    V3 en = { { 0.0f, 0.0f, 1.0f } };
+    M4 mit;
+    gl_xf_mv_inv_t(c, &mit);
+    gl_xf_eye_normal(c, &mit, &en);
+    gl_texgen_coords(c, obj, eye, &en, &tc, &tc);
+  }
+  if (!gl_M4_IsId(c->matrix_stack_ptr[2]))
+    gl_M4_MulV4((V4 *)c->raster_tex, c->matrix_stack_ptr[2], &tc);
+  else
+    for (i = 0; i < 4; i++) c->raster_tex[i] = tc.v[i];
+}
+
 /* GL 1.3 2.12: p[1..4] the object coordinates; p[5] = 1 for glWindowPos
    (GL 1.4 2.12, ARB_window_pos): p[1..3] are window coordinates */
 void glopRasterPos(GLContext *c, GLParam *p)
 {
-  V4 obj = gl_V4_New(p[1].f, p[2].f, p[3].f, p[4].f), eye, clip, tc;
+  V4 obj = gl_V4_New(p[1].f, p[2].f, p[3].f, p[4].f), eye, clip;
   const float *m;
   float n = c->depth_range[0], f = c->depth_range[1], winv;
   int i;
@@ -150,6 +184,7 @@ void glopRasterPos(GLContext *c, GLParam *p)
     for (i = 0; i < 4; i++) {
       c->raster_color[i] = c->current_color.v[i];
       c->raster_tex[i] = c->current_tex_coord.v[i];
+      c->tu1.raster_tex[i] = c->tu1.cur_tc.v[i];   /* phase 5 O1 */
     }
     c->raster_distance = 0.0f;
     c->raster_fogz = 0.0f;
@@ -212,19 +247,15 @@ void glopRasterPos(GLContext *c, GLParam *p)
     for (i = 0; i < 4; i++) c->raster_color[i] = c->current_color.v[i];
   }
 
-  /* the raster texture coordinates: texgen, then the texture matrix */
-  tc = c->current_tex_coord;
-  if (c->texgen_mask) {
-    V3 en = { { 0.0f, 0.0f, 1.0f } };
-    M4 mit;
-    gl_xf_mv_inv_t(c, &mit);
-    gl_xf_eye_normal(c, &mit, &en);
-    gl_texgen_coords(c, &obj, &eye, &en, &tc, &tc);
+  /* the raster texture coordinates: texgen, then the texture matrix;
+     phase 5 O1: each unit's, unit 1's with its state in the context
+     fields (tu_swap) */
+  raster_texcoords(c, &obj, &eye);
+  if (c->mtex_used) {
+    tu_swap(c);
+    raster_texcoords(c, &obj, &eye);
+    tu_swap(c);
   }
-  if (!gl_M4_IsId(c->matrix_stack_ptr[2]))
-    gl_M4_MulV4((V4 *)c->raster_tex, c->matrix_stack_ptr[2], &tc);
-  else
-    for (i = 0; i < 4; i++) c->raster_tex[i] = tc.v[i];
 }
 
 void tgl_raster_pos(float x, float y, float z, float w, int window)
@@ -239,7 +270,7 @@ void tgl_raster_pos(float x, float y, float z, float w, int window)
 }
 
 /* glPush/PopAttrib(GL_CURRENT_BIT): pos[4] colour[4] texcoord[4]
-   distance valid */
+   distance valid, then (phase 5 O1) texture unit 1's texcoord[4] */
 void tgl_raster_state(float *v, int set)
 {
   GLContext *c = gl_get_context();
@@ -249,6 +280,7 @@ void tgl_raster_state(float *v, int set)
       c->raster_pos[i] = v[i];
       c->raster_color[i] = v[4 + i];
       c->raster_tex[i] = v[8 + i];
+      c->tu1.raster_tex[i] = v[14 + i];
     }
     c->raster_distance = v[12];
     c->raster_valid = v[13] != 0.0f;
@@ -257,6 +289,7 @@ void tgl_raster_state(float *v, int set)
       v[i] = c->raster_pos[i];
       v[4 + i] = c->raster_color[i];
       v[8 + i] = c->raster_tex[i];
+      v[14 + i] = c->tu1.raster_tex[i];
     }
     v[12] = c->raster_distance;
     v[13] = (float)c->raster_valid;

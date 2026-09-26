@@ -142,6 +142,33 @@ void s31_cap_record(GLContext *c, int cap, int v)
   }
 }
 
+/* phase 5 O1: the capabilities of a texture unit (GL 1.3 table 6.16/6.17:
+   the texture targets and texgen), as 8 bits, exchanged with *bits - the
+   other unit's (s31_mtex.c tu_swap) */
+static const int unit_caps[8] = {
+  GL_TEXTURE_1D, GL_TEXTURE_2D, GL_TEXTURE_3D, GL_TEXTURE_CUBE_MAP,
+  GL_TEXTURE_GEN_S, GL_TEXTURE_GEN_T, GL_TEXTURE_GEN_R, GL_TEXTURE_GEN_Q,
+};
+
+void s31_cap_swap_unit(GLContext *c, unsigned int *bits)
+{
+  unsigned int in = *bits, out = 0;
+  int k;
+  for (k = 0; k < 8; k++) {
+    int i = s31_cap_index(unit_caps[k]);
+    out |= (unsigned int)cap_bit(c, i) << k;
+    cap_set(c, i, (in >> k) & 1);
+  }
+  *bits = out;
+}
+
+int s31_cap_is_unit(int cap)
+{
+  int k;
+  for (k = 0; k < 8; k++) if (unit_caps[k] == cap) return 1;
+  return 0;
+}
+
 /* 0/1, or -1 when cap is not a capability */
 int s31_cap_get(GLContext *c, int cap)
 {
@@ -165,7 +192,15 @@ int s31_cap_get(GLContext *c, int cap)
 int tgl_is_enabled(int cap)
 {
   GLContext *c = gl_get_context();
-  return s31_cap_get(c, cap);
+  int v;
+  /* phase 5 O1: the active unit's capabilities, the client-active unit's
+     texture-coordinate array (s31_mtex.c) */
+  if (c->active_tex) tu_swap(c);
+  if (c->client_tex) tc_swap(c);
+  v = s31_cap_get(c, cap);
+  if (c->client_tex) tc_swap(c);
+  if (c->active_tex) tu_swap(c);
+  return v;
 }
 
 /* GL 1.3 initial values (glspec13 table 6.x) */
@@ -435,7 +470,11 @@ void glopState(GLContext *c, GLParam *p)
   case S31_ST_DRAW_BUFFER: c->draw_buffer = p[2].i; break;
   case S31_ST_READ_BUFFER: c->read_buffer = p[2].i; break;
   case S31_ST_TEXENV_COLOR:
-    for (i = 0; i < 4; i++) c->texenv_color.v[i] = clampf01(p[2 + i].f);
+    /* phase 5 O1: the active unit's */
+    if (c->active_tex)
+      for (i = 0; i < 4; i++) c->tu1.env_color.v[i] = clampf01(p[2 + i].f);
+    else
+      for (i = 0; i < 4; i++) c->texenv_color.v[i] = clampf01(p[2 + i].f);
     break;
   case S31_ST_LIST_BASE: c->list_base = p[2].i; break;
   case S31_ST_PIXEL_ZOOM:

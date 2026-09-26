@@ -33,7 +33,8 @@ void glopMatrixMode(GLContext *c,GLParam *p)
     c->matrix_mode=1;
     break;
   case GL_TEXTURE:
-    c->matrix_mode=2;
+    /* s31 (phase 5 O1): the active unit's stack, [3] for unit 1 */
+    c->matrix_mode=2 + c->active_tex;
     break;
   default:
     gl_set_error(c, GL_INVALID_ENUM);
@@ -259,7 +260,7 @@ void glopFrustum(GLContext *c,GLParam *p)
 }
 
 /* thanks mesa */
-void glopOrtho(GLContext *c, GLParam *p)
+void glopOrtho(GLContext *c,GLParam *p)
 {
 	float left = p[1].f;
 	float right = p[2].f;
@@ -297,3 +298,4 @@ void glopOrtho(GLContext *c, GLParam *p)
 	gl_M4_MulLeft(c->matrix_stack_ptr[c->matrix_mode], (M4 *)m);
 	gl_matrix_update(c);
 }
+

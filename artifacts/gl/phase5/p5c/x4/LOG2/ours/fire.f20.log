@@ -1,0 +1,10 @@
+# glref run: impl=ours name=fire frame=20 display=:90
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/demos/fire -geometry 320x240+0+0
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000e315d8d70000)
+#   	libGLU.so.1 => /src/gl/ref-apps/prefix/lib/libGLU.so.1 (0x0000e315d8cc0000)
+#   	libglut.so.3 => /src/gl/ref-apps/prefix/lib/libglut.so.3 (0x0000e315d8be0000)
+Fire V1.5
+Written by David Bucciarelli (tech.hmw@plus.it)
+libGL: context 1 created (pid 1035, comm fire)
+glref: ok at swap 20 -> /src/artifacts/gl/phase5/p5c/x4/LOG2/ours/fire.f20

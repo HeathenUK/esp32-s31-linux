@@ -7,7 +7,10 @@
  * coordinates, one integer depth plane per triangle. What each filler does
  * per pixel (PUT_PIXEL / DRAW_LINE in ztriangle.c) is TinyGL's, unchanged.
  * Every attribute starts each row at its value at the first pixel's centre:
- *   z, r, g, b  integer planes (ztri_iplane): c + dx x + dy y
+ *   z, r, g, b  integer planes (ztri_iplane): c + dx x + dy y (r, g, b in
+ *               the ZBufferPoint units << ZTRI_CPLANE: the gradients are
+ *               truncated, so the more fraction bits, the less a plane
+ *               strays from the vertices' range across a large triangle)
  *   s/w, t/w, 1/w  float planes about the reference pixel (px, py)
  * so textures sample the texel under the pixel centre, as the general path
  * does (review G2; TinyGL's texture squeeze is gone). The row loop gives
@@ -53,9 +56,13 @@
 #ifdef INTERP_RGB
   {
     const ZBufferPoint *a_ = pv_[T_.o[0]], *b_ = pv_[T_.o[1]], *c_ = pv_[T_.o[2]];
-    ztri_iplane(&T_, a_->r, b_->r, c_->r, &rc_, &drdx, &drdy);
-    ztri_iplane(&T_, a_->g, b_->g, c_->g, &gc_, &dgdx, &dgdy);
-    ztri_iplane(&T_, a_->b, b_->b, c_->b, &bc_, &dbdx, &dbdy);
+    /* (phase 5 P: ZTRI_CPLANE more fraction bits, zbuffer.h) */
+    ztri_iplane(&T_, a_->r << ZTRI_CPLANE, b_->r << ZTRI_CPLANE, c_->r << ZTRI_CPLANE,
+                &rc_, &drdx, &drdy);
+    ztri_iplane(&T_, a_->g << ZTRI_CPLANE, b_->g << ZTRI_CPLANE, c_->g << ZTRI_CPLANE,
+                &gc_, &dgdx, &dgdy);
+    ztri_iplane(&T_, a_->b << ZTRI_CPLANE, b_->b << ZTRI_CPLANE, c_->b << ZTRI_CPLANE,
+                &bc_, &dbdx, &dbdy);
   }
 #endif
 #ifdef INTERP_STZ

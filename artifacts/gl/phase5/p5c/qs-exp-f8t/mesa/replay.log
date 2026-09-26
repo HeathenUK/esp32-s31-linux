@@ -1,0 +1,8 @@
+# glref run: impl=mesa name=replay frame=0 display=:90
+# cmd: /src/artifacts/gl/phase5/p5c/qs-exp-f8t/mesa/bin/qsreplay_host /src/gl/bench/qstrace/work/p5a/qs.gltr /src/artifacts/gl/phase5/p5c/qs-exp-f8t/mesa --frames
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /lib/aarch64-linux-gnu/libGL.so.1 (0x0000ebfe90010000)
+#   	libGLdispatch.so.0 => /lib/aarch64-linux-gnu/libGLdispatch.so.0 (0x0000ebfe8fb50000)
+#   	libGLX.so.0 => /lib/aarch64-linux-gnu/libGLX.so.0 (0x0000ebfe8faf0000)
+qsreplay_host: 439 frames, 84 full: 0 same as live, 84 differ (vendor Mesa)
+qsreplay_host: first differing frame 98

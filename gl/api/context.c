@@ -161,6 +161,11 @@ int s31gl_stencil_bytes(s31gl_ctx *ctx)
 	return ctx ? tgl_ctx_stencil_bytes(ctx->tgl) : 0;
 }
 
+void s31gl_fused_stats(unsigned int out[8])
+{
+	tgl_fused_stats(out);
+}
+
 void s31_hook_viewport(int x, int y, int w, int h)
 {
 	if (current && current->hooks.viewport)

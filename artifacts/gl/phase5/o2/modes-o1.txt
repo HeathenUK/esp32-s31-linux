@@ -1,0 +1,10 @@
+out-qsr-b5mt qsr nmn window 0 frames 100-139: 29.0161 Minsn/frame min 20.6953 max 37.3157 (frame 124), 0 dcalls/frame, hashes 40/40 same as live, tex 4892320 B heap 43176 B at start
+out-qsr-b5mt qsr nmn window 1 frames 400-439: 29.1096 Minsn/frame min 23.0249 max 37.2025 (frame 412), 0 dcalls/frame, hashes 40/40 same as live, tex 4999144 B heap 45800 B at start
+out-qsr-b5mt qsr nml window 0 frames 100-139: 32.2150 Minsn/frame min 23.4246 max 41.4468 (frame 124), 0 dcalls/frame, hashes 40/40 same as live, tex 4892320 B heap 43176 B at start
+out-qsr-b5mt qsr nml window 1 frames 400-439: 32.1644 Minsn/frame min 25.0954 max 41.8913 (frame 412), 0 dcalls/frame, hashes 40/40 same as live, tex 4999144 B heap 45800 B at start
+out-qsr-b5mt qsr lmn window 0 frames 100-139: 37.0679 Minsn/frame min 28.0548 max 45.7519 (frame 124), 0 dcalls/frame, hashes 40/40 same as live, tex 4892320 B heap 43176 B at start
+out-qsr-b5mt qsr lmn window 1 frames 400-439: 38.6488 Minsn/frame min 31.7540 max 47.5753 (frame 412), 0 dcalls/frame, hashes 40/40 same as live, tex 4999144 B heap 45800 B at start
+out-qsr-b5mt qsr lin window 0 frames 100-139: 34.8736 Minsn/frame min 26.1302 max 43.1415 (frame 124), 0 dcalls/frame, hashes 40/40 same as live, tex 4892320 B heap 43176 B at start
+out-qsr-b5mt qsr lin window 1 frames 400-439: 35.9737 Minsn/frame min 29.9445 max 43.9080 (frame 412), 0 dcalls/frame, hashes 40/40 same as live, tex 4999144 B heap 45800 B at start
+out-qsr-b5mt qsr near window 0 frames 100-139: 26.7904 Minsn/frame min 18.7885 max 34.6484 (frame 124), 0 dcalls/frame, hashes 40/40 same as live, tex 4892320 B heap 43176 B at start
+out-qsr-b5mt qsr near window 1 frames 400-439: 26.4086 Minsn/frame min 21.2024 max 33.4900 (frame 412), 0 dcalls/frame, hashes 40/40 same as live, tex 4999144 B heap 45800 B at start

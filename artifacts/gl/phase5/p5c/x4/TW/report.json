@@ -1,0 +1,252 @@
+{
+ "summary": [
+  {
+   "app": "ipers",
+   "verdict": "PASS"
+  },
+  {
+   "app": "fire",
+   "verdict": "FAIL"
+  },
+  {
+   "app": "teapot",
+   "verdict": "FAIL"
+  }
+ ],
+ "rows": [
+  {
+   "app": "ipers",
+   "frame": "3",
+   "impl_result": "ok",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "",
+   "unresolved": "",
+   "notes": [],
+   "cmp": {
+    "max_err": 123,
+    "mean_abs_err": 0.5126171875,
+    "strict_bad": 563,
+    "tolerant_bad": 402,
+    "exact": false,
+    "width": 320,
+    "height": 240,
+    "tol": 16,
+    "max_bad_pct": 1.0,
+    "strict_bad_pct": 0.7330729166666666,
+    "tolerant_bad_pct": 0.5234375,
+    "verdict": "PASS",
+    "diff": "/src/artifacts/gl/phase5/p5c/x4/TW/diff/ipers.f3.png"
+   },
+   "verdict": "PASS"
+  },
+  {
+   "app": "ipers",
+   "frame": "20",
+   "impl_result": "ok",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "",
+   "unresolved": "",
+   "notes": [],
+   "cmp": {
+    "max_err": 123,
+    "mean_abs_err": 0.5057118055555555,
+    "strict_bad": 540,
+    "tolerant_bad": 392,
+    "exact": false,
+    "width": 320,
+    "height": 240,
+    "tol": 16,
+    "max_bad_pct": 1.0,
+    "strict_bad_pct": 0.703125,
+    "tolerant_bad_pct": 0.5104166666666666,
+    "verdict": "PASS",
+    "diff": "/src/artifacts/gl/phase5/p5c/x4/TW/diff/ipers.f20.png"
+   },
+   "verdict": "PASS"
+  },
+  {
+   "app": "ipers",
+   "frame": "60",
+   "impl_result": "ok",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "",
+   "unresolved": "",
+   "notes": [],
+   "cmp": {
+    "max_err": 115,
+    "mean_abs_err": 0.4637109375,
+    "strict_bad": 405,
+    "tolerant_bad": 309,
+    "exact": false,
+    "width": 320,
+    "height": 240,
+    "tol": 16,
+    "max_bad_pct": 1.0,
+    "strict_bad_pct": 0.52734375,
+    "tolerant_bad_pct": 0.40234375,
+    "verdict": "PASS",
+    "diff": "/src/artifacts/gl/phase5/p5c/x4/TW/diff/ipers.f60.png"
+   },
+   "verdict": "PASS"
+  },
+  {
+   "app": "fire",
+   "frame": "3",
+   "impl_result": "ok",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "",
+   "unresolved": "",
+   "notes": [],
+   "cmp": {
+    "max_err": 206,
+    "mean_abs_err": 3.8788715277777777,
+    "strict_bad": 7673,
+    "tolerant_bad": 4317,
+    "exact": false,
+    "width": 320,
+    "height": 240,
+    "tol": 16,
+    "max_bad_pct": 1.0,
+    "strict_bad_pct": 9.990885416666666,
+    "tolerant_bad_pct": 5.62109375,
+    "verdict": "FAIL",
+    "diff": "/src/artifacts/gl/phase5/p5c/x4/TW/diff/fire.f3.png"
+   },
+   "verdict": "FAIL"
+  },
+  {
+   "app": "fire",
+   "frame": "20",
+   "impl_result": "ok",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "",
+   "unresolved": "",
+   "notes": [],
+   "cmp": {
+    "max_err": 134,
+    "mean_abs_err": 4.1009331597222225,
+    "strict_bad": 7736,
+    "tolerant_bad": 4488,
+    "exact": false,
+    "width": 320,
+    "height": 240,
+    "tol": 16,
+    "max_bad_pct": 1.0,
+    "strict_bad_pct": 10.072916666666666,
+    "tolerant_bad_pct": 5.84375,
+    "verdict": "FAIL",
+    "diff": "/src/artifacts/gl/phase5/p5c/x4/TW/diff/fire.f20.png"
+   },
+   "verdict": "FAIL"
+  },
+  {
+   "app": "fire",
+   "frame": "60",
+   "impl_result": "ok",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "",
+   "unresolved": "",
+   "notes": [],
+   "cmp": {
+    "max_err": 134,
+    "mean_abs_err": 3.6322569444444444,
+    "strict_bad": 7054,
+    "tolerant_bad": 4004,
+    "exact": false,
+    "width": 320,
+    "height": 240,
+    "tol": 16,
+    "max_bad_pct": 1.0,
+    "strict_bad_pct": 9.184895833333334,
+    "tolerant_bad_pct": 5.213541666666667,
+    "verdict": "FAIL",
+    "diff": "/src/artifacts/gl/phase5/p5c/x4/TW/diff/fire.f60.png"
+   },
+   "verdict": "FAIL"
+  },
+  {
+   "app": "teapot",
+   "frame": "3",
+   "impl_result": "ok",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "",
+   "unresolved": "",
+   "notes": [],
+   "cmp": {
+    "max_err": 132,
+    "mean_abs_err": 3.431918402777778,
+    "strict_bad": 4263,
+    "tolerant_bad": 2328,
+    "exact": false,
+    "width": 320,
+    "height": 240,
+    "tol": 16,
+    "max_bad_pct": 1.0,
+    "strict_bad_pct": 5.55078125,
+    "tolerant_bad_pct": 3.03125,
+    "verdict": "FAIL",
+    "diff": "/src/artifacts/gl/phase5/p5c/x4/TW/diff/teapot.f3.png"
+   },
+   "verdict": "FAIL"
+  },
+  {
+   "app": "teapot",
+   "frame": "20",
+   "impl_result": "ok",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "",
+   "unresolved": "",
+   "notes": [],
+   "cmp": {
+    "max_err": 132,
+    "mean_abs_err": 3.4131727430555556,
+    "strict_bad": 4122,
+    "tolerant_bad": 2082,
+    "exact": false,
+    "width": 320,
+    "height": 240,
+    "tol": 16,
+    "max_bad_pct": 1.0,
+    "strict_bad_pct": 5.3671875,
+    "tolerant_bad_pct": 2.7109375,
+    "verdict": "FAIL",
+    "diff": "/src/artifacts/gl/phase5/p5c/x4/TW/diff/teapot.f20.png"
+   },
+   "verdict": "FAIL"
+  },
+  {
+   "app": "teapot",
+   "frame": "60",
+   "impl_result": "ok",
+   "ref_result": "ok",
+   "unimplemented": 0,
+   "missing": "",
+   "unresolved": "",
+   "notes": [],
+   "cmp": {
+    "max_err": 132,
+    "mean_abs_err": 3.4143663194444445,
+    "strict_bad": 4208,
+    "tolerant_bad": 2296,
+    "exact": false,
+    "width": 320,
+    "height": 240,
+    "tol": 16,
+    "max_bad_pct": 1.0,
+    "strict_bad_pct": 5.479166666666667,
+    "tolerant_bad_pct": 2.9895833333333335,
+    "verdict": "FAIL",
+    "diff": "/src/artifacts/gl/phase5/p5c/x4/TW/diff/teapot.f60.png"
+   },
+   "verdict": "FAIL"
+  }
+ ]
+}

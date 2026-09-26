@@ -1,0 +1,5 @@
+run-qsr default window 0: 57.9020 Minsn/frame vs phase-4 final 57.8946: +0.01% ok; hashes 40/40 same as live
+run-qsr default window 1: 61.4048 Minsn/frame vs phase-4 final 61.3988: +0.01% ok; hashes 40/40 same as live
+run-qsr tf0 window 0: 26.8496 Minsn/frame vs phase-4 final 26.9329: -0.31% ok; hashes 40/40 same as live
+run-qsr tf0 window 1: 27.1142 Minsn/frame vs phase-4 final 27.2208: -0.39% ok; hashes 40/40 same as live
+QSR_EXIT 0

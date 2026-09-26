@@ -43,6 +43,34 @@ static int texenv_op(int mode, int fmt)
   }
 }
 
+static int tu1_update(GLContext *c);   /* phase 5 O1, below */
+
+/* phase 5 P: whether a unit's texels reach the texenv as 8-bit words
+   (ZTexF.t8): every P8 / L8 / W32 texture, and a filtered RGB565 one - the
+   filters are Mesa's 8-bit ones (s31_tfilt_int.h LERP8W, glx_prec bands 22
+   and 30-32) on the texels UNPACK expands. On the QuakeSpasm trace against
+   Mesa: 1.011 of its view luminance and 71.3% of pixels exact, against
+   1.046 and 57.1% with phase 4's 565 filter (5-bit weights, rounded lerps)
+   for the RGB565 textures - which costs a third of the instructions of the
+   8-bit one on 565 texels (the QuakeSpasm proxy's trilinear world: 163
+   against 415 a pixel), so S31GL_FILT8=1 (GLContext.filt8) is the A/B arm
+   and phase 4's filter the default for RGB565 textures */
+#ifdef S31GL_P4ARITH
+#define UNIT_W8(t, filtered) ((t)->st != TGL_ST_565)
+#else
+#define UNIT_W8(t, filtered) ((t)->st != TGL_ST_565 || ((filtered) && c->filt8))
+#endif
+
+/* phase 5: texenv_op of a texture - an RGBA one stored without its A8
+   plane (a1: every alpha 255) as the RGB ops, except that REPLACE sets
+   the alpha to 255 */
+static int texenv_op_t(int mode, const GLTexture *t)
+{
+  if (t->a1 && t->fmt == TGL_TEXF_RGBA)
+    return mode == GL_REPLACE ? ZP_TE_REPLACE_RGB1 : texenv_op(mode, TGL_TEXF_RGB);
+  return texenv_op(mode, t->fmt);
+}
+
 static int depth_sel(int func)
 {
   switch (func) {
@@ -99,9 +127,8 @@ static int zpx_tri_enabled(void)
    c->pipex. Returns 0 when the texture is drawn exactly as before phase 4
    (nearest in level 0, both filters), 1 when it is filtered. */
 __attribute__((noinline))
-static int zpx_prepare(GLContext *c, const GLTexture *t)
+static int zpx_prepare(GLContext *c, const GLTexture *t, ZTexF *x)
 {
-  ZPipeX *x = &c->pipex;
   int mipf, mip = 0, l, n = t->ws > t->hs ? t->ws : t->hs, F = t->fbits;
   int ws = t->ws, hs = t->hs;
 
@@ -156,13 +183,7 @@ static int zpx_prepare(GLContext *c, const GLTexture *t)
   for (l = 0; l <= x->nlev; l++) {
     ZLevel *L = &x->lvl[l];
     int wl = ws > l ? ws - l : 0, hl = hs > l ? hs - l : 0;
-    if (l == 0) {
-      L->pix = t->images[0].pixmap;
-      L->alpha = t->alpha;
-    } else {
-      L->pix = t->mip->l[l].pix;
-      L->alpha = t->mip->l[l].alpha;
-    }
+    zpx_level_ptrs(t, l, L);      /* (phase 5: and its 8-bit planes) */
     L->ws = wl;
     L->wm = (1 << wl) - 1;
     L->hm = (1 << hl) - 1;
@@ -289,6 +310,42 @@ static int p4_select(GLContext *c)
   return x4;
 }
 
+/* phase 5 (s31_tex8.c): an RGB-class P8 or L8 texture on tier 1 - its
+   plane, and the PACK of each index or grey value (out of line: a frame
+   with no such texture pays one test) */
+__attribute__((noinline))
+static int tier1_t8(ZBuffer *zb, const GLTexture *t)
+{
+  if (t->st == TGL_ST_P8) zb->tex_pal = t->pal0->p565;
+  else if (t->st == TGL_ST_L8 && t->amode == TGL_AM_ONE) zb->tex_pal = s31_grey565;
+  else if (t->st == TGL_ST_W32 && t->amode == TGL_AM_ONE) {
+    /* the unpacked reference (S31GL_TEX8=2) of either: its words */
+    zb->tex_pal = NULL;
+    zb->current_texture = t->images[0].pixmap;
+    zb->tex_shift = t->fbits;                   /* (the filler indexes words) */
+    return 2;
+  } else return 0;
+  zb->current_texture = t->images[0].pixmap;
+  zb->tex_shift = t->fbits;                     /* a byte a texel */
+  return 1;
+}
+
+__attribute__((noinline))
+static void tier1_t8_map(GLContext *c, int dsel, int w32)
+{
+  if (w32) {
+    if (dsel == ZP_DEPTH_NONE) c->zb_map = ZB_fillTriangleMappingPerspective32_nt;
+    else if (!c->depth_mask) c->zb_map = ZB_fillTriangleMappingPerspective32_nw;
+    else if (dsel == ZP_DEPTH_LESS) c->zb_map = ZB_fillTriangleMappingPerspective32_lt;
+    else c->zb_map = ZB_fillTriangleMappingPerspective32;
+    return;
+  }
+  if (dsel == ZP_DEPTH_NONE) c->zb_map = ZB_fillTriangleMappingPerspective8_nt;
+  else if (!c->depth_mask) c->zb_map = ZB_fillTriangleMappingPerspective8_nw;
+  else if (dsel == ZP_DEPTH_LESS) c->zb_map = ZB_fillTriangleMappingPerspective8_lt;
+  else c->zb_map = ZB_fillTriangleMappingPerspective8;
+}
+
 void gl_update_raster(GLContext *c)
 {
   ZBuffer *zb = c->zb;
@@ -296,7 +353,7 @@ void gl_update_raster(GLContext *c)
   /* s31 (plan F7): GL_TEXTURE_2D wins over GL_TEXTURE_1D (GL 1.3 3.8.15);
      a 1D texture is a W x 1 image, so the same paths draw it */
   GLTexture *t = (c->tex_enables & 1) ? c->current_texture : c->current_texture_1d;
-  int gen = 0, tex, clamp_s = 0, clamp_t = 0, tex_tier1 = 0, modwhite = 0;
+  int gen = 0, tex, clamp_s = 0, clamp_t = 0, tex_tier1 = 0, modwhite = 0, tex8_tier1 = 0;
   int sf, df, cm, nocolor, afunc, skip = 0, dsel, beq, sw, x4;
 
   c->raster_dirty = 0;
@@ -321,11 +378,17 @@ void gl_update_raster(GLContext *c)
     /* nearest sampling: GL_CLAMP and GL_CLAMP_TO_EDGE pick the same texel */
     clamp_s = t->wrap_s != GL_REPEAT;
     clamp_t = t->wrap_t != GL_REPEAT && t->hs > 0;   /* one row: no t */
-    if (t->fmt == TGL_TEXF_RGB && !clamp_s && !clamp_t) {
+    /* (phase 5: an RGBA texture without its A8 plane - a1, every alpha
+       255 - draws as an RGB one here; W32, the reference, never does) */
+    if ((t->fmt == TGL_TEXF_RGB || (t->a1 && t->fmt == TGL_TEXF_RGBA)) &&
+        !clamp_s && !clamp_t) {
       if (c->texenv_mode == GL_REPLACE || c->texenv_mode == GL_DECAL)
         tex_tier1 = 1;
       else if (c->texenv_mode == GL_MODULATE)
         modwhite = 1;
+      /* phase 5: 8-bit texels (P8, L8) on tier 1: the index or grey plane
+         and the PACK of each value (s31_tex8.c), one load more a pixel */
+      if (t->st != TGL_ST_565 && !(tex8_tier1 = tier1_t8(zb, t))) tex_tier1 = modwhite = 0;
     }
     /* phase 4 F-LIN: a linear or mipmap filter is a stage of the general
        path (tier 1 is nearest in level 0 only) */
@@ -335,15 +398,22 @@ void gl_update_raster(GLContext *c)
        level 0 on tier 1 and no level is stored, as before phase 4 (review
        4: the QuakeSpasm A/B arm) */
     c->tex_filtered = (t->mag_filter != GL_NEAREST || t->min_filter != GL_NEAREST) &&
-                      c->tex_filter && zpx_prepare(c, t);
-    if (c->tex_filtered) tex_tier1 = modwhite = 0;
+                      c->tex_filter && zpx_prepare(c, t, &c->pipex.tf[0]);
+    if (c->tex_filtered) tex_tier1 = modwhite = tex8_tier1 = 0;
     if (!tex_tier1 && !modwhite) gen = 1;
+  }
+  /* ---- phase 5 O1: texture unit 1 (one load and test until an
+     application first selects it): the general path draws */
+  c->tu1_on = 0;
+  if (c->mtex_used && tu1_update(c)) {
+    tex_tier1 = modwhite = tex8_tier1 = 0;
+    gen = 1;
   }
 
   /* ---- GL_SEPARATE_SPECULAR_COLOR: only differs from the single colour
      when there is a texture to put the specular part on */
   c->raster_sepspec = c->color_control == GL_SEPARATE_SPECULAR_COLOR &&
-                      c->lighting_enabled && tex;
+                      c->lighting_enabled && (tex || c->tu1_on);
   p->st_spec = c->raster_sepspec;
   if (c->raster_sepspec) gen = 1;
 
@@ -428,6 +498,8 @@ void gl_update_raster(GLContext *c)
     c->zb_map = s31_rt.map;
     c->zb_line = ZB_line_z; c->zb_plot = ZB_plot;
   }
+  /* phase 5: tier 1's textured filler for 8-bit texels, per depth state */
+  if (tex8_tier1) tier1_t8_map(c, dsel, tex8_tier1 == 2);
   /* nothing to write at all */
   if (nocolor && (dsel == ZP_DEPTH_NONE || !c->depth_mask) && !sw) skip = 1;
 
@@ -458,7 +530,8 @@ void gl_update_raster(GLContext *c)
   c->raster_need_attr = gen || modwhite || c->raster_gen_lines || c->raster_gen_points;
   c->raster_fog = c->raster_need_attr && c->fog_enabled;
   /* glopVertex's one test for the per-vertex extras (s31_xform.c) */
-  c->vtx_extra = (c->raster_fog ? 1 : 0) | (c->clip_plane_mask ? 2 : 0);
+  c->vtx_extra = (c->raster_fog ? 1 : 0) | (c->clip_plane_mask ? 2 : 0) |
+                  (c->tu1_on ? 4 : 0);   /* phase 5 O1: unit 1's coordinates */
   c->raster_skip = skip;
 
   /* the stage list is built when a general-path primitive is first drawn
@@ -468,7 +541,7 @@ void gl_update_raster(GLContext *c)
 
   /* ---- GL_FILL triangles */
   if (skip) c->draw_fill_inner = gl_draw_triangle_skip;
-  else if (gen) c->draw_fill_inner = gl_draw_triangle_general;
+  else if (gen) c->draw_fill_inner = c->tu1_on ? gl_draw_triangle_mt : gl_draw_triangle_general;
   else if (modwhite) c->draw_fill_inner = gl_draw_triangle_modwhite;
   /* phase 4 F-PERSP: smooth untextured tier 1 - one test per triangle
      for perspective-correct colour (s31_tfilter.c) */
@@ -485,14 +558,198 @@ void gl_update_raster(GLContext *c)
   zep_track_target(c);
 }
 
+/* ------------------------------------------------------------ phase 5: combiner programs */
+
+/* GL enum -> ZComb codes (the values were validated by glTexEnv) */
+static int zc_fcode(int f)
+{
+  switch (f) {
+  case GL_REPLACE: return ZCF_REPLACE;
+  case GL_ADD: return ZCF_ADD;
+  case GL_ADD_SIGNED: return ZCF_ADD_SIGNED;
+  case GL_INTERPOLATE: return ZCF_INTERPOLATE;
+  case GL_SUBTRACT: return ZCF_SUBTRACT;
+  default: return ZCF_MODULATE;
+  }
+}
+
+static int zc_scode(int s)
+{
+  switch (s) {
+  case GL_CONSTANT: return ZCS_CONSTANT;
+  case GL_PRIMARY_COLOR: return ZCS_PRIMARY;
+  case GL_PREVIOUS: return ZCS_PREVIOUS;
+  default: return ZCS_TEXTURE;
+  }
+}
+
+static int zc_ocode(int o)
+{
+  switch (o) {
+  case GL_ONE_MINUS_SRC_COLOR: return ZCO_OMCOLOR;
+  case GL_SRC_ALPHA: return ZCO_ALPHA;
+  case GL_ONE_MINUS_SRC_ALPHA: return ZCO_OMALPHA;
+  default: return ZCO_COLOR;
+  }
+}
+
+static void zc_set(ZComb *cb, int part, int f, int s0, int o0, int s1, int o1,
+                   int s2, int o2)
+{
+  cb->f[part] = (unsigned char)f;
+  cb->src[part][0] = (unsigned char)s0; cb->op[part][0] = (unsigned char)o0;
+  cb->src[part][1] = (unsigned char)s1; cb->op[part][1] = (unsigned char)o1;
+  cb->src[part][2] = (unsigned char)s2; cb->op[part][2] = (unsigned char)o2;
+}
+
+/* the program of one unit: GL_COMBINE as specified; every other mode the
+   program of the texenv op unit 0 would run (texenv_op), which computes
+   exactly what that stage computes (zpipe.c) */
+static void comb_prog(ZComb *cb, int mode, const GLCombine *gc, int fmt,
+                      const V4 *envc)
+{
+  int k;
+  const int T = ZCS_TEXTURE, P = ZCS_PREVIOUS, K = ZCS_CONSTANT;
+  const int C = ZCO_COLOR, A = ZCO_ALPHA;
+  memset(cb, 0, sizeof *cb);
+  for (k = 0; k < 4; k++) cb->k[k] = f8(envc->v[k]);
+  cb->fmt = (unsigned char)fmt;
+  if (mode == GL_COMBINE) {
+    int part;
+    for (part = 0; part < 2; part++) {
+      float sc = gc->scale[part];
+      zc_set(cb, part, zc_fcode(part ? gc->alpha : gc->rgb),
+             zc_scode(gc->src[part][0]), zc_ocode(gc->op[part][0]),
+             zc_scode(gc->src[part][1]), zc_ocode(gc->op[part][1]),
+             zc_scode(gc->src[part][2]), zc_ocode(gc->op[part][2]));
+      cb->sh[part] = (unsigned char)(sc >= 4.0f ? 2 : (sc >= 2.0f ? 1 : 0));
+    }
+    /* GL 1.3 table 3.20: an ALPHA texture's colour is (0, 0, 0) */
+    cb->zero_rgb = fmt == TGL_TEXF_ALPHA;
+    return;
+  }
+  zc_set(cb, 0, ZCF_NONE, T, C, P, C, K, A);
+  zc_set(cb, 1, ZCF_NONE, T, A, P, A, K, A);
+  switch (texenv_op(mode, fmt)) {
+  case ZP_TE_REPLACE_RGB: zc_set(cb, 0, ZCF_REPLACE, T, C, 0, 0, 0, 0); break;
+  case ZP_TE_REPLACE_RGBA:
+    zc_set(cb, 0, ZCF_REPLACE, T, C, 0, 0, 0, 0);
+    zc_set(cb, 1, ZCF_REPLACE, T, A, 0, 0, 0, 0);
+    break;
+  case ZP_TE_MOD_RGB: zc_set(cb, 0, ZCF_MODULATE, P, C, T, C, 0, 0); break;
+  case ZP_TE_MOD_RGBA:
+    zc_set(cb, 0, ZCF_MODULATE, P, C, T, C, 0, 0);
+    zc_set(cb, 1, ZCF_MODULATE, P, A, T, A, 0, 0);
+    break;
+  case ZP_TE_DECAL_RGBA: zc_set(cb, 0, ZCF_INTERPOLATE, T, C, P, C, T, A); break;
+  case ZP_TE_BLEND_RGB: zc_set(cb, 0, ZCF_INTERPOLATE, K, C, P, C, T, C); break;
+  case ZP_TE_BLEND_RGBA:
+    zc_set(cb, 0, ZCF_INTERPOLATE, K, C, P, C, T, C);
+    zc_set(cb, 1, ZCF_MODULATE, P, A, T, A, 0, 0);
+    break;
+  case ZP_TE_BLEND_I:
+    zc_set(cb, 0, ZCF_INTERPOLATE, K, C, P, C, T, C);
+    zc_set(cb, 1, ZCF_INTERPOLATE, K, A, P, A, T, A);
+    break;
+  case ZP_TE_ALPHA_REPLACE: zc_set(cb, 1, ZCF_REPLACE, T, A, 0, 0, 0, 0); break;
+  case ZP_TE_ALPHA_MOD: zc_set(cb, 1, ZCF_MODULATE, P, A, T, A, 0, 0); break;
+  case ZP_TE_ADD_RGB: zc_set(cb, 0, ZCF_ADD, P, C, T, C, 0, 0); break;
+  case ZP_TE_ADD_RGBA:
+    zc_set(cb, 0, ZCF_ADD, P, C, T, C, 0, 0);
+    zc_set(cb, 1, ZCF_MODULATE, P, A, T, A, 0, 0);
+    break;
+  default:                                     /* ZP_TE_ADD_I */
+    zc_set(cb, 0, ZCF_ADD, P, C, T, C, 0, 0);
+    zc_set(cb, 1, ZCF_ADD, P, A, T, A, 0, 0);
+    break;
+  }
+}
+
+/* which colour a program reads, given which of its outputs are read (need:
+   bit 0 RGB, bit 1 alpha): bits 0/1 the previous colour's RGB / alpha,
+   bits 2/3 the primary colour's. A part that is not computed passes the
+   previous colour's through */
+enum { ZR_PREV_RGB = 1, ZR_PREV_A = 2, ZR_PRIM_RGB = 4, ZR_PRIM_A = 8 };
+static int comb_reads(const ZComb *cb, int need)
+{
+  int r = 0, part, j;
+  for (part = 0; part < 2; part++) {
+    int f = cb->f[part], na;
+    if (!(need & (1 << part))) continue;
+    if (f == ZCF_NONE) { r |= part ? ZR_PREV_A : ZR_PREV_RGB; continue; }
+    na = f == ZCF_REPLACE ? 1 : (f == ZCF_INTERPOLATE ? 3 : 2);
+    for (j = 0; j < na; j++) {
+      int src = cb->src[part][j];
+      int a = part || cb->op[part][j] == ZCO_ALPHA || cb->op[part][j] == ZCO_OMALPHA;
+      if (src == ZCS_PREVIOUS) r |= a ? ZR_PREV_A : ZR_PREV_RGB;
+      else if (src == ZCS_PRIMARY) r |= a ? ZR_PRIM_A : ZR_PRIM_RGB;
+    }
+  }
+  return r;
+}
+
+/* whether a program reads its texture's alpha (a computed part with a
+   TEXTURE argument taken as alpha) */
+static int comb_reads_texa(const ZComb *cb)
+{
+  int part, j;
+  for (part = 0; part < 2; part++) {
+    int f = cb->f[part], na;
+    if (f == ZCF_NONE) continue;
+    na = f == ZCF_REPLACE ? 1 : (f == ZCF_INTERPOLATE ? 3 : 2);
+    for (j = 0; j < na; j++)
+      if (cb->src[part][j] == ZCS_TEXTURE &&
+          (part || cb->op[part][j] == ZCO_ALPHA || cb->op[part][j] == ZCO_OMALPHA))
+        return 1;
+  }
+  return 0;
+}
+
+/* phase 5 O1: unit 1's texture for the raster state (gl_update_raster,
+   only once the application used unit 1). Returns 1 when unit 1 is on:
+   enabled and its texture complete (GL 1.3 3.8.10); then the general path
+   draws (unit 1's geometry in ZPipeX.g1, its filter in ZPipeX.tf[1]) */
+__attribute__((noinline))
+static int tu1_update(GLContext *c)
+{
+  GLTexUnit *u = &c->tu1;
+  GLTexture *t = (u->enables & 1) ? u->tex2d : u->tex1d;
+  ZTexGeo *g = &c->pipex.g1;
+  int TW, F;
+
+  c->tu1_on = u->any_enabled && t != NULL && gl_texture_complete(t);
+  c->tu1_filtered = 0;
+  if (!c->tu1_on) return 0;
+  c->tu1_tex = t;
+  TW = 1 << t->ws; F = t->fbits;
+  g->ws = t->ws; g->hs = t->hs; g->fbits = F;
+  g->smask = (unsigned int)(TW - 1) << F;
+  g->tmask = (unsigned int)((1 << t->hs) - 1) << (F + t->ws);
+  g->wmax = TW - 1; g->hmax = (1 << t->hs) - 1;
+  g->clamp_s = t->wrap_s != GL_REPEAT;
+  g->clamp_t = t->wrap_t != GL_REPEAT && t->hs > 0;   /* one row: no t */
+  g->speriod = TW << F;
+  g->tperiod = 1 << (F + t->ws + t->hs);
+  c->tex1_sscale = (float)g->speriod;
+  c->tex1_tscale = (float)g->tperiod;
+  c->tex1_speriod = g->speriod;
+  c->tex1_tperiod = g->tperiod;
+  c->tu1_filtered = (t->mag_filter != GL_NEAREST || t->min_filter != GL_NEAREST) &&
+                    c->tex_filter && zpx_prepare(c, t, &c->pipex.tf[1]);
+  return 1;
+}
+
 /* the general path's stage list and constants for the state
    gl_update_raster saw (zpipe.h) */
 void gl_build_pipe(GLContext *c)
 {
   ZPipe *p = &c->pipe;
   ZPipeX *x = &c->pipex;
+  ZTexF *u0 = &x->tf[0], *u1 = &x->tf[1];
   GLTexture *t = (c->tex_enables & 1) ? c->current_texture : c->current_texture_1d;
+  GLTexture *t1 = c->tu1_on ? c->tu1_tex : NULL;
   int i = 0, flat = c->current_shade_model != GL_SMOOTH, zw_late, stip, nocol;
+  int islot0 = -1, islot1 = -1, islotc = -1, comb0, prim1 = 0;
 
   c->pipe_dirty = 0;
   c->pipe_serial++;             /* s31_draw.c rebuilds its copy */
@@ -558,34 +815,108 @@ void gl_build_pipe(GLContext *c)
     p->zb = c->zb;
     p->st[i++] = zp_stipple_fn();
   }
+  /* phase 5 O1: the units' combiner programs - unit 0's only under
+     GL_COMBINE (its other modes keep their phase 4 stages), unit 1's for
+     every mode */
+  comb0 = c->tex_active && c->texenv_mode == GL_COMBINE;
+  if (comb0)
+    comb_prog(&x->cb[0], GL_COMBINE, &c->comb, t->fmt, &c->texenv_color);
+  if (t1)
+    comb_prog(&x->cb[1], c->tu1.env_mode, &c->tu1.comb, t1->fmt, &c->tu1.env_color);
   /* phase 4: the fragment colour is not computed when nothing reads it -
      an RGB texture under REPLACE (or DECAL) replaces it, and without an
      alpha test or an alpha blend factor its alpha is never read (it cost
      ~26 instructions a pixel on a REPLACE-textured general-path span) */
   {
-    int te = c->tex_active ? texenv_op(c->texenv_mode, t->fmt) : -1;
+    int te = c->tex_active ? texenv_op_t(c->texenv_mode, t) : -1;
     int sa = p->sfactor, da = p->dfactor;
     int alpha_read = (p->afunc != GL_ALWAYS && p->afunc != GL_NEVER) ||
                      sa == GL_SRC_ALPHA || sa == GL_ONE_MINUS_SRC_ALPHA ||
                      da == GL_SRC_ALPHA || da == GL_ONE_MINUS_SRC_ALPHA ||
                      RASTER_AA_LINES(c) || RASTER_AA_POINTS(c);   /* the coverage stage */
-    nocol = te == ZP_TE_REPLACE_RGB && !alpha_read;
+    if (!t1 && !comb0) {
+      nocol = (te == ZP_TE_REPLACE_RGB && !alpha_read) || te == ZP_TE_REPLACE_RGB1;
+    } else {
+      /* phase 5 O1: what the units read of the colours before them,
+         from the last unit back (comb_reads): the colour stage runs when
+         anything reads the primary colour, and unit 1's PRIMARY_COLOR
+         after unit 0 changed it needs the kept copy */
+      int need0 = 1 | (alpha_read ? 2 : 0), r, prim = 0;
+      ZComb p0;
+      if (t1) {
+        /* a part nothing reads is not computed */
+        if (!(need0 & 2)) x->cb[1].f[1] = ZCF_NONE;
+        r = comb_reads(&x->cb[1], need0);
+        prim1 = r & (ZR_PRIM_RGB | ZR_PRIM_A);
+        prim = (prim1 & ZR_PRIM_RGB ? 1 : 0) | (prim1 & ZR_PRIM_A ? 2 : 0);
+        need0 = (r & ZR_PREV_RGB ? 1 : 0) | (r & ZR_PREV_A ? 2 : 0);
+      }
+      if (c->tex_active) {
+        if (comb0) {
+          if (!(need0 & 2)) x->cb[0].f[1] = ZCF_NONE;
+          p0 = x->cb[0];
+        } else {
+          comb_prog(&p0, c->texenv_mode, &c->comb, t->fmt, &c->texenv_color);
+        }
+        r = comb_reads(&p0, need0);
+        prim |= (r & (ZR_PREV_RGB | ZR_PRIM_RGB) ? 1 : 0) |
+                (r & (ZR_PREV_A | ZR_PRIM_A) ? 2 : 0);
+      } else {
+        prim |= need0;                /* unit 1's previous is the primary */
+        prim1 = 0;                    /* and nothing changed it before unit 1 */
+      }
+      nocol = prim == 0;
+    }
   }
   x->col_affine = zp_color_fn(flat);
-  x->slot_col = -1;
   if (!nocol) {
-    x->slot_col = i;
+    islotc = i;
     p->st[i++] = x->col_affine;
   }
-  x->slot_tex = -1;
-  x->tex_base = NULL;
-  x->tex0 = NULL; x->talpha0 = NULL;
+  if (prim1) p->st[i++] = zp_saveprim_fn();
+  u0->tex_base = NULL;
+  u0->tex0 = NULL; u0->talpha0 = NULL;
+  u0->t8 = 0;
   if (c->tex_active) {
-    x->slot_tex = i;
-    x->tex_base = zp_texidx_fn(p->clamp_s, p->clamp_t);
-    x->tex0 = p->tex; x->talpha0 = p->talpha;
-    p->st[i++] = x->tex_base;
-    p->st[i++] = zp_texenv_fn(texenv_op(c->texenv_mode, t->fmt));
+    islot0 = i;
+    u0->tex0 = p->tex; u0->talpha0 = p->talpha;
+    if (UNIT_W8(t, c->tex_filtered)) {
+      /* phase 5: 8-bit texels (s31_tex8.c) - their stages write each
+         fragment's texel word into ZTexF.ftex32 (zpipe.h) */
+      u0->t8 = 1;
+      zpx_level0(t, &u0->lvl[0]);
+      u0->rep_s = p->clamp_s ? 0 : -1;
+      u0->rep_t = p->clamp_t ? 0 : -1;
+      u0->tex_base = zpx_base8(&u0->lvl[0], 0);
+      p->st[i++] = u0->tex_base;
+      p->st[i++] = comb0 ? zp_comb_fn(0) : zp_texenv8_fn(texenv_op_t(c->texenv_mode, t));
+    } else {
+      u0->tex_base = zp_texidx_fn(p->clamp_s, p->clamp_t);
+      p->st[i++] = u0->tex_base;
+      p->st[i++] = comb0 ? zp_comb_fn(0) : zp_texenv_fn(texenv_op_t(c->texenv_mode, t));
+    }
+  }
+  u1->tex_base = NULL;
+  u1->tex0 = NULL; u1->talpha0 = NULL;
+  u1->t8 = 0;
+  p->idx1_px = NULL;
+  if (t1) {
+    const ZTexGeo *g = &x->g1;
+    p->tex1 = t1->images[0].pixmap;
+    p->talpha1 = t1->alpha;
+    islot1 = i;
+    u1->tex0 = p->tex1; u1->talpha0 = p->talpha1;
+    if (UNIT_W8(t1, c->tu1_filtered)) {
+      u1->t8 = 1;
+      zpx_level0(t1, &u1->lvl[0]);
+      u1->rep_s = g->clamp_s ? 0 : -1;
+      u1->rep_t = g->clamp_t ? 0 : -1;
+      u1->tex_base = zpx_stage8_u(1, TF_NEAREST0);
+    } else {
+      u1->tex_base = zp_texidx1_fn(g->clamp_s, g->clamp_t);
+    }
+    p->st[i++] = u1->tex_base;
+    p->st[i++] = zp_comb_fn(1);
   }
   if (c->raster_sepspec) p->st[i++] = zp_spec_fn(flat);
   if (c->fog_enabled) p->st[i++] = zp_fog_fn();
@@ -618,8 +949,12 @@ void gl_build_pipe(GLContext *c)
             (flat || nocol ? 0 : ZP_N_RGBA) |
             (c->tex_active ? ZP_N_ST | ZP_N_Q : 0) |
             (c->fog_enabled ? ZP_N_F | ZP_N_Q : 0) |
-            (c->raster_sepspec && !flat ? ZP_N_SPEC : 0);
+            (c->raster_sepspec && !flat ? ZP_N_SPEC : 0) |
+            (t1 ? ZP_N_ST1 | ZP_N_Q : 0);
   x->need0 = p->need;
+  x->slot_col = islotc >= 0 ? &p->st[islotc] : NULL;
+  u0->slot = islot0 >= 0 ? &p->st[islot0] : NULL;
+  u1->slot = islot1 >= 0 ? &p->st[islot1] : NULL;
 
   /* phase 4 (s31_tfilter.c): which choices the triangles make */
   p->xact = 0;
@@ -630,23 +965,67 @@ void gl_build_pipe(GLContext *c)
   }
   if (c->tex_active && c->tex_filtered) {
     int rep_all = !p->clamp_s && !p->clamp_t, al = t->alpha != NULL;
-    x->rep_s = p->clamp_s ? 0 : -1;
-    x->rep_t = p->clamp_t ? 0 : -1;
-    x->f_near = zpx_stage(TF_NMN, rep_all, al);
-    x->f_bil = zpx_stage(TF_LINEAR0, rep_all, al);
-    x->f_tri = zpx_stage(TF_LML, rep_all, al);
-    x->f_ntri = zpx_stage(TF_NML, rep_all, al);
-    x->lod_cur = -1;             /* the slot holds tex_base, no code yet */
-    if (x->kmag == x->kmin) {
+    u0->rep_s = p->clamp_s ? 0 : -1;
+    u0->rep_t = p->clamp_t ? 0 : -1;
+    if (u0->t8) {
+      u0->f_near = zpx_stage8_u(0, TF_NMN);
+      u0->f_bil = zpx_stage8_u(0, TF_LINEAR0);
+      u0->f_tri = zpx_stage8_u(0, TF_LML);
+      u0->f_ntri = zpx_stage8_u(0, TF_NML);
+    } else {
+      u0->f_near = zpx_stage_u(0, TF_NMN, rep_all, al);
+      u0->f_bil = zpx_stage_u(0, TF_LINEAR0, rep_all, al);
+      u0->f_tri = zpx_stage_u(0, TF_LML, rep_all, al);
+      u0->f_ntri = zpx_stage_u(0, TF_NML, rep_all, al);
+    }
+    u0->lod_cur = -1;            /* the slot holds tex_base, no code yet */
+    if (u0->kmag == u0->kmin) {
       /* one filter for every triangle (LINEAR / LINEAR without mipmaps):
          placed once, no per-triangle choice */
-      x->cur0 = &x->lvl[0];
-      x->tex_base = x->f_bil;
-      p->st[x->slot_tex] = x->f_bil;
-      p->tex = x->ftex; p->talpha = x->falpha;
+      u0->cur0 = &u0->lvl[0];
+      u0->tex_base = u0->f_bil;
+      *u0->slot = u0->f_bil;
+      p->tex = u0->ftex; p->talpha = u0->falpha;
     } else {
       p->xact |= ZPX_TEX;
     }
   }
+  if (t1 && c->tu1_filtered) {
+    const ZTexGeo *g = &x->g1;
+    /* the filtered alpha only when the combiner reads the texel's alpha
+       (a lightmap under COMBINE_RGB MODULATE: never): the same pixels, a
+       third less work a texel */
+    int rep_all = !g->clamp_s && !g->clamp_t;
+    int al = t1->alpha != NULL && comb_reads_texa(&x->cb[1]);
+    u1->rep_s = g->clamp_s ? 0 : -1;
+    u1->rep_t = g->clamp_t ? 0 : -1;
+    if (u1->t8) {
+      u1->f_near = zpx_stage8_u(1, TF_NMN);
+      u1->f_bil = zpx_stage8_u(1, TF_LINEAR0);
+      u1->f_tri = zpx_stage8_u(1, TF_LML);
+      u1->f_ntri = zpx_stage8_u(1, TF_NML);
+    } else {
+      u1->f_near = zpx_stage_u(1, TF_NMN, rep_all, al);
+      u1->f_bil = zpx_stage_u(1, TF_LINEAR0, rep_all, al);
+      u1->f_tri = zpx_stage_u(1, TF_LML, rep_all, al);
+      u1->f_ntri = zpx_stage_u(1, TF_NML, rep_all, al);
+    }
+    u1->lod_cur = -1;
+    if (u1->kmag == u1->kmin) {
+      u1->cur0 = &u1->lvl[0];
+      u1->tex_base = u1->f_bil;
+      *u1->slot = u1->f_bil;
+      p->tex1 = u1->ftex; p->talpha1 = u1->falpha;
+    } else {
+      p->xact |= ZPX_TEX1;
+    }
+  }
+  /* phase 5 O1 (two units) and O2 (one): a fused filler for the batch's
+     signature (zpipe_fused.c)
+     takes the stage list's place; the list stays in x->gen_st, where the
+     per-triangle choices keep placing their stages */
+  x->fused = 0;
+  x->run_mt = zp_run_mt;
+  x->run_lod_mt = zp_run_lod_mt;
+  if (c->fused_on) zpf_select(c);
 }
-

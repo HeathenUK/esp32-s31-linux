@@ -1,0 +1,7 @@
+# qsreplay p4-mip0: GLDIR=/Users/gadyke/esp32-s31-linux/gl/bench/base5 TRACE=/Users/gadyke/esp32-s31-linux/gl/bench/qstrace/work/p4final/qs.gltr QSR_ENV=S31GL_MIPMAPS=0
+qsr: env S31GL_MIPMAPS=0
+qsr p4-mip0 window 0 frames 100-139: 48.9153 Minsn/frame min 39.6580 max 56.6160 (frame 124), 0 dcalls/frame, hashes 0/40 same as live, tex 4644124 B heap 34248 B at start
+qsr p4-mip0 window 1 frames 400-439: 52.5580 Minsn/frame min 42.9927 max 64.0998 (frame 412), 0 dcalls/frame, hashes 0/40 same as live, tex 4750948 B heap 36616 B at start
+qsr p4-mip0 load: 97.58 Minsn before frame 98 (355 state-only frames in all: 164.83 Minsn), warm-up 199.06 Minsn
+qsr p4-mip0 heap: texture 4644124 B, other 34248 B after the load phase; at the end texture 4750948 B, other 36632 B; peak 6649044 B, 459 allocations
+qsr p4-mip0 done: 439 frames, 84 full: 0 same as live, 84 differ

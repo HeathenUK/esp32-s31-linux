@@ -1,0 +1,78 @@
+Phase 5 library round P5c - precision, texture storage, fused 8-bit fillers
+(host only; nothing touched the board). s31, MIT.
+
+Final tree gate: artifacts/gl/phase3a/p5-final2 (run-3a.sh)
+  core_test 286/0, raster_gate 51/0, filt_test 32/0, fused_test 45/0 (both
+  S31GL_FILT8 modes; incl. new exhaustive zf8_pack check), RV32 qemu-user
+  core 284/0 raster 51/0 d2f 0 mismatches filt 32/0 fused 45/0,
+  headless_gears md5 34a082d3 unchanged, mtex 4/5 PASS (p5 EXACT page as
+  before), prec 99.35% exact vs Mesa (new gate line, threshold 99.3),
+  qsr-fused 10 traces 856/856 frames fused = general = unpacked reference,
+  suitecmp vs phase-2 base: 0 apps worse.
+  suitecmp vs phase-4 final (suitecmp-vs-p4final.txt): 1 app worse -
+  teapot f60 tolerant 0.237 -> 0.249% (OPEN, see below).
+  ASan+UBSan (gl/out-san, core_test TEX8=1/2, fused_test): clean.
+Bar 2 (compat build -DS31GL_P4ARITH vs phase-4 final): bench
+  bench-s9-compat-vs-p4final.txt: 74 lines, worst +0.422% (p4v8), 0 hash
+  changes; QuakeSpasm p4final trace compat: 50.82 / 53.71 M/frame vs 50.82 /
+  53.71 (compat-p4final), 84/84 hashes same as live.
+
+QuakeSpasm trace (qsreplay.sh, RV32 proxy, M instructions / counted frame,
+window 0 / window 1):
+                         default          TEXFILTER=0      texture B (after load / end)
+  phase-4 final          58.13 / 60.51    -                4,892,320 / 4,999,144
+  phase-5 O2 (base5o2)   36.66 / 38.07    16.75 / 16.31    4,892,320 / 4,999,144
+  P5c final              37.90 / 38.87    17.61 / 17.32    3,635,120 / 3,657,000 (tf0 3,259,237)
+  peak heap: 6,901,096 -> 5,681,952 B (texture 5,642,384 at frame 13);
+  other heap 43,416 -> 39,760 B. Load phase 116 -> 234 M instructions (was
+  357 M before this pass's upload work; see levers).
+  => texture memory -25.7%, peak -17.7%; per-frame +3.4% / +2.1% default,
+     +5.2% / +6.2% TEXFILTER=0 vs O2.
+
+Mesa comparison (compare-qs.sh + qslum.py, 80 frames, view luminance ours /
+Mesa, exact pixels):
+  O2          0.920 (min 0.771)  45.0%  79 PASS 1 FAIL
+  final       1.038 (min 0.846)  53.2%  80 PASS
+  (floored LERPF variant: 1.000, 61.3%, 79/1 - rejected, below)
+  FILT8=1     1.011, 71.3%, 80 PASS - but 54.4 / 58.4 M/frame (+44%): kept off
+Precision probe glx_prec: 72.94% -> 99.35% exact (48 bands).
+
+Levers (texture bytes after load; trace default M/frame):
+  P1 rounding (div255r MUL8/MIX8/MULS8, ADDS8, clear/colour round8, blend
+     products rounded): prec 72.9 -> 99.35%; hashes change (expected).
+  (d) opaque RGBA without A8 (a1): part of 4.89 MB -> 3.64 MB below.
+  (e) P8 (<=256 colours, RGBA8 palette in the level block, compaction on
+     overflow, 565 on >256) + L8 grey (alpha modes ONE/BITS/A8/I/ALPHA) +
+     W32 reference (S31GL_TEX8=2) gated bit-identical: 4,892,320 ->
+     3,635,120 B.
+  fused T8 fillers (zpipe_fused8.h), bit-identical gates: fused_test 45/0,
+     qsr-fused 856/856.
+  this pass: upload path (direct RGBA words, lazy/branch-free statistics,
+     one-pass L8 and P8 sub-image, direct 565 RGBA->RGB): load 357 -> 234 M;
+     P8 base stage (zx8_base_p8), mask-form indices + packing folded into
+     the product shift (zf8_pack): TEXFILTER=0 19.13 -> 17.61 M.
+  (f) mips: S31GL_MIPMAPS=0 measured 3,259,237 B (-376 kB), 31.39 / 33.26
+     M/frame, but Mesa: 19 of 80 frames FAIL, luminance 1.015 (qs-final-mip0
+     compare.txt). Decision: keep mipmaps ON by default, knob kept.
+  (g) other per-context heap: 39.8 kB after load (QR_ALLOC_LOG=256: 3
+     contexts' glInit blocks 7,868 + 4,096 + 2,048 + 1,024 + 3x512 B, 2,624 B
+     ctx tables, vertex growth 5,248 B at frame 398). Nothing large; peak is
+     textures at level load.
+
+Rejected, with numbers:
+  - floored final 565 filter lerp (LERPF floor): QuakeSpasm luminance 1.000
+    / 61.3% exact, but suite vs phase-4 final fire f20 0.319 -> 0.440%,
+    ipers 0.001 -> 0.003% (worse). Quarter bias: 1.024 / 60.0%, fire 0.357%
+    (still worse). Rounded (kept): fire 0.270%, ipers same. Builds as
+    -DS31GL_LERPF_FLOOR. Recorded in s31_tfilt_int.h.
+  - transient P8 index plane during the image scan: load 270 -> 237 M but
+    +57 kB peak heap; memory is the constraint. Recorded in s31_tex8.c.
+  - memoising the last texel product in zf8_world_nn: 18.13 -> 18.37 M
+    (worse). Recorded in zpipe_fused8.h.
+  - S31GL_FILT8=1 default: +44% instructions.
+
+Fixes found on the way: GLTexPal header misaligned on 64-bit hosts
+(T8_PALOFF), W32 alpha-mode change read a NULL plane, pixel path did not
+drop the new P8 base stage (fused_test caught it), mip chains leaked at
+context teardown (init.c), UB signed overflow in zc_smooth_pc stepping,
+fused_test glBitmap read past its 8-byte image (UNPACK_ALIGNMENT).

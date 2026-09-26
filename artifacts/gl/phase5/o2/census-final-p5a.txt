@@ -1,0 +1,18 @@
+# 80 counted frames; general-path pixels per frame 193753 (alive 190621)
+#   px/frame  alive/frame  chunks/frame fused  stages (depth, st..., [gen_depth, gen_st...])
+     88465      88465      9065   1  zf_pass zf_world_x zdw_lequal zx_tri_r ze_replace_rgb zx1_bil_r zc_comb1 zo_store
+     38896      38896      2509   1  zf_pass zf_world_x zdw_lequal zx_bil_r ze_replace_rgb zx1_bil_r zc_comb1 zo_store
+     31680      31680      1089   5  zd_none zf1_blend zd_none zc_flat zo_sa_omsa
+     15360      15360       528   5  zd_none zf1_sbar zd_none zc_flat zx_bil_r ze_replace_rgb zo_sa_omsa
+      4776       4776       391   5  zd_none zf1_pica zd_none zc_flat zx_bil_ra ze_replace_rgba za_greater zo_store
+      4301       4301       521   5  zd_none zf1_pic zd_none zc_flat zx_bil_r ze_replace_rgb za_greater zo_store
+      4073       3490       687   2  zdw_lequal zf_alias_00 zdw_lequal zc_smooth zx_bil_r zc_comb0 zx1_bil_r zc_comb1 zo_sa_omsa
+      1942       1081       753   5  zdw_lequal zf1_alias zdw_lequal zc_smooth zx_bil_r zc_comb0 zo_store
+      1133        810       253   2  zdw_lequal zf_alias_00 zdw_lequal zc_smooth_pc zx_bil_r zc_comb0 zx1_bil_r zc_comb1 zo_sa_omsa
+       769          0        79   5  zdw_lequal zf1_water zdw_lequal zx_bil_r ze_replace_rgb zo_store
+       581        348       534   5  zd_lequal zf1_part zd_lequal zc_flat zx_bil_ra ze_mod_rgba zo_sa_omsa
+       532        337        30   5  zd_lequal zf1_fence zd_lequal zc_flat zx_bil_ra ze_replace_rgba za_greater zw_write zo_store
+       444        436        27   5  zd_lequal zf1_glow zd_lequal zc_flat zx_bil_r ze_mod_rgb zo_one_one
+       398        241        53   5  zd_lequal zf1_glow zd_lequal zc_flat zx_tri_r ze_mod_rgb zo_one_one
+       352        352        82   5  zd_none zf1_pica zd_none zc_flat zt_rr ze_replace_rgba za_greater zo_store
+        52         47         7   5  zdw_lequal zf1_alias zdw_lequal zc_smooth_pc zx_bil_r zc_comb0 zo_store

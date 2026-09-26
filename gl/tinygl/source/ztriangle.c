@@ -15,6 +15,23 @@
 #ifndef ZFN
 #define ZFN(n) n
 #endif
+/* s31 phase 5 P: the colour planes' extra fraction bits (ztriangle.h). With
+   ZB_POINT_RED_MIN 128 (zbuffer.h) the margin below 0 is 128 units, and a
+   truncated 16-bit gradient could stray by one unit a pixel; 8 more bits
+   make it 1/256. The packed fields take the same bits as before */
+#ifndef ZTRI_CPLANE
+#ifdef S31GL_P4ARITH
+#define ZTRI_CPLANE 0
+#else
+#define ZTRI_CPLANE 8
+#endif
+#endif
+/* blue into the packed colour's bits 12-20: << 5 of a 16-bit value */
+#if ZTRI_CPLANE <= 5
+#define ZTRI_BPACK(b) ((unsigned int)(b) << (5-ZTRI_CPLANE))
+#else
+#define ZTRI_BPACK(b) ((unsigned int)(b) >> (ZTRI_CPLANE-5))
+#endif
 
 void ZFN(ZB_fillTriangleFlat)(ZBuffer *zb,
 			 ZBufferPoint *p0,ZBufferPoint *p1,ZBufferPoint *p2)
@@ -84,7 +101,7 @@ void ZFN(ZB_fillTriangleSmooth)(ZBuffer *zb,
 #define INTERP_Z
 #define INTERP_RGB
 
-#define SAR_RND_TO_ZERO(v,n) (v / (1<<n))
+#define SAR_RND_TO_ZERO(v,n) ((v) / (1<<(n)))
 
 #if TGL_FEATURE_RENDER_BITS == 24
 
@@ -113,9 +130,9 @@ void ZFN(ZB_fillTriangleSmooth)(ZBuffer *zb,
    r1 << 16 overflowed int: UBSan); same bits, same code */
 #define DRAW_INIT() 				\
 {						\
-  _drgbdx=((unsigned int)SAR_RND_TO_ZERO(drdx,6) << 22) & 0xFFC00000;		\
-  _drgbdx|=SAR_RND_TO_ZERO(dgdx,5) & 0x000007FF;		\
-  _drgbdx|=((unsigned int)SAR_RND_TO_ZERO(dbdx,7) << 12) & 0x001FF000; 	\
+  _drgbdx=((unsigned int)SAR_RND_TO_ZERO(drdx,6+ZTRI_CPLANE) << 22) & 0xFFC00000;		\
+  _drgbdx|=SAR_RND_TO_ZERO(dgdx,5+ZTRI_CPLANE) & 0x000007FF;		\
+  _drgbdx|=((unsigned int)SAR_RND_TO_ZERO(dbdx,7+ZTRI_CPLANE) << 12) & 0x001FF000; 	\
 }
 
 
@@ -143,9 +160,9 @@ void ZFN(ZB_fillTriangleSmooth)(ZBuffer *zb,
   ppe=pp1+x2+1;								   \
   pz=pz1+x1;								   \
   z=z1;									   \
-  rgb=((unsigned int)r1 << 16) & 0xFFC00000;				   \
-  rgb|=(g1 >> 5) & 0x000007FF;						   \
-  rgb|=((unsigned int)b1 << 5) & 0x001FF000;				   \
+  rgb=((unsigned int)r1 << (16-ZTRI_CPLANE)) & 0xFFC00000;		   \
+  rgb|=(g1 >> (5+ZTRI_CPLANE)) & 0x000007FF;				   \
+  rgb|=ZTRI_BPACK(b1) & 0x001FF000;					   \
   drgbdx=_drgbdx;							   \
   if (!((x2 - x1) & 1)) {						   \
     PUT_PIXEL(0);							   \
@@ -314,9 +331,9 @@ void ZFN(ZB_fillTriangleSmoothLong)(ZBuffer *zb,
 
 #define DRAW_INIT() 				\
 {						\
-  _drgbdx=((unsigned int)SAR_RND_TO_ZERO(drdx,6) << 22) & 0xFFC00000;		\
-  _drgbdx|=SAR_RND_TO_ZERO(dgdx,5) & 0x000007FF;		\
-  _drgbdx|=((unsigned int)SAR_RND_TO_ZERO(dbdx,7) << 12) & 0x001FF000; 	\
+  _drgbdx=((unsigned int)SAR_RND_TO_ZERO(drdx,6+ZTRI_CPLANE) << 22) & 0xFFC00000;		\
+  _drgbdx|=SAR_RND_TO_ZERO(dgdx,5+ZTRI_CPLANE) & 0x000007FF;		\
+  _drgbdx|=((unsigned int)SAR_RND_TO_ZERO(dbdx,7+ZTRI_CPLANE) << 12) & 0x001FF000; 	\
   ndrdx=NB_INTERP * drdx; ndgdx=NB_INTERP * dgdx; ndbdx=NB_INTERP * dbdx;	\
 }
 
@@ -334,9 +351,9 @@ void ZFN(ZB_fillTriangleSmoothLong)(ZBuffer *zb,
 
 #define LONG_PACK()						\
 {								\
-  rgb=((unsigned int)r_ << 16) & 0xFFC00000;			\
-  rgb|=(g_ >> 5) & 0x000007FF;					\
-  rgb|=((unsigned int)b_ << 5) & 0x001FF000;			\
+  rgb=((unsigned int)r_ << (16-ZTRI_CPLANE)) & 0xFFC00000;	\
+  rgb|=(g_ >> (5+ZTRI_CPLANE)) & 0x000007FF;			\
+  rgb|=ZTRI_BPACK(b_) & 0x001FF000;				\
 }
 
 #define DRAW_LINE()				\
@@ -447,6 +464,265 @@ void ZFN(ZB_fillTriangleMappingPerspective)(ZBuffer *zb,
      if (ZCMP(zz,pz[_a])) {				\
        pp[_a]=*(PIXEL *)((char *)texture+ \
                (((t & ttmask) | (s & tsmask)) >> tshift));\
+       ZWRITE(pz[_a],zz);				\
+    }						\
+    z+=dzdx;					\
+    s+=dsdx;					\
+    t+=dtdx;					\
+}
+
+#endif
+
+#define DRAW_LINE()				\
+{						\
+  register unsigned short *pz;		\
+  register PIXEL *pp;		\
+  register unsigned int s,t,z,zz;	\
+  register int n,dsdx,dtdx;		\
+  float sz,tz,fz,zinv; \
+  n=x2-x1;                             \
+  fz=q1;\
+  zinv=1.0f / fz;\
+  pp=(PIXEL *)((char *)pp1 + x1 * PSZB); \
+  pz=pz1+x1;					\
+  z=z1;						\
+  sz=sz1;\
+  tz=tz1;\
+  while (n>=(NB_INTERP-1)) {						   \
+    {\
+      float ss,tt;\
+      ss=(sz * zinv);\
+      tt=(tz * zinv);\
+      s=(int) ss;\
+      t=(int) tt;\
+      dsdx= (int)( (dszdx - ss*fdzdx)*zinv );\
+      dtdx= (int)( (dtzdx - tt*fdzdx)*zinv );\
+      fz+=fndzdx;\
+      zinv=1.0f / fz;\
+    }\
+    PUT_PIXEL(0);							   \
+    PUT_PIXEL(1);							   \
+    PUT_PIXEL(2);							   \
+    PUT_PIXEL(3);							   \
+    PUT_PIXEL(4);							   \
+    PUT_PIXEL(5);							   \
+    PUT_PIXEL(6);							   \
+    PUT_PIXEL(7);							   \
+    pz+=NB_INTERP;							   \
+    pp=(PIXEL *)((char *)pp + NB_INTERP * PSZB);\
+    n-=NB_INTERP;							   \
+    sz+=ndszdx;\
+    tz+=ndtzdx;\
+  }									   \
+    {\
+      float ss,tt;\
+      ss=(sz * zinv);\
+      tt=(tz * zinv);\
+      s=(int) ss;\
+      t=(int) tt;\
+      dsdx= (int)( (dszdx - ss*fdzdx)*zinv );\
+      dtdx= (int)( (dtzdx - tt*fdzdx)*zinv );\
+    }\
+  while (n>=0) {							   \
+    PUT_PIXEL(0);							   \
+    pz+=1;								   \
+    pp=(PIXEL *)((char *)pp + PSZB);\
+    n-=1;								   \
+  }									   \
+}
+  
+#include "ztriangle.h"
+}
+
+/* s31 phase 5 (s31_tex8.c): the same filler for a texture of 8-bit texels
+   (P8, L8): current_texture is its index or grey plane (a byte a texel,
+   tex_shift the fraction bits), tex_pal the PACK of each value - the
+   palette entry's, or the grey ramp's (s31_grey565) - which is what the
+   general path stores for REPLACE, DECAL or MODULATE-by-white of that
+   texel's word. One load more a pixel than the RGB565 filler */
+void ZFN(ZB_fillTriangleMappingPerspective8)(ZBuffer *zb,
+                            ZBufferPoint *p0,ZBufferPoint *p1,ZBufferPoint *p2)
+{
+    const unsigned char *texture;
+    const unsigned short *tpal;
+    float fdzdx,fndzdx,ndszdx,ndtzdx;
+    /* s31: the texture's own size - masks and shift instead of TinyGL's
+       fixed 256x256 constants, the same operations per pixel (zbuffer.h) */
+    unsigned int tsmask, ttmask, tshift;
+
+/* s31: divide by q = 1/w, not by window z. Window z is affine in 1/w
+   with a constant term, so TinyGL's s*z/z was close to an affine mapping
+   on distant surfaces; s*q/q is GL's perspective-correct one (3.8). */
+#define INTERP_Z
+#define INTERP_STZ
+
+#define NB_INTERP 8
+
+#define DRAW_INIT()				\
+{						\
+  texture=(const unsigned char *)zb->current_texture;\
+  tpal=zb->tex_pal;\
+  tsmask=zb->tex_smask; ttmask=zb->tex_tmask; tshift=zb->tex_shift;\
+  fdzdx=dqdx;\
+  fndzdx=NB_INTERP * fdzdx;\
+  ndszdx=NB_INTERP * dszdx;\
+  ndtzdx=NB_INTERP * dtzdx;\
+}
+
+
+#if TGL_FEATURE_RENDER_BITS == 24
+
+#define PUT_PIXEL(_a)				\
+{						\
+   unsigned char *ptr;\
+   zz=z >> ZB_POINT_Z_FRAC_BITS;		\
+     if (ZCMP(zz,pz[_a])) {				\
+       ptr = texture + (((t & 0x3FC00000) | (s & 0x003FC000)) >> 14) * 3;\
+       pp[3 * _a]= ptr[0];\
+       pp[3 * _a + 1]= ptr[1];\
+       pp[3 * _a + 2]= ptr[2];\
+       ZWRITE(pz[_a],zz);				\
+    }						\
+    z+=dzdx;					\
+    s+=dsdx;					\
+    t+=dtdx;					\
+}
+
+#else
+
+#define PUT_PIXEL(_a)				\
+{						\
+   zz=z >> ZB_POINT_Z_FRAC_BITS;		\
+     if (ZCMP(zz,pz[_a])) {				\
+       pp[_a]=tpal[texture[((t & ttmask) | (s & tsmask)) >> tshift]];\
+       ZWRITE(pz[_a],zz);				\
+    }						\
+    z+=dzdx;					\
+    s+=dsdx;					\
+    t+=dtdx;					\
+}
+
+#endif
+
+#define DRAW_LINE()				\
+{						\
+  register unsigned short *pz;		\
+  register PIXEL *pp;		\
+  register unsigned int s,t,z,zz;	\
+  register int n,dsdx,dtdx;		\
+  float sz,tz,fz,zinv; \
+  n=x2-x1;                             \
+  fz=q1;\
+  zinv=1.0f / fz;\
+  pp=(PIXEL *)((char *)pp1 + x1 * PSZB); \
+  pz=pz1+x1;					\
+  z=z1;						\
+  sz=sz1;\
+  tz=tz1;\
+  while (n>=(NB_INTERP-1)) {						   \
+    {\
+      float ss,tt;\
+      ss=(sz * zinv);\
+      tt=(tz * zinv);\
+      s=(int) ss;\
+      t=(int) tt;\
+      dsdx= (int)( (dszdx - ss*fdzdx)*zinv );\
+      dtdx= (int)( (dtzdx - tt*fdzdx)*zinv );\
+      fz+=fndzdx;\
+      zinv=1.0f / fz;\
+    }\
+    PUT_PIXEL(0);							   \
+    PUT_PIXEL(1);							   \
+    PUT_PIXEL(2);							   \
+    PUT_PIXEL(3);							   \
+    PUT_PIXEL(4);							   \
+    PUT_PIXEL(5);							   \
+    PUT_PIXEL(6);							   \
+    PUT_PIXEL(7);							   \
+    pz+=NB_INTERP;							   \
+    pp=(PIXEL *)((char *)pp + NB_INTERP * PSZB);\
+    n-=NB_INTERP;							   \
+    sz+=ndszdx;\
+    tz+=ndtzdx;\
+  }									   \
+    {\
+      float ss,tt;\
+      ss=(sz * zinv);\
+      tt=(tz * zinv);\
+      s=(int) ss;\
+      t=(int) tt;\
+      dsdx= (int)( (dszdx - ss*fdzdx)*zinv );\
+      dtdx= (int)( (dtzdx - tt*fdzdx)*zinv );\
+    }\
+  while (n>=0) {							   \
+    PUT_PIXEL(0);							   \
+    pz+=1;								   \
+    pp=(PIXEL *)((char *)pp + PSZB);\
+    n-=1;								   \
+  }									   \
+}
+  
+#include "ztriangle.h"
+}
+
+/* s31 phase 5: the same for the RGBA8 words of the unpacked reference
+   storage (S31GL_TEX8=2, s31_tex8.c TGL_ST_W32): PACK of the word - what
+   the 8-bit filler stores from its table, so the bit-identity gate
+   compares the storages on the same rasteriser */
+void ZFN(ZB_fillTriangleMappingPerspective32)(ZBuffer *zb,
+                            ZBufferPoint *p0,ZBufferPoint *p1,ZBufferPoint *p2)
+{
+    const unsigned int *texture;
+    float fdzdx,fndzdx,ndszdx,ndtzdx;
+    /* s31: the texture's own size - masks and shift instead of TinyGL's
+       fixed 256x256 constants, the same operations per pixel (zbuffer.h) */
+    unsigned int tsmask, ttmask, tshift;
+
+/* s31: divide by q = 1/w, not by window z. Window z is affine in 1/w
+   with a constant term, so TinyGL's s*z/z was close to an affine mapping
+   on distant surfaces; s*q/q is GL's perspective-correct one (3.8). */
+#define INTERP_Z
+#define INTERP_STZ
+
+#define NB_INTERP 8
+
+#define DRAW_INIT()				\
+{						\
+  texture=(const unsigned int *)zb->current_texture;\
+  tsmask=zb->tex_smask; ttmask=zb->tex_tmask; tshift=zb->tex_shift;\
+  fdzdx=dqdx;\
+  fndzdx=NB_INTERP * fdzdx;\
+  ndszdx=NB_INTERP * dszdx;\
+  ndtzdx=NB_INTERP * dtzdx;\
+}
+
+
+#if TGL_FEATURE_RENDER_BITS == 24
+
+#define PUT_PIXEL(_a)				\
+{						\
+   unsigned char *ptr;\
+   zz=z >> ZB_POINT_Z_FRAC_BITS;		\
+     if (ZCMP(zz,pz[_a])) {				\
+       ptr = texture + (((t & 0x3FC00000) | (s & 0x003FC000)) >> 14) * 3;\
+       pp[3 * _a]= ptr[0];\
+       pp[3 * _a + 1]= ptr[1];\
+       pp[3 * _a + 2]= ptr[2];\
+       ZWRITE(pz[_a],zz);				\
+    }						\
+    z+=dzdx;					\
+    s+=dsdx;					\
+    t+=dtdx;					\
+}
+
+#else
+
+#define PUT_PIXEL(_a)				\
+{						\
+   zz=z >> ZB_POINT_Z_FRAC_BITS;		\
+     if (ZCMP(zz,pz[_a])) {				\
+       { unsigned int w_=texture[((t & ttmask) | (s & tsmask)) >> tshift];\
+         pp[_a]=(PIXEL)(((w_ & 0xf8) << 8) | ((w_ >> 5) & 0x07e0) | ((w_ >> 19) & 0x1f)); }\
        ZWRITE(pz[_a],zz);				\
     }						\
     z+=dzdx;					\

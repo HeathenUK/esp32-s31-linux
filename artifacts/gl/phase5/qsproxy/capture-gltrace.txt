@@ -1,0 +1,18 @@
+gltrace: recording /src/gl/bench/base5/out-host/libGL.so.1 -> /src/gl/bench/qstrace/work/p4final/qs.gltr (2 windows, last frame 439, 2 warm-up)
+gltrace: frame 1: context 1 current on drawable 1, 32x32 depth 16 stencil 0 db 1
+gltrace: frame 1: context 2 current on drawable 2, 320x240 depth 16 stencil 0 db 1
+gltrace: done: 439 frames (84 full, 355 state-only), 2397704 records, 69400844 bytes, 0 UNHANDLED -> /src/gl/bench/qstrace/work/p4final/qs.gltr
+GL_VENDOR: s31
+GL_RENDERER: Software Rasterizer
+GL_VERSION: 1.1 s31-tinygl
+Warning: OpenGL version < 1.5, skipping ARB_vertex_buffer_object check
+Warning: multitexture not supported (extension not found)
+Warning: texture_env_combine not supported
+Warning: texture_env_add not supported
+FOUND: SDL_GL_SWAP_CONTROL
+Warning: texture_filter_anisotropic not supported
+Warning: texture_non_power_of_two not supported
+Warning: OpenGL version < 2, GLSL not available
+Warning: GLSL gamma not available, using hardware gamma
+Warning: GLSL alias model rendering not available, using Fitz renderer
+Warning: glGenerateMipmap not available, liquids won't have mipmaps

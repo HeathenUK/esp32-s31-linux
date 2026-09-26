@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include "zgl.h"
+#include "s31_tex8.h"
 #include "s31_ramtext.h"
 
 GLContext *gl_ctx;
@@ -42,6 +43,7 @@ void endSharedState(GLContext *c)
       t1=t->next;
       for (j=0;j<TGL_STORED_LEVELS;j++)
         if (t->images[j].pixmap) gl_free(t->images[j].pixmap);
+      gl_tex_free_mip(t);         /* s31: the mipmap levels (phase 4) */
       gl_free(t);
       t=t1;
     }
@@ -181,8 +183,9 @@ void glInit(void *zbuffer1)
   c->matrix_stack_depth_max[0]=MAX_MODELVIEW_STACK_DEPTH;
   c->matrix_stack_depth_max[1]=MAX_PROJECTION_STACK_DEPTH;
   c->matrix_stack_depth_max[2]=MAX_TEXTURE_STACK_DEPTH;
+  c->matrix_stack_depth_max[3]=MAX_TEXTURE_STACK_DEPTH;   /* s31: unit 1's */
 
-  for(i=0;i<3;i++) {
+  for(i=0;i<4;i++) {
     c->matrix_stack[i]=gl_zalloc(c->matrix_stack_depth_max[i] * sizeof(M4));
     c->matrix_stack_ptr[i]=c->matrix_stack[i];
   }
@@ -191,6 +194,7 @@ void glInit(void *zbuffer1)
   glLoadIdentity();
   glMatrixMode(GL_TEXTURE);
   glLoadIdentity();
+  gl_M4_Id(c->matrix_stack[3]);     /* s31 (phase 5 O1): unit 1's */
   glMatrixMode(GL_MODELVIEW);
   glLoadIdentity();
 
@@ -216,12 +220,14 @@ void glInit(void *zbuffer1)
 
   /* s31 state */
   s31_state_init(c);
+  gl_mtex_init(c);          /* phase 5 O1: texture unit 1 (s31_mtex.c) */
   /* s31 (phase 4, s31_tfilter.c): the general path's per-triangle state;
      S31GL_MIPMAPS=0 keeps levels > 0 unstored (the mipmap filters then
      sample level 0) */
   c->pipe.x = &c->pipex;
   c->pipe.xact = 0;
-  c->pipex.slot_tex = c->pipex.slot_col = -1;
+  c->pipex.slot_col = NULL;
+  c->pipex.tf[0].slot = c->pipex.tf[1].slot = NULL;
   {
     /* S31GL_TEXFILTER=0: nearest in level 0 for every filter, and no
        level > 0 stored (phase 4 review: the pre-phase-4 behaviour, for
@@ -237,6 +243,10 @@ void glInit(void *zbuffer1)
     c->pc_enable = e ? atoi(e) != 0 : 1;
     e = getenv("S31GL_MIPMAPS");
     c->mip_store = c->tex_filter && (e ? atoi(e) != 0 : 1);
+    /* phase 5: texel storage (s31_tex8.c) */
+    c->tex8 = gl_tex8_knob();
+    e = getenv("S31GL_FILT8");
+    c->filt8 = e ? atoi(e) != 0 : 0;
   }
 }
 
@@ -251,10 +261,15 @@ void glClose(void)
   gl_free(c->vc);   /* s31 (phase 3a G14): arrays.c vertex cache (one block) */
   gl_free(c->pipex.stab);   /* phase 4 F8: the stencil table (raster_sel.c) */
   c->pipex.stab = NULL;
+  gl_free(c->pipex.wtab);   /* phase 5 O1: zpipe_fused.c's tables */
+  c->pipex.wtab = NULL;
+  gl_free(c->pipex.btab);   /* phase 5 O2: its blend tables */
+  c->pipex.btab = NULL;
 
-  for(i=0;i<3;i++) {
+  for(i=0;i<4;i++) {
     gl_free(c->matrix_stack[i]);
   }
+  gl_mtex_free(c);          /* phase 5 O1 */
   free_texture_detached(c->tex1d_default);   /* s31: the 1D default object */
   gl_free(c->pixpipe);                       /* s31: s31_draw.c's cache */
   /* s31: the specular tables were leaked */

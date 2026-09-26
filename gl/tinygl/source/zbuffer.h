@@ -16,12 +16,31 @@
 #define ZB_POINT_T_MIN ( (1<<21) )
 #define ZB_POINT_T_MAX ( (1<<30)-(1<<21) )
 
+#ifdef S31GL_P4ARITH
 #define ZB_POINT_RED_MIN ( (1<<10) )
 #define ZB_POINT_RED_MAX ( (1<<16)-(1<<10) )
 #define ZB_POINT_GREEN_MIN ( (1<<9) )
 #define ZB_POINT_GREEN_MAX ( (1<<16)-(1<<9) )
 #define ZB_POINT_BLUE_MIN ( (1<<10) )
 #define ZB_POINT_BLUE_MAX ( (1<<16)-(1<<10) )
+#else
+/* s31 phase 5 P: a colour c in [0, 1] is 65280 c + 128, i.e. 256 (255 c +
+   1/2), so its top 5 / 6 bits (RGB_TO_PIXEL, the smooth filler's packed
+   fields) are round(255 c) truncated to 565 - Mesa's result on a 565
+   buffer (gl/tests/glx_prec.c bands 1-3, 27). TinyGL's 1024 / 512 minimum
+   rounded c straight to 5 / 6 bits, one level above Mesa for 29% of the
+   values. The general path's 8.16 colour (raster_int.h c816) is
+   (v - 128) 256 + 2^15 = 256 v: the same round(255 c) as before. The
+   triangle fillers evaluate these planes with 8 more fraction bits
+   (ztriangle.h ZTRI_CPLANE), so a plane's rounding cannot take a pixel
+   below 0 or above 65535 (the 128 margin) */
+#define ZB_POINT_RED_MIN ( 128 )
+#define ZB_POINT_RED_MAX ( 65408 )
+#define ZB_POINT_GREEN_MIN ( 128 )
+#define ZB_POINT_GREEN_MAX ( 65408 )
+#define ZB_POINT_BLUE_MIN ( 128 )
+#define ZB_POINT_BLUE_MAX ( 65408 )
+#endif
 
 /* display modes */
 #define ZB_MODE_5R6G5B  1  /* true color 16 bits */
@@ -84,6 +103,10 @@ typedef struct {
     unsigned char *dctable;
     int *ctable;
     PIXEL *current_texture;
+    /* s31 phase 5: a tier-1 texture of 8-bit texels (s31_tex8.c): 
+       current_texture is its index / grey plane, tex_pal the PACK of each
+       index (the palette's, or the grey ramp's), tex_shift the byte shift */
+    const unsigned short *tex_pal;
     int zbuf_ext;  /* s31: zbuf belongs to the caller (the GLX drawable), never freed here */
 
     /* s31: the bound texture's native size (plan F3). The texel of
@@ -271,6 +294,17 @@ void ZB_fillTriangleSmoothLong_lt(ZBuffer *zb, ZBufferPoint *p1,ZBufferPoint *p2
 void ZB_fillTriangleFlat_lt(ZBuffer *zb, ZBufferPoint *p1,ZBufferPoint *p2,ZBufferPoint *p3);
 void ZB_fillTriangleSmooth_lt(ZBuffer *zb, ZBufferPoint *p1,ZBufferPoint *p2,ZBufferPoint *p3);
 void ZB_fillTriangleMappingPerspective_lt(ZBuffer *zb, ZBufferPoint *p0,ZBufferPoint *p1,ZBufferPoint *p2);
+/* s31 phase 5: the same for a texture of 8-bit texels (ZBuffer.tex_pal) */
+void ZB_fillTriangleMappingPerspective8(ZBuffer *zb, ZBufferPoint *p0,ZBufferPoint *p1,ZBufferPoint *p2);
+void ZB_fillTriangleMappingPerspective8_nt(ZBuffer *zb, ZBufferPoint *p0,ZBufferPoint *p1,ZBufferPoint *p2);
+void ZB_fillTriangleMappingPerspective8_nw(ZBuffer *zb, ZBufferPoint *p0,ZBufferPoint *p1,ZBufferPoint *p2);
+void ZB_fillTriangleMappingPerspective8_lt(ZBuffer *zb, ZBufferPoint *p0,ZBufferPoint *p1,ZBufferPoint *p2);
+void ZB_fillTriangleMappingPerspective32(ZBuffer *zb, ZBufferPoint *p0,ZBufferPoint *p1,ZBufferPoint *p2);
+void ZB_fillTriangleMappingPerspective32_nt(ZBuffer *zb, ZBufferPoint *p0,ZBufferPoint *p1,ZBufferPoint *p2);
+void ZB_fillTriangleMappingPerspective32_nw(ZBuffer *zb, ZBufferPoint *p0,ZBufferPoint *p1,ZBufferPoint *p2);
+void ZB_fillTriangleMappingPerspective32_lt(ZBuffer *zb, ZBufferPoint *p0,ZBufferPoint *p1,ZBufferPoint *p2);
+/* PACK(l, l, l) of every grey value (s31_tex8.c) */
+extern const unsigned short s31_grey565[256];
 /* s31: zline.c, GL_LESS lines and points */
 void ZB_line_z_lt(ZBuffer *zb, ZBufferPoint *p1, ZBufferPoint *p2);
 void ZB_plot_lt(ZBuffer *zb, ZBufferPoint *p);

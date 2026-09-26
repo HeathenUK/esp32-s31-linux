@@ -1,0 +1,5 @@
+- mesa: query u1 tc after pop 0.500 1.000
++ ours: query u1 tc after pop 0.700 0.200
+- mesa: error mtexcoord unit 40: 0x0
++ ours: error mtexcoord unit 40: 0x500
+32 lines compared, 2 differ

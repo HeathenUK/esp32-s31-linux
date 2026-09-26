@@ -64,6 +64,25 @@ static void to_vg(GLContext *c, ZVtxG *g, const GLVertex *v)
   }
 }
 
+/* phase 5 O1: texture unit 1's s, t in its own fixed point, exactly as
+   clip.c gl_transform_to_viewport forms unit 0's zp.s, zp.t (the q divide,
+   the clamp into the int range) */
+static inline void tc1_fixed(const GLContext *c, const GLVertex *v, int *si, int *ti)
+{
+  float fs = v->tex_coord1.X * c->tex1_sscale;
+  float ft = v->tex_coord1.Y * c->tex1_tscale;
+  if (v->tex_coord1.W != 1.0f) {
+    float iq = v->tex_coord1.W > 1.0e-6f || v->tex_coord1.W < -1.0e-6f ?
+               1.0f / v->tex_coord1.W : 1.0e6f;
+    fs *= iq;
+    ft *= iq;
+  }
+  fs = fminf(fmaxf(fs, -2.0e9f), 2.0e9f);
+  ft = fminf(fmaxf(ft, -2.0e9f), 2.0e9f);
+  *si = (int)fs;
+  *ti = (int)ft;
+}
+
 /* GL_FLAT: the provoking vertex's colour and alpha (clip.c) */
 static void set_flat(GLContext *c)
 {
@@ -93,6 +112,23 @@ void gl_draw_triangle_general(GLContext *c, GLVertex *p0, GLVertex *p1,
   to_vg(c, &g[1], p1);
   to_vg(c, &g[2], p2);
   ZB_fillTriangleGeneral(c->zb, &g[0], &g[1], &g[2], c->tex_active);
+}
+
+/* phase 5 O1: the general path with texture unit 1 on */
+void gl_draw_triangle_mt(GLContext *c, GLVertex *p0, GLVertex *p1, GLVertex *p2)
+{
+  ZVtxG g[3];
+
+  if (c->pipe_dirty) gl_build_pipe(c);
+  c->pipe.stip_on = 1;                /* polygon stipple applies */
+  if (c->current_shade_model != GL_SMOOTH) set_flat(c);
+  to_vg(c, &g[0], p0);
+  to_vg(c, &g[1], p1);
+  to_vg(c, &g[2], p2);
+  tc1_fixed(c, p0, &g[0].si1, &g[0].ti1);
+  tc1_fixed(c, p1, &g[1].si1, &g[1].ti1);
+  tc1_fixed(c, p2, &g[2].si1, &g[2].ti1);
+  ZB_fillTriangleGeneralMT(c->zb, &g[0], &g[1], &g[2], 1);
 }
 
 /* GL_MODULATE of an opaque texture: by a white colour it is the texel, so
@@ -156,7 +192,7 @@ void gl_draw_triangle_offset(GLContext *c, GLVertex *p0, GLVertex *p1,
    and s/w, t/w, fog/w over q = 1/w, so textures and fog along a line are
    perspective-correct as they are on triangles (the fog and texture stages
    divide by q) */
-typedef struct { int x, y, z, r, g, b, a; float s, t, f, q; } LinePt;
+typedef struct { int x, y, z, r, g, b, a; float s, t, f, q, s1, t1; } LinePt;
 
 static void to_lp(GLContext *c, LinePt *l, const GLVertex *v)
 {
@@ -176,6 +212,15 @@ static void to_lp(GLContext *c, LinePt *l, const GLVertex *v)
   } else {
     l->s = l->t = 0.0f;
   }
+  if (c->vtx_extra & 4) {
+    /* phase 5 O1: texture unit 1's (vtx_extra bit 2 is tu1_on, and near
+       the context pointer), likewise over q */
+    int si, ti;
+    tc1_fixed(c, v, &si, &ti);
+    l->s1 = (float)si * q;
+    l->t1 = (float)ti * q;
+  }
+  /* (else s1, t1 are not read: ZP_N_ST1 and tu1_on are the same state) */
 }
 
 /* ------------------------------------------------------------ smooth */
@@ -200,6 +245,7 @@ typedef struct {
   float z0, dz, zlo, zhi;
   float r0, dr, g0, dg, b0, db, a0, da;
   float s0, ds, t0, dt_, f0, df, q0, dq;
+  float s10, ds1, t10, dt1;     /* phase 5 O1: texture unit 1's */
   float dtdx;                   /* t per pixel along a row */
   int need;
 } AAPrim;
@@ -219,6 +265,10 @@ static void aa_prim(const ZPipe *p, AAPrim *a, const LinePt *p1, const LinePt *p
   a->t0 = p1->t; a->dt_ = p2->t - p1->t;
   a->f0 = p1->f; a->df = p2->f - p1->f;
   a->q0 = p1->q; a->dq = p2->q - p1->q;
+  if (a->need & ZP_N_ST1) {                  /* phase 5 O1 */
+    a->s10 = p1->s1; a->ds1 = p2->s1 - p1->s1;
+    a->t10 = p1->t1; a->dt1 = p2->t1 - p1->t1;
+  }
   a->dtdx = dtdx;
 }
 
@@ -226,8 +276,9 @@ static void aa_prim(const ZPipe *p, AAPrim *a, const LinePt *p1, const LinePt *p
    parameter t0 at the first pixel centre, and the coverage coordinates
    (ZSpan.cva/cvb, zpipe.c zv_cover). Depth is kept inside the two ends'
    range: the footprint reaches half a pixel past them */
-static void aa_span(ZBuffer *zb, const AAPrim *a, int row, int x0, int x1,
-                    float t0, float ca, float cda, float cb, float cdb)
+static inline __attribute__((always_inline))
+void aa_span_t(ZBuffer *zb, const AAPrim *a, int row, int x0, int x1,
+               float t0, float ca, float cda, float cb, float cdb, const int mt)
 {
   ZSpan sp;
   int n = x1 - x0, need = a->need;
@@ -256,7 +307,28 @@ static void aa_span(ZBuffer *zb, const AAPrim *a, int row, int x0, int x1,
   if (need & ZP_N_Q) { sp.fz = a->q0 + t0 * a->dq; sp.dfzdx = dt * a->dq; }
   sp.cva = ca; sp.cvda = cda; sp.cvb = cb; sp.cvdb = cdb;
   sp.cvpp = sp.pp;
-  zp_run(zb, &sp);
+  if (mt) {                                 /* phase 5 O1 */
+    sp.sz1 = a->s10 + t0 * a->ds1; sp.dszdx1 = dt * a->ds1;
+    sp.tz1 = a->t10 + t0 * a->dt1; sp.dtzdx1 = dt * a->dt1;
+    zp_run_mt(zb, &sp);
+  } else {
+    zp_run(zb, &sp);
+  }
+}
+
+typedef void (*AASpanFn)(ZBuffer *, const AAPrim *, int, int, int, float, float,
+                         float, float, float);
+static void aa_span(ZBuffer *zb, const AAPrim *a, int row, int x0, int x1,
+                    float t0, float ca, float cda, float cb, float cdb)
+{
+  aa_span_t(zb, a, row, x0, x1, t0, ca, cda, cb, cdb, 0);
+}
+
+/* phase 5 O1: with texture unit 1 on (the primitive picks one of the two) */
+static void aa_span_mt(ZBuffer *zb, const AAPrim *a, int row, int x0, int x1,
+                       float t0, float ca, float cda, float cb, float cdb)
+{
+  aa_span_t(zb, a, row, x0, x1, t0, ca, cda, cb, cdb, 1);
 }
 
 /* GL_LINE_SMOOTH (GL 1.3 3.4.2): every pixel whose centre is within
@@ -273,6 +345,7 @@ static void gl_aa_line(GLContext *c, GLVertex *va, GLVertex *vb, int flat)
   ZPipeX *x = &c->pipex;
   LinePt p1, p2;
   AAPrim ap;
+  AASpanFn span;
   float x0 = va->zp.fx, y0 = va->zp.fy, dx = vb->zp.fx - x0, dy = vb->zp.fy - y0;
   float len2 = dx * dx + dy * dy, len, inv, ux, uy, mx, my, hw1, hl, ey, cy0;
   float lo1, hi1, lo2, hi2, slo1, shi1, slo2, shi2;
@@ -294,6 +367,7 @@ static void gl_aa_line(GLContext *c, GLVertex *va, GLVertex *vb, int flat)
   x->cv_lcap = len < 1.0f ? len : 1.0f;
   x->cov_kind = 1;
   aa_prim(&c->pipe, &ap, &p1, &p2, ux * inv);
+  span = ap.need & ZP_N_ST1 ? aa_span_mt : aa_span;
   /* rows whose centre is inside the rectangle's y extent */
   ey = fabsf(uy) * hl + fabsf(ux) * hw1;
   r0 = ifloorf(my - ey - 0.5f) + 1;
@@ -333,7 +407,7 @@ static void gl_aa_line(GLContext *c, GLVertex *va, GLVertex *vb, int flat)
     cy = (float)row + 0.5f - my;
     cx0 = (float)c0 + 0.5f - mx;
     l0 = cy * uy + ux * cx0;
-    aa_span(zb, &ap, row, c0, c1, l0 * inv + 0.5f, cy * ux - uy * cx0, -uy, l0, ux);
+    span(zb, &ap, row, c0, c1, l0 * inv + 0.5f, cy * ux - uy * cx0, -uy, l0, ux);
   }
   x->cov_kind = 0;
 }
@@ -348,6 +422,7 @@ static void gl_aa_point(GLContext *c, GLVertex *v)
   ZPipeX *x = &c->pipex;
   LinePt q;
   AAPrim ap;
+  AASpanFn span;
   float cx = v->zp.fx, cy = v->zp.fy, rr = 0.5f * c->aa_ps + 0.5f;
   int row, r0, r1, bx0 = c->rast_box[0], by0 = c->rast_box[1];
   int bx1 = c->rast_box[2], by1 = c->rast_box[3];
@@ -363,6 +438,7 @@ static void gl_aa_point(GLContext *c, GLVertex *v)
   x->cv_rr = rr;
   x->cov_kind = 2;
   aa_prim(&c->pipe, &ap, &q, &q, 0.0f);
+  span = ap.need & ZP_N_ST1 ? aa_span_mt : aa_span;
   r0 = ifloorf(cy - rr - 0.5f) + 1;
   r1 = iceilf(cy + rr - 0.5f) - 1;
   if (r0 < by0) r0 = by0;
@@ -377,7 +453,7 @@ static void gl_aa_point(GLContext *c, GLVertex *v)
     if (c0 < bx0) c0 = bx0;
     if (c1 > bx1) c1 = bx1;
     if (c1 <= c0) continue;
-    aa_span(zb, &ap, row, c0, c1, 0.0f, (float)c0 + 0.5f - cx, 1.0f, dy, 0.0f);
+    span(zb, &ap, row, c0, c1, 0.0f, (float)c0 + 0.5f - cx, 1.0f, dy, 0.0f);
   }
   x->cov_kind = 0;
 }
@@ -403,7 +479,7 @@ void gl_general_line(GLContext *c, GLVertex *va, GLVertex *vb, int flat)
   LinePt p1, p2, tmp;
   int dx, dy, sx, n, i, k, e, xmaj, x, y, w = c->line_w, k0;
   int dcol[4];
-  float dpf[4], inv;
+  float dpf[4], inv, dpf1[2] = { 0.0f, 0.0f };
   int dz, stip = c->line_stipple_enabled, sfac = c->line_stipple_factor, rev = 0, s0;
   unsigned int spat = (unsigned int)c->line_stipple_pattern;
   int bx0 = c->rast_box[0], by0 = c->rast_box[1], bx1 = c->rast_box[2], by1 = c->rast_box[3];
@@ -459,6 +535,9 @@ void gl_general_line(GLContext *c, GLVertex *va, GLVertex *vb, int flat)
   dcol[3] = n ? (p2.a - p1.a) / n : 0;
   dpf[0] = (p2.s - p1.s) * inv; dpf[1] = (p2.t - p1.t) * inv;
   dpf[2] = (p2.f - p1.f) * inv; dpf[3] = (p2.q - p1.q) * inv;
+  if (c->tu1_on) {                    /* phase 5 O1 */
+    dpf1[0] = (p2.s1 - p1.s1) * inv; dpf1[1] = (p2.t1 - p1.t1) * inv;
+  }
   dz = n ? (p2.z - p1.z) / n : 0;
   k0 = -(w - 1) / 2;
 
@@ -525,7 +604,14 @@ void gl_general_line(GLContext *c, GLVertex *va, GLVertex *vb, int flat)
         sp.sz = p1.s + (float)i0 * dpf[0]; sp.tz = p1.t + (float)i0 * dpf[1];
         sp.fq = p1.f + (float)i0 * dpf[2]; sp.fz = p1.q + (float)i0 * dpf[3];
         sp.dszdx = dpf[0]; sp.dtzdx = dpf[1]; sp.dfqdx = dpf[2]; sp.dfzdx = dpf[3];
-        zp_run(zb, &sp);
+        if (c->tu1_on) {
+          /* phase 5 O1 */
+          sp.sz1 = p1.s1 + (float)i0 * dpf1[0]; sp.tz1 = p1.t1 + (float)i0 * dpf1[1];
+          sp.dszdx1 = dpf1[0]; sp.dtzdx1 = dpf1[1];
+          zp_run_mt(zb, &sp);
+        } else {
+          zp_run(zb, &sp);
+        }
         for (jj = 0; jj < j; jj++)
           if (pa[jj]) { *pa[jj] = pbuf[jj]; *za[jj] = zbuf[jj]; }
         if (sten)
@@ -602,6 +688,12 @@ void gl_general_point(GLContext *c, GLVertex *v)
     sp.sr = sp.sg = sp.sb = sp.dsrdx = sp.dsgdx = sp.dsbdx = 0;
     sp.sz = q.s; sp.tz = q.t; sp.fq = q.f; sp.fz = q.q;
     sp.dszdx = sp.dtzdx = sp.dfqdx = sp.dfzdx = 0.0f;
-    zp_run(zb, &sp);
+    if (c->tu1_on) {
+      /* phase 5 O1 */
+      sp.sz1 = q.s1; sp.tz1 = q.t1; sp.dszdx1 = sp.dtzdx1 = 0.0f;
+      zp_run_mt(zb, &sp);
+    } else {
+      zp_run(zb, &sp);
+    }
   }
 }

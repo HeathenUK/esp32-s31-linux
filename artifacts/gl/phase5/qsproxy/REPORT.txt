@@ -1,0 +1,46 @@
+QuakeSpasm GL workload proxy - phase-4-final baseline (2026-09-26, host only)
+
+Instrument: tools/glref/gltrace (record + host replay), gl/bench/qsreplay.sh
+(RV32 bare-metal replay under qemu -icount), gl/bench/qsprof.sh (profile),
+gl/tests/run-qsr.sh (guard), gl/tests/run-qsr-ab.sh (bit-identity of two
+toggle arms). Documented in tools/glref/README.md ("gltrace") and
+gl/bench/BASELINE.md ("QuakeSpasm proxy").
+
+Trace: stock QuakeSpasm 0.96.3 (artifacts/gl/glquake/host/quakespasm, the
+board's switches), timedemo demo1, 320x240 windowed, -heapsize 12288 -zone
+384 -nosound, against the phase-4-final host libGL (246e832, gl/bench/base5,
+md5 d056659370d2a14f40d58cb1c601cd57). 439 frames: frames 100-139 and
+400-439 counted, 2 warm-up frames before each, 355 state-only; 2,397,704
+records, 69.4 MB, 0 UNHANDLED. trace-summary.txt, capture-gltrace.txt.
+
+Validation
+- tracer transparent: glref capture.c frame 439 without the tracer = the
+  tracer's live frame 439, 0/76800 pixels
+- capture deterministic: two captures byte-identical except QuakeSpasm's two
+  warp-image placeholder uploads (hunk garbage, overwritten before use)
+- host replay vs live: 84/84 full frames bit-exact (host-replay-hashes.txt),
+  and 84/84 for a second capture with S31GL_TEXFILTER=0
+- RV32 bare-metal replay vs live: 84/84 in both (p4-default.frames.txt,
+  p4-tf0-live.frames.txt); rv32-f124.png = live-f124.png exactly
+- ours vs Mesa: 64 PASS / 16 FAIL of 80, all failures in the particle spray
+  (1-2 px particle triangles on different pixels; mesa-sbs-f137.png: Mesa |
+  ours | diff), mesa-compare.txt
+
+M instructions per counted frame (min-max), texture bytes after the load
+phase / at the end:
+  default (trilinear, mips)  100-139: 57.8946 (47.30-67.87)  400-439: 61.3988 (48.99-77.25)  4,892,320 / 4,999,144
+  S31GL_TEXFILTER=0          100-139: 26.9329 (19.27-33.91)  400-439: 27.2208 (21.79-34.38)  4,644,124 / 4,750,948
+  S31GL_MIPMAPS=0            48.9153 / 52.5580
+  S31GL_TRILINEAR=0          50.7164 / 54.7733
+  S31GL_PERSPCOLOR=0         57.8449 / 61.3553
+  harness floor (null GL)    0.3465 / 0.2370
+Soft-double calls 0/frame; musl libm = newlib to 4 decimals.
+texmem.txt: 145 textures after load, level 0 4,620,508 B, levels > 0
+236,844 B, lightmaps 3 x 192 kB (4 at the end).
+
+Profile (prof-default.txt): s31_tfilter.o 51.7% (zx_tri_r 18.6%, zx_bil_ra
+17.5%, zx_bil_r 9.4%), zpipe.o 34.5%, ZB_fillTriangleGeneral 5.1%, geometry
+5.3%. With TEXFILTER=0 (prof-tf0.txt): zpipe.o 63.5% (zo_mul2 15.3%,
+ze_replace_rgba 9.8%, zt_rr 8.7%, zo_sa_omsa 8.6%, zd_lequal 7.9%),
+ZB_fillTriangleMappingPerspective 9.3%, general filler 8.1%, geometry
+11.1% - the board profile's shape (../../glquake/LIBGL-OPPORTUNITIES.md 1a).

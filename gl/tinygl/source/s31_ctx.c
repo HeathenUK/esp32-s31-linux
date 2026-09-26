@@ -94,6 +94,7 @@ static GLContext *ctx_new(GLContext *share)
       GLTexture *t = c->shared_state.texture_hash_table[0];
       while (t != NULL && t->handle != 0) t = t->next;
       c->current_texture = t;
+      c->tu1.tex2d = t;             /* phase 5 O1: unit 1's default too */
     }
   }
   return c;

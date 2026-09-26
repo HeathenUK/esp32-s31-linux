@@ -1,0 +1,2 @@
+texmem after the load phase (frame 98): 145 textures, level 0 4620508 B, levels > 0 236844 B, total 4857352 B; 3 sub-updated textures (lightmaps) 589824 B
+texmem at the end: 147 textures, level 0 4727004 B, levels > 0 236844 B, total 4963848 B; 4 sub-updated textures (lightmaps) 786432 B

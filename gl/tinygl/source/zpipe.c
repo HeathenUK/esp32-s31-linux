@@ -11,20 +11,8 @@
 #include "zgl.h"
 #include "zpipe.h"
 
-#define MUL8(x, y) (((x) * ((y) + 1)) >> 8)
-
-static inline int clamp255(int v)
-{
-  return v < 0 ? 0 : (v > 255 ? 255 : v);
-}
-
-/* RGB565 -> 8 bits, replicating the high bits (31 -> 255, 63 -> 255) */
-#define UNPACK(t, R, G, B) do { unsigned int t_ = (t); \
-    (R) = ((t_ >> 8) & 0xf8) | (t_ >> 13); \
-    (G) = ((t_ >> 3) & 0xfc) | ((t_ >> 9) & 3); \
-    (B) = ((t_ << 3) & 0xf8) | ((t_ >> 2) & 7); } while (0)
-/* 8 bits -> RGB565, truncating as RGB_TO_PIXEL does */
-#define PACK(R, G, B) ((PIXEL)((((R) & 0xf8) << 8) | (((G) & 0xfc) << 3) | ((B) >> 3)))
+#include "zpipe_int.h"      /* MUL8, clamp255, UNPACK, PACK (phase 5: shared
+                                with the fused fillers, zpipe_fused.c) */
 
 /* ------------------------------------------------------------ depth test */
 
@@ -208,6 +196,49 @@ ZStageFn zp_texidx_fn(int clamp_s, int clamp_t)
   return clamp_t ? zt_rc : zt_rr;
 }
 
+/* phase 5 O1: texture unit 1's, from ZPipeX.g1 (the same fixed point and
+   the same walk as unit 0's), into ZFrag.idx1 */
+#define G_IDX_RR(si, ti) ((((unsigned int)(ti) & g->tmask) | ((unsigned int)(si) & g->smask)) >> g->fbits)
+#define G_COL_R(si) (((si) >> g->fbits) & g->wmax)
+#define G_COL_C(si) clampi((si) >> g->fbits, g->wmax)
+#define G_ROW_R(ti) (((ti) >> (g->fbits + g->ws)) & g->hmax)
+#define G_ROW_C(ti) clampi((ti) >> (g->fbits + g->ws), g->hmax)
+#define G_IDX_2(C, R, si, ti) (((unsigned int)R(ti) << g->ws) | (unsigned int)C(si))
+#define G_IDX_RC(si, ti) G_IDX_2(G_COL_R, G_ROW_C, si, ti)
+#define G_IDX_CR(si, ti) G_IDX_2(G_COL_C, G_ROW_R, si, ti)
+#define G_IDX_CC(si, ti) G_IDX_2(G_COL_C, G_ROW_C, si, ti)
+
+#define ZP_TEXIDX1(name, IDX)                                           \
+static void name(const ZPipe *p, const ZSpan *s, ZFrag *f)              \
+{                                                                       \
+  const ZTexGeo *g = &p->x->g1;                                         \
+  float fz = s->fz, sz = s->sz1, tz = s->tz1;                           \
+  const float dfz = s->dfzdx, dsz = s->dszdx1, dtz = s->dtzdx1;         \
+  int i = 0, e, n = f->n;                                               \
+  while (i < n) {                                                       \
+    float zinv = 1.0f / fz, ss = sz * zinv, tt = tz * zinv;             \
+    int si = (int)ss, ti = (int)tt;                                     \
+    int dsi = (int)((dsz - ss * dfz) * zinv);                           \
+    int dti = (int)((dtz - tt * dfz) * zinv);                           \
+    e = i + 8 < n ? i + 8 : n;                                          \
+    for (; i < e; i++) {                                                \
+      f->idx1[i] = IDX(si, ti);                                         \
+      si += dsi; ti += dti;                                             \
+    }                                                                   \
+    fz += 8.0f * dfz; sz += 8.0f * dsz; tz += 8.0f * dtz;               \
+  }                                                                     \
+}
+ZP_TEXIDX1(zt1_rr, G_IDX_RR)
+ZP_TEXIDX1(zt1_rc, G_IDX_RC)
+ZP_TEXIDX1(zt1_cr, G_IDX_CR)
+ZP_TEXIDX1(zt1_cc, G_IDX_CC)
+
+ZStageFn zp_texidx1_fn(int clamp_s, int clamp_t)
+{
+  if (clamp_s) return clamp_t ? zt1_cc : zt1_cr;
+  return clamp_t ? zt1_rc : zt1_rr;
+}
+
 /* ------------------------------------------------------------ texenv */
 
 /* GL 1.3 table 3.22, per base format class. C = fragment colour,
@@ -225,48 +256,239 @@ static void name(const ZPipe *p, const ZSpan *s, ZFrag *f)              \
 #define T_A ta = p->talpha[f->idx[i]];
 #define SET_C(R, G, B) f->r[i] = (unsigned char)(R); f->g[i] = (unsigned char)(G); \
   f->b[i] = (unsigned char)(B);
-#define BLENDK(c, t, k) (MUL8(c, 255 - (t)) + MUL8(k, t))
+#define BLENDK(c, t, k) MIX8(c, 255 - (t), k, t)
 
-ZP_TEXENV(ze_replace_rgb, T_RGB SET_C(tr, tg, tb))
-ZP_TEXENV(ze_replace_rgba, T_RGB T_A SET_C(tr, tg, tb) f->a[i] = (unsigned char)ta;)
-ZP_TEXENV(ze_mod_rgb, T_RGB
-  SET_C(MUL8(f->r[i], tr), MUL8(f->g[i], tg), MUL8(f->b[i], tb)))
-ZP_TEXENV(ze_mod_rgba, T_RGB T_A
-  SET_C(MUL8(f->r[i], tr), MUL8(f->g[i], tg), MUL8(f->b[i], tb))
-  f->a[i] = (unsigned char)MUL8(f->a[i], ta);)
-ZP_TEXENV(ze_decal_rgba, T_RGB T_A
-  SET_C(MUL8(f->r[i], 255 - ta) + MUL8(tr, ta), MUL8(f->g[i], 255 - ta) + MUL8(tg, ta),
-        MUL8(f->b[i], 255 - ta) + MUL8(tb, ta)))
-ZP_TEXENV(ze_blend_rgb, T_RGB
-  SET_C(BLENDK(f->r[i], tr, p->envc[0]), BLENDK(f->g[i], tg, p->envc[1]),
-        BLENDK(f->b[i], tb, p->envc[2])))
-ZP_TEXENV(ze_blend_rgba, T_RGB T_A
-  SET_C(BLENDK(f->r[i], tr, p->envc[0]), BLENDK(f->g[i], tg, p->envc[1]),
-        BLENDK(f->b[i], tb, p->envc[2]))
-  f->a[i] = (unsigned char)MUL8(f->a[i], ta);)
-ZP_TEXENV(ze_blend_i, T_RGB T_A
-  SET_C(BLENDK(f->r[i], tr, p->envc[0]), BLENDK(f->g[i], tg, p->envc[1]),
-        BLENDK(f->b[i], tb, p->envc[2]))
-  f->a[i] = (unsigned char)BLENDK(f->a[i], ta, p->envc[3]);)
-ZP_TEXENV(ze_alpha_replace, T_A f->a[i] = (unsigned char)ta;)
-ZP_TEXENV(ze_alpha_mod, T_A f->a[i] = (unsigned char)MUL8(f->a[i], ta);)
-ZP_TEXENV(ze_add_rgb, T_RGB
-  SET_C(clamp255(f->r[i] + tr), clamp255(f->g[i] + tg), clamp255(f->b[i] + tb)))
-ZP_TEXENV(ze_add_rgba, T_RGB T_A
-  SET_C(clamp255(f->r[i] + tr), clamp255(f->g[i] + tg), clamp255(f->b[i] + tb))
-  f->a[i] = (unsigned char)MUL8(f->a[i], ta);)
-ZP_TEXENV(ze_add_i, T_RGB T_A
-  SET_C(clamp255(f->r[i] + tr), clamp255(f->g[i] + tg), clamp255(f->b[i] + tb))
-  f->a[i] = (unsigned char)clamp255(f->a[i] + ta);)
+#define ZE(n) ze_##n
+#include "zpipe_env.h"
+#undef ZE
+#undef T_RGB
+#undef T_A
+/* phase 5: the same on a texel of 8 bits (s31_tex8.c), its RGBA8 word in
+   ZTexF.ftex32 (unit 0: the texenv stages are unit 0's) */
+#define T_RGB { unsigned int w_ = p->x->tf[0].ftex32[f->idx[i]]; \
+    tr = (int)(w_ & 255); tg = (int)((w_ >> 8) & 255); tb = (int)((w_ >> 16) & 255); }
+#define T_A ta = (int)(p->x->tf[0].ftex32[f->idx[i]] >> 24);
+#define ZE(n) ze8_##n
+#include "zpipe_env.h"
+#undef ZE
 
 ZStageFn zp_texenv_fn(int op)
 {
   static const ZStageFn t[ZP_TE_N] = {
     ze_replace_rgb, ze_replace_rgba, ze_mod_rgb, ze_mod_rgba, ze_decal_rgba,
     ze_blend_rgb, ze_blend_rgba, ze_blend_i, ze_alpha_replace, ze_alpha_mod,
-    ze_add_rgb, ze_add_rgba, ze_add_i,
+    ze_add_rgb, ze_add_rgba, ze_add_i, ze_replace_rgb1,
   };
   return op >= 0 && op < ZP_TE_N ? t[op] : ze_replace_rgb;
+}
+
+ZStageFn zp_texenv8_fn(int op)
+{
+  static const ZStageFn t[ZP_TE_N] = {
+    ze8_replace_rgb, ze8_replace_rgba, ze8_mod_rgb, ze8_mod_rgba, ze8_decal_rgba,
+    ze8_blend_rgb, ze8_blend_rgba, ze8_blend_i, ze8_alpha_replace, ze8_alpha_mod,
+    ze8_add_rgb, ze8_add_rgba, ze8_add_i, ze8_replace_rgb1,
+  };
+  return op >= 0 && op < ZP_TE_N ? t[op] : ze8_replace_rgb;
+}
+
+/* ------------------------------------------------------------ combiner */
+
+/* phase 5 O1: GL_ARB_texture_env_combine (GL 1.3 3.8.13, table 3.20), and
+   every texture environment of unit 1. One stage per unit runs the unit's
+   program (ZPipeX.cb, raster_sel.c comb_prog):
+     Arg_i = OPERAND_i(SOURCE_i), for the RGB and the alpha part apart;
+     REPLACE a0, MODULATE a0 a1, ADD a0 + a1, ADD_SIGNED a0 + a1 - 1/2,
+     INTERPOLATE a0 a2 + a1 (1 - a2), SUBTRACT a0 - a1;
+     times RGB_SCALE / ALPHA_SCALE, clamped to [0, 1].
+   The arithmetic is the texenv stages' own (8-bit, MUL8, clamp255; 1/2 is
+   128), so a mode expressed as a program computes exactly what the
+   corresponding unit-0 stage computes: MODULATE is MUL8(previous, texel),
+   DECAL and BLEND the two-product sums of BLENDK. The choice of function,
+   source and operand is made once per chunk; the loops are per channel.
+   Sources: TEXTURE the unit's texel (as a combiner source an ALPHA base
+   format has colour 0, GL 1.3 table 3.20's A = (0, 0, 0, At); RGB-class
+   formats alpha 1), CONSTANT the unit's GL_TEXTURE_ENV_COLOR, PRIMARY_COLOR
+   the fragment's colour before texturing (unit 1: kept by zp_saveprim when
+   unit 0 changes it), PREVIOUS the running colour. */
+#define ZC_N ZP_CHUNK
+
+/* the source arrays of one chunk: [source][channel] */
+typedef struct {
+  const unsigned char *c[4][4];
+} ZCSrc;
+
+/* one argument: its three colour channels (or its alpha) after the
+   operand, pointing into the source or into tmp */
+static inline void zc_arg_rgb(const ZCSrc *S, int src, int op, int n,
+                              unsigned char tmp[3][ZC_N], const unsigned char *out[3])
+{
+  int ch, i;
+  switch (op) {
+  case ZCO_COLOR:
+    for (ch = 0; ch < 3; ch++) out[ch] = S->c[src][ch];
+    break;
+  case ZCO_OMCOLOR:
+    for (ch = 0; ch < 3; ch++) {
+      const unsigned char *a = S->c[src][ch];
+      for (i = 0; i < n; i++) tmp[ch][i] = (unsigned char)(255 - a[i]);
+      out[ch] = tmp[ch];
+    }
+    break;
+  case ZCO_ALPHA:
+    out[0] = out[1] = out[2] = S->c[src][3];
+    break;
+  default: {                              /* ZCO_OMALPHA */
+    const unsigned char *a = S->c[src][3];
+    for (i = 0; i < n; i++) tmp[0][i] = (unsigned char)(255 - a[i]);
+    out[0] = out[1] = out[2] = tmp[0];
+    break;
+  }
+  }
+}
+
+static inline const unsigned char *zc_arg_a(const ZCSrc *S, int src, int op, int n,
+                                            unsigned char *tmp)
+{
+  int i;
+  const unsigned char *a = S->c[src][3];
+  if (op == ZCO_ALPHA) return a;
+  for (i = 0; i < n; i++) tmp[i] = (unsigned char)(255 - a[i]);
+  return tmp;
+}
+
+/* one channel: function f of the arguments, times 2^sh, clamped */
+static inline void zc_func(int f, int sh, int n, const unsigned char *a0,
+                           const unsigned char *a1, const unsigned char *a2,
+                           unsigned char *out)
+{
+  int i;
+  switch (f) {
+  case ZCF_REPLACE:
+    for (i = 0; i < n; i++) out[i] = (unsigned char)clamp255((int)a0[i] << sh);
+    break;
+  case ZCF_MODULATE:
+    for (i = 0; i < n; i++) out[i] = (unsigned char)MULS8(a0[i], a1[i], sh);
+    break;
+  case ZCF_ADD:
+    for (i = 0; i < n; i++) out[i] = (unsigned char)clamp255((a0[i] + a1[i]) << sh);
+    break;
+  case ZCF_ADD_SIGNED:
+    for (i = 0; i < n; i++) out[i] = (unsigned char)ADDS8(a0[i], a1[i], sh);
+    break;
+  case ZCF_INTERPOLATE:
+    for (i = 0; i < n; i++)
+      out[i] = (unsigned char)MIXS8(a0[i], a2[i], a1[i], 255 - a2[i], sh);
+    break;
+  default:                                /* ZCF_SUBTRACT */
+    for (i = 0; i < n; i++) out[i] = (unsigned char)clamp255((a0[i] - a1[i]) * (1 << sh));
+    break;
+  }
+}
+
+#define ZC_NARGS(f) ((f) == ZCF_REPLACE ? 1 : ((f) == ZCF_INTERPOLATE ? 3 : 2))
+
+static inline __attribute__((always_inline))
+void zc_comb(const ZPipe *p, ZFrag *f, const int unit)
+{
+  const ZComb *cb = &p->x->cb[unit];
+  const PIXEL *tex = unit ? p->tex1 : p->tex;
+  const unsigned char *tal = unit ? p->talpha1 : p->talpha;
+  const unsigned int *idx = unit ? (p->idx1_px ? p->idx1_px : f->idx1) : f->idx;
+  unsigned char tr[ZC_N], tg[ZC_N], tb[ZC_N], ta[ZC_N];
+  unsigned char kc[4][ZC_N];
+  unsigned char tmp[3][3][ZC_N], atmp[3][ZC_N];
+  unsigned char res[4][ZC_N];
+  const unsigned char *arg[3][3], *aarg[3] = { NULL, NULL, NULL };
+  ZCSrc S;
+  int i, j, n = f->n, ch;
+
+  /* the texel of every fragment (read whether or not an argument uses it:
+     one pass, and the combiner is the general path) */
+  if (p->x->tf[unit].t8) {
+    /* phase 5: an 8-bit texel's word (its alpha is the texel's: 255 for
+       the RGB class) */
+    const unsigned int *w8 = p->x->tf[unit].ftex32;
+    for (i = 0; i < n; i++) {
+      unsigned int w = w8[idx[i]];
+      tr[i] = (unsigned char)w; tg[i] = (unsigned char)(w >> 8);
+      tb[i] = (unsigned char)(w >> 16); ta[i] = (unsigned char)(w >> 24);
+    }
+  } else {
+    for (i = 0; i < n; i++) {
+      unsigned int t = tex[idx[i]];
+      int r, g, b;
+      UNPACK(t, r, g, b);
+      tr[i] = (unsigned char)r; tg[i] = (unsigned char)g; tb[i] = (unsigned char)b;
+    }
+    /* an RGB-class texture's alpha is 1: by its format, not the pointer -
+       under a linear filter ZPipe.talpha is the filtered chunk's alpha
+       array, which an RGB texture's filter stage does not write (found by
+       gl/tests/fused_test.c) */
+    if (tal && cb->fmt != TGL_TEXF_RGB) for (i = 0; i < n; i++) ta[i] = tal[idx[i]];
+    else memset(ta, 255, n);
+  }
+  if (cb->zero_rgb) { memset(tr, 0, n); memset(tg, 0, n); memset(tb, 0, n); }
+  for (ch = 0; ch < 4; ch++) memset(kc[ch], cb->k[ch], n);
+  S.c[ZCS_TEXTURE][0] = tr; S.c[ZCS_TEXTURE][1] = tg;
+  S.c[ZCS_TEXTURE][2] = tb; S.c[ZCS_TEXTURE][3] = ta;
+  for (ch = 0; ch < 4; ch++) S.c[ZCS_CONSTANT][ch] = kc[ch];
+  S.c[ZCS_PREVIOUS][0] = f->r; S.c[ZCS_PREVIOUS][1] = f->g;
+  S.c[ZCS_PREVIOUS][2] = f->b; S.c[ZCS_PREVIOUS][3] = f->a;
+  if (unit) {
+    S.c[ZCS_PRIMARY][0] = f->pr; S.c[ZCS_PRIMARY][1] = f->pg;
+    S.c[ZCS_PRIMARY][2] = f->pb; S.c[ZCS_PRIMARY][3] = f->pa;
+  } else {
+    /* unit 0: the previous colour is the primary one */
+    for (ch = 0; ch < 4; ch++) S.c[ZCS_PRIMARY][ch] = S.c[ZCS_PREVIOUS][ch];
+  }
+  if (cb->f[0] != ZCF_NONE) {
+    for (j = 0; j < ZC_NARGS(cb->f[0]); j++)
+      zc_arg_rgb(&S, cb->src[0][j], cb->op[0][j], n, tmp[j], arg[j]);
+    for (; j < 3; j++) arg[j][0] = arg[j][1] = arg[j][2] = NULL;
+    for (ch = 0; ch < 3; ch++)
+      zc_func(cb->f[0], cb->sh[0], n, arg[0][ch], arg[1][ch], arg[2][ch], res[ch]);
+  }
+  if (cb->f[1] != ZCF_NONE) {
+    for (j = 0; j < ZC_NARGS(cb->f[1]); j++)
+      aarg[j] = zc_arg_a(&S, cb->src[1][j], cb->op[1][j], n, atmp[j]);
+    zc_func(cb->f[1], cb->sh[1], n, aarg[0], aarg[1], aarg[2], res[3]);
+  }
+  /* both parts read the previous colour: written back after both */
+  if (cb->f[0] != ZCF_NONE) {
+    memcpy(f->r, res[0], n); memcpy(f->g, res[1], n); memcpy(f->b, res[2], n);
+  }
+  if (cb->f[1] != ZCF_NONE) memcpy(f->a, res[3], n);
+}
+
+static void zc_comb0(const ZPipe *p, const ZSpan *s, ZFrag *f)
+{
+  (void)s;
+  zc_comb(p, f, 0);
+}
+
+static void zc_comb1(const ZPipe *p, const ZSpan *s, ZFrag *f)
+{
+  (void)s;
+  zc_comb(p, f, 1);
+}
+
+ZStageFn zp_comb_fn(int unit)
+{
+  return unit ? zc_comb1 : zc_comb0;
+}
+
+static void zc_saveprim(const ZPipe *p, const ZSpan *s, ZFrag *f)
+{
+  int n = f->n;
+  (void)p; (void)s;
+  memcpy(f->pr, f->r, n); memcpy(f->pg, f->g, n);
+  memcpy(f->pb, f->b, n); memcpy(f->pa, f->a, n);
+}
+
+ZStageFn zp_saveprim_fn(void)
+{
+  return zc_saveprim;
 }
 
 /* ------------------------------------------------------------ fog */
@@ -286,11 +508,17 @@ static void zf_fog(const ZPipe *p, const ZSpan *s, ZFrag *f)
     dfi = (int)(dfv * 65536.0f);
     e = i + 8 < n ? i + 8 : n;
     for (; i < e; i++) {
+#ifdef S31GL_P4ARITH
       k = clamp255(fi >> 16);
+#else
+      /* phase 5 P: the factor rounded, not floored (glx_prec band 39:
+         Mesa mixes with the factor itself) */
+      k = clamp255((fi + 32768) >> 16);
+#endif
       q = 255 - k;
-      f->r[i] = (unsigned char)(MUL8(f->r[i], k) + MUL8(p->fogc[0], q));
-      f->g[i] = (unsigned char)(MUL8(f->g[i], k) + MUL8(p->fogc[1], q));
-      f->b[i] = (unsigned char)(MUL8(f->b[i], k) + MUL8(p->fogc[2], q));
+      f->r[i] = (unsigned char)MIX8(f->r[i], k, p->fogc[0], q);
+      f->g[i] = (unsigned char)MIX8(f->g[i], k, p->fogc[1], q);
+      f->b[i] = (unsigned char)MIX8(f->b[i], k, p->fogc[2], q);
       fi += dfi;
     }
     fz += 8.0f * dfz; fq += 8.0f * dfq;
@@ -564,7 +792,10 @@ static void name(const ZPipe *p, const ZSpan *s, ZFrag *f)              \
   }                                                                     \
 }
 #define PUT(R, G, B) pp[i] = PACK(R, G, B);
-/* SRC_ALPHA, ONE_MINUS_SRC_ALPHA: the sum of two floors never exceeds 255 */
+/* SRC_ALPHA, ONE_MINUS_SRC_ALPHA: two rounded products (Mesa blends in
+   8-bit fixed point, each product rounded: glx_prec bands 11, 29) never
+   exceed 255 together: round(s a) + round(d (255 - a)) <= round(255 a) +
+   round(255 (255 - a)) = 255 */
 ZP_OUT(zo_sa_omsa, PUT(MUL8(f->r[i], sa) + MUL8(dr, 255 - sa),
                         MUL8(f->g[i], sa) + MUL8(dg, 255 - sa),
                         MUL8(f->b[i], sa) + MUL8(db, 255 - sa)))
@@ -698,7 +929,8 @@ ZStageFn zp_out_fn(int sf, int df, int cmask, int eq)
 
 /* ------------------------------------------------------------ the runner */
 
-void zp_run(ZBuffer *zb, ZSpan *s)
+static inline __attribute__((always_inline))
+void zp_run_t(ZBuffer *zb, ZSpan *s, const int mt, const int direct)
 {
   const ZPipe *p = zb->pipe;
   const ZStageFn *st;
@@ -708,9 +940,24 @@ void zp_run(ZBuffer *zb, ZSpan *s)
   for (;;) {
     n = s->n < ZP_CHUNK ? s->n : ZP_CHUNK;
     f.n = n;
-    if (p->depth(s, &f))
+#ifndef S31GL_CENSUS
+    if (direct)
+      p->x->chunk(p, s, &f);
+    else if (p->depth(s, &f))
       for (st = p->st; *st; st++)
         (*st)(p, s, &f);
+#else
+    if (direct) {
+      zp_census_chunk(p, n, n);
+      p->x->chunk(p, s, &f);
+    } else {
+      int al_ = p->depth(s, &f);
+      zp_census_chunk(p, n, al_);
+      if (al_)
+        for (st = p->st; *st; st++)
+          (*st)(p, s, &f);
+    }
+#endif
     s->n -= n;
     if (s->n <= 0)
       return;
@@ -734,5 +981,25 @@ void zp_run(ZBuffer *zb, ZSpan *s)
       s->rq += (float)n * s->drqdx; s->gq += (float)n * s->dgqdx;
       s->bq += (float)n * s->dbqdx; s->aq += (float)n * s->daqdx;
     }
+    if (mt && (p->need & ZP_N_ST1)) {       /* phase 5 O1 */
+      s->sz1 += (float)n * s->dszdx1; s->tz1 += (float)n * s->dtzdx1;
+    }
   }
+}
+
+void zp_run(ZBuffer *zb, ZSpan *s)
+{
+  zp_run_t(zb, s, 0, 0);
+}
+
+/* phase 5 O1: a batch with texture unit 1 on */
+void zp_run_mt(ZBuffer *zb, ZSpan *s)
+{
+  zp_run_t(zb, s, 1, 0);
+}
+
+/* phase 5 O2 */
+void zp_run_mt_direct(ZBuffer *zb, ZSpan *s)
+{
+  zp_run_t(zb, s, 1, 1);
 }

@@ -149,6 +149,10 @@ static inline void interpolate(GLVertex *q,GLVertex *p0,GLVertex *p1,float t)
   q->spec.X=p0->spec.X + (p1->spec.X-p0->spec.X)*t;
   q->spec.Y=p0->spec.Y + (p1->spec.Y-p0->spec.Y)*t;
   q->spec.Z=p0->spec.Z + (p1->spec.Z-p0->spec.Z)*t;
+  /* s31 (phase 5 O1): texture unit 1's (read only while it is on) */
+  q->tex_coord1.X=p0->tex_coord1.X + (p1->tex_coord1.X-p0->tex_coord1.X)*t;
+  q->tex_coord1.Y=p0->tex_coord1.Y + (p1->tex_coord1.Y-p0->tex_coord1.Y)*t;
+  q->tex_coord1.W=p0->tex_coord1.W + (p1->tex_coord1.W-p0->tex_coord1.W)*t;
 }
 
 /*
@@ -404,6 +408,13 @@ static inline void updateTmp(GLContext *c,
     q->tex_coord.Y=p0->tex_coord.Y + (p1->tex_coord.Y-p0->tex_coord.Y)*t;
     /* s31: q too (gl_transform_to_viewport divides by it) */
     q->tex_coord.W=p0->tex_coord.W + (p1->tex_coord.W-p0->tex_coord.W)*t;
+  }
+  if (c->vtx_extra & 4) {
+    /* s31 (phase 5 O1): texture unit 1's, likewise (vtx_extra bit 2 is
+       tu1_on, and near the context pointer) */
+    q->tex_coord1.X=p0->tex_coord1.X + (p1->tex_coord1.X-p0->tex_coord1.X)*t;
+    q->tex_coord1.Y=p0->tex_coord1.Y + (p1->tex_coord1.Y-p0->tex_coord1.Y)*t;
+    q->tex_coord1.W=p0->tex_coord1.W + (p1->tex_coord1.W-p0->tex_coord1.W)*t;
   }
 
   q->clip_code=gl_clipcode(q->pc.X,q->pc.Y,q->pc.Z,q->pc.W);

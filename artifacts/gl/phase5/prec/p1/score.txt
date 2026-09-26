@@ -1,0 +1,50 @@
+# band: exact%  mean(ours-mesa) R G B  mean|levels|  name
+ 0: 100.00%   +0.00  +0.00  +0.00  0.000  glClearColor(v/255)
+ 1: 100.00%   +0.00  +0.00  +0.00  0.000  glColor3f(v/255) flat
+ 2: 100.00%   +0.00  +0.00  +0.00  0.000  glColor3ub(v) flat
+ 3:  82.88%   -0.39  -0.35  -0.92  0.082  smooth ramp 0..1
+ 4:  71.09%   +0.00  +0.00  +0.00  0.190  RGB texel v REPLACE
+ 5:  71.09%   +0.00  +0.00  +0.00  0.190  RGBA texel v REPLACE
+ 6:  65.62%   +0.02  -0.01  +0.02  0.188  RGB texel v MODULATE 191
+ 7:  84.38%   -0.14  +0.03  -0.14  0.091  RGB texel v MODULATE 100
+ 8:  46.48%   -0.61  -2.14  -0.61  0.340  case 3: T180 then lightmap v DST_COLOR,SRC_COLOR
+ 9:  67.97%   -0.08  +0.00  -0.08  0.180  case 3: T90 then lightmap v
+10: 100.00%   +0.00  +0.00  +0.00  0.000  v at alpha 28 over black
+11: 100.00%   +0.00  +0.00  +0.00  0.000  v at alpha 128 over 100
+12: 100.00%   +0.00  +0.00  +0.00  0.000  v ONE,ONE over 40
+13: 100.00%   +0.00  +0.00  +0.00  0.000  glDrawPixels RGB ubyte v
+14: 100.00%   +0.00  +0.00  +0.00  0.000  glDrawPixels RGBA float v/255
+15:  71.09%   +0.00  +0.00  +0.00  0.190  LUMINANCE v REPLACE
+16:  71.09%   +0.00  +0.00  +0.00  0.190  LUMINANCE_ALPHA (v, 255-v) REPLACE
+17:  71.09%   +0.00  +0.00  +0.00  0.190  INTENSITY v MODULATE white
+18:  53.52%   +0.10  -1.28  +0.10  0.277  case 1: T180 x lightmap v COMBINE x2
+19:  57.81%   -0.16  -1.19  -0.16  0.220  case 1: T90 x lightmap v COMBINE x2
+20:  58.59%   -0.00  -0.19  -0.00  0.247  alias: COMBINE texel v x primary 160 x2
+21:  71.09%   +0.00  +0.00  +0.00  0.190  GL_LINEAR format-4 texel v at centres
+22:  50.78%   +1.00  +0.41  +1.00  0.219  LINEAR 32-texel ramp magnified 8x
+23: 100.00%   +0.00  +0.00  +0.00  0.000  ALPHA texel v MODULATE white over black
+24:  89.71%   +0.00  +0.00  -0.85  0.034  smooth ramp 0..64
+25: 100.00%   +0.00  +0.00  +0.00  0.000  white at alpha v/255 (float) over black
+26: 100.00%   +0.00  +0.00  +0.00  0.000  glClearColor((v+0.75)/255)
+27: 100.00%   +0.00  +0.00  +0.00  0.000  glColor3f((v+0.75)/255) flat
+28:  75.00%   -0.15  +0.25  -0.15  0.130  RGBA texel (v, a v) MODULATE white over 200
+29: 100.00%   +0.00  +0.00  +0.00  0.000  flash (215,186,69) a28 over v/4
+30:  55.86%   +1.00  +0.39  +1.00  0.202  LINEAR ramp magnified 7.3x, offset
+31:  38.28%   +1.41  +0.73  +1.41  0.335  LINEAR two rows at t 0.3
+32:   6.64%   -5.35  -5.48  -5.35  0.921  trilinear 200/50 lambda v/256
+33:  73.44%   -0.26  -0.09  -0.26  0.133  RGB texel v MODULATE smooth 255->64
+34:  72.27%   -0.82  +0.33  -0.82  0.158  GL_ADD texel v + 100
+35:  78.52%   +0.26  +0.16  +0.26  0.120  GL_DECAL RGBA (v, a v) over 60
+36:  73.05%   +0.11  -0.04  +0.11  0.159  GL_BLEND L v, env 200, colour 40
+37:  65.62%   +0.07  -0.13  +0.07  0.238  MODULATE 150 then ONE,ONE again
+38:  40.23%   -0.33  -2.12  -0.33  0.297  ZERO,SRC_COLOR lightmap v over T180
+39:  89.84%   -0.42  -0.41  -0.42  0.068  linear fog white -> 80 by v/255
+40:  58.20%   +0.04  +0.37  +0.04  0.236  COMBINE ADD_SIGNED texel v, primary 90
+41:  68.75%   +0.21  +0.02  +0.21  0.180  COMBINE INTERPOLATE v, 90 by 170
+42:  63.67%   +0.00  +0.05  +0.00  0.249  COMBINE SUBTRACT v - 90 x2
+43:  61.33%   -0.46  -0.11  -0.46  0.238  COMBINE MODULATE v x 90 x4
+44:  63.67%   -0.00  -0.05  -0.00  0.249  COMBINE ADD_SIGNED x2
+45:  67.19%   -0.15  -0.20  -0.15  0.193  COMBINE INTERPOLATE x2
+46: 100.00%   +0.00  +0.00  +0.00  0.000  glDrawPixels RGBA float (v+0.75)/255
+47: 100.00%   +0.00  +0.00  +0.00  0.000  glClearColor 0.25 | (0.5,0.125,0.75)
+all: 75.75% exact

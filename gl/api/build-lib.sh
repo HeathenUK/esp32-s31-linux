@@ -88,7 +88,7 @@ echo "--- compiling TinyGL core, the GL ABI layer and GLX ($JOBS jobs)"
 # S31GL_TGLCOLD (set, even empty) replaces the list: gl/bench/build_q.sh
 # compiles a pre-F3 baseline tree with it empty, as that tree's own
 # build script built every TinyGL file -O2 (review P5b)
-TGLCOLD=${S31GL_TGLCOLD-" raster_sel texture s31_pixels s31_state get s31_rpos s31_draw s31_zepoch s31_stencil s31_ramtext "}
+TGLCOLD=${S31GL_TGLCOLD-" raster_sel texture s31_pixels s31_state get s31_rpos s31_draw s31_zepoch s31_stencil s31_ramtext s31_tex8 "}
 for f in "$GL"/tinygl/source/*.c; do
 	b=$(basename "$f" .c)
 	case $b in glu|ostinygl) continue ;; esac

@@ -85,11 +85,12 @@ fam('Color', [3, 4], ['b', 's', 'i', 'f', 'd', 'ub', 'us', 'ui'],
 fam('TexCoord', [1, 2, 3, 4], ['s', 'i', 'f', 'd'],
     lambda v: 'tgl_glTexCoord4f(%s);' % ', '.join(v), False,
     ['0', '0.0f', '0.0f', '1.0f'])
-# glMultiTexCoord{1234}{sifd}[v](target, ...): one unit
+# glMultiTexCoord{1234}{sifd}[v](target, ...): unit 0 is glTexCoord (the
+# common case, inline); phase 5 O1: unit 1 and the errors in
+# tgl_multi_tex_coord (s31_mtex.c)
 fam('MultiTexCoord', [1, 2, 3, 4], ['s', 'i', 'f', 'd'],
     lambda v: 'if (target == GL_TEXTURE0) tgl_glTexCoord4f(%s); '
-              'else if (target < GL_TEXTURE0 || target > GL_TEXTURE0 + 31) '
-              'S31_ERR(GL_INVALID_ENUM);' % ', '.join(v),
+              'else tgl_multi_tex_coord((int)target, %s);' % (', '.join(v), ', '.join(v)),
     False, ['0', '0.0f', '0.0f', '1.0f'], extra_first='GLenum target')
 
 # ARB aliases of the multitexture coordinates (GL_ARB_multitexture, gl.h)

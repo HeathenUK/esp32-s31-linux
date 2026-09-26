@@ -260,11 +260,14 @@ static void once(int gen)
 
 /* 5: texel phase */
 static unsigned char timg[128 * 128 * 4];
-/* the texel as RGB565 (the texture is stored so, truncated) */
+/* the texel as RGB565 (the texture has more than 256 colours, so it is
+   stored so: rounded to the nearest level since phase 5 P, as Mesa's
+   _mesa_unorm_to_unorm; truncated before) */
 static unsigned short texel565(int s, int t)
 {
 	const unsigned char *p = timg + (((t & 127) * 128) + (s & 127)) * 4;
-	return (unsigned short)(((p[0] >> 3) << 11) | ((p[1] >> 2) << 5) | (p[2] >> 3));
+	return (unsigned short)((((p[0] * 31 + 127) / 255) << 11) | (((p[1] * 63 + 127) / 255) << 5) |
+				((p[2] * 31 + 127) / 255));
 }
 static unsigned short fb565[W * H];
 static int texel_bad(int x0, int y0, int w, int h, int s0, int t0, int scale)

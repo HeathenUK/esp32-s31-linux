@@ -20,9 +20,18 @@ void glopClearDepth(GLContext *c,GLParam *p)
 void glopClear(GLContext *c,GLParam *p)
 {
   int mask=p[1].i;
+#ifdef S31GL_P4ARITH
   int r=(int)(c->clear_color.v[0]*65535);
   int g=(int)(c->clear_color.v[1]*65535);
   int b=(int)(c->clear_color.v[2]*65535);
+#else
+  /* phase 5 P: rounded to 8 bits, then (RGB_TO_PIXEL) truncated to 565, as
+     Mesa does (glx_prec bands 0, 26, 47: glClearColor(0.25) is 66, 65, 66,
+     not 57, 60, 57) */
+  int r=(int)(c->clear_color.v[0]*255.0f+0.5f) << 8;
+  int g=(int)(c->clear_color.v[1]*255.0f+0.5f) << 8;
+  int b=(int)(c->clear_color.v[2]*255.0f+0.5f) << 8;
+#endif
   ZBuffer *zb;
   int cm, x0, y0, x1, y1, full, dz, dc;
 

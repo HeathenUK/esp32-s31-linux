@@ -1,0 +1,33 @@
+# glref run: impl=ours name=p5 frame=2 display=:90
+# cmd: /src/gl/out-host/glx_mtex 5
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000f3076edd0000)
+libGL: context 1 created (pid 94, comm glx_mtex)
+query ext multitexture 1 combine 1 env_add 1
+query units>=2 1
+query u1 raster tc 0.600 0.300 0.000 1.000
+query u1 tc 0.600 0.300 0.000 1.000
+query u0 raster tc 0.200 0.800 0.000 1.000
+query bitmap u0 en2d 1 en1d 0 b2 0 b1 9 mode 0x2100 minf 0x2600
+query bitmap u1 en2d 1 en1d 0 b2 6 b1 -1 mode 0x2100 minf 0x2600
+read bitmap 16 93 8
+query u1 raster tc 0.600 0.300 0.000 1.000
+query u1 tc 0.600 0.300 0.000 1.000
+query u0 raster tc 0.200 0.800 0.000 1.000
+query bitmap u0 en2d 0 en1d 0 b2 0 b1 9 mode 0x2100 minf 0x2600
+query bitmap u1 en2d 1 en1d 0 b2 6 b1 -1 mode 0x2100 minf 0x2600
+read bitmap 156 121 123
+query u1 raster tc 0.600 0.300 0.000 1.000
+query u1 tc 0.600 0.300 0.000 1.000
+query u0 raster tc 0.200 0.800 0.000 1.000
+query bitmap u0 en2d 1 en1d 0 b2 0 b1 9 mode 0x2100 minf 0x2600
+query bitmap u1 en2d 1 en1d 0 b2 6 b1 -1 mode 0x8570 minf 0x2600
+read bitmap 247 154 247
+query u1 raster tc 0.600 0.300 0.000 1.000
+query u1 tc 0.600 0.300 0.000 1.000
+query u0 raster tc 0.200 0.800 0.000 1.000
+query bitmap u0 en2d 1 en1d 0 b2 0 b1 9 mode 0x8570 minf 0x2600
+query bitmap u1 en2d 1 en1d 0 b2 7 b1 -1 mode 0x104 minf 0x2600
+read bitmap 66 255 49
+error page: 0x0
+glref: ok at swap 2 -> /src/artifacts/gl/phase5/mtex-c/ours/p5.f2

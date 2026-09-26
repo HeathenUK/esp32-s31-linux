@@ -1,0 +1,19 @@
+# O1 final (gl/bench/base5mt) on trace p5a, gl/bench/qscensus.sh (census hooks applied to the same tree):
+# 80 counted frames; general-path pixels per frame 193753 (alive 157115)
+#   px/frame  alive/frame  chunks/frame fused  stages (depth, st..., [gen_depth, gen_st...])
+     88465      60627      9065   1  zdw_lequal zf_world zdw_lequal zx_tri_r ze_replace_rgb zx1_bil_r zc_comb1 zo_store
+     38896      33228      2509   1  zdw_lequal zf_world zdw_lequal zx_bil_r ze_replace_rgb zx1_bil_r zc_comb1 zo_store
+     31680      31680      1089   0  zd_none zc_flat zo_sa_omsa
+     15360      15360       528   0  zd_none zc_flat zx_bil_r ze_replace_rgb zo_sa_omsa
+      4776       4776       391   0  zd_none zc_flat zx_bil_ra ze_replace_rgba za_greater zo_store
+      4301       4301       521   0  zd_none zc_flat zx_bil_r ze_replace_rgb za_greater zo_store
+      4073       3490       687   2  zdw_lequal zf_alias_00 zdw_lequal zc_smooth zx_bil_r zc_comb0 zx1_bil_r zc_comb1 zo_sa_omsa
+      1942       1081       753   0  zdw_lequal zc_smooth zx_bil_r zc_comb0 zo_store
+      1133        810       253   2  zdw_lequal zf_alias_00 zdw_lequal zc_smooth_pc zx_bil_r zc_comb0 zx1_bil_r zc_comb1 zo_sa_omsa
+       769          0        79   0  zdw_lequal zx_bil_r ze_replace_rgb zo_store
+       581        348       534   0  zd_lequal zc_flat zx_bil_ra ze_mod_rgba zo_sa_omsa
+       532        337        30   0  zd_lequal zc_flat zx_bil_ra ze_replace_rgba za_greater zw_write zo_store
+       444        436        27   0  zd_lequal zc_flat zx_bil_r ze_mod_rgb zo_one_one
+       398        241        53   0  zd_lequal zc_flat zx_tri_r ze_mod_rgb zo_one_one
+       352        352        82   0  zd_none zc_flat zt_rr ze_replace_rgba za_greater zo_store
+        52         47         7   0  zdw_lequal zc_smooth_pc zx_bil_r zc_comb0 zo_store

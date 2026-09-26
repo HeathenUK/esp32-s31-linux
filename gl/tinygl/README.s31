@@ -138,7 +138,9 @@ OP_State). What the rasteriser HONOURS today (plan F3-F6, 2026-09-26):
                 line stipple, 1D textures, glGetTexImage.
   recorded only (prints "libGL: unimplemented ..." once when used):
                 logic op, smooth polygons (drawn aliased),
-                GL_COMBINE (drawn as MODULATE), 3D/cube textures, texture
+                GL_DOT3_RGB/RGBA (GL_INVALID_ENUM, not advertised: the
+                combiner is ARB_texture_env_combine's, not GL 1.3's
+                texture_env_dot3), 3D/cube textures, texture
                 borders (dropped), GL_NORMAL_MAP / GL_REFLECTION_MAP
                 texgen (cube maps), GL_MAP_COLOR (pixel maps; glPixelMap
                 is a stub), glDrawPixels(GL_COLOR_INDEX), the evaluators
@@ -583,3 +585,142 @@ gl/api/ramtext.list, ramtext.ld, ramtext.py; artifacts/gl/phase4/REPORT.md):
 - Checks: gl/tests/run-ramtext.sh (qemu-user RV32, static and through
   musl's ld.so; the host rig; the glref suite with S31GL_RAMTEXT=1),
   gl/tests/ramtext_trace.py (where the hot blocks really run), run-san.sh.
+
+Phase 5, O1 (2026-09-26): two texture units, the combiner, GL_ADD
+(s31_mtex.c, zpipe_fused.c, zpipe_int.h, ztriangle_genmt.c;
+artifacts/gl/phase5/REPORT.txt). Advertised when S31GL_MTEX is not 0:
+GL_ARB_multitexture (GL_MAX_TEXTURE_UNITS 2), GL_ARB_texture_env_combine
+and GL_EXT_texture_env_combine, GL_ARB_texture_env_add and
+GL_EXT_texture_env_add. GL_VERSION stays 1.1; no VBO, no GLSL.
+- State. Unit 0's state is where TinyGL kept its only unit's
+  (current_texture, texenv_mode, texgen_*, matrix_stack[2],
+  current_tex_coord), so every single-texture path reads the same fields
+  as before. Unit 1's is GLContext.tu1 (GLTexUnit) and its texture matrix
+  stack matrix_stack[3] (glMatrixMode(GL_TEXTURE) selects 2 + the active
+  unit). A command on "the active unit" (glBindTexture, glTexEnv,
+  glTexParameter, glTexImage*, glTexGen, glEnable of a texture target or
+  texgen, glGet*, glIsEnabled, the texture pixel paths) runs its ordinary
+  body between two tu_swap() calls when unit 1 is active, so one
+  implementation serves both units; glBindTexture and glEnable/Disable of
+  GL_TEXTURE_1D/2D on unit 1 set tu1 directly (once per surface in a
+  multitexturing game). Client arrays: glClientActiveTexture and tc_swap(),
+  unit 1's texcoord array is client state bit 0x40, fetched out of line
+  (array_tex1). glPushAttrib(GL_TEXTURE_BIT/ENABLE_BIT/CURRENT_BIT) saves
+  both units' records and the active unit (gl/api/gl_pushattrib.c);
+  glPushClientAttrib both units' arrays. Display lists compile
+  glActiveTexture and glMultiTexCoord; glClientActiveTexture executes.
+- Nothing costs a frame that does not use unit 1: c->mtex_used is set by
+  the first glActiveTexture / glClientActiveTexture of unit 1, and until
+  then glBegin, the vertex path and gl_update_raster take the phase 4
+  code (unit 1's vertex coordinate is GLVertex.tex_coord1, at the end of
+  the struct, copied only by gl_vertex_indexed_mt; clip.c interpolates it
+  only when vtx_extra bit 4 says so).
+- The combiner. Every texture environment of a unit - the legacy modes
+  and GL_COMBINE - becomes a ZComb program (raster_sel.c comb_prog):
+  per channel class a function (REPLACE MODULATE ADD ADD_SIGNED
+  INTERPOLATE SUBTRACT), three sources (TEXTURE CONSTANT PRIMARY_COLOR
+  PREVIOUS) with their operands, and a scale shift (RGB_SCALE /
+  ALPHA_SCALE 1 2 4 -> 0 1 2). The generic stage zc_comb evaluates it on
+  a 32-pixel chunk in 8-bit integers: products MUL8 (a*(b+1)>>8, the
+  texenv stages' own, zpipe_int.h), ADD_SIGNED a+b-128, INTERPOLATE
+  MUL8(a,c)+MUL8(b,255-c), SUBTRACT a-b, then the shift and a clamp to
+  0..255. The primary
+  colour is saved (zc_saveprim) only when unit 1 reads it after unit 0
+  replaced it; a class nothing reads is not computed (comb_reads). A
+  legacy mode on unit 0 alone still takes the phase 4 stages. RGB
+  textures read alpha 255 whatever the sampler left in the alpha array.
+- Stage order with unit 1: [stencil][stipple][col][saveprim][tex0]
+  [env0/comb0][tex1][comb1][spec][fog][cover][alpha][zwrite/stencil][out].
+  Unit 1 has its own texel index stages (zt1_*: REPEAT/CLAMP per axis)
+  and filtered samplers (s31_tfilter.c: every NEAREST/LINEAR/mipmap
+  sampler exists for both units; zp_run_lod_mt keeps both units' LOD),
+  its own interpolants (ZSpan sz1/tz1, ZP_N_ST1, ztriangle_genmt.c: the
+  general filler compiled a second time in its own translation unit so
+  the one-unit filler keeps its phase 4 code), and lines, points, smooth
+  primitives, glBitmap and glDrawPixels are textured by it too (the raster
+  position keeps unit 1's coordinates).
+- Fused fillers (zpipe_fused.c, S31GL_FUSED=0 turns them off). When the
+  stage list and the two programs are exactly QuakeSpasm's r_world.c case
+  1 (lightmapped world: unit 0 REPLACE or MODULATE of an opaque texture,
+  unit 1 MODULATE, or GL_COMBINE MODULATE with RGB_SCALE 2, of the
+  lightmap; flat or smooth primary; any sampler) or r_alias.c case 1
+  (alias models: unit 0 MODULATE of the skin by the vertex colour, unit 1
+  GL_ADD of the fullbright mask, blended or not), zpf_select replaces the
+  combiner and output stages by one stage that calls the same texel stages
+  and then does the arithmetic of the general stages in one loop, from the
+  same macros. World RGB products come from 5 KB of product tables built
+  on first use (per context, freed with it). With both units NEAREST, a
+  REPEAT wrap and a known depth state, the world filler also walks both
+  textures and tests depth inline (zf_world_nn0/1/2). Every fused filler
+  is gated bit-identical to the general stage list, colour and depth, by
+  gl/tests/fused_test.c (host and RV32; the general arm is a context with
+  S31GL_FUSED=0).
+- Knobs: S31GL_MTEX=0 (one unit, the phase 4 extension string: QuakeSpasm
+  then takes its no-multitexture passes), S31GL_FUSED=0 (general path
+  only). tgl_fused_stats / s31gl_fused_stats count fused batches.
+- Tests: gl/tests/glx_mtex.c pages 1-5 against Mesa (run-mtex.sh, in
+  run-3a.sh), core_test test_mtex (exact 565 results, errors, lists,
+  arrays, glDrawPixels, push/pop), fused_test (the gate), and the
+  QuakeSpasm trace (tools/glref/gltrace/compare-qs.sh against Mesa).
+- Mesa (llvmpipe) differences seen while testing, none of them in ours:
+  it accepts GL_ONE as a combiner source and glActiveTexture /
+  glMultiTexCoord of units past GL_MAX_TEXTURE_UNITS without an error;
+  its glBitmap/glDrawPixels with unit 1 enabled needed a glFlush to show
+  (glx_mtex page 5), so glDrawPixels through unit 1 is checked exactly in
+  core_test instead (artifacts/gl/phase5/probe/).
+- Cost: .text 170 -> 209 kB (Buildroot flags), stripped 276 -> 317 kB, of
+  which the second unit's filtered samplers are 11.6 kB, the fused fillers
+  6.2 kB and the two-unit general filler 3.8 kB. GLContext 5996 -> 7132
+  bytes, GLVertex 148 -> 164 bytes; hot fields still end below 2 KB
+  (mtex_used at 1692).
+
+Phase 5, O2 (2026-09-26): fused fillers for every per-pixel signature
+QuakeSpasm 0.96.3 still sent through the general stage list, and the
+filtered path's cost (zpipe_fused.c, s31_tfilt_int.h; report
+artifacts/gl/phase5/O2-REPORT.md). No extension, no GL state and no
+pixel changes: every fused filler is gated bit-identical to the general
+list it replaces (gl/tests/fused_test.c, 19 scenarios, host and RV32;
+gl/tests/run-qsr-fused.sh, every full frame of ten QuakeSpasm traces).
+- Filtered world (ZF_WORLD with GL_LINEAR lightmaps, both units REPEAT,
+  depth LEQUAL + write): zf_world_x reads which texel stage the per-triangle
+  / per-block level choice placed in unit 0's slot, once per chunk, and
+  runs the loop made for it (nearest in level 0 or d, nearest-mipmap-
+  linear, bilinear, trilinear); each loop tests depth first and samples
+  only the fragments that pass (31% of QuakeSpasm's trilinear world pixels
+  are hidden), with the stages' own macros (s31_tfilt_int.h, now shared)
+  and walks. A bilinear sample keeps the last 2x2 square (the lightmap,
+  magnified, hits 79% on the QuakeSpasm trace) and then needs one multiply per horizontal
+  lerp (32 a + SRND + (b - a) w is a (32 - w) + b w + SRND mod 2^32, and
+  the true value is below 2^32). Trilinear's finer level is sampled
+  uncached (86% of its squares are new). Two passes for bilinear and
+  trilinear (depth + lightmap, then unit 0), one for the nearest kinds:
+  measured, each the fewest instructions. The runners call it directly
+  (ZPipeX.run_mt / run_lod_mt: zp_run_mt_direct, zp_run_lod_mt_direct -
+  no depth stage call, no list walk), as they do the nearest world
+  filler.
+- One-unit signatures (zf1_*, zf1_pick): the status bar and view blend
+  (SRC_ALPHA / ONE_MINUS_SRC_ALPHA of a texel or a flat colour: per-alpha
+  tables of MUL8 of each field's expansion, 192 B; an opaque status bar
+  stores the texel), HUD pictures and characters (alpha GREATER), fences,
+  the console, water, alias models without a fullbright texture (COMBINE
+  MODULATE x 2), particles, the glow pass, and for a Quake without
+  multitexture the lightmap passes (DST_COLOR / SRC_COLOR, ZERO /
+  SRC_COLOR) and alias passes. Each runs the batch's own colour and texel
+  stages, then one loop of the texenv, alpha test, depth write and blend
+  arithmetic (zpipe_int.h). A texel stage that is bilinear in level 0 with
+  no per-triangle choice is replaced, for the REPLACE signatures, by
+  zf_bil0_*: exact shortcuts when a weight is 0 or 32 (LERP(x, y, 0) is x,
+  LERP(x, y, 32) is y) - one row's lerp, one column's, or one texel.
+  QuakeSpasm's status bar is 1:1 vertically and 320 pixels from 256 texels
+  across (GL_MAX_TEXTURE_SIZE).
+- The trilinear level code (zpx_code2, once per 8-pixel block) has
+  zpx_code's LML / NML steps inline: GL's default MIN_LOD / MAX_LOD clamp
+  is the identity for a finite lambda, the rest is the same arithmetic.
+- S31GL_FUSED=0 turns all of it off (the gates' reference arm).
+  s31gl_fused_stats has eight counters now (5 one-unit, 6 filtered world).
+- Diagnostics: gl/bench/qscensus.sh (a -DS31GL_CENSUS bench build,
+  s31_census.c: pixels per stage list), gl/bench/pcannot.py (instructions
+  per address of one function). Neither is in the shipped library.
+- Cost: .text 209,436 -> 223,790 B (Buildroot flags; 3 kB of it cold
+  selection code), zpipe_fused.o 6.2 -> 18.2 kB. Other heap +192 B (the
+  blend tables, at the first such batch). ZPipeX +24 B (off the hot 2 kB).

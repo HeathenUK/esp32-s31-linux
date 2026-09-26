@@ -21,6 +21,7 @@
  * Float only (F without D).
  */
 #include "zgl.h"
+#include "s31_tex8.h"
 #include "zpipe.h"
 #include "raster_int.h"
 #include "s31_pixels.h"
@@ -42,6 +43,9 @@ typedef struct {
                                per state change, not per glBitmap call */
   int tex;                  /* the texenv stage runs: idx is tidx */
   unsigned int tidx;
+  int tex1;                 /* phase 5 O1: unit 1's too: its index is tidx1 */
+  unsigned int tidx1;
+  unsigned int t1idx[ZP_CHUNK];  /* tidx1 for every fragment (ZPipe.idx1_px) */
   unsigned int z;           /* the raster depth in TinyGL's zp scale */
   float fq;                 /* the raster fog factor * 255 */
   int box[4];               /* buffer and scissor, x0 y0 x1 y1, rows from the top */
@@ -87,7 +91,9 @@ __attribute__((noinline))
 static void pix_build(GLContext *c, PixPipe *pp)
 {
   ZPipe *p = &pp->p;
-  ZStageFn drop[10];
+  ZStageFn drop[14];
+  /* phase 5 O1: under a fused filler the stage list is ZPipeX.gen_st */
+  const ZStageFn *src = c->pipex.fused ? c->pipex.gen_st : c->pipe.st;
   int i, n;
 
   *p = c->pipe;
@@ -97,22 +103,31 @@ static void pix_build(GLContext *c, PixPipe *pp)
   drop[6] = zp_spec_fn(0); drop[7] = zp_spec_fn(1);
   drop[8] = zp_stipple_fn();
   drop[9] = zp_cover_fn();                /* phase 4 SMOOTH: primitives only */
-  for (i = n = 0; c->pipe.st[i]; i++) {
+  drop[10] = zp_texidx1_fn(0, 0); drop[11] = zp_texidx1_fn(0, 1);   /* phase 5 */
+  drop[12] = zp_texidx1_fn(1, 0); drop[13] = zp_texidx1_fn(1, 1);
+  for (i = n = 0; src[i]; i++) {
     int k, keep = 1;
-    for (k = 0; k < 10; k++) if (c->pipe.st[i] == drop[k]) keep = 0;
+    for (k = 0; k < 14; k++) if (src[i] == drop[k]) keep = 0;
     /* phase 4: the filtered texel stages and the perspective colour
        stage the last triangle may have left in the list; the pixel paths
        sample level 0 nearest (pp->tidx) */
-    if (zpx_is_tex_stage(c->pipe.st[i]) || c->pipe.st[i] == zpx_color_pc()) keep = 0;
-    if (keep) p->st[n++] = c->pipe.st[i];
+    if (zpx_is_tex_stage(src[i]) || src[i] == zpx_color_pc()) keep = 0;
+    if (keep) p->st[n++] = src[i];
   }
   p->st[n] = NULL;
-  p->tex = c->pipex.tex0;
-  p->talpha = c->pipex.talpha0;
+  p->tex = c->pipex.tf[0].tex0;
+  p->talpha = c->pipex.tf[0].talpha0;
+  p->tex1 = c->pipex.tf[1].tex0;           /* phase 5 O1 */
+  p->talpha1 = c->pipex.tf[1].talpha0;
+  p->idx1_px = pp->t1idx;
   p->xact = 0;
   p->stip_on = 0;
+  /* phase 5 O1: a fused world filler tests depth itself; the general
+     list's depth stage is ZPipeX.gen_depth */
+  if (c->pipex.fused) p->depth = c->pipex.gen_depth;
   pp->tex = c->tex_active;
-  pp->direct = p->dsel == ZP_DEPTH_NONE && !pp->tex && !c->fog_enabled &&
+  pp->tex1 = c->tu1_on;
+  pp->direct = p->dsel == ZP_DEPTH_NONE && !pp->tex && !pp->tex1 && !c->fog_enabled &&
                (p->afunc == GL_ALWAYS) && p->sfactor == GL_ONE &&
                p->dfactor == GL_ZERO && p->cmask == 0xffff && !p->nocolor &&
                c->pipex.beq == GL_FUNC_ADD && !RASTER_STENCIL(c);
@@ -159,8 +174,40 @@ static PixPipe *pix_begin(GLContext *c)
     row = p->clamp_t ? (unsigned int)clampi(ti >> (p->fbits + p->ws), p->hmax)
                      : (unsigned int)((ti >> (p->fbits + p->ws)) & p->hmax);
     pp->tidx = (row << p->ws) | col;
+    if (c->pipex.tf[0].t8) {
+      /* phase 5: an 8-bit texel - its word where the texenv stages read
+         it, ftex32[idx] with idx 0 (no texel stage runs here) */
+      ZTexF *u = &c->pipex.tf[0];
+      u->ftex32[0] = zpx_t8_texel(&u->lvl[0], pp->tidx);
+      pp->tidx = 0;
+    }
   } else {
     pp->tidx = 0;
+  }
+  pp->tidx1 = 0;
+  if (pp->tex1) {
+    /* phase 5 O1: texture unit 1's texel of its raster texcoords, as
+       unit 0's above */
+    const ZTexGeo *g = &c->pipex.g1;
+    const float *rt = c->tu1.raster_tex;
+    float q = rt[3] != 0.0f ? 1.0f / rt[3] : 1.0f;
+    float fs = rt[0] * q * c->tex1_sscale, ft = rt[1] * q * c->tex1_tscale;
+    int si, ti;
+    unsigned int col, row;
+    fs = fminf(fmaxf(fs, -2.0e9f), 2.0e9f);
+    ft = fminf(fmaxf(ft, -2.0e9f), 2.0e9f);
+    si = (int)floorf(fs); ti = (int)floorf(ft);
+    col = g->clamp_s ? (unsigned int)clampi(si >> g->fbits, g->wmax)
+                     : (unsigned int)((si >> g->fbits) & g->wmax);
+    row = g->clamp_t ? (unsigned int)clampi(ti >> (g->fbits + g->ws), g->hmax)
+                     : (unsigned int)((ti >> (g->fbits + g->ws)) & g->hmax);
+    pp->tidx1 = (row << g->ws) | col;
+    if (c->pipex.tf[1].t8) {
+      ZTexF *u = &c->pipex.tf[1];
+      u->ftex32[0] = zpx_t8_texel(&u->lvl[0], pp->tidx1);
+      pp->tidx1 = 0;
+    }
+    for (i = 0; i < ZP_CHUNK; i++) pp->t1idx[i] = pp->tidx1;
   }
   pp->z = raster_zp(c->raster_pos[2]);
   /* phase 3a G03 (s31_zepoch.c): the raster depth at the epoch's farthest
@@ -947,7 +994,21 @@ void tgl_copy_tex(int target, int level, int ifmt, int x, int y, int w, int h,
 /* texture.c does the upload; the source is the colour buffer read as
    RGB565 at the time the command executes */
 
+static void copy_tex(GLContext *c, GLParam *p);
+
+/* phase 5 O1: into the active unit's texture (s31_mtex.c) */
 void glopCopyTex(GLContext *c, GLParam *p)
+{
+  if (c->active_tex) {
+    tu_swap(c);
+    copy_tex(c, p);
+    tu_swap(c);
+  } else {
+    copy_tex(c, p);
+  }
+}
+
+static void copy_tex(GLContext *c, GLParam *p)
 {
   int target = p[1].i, level = p[2].i, ifmt = p[3].i;
   int x = p[4].i, y = p[5].i, w = p[6].i, h = p[7].i, border = p[8].i;
@@ -1056,13 +1117,27 @@ void tgl_get_polygon_stipple(unsigned char *mask)
    from its stored block (phase 4, texture.c); one that is not stored
    (S31GL_MIPMAPS=0, no memory) is read as level 0 sampled nearest at the
    level's size */
+static void get_tex_image(int target, int level, int format, int type, void *pixels);
+
 void tgl_get_tex_image(int target, int level, int format, int type, void *pixels)
+{
+  GLContext *c = gl_get_context();
+  if (c->active_tex) {
+    tu_swap(c);
+    get_tex_image(target, level, format, type, pixels);
+    tu_swap(c);
+  } else {
+    get_tex_image(target, level, format, type, pixels);
+  }
+}
+
+static void get_tex_image(int target, int level, int format, int type, void *pixels)
 {
   GLContext *c = gl_get_context();
   GLTexture *t = gl_tex_target(c, target);
   S31Pack k;
   float v[4 * 64];
-  int e, w, h, x, y, lum, TW, TH, sh, n, i, fmt;
+  int e, w, h, x, y, lum, TW, TH, sh, n, i, fmt, lv;
   const unsigned short *pix;
   const unsigned char *al;
 
@@ -1088,9 +1163,11 @@ void tgl_get_tex_image(int target, int level, int format, int type, void *pixels
   pix = (const unsigned short *)t->images[0].pixmap;
   al = t->alpha;
   fmt = t->fmt;
+  lv = 0;
   if (level > 0 && t->mip && t->mip->l[level].pix) {
     const GLMipLevel *m = &t->mip->l[level];
     int f = t->lfmt[level];
+    lv = level;
     pix = m->pix; al = m->alpha; fmt = m->cls;
     TW = 1 << m->ws; TH = 1 << m->hs;
     sh = 0;
@@ -1104,12 +1181,21 @@ void tgl_get_tex_image(int target, int level, int format, int type, void *pixels
       for (i = 0; i < n; i++) {
         int sx = ((x + i) << sh) < TW ? ((x + i) << sh) : TW - 1;
         int idx = sy * TW + sx;
-        unsigned int tx = pix[idx];
-        float *q = v + 4 * i, a = al ? al[idx] * (1.0f / 255.0f) : 1.0f;
-        q[0] = (float)(tx >> 11) * (1.0f / 31.0f);
-        q[1] = (float)((tx >> 5) & 63) * (1.0f / 63.0f);
-        q[2] = (float)(tx & 31) * (1.0f / 31.0f);
-        q[3] = a;
+        float *q = v + 4 * i;
+        if (t->st != TGL_ST_565) {
+          /* phase 5: an 8-bit texel, exactly (s31_tex8.c) */
+          unsigned int wd = gl_tex8_texel(t, lv, idx);
+          q[0] = (float)(wd & 255) * (1.0f / 255.0f);
+          q[1] = (float)((wd >> 8) & 255) * (1.0f / 255.0f);
+          q[2] = (float)((wd >> 16) & 255) * (1.0f / 255.0f);
+          q[3] = (float)(wd >> 24) * (1.0f / 255.0f);
+        } else {
+          unsigned int tx = pix[idx];
+          q[0] = (float)(tx >> 11) * (1.0f / 31.0f);
+          q[1] = (float)((tx >> 5) & 63) * (1.0f / 63.0f);
+          q[2] = (float)(tx & 31) * (1.0f / 31.0f);
+          q[3] = al ? al[idx] * (1.0f / 255.0f) : 1.0f;
+        }
         if (fmt == TGL_TEXF_ALPHA) q[0] = q[1] = q[2] = 0.0f;
         else if (lum) q[1] = q[2] = 0.0f;
         if (fmt == TGL_TEXF_INTENSITY) q[3] = 1.0f;

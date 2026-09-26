@@ -108,7 +108,7 @@ static void test_basics(s31gl_ctx *ctx)
 	GETI(GL_STENCIL_BITS, 0);
 	GETI(GL_MAX_LIGHTS, 16);
 	GETI(GL_MAX_MODELVIEW_STACK_DEPTH, 32);
-	GETI(GL_MAX_TEXTURE_UNITS, 1);
+	GETI(GL_MAX_TEXTURE_UNITS, 2);	/* phase 5 O1: GL_ARB_multitexture */
 	GETI(GL_DOUBLEBUFFER, 1);
 	GETI(GL_DEPTH_FUNC, GL_LESS);
 	GETI(GL_UNPACK_ALIGNMENT, 4);
@@ -1590,6 +1590,431 @@ static void test_f7(void)
 	glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
 }
 
+/* phase 5 O1: GL_ARB_multitexture + texture_env_combine/add, exact pixels
+   (RGB565, 1x1 textures of exact 565 colours) and the error and state
+   semantics a Mesa comparison cannot show (glx_mtex covers the rest) */
+static GLuint mt_tex(unsigned char r, unsigned char g, unsigned char b)
+{
+	GLuint t;
+	unsigned char px[4] = { r, g, b, 255 };
+	glGenTextures(1, &t);
+	glBindTexture(GL_TEXTURE_2D, t);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
+	return t;
+}
+
+static unsigned short mt_quad(void)
+{
+	glClear(GL_COLOR_BUFFER_BIT);
+	glBegin(GL_QUADS);
+	glMultiTexCoord2f(GL_TEXTURE1, 0, 0); glTexCoord2f(0, 0); glVertex2f(-1, -1);
+	glMultiTexCoord2f(GL_TEXTURE1, 1, 0); glTexCoord2f(1, 0); glVertex2f(1, -1);
+	glMultiTexCoord2f(GL_TEXTURE1, 1, 1); glTexCoord2f(1, 1); glVertex2f(1, 1);
+	glMultiTexCoord2f(GL_TEXTURE1, 0, 1); glTexCoord2f(0, 1); glVertex2f(-1, 1);
+	glEnd();
+	return PX(W / 2, H / 2);
+}
+
+static void test_mtex(void)
+{
+	GLuint white, red, green, t2, list;
+	GLint iv[2];
+	unsigned short v;
+	const char *ext = (const char *)glGetString(GL_EXTENSIONS);
+	static const float tc[8] = { 0, 0, 1, 0, 1, 1, 0, 1 };
+	static const float vx[8] = { -1, -1, 1, -1, 1, 1, -1, 1 };
+	unsigned char two[8] = { 255, 0, 0, 255, 0, 0, 255, 255 };
+	unsigned short pix[4] = { 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF };
+
+	CHECK(ext && strstr(ext, "GL_ARB_multitexture") && strstr(ext, "GL_ARB_texture_env_combine") &&
+	      strstr(ext, "GL_ARB_texture_env_add") && strstr(ext, "GL_EXT_texture_env_combine"),
+	      "GL_EXTENSIONS lists multitexture, env_combine, env_add");
+	CHECK(!strstr(ext, "vertex_buffer_object") && !strstr(ext, "shader") &&
+	      !strncmp((const char *)glGetString(GL_VERSION), "1.1", 3),
+	      "no VBO/GLSL advertised, GL_VERSION stays 1.1");
+	ident();
+	glDisable(GL_DEPTH_TEST);
+	glDisable(GL_BLEND);
+	glColor4f(1, 1, 1, 1);
+	white = mt_tex(255, 255, 255);
+	red = mt_tex(255, 0, 0);
+	green = mt_tex(0, 255, 0);
+
+	/* unit 0 red, unit 1 green: MODULATE black, ADD yellow */
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, red);
+	glEnable(GL_TEXTURE_2D);
+	glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+	glActiveTexture(GL_TEXTURE1);
+	glBindTexture(GL_TEXTURE_2D, green);
+	glEnable(GL_TEXTURE_2D);
+	glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+	v = mt_quad();
+	CHECK(v == 0x0000, "unit0 red MODULATE unit1 green = 0x%04x (want 0)", v);
+	glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_ADD);
+	v = mt_quad();
+	CHECK(v == 0xFFE0, "unit1 GL_ADD red + green = 0x%04x (want 0xffe0)", v);
+	glGetIntegerv(GL_ACTIVE_TEXTURE, iv);
+	glGetIntegerv(GL_TEXTURE_BINDING_2D, iv + 1);
+	CHECK(iv[0] == GL_TEXTURE1 && iv[1] == (GLint)green, "glGet ACTIVE_TEXTURE / binding of the active unit");
+	CHECK(glIsEnabled(GL_TEXTURE_2D), "glIsEnabled(TEXTURE_2D) on unit 1");
+
+	/* COMBINE SUBTRACT on unit 1: white - red = cyan */
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, white);
+	glActiveTexture(GL_TEXTURE1);
+	glBindTexture(GL_TEXTURE_2D, red);
+	glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_COMBINE);
+	glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_RGB, GL_SUBTRACT);
+	glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE0_RGB, GL_PREVIOUS);
+	glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE1_RGB, GL_TEXTURE);
+	v = mt_quad();
+	CHECK(v == 0x07FF, "COMBINE SUBTRACT white - red = 0x%04x (want 0x07ff)", v);
+	/* INTERPOLATE by a constant alpha of 0: all SOURCE1 (the texture) */
+	{
+		float k[4] = { 0, 0, 0, 0 };
+		glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, k);
+	}
+	glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_RGB, GL_INTERPOLATE);
+	glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE0_RGB, GL_PREVIOUS);
+	glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE1_RGB, GL_TEXTURE);
+	glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE2_RGB, GL_CONSTANT);
+	glTexEnvi(GL_TEXTURE_ENV, GL_OPERAND2_RGB, GL_SRC_ALPHA);
+	v = mt_quad();
+	CHECK(v == 0xF800, "COMBINE INTERPOLATE(prev, tex, const a=0) = 0x%04x (want 0xf800)", v);
+	/* ONE_MINUS_SRC_COLOR of red = cyan, times primary 1/4, scale 4 */
+	glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_RGB, GL_MODULATE);
+	glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE0_RGB, GL_TEXTURE);
+	glTexEnvi(GL_TEXTURE_ENV, GL_OPERAND0_RGB, GL_ONE_MINUS_SRC_COLOR);
+	glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE1_RGB, GL_PRIMARY_COLOR);
+	glTexEnvf(GL_TEXTURE_ENV, GL_RGB_SCALE, 4.0f);
+	glColor4f(0.25f, 0.25f, 0.25f, 1);
+	v = mt_quad();
+	glColor4f(1, 1, 1, 1);
+	CHECK(v == 0x07FF, "COMBINE (1-red) * primary 0.25, RGB_SCALE 4 = 0x%04x (want 0x07ff)", v);
+	glGetTexEnviv(GL_TEXTURE_ENV, GL_OPERAND0_RGB, iv);
+	CHECK(iv[0] == GL_ONE_MINUS_SRC_COLOR, "glGetTexEnv OPERAND0_RGB");
+	glTexEnvf(GL_TEXTURE_ENV, GL_RGB_SCALE, 3.0f);
+	CHECK(glGetError() == GL_INVALID_VALUE, "RGB_SCALE 3 is GL_INVALID_VALUE");
+	glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_RGB, GL_DOT3_RGB);
+	CHECK(glGetError() == GL_INVALID_ENUM, "COMBINE_RGB DOT3 (not advertised) is GL_INVALID_ENUM");
+	glTexEnvf(GL_TEXTURE_ENV, GL_RGB_SCALE, 1.0f);
+	glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+
+	/* unit 0's env untouched by unit 1's */
+	glActiveTexture(GL_TEXTURE0);
+	glGetTexEnviv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, iv);
+	CHECK(iv[0] == GL_MODULATE, "unit 0 env mode unchanged by unit 1's");
+	glActiveTexture(GL_TEXTURE2);
+	CHECK(glGetError() == GL_INVALID_ENUM, "glActiveTexture(GL_TEXTURE2) is GL_INVALID_ENUM");
+	glClientActiveTexture(GL_TEXTURE2);
+	CHECK(glGetError() == GL_INVALID_ENUM, "glClientActiveTexture(GL_TEXTURE2) is GL_INVALID_ENUM");
+
+	/* a display list switching units */
+	glActiveTexture(GL_TEXTURE1);
+	glBindTexture(GL_TEXTURE_2D, white);
+	list = glGenLists(1);
+	glNewList(list, GL_COMPILE);
+	glActiveTexture(GL_TEXTURE1);
+	glBindTexture(GL_TEXTURE_2D, green);
+	glActiveTexture(GL_TEXTURE0);
+	glEndList();
+	glGetIntegerv(GL_TEXTURE_BINDING_2D, iv);
+	CHECK(iv[0] == (GLint)white, "GL_COMPILE does not execute glBindTexture (unit 1)");
+	glCallList(list);
+	glGetIntegerv(GL_ACTIVE_TEXTURE, iv);
+	glActiveTexture(GL_TEXTURE1);
+	glGetIntegerv(GL_TEXTURE_BINDING_2D, iv + 1);
+	CHECK(iv[0] == GL_TEXTURE0 && iv[1] == (GLint)green, "glCallList switches units and binds on unit 1");
+	glDeleteLists(list, 1);
+	v = mt_quad();
+	CHECK(v == 0x07E0, "white x green after the list = 0x%04x (want 0x07e0)", v);
+
+	/* unit 1's texcoord array: a 2x1 red|blue texture, s = 1 on the right */
+	glGenTextures(1, &t2);
+	glBindTexture(GL_TEXTURE_2D, t2);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 2, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, two);
+	glEnableClientState(GL_VERTEX_ARRAY);
+	glVertexPointer(2, GL_FLOAT, 0, vx);
+	glClientActiveTexture(GL_TEXTURE1);
+	glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+	glTexCoordPointer(2, GL_FLOAT, 0, tc);
+	glClientActiveTexture(GL_TEXTURE0);
+	CHECK(!glIsEnabled(GL_TEXTURE_COORD_ARRAY), "unit 0 texcoord array stays disabled");
+	glClear(GL_COLOR_BUFFER_BIT);
+	glDrawArrays(GL_QUADS, 0, 4);
+	CHECK(PX(W / 4, H / 2) == 0xF800 && PX(3 * W / 4, H / 2) == 0x001F,
+	      "unit 1 texcoord array: left 0x%04x right 0x%04x (want 0xf800 0x001f)",
+	      PX(W / 4, H / 2), PX(3 * W / 4, H / 2));
+	glClientActiveTexture(GL_TEXTURE1);
+	glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+	glClientActiveTexture(GL_TEXTURE0);
+	glDisableClientState(GL_VERTEX_ARRAY);
+
+	/* glDrawPixels textured by unit 1 at the raster position's unit-1
+	   coordinates (unit 0 off): white pixels x green */
+	glBindTexture(GL_TEXTURE_2D, green);
+	glActiveTexture(GL_TEXTURE0);
+	glDisable(GL_TEXTURE_2D);
+	glClear(GL_COLOR_BUFFER_BIT);
+	glMultiTexCoord2f(GL_TEXTURE1, 0.5f, 0.5f);
+	glRasterPos2f(0, 0);
+	glDrawPixels(2, 2, GL_RGB, GL_UNSIGNED_SHORT_5_6_5, pix);
+	CHECK(PX(W / 2, H / 2 - 1) == 0x07E0 || PX(W / 2, H / 2) == 0x07E0,
+	      "glDrawPixels textured by unit 1 = 0x%04x (want 0x07e0)", PX(W / 2, H / 2 - 1));
+
+	/* glPushAttrib(TEXTURE_BIT) keeps both units */
+	glActiveTexture(GL_TEXTURE1);
+	glPushAttrib(GL_TEXTURE_BIT);
+	glDisable(GL_TEXTURE_2D);
+	glBindTexture(GL_TEXTURE_2D, red);
+	glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_ADD);
+	glActiveTexture(GL_TEXTURE0);
+	glPopAttrib();
+	glGetIntegerv(GL_ACTIVE_TEXTURE, iv);
+	CHECK(iv[0] == GL_TEXTURE1, "glPopAttrib restores the active unit");
+	glGetIntegerv(GL_TEXTURE_BINDING_2D, iv);
+	glGetTexEnviv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, iv + 1);
+	CHECK(iv[0] == (GLint)green && iv[1] == GL_MODULATE && glIsEnabled(GL_TEXTURE_2D),
+	      "glPopAttrib restores unit 1's binding, env and enable");
+
+	glDisable(GL_TEXTURE_2D);
+	glActiveTexture(GL_TEXTURE0);
+	glDisable(GL_TEXTURE_2D);
+	glDeleteTextures(1, &t2);
+	glDeleteTextures(1, &white);
+	glDeleteTextures(1, &red);
+	glDeleteTextures(1, &green);
+	CHECK(glGetError() == GL_NO_ERROR, "no error after the multitexture tests");
+}
+
+/* phase 5 (s31_tex8.c): the storage kinds. A level with at most 256
+   distinct texels is P8, a grey one L8, anything else RGB565 rounded (+ A8
+   unless every alpha is 255): P8 / L8 hold the texels exactly - drawn,
+   read back and reported (GL_TEXTURE_*_SIZE 8) - and a glTexSubImage the
+   kind cannot hold converts the texture exactly */
+#define PK(r, g, b) ((unsigned short)((((r) & 0xf8) << 8) | (((g) & 0xfc) << 3) | ((b) >> 3)))
+static unsigned short pk_round(int r, int g, int b)
+{
+	int r5 = (r * 31 + 127) / 255, g6 = (g * 63 + 127) / 255, b5 = (b * 31 + 127) / 255;
+	return (unsigned short)((r5 << 11) | (g6 << 5) | b5);
+}
+static int size8(GLenum pname)
+{
+	GLint v = -1;
+	glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, pname, &v);
+	return v;
+}
+/* draw the tw x 16 texture 1:1 at the viewport's corner (window pixels) */
+static void tquadw(int tw)
+{
+	glMatrixMode(GL_PROJECTION); glLoadIdentity(); glOrtho(0, W, 0, H, -1, 1);
+	glMatrixMode(GL_MODELVIEW); glLoadIdentity();
+	glBegin(GL_QUADS);
+	glTexCoord2f(0, 0); glVertex2f(0, 0); glTexCoord2f(1, 0); glVertex2f((float)tw, 0);
+	glTexCoord2f(1, 1); glVertex2f((float)tw, 16); glTexCoord2f(0, 1); glVertex2f(0, 16);
+	glEnd();
+}
+#define tquad16() tquadw(16)
+/* a tw x 16 image of n colours (n <= 256: a palette image); grey: r = g =
+   b; alpha 0: 255, 1: 0 or 255, 2: any */
+static void imgw(unsigned char *p, int tw, int n, int grey, int alpha, unsigned seed)
+{
+	int k;
+	for (k = 0; k < tw * 16; k++) {
+		unsigned c = (unsigned)(k % n) * 2654435761u + seed;
+		unsigned char *q = p + k * 4;
+		q[0] = (unsigned char)(c >> 8); q[1] = grey ? q[0] : (unsigned char)(c >> 16);
+		q[2] = grey ? q[0] : (unsigned char)(c >> 24);
+		q[3] = alpha == 0 ? 255 : (alpha == 1 ? (k & 1 ? 255 : 0) : (unsigned char)(c >> 4));
+	}
+}
+#define img16(p, n, g, a, s) imgw(p, 16, n, g, a, s)
+static int drawn_exactw(const unsigned char *img, int tw, int rounded)
+{
+	int i, j, bad = 0;
+	for (j = 0; j < 16; j++)
+		for (i = 0; i < tw; i++) {
+			const unsigned char *q = img + (j * tw + i) * 4;
+			unsigned short want = rounded ? pk_round(q[0], q[1], q[2]) : PK(q[0], q[1], q[2]);
+			bad += PX(i, H - 1 - j) != want;
+		}
+	return bad;
+}
+#define drawn_exact(img, r) drawn_exactw(img, 16, r)
+static int readback_exact(const unsigned char *img)
+{
+	static unsigned char got[32 * 16 * 4];
+	int k, bad = 0;
+	glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, got);
+	for (k = 0; k < 16 * 16 * 4; k++) bad += got[k] != img[k];
+	return bad;
+}
+static void test_tex8(void)
+{
+	static unsigned char a[32 * 16 * 4], b[32 * 16 * 4];
+	GLuint t;
+	int k, bad;
+	glGenTextures(1, &t);
+	glBindTexture(GL_TEXTURE_2D, t);
+	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+	glPixelStorei(GL_PACK_ALIGNMENT, 1);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glEnable(GL_TEXTURE_2D);
+	glDisable(GL_DEPTH_TEST);
+	glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+
+	/* P8: 40 colours, exact */
+	img16(a, 40, 0, 0, 1);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 16, 16, 0, GL_RGBA, GL_UNSIGNED_BYTE, a);
+	CHECK(size8(GL_TEXTURE_RED_SIZE) == 8 && size8(GL_TEXTURE_GREEN_SIZE) == 8,
+	      "40 colours: stored 8 bits a channel (P8)");
+	glClear(GL_COLOR_BUFFER_BIT);
+	tquad16();
+	CHECK((bad = drawn_exact(a, 0)) == 0, "P8 REPLACE draws PACK of the exact texel (%d off)", bad);
+	CHECK((bad = readback_exact(a)) == 0, "P8 glGetTexImage returns the texels exactly (%d off)", bad);
+	/* a glTexSubImage2D with new colours joins the palette */
+	img16(b, 30, 0, 0, 77);
+	glTexSubImage2D(GL_TEXTURE_2D, 0, 4, 4, 8, 8, GL_RGBA, GL_UNSIGNED_BYTE, b);
+	for (k = 0; k < 64; k++) memcpy(a + (((k / 8) + 4) * 16 + (k % 8) + 4) * 4, b + k * 4, 4);
+	CHECK(size8(GL_TEXTURE_RED_SIZE) == 8 && readback_exact(a) == 0,
+	      "P8 glTexSubImage2D with new colours: still P8, exact");
+	/* the old colours no texel uses are dropped: 200 new ones over all */
+	img16(a, 200, 0, 0, 999);
+	glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 16, 16, GL_RGBA, GL_UNSIGNED_BYTE, a);
+	CHECK(size8(GL_TEXTURE_RED_SIZE) == 8 && readback_exact(a) == 0,
+	      "P8 overwritten by 200 new colours: the unused entries are dropped, still P8");
+	/* a 32 x 16 P8 texture (200 colours) gets 200 new ones over half: 400
+	   in use, RGB565 (rounded), every texel converted exactly */
+	imgw(a, 32, 200, 0, 0, 31);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 32, 16, 0, GL_RGBA, GL_UNSIGNED_BYTE, a);
+	CHECK(size8(GL_TEXTURE_RED_SIZE) == 8, "32 x 16, 200 colours: P8");
+	imgw(b, 16, 200, 0, 0, 4242);
+	glTexSubImage2D(GL_TEXTURE_2D, 0, 16, 0, 16, 16, GL_RGBA, GL_UNSIGNED_BYTE, b);
+	for (k = 0; k < 256; k++) memcpy(a + ((k / 16) * 32 + (k % 16) + 16) * 4, b + k * 4, 4);
+	CHECK(size8(GL_TEXTURE_RED_SIZE) == 5 && size8(GL_TEXTURE_GREEN_SIZE) == 6,
+	      "more than 256 colours after glTexSubImage2D: RGB565");
+	glClear(GL_COLOR_BUFFER_BIT);
+	tquadw(32);
+	CHECK((bad = drawn_exactw(a, 32, 1)) == 0, "converted to 565: every texel rounded (%d off)", bad);
+
+	/* more than 256 colours at once: RGB565, rounded */
+	{
+		static unsigned char c[32 * 16 * 4];
+		for (k = 0; k < 512 * 4; k++) c[k] = (unsigned char)((k * 37) ^ (k * k * 13) ^ ((k >> 3) * 101));
+		for (k = 0; k < 512; k++) c[k * 4 + 3] = 255;
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 32, 16, 0, GL_RGBA, GL_UNSIGNED_BYTE, c);
+		glClear(GL_COLOR_BUFFER_BIT);
+		tquadw(32);
+		CHECK(size8(GL_TEXTURE_RED_SIZE) == 5 && (bad = drawn_exactw(c, 32, 1)) == 0,
+		      "more than 256 distinct texels: RGB565 rounded as Mesa's texstore (%d off)", bad);
+		/* an opaque RGBA one keeps no A8 plane; REPLACE sets alpha 1 */
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 32, 16, 0, GL_RGBA, GL_UNSIGNED_BYTE, c);
+		glEnable(GL_ALPHA_TEST);
+		glAlphaFunc(GL_GREATER, 0.5f);
+		glColor4f(1, 1, 1, 0);
+		glClear(GL_COLOR_BUFFER_BIT);
+		tquadw(32);
+		CHECK(size8(GL_TEXTURE_ALPHA_SIZE) == 8 && (bad = drawn_exactw(c, 32, 1)) == 0,
+		      "opaque RGBA without its A8 plane: REPLACE's alpha is 1 (%d off)", bad);
+		/* a transparent glTexSubImage2D gives it the plane */
+		for (k = 0; k < 32; k++) c[k * 4 + 3] = 0;
+		glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 32, 1, GL_RGBA, GL_UNSIGNED_BYTE, c);
+		glClear(GL_COLOR_BUFFER_BIT);
+		tquadw(32);
+		CHECK(PX(3, H - 1) == 0 && PX(3, H - 2) == pk_round(c[32 * 4 + 12], c[32 * 4 + 13], c[32 * 4 + 14]),
+		      "... then alpha 0 texels from glTexSubImage2D fail the alpha test (0x%04x 0x%04x)",
+		      PX(3, H - 1), PX(3, H - 2));
+		glDisable(GL_ALPHA_TEST);
+		glColor4f(1, 1, 1, 1);
+	}
+
+	/* L8: grey RGBA, alpha 0 or 255 (a lightmap's unused area) */
+	img16(a, 256, 1, 1, 5);
+	glTexImage2D(GL_TEXTURE_2D, 0, 4, 16, 16, 0, GL_RGBA, GL_UNSIGNED_BYTE, a);
+	CHECK(size8(GL_TEXTURE_RED_SIZE) == 8 && readback_exact(a) == 0,
+	      "grey RGBA with alpha 0 / 255: L8, exact");
+	glClear(GL_COLOR_BUFFER_BIT);
+	tquad16();
+	CHECK((bad = drawn_exact(a, 0)) == 0, "L8 REPLACE exact (%d off)", bad);
+	img16(b, 7, 1, 2, 6);                          /* grey, any alpha: the plane grows */
+	glTexSubImage2D(GL_TEXTURE_2D, 0, 8, 0, 8, 16, GL_RGBA, GL_UNSIGNED_BYTE, b);
+	for (k = 0; k < 128; k++) memcpy(a + ((k / 8) * 16 + (k % 8) + 8) * 4, b + k * 4, 4);
+	CHECK(size8(GL_TEXTURE_RED_SIZE) == 8 && readback_exact(a) == 0,
+	      "L8 glTexSubImage2D with any alpha: an A8 plane, exact");
+	img16(b, 3, 0, 0, 7);                          /* colour: RGB565 */
+	glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 4, 4, GL_RGBA, GL_UNSIGNED_BYTE, b);
+	CHECK(size8(GL_TEXTURE_RED_SIZE) == 5, "a colour texel in an L8 texture: RGB565");
+	/* LUMINANCE, INTENSITY, ALPHA: L8 */
+	for (k = 0; k < 256; k++) a[k] = (unsigned char)(k * 7);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, 16, 16, 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, a);
+	CHECK(size8(GL_TEXTURE_LUMINANCE_SIZE) == 8, "LUMINANCE: 8 bits");
+	glClear(GL_COLOR_BUFFER_BIT);
+	tquad16();
+	for (k = 0, bad = 0; k < 256; k++) bad += PX(k % 16, H - 1 - k / 16) != PK(a[k], a[k], a[k]);
+	CHECK(bad == 0, "LUMINANCE REPLACE exact (%d off)", bad);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_INTENSITY, 16, 16, 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, a);
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA, GL_ZERO);             /* the texel times its own alpha */
+	glClear(GL_COLOR_BUFFER_BIT);
+	tquad16();
+	for (k = 0, bad = 0; k < 256; k++) {
+		int v = (a[k] * a[k] + 127) / 255;            /* round(i i / 255) */
+		bad += PX(k % 16, H - 1 - k / 16) != PK(v, v, v);
+	}
+	CHECK(size8(GL_TEXTURE_INTENSITY_SIZE) == 8 && bad == 0,
+	      "INTENSITY: 8 bits, REPLACE sets alpha to I (%d off)", bad);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_ALPHA, 16, 16, 0, GL_ALPHA, GL_UNSIGNED_BYTE, a);
+	glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+	glColor4f(0.5f, 1.0f, 0.25f, 1.0f);
+	glClear(GL_COLOR_BUFFER_BIT);
+	tquad16();
+	for (k = 0, bad = 0; k < 256; k++) {
+		int r = (128 * a[k] + 127) / 255, g = (255 * a[k] + 127) / 255, bl = (64 * a[k] + 127) / 255;
+		bad += PX(k % 16, H - 1 - k / 16) != PK(r, g, bl);
+	}
+	CHECK(size8(GL_TEXTURE_ALPHA_SIZE) == 8 && bad == 0,
+	      "ALPHA: 8 bits, MODULATE keeps the colour and multiplies the alpha (%d off)", bad);
+	glDisable(GL_BLEND);
+	glColor4f(1, 1, 1, 1);
+	glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+
+	/* a mip chain: level 0 P8, a level 1 of more than 256 colours - the
+	   whole texture becomes RGB565 (every level of a texture one kind) */
+	img16(a, 40, 0, 0, 1);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 16, 16, 0, GL_RGBA, GL_UNSIGNED_BYTE, a);
+	CHECK(size8(GL_TEXTURE_RED_SIZE) == 8, "mip chain: level 0 alone is P8");
+	{
+		static unsigned char c[8 * 8 * 4];
+		for (k = 0; k < 8 * 8 * 4; k++) c[k] = (unsigned char)(k * 37 + 11);
+		glTexImage2D(GL_TEXTURE_2D, 1, GL_RGB, 8, 8, 0, GL_RGBA, GL_UNSIGNED_BYTE, c);
+		for (k = 0; k < 8 * 8 * 4; k++) c[k] = (unsigned char)(k * 53 + 7);
+		glTexImage2D(GL_TEXTURE_2D, 1, GL_RGB, 8, 8, 0, GL_RGBA, GL_UNSIGNED_BYTE, c);
+	}
+	CHECK(size8(GL_TEXTURE_RED_SIZE) == 8, "mip chain: a level 1 of 64 texels is P8 too");
+	/* the colour buffer copied in: its 565 colours, exactly */
+	glDisable(GL_TEXTURE_2D);
+	glClearColor(0.25f, 0.5f, 0.75f, 1);
+	glClear(GL_COLOR_BUFFER_BIT);
+	glEnable(GL_TEXTURE_2D);
+	glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, 16, 16);
+	glClearColor(0, 0, 0, 0);
+	glClear(GL_COLOR_BUFFER_BIT);
+	tquad16();
+	CHECK(PX(5, H - 6) == PK(64, 128, 191) && size8(GL_TEXTURE_RED_SIZE) == 8,
+	      "glCopyTexSubImage2D of a flat colour buffer: the fb colour, P8 (0x%04x)", PX(5, H - 6));
+	glDisable(GL_TEXTURE_2D);
+	glDeleteTextures(1, &t);
+	glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+	glPixelStorei(GL_PACK_ALIGNMENT, 4);
+	CHECK(glGetError() == GL_NO_ERROR, "no error from the storage tests");
+}
+
 int main(void)
 {
 	s31gl_ctx *ctx = s31gl_create_context(NULL);
@@ -1609,6 +2034,8 @@ int main(void)
 	test_smooth();
 	test_push_pop_attrib();
 	test_f7();
+	test_mtex();
+	test_tex8();
 	s31gl_make_current(NULL);
 	s31gl_destroy_context(ctx);
 	test_lazy_and_hooks();

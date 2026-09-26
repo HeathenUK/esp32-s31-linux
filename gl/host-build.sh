@@ -47,6 +47,10 @@ $CC -O2 -Wall -I$GL/include -I$GL/api $GL/tests/zepoch_test.c \
 $CC -O2 -Wall -I$GL/include -I$GL/api $GL/tests/filt_test.c \
 	-o $GL/out-host/filt_test -L$GL/out-host -l:libGL.so.1 -lm \
 	-Wl,-rpath,'$ORIGIN' & pids="$pids $!"
+# phase 5 O1: the fused fillers' bit-identity gate
+$CC -O2 -Wall -I$GL/include -I$GL/api $GL/tests/fused_test.c \
+	-o $GL/out-host/fused_test -L$GL/out-host -l:libGL.so.1 -lm \
+	-Wl,-rpath,'$ORIGIN' & pids="$pids $!"
 # no rpath: LD_LIBRARY_PATH picks the implementation (tools/glref/run.sh)
 if [ -z "$S31GL_NO_GLX" ]; then
 	$CC -O2 -Wall -I$GL/include $GL/tests/glx_prims.c \

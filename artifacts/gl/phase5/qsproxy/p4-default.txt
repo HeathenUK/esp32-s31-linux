@@ -1,0 +1,11 @@
+# qsreplay p4-default: GLDIR=/Users/gadyke/esp32-s31-linux/gl/bench/base5 TRACE=/Users/gadyke/esp32-s31-linux/gl/bench/qstrace/work/p4final/qs.gltr QSR_ENV=
+qsr p4-default window 0 frames 100-139: 57.8946 Minsn/frame min 47.2963 max 67.8694 (frame 124), 0 dcalls/frame, hashes 40/40 same as live, tex 4892320 B heap 34248 B at start
+qsr p4-default window 1 frames 400-439: 61.3988 Minsn/frame min 48.9907 max 77.2487 (frame 412), 0 dcalls/frame, hashes 40/40 same as live, tex 4999144 B heap 36616 B at start
+qsr p4-default load: 100.58 Minsn before frame 98 (355 state-only frames in all: 167.83 Minsn), warm-up 235.38 Minsn
+qsr p4-default heap: texture 4892320 B, other 34248 B after the load phase; at the end texture 4999144 B, other 36632 B; peak 6897240 B, 1021 allocations
+qsr p4-default done: 439 frames, 84 full: 84 same as live, 0 differ
+qsr p4-default-null window 0 frames 100-139: 0.3465 Minsn/frame min 0.1492 max 0.5760 (frame 137), 0 dcalls/frame, hashes 0/40 same as live, tex 0 B heap 34248 B at start
+qsr p4-default-null window 1 frames 400-439: 0.2370 Minsn/frame min 0.1218 max 0.3461 (frame 415), 0 dcalls/frame, hashes 0/40 same as live, tex 0 B heap 34248 B at start
+qsr p4-default-null load: 2.72 Minsn before frame 98 (355 state-only frames in all: 7.21 Minsn), warm-up 1.27 Minsn
+qsr p4-default-null heap: texture 0 B, other 34248 B after the load phase; at the end texture 0 B, other 34264 B; peak 34264 B, 36 allocations
+qsr p4-default-null done: 439 frames, 84 full: 0 same as live, 84 differ

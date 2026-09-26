@@ -89,6 +89,8 @@ $CC -O2 -Wall $ARCHFLAGS -I$GL/include -I$GL/api -c $GL/tests/zepoch_test.c \
 	-o $OBJ/zepoch_test.o & pids="$pids $!"
 $CC -O2 -Wall $ARCHFLAGS -I$GL/include -I$GL/api -c $GL/tests/filt_test.c \
 	-o $OBJ/filt_test.o & pids="$pids $!"
+$CC -O2 -Wall $ARCHFLAGS -I$GL/include -I$GL/api -c $GL/tests/fused_test.c \
+	-o $OBJ/fused_test.o & pids="$pids $!"
 waitall
 # phase 4 L1: the core objects carry the hot section (api/build-lib.sh), so
 # every static link places it (api/ramtext.ld), keeps its relocations (-q)
@@ -100,7 +102,7 @@ rtfix() { python3 $GL/api/ramtext.py fix "$1" > /dev/null; }
 	rtfix $TEST && $STRIP $TEST ) & pids="$pids $!"
 ( $CC -static $ARCHFLAGS $RT -o $GL/out-rv32/core_test $OBJ/core_test.o $(cat $OBJ/core.list) -lm &&
 	rtfix $GL/out-rv32/core_test && $STRIP $GL/out-rv32/core_test ) & pids="$pids $!"
-for t in headless_gears core_test d2f_test raster_gate zepoch_test filt_test; do
+for t in headless_gears core_test d2f_test raster_gate zepoch_test filt_test fused_test; do
 	( $CC -static $ARCHFLAGS $RT -o $GL/out-rv32/$t.qemu $OBJ/$t.o $OBJ/qemu_libc.o \
 		$(cat $OBJ/core.list) -lm && rtfix $GL/out-rv32/$t.qemu ) & pids="$pids $!"
 done

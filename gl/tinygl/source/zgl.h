@@ -160,6 +160,10 @@ typedef struct GLVertex {
   V4 pc;                /* coordinates in the normalized volume */
   int clip_code;        /* clip code */
   ZBufferPoint zp;      /* integer coordinates for the rasterization */
+  /* s31 (phase 5 O1): texture unit 1's coordinates (texgen and its texture
+     matrix applied; s, t, r, q), set only while unit 1 is on (tu1_on).
+     Last, so every field before it keeps its offset */
+  V4 tex_coord1;
 } GLVertex;
 
 typedef struct GLImage {
@@ -177,6 +181,43 @@ enum { TGL_TEXF_RGB,        /* RGB565, no alpha: RGB, LUMINANCE, 3, 1 ... */
        TGL_TEXF_ALPHA,      /* A8 (colour plane white): ALPHA */
        TGL_TEXF_INTENSITY   /* I in the colour plane and in A8 */
 };
+
+/* s31 phase 5 (s31_tex8.c): how a texture's levels are stored. Every
+   stored level of a texture has the same kind (and, for L8, the same
+   alpha mode). P8 and L8 hold the texels exactly, 8 bits a channel */
+enum { TGL_ST_565,          /* RGB565 (+ A8): the classes above */
+       TGL_ST_P8,           /* 8-bit indices into the level's RGBA8 palette:
+                               at most 256 distinct texels (ALPHA: a fixed
+                               ramp, the index is A) */
+       TGL_ST_L8,           /* 8-bit grey (r = g = b) and an alpha by
+                               GLTexture.amode: LUMINANCE(_ALPHA),
+                               INTENSITY and grey RGB(A) such as lightmaps */
+       TGL_ST_W32           /* RGBA8 texels: the unpacked reference of P8
+                               and L8 (S31GL_TEX8=2, the bit-identity gate) */
+};
+/* GLTexture.amode, TGL_ST_L8: where a level's alpha is */
+enum { TGL_AM_ONE,          /* 255 everywhere: no plane */
+       TGL_AM_BITS,         /* 0 or 255: a bit a texel (texel k: bit k & 7 of
+                               byte k >> 3), after the grey plane */
+       TGL_AM_A8,           /* an A8 plane after the grey plane */
+       TGL_AM_I,            /* the grey value itself (INTENSITY) */
+       TGL_AM_ALPHA         /* ALPHA: the plane is the alpha, the colour white */
+};
+
+/* s31 phase 5: the palette of a level with 8-bit texels (TGL_ST_P8, and
+   TGL_ST_W32, whose storage decisions follow the same palette). The
+   entries are the texels as GL defines them for the base format (RGB: a
+   255, LUMINANCE: (L, L, L, 255), ALPHA: (255, 255, 255, A), INTENSITY:
+   (I, I, I, I)), little-endian r | g << 8 | b << 16 | a << 24, in the
+   level's block: its texels, this header (the level's pal points at it),
+   the entries, then (level 0) their PACKs */
+typedef struct GLTexPal {
+  unsigned int *w;           /* the entries */
+  unsigned short *p565;      /* level 0: PACK of each entry (tier 1's REPLACE) */
+  unsigned short n, cap;     /* used, allocated */
+  unsigned char grey;        /* every entry has r == g == b (a lightmap) */
+  unsigned char pad[3];
+} GLTexPal;
 
 #define TGL_STORED_LEVELS 1
 typedef struct GLTexture {
@@ -210,20 +251,72 @@ typedef struct GLTexture {
      mipmaps pays 4 bytes). Each level is its own RGB565 (+ A8) block of
      its own size, so a full chain costs a third of level 0 more */
   struct GLMipChain *mip;
+  /* s31 phase 5 (s31_tex8.c): the storage kind (TGL_ST_*) of every stored
+     level; a1: an RGBA-class TGL_ST_565 texture whose texels all have
+     alpha 255, stored without A8 planes (its alpha reads as 255); level
+     0's palette (TGL_ST_P8, and TGL_ST_W32 of a P8 reference).
+     images[0].pixmap (GLMipLevel.pix) is a level's block in every kind:
+     565 plane then A8; P8 indices then the palette's entries and PACKs;
+     L8 grey plane then its alpha (amode); W32 words then the palette */
+  unsigned char st, a1;
+  /* TGL_ST_L8: TGL_AM_*; TGL_ST_W32: the kind (P8 or L8) whose decisions
+     the reference mirrors (stref) */
+  unsigned char amode, stref;
+  GLTexPal *pal0;           /* in level 0's block (NULL: none) */
 } GLTexture;
 
 /* s31 (phase 4): a stored level > 0 (texture.c). cls is the stored class
    (TGL_TEXF_*) its data was converted to; a level whose class is not
    level 0's is not used (the mipmap filters then sample level 0) */
 typedef struct GLMipLevel {
-  unsigned short *pix;      /* RGB565, then the A8 plane when cls has alpha */
+  void *pix;                /* RGB565, then the A8 plane when cls has alpha;
+                               phase 5: the level's block of GLTexture.st */
   unsigned char *alpha;
   unsigned char ws, hs, cls, pad;
+  GLTexPal *pal;            /* phase 5: TGL_ST_P8 / W32, in the block */
 } GLMipLevel;
 typedef struct GLMipChain {
   GLMipLevel l[MAX_TEXTURE_LEVELS];   /* l[0] unused */
 } GLMipChain;
 
+
+/* s31 (phase 5 O1): GL_ARB_texture_env_combine state of one texture unit
+   (GL 1.3 table 6.17): the functions, the three sources and operands of
+   the RGB and alpha parts, and the scales (1, 2 or 4) */
+typedef struct GLCombine {
+  int rgb, alpha;               /* GL_COMBINE_RGB / GL_COMBINE_ALPHA */
+  int src[2][3];                /* [0] SOURCEn_RGB, [1] SOURCEn_ALPHA */
+  int op[2][3];                 /* [0] OPERANDn_RGB, [1] OPERANDn_ALPHA */
+  float scale[2];               /* GL_RGB_SCALE, GL_ALPHA_SCALE */
+} GLCombine;
+
+/* s31 (phase 5 O1): the state of a texture unit that glActiveTexture
+   selects (GL 1.3 2.7, 3.8.x). Unit 0's lives in the GLContext fields TinyGL
+   always had - current_texture, texenv_mode, texgen_*, matrix_stack[2] ... -
+   so every path that uses one texture reads what it read before. Unit 1's
+   is a GLTexUnit (GLContext.tu1). A command that acts on the ACTIVE unit
+   while unit 1 is active swaps the two sets around its body (s31_mtex.c
+   tu_swap), so the existing code serves both units, and between commands
+   the context fields always hold unit 0. */
+typedef struct GLTexUnit {
+  GLTexture *tex2d, *tex1d;     /* bindings */
+  int enables;                  /* tex_enables: bit 0 2D, bit 1 1D */
+  int any_enabled;              /* texture_2d_enabled */
+  unsigned int capbits;         /* glIsEnabled bits of the unit's caps (s31_state.c) */
+  int env_mode; V4 env_color;
+  GLCombine comb;
+  int texgen_mask, texgen_mode[4], texgen_eye_needed;
+  V4 texgen_obj[4], texgen_eye[4];
+  V4 cur_tc;                    /* the current texture coordinates */
+  float raster_tex[4];          /* the raster position's */
+} GLTexUnit;
+
+/* s31 (phase 5 O1): the vertex-array state that glClientActiveTexture
+   selects (the texture coordinate array); unit 0's is the context's */
+typedef struct GLTexClient {
+  float *array;
+  int size, stride, type, bstride;
+} GLTexClient;                  /* (enabled: client_states bit 0x40, arrays.c) */
 
 /* shared state */
 
@@ -276,9 +369,11 @@ typedef struct GLContext {
   /* matrix */
 
   int matrix_mode;
-  M4 *matrix_stack[3];
-  M4 *matrix_stack_ptr[3];
-  int matrix_stack_depth_max[3];
+  /* s31 (phase 5 O1): [3] is texture unit 1's texture matrix stack;
+     matrix_mode is 3 for GL_TEXTURE while unit 1 is active (matrix.c) */
+  M4 *matrix_stack[4];
+  M4 *matrix_stack_ptr[4];
+  int matrix_stack_depth_max[4];
 
   M4 matrix_model_view_inv;
   M4 matrix_model_projection;
@@ -464,6 +559,9 @@ typedef struct GLContext {
   int vtx_extra;              /* 1: fog factor, 2: user clip planes (s31_xform.c) */
   int clip_plane_mask;        /* enabled GL_CLIP_PLANEi, bit i */
   int texgen_mask;            /* GL_TEXTURE_GEN_S/T/R/Q enabled, bits 0-3 */
+  /* s31 (phase 5 O1): texture unit 1 was ever selected or given state
+     (s31_mtex.c): glBegin and gl_update_raster test it, so it sits here */
+  int mtex_used;
   int texgen_mode[4];
   int texgen_eye_needed;      /* a mode reads eye coordinates or the eye normal */
   float raster_color[4], raster_tex[4], raster_distance;
@@ -538,6 +636,28 @@ typedef struct GLContext {
   int stencil_bits;
   int p4_en, p4_raster;
   float aa_lw, aa_ps;         /* smooth width and size in buffer pixels (>= 1) */
+  /* s31 (phase 5 O1): GL_ARB_multitexture, 2 units (s31_mtex.c). Far from
+     the context pointer: nothing a single-texture frame runs reads these,
+     except gl_update_raster's one test of mtex_used */
+  int active_tex, client_tex;   /* glActiveTexture / glClientActiveTexture: 0 or 1 */
+  GLCombine comb;               /* unit 0's GL_COMBINE state */
+  GLTexUnit tu1;                /* unit 1's (see GLTexUnit) */
+  GLTexClient tc1;              /* unit 1's texture coordinate array */
+  /* what glBegin / gl_update_raster derived for unit 1 */
+  int tu1_on;                   /* unit 1 is enabled and its texture complete */
+  int tu1_apply;                /* its texture matrix is not identity (1), texgen (2) */
+  GLTexture *tu1_tex;           /* the object unit 1 samples (2D over 1D) */
+  float tex1_sscale, tex1_tscale;  /* texcoord 1.0 in its s/t fixed point */
+  int tex1_speriod, tex1_tperiod;  /* one REPEAT period of s and t */
+  int tu1_filtered;             /* its texture has a linear/mipmap filter */
+  int fused_on;                 /* S31GL_FUSED (default 1): the fused fillers */
+  int filt8;                    /* phase 5 S31GL_FILT8 (default 0): filtered
+                                   RGB565 textures through the 8-bit (Mesa)
+                                   filters too (raster_sel.c UNIT_W8) */
+  int tex8;                     /* phase 5 S31GL_TEX8 (s31_tex8.c): 0 store as
+                                   phase 4 did, 1 (default) 8-bit palette
+                                   levels, 2 their unpacked RGBA8 reference */
+  int mtex_adv;                 /* S31GL_MTEX (default 1): advertise 2 units */
 } GLContext;
 
 /* GLContext.p4_en */
@@ -617,6 +737,14 @@ int s31_cap_index(int cap);          /* -1: not a GL capability */
 void s31_cap_record(GLContext *c, int cap, int v);
 int s31_cap_get(GLContext *c, int cap);
 void s31_state_init(GLContext *c);
+void s31_cap_swap_unit(GLContext *c, unsigned int *bits);   /* phase 5 O1 */
+int s31_cap_is_unit(int cap);
+/* s31_mtex.c (phase 5 O1): exchange the ACTIVE-unit state (GLTexUnit) of
+   the context fields and tu1 / the client texture-coordinate array state */
+void tu_swap(GLContext *c);
+void tc_swap(GLContext *c);
+void gl_mtex_init(GLContext *c);
+void gl_mtex_free(GLContext *c);
 int s31_client_state(GLContext *c, int array);   /* arrays.c; -1 = not one */
 
 /* s31: a vertex colour in the rasteriser's ZBufferPoint scale, clamped as
@@ -650,6 +778,8 @@ static inline void gl_set_provoking(GLContext *c, GLVertex *v)
 /* raster.c */
 void gl_update_raster(GLContext *c);
 void gl_draw_triangle_general(GLContext *c, GLVertex *p0, GLVertex *p1, GLVertex *p2);
+/* phase 5 O1: the general path with texture unit 1 on */
+void gl_draw_triangle_mt(GLContext *c, GLVertex *p0, GLVertex *p1, GLVertex *p2);
 void gl_draw_triangle_modwhite(GLContext *c, GLVertex *p0, GLVertex *p1, GLVertex *p2);
 /* s31_tfilter.c (phase 4 F-PERSP): smooth tier 1 with the perspective-colour test */
 void gl_draw_triangle_fill_pq(GLContext *c, GLVertex *p0, GLVertex *p1, GLVertex *p2);
@@ -669,6 +799,7 @@ void gl_vertex_extra(GLContext *c, GLVertex *v);     /* vtx_extra: fog, clip pla
 void gl_vertex_texcoord(GLContext *c, GLVertex *v);  /* texgen and/or texture matrix */
 int gl_user_clipcode(const GLContext *c, const V4 *pc);  /* bits 6.. */
 void gl_update_xform(GLContext *c);   /* glBegin, matrices changed: planes, texgen */
+void gl_tu1_begin(GLContext *c);      /* phase 5 O1: the same for texture unit 1 */
 void gl_texgen_coords(GLContext *c, const V4 *obj, const V4 *eye,
                       const V3 *en, const V4 *in, V4 *out);
 #define TGL_CLIP_USER_SHIFT 6
@@ -715,6 +846,7 @@ void gl_shade_vertex(GLContext *c,GLVertex *v);
 void gl_color_material(GLContext *c, float r, float g, float b, float a);
 /* vertex.c (phase 3a G14): glopVertex for glDrawElements' vertex cache */
 void gl_vertex_indexed(GLContext *c, GLParam *p, const GLVertex *hit, GLVertex *save);
+void gl_vertex_indexed_mt(GLContext *c, GLParam *p, const GLVertex *hit, GLVertex *save);
 void gl_vertex4f(float x, float y, float z, float w, GLContext *c);  /* glopVertex's body */
 
 void glInitTextures(GLContext *c);

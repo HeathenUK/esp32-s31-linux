@@ -6,7 +6,7 @@
  * tgl_get() returns every GL 1.3 state value this library holds, plus the
  * implementation limits, honestly: the limits are this rasteriser's (RGB565
  * colour, 16-bit depth, an 8-bit stencil only for a context with stencil
- * bits (phase 4), no accum/alpha planes, one texture unit, 256x256
+ * bits (phase 4), no accum/alpha planes, two texture units (phase 5), 256x256
  * textures). Every capability
  * glIsEnabled knows is also a valid glGet name. gl/api/get.c converts to
  * the four glGet*v types.
@@ -24,9 +24,25 @@ static int matrix(const M4 *m, float *fv, int transpose)
   return 16;
 }
 
+static int get(GLContext *c, int pname, int *iv, float *fv, int *kind);
+
+/* phase 5 O1: the active unit's state (bindings, texture matrix, current
+   and raster texcoords, texture enables) and the client-active unit's
+   texture-coordinate array, through the unit exchange (s31_mtex.c) */
 int tgl_get(int pname, int *iv, float *fv, int *kind)
 {
   GLContext *c = gl_get_context();
+  int n;
+  if (c->active_tex) tu_swap(c);
+  if (c->client_tex) tc_swap(c);
+  n = get(c, pname, iv, fv, kind);
+  if (c->client_tex) tc_swap(c);
+  if (c->active_tex) tu_swap(c);
+  return n;
+}
+
+static int get(GLContext *c, int pname, int *iv, float *fv, int *kind)
+{
   int n = -1, i;
 
   *kind = TGL_GET_INT;
@@ -75,7 +91,7 @@ int tgl_get(int pname, int *iv, float *fv, int *kind)
   case GL_EDGE_FLAG_ARRAY_STRIDE: I1(c->edge_flag_array_stride); break;
   case GL_INDEX_ARRAY_TYPE: I1(GL_FLOAT); break;
   case GL_INDEX_ARRAY_STRIDE: I1(0); break;
-  case GL_CLIENT_ACTIVE_TEXTURE: I1(GL_TEXTURE0); break;
+  case GL_CLIENT_ACTIVE_TEXTURE: I1(GL_TEXTURE0 + c->client_tex); break;
   case GL_ARRAY_BUFFER_BINDING: case GL_ELEMENT_ARRAY_BUFFER_BINDING:
     I1(0); break;
 
@@ -107,7 +123,7 @@ int tgl_get(int pname, int *iv, float *fv, int *kind)
     I1((int)(c->matrix_stack_ptr[2] - c->matrix_stack[2]) + 1); break;
   case GL_MATRIX_MODE:
     I1(c->matrix_mode == 0 ? GL_MODELVIEW :
-       c->matrix_mode == 1 ? GL_PROJECTION : GL_TEXTURE);
+       c->matrix_mode == 1 ? GL_PROJECTION : GL_TEXTURE);   /* 2, 3: GL_TEXTURE */
     break;
 
   /* colouring */
@@ -149,7 +165,7 @@ int tgl_get(int pname, int *iv, float *fv, int *kind)
   case GL_TEXTURE_BINDING_1D:
     I1(c->current_texture_1d ? c->current_texture_1d->handle : 0); break;
   case GL_TEXTURE_BINDING_3D: I1(0); break;
-  case GL_ACTIVE_TEXTURE: I1(GL_TEXTURE0); break;
+  case GL_ACTIVE_TEXTURE: I1(GL_TEXTURE0 + c->active_tex); break;
 
   /* pixel operations */
   case GL_SCISSOR_BOX:
@@ -267,7 +283,7 @@ int tgl_get(int pname, int *iv, float *fv, int *kind)
   case GL_MAX_ATTRIB_STACK_DEPTH: I1(16); break;
   case GL_MAX_CLIENT_ATTRIB_STACK_DEPTH: I1(16); break;
   case GL_MAX_ELEMENTS_VERTICES: case GL_MAX_ELEMENTS_INDICES: I1(4096); break;
-  case GL_MAX_TEXTURE_UNITS: I1(1); break;
+  case GL_MAX_TEXTURE_UNITS: I1(c->mtex_adv ? 2 : 1); break;   /* phase 5 O1 */
   /* s31: aliased widths and sizes are drawn at the nearest integer
      (raster.c). Phase 4 SMOOTH: GL_POINT_SIZE_RANGE and GL_LINE_WIDTH_RANGE
      are the smooth ranges (GL 1.2's GL_SMOOTH_*_RANGE, the same enums), and
@@ -379,7 +395,8 @@ void *tgl_get_pointer(int pname)
   case GL_VERTEX_ARRAY_POINTER: return c->vertex_array;
   case GL_NORMAL_ARRAY_POINTER: return c->normal_array;
   case GL_COLOR_ARRAY_POINTER: return c->color_array;
-  case GL_TEXTURE_COORD_ARRAY_POINTER: return c->texcoord_array;
+  case GL_TEXTURE_COORD_ARRAY_POINTER:      /* phase 5 O1: the client-active unit's */
+    return c->client_tex ? (void *)c->tc1.array : (void *)c->texcoord_array;
   case GL_EDGE_FLAG_ARRAY_POINTER: return c->edge_flag_array;
   case GL_SELECTION_BUFFER_POINTER: return c->select_buffer;
   default: return (void *)-1;

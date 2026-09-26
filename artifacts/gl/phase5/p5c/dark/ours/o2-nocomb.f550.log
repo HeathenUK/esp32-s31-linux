@@ -1,0 +1,63 @@
+# glref run: impl=ours name=o2-nocomb frame=550 display=:99
+# cmd: /src/artifacts/gl/glquake/host/quakespasm -basedir /src/artifacts/gl/glquake/host -width 320 -height 240 -window -nosound -nocdaudio -novbo -nomtex -nocombine -noadd -notexturenpot -noglsl -nowarpmipmaps
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/artifacts/gl/phase5/p5c/dark/libs/o2/gl/out-host/libGL.so.1 (0x0000e36e1cc90000)
+libGL: context 1 created (pid 563, comm quakespasm)
+libGL: context 2 created (pid 563, comm quakespasm)
+Command line: /src/artifacts/gl/glquake/host/quakespasm -basedir /src/artifacts/gl/glquake/host -width 320 -height 240 -window -nosound -nocdaudio -novbo -nomtex -nocombine -noadd -notexturenpot -noglsl -nowarpmipmaps
+Found SDL version 1.2.68
+Terminal input not available.
+Detected 8 CPUs.
+Initializing QuakeSpasm v0.96.3
+Host_Init
+Playing shareware version.
+Console initialized.
+UDP Initialized
+Server using protocol 666 (FitzQuake)
+Exe: 09:44:21 Sep 26 2026
+256.0 megabyte heap
+Video mode 320x240x16 60Hz (16-bit z-buffer, 0x FSAA) initialized
+GL_VENDOR: s31
+GL_RENDERER: Software Rasterizer
+GL_VERSION: 1.1 s31-tinygl
+Warning: Vertex buffer objects disabled at command line
+Warning: Mutitexture disabled at command line
+Warning: texture_env_combine disabled at command line
+Warning: texture_env_add disabled at command line
+FOUND: SDL_GL_SWAP_CONTROL
+Warning: texture_filter_anisotropic not supported
+Warning: texture_non_power_of_two disabled at command line
+Warning: GLSL disabled at command line
+Warning: GLSL gamma not available, using hardware gamma
+Warning: GLSL alias model rendering not available, using Fitz renderer
+Warning: glGenerateMipmap disabled at command line
+gamma adjustment not available
+
+Language initialization
+Couldn't load 'localization/loc_english.txt'
+from '/src/artifacts/gl/glquake/host'
+
+========= Quake Initialized =========
+
+execing quake.rc
+execing default.cfg
+execing config.cfg
+execing autoexec.cfg
+Playing demo from demo1.dem.
+3 demo(s) in loop
+
+
+the Necropolis
+Using protocol 15
+You got the shells
+You got the Grenade Launcher
+You receive 25 health
+You get 2 rockets  
+You got the rockets
+You got the nailgun
+You got the nails
+You got the nails
+You receive 15 health
+You receive 15 health
+You got the rockets
+glref: ok at swap 550 -> /src/artifacts/gl/phase5/p5c/dark/ours/o2-nocomb.f550

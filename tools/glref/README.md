@@ -42,6 +42,7 @@ Rebuild the image after editing the Dockerfile:
 | `apps.txt` | The target list: name, kind, capture mode, frames, command. |
 | `suite.sh` | Every target at 2-3 frames, Mesa references cached, `report.md`. |
 | `report.py` | Builds `report.md`/`report.json` from a run directory (re-runnable by hand). |
+| `gltrace/` | Record a stock app's whole GL/GLX stream into a binary trace and replay it: on the host (Mesa or ours) and on the RV32 instruction counter (gl/bench/qsreplay.sh). The QuakeSpasm workload proxy; see "gltrace" below. |
 | `xlite-load.sh` | The board's X stack at load time: every app and the libglut/libGLU it loads, `ldd -r` (all relocations, as musl binds) against our libGL + xlite libX11 + xstubs libXext + xlite's libXrandr/libXxf86vm, built for the host from the repo. A suite PASS uses the host's libX11 and says nothing about xlite gaps; this says which apps would abort at load on the board. suite.sh runs it for `--impl ours` and appends it to `report.md`. |
 
 ## How a frame is made deterministic (capture.c)
@@ -207,3 +208,157 @@ for all 18 apps.
 - **xlite load arm and SDL**: the rig's libSDL2 links libX11 directly, the
   board's is `SDL_VIDEO_DRIVER_X11_DYNAMIC`, so the host SDL2's own imports
   (Xdbe*, Xutf8*) are listed but not counted.
+
+## gltrace: the QuakeSpasm GL workload proxy (2026-09-26)
+
+Records every GL and GLX call stock QuakeSpasm 0.96.3 makes during
+`timedemo demo1` (320x240 windowed, the capture shim's virtual clock), with
+texture and pixel data by value, into a compact binary trace. The trace then
+replays three ways: on the host through GLX against our libGL (it must
+reproduce the live frames bit for bit) or Mesa (image check), and on RV32
+bare metal linked with our library objects under gl/bench's qemu
+instruction counter (gl/bench/BASELINE.md, "QuakeSpasm proxy"). Host only:
+nothing touches the board.
+
+    tools/glref/gltrace/capture-qs.sh [NAME]                 # ~10 s, one command
+    tools/glref/gltrace/replay-host.sh ours|mesa TRACE OUTDIR [OURS_DIR]
+    tools/glref/gltrace/compare-qs.sh TRACE OUTDIR [OURS_DIR] # ours vs Mesa, every counted frame
+    gl/bench/qsreplay.sh [GLDIR] [OUT] [TRACE]               # RV32 instructions/frame, texture bytes
+    gl/bench/qsprof.sh OUT                                   # per-function profile of the counted frames
+    gl/tests/run-qsr.sh [GLDIR]                              # guard: the phase-4 trace, hashes + <= +0.5%
+    gl/tests/run-qsr-ab.sh "ENV_A" "ENV_B"                   # two toggle arms must draw identical frames
+    gl/tests/run-qsr-fused.sh [GLDIR]                        # phase 5 O2: S31GL_FUSED=0 vs default, every trace
+    gl/bench/qscensus.sh GLDIR OUT TRACE                     # which general-path stage lists draw how many pixels
+    gl/bench/pcannot.py ELF OBJDUMP FUNC FRAMES PCPROF.LOG   # one function's disassembly with its counts
+
+`QS_CFG="gl_texturemode GL_NEAREST_MIPMAP_NEAREST"` (console commands,
+`;`-separated) captures with the app's own settings, as a player would set
+them: the game directory is then a copy whose autoexec.cfg runs them before
+the timedemo. Phase 5 O2's traces `p5a-nmn`, `-nml`, `-lmn`, `-lin`,
+`-near` are QuakeSpasm's five other `gl_texturemode` values (it offers
+them only on the console; the menu has none), `p5wide` is
+`QS_WINDOWS=20-27,120-127,...,900-907` for the census.
+
+TRACE and OUTDIR of the host scripts are container paths (`/src/...`).
+**Re-capture after any library change that alters what the app sees** (the
+extension string above all: QuakeSpasm picks its world and alias paths from
+it, so after GL_ARB_multitexture/texture_env_combine land the trace must be
+re-recorded). capture-qs.sh records against `QS_LIBGL`, default
+`/src/gl/out-host/libGL.so.1`, i.e. whatever `gl/host-build.sh` last built.
+
+### How it records (gltrace_rt.c, gen.py)
+
+- **A wrapper libGL.so.1, not an LD_PRELOAD.** SDL (sdl12-compat -> SDL2)
+  `dlopen()`s libGL.so.1 and fetches everything through `dlsym` and
+  `glXGetProcAddressARB`, which a preload never sees. The tracer is built
+  *as* libGL.so.1 and put first on `LD_LIBRARY_PATH`, so the app's direct
+  imports and SDL's lookups all land in it. It `dlopen()`s the real library
+  by path (`GLTRACE_REAL`) and forwards.
+- **The same export surface as the real library.** gen.py reads `nm -D` of
+  the real libGL and the prototypes of gl/include/GL/{gl,glext,glx}.h:
+  - every exported gl* name gets a recording wrapper;
+  - every glX* name gets a wrapper that notes the call;
+  - MakeCurrent, SwapBuffers, Create/DestroyContext and GetProcAddress are
+    hand-written;
+  - everything else (s31gl_*, the two glXSwapInterval names without a
+    prototype) is an aarch64 tail-jump trampoline.
+
+  capture-qs.sh checks that the tracer's export list equals the real one's.
+  An extra export would change what SDL finds; a missing one would fail
+  LD_BIND_NOW. `glXGetProcAddressARB` returns the tracer's own wrapper for a
+  name the real library resolves, and NULL where the real one returns NULL,
+  so the app sees exactly the real feature set.
+- **Depth 0 only.** The real library calls its own exports through the PLT,
+  which lands in the wrappers again. A thread-local depth counter records
+  only the application's calls.
+- **Data by value.** A size rule per pointer parameter:
+  - images: `glTex(Sub)Image*`, `glDrawPixels`, `glBitmap`. The rule applies
+    the unpack state (row length, skips, alignment), read back from the real
+    library at the call;
+  - vectors by name (`glColor4fv`...);
+  - pname-counted parameters (`glFogfv`, `glLightfv`...);
+  - matrices, name arrays and index arrays.
+
+  Outputs (`glGet*`, `glReadPixels`) record only their size: the replay
+  passes scratch memory. `glGenTextures` records the names it returned, and
+  the replay maps recorded names to its own. A call the rules cannot record
+  faithfully is written as UNHANDLED, and the capture fails:
+  - client-array pointers;
+  - `glMap*`;
+  - GLSL sources;
+  - any draw call with client arrays enabled.
+
+  QuakeSpasm's no-extension path uses none of them.
+- **Frames.** Frame N is what the Nth `glXSwapBuffers` presents, the same
+  numbering as glref's `f<N>` captures. Recording modes:
+  - **Counted frames** (`GLTRACE_WINDOWS`, default `100-139,400-439`) and
+    `GLTRACE_WARM` (2) warm-up frames before each window are recorded in
+    full.
+  - **State-only frames**: every other frame, the load phase included.
+    Their draw calls and queries are dropped (`glBegin`/`glEnd` blocks,
+    `glClear`, `glDraw*`, `glReadPixels`, `glCopyTex*`, `glGet*`). Each
+    dropped block leaves only the last colour, texcoord and normal it set,
+    so the state at the next frame is what it was live. Every texture
+    upload and state change is kept.
+  - The warm-up frames refill both colour buffers and the library's
+    retained state (dirty boxes, depth epochs) before the first counted
+    frame.
+- **Live hashes.** After every full frame's swap the tracer `XSync`s. It
+  then reads the window from the root window over a second connection,
+  exactly as capture.c does, and stores the FNV-1a hash of the RGB565
+  pixels in the SWAP record. With `GLTRACE_FRAMES` it also writes the raw
+  frame.
+- **Format** (gltrace.h). Each record is 32-bit words:
+  - word 0 is `id | nwords << 12`;
+  - then the scalars, then each pointer as a length word and its data.
+
+  The header carries the name table, so replayers map names, not numbers.
+
+### Verified (2026-09-26, trace `gl/bench/qstrace/work/p4final`, phase-4-final library)
+
+- **The tracer does not change what is drawn.** Frame 439 captured by
+  capture.c in a run without the tracer matches the tracer's live frame
+  439: 0 of 76,800 pixels differ.
+- **The capture is deterministic.** Two captures are byte-identical except
+  for 2 of the 689 `glTexImage2D` calls, both in frame 13. Those two upload
+  QuakeSpasm's warp-image placeholders, "dummy data from the hunk" (heap
+  garbage, gl_model.c:585). `glCopyTexSubImage2D` overwrites them before
+  they are used, and all 84 frame hashes are identical.
+- **The host replay against ours is bit-exact.** All 84 full frames (80
+  counted + 4 warm-up) match the live hashes. This holds for the default
+  configuration and for a second capture made with `S31GL_TEXFILTER=0`
+  (`QS_GLENV`).
+- **The RV32 bare-metal replay is bit-exact.** All 84 frames match the live
+  (host) capture in both configurations (gl/bench/BASELINE.md).
+- **Against Mesa** (compare-qs.sh), 64 of 80 counted frames PASS and 16 FAIL
+  (116-118, 122-127, 133-139). The worst is frame 137, with 2.79% tolerant
+  and 6.3% strict bad pixels. Every failure is in the particle spray
+  (`artifacts/gl/phase5/qsproxy/mesa-sbs-f137.png`): 1-2 pixel particle
+  triangles land on different pixels. Nothing else differs; the walls,
+  models and HUD pass.
+- **The trace:**
+  - 69.4 MB, 2,397,704 records, 439 frames: 84 full and 355 state-only;
+  - load-phase uploads: `glTexImage2D` 20.4 MB (689 calls) and
+    `glTexSubImage2D` (the lightmaps) 12.2 MB;
+  - about 395 kB and 25-44 k calls per counted frame, mostly
+    `glColor4fv`, `glTexCoord2f` and `glVertex3f[v]`.
+
+  Traces are gitignored (`gl/bench/qstrace/work/`).
+- **Time:** capture about 9 s, host replay about 2 s, RV32 replay about 8 s
+  (both images), profile about 8 s.
+
+### Limits
+
+- **Replay ignores most of GLX.** It does not replay the glX calls other
+  than MakeCurrent, SwapBuffers and Create/DestroyContext
+  (`glXSwapInterval*`, `glXQuery*` and the like). It does not replay a
+  separate read drawable either (the tracer warns).
+- **The host SDL is not the board's.** The rig runs sdl12-compat, not SDL
+  1.2.15, so the few GL calls SDL itself makes at start-up may differ from
+  the board's. QuakeSpasm's own stream is the same.
+- **A trace belongs to the library it was recorded against.** QuakeSpasm
+  never reads pixels back on this path, so the calls do not depend on the
+  library's rendering, apart from the two placeholder uploads. The live
+  hashes do: replaying with other toggles is a valid measurement, but its
+  hash check is only meaningful against a capture made with the same
+  toggles (`QS_GLENV`).
