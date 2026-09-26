@@ -1,0 +1,60 @@
+window 34.5 s SF 0x1BE1FBDF SLICE 0x00155CC0 NSLICE 0x000AAE60
+
+-- IRQ/s  CPU0  CPU1
+9: ESP32-S31 CLIC local INTC 5 Edge riscv-timer                390.7   177.8
+24: ESP32S31-CLIC 30 Level 20343000.dma-controller              41.8     0.0
+28: ESP32S31-CLIC 32 Level 20345000.pixel-accelerator            5.7     0.0
+29: ESP32S31-CLIC 40 Edge 2f06af80.wireless                      2.3     0.0
+30: ESP32S31-CLIC 21 Level 20386000.i2c                         41.3     0.0
+31: ESP32S31-CLIC 42 Level esp32s31-lcd                         46.5     0.0
+32: ESP32S31-CLIC 16 Level dw-mci                              320.5     0.0
+IPI0: Rescheduling interrupts                                    1.9     0.9
+IPI1: Function call interrupts                                 120.6   147.6
+ctxt/s 477
+cpu0 user 42% sys 24% idle 28% iowait 1% irq 0% softirq 5%
+cpu1 user 36% sys 24% idle 37% iowait 1% irq 0% softirq 1%
+
+-- softirq/s
+HI: 0/0  TIMER: 25/22  NET_TX: 0/0  NET_RX: 2/0  BLOCK: 36/31  IRQ_POLL: 0/0  TASKLET: 167/22  SCHED: 50/58  HRTIMER: 64/3  RCU: 18/16
+
+-- switches/s  vol  nonvol  pid tid comm
+  91.5   16.5   75.0  921 921 quakespasm
+  57.6   57.1    0.6  934 934 kworker/0:0-events_freezable
+  56.1   46.8    9.4  559 559 lvdesk.new
+  48.7   45.4    3.3  921 926 quakespasm
+  41.3   14.8   26.5  36 36 kswapd0
+  14.9   14.3    0.6  12 12 ksoftirqd/0
+  13.0   13.0    0.0  13 13 rcu_sched
+   7.0    6.7    0.3  327 327 kworker/1:2H-kblockd
+   6.0    5.6    0.4  925 925 kworker/0:3H-mmc_complete
+   4.9    4.9    0.0  325 325 s31-bt
+   4.5    0.6    3.9  893 893 sh
+   3.4    1.4    2.0  899 899 sh
+   3.3    3.3    0.0  19 19 migration/1
+   2.0    1.8    0.2  20 20 ksoftirqd/1
+   1.6    0.6    1.1  353 353 wpa_supplicant
+   0.9    0.2    0.7  957 957 sh
+   0.7    0.7    0.0  924 924 kworker/1:0H
+   0.6    0.4    0.2  45 45 kworker/u10:2-flush-179:0
+   0.5    0.3    0.1  68 68 jbd2/mmcblk0-8
+
+-- armed hrtimers by function, CPU0/CPU1, summed over 4 snapshots
+ 18 cpu1 hrtimer_wakeup
+ 15 cpu0 hrtimer_wakeup
+  5 cpu1 tick_nohz_handler
+  5 cpu1 dl_task_timer
+  4 cpu0 tick_nohz_handler
+  4 cpu0 esp32s31_lcd_vblank_tick
+  4 cpu0 pm_suspend_timer_fn
+  4 cpu0 sched_clock_poll
+  3 cpu0 dl_task_timer
+  3 cpu0 dw_mci_ka_timer
+  2 cpu0 hrtick
+hrtimer nr_events/s ['417', '190']
+vm/s {'pswpin': 39.3, 'pswpout': 22.1, 'pgmajfault': 52.4}
+921 quakespasm slack=50000 aff=Cpus_allowed_list:	0-1
+559 lvdesk.new slack=50000 aff=Cpus_allowed_list:	0-1
+325 s31-bt slack=0 aff=Cpus_allowed_list:	0-1
+353 wpa_supplicant slack=50000 aff=Cpus_allowed_list:	0-1
+318 bluetoothd slack=50000 aff=Cpus_allowed_list:	0-1
+

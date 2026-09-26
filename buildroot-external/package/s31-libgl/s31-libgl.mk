@@ -66,13 +66,17 @@ S31_LIBGL_OUT = $(@D)/_br_out
 # until fast filtered fillers exist. Phase 5 proxy: QuakeSpasm 17.5 M
 # instr/frame nearest against 37.8 M trilinear; board numbers in
 # artifacts/gl/phase5/BOARD.md. The host build (gl/build.sh) keeps 1.
-# S31GL_RAMTEXT_DEFAULT=1 (phase 6, artifacts/gl/phase6/ramtext/): the hot
+# S31GL_RAMTEXT (phase 6, artifacts/gl/phase6/ramtext/): the hot
 # rasteriser (~40 kB, gl/api/ramtext.list from the board's QuakeSpasm
 # profile) is copied into anonymous RAM at the first context and mlock'd,
 # so it runs from PSRAM when libGL is mapped from XIP flash and can never
 # be evicted under GLQuake's paging when it is mapped from the SD card.
-# S31GL_RAMTEXT=0 turns it off per process.
-S31_LIBGL_DEFAULTS = -DS31GL_TEXFILTER_DEFAULT=0 -DS31GL_RAMTEXT_DEFAULT=1
+# RAMTEXT default OFF (measured 2026-09-26, QuakeSpasm timedemo demo1
+# fullscreen, fresh boots): libGL from SD 7.3-7.5 fps; SD + RAMTEXT 7.2;
+# XIP + RAMTEXT 7.0, 6.5 (41,980 B hot range mlocked, 90% of libGL's board
+# samples). The uncovered 10% run from flash costs more than the copy saves,
+# so libGL ships from the SD root without it. S31GL_RAMTEXT=1 turns it on.
+S31_LIBGL_DEFAULTS = -DS31GL_TEXFILTER_DEFAULT=0 -DS31GL_RAMTEXT_DEFAULT=0
 S31_LIBGL_SO = libGL.so.1.2.0
 
 define S31_LIBGL_BUILD_CMDS
