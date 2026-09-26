@@ -2510,12 +2510,34 @@ static void clock_update(void)
 	lv_label_set_text(clock_lbl, buf);
 }
 
+/* the kB value of "Key:" at the start of a line of /proc/meminfo text */
+static unsigned long meminfo_kb(const char *t, const char *key)
+{
+	size_t kl = strlen(key);
+	const char *p = t;
+	unsigned long v = 0;
+
+	while (*p) {
+		if (!strncmp(p, key, kl)) {
+			for (p += kl; *p == ' '; p++)
+				;
+			while (*p >= '0' && *p <= '9')
+				v = v * 10 + (unsigned long)(*p++ - '0');
+			return v;
+		}
+		while (*p && *p != '\n')
+			p++;
+		if (*p)
+			p++;
+	}
+	return 0;
+}
+
 static void sysinfo_update(void)
 {
-	char buf[192], line[96];
+	char buf[192];
 	unsigned long total = 0, avail = 0;
 	double up = 0;
-	FILE *f;
 
 	if (!sysinfo)
 		return;
@@ -2555,19 +2577,28 @@ static void sysinfo_update(void)
 	 * silent while nothing meaningful is moving. This is the same trap the
 	 * comment below records for jwm's clock; it is easy to walk back into.
 	 */
-	f = fopen("/proc/meminfo", "r");
-	if (f) {
+	/*
+	 * read() and a hand parse, NOT fgets/sscanf: both reach musl's memchr,
+	 * which is PIE, and this runs every 5 s on the lent CPU - where PIE
+	 * traps and moves the desktop onto a fullscreen client's CPU for
+	 * seconds (lentcpu.c). Same fields, same arithmetic.
+	 */
+	{
+		static char mi[2048];
 		unsigned long fr = 0, bu = 0, ca = 0, sh = 0, ma = 0;
-		int got = 0;
+		int fd = open("/proc/meminfo", O_RDONLY | O_CLOEXEC);
+		ssize_t n = fd >= 0 ? read(fd, mi, sizeof(mi) - 1) : -1;
 
-		while (got < 5 && fgets(line, sizeof(line), f)) {
-			if (sscanf(line, "MemFree: %lu kB", &fr) == 1) got++;
-			else if (sscanf(line, "Buffers: %lu kB", &bu) == 1) got++;
-			else if (sscanf(line, "Cached: %lu kB", &ca) == 1) got++;
-			else if (sscanf(line, "Shmem: %lu kB", &sh) == 1) got++;
-			else if (sscanf(line, "Mapped: %lu kB", &ma) == 1) got++;
+		if (fd >= 0)
+			close(fd);
+		if (n > 0) {
+			mi[n] = 0;
+			fr = meminfo_kb(mi, "MemFree:");
+			bu = meminfo_kb(mi, "Buffers:");
+			ca = meminfo_kb(mi, "Cached:");
+			sh = meminfo_kb(mi, "Shmem:");
+			ma = meminfo_kb(mi, "Mapped:");
 		}
-		fclose(f);
 		avail = fr + bu + ca;
 		/* shmem and mapped are not going anywhere on demand */
 		avail -= (sh + ma < avail) ? sh + ma : avail;
@@ -12119,7 +12150,10 @@ static int bt_connect_sock(void)
 	fd = socket(AF_UNIX, SOCK_STREAM, 0);
 	if (fd < 0)
 		return -1;
-	snprintf(sa.sun_path, sizeof(sa.sun_path), "%s", BT_SOCK);
+	/* not snprintf("%s"): its strnlen is musl's PIE memchr (lentcpu.c),
+	 * and this is retried on the 5 s tick while s31-bt is down */
+	memcpy(sa.sun_path, BT_SOCK, sizeof(BT_SOCK) < sizeof(sa.sun_path) ?
+	       sizeof(BT_SOCK) : sizeof(sa.sun_path) - 1);
 	if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
 		close(fd);
 		return -1;

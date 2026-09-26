@@ -571,6 +571,9 @@ static void vm_gamma_table(uint16_t *t, int n, int shift, uint32_t v)
 	}
 }
 
+static void vm_ramp_from_gamma(void);
+static uint16_t get16(const uint8_t *p);
+
 static void vm_gamma_set(int owner, uint32_t r, uint32_t g, uint32_t b)
 {
 	vm_gamma_v[0] = r;
@@ -581,9 +584,82 @@ static void vm_gamma_set(int owner, uint32_t r, uint32_t g, uint32_t b)
 	vm_gamma_table(vm_glr, 32, 11, r);
 	vm_gamma_table(vm_glg, 64, 5, g);
 	vm_gamma_table(vm_glb, 32, 0, b);
+	vm_ramp_from_gamma();
 	vm_gamma_gen++;
 	fprintf(stderr, "xshim: VidMode gamma %.2f %.2f %.2f (client %d)\n",
 		r / 10000.0, g / 10000.0, b / 10000.0, owner);
+}
+
+/*
+ * XF86VidMode gamma RAMPS (minors 17 GetGammaRamp, 18 SetGammaRamp, 19
+ * GetGammaRampSize), 2026-09-26, wire layout from xf86vmproto.h
+ * (xXF86VidModeSetGammaRampReq: screen CARD16 @4, size CARD16 @6, then
+ * size CARD16 red, green, blue; the Get reply's size CARD16 @8 and the three
+ * channels as its extra data). Stock TyrQuake 0.71 GL (vid_glx.c Gamma_Init)
+ * uses hardware gamma only through these: without a ramp size it has no
+ * gamma control fullscreen at all. The ramp lands in the same per-client
+ * 565 tables SetGamma fills, so it costs the same (identity = one test per
+ * row) and goes back to identity when its client leaves. The ramp is 256
+ * entries, what a real 8-bit-per-channel server reports; SDL 1.2 never asks
+ * (its X11 ramps are DirectColor colormaps), so nothing that worked before
+ * sees a change. SetGamma keeps its own tables exactly as shipped and also
+ * refreshes the ramp so GetGammaRamp reads back what is in force.
+ */
+#define VM_RAMP 256
+static uint16_t vm_ramp[3][VM_RAMP];
+
+static void vm_ramp_from_gamma(void)
+{
+	int c, i;
+
+	for (c = 0; c < 3; c++) {
+		float g = (float)vm_gamma_v[c] / 10000.0f;
+
+		if (g < 0.1f)
+			g = 0.1f;
+		if (g > 10.0f)
+			g = 10.0f;
+		for (i = 0; i < VM_RAMP; i++) {
+			float v = 65535.0f * powf((float)i / (VM_RAMP - 1), 1.0f / g) + 0.5f;
+
+			vm_ramp[c][i] = v > 65535.0f ? 65535 : (uint16_t)v;
+		}
+	}
+}
+
+/* n-level channel value i -> the ramp's 16-bit output -> n levels */
+static void vm_ramp_table(uint16_t *t, int n, int shift, const uint16_t *ramp)
+{
+	int i, o;
+
+	for (i = 0; i < n; i++) {
+		int idx = (i * (VM_RAMP - 1) + (n - 1) / 2) / (n - 1);
+
+		o = ((int)ramp[idx] * (n - 1) + 32767) / 65535;
+		t[i] = (uint16_t)(o << shift);
+	}
+}
+
+static void vm_ramp_set(int owner, const uint8_t *rgb)
+{
+	int c, i, ident = 1;
+
+	for (c = 0; c < 3; c++)
+		for (i = 0; i < VM_RAMP; i++) {
+			vm_ramp[c][i] = get16(rgb + (c * VM_RAMP + i) * 2);
+			/* identity at 8 bits: what GetGammaRamp returned for 1.0 */
+			if ((vm_ramp[c][i] >> 8) != i)
+				ident = 0;
+		}
+	vm_ramp_table(vm_glr, 32, 11, vm_ramp[0]);
+	vm_ramp_table(vm_glg, 64, 5, vm_ramp[1]);
+	vm_ramp_table(vm_glb, 32, 0, vm_ramp[2]);
+	vm_gamma_on = !ident;
+	vm_gamma_cli = vm_gamma_on ? owner : -1;
+	vm_gamma_gen++;
+	fprintf(stderr, "xshim: VidMode gamma ramp %s (r[64] %u g[64] %u b[64] %u, client %d)\n",
+		ident ? "identity" : "set", vm_ramp[0][64], vm_ramp[1][64],
+		vm_ramp[2][64], owner);
 }
 
 /* one row of RGB565, in place */
@@ -9545,7 +9621,35 @@ static void vidmode_request(struct cli *c, const uint8_t *r, int len)
 		put32(d24 + 8, vm_gamma_v[2]);
 		send_reply(c, 0, d24, NULL, 0);
 		break;
-	case 19:					/* GetGammaRampSize: none */
+	case 17: {					/* GetGammaRamp */
+		static uint8_t rb[3 * VM_RAMP * 2];
+		unsigned sz = len >= 8 ? get16(r + 6) : 0;
+
+		if (sz != VM_RAMP) {
+			send_error(c, X_BAD_VALUE, sz, VIDMODE_MAJOR);
+			break;
+		}
+		if (vm_ramp[2][VM_RAMP - 1] == 0)	/* never set: 1.0 */
+			vm_ramp_from_gamma();
+		for (i = 0; i < 3 * VM_RAMP; i++)
+			put16(rb + i * 2, vm_ramp[i / VM_RAMP][i % VM_RAMP]);
+		put16(d24 + 0, VM_RAMP);
+		send_reply(c, 0, d24, rb, sizeof rb);
+		break;
+	}
+	case 18: {					/* SetGammaRamp */
+		unsigned sz = len >= 8 ? get16(r + 6) : 0;
+
+		if (sz != VM_RAMP || len < 8 + 3 * VM_RAMP * 2) {
+			send_error(c, X_BAD_VALUE, sz, VIDMODE_MAJOR);
+			break;
+		}
+		if (!getenv("XSHIM_NOGAMMA"))
+			vm_ramp_set((int)(c - cli), r + 8);
+		break;
+	}
+	case 19:					/* GetGammaRampSize */
+		put16(d24 + 0, getenv("XSHIM_NOGAMMA") ? 0 : VM_RAMP);
 		send_reply(c, 0, d24, NULL, 0);
 		break;
 	case 4:						/* GetMonitor: nothing known */

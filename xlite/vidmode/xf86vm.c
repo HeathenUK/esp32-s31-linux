@@ -13,7 +13,11 @@
  * record, exactly as vm_mode_record() and case 10 there lay it out.
  *
  * Only the calls TyrQuake makes are real: QueryVersion, QueryExtension,
- * GetModeLine, GetAllModeLines, SwitchToMode, SetViewPort, GetViewPort.
+ * GetModeLine, GetAllModeLines, SwitchToMode, SetViewPort, GetViewPort,
+ * and (2026-09-26, TyrQuake 0.71 GL's Gamma_Init) GetGammaRampSize,
+ * GetGammaRamp and SetGammaRamp, laid out as xf86vmproto.h's
+ * xXF86VidMode{Get,Set}GammaRamp{,Size}Req and replies, which xshim serves
+ * (vidmode_request cases 17-19).
  * The rest of libXxf86vm's API is not exported; a client that needs it is a
  * client this board has not met.
  */
@@ -243,5 +247,75 @@ Bool XF86VidModeGetViewPort(Display *dpy, int screen, int *x, int *y)
 	free(ex);
 	if (x) *x = (int)g32(hdr + 8);
 	if (y) *y = (int)g32(hdr + 12);
+	return True;
+}
+
+Bool XF86VidModeGetGammaRampSize(Display *dpy, int screen, int *size)
+{
+	struct vmreq q;
+	unsigned char hdr[32], *ex;
+	size_t nex;
+
+	if (size)
+		*size = 0;
+	if (!vm_begin(dpy, X_XF86VidModeGetGammaRampSize, 2, &q))
+		return False;
+	p16(q.r + 4, (unsigned)screen);
+	if (!vm_round(&q, hdr, &ex, &nex))
+		return False;
+	free(ex);
+	if (size)
+		*size = (int)g16(hdr + 8);
+	return True;
+}
+
+Bool XF86VidModeGetGammaRamp(Display *dpy, int screen, int size,
+			     unsigned short *red, unsigned short *green,
+			     unsigned short *blue)
+{
+	struct vmreq q;
+	unsigned char hdr[32], *ex;
+	size_t nex;
+	int i, n;
+
+	if (!vm_begin(dpy, X_XF86VidModeGetGammaRamp, 2, &q))
+		return False;
+	p16(q.r + 4, (unsigned)screen);
+	p16(q.r + 6, (unsigned)size);
+	if (!vm_round(&q, hdr, &ex, &nex))
+		return False;
+	n = (int)g16(hdr + 8);
+	if (n && (n != size || nex < (size_t)n * 6)) {
+		free(ex);
+		return False;
+	}
+	for (i = 0; i < n; i++) {
+		red[i] = (unsigned short)g16(ex + i * 2);
+		green[i] = (unsigned short)g16(ex + (n + i) * 2);
+		blue[i] = (unsigned short)g16(ex + (2 * n + i) * 2);
+	}
+	free(ex);
+	return True;
+}
+
+Bool XF86VidModeSetGammaRamp(Display *dpy, int screen, int size,
+			     unsigned short *red, unsigned short *green,
+			     unsigned short *blue)
+{
+	struct vmreq q;
+	int i, words = 2 + (size * 6 + 3) / 4;
+
+	if (size < 0 || size > 4096)
+		return False;
+	if (!vm_begin(dpy, X_XF86VidModeSetGammaRamp, words, &q))
+		return False;
+	p16(q.r + 4, (unsigned)screen);
+	p16(q.r + 6, (unsigned)size);
+	for (i = 0; i < size; i++) {
+		p16(q.r + 8 + i * 2, red[i]);
+		p16(q.r + 8 + (size + i) * 2, green[i]);
+		p16(q.r + 8 + (2 * size + i) * 2, blue[i]);
+	}
+	xlite_send(q.x, q.r);
 	return True;
 }

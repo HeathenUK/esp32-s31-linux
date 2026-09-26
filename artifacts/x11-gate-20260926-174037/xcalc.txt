@@ -1,0 +1,2 @@
+xcalc mapped=1 afterclick=1 afterclose=0
+

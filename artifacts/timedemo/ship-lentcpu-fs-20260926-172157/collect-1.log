@@ -1,0 +1,15 @@
+sh /tmp/r.sh 2>&1 & __rp=$!; ( trap 'kill "$__rs_sleep" 2>/dev/null; wait "$
+__rs_sleep" 2>/dev/null; exit' TERM INT; sleep 137 & __rs_sleep=$!; wait "$__rs_
+sleep"; kill -0 $__rp 2>/dev/null && { echo RS_TIME"K"ILL; kill -9 $__rp 2>/dev/
+null; } ) & __rw=$!; wait $__rp 2>/dev/null; kill $__rw 2>/dev/null; wait $__rw 
+2>/dev/null; echo RS_DONE
+TD_FPS Timed 5026 gametics in 3981 realtics = 44.2 frames per second
+TD_STILL_RUNNING 0
+TD_ALARMS 0
+TD_PRE 
+TD_PINNED 0
+TD_RX 108710
+TD_BOUNCES 1290 sil_stuck=0
+TD_COLLECTED
+RS_DONE
+[2]+  Done(143)                  (trap "kill \"\$__rs_sleep\" 2>/dev/null; wait \"\$__rs_sleep\" 2>/dev/null; exit" TER

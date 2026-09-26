@@ -1,0 +1,3 @@
+conlog: recording /dev/cu.usbserial-130 to artifacts/timedemo/ship-lentcpu-win-20260926-172804/console-1.log for 250s
+QUIET no console output for 20s
+conlog: done

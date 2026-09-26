@@ -1,0 +1,3 @@
+st mapped=1 afterclose=0
+[1]+  Done                       sh /tmp/r.sh 2>&1
+~ # 

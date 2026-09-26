@@ -1,0 +1,3 @@
+tyrian alive=1 fs=1 mode=320x200 puts=897 motion=22 keys=4
+[1]+  Done                       sh /tmp/r.sh 2>&1
+~ # 

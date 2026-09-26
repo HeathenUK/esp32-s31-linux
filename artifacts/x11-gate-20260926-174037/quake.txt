@@ -1,0 +1,3 @@
+quake alive=1 puts=238 motion=17 keys=4
+[1]+  Done                       sh /tmp/r.sh 2>&1
+
