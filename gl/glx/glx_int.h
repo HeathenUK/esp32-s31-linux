@@ -136,6 +136,7 @@ void glxi_surf_free_buffers(struct glxi_surf *s);
 int glxi_surf_alloc(struct glxi_surf *s, VisualID vid, int screen, int db);
 void glxi_surf_wait(struct glxi_surf *s);
 int glxi_surf_present(struct glxi_surf *s);	/* 1: s->pixels moved */
+int glxi_surf_revoked(struct glxi_surf *s);	/* render scale withdrawn */
 int glxi_query_geometry(Display *dpy, Drawable d, int *w, int *h, int *depth);
 void glxi_surfs_for_display_closed(Display *dpy);
 void glxi_surf_print_all(void);

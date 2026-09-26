@@ -1,0 +1,22 @@
+ARM win2ceil render_scale=1 shmbufs=2 mode=win runs=6 bin=/root/lvdesk.ceil lib=/root/g04 lvenv=XSHIM_PUTCEIL=1 #391 SMP Fri Sep 25 10:24:40 UTC 2026 up 79.66
+RUN 1 fps 43.4 gears 91% lvdesk 69% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+212 frames in 5.0 seconds = 42.325 FPS 162 frames in 5.0 seconds = 32.381 FPS 260 frames in 5.0 seconds = 51.836 FPS 
+RUN 2 fps 48.5 gears 97% lvdesk 75% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+165 frames in 5.0 seconds = 32.892 FPS 227 frames in 5.0 seconds = 45.379 FPS 262 frames in 5.0 seconds = 52.237 FPS 
+RUN 3 fps 38.9 gears 92% lvdesk 50% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+211 frames in 5.0 seconds = 42.118 FPS 199 frames in 5.0 seconds = 39.764 FPS 216 frames in 5.0 seconds = 43.179 FPS 
+RUN 4 fps 39.8 gears 93% lvdesk 50% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+221 frames in 5.0 seconds = 44.085 FPS 203 frames in 5.0 seconds = 40.509 FPS 186 frames in 5.0 seconds = 37.083 FPS 
+RUN 5 fps 42.5 gears 91% lvdesk 68% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+214 frames in 5.0 seconds = 42.669 FPS 156 frames in 5.0 seconds = 31.102 FPS 258 frames in 5.0 seconds = 51.480 FPS 
+RUN 6 fps 44.9 gears 97% lvdesk 71% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+163 frames in 5.0 seconds = 32.550 FPS 210 frames in 5.0 seconds = 41.845 FPS 244 frames in 5.0 seconds = 48.786 FPS 
+xshim: render scale 0x200002 150x150 refused
+xshim: render scale 0x200002 150x150 refused
+xshim: render scale 0x200002 150x150 refused
+xshim: render scale 0x200002 150x150 refused
+xshim: render scale 0x200002 150x150 refused
+xshim: render scale 0x200002 150x150 refused
+              total        used        free      shared  buff/cache   available
+Mem:          15336        9744        3232         132        2360        2820
+DONE

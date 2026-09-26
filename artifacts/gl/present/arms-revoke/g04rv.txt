@@ -1,0 +1,22 @@
+ARM g04rv render_scale=1 shmbufs=2 mode=fs runs=6 bin=/root/lvdesk.new lib=/root/g04 lvenv= glenv= #391 SMP Fri Sep 25 10:24:40 UTC 2026 up 79.87
+RUN 1 fps 29.8 gears 97% lvdesk 45% | gaps0 <25:82 <50:57 <100:9 <200:0 <400:0 >=400:0 | gaps1 <25:164 <50:333 <100:35 <200:4 <400:1 >=400:0
+174 frames in 5.0 seconds = 34.771 FPS 126 frames in 5.0 seconds = 25.135 FPS 172 frames in 5.0 seconds = 34.365 FPS 
+RUN 2 fps 36.4 gears 96% lvdesk 62% | gaps0 <25:207 <50:415 <100:61 <200:9 <400:2 >=400:1 | gaps1 <25:413 <50:642 <100:74 <200:11 <400:2 >=400:1
+137 frames in 5.0 seconds = 27.308 FPS 180 frames in 5.0 seconds = 35.913 FPS 190 frames in 5.0 seconds = 37.964 FPS 
+RUN 3 fps 32.3 gears 92% lvdesk 52% | gaps0 <25:471 <50:752 <100:84 <200:16 <400:3 >=400:2 | gaps1 <25:599 <50:990 <100:110 <200:20 <400:3 >=400:2
+164 frames in 5.0 seconds = 32.704 FPS 176 frames in 5.0 seconds = 34.995 FPS 154 frames in 5.0 seconds = 30.689 FPS 
+RUN 4 fps 30.1 gears 95% lvdesk 45% | gaps0 <25:640 <50:1131 <100:123 <200:22 <400:3 >=400:3 | gaps1 <25:718 <50:1392 <100:155 <200:24 <400:3 >=400:3
+162 frames in 5.0 seconds = 32.351 FPS 147 frames in 5.0 seconds = 29.229 FPS 150 frames in 5.0 seconds = 29.926 FPS 
+RUN 5 fps 30.4 gears 95% lvdesk 45% | gaps0 <25:758 <50:1531 <100:175 <200:24 <400:3 >=400:4 | gaps1 <25:861 <50:1790 <100:192 <200:31 <400:3 >=400:4
+160 frames in 5.0 seconds = 31.866 FPS 125 frames in 5.0 seconds = 24.919 FPS 177 frames in 5.0 seconds = 35.245 FPS 
+RUN 6 fps 37.8 gears 95% lvdesk 65% | gaps0 <25:897 <50:1886 <100:226 <200:34 <400:3 >=400:5 | gaps1 <25:1161 <50:2081 <100:246 <200:35 <400:3 >=400:5
+147 frames in 5.0 seconds = 29.284 FPS 177 frames in 5.0 seconds = 35.324 FPS 202 frames in 5.0 seconds = 40.289 FPS 
+kms: fullscreen 400x240, fb 43 pitch 800
+lvdesk: fullscreen at panel size, render scale 2x (half-size mode)
+lvdesk: fullscreen alias 0x200002 400x240x16
+kms: fullscreen off
+lvdesk: fs_render_set(1): refresh restored (refreshes during fullscreen so far 0)
+lvdesk: fullscreen off (client gone)
+              total        used        free      shared  buff/cache   available
+Mem:          15336        9424        3992         148        1920        3328
+DONE

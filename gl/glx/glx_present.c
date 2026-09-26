@@ -66,13 +66,22 @@
  * and only the pixels are softer. Anything that is not a whole-frame put
  * of the half-size buffer is an ordinary put, and a server without the
  * request ("XLITE-RSCALE" absent: stock X, the host Xvfb rig, an older
- * xshim) is never asked.
+ * xshim) is never asked. The scale is for fullscreen only (owner's review):
+ * a window that is not fullscreen is refused, and one that LEAVES
+ * fullscreen is revoked - the server sets a word past the image in our
+ * segment, glxi_surf_revoked() sees it at the next present, and the
+ * buffers are remade at native size before the next frame.
+ *
+ * NOT DONE, measured: letting the server show our segment until the next
+ * put ("segment hold") saved lvdesk's copy but LOWERED fps, 37.9 -> 32.6
+ * windowed - see "REJECTED 2026-09-26" in lvdesk/xshim.c mitshm_request.
  */
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ipc.h>
+#include <stdint.h>
 #include <sys/shm.h>
 
 #include <X11/Xlibint.h>
@@ -128,6 +137,27 @@ static int rscale_ask(Display *dpy, Window win, int bw, int bh)
 	UnlockDisplay(dpy);
 	SyncHandle();
 	return ok;
+}
+
+/*
+ * The server revoked the render scale (the window left fullscreen, or is
+ * not presented scaled): it wrote 1 into the spare word past either
+ * segment's image. Read at every present - no round trip, and it works
+ * when the application eats every event. The caller then reallocates at
+ * native size before the next frame (glx.c glXSwapBuffers).
+ */
+int glxi_surf_revoked(struct glxi_surf *s)
+{
+	int i;
+
+	if (!s->rscale || !s->use_shm)
+		return 0;
+	for (i = 0; i < s->nbuf; i++)
+		if (s->buf[i].pixels &&
+		    *(volatile uint32_t *)((char *)s->buf[i].pixels +
+					   (size_t)s->pitch * s->bh))
+			return 1;
+	return 0;
 }
 
 /* The window is the panel's size: ask for half of it. */
@@ -391,7 +421,9 @@ static int alloc_shm(struct glxi_surf *s, struct glxi_buf *b)
 			      s->bw, s->bh);
 	if (!img)
 		return -1;
-	len = (size_t)img->bytes_per_line * img->height;
+	/* + one word past the image: the render-scale revoke flag, which the
+	 * server sets (xshim.c rs_revoke; glxi_surf_revoked) */
+	len = (size_t)img->bytes_per_line * img->height + 4;
 	b->shm.shmid = shmget(IPC_PRIVATE, len, IPC_CREAT | 0600);
 	if (b->shm.shmid < 0) {
 		XDestroyImage(img);

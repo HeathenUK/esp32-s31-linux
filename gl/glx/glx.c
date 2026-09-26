@@ -457,6 +457,23 @@ GLXI_EXPORT void glXSwapBuffers(Display *dpy, GLXDrawable drawable)
 	 */
 	if (cur && cur->draw == s)
 		glxi_core_finish(cur->core);
+	if (glxi_surf_revoked(s)) {
+		/*
+		 * The server withdrew the render scale (the window left
+		 * fullscreen). This frame is already drawn at half size: it
+		 * goes out (the server expands it on the CPU), and the next
+		 * one is drawn at native size into buffers made at the next
+		 * draw - the scale is never a steady state out of fullscreen.
+		 */
+		glxi_surf_present(s);
+		glxi_surf_free_buffers(s);
+		if (cur && cur->draw == s) {
+			glxi_core_set_scale(cur->core, 0);
+			glxi_core_bind(cur->core, NULL, s->w, s->h, 0);
+			glxi_core_bind_depth(cur->core, NULL);
+		}
+		return;
+	}
 	if (glxi_surf_present(s)) {
 		/* ping-pong: the next frame renders into the other segment
 		 * (a rebind of the same size keeps the depth buffer) */

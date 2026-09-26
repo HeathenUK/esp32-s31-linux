@@ -12,9 +12,12 @@
 N=$1; RS=$2; NB=$3; MODE=$4; RUNS=${5:-6}; BIN=${6:-/root/lvdesk.new}
 GL=${GLLIB:-}
 exec > /root/glarm-$N.txt 2>&1
-echo "ARM $N render_scale=$RS shmbufs=$NB mode=$MODE runs=$RUNS bin=$BIN lib=${GL:-/usr/lib} $(uname -v) up $(cut -d' ' -f1 /proc/uptime)"
-killall lvdesk lvdesk.new 2>/dev/null; for p in $(pidof glxgears); do kill -9 $p; done; sleep 1
+echo "ARM $N render_scale=$RS shmbufs=$NB mode=$MODE runs=$RUNS bin=$BIN lib=${GL:-/usr/lib} lvenv=${LVENV:-} glenv=${GLENV:-} $(uname -v) up $(cut -d' ' -f1 /proc/uptime)"
+killall lvdesk lvdesk.new lvdesk.ceil 2>/dev/null; for p in $(pidof glxgears); do kill -9 $p; done; sleep 1
 [ -r /etc/lvdesk.env ] && . /etc/lvdesk.env
+# LVENV="A=1 B=2": extra desktop environment for an arm (a runtime toggle);
+# GLENV the same for the client (e.g. S31GL_HOLD=0)
+[ -n "${LVENV:-}" ] && export $LVENV
 LVDESK_CTL=1 setsid $BIN >/var/log/lvdesk.log 2>&1 </dev/null &
 sleep 8
 L=$(pidof $(basename $BIN))
@@ -27,7 +30,7 @@ gaps() { grep -a 'lvdesk: frames' /var/log/lvdesk.log | tail -n 1 | sed 's/.*gap
 r=1
 while [ $r -le $RUNS ]; do
 	cd /root/gl2/bin
-	setsid sh -c "exec env S31GL_RENDER_SCALE=$RS S31GL_SHMBUFS=$NB LD_LIBRARY_PATH=$LP ./glxgears $FL >/tmp/glarm.out 2>&1" </dev/null >/dev/null 2>&1 &
+	setsid sh -c "exec env ${GLENV:-} S31GL_RENDER_SCALE=$RS S31GL_SHMBUFS=$NB LD_LIBRARY_PATH=$LP ./glxgears $FL >/tmp/glarm.out 2>&1" </dev/null >/dev/null 2>&1 &
 	sleep 4
 	G=$(pidof glxgears)
 	p0=$(puts); g0a=$(gaps)

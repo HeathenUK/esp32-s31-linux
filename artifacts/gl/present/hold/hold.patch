@@ -1,0 +1,345 @@
+diff --git a/gl/glx/glx_int.h b/gl/glx/glx_int.h
+index ea5a731..e877301 100644
+--- a/gl/glx/glx_int.h
++++ b/gl/glx/glx_int.h
+@@ -81,6 +81,9 @@ struct glxi_buf {
+ 	void *pixels;
+ 	int pending;		/* a ShmPutImage with send_event is in flight */
+ 	unsigned long pend_serial;
++	/* segment hold (glx_present.c): the server shows this segment until
++	 * our NEXT put, whose serial then becomes pend_serial */
++	int held;
+ };
+ 
+ struct glxi_surf {
+@@ -104,6 +107,10 @@ struct glxi_surf {
+ 	 * native. The core maps GL's window coordinates (s->w x s->h) onto
+ 	 * them (s31gl_set_render_scale). */
+ 	int rscale;
++	/* SEGMENT HOLD (glx_present.c, xshim xhold_request): with two SHM
++	 * buffers the server presents straight from the segment and lets it
++	 * go at our next put - no copy per frame */
++	int hold;
+ 	int use_shm;
+ 	GC gc;
+ 	Visual *visual;
+diff --git a/lvdesk/lvdesk.c b/lvdesk/lvdesk.c
+index b26621b..8e58a3a 100644
+--- a/lvdesk/lvdesk.c
++++ b/lvdesk/lvdesk.c
+@@ -8341,6 +8341,21 @@ static void HOTTEXT xwin_on_draw(uint32_t id)
+ 				px = xshim_window_pixels(id, &w, &h);
+ 			}
+ 
++			/*
++			 * Only the pointer moved, at the same size: our libGL's
++			 * held segments (xshim.c xhold_request) alternate every
++			 * frame. The widget names &dsc, and there is no image
++			 * cache here (LV_CACHE_DEF_SIZE 0), so pointing dsc at
++			 * the new pixels is enough - lv_image_set_src() would
++			 * invalidate the whole window, and that full LVGL
++			 * repaint per frame is exactly the copy the hold saves.
++			 * The damage below presents it.
++			 */
++			if (px && (int)xwins[i].dsc.header.w == w &&
++			    (int)xwins[i].dsc.header.h == h &&
++			    xwins[i].dsc.data != (const uint8_t *)px &&
++			    lv_image_get_src(xwins[i].img) == &xwins[i].dsc)
++				xwins[i].dsc.data = (const uint8_t *)px;
+ 			/*
+ 			 * The client may have resized itself, which moves the
+ 			 * buffer. Follow it, and resize the lvdesk window to
+diff --git a/lvdesk/xshim.c b/lvdesk/xshim.c
+index ab37e5c..d5f64c8 100644
+--- a/lvdesk/xshim.c
++++ b/lvdesk/xshim.c
+@@ -277,6 +277,16 @@ struct res {
+ 	struct res *rs;
+ 	uint8_t rs_live;
+ 	uint32_t rs_of;
++	/*
++	 * SEGMENT HOLD (XLITE-SHM HoldSegments, see xhold_request()). hold: the
++	 * client (our libGL, ping-ponging two segments) lets this window keep
++	 * its last whole-window ShmPutImage segment as its pixels (px_adopted)
++	 * until its next put; held_*: that put's ShmCompletion, sent when the
++	 * segment is let go instead of when the put is handled.
++	 */
++	uint8_t hold, held, held_ev;
++	int held_cli;
++	uint32_t held_did, held_seg, held_off;
+ 	/*
+ 	 * WM_PROTOCOLS lists WM_DELETE_WINDOW (ICCCM 4.1.2.7): the client
+ 	 * wants to be ASKED to close, not have its connection cut. See
+@@ -509,6 +519,8 @@ static void rs_drop(struct res *w);
+ static struct res *rs_src(struct res *r);
+ static void rs_upscale(struct res *w, int x, int y, int cw, int ch);
+ static struct res *res_find(uint32_t id);
++static void hold_release(struct res *w);
++static void hold_own(struct res *w);
+ 
+ /*
+  * XFree86-VidMode. The list is what a client may switch to; the panel is the
+@@ -755,6 +767,7 @@ static int rowdmg_on(void)
+ }
+ 
+ static unsigned long nshmput;
++static unsigned long nshmhold;	/* ShmPutImage presented from a held segment */
+ /* Frames whose every row hashed identical - nothing presented at all. */
+ static unsigned long nrow_skip;	/* MIT-SHM ShmPutImage requests served */
+ /* MotionNotify events folded into a later one by motion compression. */
+@@ -1765,7 +1778,8 @@ void xshim_mem_report(void)
+ 		rf_calls, rf_steps, rf_calls ? rf_steps / rf_calls : 0,
+ 		nreqs, nreplies, nreqs ? nreplies * 100 / nreqs : 0);
+ 	fprintf(stderr, "xshim: %lu MIT-SHM ShmPutImage, %lu identical "
+-		"(no rows changed)\n", nshmput, nrow_skip);
++		"(no rows changed), %lu held (no copy)\n", nshmput, nrow_skip,
++		nshmhold);
+ 	fprintf(stderr, "xshim: %lu MotionNotify folded by compression\n",
+ 		xsp_motion_dropped);
+ 	fprintf(stderr, "xshim: xlite-SHM row scans %lu, rows %lu/%lu kept "
+@@ -5922,15 +5936,9 @@ static void shmseg_drop(struct shmseg *sg)
+ 		struct res *w = &res[i];
+ 
+ 		if (w->type == R_WINDOW && w->px_adopted &&
+-		    (void *)w->px == sg->addr) {
+-			size_t n = (size_t)w->w * w->h * (w->bpp ? w->bpp : 2);
+-
+-			w->px = calloc(n, 1);
+-			w->canary = 0;
+-			w->px_adopted = 0;
+-			if (!w->px)
+-				w->w = w->h = 0;	/* nothing to draw */
+-		}
++		    (const uint8_t *)w->px >= (const uint8_t *)sg->addr &&
++		    (const uint8_t *)w->px < (const uint8_t *)sg->addr + sg->len)
++			hold_own(w);	/* a copy of the frame, then the pages go */
+ 	}
+ 	/*
+ 	 * Unmap it the way it was mapped. shmdt() on an mmap'd pointer fails
+@@ -6089,6 +6097,46 @@ static void HOTTEXT mitshm_request(struct cli *c, const uint8_t *r, int len)
+ 		}
+ 		db = d->buf ? d->buf : d;
+ 		bpp = db->bpp ? db->bpp : 2;
++		/*
++		 * SEGMENT HOLD (xhold_request()): the whole window, at 0,0, at the
++		 * window's own stride, from a writable segment of the client that
++		 * asked - the window SHOWS the segment until the next such put,
++		 * and this put's completion waits for that.
++		 */
++		if (d->hold && !rsw && d->buf == d && bpp == 2 && !dx && !dy &&
++		    !sx && !sy && sw == tw && sh == th && tw == d->w &&
++		    th == d->h && (((int)tw * 2 + 3) & ~3) == d->w * 2 &&
++		    !sg->ro && sg->owner == (int)(c - cli) && d->w > 0 &&
++		    (size_t)off + (size_t)d->w * d->h * 2 <= sg->len &&
++		    !d->px_scanout && !d->alias && !d->gem_src &&
++		    !d->px_shared && !(vm_native && vm_native_win == d->id)) {
++			hold_release(d);	/* the previous one is let go */
++			if (!d->px_adopted)
++				px_release(d);	/* its own pixels are not needed */
++			d->px = (uint16_t *)((uint8_t *)sg->addr + off);
++			d->px_adopted = 1;
++			d->canary = 0;
++			d->hole = 0;
++			d->dirty = 1;
++			wr_touch(d);		/* row hashes describe the old pixels */
++			damage_add(d, 0, 0, d->w, d->h);
++			d->held = 1;
++			d->held_ev = r[30];
++			d->held_cli = (int)(c - cli);
++			d->held_did = did;
++			d->held_seg = seg;
++			d->held_off = off;
++			nshmhold++;
++			if (late_present_on())
++				late_present_queue(d->id);
++			else
++				notify_draw(d);
++			break;			/* completion deferred */
++		}
++		/* any other put into a held window: its own pixels again, or
++		 * the copy below would write into the client's segment */
++		if (d->buf && d->buf->px_adopted)
++			hold_own(d->buf);
+ 		/*
+ 		 * Rows in a ZPixmap are padded to the scanline pad we
+ 		 * advertise in the connection setup - 32 bits - exactly as the
+@@ -6859,6 +6907,137 @@ static void rscale_request(struct cli *c, const uint8_t *r, int len)
+ 	}
+ }
+ 
++/* ------------------------------------------------------------ segment hold */
++
++/*
++ * SEGMENT HOLD - XLITE-SHM minor 4 (docs/gl-plan-2026-09-25.md section 9,
++ * goal "windowed zero-copy"). Only our libGL asks, and only for a drawable
++ * that ping-pongs two MIT-SHM segments.
++ *
++ * MIT-SHM's contract is that the server has CONSUMED the segment when it
++ * has handled ShmPutImage, which is why xshim copies every put (see "COPY.
++ * Always." in mitshm_request: adopting the segment broke SDL and Doom, which
++ * reuse it at once). A client that ping-pongs two segments and waits for
++ * each one's ShmCompletion before drawing into it again can offer more: the
++ * window may SHOW the segment itself until the client's next put. Then the
++ * put is no copy at all - the window's pixels become the segment
++ * (px_adopted) and the desktop presents from it - and the completion is sent
++ * when the segment is let go, at the next whole-window put (or when the
++ * window takes its pixels back), not while the put is handled.
++ *
++ *   HoldSegments  CARD8 major (XLITE-SHM), CARD8 4, CARD16 length 3,
++ *                 CARD32 window, CARD32 on (1) / off (0)
++ *   reply         BYTE granted (0/1)
++ *
++ * Discovered through the extension name "XLITE-HOLD", like "XLITE-RSCALE".
++ * Granted for a depth-16 top-level the client owns that is not render
++ * scaled (XSHIM_HOLD=0 refuses everything). Only a put of the whole window
++ * at 0,0 from a writable segment of the same client, at the window's own
++ * stride, is held; anything else - and every put while the window is
++ * fullscreen, where the scanout alias already makes the one copy the
++ * present - takes the ordinary copy path, with an ordinary completion.
++ *
++ * No client can deadlock on it: a held segment is let go by the client's
++ * own next put, and a client that waits for a segment it has not followed
++ * with another put withdraws first (off: the window copies the segment into
++ * pixels of its own, and the completion goes out). A resize, a ShmDetach, a
++ * client exit or the window's destruction let go as well; ShmDetach copies
++ * first, so the desktop never reads a segment that is gone.
++ */
++static int xhold_on(void)
++{
++	static int v = -1;
++
++	if (v < 0) {
++		const char *e = getenv("XSHIM_HOLD");
++
++		v = !(e && strcmp(e, "0") == 0);
++		fprintf(stderr, "xshim: segment hold for our libGL %s\n",
++			v ? "ON" : "OFF (XSHIM_HOLD=0)");
++	}
++	return v;
++}
++
++/* Send the held put's ShmCompletion: the segment is no longer read. */
++static void hold_release(struct res *w)
++{
++	struct cli *hc;
++	uint8_t ev[16];
++
++	if (!w || !w->held)
++		return;
++	w->held = 0;
++	if (!w->held_ev || w->held_cli < 0 || w->held_cli >= MAXCLI ||
++	    cli[w->held_cli].fd < 0)
++		return;
++	hc = &cli[w->held_cli];
++	put32(ev + 0, w->held_did);
++	put16(ev + 4, 3);
++	ev[6] = MITSHM_MAJOR;
++	ev[7] = 0;
++	put32(ev + 8, w->held_seg);
++	put32(ev + 12, w->held_off);
++	send_event(hc, MITSHM_EVENT, ev, sizeof ev);
++	if (w->held_cli != cur_owner)
++		out_flush(hc);
++}
++
++/*
++ * The window takes its pixels back from a held segment: its own buffer, a
++ * copy of the frame on screen, then the completion. The desktop is told,
++ * because its image widget names the segment.
++ */
++static void hold_own(struct res *w)
++{
++	const void *seg_px;
++	size_t n;
++
++	if (!w)
++		return;
++	if (w->px_adopted && w->px) {
++		seg_px = w->px;
++		n = (size_t)w->w * w->h * 2;
++		w->px = NULL;
++		w->canary = 0;
++		w->px_adopted = 0;
++		if (px_alloc(w, w->w, w->h)) {
++			memcpy(w->px, seg_px, n);
++			w->hole = 0;
++			w->dirty = 1;
++			wr_touch(w);
++		} else {
++			w->w = w->h = 0;	/* nothing to draw */
++		}
++		hold_release(w);
++		notify_draw(w);
++		return;
++	}
++	hold_release(w);
++}
++
++static void xhold_request(struct cli *c, const uint8_t *r, int len)
++{
++	uint8_t d24[24];
++	struct res *w = len >= 12 ? res_find(get32(r + 4)) : NULL;
++	int on = len >= 12 ? get32(r + 8) != 0 : 0, ok = 0;
++
++	memset(d24, 0, sizeof d24);
++	if (w && w->type == R_WINDOW && w->parent == ROOT_ID &&
++	    w->owner == (int)(c - cli) && w->buf == w && !w->rs_of) {
++		if (!on) {
++			w->hold = 0;
++			hold_own(w);
++		} else if (xhold_on() && (w->bpp ? w->bpp : 2) == 2 && !w->rs) {
++			w->hold = 1;
++			ok = 1;
++		}
++	}
++	d24[0] = (uint8_t)ok;
++	send_reply(c, 0, d24, NULL, 0);
++	fprintf(stderr, "xshim: segment hold 0x%x %s: %s\n", w ? w->id : 0,
++		on ? "on" : "off", ok ? "granted" : on ? "refused" : "done");
++}
++
+ static void HOTTEXT xshm_request(struct cli *c, const uint8_t *r, int len)
+ {
+ 	uint8_t d24[24];
+@@ -6876,6 +7055,7 @@ static void HOTTEXT xshm_request(struct cli *c, const uint8_t *r, int len)
+ 		 *   2 Damaged      - the client has written to those pages, so
+ 		 *                    mark the surface dirty and repaint.
+ 		 *   3 RenderScale  - see rscale_request() above.
++		 *   4 HoldSegments - see xhold_request() above.
+ 		 *
+ 		 * There is no reply to Damaged: the point of the whole path is
+ 		 * that pixels move without round trips, and a round trip per
+@@ -6887,6 +7067,10 @@ static void HOTTEXT xshm_request(struct cli *c, const uint8_t *r, int len)
+ 			rscale_request(c, r, len);
+ 			return;
+ 		}
++		if (r[1] == 4) {
++			xhold_request(c, r, len);
++			return;
++		}
+ 		if (r[1] == 1) {
+ 			/*
+ 			 * Windows too, not just pixmaps - and this is where
+@@ -7228,6 +7412,13 @@ static void handle(struct cli *c, const uint8_t *r, int len)
+ 			d24[2] = 0;
+ 			d24[3] = 0;
+ 		}
++		/* ... and HoldSegments (minor 4), the same way */
++		if (n == 10 && !memcmp(r + 8, "XLITE-HOLD", 10)) {
++			d24[0] = 1;
++			d24[1] = XSHM_MAJOR;
++			d24[2] = 0;
++			d24[3] = 0;
++		}
+ 		/* The transport itself (../xlite/xring.h). XSHIM_RING=0 hides it. */
+ 		if (n == sizeof(XRING_NAME) - 1 &&
+ 		    !memcmp(r + 8, XRING_NAME, sizeof(XRING_NAME) - 1) &&
+@@ -9788,6 +9979,8 @@ static void win_resize(struct res *r, int w, int h, int force)
+ 	 * again (or not) when it reallocates for the new one */
+ 	if (r->rs)
+ 		rs_drop(r);
++	/* a held segment is let go: the new size gets pixels of its own */
++	hold_release(r);
+ 
+ 	/*
+ 	 * Re-back the top-level at the new size. Only a top-level owns pixels;

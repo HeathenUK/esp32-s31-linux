@@ -277,6 +277,9 @@ struct res {
 	struct res *rs;
 	uint8_t rs_live;
 	uint32_t rs_of;
+	/* the (up to two, ping-pong) segments the client's scaled puts came
+	 * from, and the byte in each just past the image: rs_revoke() */
+	uint32_t rs_seg[2], rs_flag[2];
 	/*
 	 * WM_PROTOCOLS lists WM_DELETE_WINDOW (ICCCM 4.1.2.7): the client
 	 * wants to be ASKED to close, not have its connection cut. See
@@ -6084,8 +6087,19 @@ static void HOTTEXT mitshm_request(struct cli *c, const uint8_t *r, int len)
 		 */
 		if (d->rs && dx == 0 && dy == 0 && sx == 0 && sy == 0 &&
 		    sw == d->rs->w && sh == d->rs->h) {
+			uint32_t fl = off + (uint32_t)(((int)tw * 2 + 3) & ~3) * th;
+
 			rsw = d;
 			d = d->rs;
+			/* where rs_revoke() may flag this segment */
+			if (rsw->rs_seg[0] != seg && rsw->rs_seg[1] != seg) {
+				rsw->rs_seg[1] = rsw->rs_seg[0];
+				rsw->rs_flag[1] = rsw->rs_flag[0];
+				rsw->rs_seg[0] = seg;
+				rsw->rs_flag[0] = fl;
+			} else {
+				rsw->rs_flag[rsw->rs_seg[0] == seg ? 0 : 1] = fl;
+			}
 		}
 		db = d->buf ? d->buf : d;
 		bpp = db->bpp ? db->bpp : 2;
@@ -6140,6 +6154,24 @@ static void HOTTEXT mitshm_request(struct cli *c, const uint8_t *r, int len)
 		 * (docs/current-state.md). With MIT-SHM the pixels never touch
 		 * the socket and this is a plain memcpy out of shared memory,
 		 * which keeps most of the benefit and all of the correctness.
+		 *
+		 * REJECTED 2026-09-26, the LEGAL version for our own libGL
+		 * ("segment hold", XLITE-SHM minor 4 - opt-in, two ping-pong
+		 * segments, the window shows the segment until the client's
+		 * next put, whose handling sends the completion). Correct - a
+		 * one-colour-per-frame client recorded with mjpegrec under
+		 * pointer, popover and move traffic: 0 torn of 117-169
+		 * frames, where the unpaced control tore 1-29 - and it saved
+		 * the copy: lvdesk 69-72% -> 43-46% of a core, glxgears
+		 * 87-98% -> 70-79%, and the window's own 180 kB. But FPS
+		 * FELL, windowed glxgears 300x300 fresh boot per arm, runs
+		 * 2-6: copy 37.6-40.3 (median 37.9), hold 31.9-35.7 (32.6).
+		 * With a hold, a segment is free only once the NEXT put has
+		 * been handled, so the client waits a round of the server's
+		 * loop before every frame instead of rendering straight on;
+		 * the plan's rule is that a present lever never lowers fps.
+		 * The patch is artifacts/gl/present/hold/ (a third segment
+		 * would remove the wait at +180 kB - untried).
 		 */
 		if (d->buf && d->buf->px) {
 			const uint8_t *src = (const uint8_t *)sg->addr + off;
@@ -6652,15 +6684,19 @@ refuse:
  *     rs_live, and the desktop's accessors for the window return the
  *     surface, so lvdesk scans it out as a 400x240 mode (fsnat_cb(2)); its
  *     scanout alias makes the put's copy the present, as in any fullscreen;
- *   - the window not (or no longer) fullscreen while the grant stands - it
- *     left fullscreen and has not reallocated yet: each put is also
- *     expanded 2x on the CPU into the window's own pixels, so the window is
- *     correct in every state - slower, and never the case the scale is for.
+ *   - the window no longer (or not yet) scanned out from the surface: each
+ *     put is also expanded 2x on the CPU into the window's own pixels, so
+ *     the window is correct in every state. Leaving fullscreen REVOKES the
+ *     grant (rs_revoke(): a flag word in the client's segments), and libGL
+ *     reallocates at native size before its next frame, so the expansion
+ *     only ever covers frames already in flight - never a steady state.
  * Any other request drawing into the window draws into its own pixels, as
  * always; they are simply not shown while it is scaled fullscreen.
  *
  * Resizing the window, withdrawing, or destroying it frees the surface; the
- * client re-asks when it reallocates. Nothing about the scale is ever sent
+ * client re-asks when it reallocates (and is refused unless fullscreen).
+ * The segments of a granted client carry one spare word past the image,
+ * which the server sets to revoke (see rs_revoke()). Nothing about the scale is ever sent
  * to the application, so a stock client (anything but our libGL) cannot
  * even see it.
  */
@@ -6752,6 +6788,32 @@ static void rs_upscale(struct res *w, int x, int y, int cw, int ch)
 }
 
 /*
+ * REVOKE (owner's review, 2026-09-26: render scale is for panel-size
+ * FULLSCREEN only - a titled panel-size window at half resolution is not
+ * what was approved). When the window stops being scanned out from its
+ * surface - it left fullscreen, or the desktop could not present it - or
+ * the grant is dropped, libGL must go back to native rendering at once,
+ * with the 2x CPU expansion covering only the frames already in flight.
+ * libGL learns it without a round trip and even when the application eats
+ * every event: the grant's contract is that its segments carry one spare
+ * word just past the image, and the server writes 1 there. libGL reads it
+ * at each present (glx_present.c glxi_surf_revoked) and reallocates native.
+ */
+static void rs_revoke(struct res *w)
+{
+	int k;
+
+	for (k = 0; k < 2; k++) {
+		struct shmseg *sg = w->rs_seg[k] ? shmseg_find(w->rs_seg[k]) : NULL;
+
+		if (sg && sg->addr && !sg->ro && sg->owner == w->owner &&
+		    (size_t)w->rs_flag[k] + 4 <= sg->len)
+			*(volatile uint32_t *)((uint8_t *)sg->addr +
+					       w->rs_flag[k]) = 1;
+	}
+}
+
+/*
  * Present the window from its surface (on) or from its own pixels (off).
  * The caller tells the desktop (fsnat_cb). Ordering is the whole contract:
  * whichever of the two is scanout-aliased stops being so BEFORE the desktop
@@ -6775,6 +6837,7 @@ static void rs_go_live(struct res *w, int on)
 			unalias_res(sf, 1);
 		w->rs_live = 0;
 		rs_upscale(w, 0, 0, sf->w, sf->h);	/* the last frame */
+		rs_revoke(w);		/* libGL: native from the next frame */
 	}
 	if (on)
 		fprintf(stderr, "xshim: render scale 0x%x LIVE: scaled "
@@ -6798,7 +6861,9 @@ static void rs_drop(struct res *w)
 		if (vm_native && vm_native_win == w->id && fsnat_cb)
 			fsnat_cb(1);
 	}
+	rs_revoke(w);
 	w->rs = NULL;
+	w->rs_seg[0] = w->rs_seg[1] = 0;
 	res_free(sf->id);
 	fprintf(stderr, "xshim: render scale 0x%x dropped\n", w->id);
 }
@@ -6850,7 +6915,8 @@ static void rscale_request(struct cli *c, const uint8_t *r, int len)
 	put16(d24 + 4, (uint16_t)(ok ? bh : 0));
 	send_reply(c, 0, d24, NULL, 0);
 	fprintf(stderr, "xshim: render scale 0x%x %dx%d %s\n",
-		w ? w->id : 0, bw, bh, ok ? "granted" : "refused");
+		w ? w->id : 0, bw, bh, ok ? "granted" :
+		(!bw && !bh) ? "withdrawn" : "refused");
 	/* already the panel-size fullscreen window: go live now */
 	if (ok && vm_native && vm_native_win == w->id && !w->rs_live) {
 		rs_go_live(w, 1);

@@ -1,0 +1,102 @@
+132a133,181
+> /*
+>  * SEGMENT HOLD, XLITE-SHM minor 4 HoldSegments(window, on) (lvdesk/xshim.c
+>  * xhold_request, discovered as "XLITE-HOLD"). With two segments the server
+>  * may present the window straight from the segment it was given and keep
+>  * it until our next put: no copy per frame. The wait keeps its shape - a
+>  * buffer is free once the server has processed the put AFTER its own - so
+>  * the next put's serial becomes the buffer's pend_serial (glxi_surf_present),
+>  * and a buffer not yet followed by a put is withdrawn instead of waited for
+>  * (glxi_surf_wait). S31GL_HOLD=0 never asks. Returns 1 when granted.
+>  */
+> static int hold_wanted(void)
+> {
+> 	static int v = -1;
+> 
+> 	if (v < 0) {
+> 		const char *e = getenv("S31GL_HOLD");
+> 
+> 		v = !(e && strcmp(e, "0") == 0);
+> 	}
+> 	return v;
+> }
+> 
+> static int hold_ask(Display *dpy, Window win, int on)
+> {
+> 	int major, ev, er, ok = 0;
+> 	xGenericReply rep;
+> 	struct hold_req {
+> 		CARD8 reqType, minor;
+> 		CARD16 length;
+> 		CARD32 window;
+> 		CARD32 on;
+> 	} *req;
+> 
+> 	if (!XQueryExtension(dpy, "XLITE-HOLD", &major, &ev, &er))
+> 		return 0;
+> 	LockDisplay(dpy);
+> 	req = (struct hold_req *)_XGetRequest(dpy, (CARD8)major, sizeof(*req));
+> 	if (req) {
+> 		req->minor = 4;
+> 		req->window = (CARD32)win;
+> 		req->on = (CARD32)(on != 0);
+> 		if (_XReply(dpy, (xReply *)&rep, 0, xTrue))
+> 			ok = (rep.data00 & 0xff) == 1 ? 1 : 0;
+> 	}
+> 	UnlockDisplay(dpy);
+> 	SyncHandle();
+> 	return ok;
+> }
+> 
+300a350,354
+> 	/* the window copies the segment it shows before the segments go (a
+> 	 * ShmDetach would make it copy too; this also ends the hold) */
+> 	if (s->hold && s->dpy)
+> 		hold_ask(s->dpy, s->win, 0);
+> 	s->hold = 0;
+560a615,616
+> 	s->hold = s->nbuf == 2 && !s->rscale && hold_wanted() &&
+> 		  hold_ask(s->dpy, s->win, 1);
+562,564c618,622
+< 	 * calloc: 0 is the far plane, as the core's private buffer starts. A
+< 	 * failure is not fatal: the core then allocates a private one. */
+< 	s->depth = calloc((size_t)s->bw * s->bh, 2);
+---
+> 	 * calloc: 0 is the far plane, as the core's private buffer starts,
+> 	 * and S31GL_DEPTH_TAIL zero bytes after it hold the core's depth
+> 	 * epoch state (s31gl.h). A failure is not fatal: the core then
+> 	 * allocates a private one. */
+> 	s->depth = calloc((size_t)s->bw * s->bh * 2 + S31GL_DEPTH_TAIL, 1);
+615a674,677
+> 	/* a HELD buffer is never released by an event yet: the server lets it
+> 	 * go at our next put, and the completion that arrives meanwhile (the
+> 	 * other segment's, sent while that same put was handled) carries a
+> 	 * serial at or after its own put */
+618c680
+< 			if (s->buf[i].pending &&
+---
+> 			if (s->buf[i].pending && !s->buf[i].held &&
+632a695,705
+> 	if (b->held) {
+> 		/* shown by the server and no put of ours after it (the pair is
+> 		 * not ping-ponging any more): end the hold - the window copies
+> 		 * it - and the reply proves it let go */
+> 		hold_ask(s->dpy, s->win, 0);
+> 		s->hold = 0;
+> 		b->held = 0;
+> 		b->pending = 0;
+> 		drain_completions(s);
+> 		return;
+> 	}
+690a764,774
+> 		if (s->hold && ev) {
+> 			/* the server keeps THIS segment until our next put, and
+> 			 * this put lets the other one go */
+> 			struct glxi_buf *o = &s->buf[s->cur ^ 1];
+> 
+> 			if (o->held) {
+> 				o->held = 0;
+> 				o->pend_serial = b->pend_serial;
+> 			}
+> 			b->held = 1;
+> 		}

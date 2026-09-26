@@ -1,0 +1,22 @@
+ARM win2base render_scale=1 shmbufs=2 mode=win runs=6 bin=/root/lvdesk.ceil lib=/root/g04 lvenv= #391 SMP Fri Sep 25 10:24:40 UTC 2026 up 79.24
+RUN 1 fps 34.9 gears 91% lvdesk 65% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+196 frames in 5.0 seconds = 39.183 FPS 135 frames in 5.0 seconds = 26.862 FPS 207 frames in 5.0 seconds = 41.353 FPS 
+RUN 2 fps 41.3 gears 98% lvdesk 72% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+144 frames in 5.0 seconds = 28.687 FPS 205 frames in 5.0 seconds = 40.988 FPS 212 frames in 5.0 seconds = 42.216 FPS 
+RUN 3 fps 36.0 gears 89% lvdesk 64% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+202 frames in 5.0 seconds = 40.208 FPS 187 frames in 5.0 seconds = 37.271 FPS 201 frames in 5.0 seconds = 39.994 FPS 
+RUN 4 fps 35.2 gears 87% lvdesk 63% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+200 frames in 5.0 seconds = 39.959 FPS 187 frames in 5.0 seconds = 37.257 FPS 157 frames in 5.0 seconds = 31.235 FPS 
+RUN 5 fps 35.2 gears 86% lvdesk 65% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+197 frames in 5.0 seconds = 39.255 FPS 131 frames in 5.0 seconds = 26.155 FPS 210 frames in 5.0 seconds = 41.850 FPS 
+RUN 6 fps 37.2 gears 98% lvdesk 69% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+167 frames in 5.1 seconds = 32.791 FPS 159 frames in 5.0 seconds = 31.674 FPS 210 frames in 5.0 seconds = 41.915 FPS 
+xshim: render scale 0x200002 150x150 refused
+xshim: render scale 0x200002 150x150 refused
+xshim: render scale 0x200002 150x150 refused
+xshim: render scale 0x200002 150x150 refused
+xshim: render scale 0x200002 150x150 refused
+xshim: render scale 0x200002 150x150 refused
+              total        used        free      shared  buff/cache   available
+Mem:          15336        9560        3668         116        2108        3096
+DONE

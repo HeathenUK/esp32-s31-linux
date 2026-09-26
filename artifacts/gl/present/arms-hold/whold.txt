@@ -1,0 +1,22 @@
+ARM whold render_scale=1 shmbufs=2 mode=win runs=6 bin=/root/lvdesk.new lib=/root/g04 lvenv= glenv= #391 SMP Fri Sep 25 10:24:40 UTC 2026 up 79.53
+RUN 1 fps 34.4 gears 73% lvdesk 46% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+188 frames in 5.0 seconds = 37.400 FPS 139 frames in 5.0 seconds = 27.712 FPS 201 frames in 5.0 seconds = 40.101 FPS 
+RUN 2 fps 35.7 gears 79% lvdesk 46% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+145 frames in 5.0 seconds = 28.932 FPS 169 frames in 5.0 seconds = 33.698 FPS 191 frames in 5.0 seconds = 38.082 FPS 
+RUN 3 fps 32.1 gears 70% lvdesk 43% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+177 frames in 5.0 seconds = 35.217 FPS 162 frames in 5.0 seconds = 32.358 FPS 162 frames in 5.0 seconds = 32.360 FPS 
+RUN 4 fps 32.6 gears 74% lvdesk 43% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+176 frames in 5.0 seconds = 35.070 FPS 150 frames in 5.0 seconds = 29.966 FPS 170 frames in 5.0 seconds = 33.947 FPS 
+RUN 5 fps 31.9 gears 77% lvdesk 45% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+171 frames in 5.0 seconds = 33.934 FPS 127 frames in 5.0 seconds = 25.396 FPS 186 frames in 5.0 seconds = 37.059 FPS 
+RUN 6 fps 35.3 gears 78% lvdesk 45% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+143 frames in 5.0 seconds = 28.530 FPS 165 frames in 5.0 seconds = 32.930 FPS 189 frames in 5.0 seconds = 37.741 FPS 
+xshim: render scale 0x200002 150x150 refused
+xshim: render scale 0x200002 150x150 refused
+xshim: render scale 0x200002 150x150 refused
+xshim: render scale 0x200002 150x150 refused
+xshim: render scale 0x200002 150x150 refused
+xshim: render scale 0x200002 150x150 refused
+              total        used        free      shared  buff/cache   available
+Mem:          15336        9480        2972         144        2884        2808
+DONE
