@@ -23,6 +23,7 @@
  * costs nothing while disabled.
  */
 #include "zgl.h"
+#include "s31_ramtext.h"
 #include "zpipe.h"
 
 #include "raster_int.h"
@@ -86,6 +87,7 @@ static inline void tc1_fixed(const GLContext *c, const GLVertex *v, int *si, int
 /* GL_FLAT: the provoking vertex's colour and alpha (clip.c) */
 static void set_flat(GLContext *c)
 {
+  S31_RT_ENTER_V(set_flat, c);   /* phase 6 ramtext */
   ZPipe *p = &c->pipe;
   p->flat[0] = (unsigned char)c8(c->flat_r, ZB_POINT_RED_MIN, KR);
   p->flat[1] = (unsigned char)c8(c->flat_g, ZB_POINT_GREEN_MIN, KG);
@@ -104,6 +106,7 @@ static void set_flat(GLContext *c)
 void gl_draw_triangle_general(GLContext *c, GLVertex *p0, GLVertex *p1,
                               GLVertex *p2)
 {
+  S31_RT_ENTER_V(gl_draw_triangle_general, c, p0, p1, p2);   /* phase 6 ramtext */
   ZVtxG g[3];
 
   if (c->pipe_dirty) gl_build_pipe(c);

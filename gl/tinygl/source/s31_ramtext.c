@@ -42,6 +42,19 @@
  *   syscall is still made (it is the documented user-space call on other
  *   RISC-V kernels); AArch64 uses __builtin___clear_cache.
  *
+ * - Phase 6 (artifacts/gl/phase6/ramtext/). The list is QuakeSpasm's phase
+ *   5 path (~40 kB). Entry is no longer only through s31_rt: ramtext.py
+ *   writes a second table, s31_ramtext_dw[], of every word in the writable
+ *   image that holds a hot address (op tables, clip_proc[], the fused
+ *   fillers' tables, the GOT), and dw_patch() rewrites each to the copy
+ *   (RELRO pages through a temporary PROT_WRITE). What code does itself
+ *   goes through S31_RT_RAM / S31_RT_XIP / S31_RT_ENTER (s31_ramtext.h),
+ *   so that each hot function has one address at run time. The copy's
+ *   pages are then mlock'd (only they: a few tens of kB), so reclaim can
+ *   never evict the hot code - which matters as much with libGL on the SD
+ *   card, where its page-cache text is otherwise clean and evictable, as
+ *   it does with libGL in XIP flash.
+ *
  * - Elsewhere (bare-metal gl/bench images, other architectures) the copy
  *   is compiled out and S31GL_RAMTEXT does nothing.
  */
@@ -64,8 +77,12 @@ struct s31_rt s31_rt = {
   gl_vertex4f, glopCallList,
 };
 
-#if !defined(S31GL_NO_RAMTEXT) && defined(__linux__) && ((defined(__riscv) && __riscv_xlen == 32) || defined(__aarch64__))
+#ifdef S31_RT_COPY
 #define RT_COPY 1
+intptr_t s31_rt_d;
+uintptr_t s31_rt_lo, s31_rt_len;
+extern const unsigned char __s31hot_start[] __attribute__((visibility("hidden")));
+extern const unsigned char __s31hot_end[] __attribute__((visibility("hidden")));
 #include <sys/mman.h>
 #include <sys/syscall.h>
 #include <unistd.h>
@@ -78,14 +95,28 @@ struct s31_rt s31_rt = {
    ramtext.py says when to raise them. A sanitizer build of the same range
    needs far more (run-san.sh passes -D for both) */
 #ifndef S31GL_RAMTEXT_FIXMAX
-#define S31GL_RAMTEXT_FIXMAX 384
+#define S31GL_RAMTEXT_FIXMAX 1536
 #endif
 #ifndef S31GL_RAMTEXT_SLOT
-#define S31GL_RAMTEXT_SLOT (20 * 1024)
+#define S31GL_RAMTEXT_SLOT (64 * 1024)  /* bss: costs nothing until used */
 #endif
+/* data words holding a hot address (ramtext.py's second table) */
+#ifndef S31GL_RAMTEXT_DWMAX
+#define S31GL_RAMTEXT_DWMAX 1024
+#endif
+#define DW_MAGIC   0x57313353u     /* "S31W" */
+#define DW_HDR     5               /* magic, count, link start, relro page lo, hi */
 #define RT_FIXMAX  S31GL_RAMTEXT_FIXMAX
 #define RT_SLOT    S31GL_RAMTEXT_SLOT
-#define RT_GRAIN   64              /* the copy keeps the range's offset mod this */
+/* the copy keeps the range's offset mod this. AArch64: a whole page, so the
+   move is a multiple of 4096 - an adrp from inside the range to inside it
+   (a jump table in s31hot_rodata) is page-relative, not pc-relative, and
+   is left alone like every other internal reference */
+#if defined(__aarch64__)
+#define RT_GRAIN   4096
+#else
+#define RT_GRAIN   64
+#endif
 
 /* a table entry is (offset in the range << 3) | kind. An RV_HI (auipc) is
    followed by the entries of its low halves (addi/load/jalr: RV_LO_I,
@@ -93,13 +124,17 @@ struct s31_rt s31_rt = {
 enum { K_RV_LO_S = 0, K_RV_HI = 1, K_RV_JAL = 2, K_A64_ADRP = 3, K_A64_B26 = 4,
        K_A64_ADR = 5, K_A64_LDLIT = 6, K_RV_LO_I = 7 };
 
-extern const unsigned char __s31hot_start[] __attribute__((visibility("hidden")));
-extern const unsigned char __s31hot_end[] __attribute__((visibility("hidden")));
-
 /* written in place by ramtext.py; the initialiser keeps it in .rodata
    (non-zero) and says "not processed" until then */
 __attribute__((used, visibility("hidden")))
 const uint32_t s31_ramtext_fix[RT_FIXMAX] = { RT_MAGIC, RT_UNSET };
+
+/* written in place by ramtext.py: the link-time addresses of the words in
+   the writable image (function-pointer tables, the GOT, .data) that hold
+   an address inside the range. Each is rewritten to the copy, so an
+   indirect call through any of them - from cold code too - enters RAM */
+__attribute__((used, visibility("hidden")))
+const uint32_t s31_ramtext_dw[S31GL_RAMTEXT_DWMAX] = { DW_MAGIC, RT_UNSET };
 
 /* the RAM copy goes in the whole pages inside this array, and only those:
    mprotect works on pages, and the partial pages at its ends are shared
@@ -244,8 +279,42 @@ static uint32_t fnv1a(const unsigned char *p, size_t n)
       s31_rt.f = (__typeof__(s31_rt.f))(a_ + d); moved++; } \
   } while (0)
 
+/* Rewrite every listed data word that still holds an XIP hot address to
+   the copy. Words inside RELRO (read-only once ld.so is done) are written
+   through a temporary PROT_READ|PROT_WRITE on their page. -> words moved,
+   or -1 when a page could not be made writable (nothing half-done matters:
+   the XIP and RAM copies are the same code) */
+static int dw_patch(intptr_t d)
+{
+  const uint32_t *t = s31_ramtext_dw;
+  uintptr_t bias, rlo, rhi, cur = 0;
+  uint32_t n, i;
+  int moved = 0;
+
+  __asm__ ("" : "+r"(t));
+  if (t[0] != DW_MAGIC || t[1] == RT_UNSET) return 0;
+  n = t[1];
+  if (n > S31GL_RAMTEXT_DWMAX - DW_HDR) return -1;
+  bias = (uintptr_t)__s31hot_start - (uintptr_t)t[2];  /* the load bias */
+  rlo = (uintptr_t)t[3] + bias; rhi = (uintptr_t)t[4] + bias;
+  for (i = 0; i < n; i++) {
+    uintptr_t *w = (uintptr_t *)((uintptr_t)t[DW_HDR + i] + bias);
+    uintptr_t v = *w, pg = (uintptr_t)w & ~(uintptr_t)4095;
+    if (v < (uintptr_t)__s31hot_start || v >= (uintptr_t)__s31hot_end) continue;
+    if ((uintptr_t)w >= rlo && (uintptr_t)w < rhi && pg != cur) {
+      if (cur) mprotect((void *)cur, 4096, PROT_READ);
+      if (mprotect((void *)pg, 4096, PROT_READ | PROT_WRITE)) return -1;
+      cur = pg;
+    }
+    *w = v + d;
+    moved++;
+  }
+  if (cur) mprotect((void *)cur, 4096, PROT_READ);
+  return moved;
+}
+
 static const char *rt_copy(size_t *bytes, size_t *pages, unsigned int *nfix,
-                           int *nmoved)
+                           int *nmoved, int *ndw, long *locked)
 {
   const uint32_t *t = s31_ramtext_fix;
   const unsigned char *s = __s31hot_start;
@@ -297,10 +366,20 @@ static const char *rt_copy(size_t *bytes, size_t *pages, unsigned int *nfix,
   __asm__ volatile ("fence.i" ::: "memory");
 #endif
 
+  s31_rt_lo = (uintptr_t)s; s31_rt_len = len;
+  s31_rt_d = d;                /* S31_RT_RAM/XIP/ENTER from here on */
   RT_MOVE(flat); RT_MOVE(smooth); RT_MOVE(map);
   RT_MOVE(flat_lt); RT_MOVE(smooth_lt); RT_MOVE(map_lt);
   RT_MOVE(draw_fill); RT_MOVE(draw_fill_pq);
   RT_MOVE(vertex4f); RT_MOVE(call_list);
+  /* the RAM copy is the hot code now: keep it resident. Anonymous pages
+     would otherwise be swapped out under GLQuake's paging (and the XIP or
+     page-cache copy is what would run meanwhile only if nothing pointed
+     at the RAM one - everything does). Only these pages, a few tens of
+     kB, so RLIMIT_MEMLOCK's default (64 kB and up) covers it; a failure
+     is reported and not fatal */
+  *locked = mlock(page, span) == 0 ? (long)span : -1;
+  *ndw = dw_patch(d);
   *bytes = len;
   *pages = span / 4096;
   *nfix = n;
@@ -324,15 +403,18 @@ void s31_ramtext_init(void)
   {
     size_t bytes = 0, pages = 0;
     unsigned int nfix = 0;
-    int moved = 0;
-    const char *why = rt_copy(&bytes, &pages, &nfix, &moved);
+    int moved = 0, ndw = 0;
+    long locked = 0;
+    const char *why = rt_copy(&bytes, &pages, &nfix, &moved, &ndw, &locked);
     /* one line, and only when asked for by name: the board A/B's proof
        of which arm ran */
     if (e == NULL) return;
     if (why) fprintf(stderr, "libGL: ramtext off: %s\n", why);
     else fprintf(stderr, "libGL: ramtext on: %u bytes in %u pages, "
-                 "%u fixup entries, %d entry points\n", (unsigned)bytes,
-                 (unsigned)pages, nfix, moved);
+                 "%u fixup entries, %d entry points, %d data words, "
+                 "%ld bytes mlocked%s\n", (unsigned)bytes,
+                 (unsigned)pages, nfix, moved, ndw, locked < 0 ? 0 : locked,
+                 locked < 0 ? " (mlock FAILED)" : "");
   }
 #else
   if (e != NULL) fprintf(stderr, "libGL: ramtext off: not built for this target\n");

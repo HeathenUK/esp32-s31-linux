@@ -1,0 +1,20 @@
+--- enum values: TinyGL header against Khronos
+enumcmp: 0 mismatches
+--- compiling TinyGL core, the GL ABI layer and GLX (8 jobs)
+--- export surface (mkstubs.py)
+mkstubs: 674 exported GL names: 462 implemented, 212 stubs
+ramtext: 63 sections moved to s31hot_text
+--- linking /src/gl/out-rv32/libGL.so.1
+ramtext: libGL.so.1: 41208 bytes at 0x50bc0-0x5acb8, 11 pages in RAM, 499 sites (auipc 319, jal 180), 818 table entries; slot 0x67000, displacement +91200; 287 references into the range from outside: 21 data words moved to the copy, 155 cold call sites, 9 cold address-takes, 0 read-only words left
+-rwxr-xr-x 1 builder builder 415388 Sep 26 21:56 /src/gl/out-rv32/libGL.so.1
+--- headless_gears, core_test (static: the core objects of libGL.so.1, no X)
+    and their qemu-user variants (scalar mem*/str*: qemu has no ESP PIE), in parallel
+-rwxr-xr-x 1 builder builder  452432 Sep 26 21:56 /src/gl/out-rv32/core_test
+-rwxr-xr-x 1 builder builder 2012620 Sep 26 21:56 /src/gl/out-rv32/core_test.qemu
+-rwxr-xr-x 1 builder builder 1744268 Sep 26 21:56 /src/gl/out-rv32/d2f_test.qemu
+-rwxr-xr-x 1 builder builder 2106792 Sep 26 21:56 /src/gl/out-rv32/filt_test.qemu
+-rwxr-xr-x 1 builder builder 1783684 Sep 26 21:56 /src/gl/out-rv32/fused_test.qemu
+-rwxr-xr-x 1 builder builder  407472 Sep 26 21:56 /src/gl/out-rv32/headless_gears
+-rwxr-xr-x 1 builder builder 2196492 Sep 26 21:56 /src/gl/out-rv32/headless_gears.qemu
+-rwxr-xr-x 1 builder builder 1764392 Sep 26 21:56 /src/gl/out-rv32/raster_gate.qemu
+-rwxr-xr-x 1 builder builder 1776648 Sep 26 21:56 /src/gl/out-rv32/zepoch_test.qemu

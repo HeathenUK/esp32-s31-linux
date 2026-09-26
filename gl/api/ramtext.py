@@ -229,7 +229,7 @@ def analyse(e):
     if end <= start:
         die('%s: the hot range is empty (api/ramtext.list matched nothing?)' % e.path)
     syms = e.syms()             # the one .symtab (-q relocations index it)
-    fixes, bad, inside = [], [], {}
+    fixes, bad, inside, into = [], [], {}, []
     seen = 0
     # RISC-V: the low halves of each auipc, by the auipc's address (a
     # PCREL_LO12 relocation points at its auipc, not at the target)
@@ -255,6 +255,7 @@ def analyse(e):
                 T = S + add
                 if not undef and start <= T < end:
                     inside[typ] = inside.get(typ, 0) + 1
+                    into.append((off, typ, T, sec['flags']))
                     if e.machine == EM_RISCV and typ in RV_DIFF:
                         bad.append('0x%x: a jump table outside the range points into it '
                                    '(%s): its .rodata.<function> did not move' % (off, name))
@@ -355,7 +356,7 @@ def analyse(e):
         die('%s: no relocations inside the hot range: link with -Wl,-q' % e.path)
     if bad:
         die('%s: the hot range cannot be moved:\n  ' % e.path + '\n  '.join(bad))
-    return start, end, fixes, inside
+    return start, end, fixes, inside, into
 
 
 def lo_get(w, k):
@@ -422,6 +423,110 @@ def simulate(e, start, end, fixes, dst):
 
 
 SHT_DYNSYM = 11
+SHT_PROGBITS = 1
+SHF_WRITE, SHF_EXECINSTR = 1, 4
+PT_GNU_RELRO = 0x6474e552
+DW_MAGIC = 0x57313353           # "S31W": s31_ramtext.c's data-word table
+DW_HDR = 5                      # magic, count, link start, relro page lo, hi
+RV_32, A_ABS64 = 1, 257
+DYN_REL = {EM_RISCV: (3, 1, 2), EM_AARCH64: (1027, 257, 1025)}   # RELATIVE, 32/ABS64, GLOB_DAT
+
+
+def phdrs(e):
+    d = e.d
+    if e.b64:
+        phoff, = struct.unpack_from('<Q', d, 0x20)
+        phentsize, phnum = struct.unpack_from('<HH', d, 0x36)
+    else:
+        phoff, = struct.unpack_from('<I', d, 0x1c)
+        phentsize, phnum = struct.unpack_from('<HH', d, 0x2a)
+    for i in range(phnum):
+        o = phoff + i * phentsize
+        if e.b64:
+            t, fl, off, va, pa, fs, ms, al = struct.unpack_from('<IIQQQQQQ', d, o)
+        else:
+            t, off, va, pa, fs, ms, fl, al = struct.unpack_from('<IIIIIIII', d, o)
+        yield t, va, ms
+
+
+def data_words(a, t, start, end, into):
+    """the words of the writable image that hold an address in the range:
+    function-pointer tables (-q's absolute relocations in data) and, in a
+    shared library, what the dynamic relocations put there (RELATIVE, the
+    GOT). s31_ramtext.c rewrites each to the copy -> sorted vaddrs"""
+    ws = set()
+    absr = RV_32 if a.machine == EM_RISCV else A_ABS64
+    for off, typ, T, fl in into:
+        if typ == absr and fl & SHF_ALLOC and not fl & SHF_EXECINSTR:
+            ws.add(off)
+    rel, abs_, glob = DYN_REL[a.machine]
+    es = 24 if t.b64 else 12
+    dsyms = None
+    for s in t.sh:
+        if s['type'] != SHT_RELA or not s['flags'] & SHF_ALLOC:
+            continue
+        if dsyms is None:
+            dsyms = []
+            ds = t.sh[s['link']]
+            ses = 24 if t.b64 else 16
+            for o in range(ds['off'], ds['off'] + ds['size'], ses):
+                if t.b64:
+                    n, info, other, shndx, v, sz = struct.unpack_from('<IBBHQQ', t.d, o)
+                else:
+                    n, v, sz, info, other, shndx = struct.unpack_from('<IIIBBH', t.d, o)
+                dsyms.append((v, shndx))
+        for o in range(s['off'], s['off'] + s['size'], es):
+            if t.b64:
+                off, info, add = struct.unpack_from('<QQq', t.d, o)
+                typ, si = info & 0xffffffff, info >> 32
+            else:
+                off, info, add = struct.unpack_from('<IIi', t.d, o)
+                typ, si = info & 0xff, info >> 8
+            if typ == rel:
+                T = add
+            elif typ in (abs_, glob) and si and dsyms[si][1] != 0:
+                T = dsyms[si][0] + (add if typ == abs_ else 0)
+            else:
+                continue
+            if start <= T < end:
+                ws.add(off)
+    out, ro = [], 0
+    for w in sorted(ws):
+        if w & 3:
+            die('data word 0x%x holding a hot address is not aligned' % w)
+        sec = [x for x in t.sh if x['flags'] & SHF_ALLOC and x['addr'] <= w < x['addr'] + x['size']]
+        if not sec or not sec[0]['flags'] & SHF_WRITE:
+            ro += 1         # a static link's const table in .rodata: it
+            continue        # keeps the XIP address (correct, not covered)
+        out.append(w)
+    return out, ro
+
+
+def cold_refs(a, start, end, into):
+    """what still reaches the XIP copy: code outside the range that calls
+    into it or takes the address of something in it -> report lines"""
+    fns = sorted((s['value'], s['name']) for s in a.syms() if s['type'] == 2 and s['shndx'] != 0)
+    import bisect
+    addrs = [v for v, _ in fns]
+
+    def name(x):
+        i = bisect.bisect_right(addrs, x) - 1
+        return fns[i][1] if i >= 0 else hex(x)
+    calls, taken = {}, {}
+    for off, typ, T, fl in into:
+        if not fl & SHF_EXECINSTR:
+            continue
+        k = '%s -> %s' % (name(off), name(T))
+        if a.machine == EM_RISCV and typ in (RV_CALL, RV_CALL_PLT, RV_JAL) or \
+                a.machine == EM_AARCH64 and typ in (A_JUMP26, A_CALL26):
+            calls[k] = calls.get(k, 0) + 1
+        elif a.machine == EM_RISCV and typ in (RV_PCREL_HI20, RV_GOT_HI20) or \
+                a.machine == EM_AARCH64 and typ in (A_ADR_PREL_PG_HI21, A_ADR_PREL_PG_HI21_NC,
+                                                    A_ADR_PREL_LO21, A_ADR_GOT_PAGE):
+            taken[k] = taken.get(k, 0) + 1
+    out = ['cold call into the range: %s' % k for k in sorted(calls)]
+    out += ['cold address of a hot function: %s' % k for k in sorted(taken)]
+    return out, len(calls), len(taken)
 
 
 def alloc_image(e):
@@ -454,7 +559,7 @@ def fnv1a(b):
 
 def cmd_fix(apath, tpath):
     a = Elf(apath)
-    start, end, fixes, inside = analyse(a)
+    start, end, fixes, inside, into = analyse(a)
     t = Elf(tpath) if tpath != apath else a
     if tpath != apath:
         # what ships must be what was analysed: every allocated section, at
@@ -477,7 +582,8 @@ def cmd_fix(apath, tpath):
     if len(entries) > fixmax - HDR:
         die('%d table entries, s31_ramtext_fix holds %d: raise RT_FIXMAX in s31_ramtext.c'
             % (len(entries), fixmax - HDR))
-    length, off = end - start, start & (GRAIN - 1)
+    grain = 4096 if t.machine == EM_AARCH64 else GRAIN     # s31_ramtext.c RT_GRAIN
+    length, off = end - start, start & (grain - 1)
     span = (off + length + 4095) & ~4095
     page = (slot['value'] + 4095) & ~4095       # s31_ramtext.c: its whole pages
     if page + span > slot['value'] + slot['size']:
@@ -494,15 +600,40 @@ def cmd_fix(apath, tpath):
     with open(tpath, 'r+b') as f:
         f.seek(fo)
         f.write(struct.pack('<%dI' % len(words), *words))
+    dws, dro = data_words(a, t, start, end, into)
+    dtab = t.sym('s31_ramtext_dw')
+    if dtab is None:
+        die('%s: no s31_ramtext_dw' % tpath)
+    rlo = rhi = 0
+    for pt, va, ms in phdrs(t):
+        if pt == PT_GNU_RELRO:
+            rlo, rhi = va & ~4095, (va + ms) & ~4095    # as ld.so protects it
+    if len(dws) > dtab['size'] // 4 - DW_HDR:
+        die('%d data words, s31_ramtext_dw holds %d: raise S31GL_RAMTEXT_DWMAX'
+            % (len(dws), dtab['size'] // 4 - DW_HDR))
+    fo = t.foff(dtab['value'])
+    if struct.unpack_from('<II', t.d, fo) != (DW_MAGIC, UNSET):
+        die('%s: s31_ramtext_dw is not the unprocessed table' % tpath)
+    dwords = [DW_MAGIC, len(dws), start & 0xffffffff, rlo & 0xffffffff, rhi & 0xffffffff] + \
+        [w & 0xffffffff for w in dws]
+    with open(tpath, 'r+b') as f:
+        f.seek(fo)
+        f.write(struct.pack('<%dI' % len(dwords), *dwords))
+    rep, ncall, ntaken = cold_refs(a, start, end, into)
+    rp = os.environ.get('S31GL_RAMTEXT_REPORT')
+    if rp:
+        with open(rp, 'w') as f:
+            f.write('\n'.join(rep) + '\n')
     kinds = {}
     for _, k, _, _, _ in fixes:
         kinds[KNAME[k]] = kinds.get(KNAME[k], 0) + 1
     print('ramtext: %s: %d bytes at 0x%x-0x%x, %d pages in RAM, %d sites (%s), '
           '%d table entries; slot 0x%x, displacement %+d; %d references into the '
-          'range from outside'
+          'range from outside: %d data words moved to the copy, %d cold call sites, '
+          '%d cold address-takes, %d read-only words left'
           % (os.path.basename(tpath), length, start, end, span // 4096, len(fixes),
              ', '.join('%s %d' % kv for kv in sorted(kinds.items())), len(entries),
-             page, dst - start, sum(inside.values())))
+             page, dst - start, sum(inside.values()), len(dws), ncall, ntaken, dro))
 
 
 # a function's sections: its own, its clones, its cold part - and its

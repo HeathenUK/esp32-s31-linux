@@ -29,11 +29,13 @@
  */
 #include <stdlib.h>
 #include "zgl.h"
+#include "s31_ramtext.h"
 
 #define SWAPV(a, b) do { __typeof__(a) t_ = (a); (a) = (b); (b) = t_; } while (0)
 
 void tu_swap(GLContext *c)
 {
+  S31_RT_ENTER_V(tu_swap, c);
   GLTexUnit *u = &c->tu1;
   int i;
   SWAPV(c->current_texture, u->tex2d);
@@ -207,6 +209,7 @@ void tgl_client_active_texture(int texture)
 
 void tgl_multi_tex_coord(int target, float s, float t, float r, float q)
 {
+  S31_RT_ENTER_V(tgl_multi_tex_coord, target, s, t, r, q);
   /* s31 (phase 6 V3): per vertex in a multitexturing game's world pass -
      the context read once, tgl_max_texture_units' test inline (two calls
      to gl_get_context and five saved registers were 48 instructions) */

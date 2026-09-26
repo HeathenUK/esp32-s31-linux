@@ -1,5 +1,6 @@
 #include <stddef.h>
 #include "zgl.h"
+#include "s31_ramtext.h"
 #include "ztri.h"
 #include "s31_ttv.h"
 #include "s31_fmath.h"
@@ -308,6 +309,7 @@ void gl_vertex_fog(GLContext * c, GLVertex * v)
 
 void glopBegin(GLContext * c, GLParam * p)
 {
+    S31_RT_ENTER_V(glopBegin, c, p);
     int type;
 
     /* s31: GL errors instead of asserts; never draw without a buffer */
@@ -785,6 +787,7 @@ void gl_vertex_core(GLContext * c, float x, float y, float z, float w,
    with the context last glVertex4f passes its a0-a3 through unmoved */
 void gl_vertex4f(float x, float y, float z, float w, GLContext * c)
 {
+  S31_RT_ENTER_V(gl_vertex4f, x, y, z, w, c);   /* phase 6 ramtext */
     gl_vertex_core(c, x, y, z, w, NULL, NULL, 0, 1);
 }
 
@@ -814,6 +817,7 @@ void gl_vertex_indexed_mt(GLContext * c, GLParam * p, const GLVertex * hit, GLVe
 
 void glopEnd(GLContext * c, GLParam * param)
 {
+    S31_RT_ENTER_V(glopEnd, c, param);
     if (!c->in_begin) {
 	gl_set_error(c, GL_INVALID_OPERATION);
 	return;

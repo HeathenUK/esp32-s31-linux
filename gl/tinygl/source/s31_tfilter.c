@@ -75,6 +75,7 @@
  */
 #include <stdlib.h>
 #include "zgl.h"
+#include "s31_ramtext.h"
 #include "zpipe.h"
 #include "ztri.h"
 
@@ -364,13 +365,14 @@ ZStageFn zpx_stage8_u(int unit, int kind)
    zpx_level0) */
 ZStageFn zpx_base8(const ZLevel *L, int unit)
 {
-  return unit == 0 && L->k8 == TGL_ST_P8 ? zx8_base_p8 : zx8_tab[unit != 0][0];
+  return S31_RT_RAM(unit == 0 && L->k8 == TGL_ST_P8 ? zx8_base_p8 : zx8_tab[unit != 0][0]);
 }
 
 /* whether f is one of zpx_base8's stages for the unit */
 int zpx_is_base8(ZStageFn f, int unit)
 {
-  return f == zx8_tab[unit != 0][0] || (unit == 0 && f == zx8_base_p8);
+  f = S31_RT_XIP(f);           /* phase 6 ramtext: compared as XIP addresses */
+  return f == S31_RT_XIP(zx8_tab[unit != 0][0]) || (unit == 0 && f == zx8_base_p8);
 }
 
 /* a stored level of t as the texel stages read it: its planes */
@@ -416,10 +418,11 @@ int zpx_is_tex_stage(ZStageFn f)
 {
   const ZStageFn *t = &zx_tab[0][0][0][0];
   int i;
+  f = S31_RT_XIP(f);           /* phase 6 ramtext: compared as XIP addresses */
   for (i = 0; i < (int)(sizeof zx_tab / sizeof zx_tab[0][0][0][0]); i++)
-    if (t[i] == f) return 1;
+    if (S31_RT_XIP(t[i]) == f) return 1;
   for (i = 0; i < 10; i++)
-    if ((&zx8_tab[0][0])[i] == f) return 1;
+    if (S31_RT_XIP((&zx8_tab[0][0])[i]) == f) return 1;
   return f == zx8_base_p8;
 }
 
@@ -466,7 +469,7 @@ static void zc_smooth_pc(const ZPipe *p, const ZSpan *s, ZFrag *f)
 
 ZStageFn zpx_color_pc(void)
 {
-  return zc_smooth_pc;
+  return S31_RT_RAM(zc_smooth_pc);
 }
 
 /* ------------------------------------------------------------ per triangle */
@@ -721,7 +724,7 @@ int zpx_tri(ZPipe *p, const ZTri *T, const ZVtxG *v0, const ZVtxG *v1,
     }
     x->pc_cur = pc;
     if (pc) {
-      *x->slot_col = zc_smooth_pc;
+      *x->slot_col = S31_RT_RAM(zc_smooth_pc);
       p->need = (x->need0 & ~ZP_N_RGBA) | ZP_N_PC | ZP_N_Q;
     } else {
       *x->slot_col = x->col_affine;

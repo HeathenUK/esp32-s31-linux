@@ -1,0 +1,14 @@
+S31GL_RAMTEXT=0: exit 0, hot-range blocks 179746: XIP 179746, RAM 0 (0.0% in RAM) 
+S31GL_RAMTEXT=1: exit 0, hot-range blocks 190783: XIP 6194, RAM 184589 (96.8% in RAM) libGL: ramtext on: 41196 bytes in 11 pages, 812 fixup entries, 4 entry points, 12 data words, 45056 bytes mlocked
+       1064 entries into the XIP range: tgl_glVertex4f -> gl_add_op
+        209 entries into the XIP range: tgl_glNormal3f -> gl_add_op
+         18 entries into the XIP range: tgl_glBegin -> gl_add_op
+         18 entries into the XIP range: tgl_glEnd -> gl_add_op
+         18 entries into the XIP range: tgl_glRotatef -> gl_add_op
+         12 entries into the XIP range: tgl_glPushMatrix -> gl_add_op
+         12 entries into the XIP range: tgl_glPopMatrix -> gl_add_op
+         10 entries into the XIP range: tgl_glTranslatef -> gl_add_op
+          8 entries into the XIP range: tgl_glMatrixMode -> gl_add_op
+          8 entries into the XIP range: tgl_glLoadIdentity -> gl_add_op
+          6 entries into the XIP range: tgl_glShadeModel -> gl_add_op
+          5 entries into the XIP range: tgl_glEnable -> s31_cap_index

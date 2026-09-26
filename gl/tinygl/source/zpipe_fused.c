@@ -40,6 +40,7 @@
  */
 #include <string.h>
 #include "zgl.h"
+#include "s31_ramtext.h"
 #include "zpipe.h"
 #include "zpipe_int.h"
 
@@ -973,6 +974,7 @@ void zpf_select(GLContext *c)
 __attribute__((cold))
 int zpf_is_fused_stage(ZStageFn f)
 {
+  f = S31_RT_XIP(f);           /* phase 6 ramtext: compared as XIP addresses */
   if (f == zf1_sbar || f == zf1_blend || f == zf1_pic || f == zf1_pica ||
       f == zf1_fence || f == zf1_con || f == zf1_water || f == zf1_alias ||
       f == zf1_part || f == zf1_glow || f == zf1_lmap || f == zf1_lmap1 ||

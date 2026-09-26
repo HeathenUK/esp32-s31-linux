@@ -9,6 +9,7 @@
 #include <math.h>
 #include <string.h>
 #include "zgl.h"
+#include "s31_ramtext.h"
 #include "zpipe.h"
 
 #include "zpipe_int.h"      /* MUL8, clamp255, UNPACK, PACK (phase 5: shared
@@ -144,7 +145,7 @@ static void zc_flat(const ZPipe *p, const ZSpan *s, ZFrag *f)
 
 ZStageFn zp_color_fn(int flat)
 {
-  return flat ? zc_flat : zc_smooth;
+  return flat ? zc_flat : S31_RT_RAM(zc_smooth);   /* phase 6 ramtext */
 }
 
 /* ------------------------------------------------------------ texel index */
@@ -193,7 +194,7 @@ ZP_TEXIDX(zt_cc, IDX_CC)
 ZStageFn zp_texidx_fn(int clamp_s, int clamp_t)
 {
   if (clamp_s) return clamp_t ? zt_cc : zt_cr;
-  return clamp_t ? zt_rc : zt_rr;
+  return clamp_t ? zt_rc : S31_RT_RAM(zt_rr);        /* phase 6 ramtext */
 }
 
 /* phase 5 O1: texture unit 1's, from ZPipeX.g1 (the same fixed point and
@@ -1057,12 +1058,14 @@ void zp_run_t(ZBuffer *zb, ZSpan *s, const int mt, const int direct)
 
 void zp_run(ZBuffer *zb, ZSpan *s)
 {
+  S31_RT_ENTER_V(zp_run, zb, s);
   zp_run_t(zb, s, 0, 0);
 }
 
 /* phase 5 O1: a batch with texture unit 1 on */
 void zp_run_mt(ZBuffer *zb, ZSpan *s)
 {
+  S31_RT_ENTER_V(zp_run_mt, zb, s);
   zp_run_t(zb, s, 1, 0);
 }
 

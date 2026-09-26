@@ -6,22 +6,23 @@
 # Chosen from the gl/bench per-function profile (prof.sh) of gears, glxgears,
 # texobj and teapotf at 320x240 and 640x400 on the phase 4 tree: everything
 # above ~0.5% of a frame on the per-vertex and per-triangle path, for the
-# default depth test (GL_LESS with writes: ztriangle_lt.c). Left out, and
-# why (artifacts/gl/phase4/REPORT.md, L1):
-#   ZB_fill16            the clear: a 116-byte store loop, store-bound and
-#                        resident in the I-cache wherever it lives
-#   the clipper          gl_draw_triangle_clip, updateTmp, clip_*: ~1.5% of
-#                        gears, 2 kB
-#   the LEQUAL, no-depth and depth-mask fillers: none of the four demos uses
-#                        them; the entry points exist (s31_rt), so adding a
-#                        line here is all it takes
-# Keep it small: the hart's I-cache is 16 KB (shared with the kernel), and
-# the copy is RSS (whole pages) in every GL process that turns it on.
-ztriangle_lt  ZB_fillTriangleFlat_lt ZB_fillTriangleSmooth_lt ZB_fillTriangleMappingPerspective_lt ztri_setup
-vertex        gl_vertex4f
+# default depth test (GL_LESS with writes: ztriangle_lt  ZB_fillTriangleFlat_lt ZB_fillTriangleSmooth_lt ZB_fillTriangleMappingPerspective_lt ztri_setup
+vertex        gl_vertex4f glopBegin glopEnd
 light         gl_shade_vertex
-clip          gl_transform_to_viewport gl_draw_triangle gl_draw_triangle_fill gl_set_provoking_flat
-list          glopCallList
+clip          gl_transform_to_viewport gl_draw_triangle gl_draw_triangle_fill gl_set_provoking_flat gl_draw_triangle_clip updateTmp clip_xmin clip_xmax clip_ymin clip_ymax clip_zmin clip_zmax
+list          glopCallList gl_add_op
 # fill_pq_slow: reached from gl_draw_triangle_fill_pq by glxgears' smooth
 # triangles every frame (review 4 R4-hot)
-s31_tfilter   gl_draw_triangle_fill_pq fill_pq_slow
+s31_tfilter   gl_draw_triangle_fill_pq fill_pq_slow zx8_base_p8 zx8_1_base zpx_level0 zc_smooth_pc
+# phase 6: QuakeSpasm's phase 5 path (board profile, share of libGL samples)
+ztriangle_genmt ZB_fillTriangleGeneralMT
+ztriangle_gen ZB_fillTriangleGeneral
+zbuffer       ZB_fill16
+zpipe         zp_run_mt_direct zp_run zp_run_mt zp_out_fn zp_depth_fn zt_rr zdw_lequal zc_smooth
+zpipe_fused   zpf_select zf8_wnn_p0 zf8_wnn_c0 zf8_alias_bl zf1_sbar zf1_blend zf1_pica zf_alias_00 zf1_alias
+raster_sel    gl_build_pipe gl_update_raster comb_prog tu1_update
+raster        to_vg set_flat gl_draw_triangle_mt gl_draw_triangle_general
+s31_mtex      tgl_multi_tex_coord tu_swap
+texture       tex_env
+s31_xform     gl_vertex_extra
+s31_state     state_op s31_cap_swap_unit s31_cap_index

@@ -348,6 +348,7 @@ static void tier1_t8_map(GLContext *c, int dsel, int w32)
 
 void gl_update_raster(GLContext *c)
 {
+  S31_RT_ENTER_V(gl_update_raster, c);
   ZBuffer *zb = c->zb;
   ZPipe *p = &c->pipe;
   /* s31 (plan F7): GL_TEXTURE_2D wins over GL_TEXTURE_1D (GL 1.3 3.8.15);
@@ -743,6 +744,7 @@ static int tu1_update(GLContext *c)
    gl_update_raster saw (zpipe.h) */
 void gl_build_pipe(GLContext *c)
 {
+  S31_RT_ENTER_V(gl_build_pipe, c);   /* phase 6: its stage pointers are RAM's */
   ZPipe *p = &c->pipe;
   ZPipeX *x = &c->pipex;
   ZTexF *u0 = &x->tf[0], *u1 = &x->tf[1];

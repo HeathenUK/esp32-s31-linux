@@ -1,0 +1,12 @@
+ramtext: libGL.so.1: 41208 bytes at 0x4c3a0-0x56498, 11 pages in RAM, 499 sites (auipc 319, jal 180), 818 table entries; slot 0x62000, displacement +89216; 287 references into the range from outside: 21 data words moved to the copy, 155 cold call sites, 9 cold address-takes, 0 read-only words left
+sh: 6: cannot open /tmp/d0.ppm: No such file
+hg_dyn 320x240x30 S31GL_RAMTEXT=0: rc 132  
+Traceback (most recent call last):
+  File "<stdin>", line 9, in <module>
+ValueError: substring not found
+sh: 6: cannot open /tmp/d1.ppm: No such file
+hg_dyn 320x240x30 S31GL_RAMTEXT=1: rc 132  
+Traceback (most recent call last):
+  File "<stdin>", line 9, in <module>
+ValueError: substring not found
+hg_dyn: frames DIFFER

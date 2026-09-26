@@ -1,4 +1,5 @@
 #include "zgl.h"
+#include "s31_ramtext.h"
 #include "ztri.h"
 #include "s31_ttv.h"
 
@@ -428,6 +429,7 @@ static void gl_draw_triangle_twoside(GLContext *c,
 void gl_draw_triangle(GLContext *c,
                       GLVertex *p0,GLVertex *p1,GLVertex *p2)
 {
+  S31_RT_ENTER_V(gl_draw_triangle, c, p0, p1, p2);   /* phase 6 ramtext */
   int co,c_and,cc[3],front;
   float norm;
   
@@ -584,6 +586,7 @@ int count_triangles,count_triangles_textured,count_pixels;
 void gl_draw_triangle_fill(GLContext *c,
                            GLVertex *p0,GLVertex *p1,GLVertex *p2)
 {
+  S31_RT_ENTER_V(gl_draw_triangle_fill, c, p0, p1, p2);   /* phase 6 ramtext */
 #ifdef PROFILE
   {
     int norm;
