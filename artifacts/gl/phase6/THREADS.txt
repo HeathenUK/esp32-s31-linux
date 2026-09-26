@@ -282,3 +282,28 @@ full gates), thrchk-pie.log, threads-host.log.
     the 128-byte pattern into the pipe record).
   - The worker could also take main's clears (G11's "second hart for
     clears"), if M1 says two-hart stores scale.
+
+BOARD RESULT, 2026-09-27 00:05-00:25 (coordinator). QuakeSpasm timedemo demo1,
+fullscreen, fresh boot per run. The library is the 8793388b merge (47fb60d1),
+loaded from /root/thr on the SD card; kernel #393; shipped XIP images. libGL
+logged "S31GL_THREADS=1 (band 16 rows, worker 1 of 2, ring 64 kB)", so the
+worker ran.
+
+| arm | fps | seconds |
+|---|---|---|
+| THREADS=1 | 7.4 | 130.5 |
+| THREADS=0 | 7.5 | 129.6 |
+| THREADS=1 | 7.2 | 134.5 |
+| THREADS=1, TSPLIT=2/3 | 7.3 | 132.0 |
+
+Both threaded arms fall inside the single-thread band (7.3-7.5), with no
+gain. The game used 20,616 CPU ticks threaded against 14,251 single, so the
+worker really did work.
+
+Why: the frame is not bound by libGL's CPU time. The tick attribution
+(artifacts/gl/glquake/tick/attribution.txt) shows CPU0 28% idle, 52 major
+faults/s and SD at 320 IRQ/s. The game waits on paging, and a second hart
+cannot shorten that.
+
+Verdict: kept behind S31GL_THREADS, default 0. Revisit once paging (lever
+#2) is fixed.
