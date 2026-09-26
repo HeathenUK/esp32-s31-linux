@@ -75,3 +75,18 @@ fresh boot per arm, >= 3 runs; the current shipped config is the SD arm)
 Run with S31GL_RAMTEXT=1 set explicitly once per arm: libGL then prints
 "libGL: ramtext on: N bytes in P pages, ..., K bytes mlocked" to stderr,
 the proof of which arm ran (it is silent when the default is used).
+
+BOARD RESULT, 2026-09-26 23:10 (coordinator). QuakeSpasm timedemo demo1,
+fullscreen, fresh boot per run, kernel #393:
+  libGL from SD, RAMTEXT off (the shipped state)   7.3, 7.4, 7.5 fps
+  libGL from SD, RAMTEXT on                         7.2
+  libGL in XIP image 1, RAMTEXT on                  7.0, 6.5
+
+On the board the copy engages: "libGL: ramtext on: 41980 bytes in 11 pages,
+873 fixup entries, 4 entry points, 17 data words, 45056 bytes mlocked", and
+VmLck reads 44 kB.
+
+Verdict: RAMTEXT does not beat the SD-loaded library. The 10% of libGL's
+samples left in flash (the API wrappers, the PLT entries and the other
+code) cost more than the copy saves. The Buildroot default is back to 0;
+libGL stays on the SD root, and XIP image 1 stays without it.
