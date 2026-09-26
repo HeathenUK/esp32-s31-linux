@@ -1,0 +1,26 @@
+GQ tgpfs2 args: -sndspeed 11025 -heapsize 14336 -width 320 -height 240 -fullscreen +timedemo demo1 | #393 SMP Sat Sep 26 12:31:02 UTC 2026 up 535.11
+MEM0 MemFree: 5044 kB MemAvailable: 4304 kB SwapFree: 64388 kB CmaFree: 2304 kB 
+VM0 pswpin=9741 pswpout=8057 pgmajfault=10177 
+LV0 lvdesk: frames 1025  gaps <25:0 <50:0 <100:5 <200:251 <400:659 >=400:110 xshim: 1110 MIT-SHM ShmPutImage, 84 identical (no rows changed) 
+S 10 VmRSS:4568 VmSwap:14688  majflt=427 sdrd=392902 pswpin=10227 pswpout=10261 pgmajfault=10668 
+S 20 VmRSS:4948 VmSwap:21012  majflt=1504 sdrd=455766 pswpin=12204 pswpout=12870 pgmajfault=11828 
+S 30 VmRSS:5312 VmSwap:20556  majflt=1991 sdrd=465870 pswpin=12954 pswpout=13158 pgmajfault=12408 
+S 40 VmRSS:4672 VmSwap:21436  majflt=2888 sdrd=503758 pswpin=13993 pswpout=13778 pgmajfault=13336 
+S 50 VmRSS:4504 VmSwap:21640  majflt=3379 sdrd=528230 pswpin=14507 pswpout=13990 pgmajfault=13894 
+S 60 VmRSS:5108 VmSwap:21060  majflt=3659 sdrd=539582 pswpin=14829 pswpout=14046 pgmajfault=14196 
+M 664 264 0 264 /root/tyrgl/tyr-glquake
+M 6648 272 3732 4004 
+M 2268 560 1680 2240 
+M 2120 96 2000 2096 
+M 496 232 264 496 
+M 1320 260 1060 1320 
+M 500 176 320 496 
+M 14368 2576 11792 14368 
+s31pin: 3 thread(s) of 750 -> 0x1
+s31pin: 1 thread(s) of 246 -> 0x1
+PROF quake utime/stime 4172 2256 -> 4901 2420 lvdesk 1955 1367 -> 1982 1387 samples 8000
+s31pin: 1 thread(s) of 246 -> 0x3
+S 78 VmRSS:5160 VmSwap:21016  majflt=4384 sdrd=553710 pswpin=15299 pswpout=14162 pgmajfault=14977 
+S 88 VmRSS:4928 VmSwap:21264  majflt=4918 sdrd=560286 pswpin=15550 pswpout=14321 pgmajfault=15534 
+S 98 VmRSS:4860 VmSwap:21272  majflt=5179 sdrd=564606 pswpin=15715 pswpout=14395 pgmajfault=15825 
+S 108 VmRSS:4804 VmSwap:21384  majflt=5525 sdrd=569670 pswpin=15888 pswpout=14521 pgmajfault=16153 

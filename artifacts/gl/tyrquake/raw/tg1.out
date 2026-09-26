@@ -1,0 +1,43 @@
+Quake -- TyrQuake Version 0.71
+libGL: context 1 created (pid 1240, comm tyr-glquake)
+libGL: unimplemented texture larger than GL_MAX_TEXTURE_SIZE 256 (GL_INVALID_VALUE)
+libGL: approximated GL_LINEAR / mipmap texture filters by nearest sampling of level 0
+libGL: approximated GL_LINEAR texture filter by nearest sampling
+Error: Cache_TryAlloc: 1356896 is greater than free hunk
+gl_texsort is obsolete.
+gl_keeptjunctions is obsolete.
+gl_reporttjunctions is obsolete.
+Console initialized.
+UDP_Init: Success
+Exe: 2026-09-26 08:24:40
+12.0 megabyte heap
+Added packfile /root/tyrgl/id1/pak0.pak (339 files)
+Playing shareware version.
+Using XFree86-VidModeExtension Version 2.2
+couldn't exec video.cfg
+GL_VENDOR: s31
+GL_RENDERER: Software Rasterizer
+GL_VERSION: 1.1 s31-tinygl
+Video mode 320x240 initialized.
+Sound Initialized: 16 bits @ 11025Hz
+======= Quake Initialized =======
+couldn't exec config.cfg
+couldn't exec autoexec.cfg
+Playing demo from demo1.dem.
+3 demo(s) in loop
+
+
+[1d][1e][1e][1e][1e][1e][1e][1e][1e][1e][1e][1e][1e][1e][1e][1e][1e][1e][1e][1e][1e][1e][1e][1e][1e][1e][1e][1e][1e][1e][1e][1e][1e][1e][1e][1e][1f]
+
+[02]the Necropolis
+Using protocol 15
+COM_FOpenFileCreate: path is 'config.cfg'
+COM_CreatePath: creating '/root'
+COM_CreatePath: creating '/root/tyrgl'
+COM_CreatePath: creating '/root/tyrgl/.tyrquake'
+COM_CreatePath: creating '/root/tyrgl/.tyrquake/id1'
+COM_FOpenFileCreate: path is 'video.cfg'
+COM_CreatePath: creating '/root'
+COM_CreatePath: creating '/root/tyrgl'
+COM_CreatePath: creating '/root/tyrgl/.tyrquake'
+COM_CreatePath: creating '/root/tyrgl/.tyrquake/id1'

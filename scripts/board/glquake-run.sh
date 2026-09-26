@@ -12,6 +12,11 @@
 # runs from /root/quake/td, whose id1/autoexec.cfg says "timedemo demo1"
 # (quake.rc execs autoexec.cfg before startdemos) beside a pak0.pak symlink.
 # GQ_WRAP is prefixed to the command (e.g. "/root/s31pin 1" to pin).
+# GQ_BIN runs another Quake with the same harness (default
+# /root/quake/quakespasm; e.g. /root/tyrgl/tyr-glquake, TyrQuake 0.71 GL),
+# GQ_QLOG names its -condebug log (default $B/qconsole.log, QuakeSpasm writes
+# it to the working directory; TyrQuake writes $B/id1/qconsole.log) and
+# GQ_HOME its HOME (default /root/quake).
 # Ends when qconsole.log has the timedemo "N frames" line, on "Error"/exit,
 # or at max_secs. Output: /root/gq/<label>.txt (collect it afterwards).
 # Sound stays on at the codec's quiet level (DAC 110, restored to 143).
@@ -23,7 +28,9 @@ echo "MEM0 $(grep -E 'MemAvailable|MemFree|SwapFree|CmaFree' /proc/meminfo | tr 
 vm() { awk '/^(pswpin|pswpout|pgmajfault) /{printf "%s=%s ",$1,$2}' /proc/vmstat; }
 echo "VM0 $(vm)"
 B=${GQ_BASE:-/root/quake}
-rm -f $B/qconsole.log
+BIN=${GQ_BIN:-/root/quake/quakespasm}
+QL=${GQ_QLOG:-$B/qconsole.log}
+rm -f $QL
 # the desktop's own counters (SIGUSR1 report): present gaps (fullscreen) and
 # the MIT-SHM put count, before and after
 lvrep() { kill -USR1 $(pidof lvdesk lvdesk.new) 2>/dev/null; sleep 1; grep -a 'lvdesk: frames\|MIT-SHM ShmPutImage' /var/log/lvdesk.log | tail -n 2 | tr '\n' ' '; }
@@ -31,7 +38,7 @@ echo "LV0 $(lvrep)"
 amixer -q sset DACL 110 2>/dev/null; amixer -q sset DACR 110 2>/dev/null
 cd $B	# qconsole.log is written to the working directory
 T0=$(cut -d' ' -f1 /proc/uptime)
-DISPLAY=:0 HOME=/root/quake setsid $GQ_WRAP /root/quake/quakespasm -basedir $B -condebug "$@" >/root/gq/$L.out 2>&1 </dev/null &
+DISPLAY=:0 HOME=${GQ_HOME:-/root/quake} setsid $GQ_WRAP $BIN -basedir $B -condebug "$@" >/root/gq/$L.out 2>&1 </dev/null &
 P=$!
 t=0
 while [ $t -lt $MAX ]; do
@@ -57,11 +64,11 @@ while [ $t -lt $MAX ]; do
 		/root/s31pin -p 3 $LV	# the desktop's own affinity back (0-1)
 		t=$((t + 4 * ${GQ_PROFN:-2}))
 	fi
-	grep -aqE '^ *[0-9]+ frames' $B/qconsole.log 2>/dev/null && break
+	grep -aqE '^ *[0-9]+ frames' $QL 2>/dev/null && break
 done
 T1=$(cut -d' ' -f1 /proc/uptime)
 echo "WALL $T0 $T1"
-echo "RESULT $(grep -aE '^ *[0-9]+ frames' $B/qconsole.log | head -1)"
+echo "RESULT $(grep -aE '^ *[0-9]+ frames' $QL | head -1)"
 echo "VM1 $(vm)"
 echo "LV1 $(lvrep)"
 echo "MEM1 $(grep -E 'MemAvailable|MemFree|SwapFree|CmaFree' /proc/meminfo | tr -s ' ' | tr '\n' ' ')"
@@ -69,6 +76,6 @@ echo "MEM1 $(grep -E 'MemAvailable|MemFree|SwapFree|CmaFree' /proc/meminfo | tr 
 [ -n "$GQ_HOLD" ] && sleep $GQ_HOLD
 kill -9 $P 2>/dev/null
 amixer -q sset DACL 143 2>/dev/null; amixer -q sset DACR 143 2>/dev/null
-echo "--- log"; grep -aiE 'error|fail|hunk|megabyte|FOUND|not supported|disabled|gamma|sound|Video mode|GL_|frames|speed|warning' $B/qconsole.log | head -60
+echo "--- log"; grep -aiE 'error|fail|hunk|megabyte|FOUND|not supported|disabled|gamma|sound|Video mode|GL_|frames|speed|warning' $QL | head -60
 echo "--- out"; tail -n 15 /root/gq/$L.out
 echo GQDONE

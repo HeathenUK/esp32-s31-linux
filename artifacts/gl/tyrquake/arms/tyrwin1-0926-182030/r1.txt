@@ -1,0 +1,78 @@
+GQ tyrwin1-r1 args: -sndspeed 11025 -heapsize 14336 -width 320 -height 240 -window +timedemo demo1 | #393 SMP Sat Sep 26 12:31:02 UTC 2026 up 61.87
+MEM0 MemFree: 3044 kB MemAvailable: 3004 kB SwapFree: 65420 kB CmaFree: 1128 kB 
+VM0 pswpin=37 pswpout=101 pgmajfault=433 
+LV0 lvdesk: frames 0  gaps <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 xshim: 0 MIT-SHM ShmPutImage, 0 identical (no rows changed) 
+S 10 VmRSS:4244 VmSwap:14284  majflt=530 sdrd=113022 pswpin=606 pswpout=2443 pgmajfault=1020 
+S 20 VmRSS:4512 VmSwap:21100  majflt=1399 sdrd=172158 pswpin=2427 pswpout=5072 pgmajfault=2026 
+S 30 VmRSS:4748 VmSwap:21556  majflt=1969 sdrd=196702 pswpin=3350 pswpout=5544 pgmajfault=2602 
+S 40 VmRSS:4436 VmSwap:21676  majflt=2749 sdrd=230046 pswpin=4475 pswpout=6087 pgmajfault=3421 
+S 50 VmRSS:4320 VmSwap:21868  majflt=3525 sdrd=260366 pswpin=5095 pswpout=6322 pgmajfault=4267 
+S 60 VmRSS:5136 VmSwap:20872  majflt=3787 sdrd=265966 pswpin=5438 pswpout=6344 pgmajfault=4562 
+M 6648 272 3732 4004 
+M 864 504 340 844 
+M 4944 612 4300 4912 
+M 500 176 320 496 
+M 14368 2596 11772 14368 
+S 70 VmRSS:4780 VmSwap:21240  majflt=4354 sdrd=274942 pswpin=5781 pswpout=6488 pgmajfault=5175 
+S 80 VmRSS:4580 VmSwap:21576  majflt=4706 sdrd=281182 pswpin=5883 pswpout=6552 pgmajfault=5531 
+S 90 VmRSS:5488 VmSwap:20708  majflt=4902 sdrd=285502 pswpin=6137 pswpout=6563 pgmajfault=5741 
+S 100 VmRSS:5232 VmSwap:20924  majflt=5187 sdrd=289726 pswpin=6293 pswpout=6666 pgmajfault=6058 
+S 110 VmRSS:4892 VmSwap:21264  majflt=5335 sdrd=293614 pswpin=6414 pswpout=6790 pgmajfault=6208 
+S 120 VmRSS:5076 VmSwap:21076  majflt=5517 sdrd=298374 pswpin=6573 pswpout=6817 pgmajfault=6408 
+S 130 VmRSS:5036 VmSwap:21140  majflt=5610 sdrd=300846 pswpin=6628 pswpout=6836 pgmajfault=6507 
+S 140 VmRSS:4784 VmSwap:21372  majflt=6019 sdrd=307366 pswpin=6849 pswpout=6973 pgmajfault=6922 
+S 150 VmRSS:5292 VmSwap:20872  majflt=6301 sdrd=313198 pswpin=7177 pswpout=7094 pgmajfault=7251 
+S 160 VmRSS:4980 VmSwap:21084  majflt=6680 sdrd=319022 pswpin=7403 pswpout=7182 pgmajfault=7619 
+S 170 VmRSS:4736 VmSwap:21196  majflt=7167 sdrd=326270 pswpin=7764 pswpout=7313 pgmajfault=8148 
+S 180 VmRSS:5212 VmSwap:20936  majflt=7411 sdrd=331574 pswpin=8002 pswpout=7367 pgmajfault=8382 
+S 190 VmRSS:5036 VmSwap:21124  majflt=7674 sdrd=335798 pswpin=8167 pswpout=7402 pgmajfault=8661 
+S 200 VmRSS:5124 VmSwap:21036  majflt=7794 sdrd=338158 pswpin=8263 pswpout=7412 pgmajfault=8789 
+S 210 VmRSS:5364 VmSwap:20796  majflt=7864 sdrd=339630 pswpin=8337 pswpout=7416 pgmajfault=8860 
+S 220 VmRSS:5448 VmSwap:20712  majflt=7891 sdrd=341110 pswpin=8366 pswpout=7421 pgmajfault=8891 
+S 230 VmRSS:5420 VmSwap:20788  majflt=7903 sdrd=342318 pswpin=8370 pswpout=7426 pgmajfault=8910 
+S 240 VmRSS:5524 VmSwap:20632  majflt=7936 sdrd=343558 pswpin=8427 pswpout=7427 pgmajfault=8951 
+S 250 VmRSS:5336 VmSwap:20832  majflt=8014 sdrd=347038 pswpin=8514 pswpout=7458 pgmajfault=9039 
+S 260 VmRSS:4864 VmSwap:21176  majflt=8342 sdrd=353070 pswpin=8687 pswpout=7523 pgmajfault=9384 
+WALL 64.56 352.54
+RESULT 969 frames 261.3 seconds   3.7 fps
+VM1 pswpin=8689 pswpout=7523 pgmajfault=9386 
+LV1 lvdesk: frames 0  gaps <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 xshim: 1020 MIT-SHM ShmPutImage, 27 identical (no rows changed) 
+MEM1 MemFree: 1384 kB MemAvailable: 304 kB SwapFree: 38940 kB CmaFree: 4 kB 
+FINAL VmHWM:6444 VmRSS:4844 VmData:28248 VmSwap:21200  majflt=8343 cpu=28448
+--- log
+GL_VENDOR: s31
+GL_RENDERER: Software Rasterizer
+GL_VERSION: 1.1 s31-tinygl
+Video mode 320x240 initialized.
+DEBUG: Reducing gl_max_size from 1024 to 256
+Sound Initialized: 16 bits @ 11025Hz
+DEBUG: Bad "cue " chunk length (-1064232960) in wav file demon/dland2.wav
+DEBUG: Bad "cue " chunk length (-1) in wav file player/land2.wav
+DEBUG: Bad "cue " chunk length (-1) in wav file weapons/ax1.wav
+DEBUG: Bad "cue " chunk length (-1) in wav file zombie/idle_w2.wav
+DEBUG: Bad "cue " chunk length (-1068171264) in wav file demon/ddeath.wav
+DEBUG: Bad "cue " chunk length (-1069940736) in wav file items/r_item1.wav
+DEBUG:  4.6 megabyte data cache
+DEBUG: Bad "cue " chunk length (-1069940736) in wav file items/r_item1.wav
+DEBUG: Bad "cue " chunk length (-1064232960) in wav file demon/dland2.wav
+969 frames 261.3 seconds   3.7 fps
+--- out
+You got the shells
+You got the Grenade Launcher
+You receive 25 health
+You get 2 rockets  
+You got the rockets
+You got the nailgun
+You got the nails
+You got the nails
+You receive 15 health
+You receive 15 health
+You got the rockets
+You get 2 rockets  
+You got the nails
+You got the nails
+You rGQDONE
+RS_DONE
+[2]+  Done(143)                  (trap "kill \"\$__rs_sleep\" 2>/dev/null; wait \"\$__rs_sleep\" 2>/dev/null; exit" TERM INT; sleep 57; ; wait "${__rs_sleep}"; kill -0 ${__rp} 2>/dev/null && echo RS_TIME"K"ILL; kill -9 ${__rp} 2>/dev/null)
+[1]+  Done                       sh /tmp/r.sh 2>&1
+~ # 

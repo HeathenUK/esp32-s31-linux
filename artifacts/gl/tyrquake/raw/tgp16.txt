@@ -1,0 +1,23 @@
+GQ tgp16 args: -sndspeed 11025 -heapsize 16384 -width 320 -height 240 -fullscreen +timedemo demo1 | #393 SMP Sat Sep 26 12:31:02 UTC 2026 up 2045.54
+MEM0 MemFree: 3804 kB MemAvailable: 3240 kB SwapFree: 64132 kB CmaFree: 1624 kB 
+VM0 pswpin=128063 pswpout=95846 pgmajfault=99668 
+LV0 lvdesk: frames 736  gaps <25:0 <50:2 <100:94 <200:233 <400:216 >=400:191 xshim: 9547 MIT-SHM ShmPutImage, 757 identical (no rows changed) 
+S 10 VmRSS:3648 VmSwap:15076  majflt=628 sdrd=3909206 pswpin=128684 pswpout=98047 pgmajfault=100397 
+S 20 VmRSS:4032 VmSwap:22600  majflt=1461 sdrd=3965662 pswpin=130167 pswpout=100833 pgmajfault=101356 
+S 30 VmRSS:3532 VmSwap:24712  majflt=2833 sdrd=4010598 pswpin=132147 pswpout=102213 pgmajfault=102752 
+S 40 VmRSS:3864 VmSwap:24052  majflt=3860 sdrd=4052054 pswpin=133723 pswpout=102922 pgmajfault=103842 
+S 50 VmRSS:3724 VmSwap:24348  majflt=5111 sdrd=4101174 pswpin=135469 pswpout=103570 pgmajfault=105202 
+S 60 VmRSS:3876 VmSwap:24424  majflt=7591 sdrd=4180270 pswpin=138849 pswpout=104659 pgmajfault=107858 
+M 6648 168 3836 4004 
+M 2256 540 1688 2228 
+M 2396 64 2308 2372 
+M 1588 284 1304 1588 
+M 500 148 348 496 
+M 16416 1332 15084 16416 
+s31pin: 3 thread(s) of 2048 -> 0x1
+s31pin: 1 thread(s) of 565 -> 0x1
+PROF quake utime/stime 2742 3215 -> 3235 3601 lvdesk 15060 6544 -> 15084 6569 samples 8000
+s31pin: 1 thread(s) of 565 -> 0x3
+S 78 VmRSS:3680 VmSwap:24460  majflt=11402 sdrd=4329198 pswpin=143434 pswpout=106490 pgmajfault=112039 
+S 88 VmRSS:3544 VmSwap:24644  majflt=13344 sdrd=4403526 pswpin=145390 pswpout=107292 pgmajfault=114056 
+S 98 VmRSS:3804 VmSwap:24464  majflt=14842 sdrd=4464222 pswpin=146918 pswpout=107930 pgmajfault=115640 
