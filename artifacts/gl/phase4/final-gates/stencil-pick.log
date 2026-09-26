@@ -1,0 +1,7 @@
+PICK sdl2 asked=0 GL_STENCIL_BITS=0 attr=0
+PICK sdl2 asked=8 GL_STENCIL_BITS=8 attr=8
+PICK sdl12 asked=0 GL_STENCIL_BITS=0 attr=0
+PICK sdl12 asked=8 GL_STENCIL_BITS=8 attr=8
+PICK freeglut asked=0 GL_STENCIL_BITS=0 attr=0
+PICK freeglut asked=8 GL_STENCIL_BITS=8 attr=8
+stencil-pick: PASS

@@ -12,8 +12,12 @@ Exported, per plan F1 (docs/gl-plan-2026-09-25.md section 2.2):
   - every GL 1.4, 1.5 and 2.0 name in glext.h: musl binds eagerly, so one
     missing import stops a stock binary at load time;
   - the EXT names below that old binaries built against Mesa import.
-NOT exported, per plan 4.2 (the SDL2 regression guard): glBlendEquation,
-glBlendFuncSeparate and their EXT/ATI/2.0-separate variants.
+Phase 4 (BLEND-EQ): glBlendEquation, glBlendFuncSeparate,
+glBlendEquationSeparate and their EXT names are implemented and exported.
+Plan 4.2 had withheld them as the SDL2 regression guard (SDL2's GL render
+driver loads both); SDL2 is now built with GL contexts but WITHOUT that
+render driver (plan 4.2 option B), which removes the reason. The ATI and
+INGR aliases stay out: nothing on the target list imports them.
 
 Stub behaviour: prints "libGL: unimplemented <name>" once per name, never per
 call, and never aborts. GL 1.5/2.0 object APIs (buffers, queries, shaders)
@@ -26,10 +30,7 @@ import re
 import sys
 
 EXCLUDE = {
-    'glBlendEquation', 'glBlendFuncSeparate', 'glBlendEquationSeparate',
-    'glBlendEquationEXT', 'glBlendFuncSeparateEXT',
-    'glBlendEquationSeparateEXT', 'glBlendEquationSeparateATI',
-    'glBlendFuncSeparateINGR',
+    'glBlendEquationSeparateATI', 'glBlendFuncSeparateINGR',
 }
 GLEXT_SECTIONS = {'GL_VERSION_1_4', 'GL_VERSION_1_5', 'GL_VERSION_2_0',
                   'GL_EXT_texture_object', 'GL_EXT_vertex_array',
@@ -37,7 +38,12 @@ GLEXT_SECTIONS = {'GL_VERSION_1_4', 'GL_VERSION_1_5', 'GL_VERSION_2_0',
                   'GL_EXT_draw_range_elements',
                   # glWindowPos*ARB/MESA: mesa-demos' glxsnoop imports
                   # glWindowPos2iARB (link failure otherwise).
-                  'GL_ARB_window_pos', 'GL_MESA_window_pos'}
+                  'GL_ARB_window_pos', 'GL_MESA_window_pos',
+                  # phase 4 BLEND-EQ: the EXT names of the blend equations
+                  # and separate factors (implemented, gl_core.c)
+                  'GL_EXT_blend_color', 'GL_EXT_blend_minmax',
+                  'GL_EXT_blend_func_separate',
+                  'GL_EXT_blend_equation_separate'}
 
 
 def parse(path, want_section):

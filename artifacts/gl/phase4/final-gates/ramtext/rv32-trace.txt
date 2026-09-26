@@ -1,0 +1,4 @@
+S31GL_RAMTEXT=0: exit 0, hot-range blocks 219351: XIP 219351, RAM 0 (0.0% in RAM) 
+S31GL_RAMTEXT=1: exit 0, hot-range blocks 213036: XIP 2037, RAM 210999 (99.0% in RAM) libGL: ramtext on: 10620 bytes in 3 pages, 155 fixup entries, 7 entry points
+        268 entries into the XIP range: updateTmp -> gl_transform_to_viewport
+        207 entries into the XIP range: gl_draw_triangle_clip -> gl_draw_triangle

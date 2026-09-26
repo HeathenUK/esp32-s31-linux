@@ -1,0 +1,6 @@
+# glref run: impl=ours name=floor-lml frame=2 display=:90
+# cmd: /src/gl/out-host/glx_floor 3 0 1
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000fe4576030000)
+libGL: context 1 created (pid 1023, comm glx_floor)
+glref: ok at swap 2 -> /src/artifacts/gl/phase4/final-p4apps/ours/floor-lml.f2

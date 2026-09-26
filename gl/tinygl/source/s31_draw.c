@@ -36,6 +36,10 @@ typedef struct {
   ZPipe p;                  /* c->pipe with the primitive-only stages dropped */
   unsigned int serial;      /* c->pipe_serial it was made from */
   int direct;               /* no fragment operation: store */
+  int whole;                /* glBitmap: a word of bits is one masked chunk
+                               (the depth stage writes nothing; phase 4:
+                               and no stencil stage) - decided here, once
+                               per state change, not per glBitmap call */
   int tex;                  /* the texenv stage runs: idx is tidx */
   unsigned int tidx;
   unsigned int z;           /* the raster depth in TinyGL's zp scale */
@@ -76,11 +80,14 @@ static inline int clampi(int v, int hi)
   return v < 0 ? 0 : (v > hi ? hi : v);
 }
 
-/* the stage list for the current state (cold: once per state change) */
+/* the stage list for the current state (cold: once per state change;
+   out of line, so pix_begin - once per glBitmap - does not pay its
+   registers: phase 4 measured +8 instructions a call when inlined) */
+__attribute__((noinline))
 static void pix_build(GLContext *c, PixPipe *pp)
 {
   ZPipe *p = &pp->p;
-  ZStageFn drop[9];
+  ZStageFn drop[10];
   int i, n;
 
   *p = c->pipe;
@@ -89,17 +96,28 @@ static void pix_build(GLContext *c, PixPipe *pp)
   drop[4] = zp_texidx_fn(1, 0); drop[5] = zp_texidx_fn(1, 1);
   drop[6] = zp_spec_fn(0); drop[7] = zp_spec_fn(1);
   drop[8] = zp_stipple_fn();
+  drop[9] = zp_cover_fn();                /* phase 4 SMOOTH: primitives only */
   for (i = n = 0; c->pipe.st[i]; i++) {
     int k, keep = 1;
-    for (k = 0; k < 9; k++) if (c->pipe.st[i] == drop[k]) keep = 0;
+    for (k = 0; k < 10; k++) if (c->pipe.st[i] == drop[k]) keep = 0;
+    /* phase 4: the filtered texel stages and the perspective colour
+       stage the last triangle may have left in the list; the pixel paths
+       sample level 0 nearest (pp->tidx) */
+    if (zpx_is_tex_stage(c->pipe.st[i]) || c->pipe.st[i] == zpx_color_pc()) keep = 0;
     if (keep) p->st[n++] = c->pipe.st[i];
   }
   p->st[n] = NULL;
+  p->tex = c->pipex.tex0;
+  p->talpha = c->pipex.talpha0;
+  p->xact = 0;
   p->stip_on = 0;
   pp->tex = c->tex_active;
   pp->direct = p->dsel == ZP_DEPTH_NONE && !pp->tex && !c->fog_enabled &&
                (p->afunc == GL_ALWAYS) && p->sfactor == GL_ONE &&
-               p->dfactor == GL_ZERO && p->cmask == 0xffff && !p->nocolor;
+               p->dfactor == GL_ZERO && p->cmask == 0xffff && !p->nocolor &&
+               c->pipex.beq == GL_FUNC_ADD && !RASTER_STENCIL(c);
+  pp->whole = !pp->direct && (p->dsel == ZP_DEPTH_NONE || !c->depth_mask) &&
+              !RASTER_STENCIL(c);
   pp->serial = c->pipe_serial;
 }
 
@@ -372,8 +390,9 @@ void glopBitmap(GLContext *c, GLParam *p)
     pv = PACK565(col[0], col[1], col[2]);
     if (!pp->direct) pix_span_init(pp, &sp);
     /* with fragment operations, a word of bits is one masked chunk
-       unless the depth stage writes (then each run goes alone) */
-    whole = !pp->direct && (pp->p.dsel == ZP_DEPTH_NONE || !c->depth_mask);
+       unless the depth stage writes (then each run goes alone; phase 4
+       F8: so does the stencil stage, before the mask would apply) */
+    whole = pp->whole;
     lo = pp->box[0] - x0; hi = pp->box[2] - x0;
     if (lo < 0) lo = 0;
     if (hi > w) hi = w;
@@ -518,6 +537,50 @@ static void draw_image(GLContext *c, PixPipe *pp, const S31Unpack *u, int w, int
   gl_free(full);
 }
 
+/* phase 4 F8: write a w x h image of stencil indices at the raster
+   position, zoomed (GL 1.3 4.3.1: through GL_STENCIL_WRITEMASK, clipped to
+   the buffer and scissor box; no other fragment operation applies). The
+   caller made sure a stencil buffer exists */
+static void draw_stencil(GLContext *c, const unsigned int *v, int w, int h)
+{
+  float zx = c->pixel_zoom[0], zy = c->pixel_zoom[1];
+  float rx = c->raster_pos[0], ry = c->raster_pos[1];
+  unsigned int wm = (unsigned int)c->stencil_writemask & 255;
+  int xs, xe, ys, ye, x, y, bh = c->zb->ysize, *box = c->rast_box;
+
+  if (wm == 0) return;
+  if (c->rscale) {
+    float rf = 1.0f / (float)(1 << c->rscale);
+    zx *= rf; zy *= rf; rx *= rf; ry *= rf;
+  }
+  zoom_range(rx, zx, w, &xs, &xe);
+  zoom_range(ry, zy, h, &ys, &ye);
+  if (xs < box[0]) xs = box[0];
+  if (xe > box[2]) xe = box[2];
+  if (ys < bh - box[3]) ys = bh - box[3];
+  if (ye > bh - box[1]) ye = bh - box[1];
+  if (xe <= xs || ye <= ys) return;
+  for (y = ys; y < ye; y++) {
+    int j = zoom_src(ry, zy, y, h), row = bh - 1 - y;
+    for (x = xs; x < xe; x++)
+      zst_put(c->zb, x, row, v[j * w + zoom_src(rx, zx, x, w)], wm);
+  }
+  zst_touch(c->zb, xs, bh - ye, xe, bh - ys);
+}
+
+/* the buffers and the box a stencil pixel path works in; 0: nothing to do
+   (no buffer: GL_INVALID_OPERATION, GL 1.3 3.6.4 / 4.3.3) */
+static int stencil_begin(GLContext *c)
+{
+  if (!gl_prepare(c)) return 0;
+  if (c->zb->sbuf == NULL) { gl_set_error(c, GL_INVALID_OPERATION); return 0; }
+  if (c->viewport.updated) {
+    gl_eval_viewport(c);
+    c->viewport.updated = 0;
+  }
+  return 1;
+}
+
 /* depths of a GL_DEPTH_COMPONENT image in the zp scale; NULL on failure */
 static unsigned int *unpack_depth(GLContext *c, int w, int h, int type,
                                   const void *pixels, int *err)
@@ -580,7 +643,14 @@ void glopDrawPixels(GLContext *c, GLParam *p)
 
   if (w < 0 || h < 0) { gl_set_error(c, GL_INVALID_VALUE); return; }
   if (format == GL_STENCIL_INDEX) {
-    gl_set_error(c, GL_INVALID_OPERATION);   /* no stencil buffer */
+    /* phase 4 F8: into the stencil buffer (none: INVALID_OPERATION) */
+    unsigned int *sv;
+    if (!stencil_begin(c)) return;
+    if (!c->raster_valid || w == 0 || h == 0 || pixels == NULL) return;
+    sv = zst_unpack(c, w, h, type, pixels, &e);
+    if (sv == NULL) { if (e) gl_set_error(c, e); return; }
+    draw_stencil(c, sv, w, h);
+    gl_free(sv);
     return;
   }
   if (format == GL_COLOR_INDEX) {
@@ -620,7 +690,10 @@ void tgl_draw_pixels(int w, int h, int format, int type, const void *pixels)
   if (c->in_begin) { gl_set_error(c, GL_INVALID_OPERATION); return; }
   if (c->compile_flag && format == GL_DEPTH_COMPONENT)
     gl_warn_once("glDrawPixels(GL_DEPTH_COMPONENT) in a display list (the list keeps the pointer, not a copy)");
-  if (c->compile_flag && pixels != NULL && format != GL_DEPTH_COMPONENT) {
+  if (c->compile_flag && format == GL_STENCIL_INDEX)
+    gl_warn_once("glDrawPixels(GL_STENCIL_INDEX) in a display list (the list keeps the pointer, not a copy)");
+  if (c->compile_flag && pixels != NULL && format != GL_DEPTH_COMPONENT &&
+      format != GL_STENCIL_INDEX) {
     void *blk = s31_unpack_copy(c, w, h, format, type, pixels);
     if (blk != NULL) {
       gl_list_own(c, blk);
@@ -649,7 +722,27 @@ void glopCopyPixels(GLContext *c, GLParam *p)
     gl_set_error(c, GL_INVALID_ENUM);
     return;
   }
-  if (type == GL_STENCIL) { gl_set_error(c, GL_INVALID_OPERATION); return; }
+  if (type == GL_STENCIL) {
+    /* phase 4 F8: a copy of the source indices first (the rectangles may
+       overlap), then written as glDrawPixels writes them - the index
+       shift and offset applied once, at the write (GL 1.3 4.3.3) */
+    unsigned int *sv;
+    int rs, vw, vh;
+    if (!stencil_begin(c)) return;
+    if (!c->raster_valid || w == 0 || h == 0) return;
+    sv = gl_malloc(w * h * (int)sizeof(*sv));
+    if (sv == NULL) { gl_set_error(c, GL_OUT_OF_MEMORY); return; }
+    zb = c->zb; rs = c->rscale; vw = zb->xsize << rs; vh = zb->ysize << rs;
+    for (j = 0; j < h; j++)
+      for (i = 0; i < w; i++) {
+        int wx = x + i, row = vh - 1 - (y + j);
+        sv[j * w + i] = (wx >= 0 && wx < vw && row >= 0 && row < vh) ?
+                        zb->sbuf[(row >> rs) * zb->xsize + (wx >> rs)] : 0;
+      }
+    draw_stencil(c, sv, w, h);
+    gl_free(sv);
+    return;
+  }
   if (!c->raster_valid || w == 0 || h == 0) return;
   if ((pp = pix_begin(c)) == NULL) return;
   zb = c->zb;
@@ -728,9 +821,20 @@ void tgl_read_pixels(int x, int y, int w, int h, int format, int type, void *pix
 
   if (c->in_begin) { gl_set_error(c, GL_INVALID_OPERATION); return; }
   if (w < 0 || h < 0) { gl_set_error(c, GL_INVALID_VALUE); return; }
-  if (format == GL_STENCIL_INDEX || format == GL_COLOR_INDEX) {
-    /* no stencil buffer; RGBA mode */
-    gl_set_error(c, GL_INVALID_OPERATION);
+  if (format == GL_STENCIL_INDEX) {
+    /* phase 4 F8: from the stencil buffer (none: INVALID_OPERATION) */
+    if (pixels == NULL || w == 0 || h == 0) {
+      if (!gl_prepare(c)) return;
+      if (c->zb->sbuf == NULL) gl_set_error(c, GL_INVALID_OPERATION);
+      return;
+    }
+    if (!gl_prepare(c)) return;
+    if (c->zb->sbuf == NULL) { gl_set_error(c, GL_INVALID_OPERATION); return; }
+    zst_read(c, x, y, w, h, type, pixels);
+    return;
+  }
+  if (format == GL_COLOR_INDEX) {
+    gl_set_error(c, GL_INVALID_OPERATION);     /* RGBA mode */
     return;
   }
   e = s31_pack_setup(c, &k, w, h, format, type, pixels);
@@ -948,16 +1052,19 @@ void tgl_get_polygon_stipple(unsigned char *mask)
 
 /* ------------------------------------------------------------ glGetTexImage */
 
-/* GL 1.3 6.1.4, table 6.1 for the stored classes. Levels above 0 are not
-   stored (texture.c): they are read as what is drawn, level 0 sampled
-   nearest at the level's size */
+/* GL 1.3 6.1.4, table 6.1 for the stored classes. A level above 0 is read
+   from its stored block (phase 4, texture.c); one that is not stored
+   (S31GL_MIPMAPS=0, no memory) is read as level 0 sampled nearest at the
+   level's size */
 void tgl_get_tex_image(int target, int level, int format, int type, void *pixels)
 {
   GLContext *c = gl_get_context();
   GLTexture *t = gl_tex_target(c, target);
   S31Pack k;
   float v[4 * 64];
-  int e, w, h, x, y, lum, TW, TH, sh, n, i;
+  int e, w, h, x, y, lum, TW, TH, sh, n, i, fmt;
+  const unsigned short *pix;
+  const unsigned char *al;
 
   if (t == NULL) { gl_set_error(c, GL_INVALID_ENUM); return; }
   if (level < 0 || level >= MAX_TEXTURE_LEVELS) { gl_set_error(c, GL_INVALID_VALUE); return; }
@@ -978,6 +1085,18 @@ void tgl_get_tex_image(int target, int level, int format, int type, void *pixels
         t->internal_format == GL_LUMINANCE || t->internal_format == GL_LUMINANCE_ALPHA ||
         t->fmt == TGL_TEXF_INTENSITY;
   sh = level;
+  pix = (const unsigned short *)t->images[0].pixmap;
+  al = t->alpha;
+  fmt = t->fmt;
+  if (level > 0 && t->mip && t->mip->l[level].pix) {
+    const GLMipLevel *m = &t->mip->l[level];
+    int f = t->lfmt[level];
+    pix = m->pix; al = m->alpha; fmt = m->cls;
+    TW = 1 << m->ws; TH = 1 << m->hs;
+    sh = 0;
+    lum = f == 1 || f == 2 || (f >= GL_LUMINANCE4 && f <= GL_LUMINANCE16_ALPHA16) ||
+          f == GL_LUMINANCE || f == GL_LUMINANCE_ALPHA || fmt == TGL_TEXF_INTENSITY;
+  }
   for (y = 0; y < h; y++) {
     int sy = (y << sh) < TH ? (y << sh) : TH - 1;
     for (x = 0; x < w; x += n) {
@@ -985,15 +1104,15 @@ void tgl_get_tex_image(int target, int level, int format, int type, void *pixels
       for (i = 0; i < n; i++) {
         int sx = ((x + i) << sh) < TW ? ((x + i) << sh) : TW - 1;
         int idx = sy * TW + sx;
-        unsigned int tx = ((const unsigned short *)t->images[0].pixmap)[idx];
-        float *q = v + 4 * i, a = t->alpha ? t->alpha[idx] * (1.0f / 255.0f) : 1.0f;
+        unsigned int tx = pix[idx];
+        float *q = v + 4 * i, a = al ? al[idx] * (1.0f / 255.0f) : 1.0f;
         q[0] = (float)(tx >> 11) * (1.0f / 31.0f);
         q[1] = (float)((tx >> 5) & 63) * (1.0f / 63.0f);
         q[2] = (float)(tx & 31) * (1.0f / 31.0f);
         q[3] = a;
-        if (t->fmt == TGL_TEXF_ALPHA) q[0] = q[1] = q[2] = 0.0f;
+        if (fmt == TGL_TEXF_ALPHA) q[0] = q[1] = q[2] = 0.0f;
         else if (lum) q[1] = q[2] = 0.0f;
-        if (t->fmt == TGL_TEXF_INTENSITY) q[3] = 1.0f;
+        if (fmt == TGL_TEXF_INTENSITY) q[3] = 1.0f;
         if (c->xfer_active) {
           int ch;
           for (ch = 0; ch < 4; ch++) q[ch] = q[ch] * c->xfer_scale[ch] + c->xfer_bias[ch];

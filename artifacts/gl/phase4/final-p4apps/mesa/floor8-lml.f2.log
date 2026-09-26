@@ -1,0 +1,7 @@
+# glref run: impl=mesa name=floor8-lml frame=2 display=:90
+# cmd: /src/gl/out-host/glx_floor 3 0 8
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /lib/aarch64-linux-gnu/libGL.so.1 (0x0000f4394f150000)
+#   	libGLdispatch.so.0 => /lib/aarch64-linux-gnu/libGLdispatch.so.0 (0x0000f4394ec90000)
+#   	libGLX.so.0 => /lib/aarch64-linux-gnu/libGLX.so.0 (0x0000f4394ec30000)
+glref: ok at swap 2 -> /src/artifacts/gl/phase4/final-p4apps/mesa/floor8-lml.f2

@@ -1,5 +1,6 @@
 #include "zgl.h"
 #include "s31_pixels.h"
+#include "s31_ramtext.h"
 #include <stdio.h>
 
 /* s31 (phase 3a G14): while executing (not compiling a list, not printing
@@ -20,9 +21,12 @@ void glVertex4f(float x,float y,float z,float w)
   GLParam p[5];
 
   GLContext *c=gl_ctx;
-  /* s31 (phase 3a G14): executing: the vertex op itself (vertex.c) */
-  if (!(c->compile_flag | c->print_flag)) {
-    gl_vertex4f(x,y,z,w,c);
+  /* s31 (phase 3a G14): executing: the vertex op itself (vertex.c);
+     phase 4 L1: through vtx_run (s31_ramtext.h), which is NULL while
+     compiling or printing */
+  s31_vtx_fn run=c->vtx_run;
+  if (run) {
+    run(x,y,z,w,c);
     return;
   }
   p[0].op=OP_Vertex;
@@ -821,10 +825,17 @@ glPolygonOffset(GLfloat factor, GLfloat units)
 void glCallList(unsigned int list)
 {
   GLParam p[2];
+  GLContext *c=gl_ctx;
 
   p[0].op=OP_CallList;
   p[1].i=list;
 
+  /* phase 4 L1: executing, straight to glopCallList - the RAM copy when
+     S31GL_RAMTEXT made one (s31_ramtext.h); gl_add_op otherwise */
+  if (!(c->compile_flag | c->print_flag)) {
+    s31_rt.call_list(c,p);
+    return;
+  }
   gl_add_op(p);
 }
 
@@ -850,5 +861,6 @@ void glDebug(int mode)
 {
   GLContext *c=gl_get_context();
   c->print_flag=mode;
+  gl_update_vtx_run(c);
 }
 

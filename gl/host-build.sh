@@ -43,12 +43,25 @@ $CC -O2 -Wall -I$GL/include -I$GL/api $GL/tests/raster_gate.c \
 $CC -O2 -Wall -I$GL/include -I$GL/api $GL/tests/zepoch_test.c \
 	-o $GL/out-host/zepoch_test -L$GL/out-host -l:libGL.so.1 -lm \
 	-Wl,-rpath,'$ORIGIN' & pids="$pids $!"
+# phase 4: texture filters and perspective colour
+$CC -O2 -Wall -I$GL/include -I$GL/api $GL/tests/filt_test.c \
+	-o $GL/out-host/filt_test -L$GL/out-host -l:libGL.so.1 -lm \
+	-Wl,-rpath,'$ORIGIN' & pids="$pids $!"
 # no rpath: LD_LIBRARY_PATH picks the implementation (tools/glref/run.sh)
 if [ -z "$S31GL_NO_GLX" ]; then
 	$CC -O2 -Wall -I$GL/include $GL/tests/glx_prims.c \
 		-o $GL/out-host/glx_prims -L$GL/out-host -lGL -lX11 & pids="$pids $!"
 	$CC -O2 -Wall -I$GL/include $GL/tests/glx_reopen.c \
 		-o $GL/out-host/glx_reopen -L$GL/out-host -lGL -lX11 & pids="$pids $!"
+	# phase 4: stencil, blend equations, smooth lines and points; and the
+	# app-only rand() preload of run-p4apps.sh (gl/tests/apprand.c)
+	$CC -O2 -Wall -shared -fPIC $GL/tests/apprand.c -o $GL/out-host/apprand.so -ldl &
+	pids="$pids $!"
+	$CC -O2 -Wall -I$GL/include $GL/tests/glx_p4.c \
+		-o $GL/out-host/glx_p4 -L$GL/out-host -lGL -lX11 -lm & pids="$pids $!"
+	# phase 4 review: the receding floor (mipmap level per block)
+	$CC -O2 -Wall -I$GL/include $GL/tests/glx_floor.c \
+		-o $GL/out-host/glx_floor -L$GL/out-host -lGL -lX11 -lm & pids="$pids $!"
 fi
 for p in $pids; do wait $p; done
 ls -l $OUT $GL/out-host/headless_gears $GL/out-host/core_test $GL/out-host/raster_gate

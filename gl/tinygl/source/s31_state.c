@@ -33,7 +33,7 @@ static const struct cap {
   { GL_DITHER, 0, 0, 1 },             /* dithering is implementation-defined */
   { GL_FOG, 0, 0, 0 },                /* honoured (zpipe.c) */
   { GL_LIGHTING, 1, 0, 0 },
-  { GL_LINE_SMOOTH, 0, 1, 0 },
+  { GL_LINE_SMOOTH, 0, 0, 0 },        /* honoured with blending (raster.c, phase 4) */
   { GL_LINE_STIPPLE, 0, 0, 0 },      /* honoured (raster.c, plan F7) */
   { GL_MAP1_COLOR_4, 0, 1, 0 }, { GL_MAP1_INDEX, 0, 1, 0 },
   { GL_MAP1_NORMAL, 0, 1, 0 }, { GL_MAP1_TEXTURE_COORD_1, 0, 1, 0 },
@@ -46,14 +46,15 @@ static const struct cap {
   { GL_MAP2_TEXTURE_COORD_4, 0, 1, 0 }, { GL_MAP2_VERTEX_3, 0, 1, 0 },
   { GL_MAP2_VERTEX_4, 0, 1, 0 },
   { GL_NORMALIZE, 1, 0, 0 },
-  { GL_POINT_SMOOTH, 0, 1, 0 },
+  { GL_POINT_SMOOTH, 0, 0, 0 },       /* honoured with blending (raster.c, phase 4) */
   { GL_POLYGON_OFFSET_FILL, 1, 0, 0 },
   { GL_POLYGON_OFFSET_LINE, 1, 0, 0 },
   { GL_POLYGON_OFFSET_POINT, 1, 0, 0 },
   { GL_POLYGON_SMOOTH, 0, 1, 0 },
   { GL_POLYGON_STIPPLE, 0, 0, 0 },   /* honoured (zpipe.c, plan F7) */
   { GL_SCISSOR_TEST, 0, 0, 0 },       /* honoured (vertex.c, clear.c) */
-  { GL_STENCIL_TEST, 0, 0, 0 },       /* no stencil buffer: the test passes */
+  { GL_STENCIL_TEST, 0, 0, 0 },       /* honoured with stencil bits (zpipe.c, phase 4 F8);
+                                         without a buffer the test passes */
   { GL_TEXTURE_1D, 0, 0, 0 },        /* honoured: a W x 1 texture (texture.c) */
   { GL_TEXTURE_2D, 1, 0, 0 },
   { GL_TEXTURE_3D, 0, 1, 0 },
@@ -179,6 +180,8 @@ void s31_state_init(GLContext *c)
   c->depth_mask = 1;
   c->depth_range[0] = 0.0f; c->depth_range[1] = 1.0f;
   c->blend_src = GL_ONE; c->blend_dst = GL_ZERO;
+  c->blend_src_a = GL_ONE; c->blend_dst_a = GL_ZERO;
+  c->blend_eq = c->blend_eq_a = GL_FUNC_ADD;
   for (i = 0; i < 4; i++) c->blend_color[i] = 0.0f;
   c->alpha_func = GL_ALWAYS; c->alpha_ref = 0.0f;
   for (i = 0; i < 4; i++) c->color_mask[i] = 1;
@@ -233,22 +236,32 @@ static int valid_func(int f)
   return f >= GL_NEVER && f <= GL_ALWAYS;
 }
 
+/* GL 1.4 table 4.1 (phase 4): SRC_COLOR as a source factor and DST_COLOR
+   as a destination factor (NV_blend_square, core in 1.4) and the
+   GL_CONSTANT_* factors are valid, as Mesa takes them; all are drawn
+   (zpipe.c factor()) */
 static int valid_blend(int f, int is_src)
 {
   switch (f) {
   case GL_ZERO: case GL_ONE:
   case GL_SRC_ALPHA: case GL_ONE_MINUS_SRC_ALPHA:
   case GL_DST_ALPHA: case GL_ONE_MINUS_DST_ALPHA:
-    return 1;
   case GL_SRC_COLOR: case GL_ONE_MINUS_SRC_COLOR:
-    return !is_src;
   case GL_DST_COLOR: case GL_ONE_MINUS_DST_COLOR:
-    return is_src;
+  case GL_CONSTANT_COLOR: case GL_ONE_MINUS_CONSTANT_COLOR:
+  case GL_CONSTANT_ALPHA: case GL_ONE_MINUS_CONSTANT_ALPHA:
+    return 1;
   case GL_SRC_ALPHA_SATURATE:
     return is_src;
   default:
     return 0;
   }
+}
+
+static int valid_blend_eq(int e)
+{
+  return e == GL_FUNC_ADD || e == GL_FUNC_SUBTRACT ||
+         e == GL_FUNC_REVERSE_SUBTRACT || e == GL_MIN || e == GL_MAX;
 }
 
 /* validation happens here, at call time, so errors are reported where GL
@@ -261,6 +274,11 @@ static int validate(GLContext *c, int code, const GLParam *p)
     return valid_func(p[2].i) ? 0 : GL_INVALID_ENUM;
   case S31_ST_BLEND_FUNC:
     return valid_blend(p[2].i, 1) && valid_blend(p[3].i, 0) ? 0 : GL_INVALID_ENUM;
+  case S31_ST_BLEND_FUNC_SEP:
+    return valid_blend(p[2].i, 1) && valid_blend(p[3].i, 0) &&
+           valid_blend(p[4].i, 1) && valid_blend(p[5].i, 0) ? 0 : GL_INVALID_ENUM;
+  case S31_ST_BLEND_EQ:
+    return valid_blend_eq(p[2].i) && valid_blend_eq(p[3].i) ? 0 : GL_INVALID_ENUM;
   case S31_ST_SCISSOR:
     return (p[4].i < 0 || p[5].i < 0) ? GL_INVALID_VALUE : 0;
   case S31_ST_LINE_WIDTH:
@@ -361,7 +379,15 @@ void glopState(GLContext *c, GLParam *p)
     c->viewport.updated = 1;        /* the viewport's z transform */
     break;
   case S31_ST_BLEND_FUNC:
+    c->blend_src = c->blend_src_a = p[2].i;
+    c->blend_dst = c->blend_dst_a = p[3].i;
+    break;
+  case S31_ST_BLEND_FUNC_SEP:
     c->blend_src = p[2].i; c->blend_dst = p[3].i;
+    c->blend_src_a = p[4].i; c->blend_dst_a = p[5].i;
+    break;
+  case S31_ST_BLEND_EQ:
+    c->blend_eq = p[2].i; c->blend_eq_a = p[3].i;
     break;
   case S31_ST_BLEND_COLOR:
     for (i = 0; i < 4; i++) c->blend_color[i] = clampf01(p[2 + i].f);

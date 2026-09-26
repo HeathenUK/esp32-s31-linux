@@ -132,7 +132,34 @@ typedef struct {
     int dzbox[4], dzvalid;    /* depth: drawn into since the last real clear */
     unsigned int dzval, dzser;
     unsigned short *dzbuf;
+
+    /* s31 (phase 4 F8): the 8-bit stencil buffer, xsize * ysize bytes
+       (row y at y * xsize, as zbuf), followed by ZB_STENCIL_TAIL bytes of
+       ZStencilState; NULL when the context has no stencil bits. The
+       caller's (the GLX drawable's, sbuf_ext) or a private one allocated
+       with the depth buffer. sst is its state, in that tail */
+    unsigned char *sbuf;
+    int sbuf_ext;
+    struct ZStencilState *sst;
 } ZBuffer;
+
+/* s31 (phase 4 F8): the stencil buffer's state, kept after its values so
+   every context bound to one buffer (GLX: the drawable's) shares it. The
+   dirty range: since the last full clear to val, only bytes [lo, hi) may
+   differ from val (a stencil write through the stages grows it, clear.c
+   clamps it), so the next full clear to the same value writes only those.
+   valid 0: nothing is known (the first full clear writes everything). */
+typedef struct ZStencilState {
+    unsigned int magic;       /* ZST_MAGIC once the core owns the state */
+    int lo, hi;
+    unsigned char val, valid, pad[2];
+} ZStencilState;
+#define ZB_STENCIL_TAIL 20
+#define ZB_STENCIL_STATE(sbuf, npix) \
+  ((ZStencilState *)(((unsigned long)((unsigned char *)(sbuf) + (npix)) + 3) & ~3ul))
+#define ZST_MAGIC 0x53543331u     /* "ST31" */
+#define ZST_ZERO 0x5354305au      /* "Z0ST": the caller states the buffer is all 0
+                                     (s31gl_stencil_zeroed; review 4 R3-stencil) */
 
 /* s31 (phase 3a G03): depth epochs. A full glClear of depth to 1.0 does
    not write the buffer when the values drawn since the last real clear
@@ -231,6 +258,15 @@ void ZB_fillTriangleFlat_nw(ZBuffer *zb, ZBufferPoint *p1,ZBufferPoint *p2,ZBuff
 void ZB_fillTriangleSmooth_nw(ZBuffer *zb, ZBufferPoint *p1,ZBufferPoint *p2,ZBufferPoint *p3);
 void ZB_fillTriangleMappingPerspective_nw(ZBuffer *zb, ZBufferPoint *p0,ZBufferPoint *p1,ZBufferPoint *p2);
 void ZB_plot_nz(ZBuffer *zb,ZBufferPoint *p);
+/* s31 (phase 4 F-PERSP): the smooth filler with perspective-correct colour,
+   for depth LEQUAL and LESS (the other depth states take the general path) */
+void ZB_fillTriangleSmoothPersp(ZBuffer *zb, ZBufferPoint *p1,ZBufferPoint *p2,ZBufferPoint *p3);
+void ZB_fillTriangleSmoothPersp_lt(ZBuffer *zb, ZBufferPoint *p1,ZBufferPoint *p2,ZBufferPoint *p3);
+/* (phase 4) the smooth filler re-anchored every 8 pixels (long spans, equal
+   w), for LEQUAL, LESS and no depth test */
+void ZB_fillTriangleSmoothLong(ZBuffer *zb, ZBufferPoint *p1,ZBufferPoint *p2,ZBufferPoint *p3);
+void ZB_fillTriangleSmoothLong_nt(ZBuffer *zb, ZBufferPoint *p1,ZBufferPoint *p2,ZBufferPoint *p3);
+void ZB_fillTriangleSmoothLong_lt(ZBuffer *zb, ZBufferPoint *p1,ZBufferPoint *p2,ZBufferPoint *p3);
 /* s31: ztriangle_lt.c, GL_LESS (strict) with depth writes */
 void ZB_fillTriangleFlat_lt(ZBuffer *zb, ZBufferPoint *p1,ZBufferPoint *p2,ZBufferPoint *p3);
 void ZB_fillTriangleSmooth_lt(ZBuffer *zb, ZBufferPoint *p1,ZBufferPoint *p2,ZBufferPoint *p3);

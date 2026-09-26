@@ -99,6 +99,16 @@ void glopEnableDisable(GLContext *c,GLParam *p)
   case GL_FOG:
     c->fog_enabled = v;
     break;
+  /* s31 phase 4: F8-STENCIL (raster_sel.c, zpipe.c) and SMOOTH (raster.c) */
+  case GL_STENCIL_TEST:
+    c->p4_en = v ? c->p4_en | P4_EN_STENCIL : c->p4_en & ~P4_EN_STENCIL;
+    break;
+  case GL_LINE_SMOOTH:
+    c->p4_en = v ? c->p4_en | P4_EN_LSMOOTH : c->p4_en & ~P4_EN_LSMOOTH;
+    break;
+  case GL_POINT_SMOOTH:
+    c->p4_en = v ? c->p4_en | P4_EN_PSMOOTH : c->p4_en & ~P4_EN_PSMOOTH;
+    break;
   case GL_SCISSOR_TEST:
     c->scissor_enabled = v;
     c->viewport.updated = 1;   /* the scissor box clips like the viewport */

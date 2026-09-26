@@ -31,6 +31,8 @@ s31gl_ctx *glxi_core_create(s31gl_ctx *share, struct __GLXcontextRec *c)
 		return NULL;
 	/* GL_DOUBLEBUFFER and the default GL_DRAW_BUFFER follow the config */
 	s31gl_set_doublebuffer(ctx, c->db);
+	/* phase 4 F8: so does GL_STENCIL_BITS (0: no stencil memory at all) */
+	s31gl_set_stencil_bits(ctx, c->stencil);
 	/* phase 3a dirty boxes: the drawables' colour buffers are ours alone
 	 * (the X server only reads a ShmPutImage segment - xshim copies out
 	 * of it, lvdesk/xshim.c "COPY. Always."; XPutImage copies before it
@@ -82,6 +84,18 @@ void glxi_core_release_depth(s31gl_ctx *ctx)
 int glxi_core_bind_depth(s31gl_ctx *ctx, void *depth)
 {
 	return ctx ? s31gl_bind_depth(ctx, depth) : -1;
+}
+
+/* phase 4 F8: caller-owned stencil (the drawable's); NULL: the core's own,
+ * lazily - or none, for a context without stencil bits */
+int glxi_core_bind_stencil(s31gl_ctx *ctx, void *stencil)
+{
+	return ctx ? s31gl_bind_stencil(ctx, stencil) : -1;
+}
+
+void glxi_core_stencil_zeroed(void *stencil, int w, int h)
+{
+	s31gl_stencil_zeroed(stencil, w, h);
 }
 
 void *glxi_core_get_proc(const char *name)

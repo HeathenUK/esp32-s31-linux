@@ -5,8 +5,9 @@
  *
  * tgl_get() returns every GL 1.3 state value this library holds, plus the
  * implementation limits, honestly: the limits are this rasteriser's (RGB565
- * colour, 16-bit depth, no stencil/accum/alpha planes, one texture unit,
- * 256x256 textures, width-1 lines and size-1 points). Every capability
+ * colour, 16-bit depth, an 8-bit stencil only for a context with stencil
+ * bits (phase 4), no accum/alpha planes, one texture unit, 256x256
+ * textures). Every capability
  * glIsEnabled knows is also a valid glGet name. gl/api/get.c converts to
  * the four glGet*v types.
  */
@@ -166,7 +167,13 @@ int tgl_get(int pname, int *iv, float *fv, int *kind)
   case GL_DEPTH_FUNC: I1(c->depth_func); break;
   case GL_BLEND_SRC: I1(c->blend_src); break;
   case GL_BLEND_DST: I1(c->blend_dst); break;
-  case GL_BLEND_EQUATION: I1(GL_FUNC_ADD); break;
+  /* phase 4 BLEND-EQ (GL_BLEND_EQUATION is GL_BLEND_EQUATION_RGB) */
+  case GL_BLEND_EQUATION: I1(c->blend_eq); break;
+  case GL_BLEND_EQUATION_ALPHA: I1(c->blend_eq_a); break;
+  case GL_BLEND_SRC_RGB: I1(c->blend_src); break;
+  case GL_BLEND_DST_RGB: I1(c->blend_dst); break;
+  case GL_BLEND_SRC_ALPHA: I1(c->blend_src_a); break;
+  case GL_BLEND_DST_ALPHA: I1(c->blend_dst_a); break;
   case GL_BLEND_COLOR:
     for (i = 0; i < 4; i++) fv[i] = c->blend_color[i];
     *kind = TGL_GET_COLOR; n = 4; break;
@@ -261,13 +268,16 @@ int tgl_get(int pname, int *iv, float *fv, int *kind)
   case GL_MAX_CLIENT_ATTRIB_STACK_DEPTH: I1(16); break;
   case GL_MAX_ELEMENTS_VERTICES: case GL_MAX_ELEMENTS_INDICES: I1(4096); break;
   case GL_MAX_TEXTURE_UNITS: I1(1); break;
-  /* s31: integer widths and sizes are drawn (raster.c), aliased; the
-     smooth ranges are the same because GL_*_SMOOTH is drawn aliased */
+  /* s31: aliased widths and sizes are drawn at the nearest integer
+     (raster.c). Phase 4 SMOOTH: GL_POINT_SIZE_RANGE and GL_LINE_WIDTH_RANGE
+     are the smooth ranges (GL 1.2's GL_SMOOTH_*_RANGE, the same enums), and
+     smooth lines and points are drawn at their real size from 1 up, so
+     their granularity is fine; 1/8 is stated */
   case GL_ALIASED_POINT_SIZE_RANGE: case GL_POINT_SIZE_RANGE:
   case GL_ALIASED_LINE_WIDTH_RANGE: case GL_LINE_WIDTH_RANGE:
     fv[0] = 1.0f; fv[1] = 64.0f; *kind = TGL_GET_FLOAT; n = 2; break;
   case GL_POINT_SIZE_GRANULARITY: case GL_LINE_WIDTH_GRANULARITY:
-    F1(1.0f); break;
+    F1(0.125f); break;
   case GL_SAMPLE_BUFFERS: case GL_SAMPLES: I1(0); break;
   case GL_SAMPLE_COVERAGE_VALUE: F1(1.0f); break;
   case GL_SAMPLE_COVERAGE_INVERT: I1(0); break;
@@ -279,7 +289,8 @@ int tgl_get(int pname, int *iv, float *fv, int *kind)
   case GL_STEREO: I1(0); break;
   case GL_RED_BITS: case GL_BLUE_BITS: I1(5); break;
   case GL_GREEN_BITS: I1(6); break;
-  case GL_ALPHA_BITS: case GL_INDEX_BITS: case GL_STENCIL_BITS:
+  case GL_STENCIL_BITS: I1(c->stencil_bits); break;    /* phase 4 F8: 0 or 8 */
+  case GL_ALPHA_BITS: case GL_INDEX_BITS:
   case GL_ACCUM_RED_BITS: case GL_ACCUM_GREEN_BITS: case GL_ACCUM_BLUE_BITS:
   case GL_ACCUM_ALPHA_BITS: case GL_AUX_BUFFERS:
     I1(0); break;

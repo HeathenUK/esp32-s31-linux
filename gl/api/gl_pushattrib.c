@@ -135,6 +135,9 @@ struct attrib {
 	GLfloat depth_clear;
 	/* COLOR_BUFFER */
 	GLint alpha_func, blend_src, blend_dst, logic_op, draw_buffer;
+	/* phase 4 BLEND-EQ: GL 1.4 puts these in COLOR_BUFFER too */
+	GLint blend_src_a, blend_dst_a, blend_eq, blend_eq_a;
+	GLfloat blend_color[4];
 	GLfloat alpha_ref, clear_color[4];
 	GLint color_mask[4];
 	/* STENCIL_BUFFER */
@@ -160,6 +163,8 @@ struct attrib {
 	   [0] the 2D binding, [1] the 1D one (review G8) */
 	GLint tp_min[2], tp_mag[2], tp_ws[2], tp_wt[2];
 	GLfloat tp_border[2][4], tp_prio[2];
+	GLfloat tp_minlod[2], tp_maxlod[2];	/* GL 1.2 (review 4 R4) */
+	GLint tp_base[2], tp_maxlev[2];
 	/* CURRENT: the raster position (tgl_raster_state) */
 	GLfloat raster[14];
 	/* TRANSFORM: the clip planes, eye coordinates */
@@ -358,6 +363,11 @@ void GLAPIENTRY glPushAttrib(GLbitfield mask)
 		glGetFloatv(GL_ALPHA_TEST_REF, &a->alpha_ref);
 		glGetIntegerv(GL_BLEND_SRC, &a->blend_src);
 		glGetIntegerv(GL_BLEND_DST, &a->blend_dst);
+		glGetIntegerv(GL_BLEND_SRC_ALPHA, &a->blend_src_a);
+		glGetIntegerv(GL_BLEND_DST_ALPHA, &a->blend_dst_a);
+		glGetIntegerv(GL_BLEND_EQUATION, &a->blend_eq);
+		glGetIntegerv(GL_BLEND_EQUATION_ALPHA, &a->blend_eq_a);
+		glGetFloatv(GL_BLEND_COLOR, a->blend_color);
 		glGetIntegerv(GL_LOGIC_OP_MODE, &a->logic_op);
 		glGetIntegerv(GL_DRAW_BUFFER, &a->draw_buffer);
 		glGetFloatv(GL_COLOR_CLEAR_VALUE, a->clear_color);
@@ -409,6 +419,10 @@ void GLAPIENTRY glPushAttrib(GLbitfield mask)
 			glGetTexParameteriv(tg, GL_TEXTURE_WRAP_T, &a->tp_wt[i]);
 			glGetTexParameterfv(tg, GL_TEXTURE_BORDER_COLOR, a->tp_border[i]);
 			glGetTexParameterfv(tg, GL_TEXTURE_PRIORITY, &a->tp_prio[i]);
+			glGetTexParameterfv(tg, GL_TEXTURE_MIN_LOD, &a->tp_minlod[i]);
+			glGetTexParameterfv(tg, GL_TEXTURE_MAX_LOD, &a->tp_maxlod[i]);
+			glGetTexParameteriv(tg, GL_TEXTURE_BASE_LEVEL, &a->tp_base[i]);
+			glGetTexParameteriv(tg, GL_TEXTURE_MAX_LEVEL, &a->tp_maxlev[i]);
 		}
 	}
 	a->next = sl->attrib_top;
@@ -538,7 +552,11 @@ void GLAPIENTRY glPopAttrib(void)
 	}
 	if (mask & GL_COLOR_BUFFER_BIT) {
 		glAlphaFunc(a->alpha_func, a->alpha_ref);
-		glBlendFunc(a->blend_src, a->blend_dst);
+		glBlendFuncSeparate(a->blend_src, a->blend_dst, a->blend_src_a,
+				    a->blend_dst_a);
+		glBlendEquationSeparate(a->blend_eq, a->blend_eq_a);
+		glBlendColor(a->blend_color[0], a->blend_color[1],
+			     a->blend_color[2], a->blend_color[3]);
 		glLogicOp(a->logic_op);
 		glDrawBuffer(a->draw_buffer);
 		glClearColor(a->clear_color[0], a->clear_color[1],
@@ -593,6 +611,10 @@ void GLAPIENTRY glPopAttrib(void)
 			glTexParameteri(tg, GL_TEXTURE_WRAP_T, a->tp_wt[i]);
 			glTexParameterfv(tg, GL_TEXTURE_BORDER_COLOR, a->tp_border[i]);
 			glTexParameterf(tg, GL_TEXTURE_PRIORITY, a->tp_prio[i]);
+			glTexParameterf(tg, GL_TEXTURE_MIN_LOD, a->tp_minlod[i]);
+			glTexParameterf(tg, GL_TEXTURE_MAX_LOD, a->tp_maxlod[i]);
+			glTexParameteri(tg, GL_TEXTURE_BASE_LEVEL, a->tp_base[i]);
+			glTexParameteri(tg, GL_TEXTURE_MAX_LEVEL, a->tp_maxlev[i]);
 		}
 		glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, a->texenv_mode);
 		glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, a->texenv_color);

@@ -149,9 +149,18 @@ void glopLight(GLContext *c,GLParam *p)
     }
     break;
   case GL_SPOT_DIRECTION:
-    for(i=0;i<3;i++) {
-      l->spot_direction.v[i]=v.v[i];
-      l->norm_spot_direction.v[i]=v.v[i];
+    /* s31 (phase 4): GL 1.3 2.13.1 - the direction is transformed by the
+       upper-left 3x3 of the modelview when specified, as the position is
+       by the whole matrix; TinyGL stored it untransformed, so a spot set
+       after gluLookAt pointed somewhere else (mesa-demos teapot: the light
+       pool on the floor was missing, the teapot lit by ambient alone) */
+    {
+      const M4 *m = c->matrix_stack_ptr[0];
+      for(i=0;i<3;i++) {
+        float d = m->m[i][0]*v.v[0] + m->m[i][1]*v.v[1] + m->m[i][2]*v.v[2];
+        l->spot_direction.v[i]=d;
+        l->norm_spot_direction.v[i]=d;
+      }
     }
     gl_V3_Norm(&l->norm_spot_direction);
     break;

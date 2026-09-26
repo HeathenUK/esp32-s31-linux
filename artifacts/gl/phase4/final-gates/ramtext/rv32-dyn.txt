@@ -1,0 +1,6 @@
+ramtext: libGL.so.1: 10620 bytes at 0x352c0-0x37c3c, 3 pages in RAM, 96 sites (auipc 61, jal 35), 157 table entries; slot 0x41000, displacement +48448; 68 references into the range from outside
+hg_dyn 320x240x30 S31GL_RAMTEXT=0: rc 0 e48c3678bbeeb8843117a2ac488eaf67 
+    libGL at 0x2b358000: hot-range blocks run from XIP 4141846, from the RAM copy 0; no mprotect of the slot
+hg_dyn 320x240x30 S31GL_RAMTEXT=1: rc 0 e48c3678bbeeb8843117a2ac488eaf67 libGL: ramtext on: 10620 bytes in 3 pages, 157 fixup entries, 7 entry points
+    libGL at 0x2b358000: hot-range blocks run from XIP 22323, from the RAM copy 4111350; 14 mprotect(0x2b399000,12288,PROT_EXEC|PROT_READ) = 0
+hg_dyn: frames identical on/off

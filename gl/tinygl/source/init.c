@@ -1,4 +1,6 @@
+#include <stdlib.h>
 #include "zgl.h"
+#include "s31_ramtext.h"
 
 GLContext *gl_ctx;
 
@@ -81,6 +83,7 @@ void glInit(void *zbuffer1)
   c->exec_flag=1;
   c->compile_flag=0;
   c->print_flag=0;
+  gl_update_vtx_run(c);
 
   c->in_begin=0;
 
@@ -213,6 +216,28 @@ void glInit(void *zbuffer1)
 
   /* s31 state */
   s31_state_init(c);
+  /* s31 (phase 4, s31_tfilter.c): the general path's per-triangle state;
+     S31GL_MIPMAPS=0 keeps levels > 0 unstored (the mipmap filters then
+     sample level 0) */
+  c->pipe.x = &c->pipex;
+  c->pipe.xact = 0;
+  c->pipex.slot_tex = c->pipex.slot_col = -1;
+  {
+    /* S31GL_TEXFILTER=0: nearest in level 0 for every filter, and no
+       level > 0 stored (phase 4 review: the pre-phase-4 behaviour, for
+       the board A/B of filtered apps such as QuakeSpasm) */
+    const char *e, *f = getenv("S31GL_TEXFILTER");
+#ifndef S31GL_TEXFILTER_DEFAULT
+#define S31GL_TEXFILTER_DEFAULT 1      /* gl/bench: -DS31GL_TEXFILTER_DEFAULT=0 */
+#endif
+    c->tex_filter = f ? atoi(f) != 0 : S31GL_TEXFILTER_DEFAULT;
+    /* S31GL_PERSPCOLOR=0: Gouraud colour stays screen-affine (read here
+       once, not in gl_update_raster: review 4 R4-hot) */
+    e = getenv("S31GL_PERSPCOLOR");
+    c->pc_enable = e ? atoi(e) != 0 : 1;
+    e = getenv("S31GL_MIPMAPS");
+    c->mip_store = c->tex_filter && (e ? atoi(e) != 0 : 1);
+  }
 }
 
 void glClose(void)
@@ -224,6 +249,8 @@ void glClose(void)
 
   gl_free(c->vertex);
   gl_free(c->vc);   /* s31 (phase 3a G14): arrays.c vertex cache (one block) */
+  gl_free(c->pipex.stab);   /* phase 4 F8: the stencil table (raster_sel.c) */
+  c->pipex.stab = NULL;
 
   for(i=0;i<3;i++) {
     gl_free(c->matrix_stack[i]);

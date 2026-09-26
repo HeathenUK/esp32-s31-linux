@@ -1,0 +1,2867 @@
+diff --git a/gl/.gitignore b/gl/.gitignore
+index a8b4ac7..c60dd66 100644
+--- a/gl/.gitignore
++++ b/gl/.gitignore
+@@ -13,3 +13,5 @@
+ /bench/base3ra/
+ /bench/qemu/*.dylib
+ /bench/out-*.log
++/bench/base4/
++/bench/p4s*/
+diff --git a/gl/bench/bench.sh b/gl/bench/bench.sh
+index 85a0d3c..7d9f18b 100755
+--- a/gl/bench/bench.sh
++++ b/gl/bench/bench.sh
+@@ -2,7 +2,8 @@
+ # bench.sh [GLDIR] [OUT] - build (build_q.sh) and run every image in
+ # parallel; prints "demo WxH Minsn/frame dcalls/frame fbhash" sorted, and
+ # writes it to $OUT/results.txt. Frames land in $OUT/*.raw.
+-# Then (unless BENCH_GUARD_ONLY=1) feat.sh, pix.sh, prim.sh and geo.sh on the same
++# Then (unless BENCH_GUARD_ONLY=1) feat.sh, pix.sh, prim.sh, geo.sh and (phase 4)
++# filt.sh on the same
+ # objects, and every line is checked against limits.txt: the plan's +1%
+ # guard for gears and texobj, tripwires for the general path, the pixel
+ # paths and the per-primitive costs (review P5d). Exit 1 on any excess.
+@@ -26,9 +27,10 @@ n=$(wc -l < results.txt)
+ "$HERE/pix.sh" "$OUT" >/dev/null
+ "$HERE/prim.sh" "$OUT" >/dev/null
+ "$HERE/geo.sh" "$OUT" >/dev/null
+-cat feat.txt pix.txt prim.txt geo.txt
++"$HERE/filt.sh" "$OUT" >/dev/null
++cat feat.txt pix.txt prim.txt geo.txt filt.txt
+ [ -n "$BENCH_NO_LIMITS" ] && exit 0
+-python3 - "$HERE/limits.txt" results.txt feat.txt pix.txt prim.txt geo.txt <<'PY'
++python3 - "$HERE/limits.txt" results.txt feat.txt pix.txt prim.txt geo.txt filt.txt <<'PY'
+ import re, sys
+ lim = {}
+ for l in open(sys.argv[1]):
+diff --git a/gl/bench/limits.txt b/gl/bench/limits.txt
+index 7e92283..f46f9f3 100644
+--- a/gl/bench/limits.txt
++++ b/gl/bench/limits.txt
+@@ -54,3 +54,33 @@ glxgears 300x300 | 1.1465 | tripwire | phase 3a final 1.1240 + 2%
+ # phase 3a pixel levers (2026-09-26): glxgears drawn into two colour
+ # buffers in turn, as GLX does for a 300x300 window (geo.sh); + 2%
+ glxgears-2buf 300x300 | 0.9888 | tripwire | phase 3a pixel final 0.9694 + 2%
++
++# phase 4 (2026-09-26, artifacts/gl/phase4/REPORT.md). Later lines win.
++# pix1 and pix8 were already over their tripwires at the phase 3a final
++# (gl/bench/base4: 2.0115 and 1.2370 - the dirty-box bookkeeping of phase
++# 3a part B); re-based to that final + 2%:
++pix1 320x240 | 2.0517 | tripwire | phase 3a final 2.0115 + 2%
++pix8 320x240 | 1.2617 | tripwire | phase 3a final 1.2370 + 2%
++# the phase 4 bar: a frame that uses no phase-4 feature costs at most the
++# phase 3a final + 0.5% (gl/bench/base4), and keeps its frame hash:
++gears 320x240 | 1.0361 | guard | phase 3a final 1.0309 + 0.5%
++gears 640x400 | 1.8896 | guard | phase 3a final 1.8802 + 0.5%
++teapot 320x240 | 2.5779 | guard | phase 3a final 2.5651 + 0.5%
++teapot 640x400 | 3.0669 | guard | phase 3a final 3.0516 + 0.5%
++texobj 320x240 | 0.3268 | guard | phase 3a final 0.3252 + 0.5%
++texobj 640x400 | 1.0130 | guard | phase 3a final 1.0080 + 0.5%
++glxgears 300x300 | 0.9714 | guard | phase 3a final 0.9666 + 0.5%
++glxgears-2buf 300x300 | 0.9717 | guard | phase 3a final 0.9669 + 0.5%
++# phase 4 cases (filt.sh): the phase 4 final + 2%
++filt1 320x240 | 0.6506 | tripwire | phase 4 final 0.6378 + 2%
++filt1 640x400 | 2.1008 | tripwire | phase 4 final 2.0596 + 2%
++filt2 320x240 | 5.0091 | tripwire | phase 4 final 4.9109 + 2%
++filt2 640x400 | 16.5335 | tripwire | phase 4 final 16.2093 + 2%
++filt3 320x240 | 5.0102 | tripwire | phase 4 final 4.9120 + 2%
++filt3 640x400 | 16.5346 | tripwire | phase 4 final 16.2104 + 2%
++filt4 320x240 | 6.8200 | tripwire | phase 4 final 6.6863 + 2%
++filt4 640x400 | 21.4411 | tripwire | phase 4 final 21.0207 + 2%
++filt5 320x240 | 7.3953 | tripwire | phase 4 final 7.2503 + 2%
++filt6 320x240 | 38.1606 | tripwire | phase 4 final 37.4124 + 2%
++filt7 320x240 | 1.7386 | tripwire | phase 4 final 1.7045 + 2%
++filt8 320x240 | 1.2079 | tripwire | phase 4 final 1.1842 + 2%
+diff --git a/gl/build.sh b/gl/build.sh
+index 1c49f7b..46bd7bd 100755
+--- a/gl/build.sh
++++ b/gl/build.sh
+@@ -87,12 +87,14 @@ $CC -O2 -Wall $ARCHFLAGS -I$GL/include -I$GL/api -c $GL/tests/raster_gate.c \
+ $CC -O2 $ARCHFLAGS -I$GL/tinygl/source -c $GL/tests/d2f_test.c -o $OBJ/d2f_test.o & pids="$pids $!"
+ $CC -O2 -Wall $ARCHFLAGS -I$GL/include -I$GL/api -c $GL/tests/zepoch_test.c \
+ 	-o $OBJ/zepoch_test.o & pids="$pids $!"
++$CC -O2 -Wall $ARCHFLAGS -I$GL/include -I$GL/api -c $GL/tests/filt_test.c \
++	-o $OBJ/filt_test.o & pids="$pids $!"
+ waitall
+ ( $CC -static $ARCHFLAGS -o $TEST $OBJ/headless_gears.o $(cat $OBJ/core.list) -lm && $STRIP $TEST ) &
+ pids="$pids $!"
+ ( $CC -static $ARCHFLAGS -o $GL/out-rv32/core_test $OBJ/core_test.o $(cat $OBJ/core.list) -lm &&
+ 	$STRIP $GL/out-rv32/core_test ) & pids="$pids $!"
+-for t in headless_gears core_test d2f_test raster_gate zepoch_test; do
++for t in headless_gears core_test d2f_test raster_gate zepoch_test filt_test; do
+ 	$CC -static $ARCHFLAGS -o $GL/out-rv32/$t.qemu $OBJ/$t.o $OBJ/qemu_libc.o \
+ 		$(cat $OBJ/core.list) -lm & pids="$pids $!"
+ done
+diff --git a/gl/host-build.sh b/gl/host-build.sh
+index 2f844c1..9fe7f83 100755
+--- a/gl/host-build.sh
++++ b/gl/host-build.sh
+@@ -43,6 +43,10 @@ $CC -O2 -Wall -I$GL/include -I$GL/api $GL/tests/raster_gate.c \
+ $CC -O2 -Wall -I$GL/include -I$GL/api $GL/tests/zepoch_test.c \
+ 	-o $GL/out-host/zepoch_test -L$GL/out-host -l:libGL.so.1 -lm \
+ 	-Wl,-rpath,'$ORIGIN' & pids="$pids $!"
++# phase 4: texture filters and perspective colour
++$CC -O2 -Wall -I$GL/include -I$GL/api $GL/tests/filt_test.c \
++	-o $GL/out-host/filt_test -L$GL/out-host -l:libGL.so.1 -lm \
++	-Wl,-rpath,'$ORIGIN' & pids="$pids $!"
+ # no rpath: LD_LIBRARY_PATH picks the implementation (tools/glref/run.sh)
+ if [ -z "$S31GL_NO_GLX" ]; then
+ 	$CC -O2 -Wall -I$GL/include $GL/tests/glx_prims.c \
+diff --git a/gl/tests/core_test.c b/gl/tests/core_test.c
+index ce842cd..28f1ad9 100644
+--- a/gl/tests/core_test.c
++++ b/gl/tests/core_test.c
+@@ -617,6 +617,7 @@ static void test_raster_features(void)
+ 	glGenTextures(1, &t);
+ 	glBindTexture(GL_TEXTURE_2D, t);
+ 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
++	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);   /* phase 4: GL_LINEAR (the default) is bilinear now */
+ 	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+ 	/* GL 1.1: power-of-two sizes only, up to GL_MAX_TEXTURE_SIZE */
+ 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 12, 8, 0, GL_RGBA, GL_UNSIGNED_BYTE, img);
+diff --git a/gl/tests/run-3a.sh b/gl/tests/run-3a.sh
+index 611f5d2..0867256 100755
+--- a/gl/tests/run-3a.sh
++++ b/gl/tests/run-3a.sh
+@@ -3,7 +3,7 @@
+ # the Mac (host only: nothing touches the board). Output in
+ # artifacts/gl/phase3a/LABEL/:
+ #   host.log      gl/host-build.sh (host libGL + tests), core_test, raster_gate,
+-#                 fmath_test and f2d_test (host)
++#                 filt_test (phase 4), fmath_test and f2d_test (host)
+ #   suite/        tools/glref/suite.sh (22 apps), and suitecmp.txt against
+ #                 artifacts/gl/phase3a/suite-base (= phase2 SUITE.md 10.2)
+ #   pixels/       gl/tests/run-pixels.sh (glx_pixels p1-p4, GLU g1-g3, b1-b2)
+@@ -25,6 +25,7 @@ mkdir -p $F
+ 	gl/host-build.sh
+ 	echo "--- core_test"; docker run --rm -v "$R":/src -w /src s31-glref:latest sh -c 'cd /src/gl/out-host && ./core_test 2>&1 | tail -3'
+ 	echo "--- raster_gate"; docker run --rm -v "$R":/src -w /src s31-glref:latest sh -c 'cd /src/gl/out-host && ./raster_gate 2>&1 | tail -3'
++	echo "--- filt_test (phase 4)"; docker run --rm -v "$R":/src -w /src s31-glref:latest sh -c 'cd /src/gl/out-host && ./filt_test 2>&1 | grep -v "^PASS\|^libGL"'
+ 	echo "--- headless_gears md5"; docker run --rm -v "$R":/src -w /src s31-glref:latest sh -c 'cd /tmp && /src/gl/out-host/headless_gears 320 240 100 /tmp/hg.ppm >/dev/null 2>&1; md5sum /tmp/hg.ppm'
+ 	echo "--- fmath_test, f2d_test (host arm64 in the rig)"
+ 	docker run --rm -v "$R":/src -w /src s31-glref:latest sh -c 'gcc -O2 -ffp-contract=off -I/src/gl/tinygl/source /src/gl/tests/fmath_test.c /src/gl/tinygl/source/s31_fmath.c -lm -o /tmp/fm && /tmp/fm; gcc -O2 -I/src/gl/tinygl/source /src/gl/tests/f2d_test.c -o /tmp/f2d && /tmp/f2d'
+@@ -45,7 +46,7 @@ docker run --rm -v "$R":/src -w /src s31-glref:latest sh /src/gl/tests/run-prims
+ echo "prims: $(tail -2 "$A/prims.log" | tr '\n' ' ')"
+ {
+ 	S31GL_IMAGE=/src/gl/out-rv32/libGL.so.1 gl/build.sh
+-	for t in core_test raster_gate d2f_test; do
++	for t in core_test raster_gate d2f_test filt_test; do
+ 		echo "--- $t (RV32 qemu-user)"
+ 		docker run --rm -v "$R":/src s31-glref-qemu qemu-riscv32 -cpu rv32,zba=true,zbb=true,zbc=true,zbs=true /src/gl/out-rv32/$t.qemu 2>&1 | tail -3
+ 	done
+diff --git a/gl/tests/run-san.sh b/gl/tests/run-san.sh
+index 17c467a..c04d615 100755
+--- a/gl/tests/run-san.sh
++++ b/gl/tests/run-san.sh
+@@ -3,7 +3,7 @@
+ # glx_raster pages 1-6, glx_pixels pages 1-4 and glu_check pages 1-3
+ # (plan F7), glx_prims, glx_geo (phase 3a), core_test, headless_gears,
+ # raster_gate and zepoch_test (phase 3a: both ways, and S31GL_DIRTYBOX=2 at
+-# 97x71) against it
++# 97x71) and filt_test (phase 4) against it
+ # under Xvfb. Prints every sanitizer report; "san: clean" when there is none.
+ # In s31-glref (re-execs itself there from the Mac).
+ if [ ! -x /usr/bin/Xvfb ]; then
+@@ -28,6 +28,7 @@ gcc -O1 -g -I$GL/include -I$GL/api $GL/tests/core_test.c -o $S/core_test -L$S -l
+ gcc -O1 -g -I$GL/include -I$GL/api $GL/tests/headless_gears.c -o $S/headless_gears -L$S -l:libGL.so.1 -lm
+ gcc -O1 -g -I$GL/include -I$GL/api $GL/tests/raster_gate.c -o $S/raster_gate -L$S -l:libGL.so.1 -lm
+ gcc -O1 -g -I$GL/include -I$GL/api $GL/tests/zepoch_test.c -o $S/zepoch_test -L$S -l:libGL.so.1 -lm
++gcc -O1 -g -I$GL/include -I$GL/api $GL/tests/filt_test.c -o $S/filt_test -L$S -l:libGL.so.1 -lm
+ Xvfb :77 -screen 0 800x480x16 -nolisten tcp >/dev/null 2>&1 &
+ XP=$!
+ sleep 1
+@@ -47,6 +48,10 @@ $S/zepoch_test 96 72 > /dev/null 2>> $S/san.log || echo "zepoch_test: rc $?" >>
+ S31GL_ZTRICK=0 S31GL_DIRTYBOX=0 $S/zepoch_test 96 72 > /dev/null 2>> $S/san.log || echo "zepoch_test off: rc $?" >> $S/san.log
+ # review 3a: the x-extent boxes, and an odd size (tail alignment, row packing)
+ S31GL_DIRTYBOX=2 $S/zepoch_test 97 71 > /dev/null 2>> $S/san.log || echo "zepoch_test x 97x71: rc $?" >> $S/san.log
++# phase 4: texture filters and perspective colour (filt_test: bilinear,
++# mipmaps, perspective colour, and a 400-batch fuzz of filtered primitives)
++$S/filt_test >> $S/san.log 2>&1 || echo "filt_test: rc $?" >> $S/san.log
++S31GL_TRILINEAR=0 $S/filt_test > /dev/null 2>> $S/san.log || true
+ kill $XP
+ if grep -q "runtime error\|ERROR: AddressSanitizer\|LeakSanitizer\|: rc " $S/san.log; then
+ 	grep -A12 "runtime error\|ERROR: AddressSanitizer\|LeakSanitizer\|: rc " $S/san.log | head -80
+diff --git a/gl/tinygl/README.s31 b/gl/tinygl/README.s31
+index bd0afa5..51d73ab 100644
+--- a/gl/tinygl/README.s31
++++ b/gl/tinygl/README.s31
+@@ -110,8 +110,11 @@ OP_State). What the rasteriser HONOURS today (plan F3-F6, 2026-09-26):
+                 front material); glPushAttrib(GL_TEXTURE_BIT) with the bound
+                 objects' filters, wraps, border colour and priority.
+   approximated  (prints "libGL: approximated ..." once; tools/glref does not
+-                count it as a gap) GL_LINEAR and the mipmap filters, drawn
+-                as nearest sampling of level 0.
++                count it as a gap) since phase 4, only details of the
++                texture filters (see "Phase 4" below): one mipmap level
++                (lambda) per triangle, NEAREST_MIPMAP_LINEAR as nearest in
++                the nearer level, GL_CLAMP under a linear filter as
++                CLAMP_TO_EDGE.
+                 Not printed: the texture q (glTexCoord4, texgen Q) divides
+                 s and t per vertex - exact when q is the same at every
+                 vertex of a primitive; where it varies (projective
+@@ -121,9 +124,8 @@ OP_State). What the rasteriser HONOURS today (plan F3-F6, 2026-09-26):
+                 exact) but cannot tell a vertex alpha of 0.5 from 128/255
+                 (raster_sel.c). Fog is per vertex (EXP/EXP2 differ from
+                 Mesa's per-fragment fog on large polygons); Gouraud colour
+-                is linear in screen space (a quad whose corner colours are
+-                affine in object space shows its split diagonal under
+-                perspective, testgl frame 60).
++                is linear in screen space except where that is visibly
++                wrong (phase 4 F-PERSP, below).
+                 Plan F7 (2026-09-26, see "Pixel paths" below): the raster
+                 position, glBitmap, glDrawPixels, glReadPixels,
+                 glCopyPixels, glCopyTexImage/SubImage 1D/2D, glPixelZoom,
+@@ -200,8 +202,8 @@ with one "libGL:" line; the proxy answers what a real upload would accept
+ accept every GL 1.3 format/type in s31_pixels.c and honour every
+ GL_UNPACK_* parameter; inside glNewList the pixels are unpacked at compile
+ time and the list owns the copy. Levels > 0 are validated and recorded
+-(completeness, glGetTexLevelParameter) but not stored: the mipmap filters
+-sample level 0. The fixed-point s/t layout keeps GL_REPEAT to masks, the
++(completeness, glGetTexLevelParameter) and, since phase 4, stored and
++filtered (below). The fixed-point s/t layout keeps GL_REPEAT to masks, the
+ same three operations per pixel as TinyGL's 256x256 constants (zbuffer.h);
+ |texcoord| up to 512 repeats is exact. Level L is at most 256 >> L, for
+ proxies and real uploads (review G3: GLU's closestFit probes level 1, and a
+@@ -210,7 +212,8 @@ success with no texture); a proxy remembers its level and border. The
+ common uploads (UNSIGNED_BYTE RGB, RGBA, LUMINANCE, no pixel transfer) are
+ converted straight from the client's bytes, one loop per stored class
+ (review P7: 12-17 instructions a texel, were 25-31). A texture object is
+-148 bytes on RV32 (was 288): one stored image, not MAX_TEXTURE_LEVELS.
++152 bytes on RV32 (was 288): one stored image, not MAX_TEXTURE_LEVELS,
++and a pointer to the levels > 0 (phase 4).
+ 
+ Pixel paths (plan F7: s31_draw.c, s31_pixels.c, s31_rpos.c, s31_xform.c;
+ gl/api/gl_pixels.c):
+@@ -366,11 +369,9 @@ artifacts/gl/phase3a/LEVERS.md):
+     Mesa (were 0.016-0.034%).
+   - glopDisableClientState cleared the wrong bits (unreachable: the entry
+     point sets the state directly).
+-- Known and unchanged: Gouraud colour is interpolated linearly in screen
+-  space, so a triangle whose vertices have different w (glVertex4, or
+-  perspective) differs from Mesa's perspective-correct colour (glx_geo row
+-  0, testgl frame 60); the specular table quantises the highlight (a few
+-  pixels per lit sphere, glx_geo row 3).
++- Known and unchanged: the specular table quantises the highlight (a few
++  pixels per lit sphere, glx_geo row 3). (Gouraud colour under differing w:
++  phase 4, below.)
+ 
+ 
+ Phase 3a, pixel side (2026-09-26; measured on the host only, see
+@@ -410,3 +411,54 @@ artifacts/gl/phase3a/LEVERS.md part B):
+   as an end-pointer loop (+0.1-0.4%); depth epochs by fixed halves or by
+   shrinking precision (one or two apps' error against Mesa grew: geartrain
+   0.030 -> 0.047%).
++
++
++Phase 4 (2026-09-26; measurements in artifacts/gl/phase4/REPORT.md)
++------------------------------------------------------------------
++Every choice below is made once per triangle (or batch), never per pixel;
++a frame that uses none of it runs the phase 3a code (gl/bench: every
++frame hash the same, gears/glxgears/texobj/teapot at most +0.37%).
++- F-LIN, texture filters (s31_tfilter.c; the kinds and the level chain in
++  raster_sel.c zpx_prepare; the per-triangle choice zpx_tri, called by the
++  general filler when ZPipe.xact says a batch has one):
++  - levels > 0 are stored as uploaded (texture.c tex_level_store: each its
++    own RGB565 + A8 block in GLTexture.mip, allocated at the first level
++    > 0; a full chain is +33%, a texture without one pays 4 bytes;
++    S31GL_MIPMAPS=0 stores none). glTexSubImage2D, glCopyTex* and
++    glGetTexImage reach them.
++  - GL_LINEAR: bilinear on RGB565 spread into one word (5 spare bits a
++    field), 5-bit rounded weights, the A8 plane lerped alongside; the
++    filtered texel feeds the unchanged texenv stages (ZPipeX.ftex, idx =
++    i). REPEAT-only and general-wrap variants, with and without alpha.
++  - mipmaps: one lambda per triangle, rho = max(|d(u,v)/dx|, |d(u,v)/dy|)
++    at its centroid from the s/w, t/w, 1/w planes (perspective-correct
++    there), a quadratic log2; GL's mag/min switch (c = 0.5) and level
++    rules; LINEAR_MIPMAP_LINEAR trilinear (S31GL_TRILINEAR=0: as
++    LINEAR_MIPMAP_NEAREST).
++  - a filtered texture takes the general path (tier 1 is nearest level 0);
++    lines and points use the magnification filter at level 0; the pixel
++    paths stay nearest.
++  - a colour stage nothing reads is not placed (RGB REPLACE/DECAL with no
++    alpha test or alpha blend factor): -20% on the general path's
++    REPLACE/DECAL spans (gl/bench feat1/feat2 texobj), same pixels.
++- F-PERSP, Gouraud colour:
++  - perspective: a smooth triangle whose w and colours differ enough for
++    screen-affine colour to be off by 4 8-bit levels (one RGB565 green
++    step) gets r/w, g/w, b/w over 1/w re-derived every 8 pixels, stepped
++    along the chord: tier 1 ZB_fillTriangleSmoothPersp (LEQUAL, LESS), the
++    general path's zc_smooth_pc for everything else.
++  - long spans: TinyGL's packed colour steps with a truncated gradient
++    (1/32 of a step, 1/16 for blue), so a 64-pixel span drifts by up to 4
++    blue steps (SDL testgl's creases, glOrtho, w = 1): a smooth triangle 64
++    or more pixels wide is re-anchored every 8 pixels from its integer
++    planes (ZB_fillTriangleSmoothLong: LEQUAL, LESS, no depth test).
++  - the test is one per smooth tier-1 triangle (gl_draw_triangle_fill_pq:
++    the bits of the three 1/w and the snapped x width, one shift each);
++    S31GL_PERSPCOLOR=0 turns both off.
++- light.c: GL_SPOT_DIRECTION is transformed by the modelview's upper 3x3
++  when specified (GL 1.3 2.13.1); TinyGL stored it as given, so a spot set
++  after gluLookAt pointed elsewhere (mesa-demos teapot: 4-6% of every
++  frame).
++Tests: gl/tests/filt_test.c (bilinear against a float model, the mip
++level rules, perspective colour, a 400-batch fuzz with canaries; host,
++RV32 qemu-user and ASan/UBSan), gl/bench/filt.sh (the costs).
+diff --git a/gl/tinygl/source/init.c b/gl/tinygl/source/init.c
+index 0928399..b0ec771 100644
+--- a/gl/tinygl/source/init.c
++++ b/gl/tinygl/source/init.c
+@@ -1,3 +1,4 @@
++#include <stdlib.h>
+ #include "zgl.h"
+ 
+ GLContext *gl_ctx;
+@@ -213,6 +214,16 @@ void glInit(void *zbuffer1)
+ 
+   /* s31 state */
+   s31_state_init(c);
++  /* s31 (phase 4, s31_tfilter.c): the general path's per-triangle state;
++     S31GL_MIPMAPS=0 keeps levels > 0 unstored (the mipmap filters then
++     sample level 0) */
++  c->pipe.x = &c->pipex;
++  c->pipe.xact = 0;
++  c->pipex.slot_tex = c->pipex.slot_col = -1;
++  {
++    const char *e = getenv("S31GL_MIPMAPS");
++    c->mip_store = e ? atoi(e) != 0 : 1;
++  }
+ }
+ 
+ void glClose(void)
+diff --git a/gl/tinygl/source/light.c b/gl/tinygl/source/light.c
+index 88a592d..a15f032 100644
+--- a/gl/tinygl/source/light.c
++++ b/gl/tinygl/source/light.c
+@@ -149,9 +149,18 @@ void glopLight(GLContext *c,GLParam *p)
+     }
+     break;
+   case GL_SPOT_DIRECTION:
+-    for(i=0;i<3;i++) {
+-      l->spot_direction.v[i]=v.v[i];
+-      l->norm_spot_direction.v[i]=v.v[i];
++    /* s31 (phase 4): GL 1.3 2.13.1 - the direction is transformed by the
++       upper-left 3x3 of the modelview when specified, as the position is
++       by the whole matrix; TinyGL stored it untransformed, so a spot set
++       after gluLookAt pointed somewhere else (mesa-demos teapot: the light
++       pool on the floor was missing, the teapot lit by ambient alone) */
++    {
++      const M4 *m = c->matrix_stack_ptr[0];
++      for(i=0;i<3;i++) {
++        float d = m->m[i][0]*v.v[0] + m->m[i][1]*v.v[1] + m->m[i][2]*v.v[2];
++        l->spot_direction.v[i]=d;
++        l->norm_spot_direction.v[i]=d;
++      }
+     }
+     gl_V3_Norm(&l->norm_spot_direction);
+     break;
+diff --git a/gl/tinygl/source/raster.c b/gl/tinygl/source/raster.c
+index 58a806e..808b2fa 100644
+--- a/gl/tinygl/source/raster.c
++++ b/gl/tinygl/source/raster.c
+@@ -210,6 +210,7 @@ void gl_general_line(GLContext *c, GLVertex *va, GLVertex *vb, int flat)
+ 
+   if (c->pipe_dirty) gl_build_pipe(c);
+   c->pipe.stip_on = 0;
++  if (c->pipe.xact) zpx_reset(&c->pipe);   /* phase 4: level 0, affine colour */
+   /* line stipple (GL 1.3 3.4.2, plan F7): the counter restarts at each
+      independent segment and at the first segment of a strip or loop,
+      and runs on along the strip */
+@@ -326,6 +327,7 @@ void gl_general_point(GLContext *c, GLVertex *v)
+     zdb_grow(c, v->zp.x - w, v->zp.y - w, v->zp.x + w + 1, v->zp.y + w + 1);
+   if (c->pipe_dirty) gl_build_pipe(c);
+   c->pipe.stip_on = 0;
++  if (c->pipe.xact) zpx_reset(&c->pipe);   /* phase 4: level 0, affine colour */
+   to_lp(c, &q, v);
+   if (c->current_shade_model != GL_SMOOTH) {
+     ZPipe *p = &c->pipe;
+diff --git a/gl/tinygl/source/raster_sel.c b/gl/tinygl/source/raster_sel.c
+index c895b7c..d2d0adb 100644
+--- a/gl/tinygl/source/raster_sel.c
++++ b/gl/tinygl/source/raster_sel.c
+@@ -4,6 +4,7 @@
+  * runs once per state change - so it is built -Os (gl/api/build-lib.sh).
+  * s31, MIT.
+  */
++#include <stdlib.h>
+ #include "zgl.h"
+ #include "zpipe.h"
+ #include "raster_int.h"
+@@ -60,6 +61,101 @@ static void gl_draw_triangle_skip(GLContext *c, GLVertex *p0, GLVertex *p1,
+   (void)c; (void)p0; (void)p1; (void)p2;
+ }
+ 
++/* ------------------------------------------------------------ phase 4 knobs */
++
++static int knob(const char *name, int def)
++{
++  const char *e = getenv(name);
++  return e ? atoi(e) : def;
++}
++static int pc_on = -1, tri_on = -1;
++
++/* S31GL_PERSPCOLOR=0: Gouraud colour stays screen-affine everywhere */
++static int zpx_pc_enabled(void)
++{
++  if (pc_on < 0) pc_on = knob("S31GL_PERSPCOLOR", 1) != 0;
++  return pc_on;
++}
++
++/* S31GL_TRILINEAR=0: GL_LINEAR_MIPMAP_LINEAR as LINEAR_MIPMAP_NEAREST */
++static int zpx_tri_enabled(void)
++{
++  if (tri_on < 0) tri_on = knob("S31GL_TRILINEAR", 1) != 0;
++  return tri_on;
++}
++
++/* phase 4 F-LIN: the texture's filter kinds and stored level chain into
++   c->pipex. Returns 0 when the texture is drawn exactly as before phase 4
++   (nearest in level 0, both filters), 1 when it is filtered. */
++__attribute__((noinline))
++static int zpx_prepare(GLContext *c, const GLTexture *t)
++{
++  ZPipeX *x = &c->pipex;
++  int mipf, mip = 0, l, n = t->ws > t->hs ? t->ws : t->hs, F = t->fbits;
++  int ws = t->ws, hs = t->hs;
++
++  mipf = t->min_filter != GL_NEAREST && t->min_filter != GL_LINEAR;
++  /* the chain is usable when every level down to 1x1 is stored, at the
++     halved size, in level 0's class (GL 1.3 3.8.10 also asks for the same
++     internal format; gl_texture_complete checked the sizes) */
++  if (mipf && c->mip_store && t->mip && n > 0 && n < ZPX_MAXLEV) {
++    mip = 1;
++    for (l = 1; l <= n; l++) {
++      const GLMipLevel *m = &t->mip->l[l];
++      int wl = ws > l ? ws - l : 0, hl = hs > l ? hs - l : 0;
++      if (m->pix == NULL || m->cls != t->fmt || m->ws != wl || m->hs != hl) {
++        mip = 0;
++        break;
++      }
++    }
++  }
++  x->kmag = t->mag_filter == GL_LINEAR ? TF_LINEAR0 : TF_NEAREST0;
++  switch (t->min_filter) {
++  case GL_NEAREST: x->kmin = TF_NEAREST0; break;
++  case GL_LINEAR: x->kmin = TF_LINEAR0; break;
++  case GL_NEAREST_MIPMAP_NEAREST: x->kmin = mip ? TF_NMN : TF_NEAREST0; break;
++  case GL_LINEAR_MIPMAP_NEAREST: x->kmin = mip ? TF_LMN : TF_LINEAR0; break;
++  case GL_NEAREST_MIPMAP_LINEAR: x->kmin = mip ? TF_NML : TF_NEAREST0; break;
++  default: x->kmin = mip ? (zpx_tri_enabled() ? TF_LML : TF_LMN) : TF_LINEAR0; break;
++  }
++  if (mipf && !mip && (c->mip_store || t->mip))
++    gl_note_once("mipmap filter on an incomplete stored chain (level 0 sampled)");
++  if (x->kmin == TF_NML)
++    gl_note_once("GL_NEAREST_MIPMAP_LINEAR (nearest in the nearer level)");
++  if (x->kmag == TF_NEAREST0 && x->kmin == TF_NEAREST0) return 0;
++  if (t->wrap_s == GL_CLAMP || t->wrap_t == GL_CLAMP)
++    gl_note_once("GL_CLAMP with a linear texture filter (drawn as GL_CLAMP_TO_EDGE)");
++  if (x->kmin >= TF_NMN)
++    gl_note_once("mipmap level chosen once per triangle (lambda at its centroid)");
++  /* GL 1.3 3.8.8: c = 0.5 for LINEAR magnification with a NEAREST_MIPMAP_*
++     minification, else 0 */
++  x->lod_c = (t->mag_filter == GL_LINEAR &&
++              (t->min_filter == GL_NEAREST_MIPMAP_NEAREST ||
++               t->min_filter == GL_NEAREST_MIPMAP_LINEAR)) ? 0.5f : 0.0f;
++  x->nlev = mip ? n : 0;
++  /* s, t fixed point -> level-0 texels, squared (rho^2) */
++  x->lod_ks = 1.0f / (float)(1u << (2 * F));
++  x->lod_kt = 1.0f / (float)(1u << F) / (float)(1u << F) /
++              (float)(1u << ws) / (float)(1u << ws);
++  for (l = 0; l <= x->nlev; l++) {
++    ZLevel *L = &x->lvl[l];
++    int wl = ws > l ? ws - l : 0, hl = hs > l ? hs - l : 0;
++    if (l == 0) {
++      L->pix = t->images[0].pixmap;
++      L->alpha = t->alpha;
++    } else {
++      L->pix = t->mip->l[l].pix;
++      L->alpha = t->mip->l[l].alpha;
++    }
++    L->ws = wl;
++    L->wm = (1 << wl) - 1;
++    L->hm = (1 << hl) - 1;
++    L->shs = F + ws - wl;
++    L->sht = F + ws + hs - hl;
++  }
++  return 1;
++}
++
+ /* ------------------------------------------------------------ selection */
+ 
+ void gl_update_raster(GLContext *c)
+@@ -78,6 +174,7 @@ void gl_update_raster(GLContext *c)
+   /* ---- texture (GL 1.3 3.8.10: an incomplete texture disables it) */
+   tex = c->texture_2d_enabled && t != NULL && gl_texture_complete(t);
+   c->tex_active = tex;
++  c->tex_filtered = 0;
+   if (tex) {
+     int TW = 1 << t->ws, F = t->fbits;
+     zb->current_texture = t->images[0].pixmap;
+@@ -99,6 +196,13 @@ void gl_update_raster(GLContext *c)
+       else if (c->texenv_mode == GL_MODULATE)
+         modwhite = 1;
+     }
++    /* phase 4 F-LIN: a linear or mipmap filter is a stage of the general
++       path (tier 1 is nearest in level 0 only) */
++    /* (out of line, and not called for NEAREST / NEAREST: texobj binds
++       two textures a frame, and inlined it put 244 B into its hot code) */
++    c->tex_filtered = (t->mag_filter != GL_NEAREST || t->min_filter != GL_NEAREST) &&
++                      zpx_prepare(c, t);
++    if (c->tex_filtered) tex_tier1 = modwhite = 0;
+     if (!tex_tier1 && !modwhite) gen = 1;
+   }
+ 
+@@ -148,18 +252,25 @@ void gl_update_raster(GLContext *c)
+     gen = 1;
+   if (dsel == ZP_DEPTH_NONE) {
+     c->zb_flat = ZB_fillTriangleFlat_nt; c->zb_smooth = ZB_fillTriangleSmooth_nt;
++    c->zb_smooth_pc = NULL;               /* phase 4: the general path */
++    c->zb_smooth_long = ZB_fillTriangleSmoothLong_nt;
+     c->zb_map = ZB_fillTriangleMappingPerspective_nt;
+     c->zb_line = ZB_line; c->zb_plot = ZB_plot_nz;
+   } else if (!c->depth_mask) {
+     c->zb_flat = ZB_fillTriangleFlat_nw; c->zb_smooth = ZB_fillTriangleSmooth_nw;
++    c->zb_smooth_pc = c->zb_smooth_long = NULL;   /* phase 4: the general path */
+     c->zb_map = ZB_fillTriangleMappingPerspective_nw;
+     c->zb_line = ZB_line_z; c->zb_plot = ZB_plot;   /* not used: general path */
+   } else if (dsel == ZP_DEPTH_LESS) {
+     c->zb_flat = ZB_fillTriangleFlat_lt; c->zb_smooth = ZB_fillTriangleSmooth_lt;
++    c->zb_smooth_pc = ZB_fillTriangleSmoothPersp_lt;
++    c->zb_smooth_long = ZB_fillTriangleSmoothLong_lt;
+     c->zb_map = ZB_fillTriangleMappingPerspective_lt;
+     c->zb_line = ZB_line_z_lt; c->zb_plot = ZB_plot_lt;
+   } else {
+     c->zb_flat = ZB_fillTriangleFlat; c->zb_smooth = ZB_fillTriangleSmooth;
++    c->zb_smooth_pc = ZB_fillTriangleSmoothPersp;
++    c->zb_smooth_long = ZB_fillTriangleSmoothLong;
+     c->zb_map = ZB_fillTriangleMappingPerspective;
+     c->zb_line = ZB_line_z; c->zb_plot = ZB_plot;
+   }
+@@ -200,6 +311,10 @@ void gl_update_raster(GLContext *c)
+   if (skip) c->draw_fill_inner = gl_draw_triangle_skip;
+   else if (gen) c->draw_fill_inner = gl_draw_triangle_general;
+   else if (modwhite) c->draw_fill_inner = gl_draw_triangle_modwhite;
++  /* phase 4 F-PERSP: smooth untextured tier 1 - one test per triangle
++     for perspective-correct colour (s31_tfilter.c) */
++  else if (!tex && c->current_shade_model == GL_SMOOTH && zpx_pc_enabled())
++    c->draw_fill_inner = gl_draw_triangle_fill_pq;
+   else c->draw_fill_inner = gl_draw_triangle_fill;
+   c->draw_fill = (c->offset_states & TGL_OFFSET_FILL) && !skip ?
+                  gl_draw_triangle_offset : c->draw_fill_inner;
+@@ -216,8 +331,9 @@ void gl_update_raster(GLContext *c)
+ void gl_build_pipe(GLContext *c)
+ {
+   ZPipe *p = &c->pipe;
++  ZPipeX *x = &c->pipex;
+   GLTexture *t = (c->tex_enables & 1) ? c->current_texture : c->current_texture_1d;
+-  int i = 0, flat = c->current_shade_model != GL_SMOOTH, zw_late, stip;
++  int i = 0, flat = c->current_shade_model != GL_SMOOTH, zw_late, stip, nocol;
+ 
+   c->pipe_dirty = 0;
+   c->pipe_serial++;             /* s31_draw.c rebuilds its copy */
+@@ -269,9 +385,32 @@ void gl_build_pipe(GLContext *c)
+     p->zb = c->zb;
+     p->st[i++] = zp_stipple_fn();
+   }
+-  p->st[i++] = zp_color_fn(flat);
++  /* phase 4: the fragment colour is not computed when nothing reads it -
++     an RGB texture under REPLACE (or DECAL) replaces it, and without an
++     alpha test or an alpha blend factor its alpha is never read (it cost
++     ~26 instructions a pixel on a REPLACE-textured general-path span) */
++  {
++    int te = c->tex_active ? texenv_op(c->texenv_mode, t->fmt) : -1;
++    int sa = p->sfactor, da = p->dfactor;
++    int alpha_read = (p->afunc != GL_ALWAYS && p->afunc != GL_NEVER) ||
++                     sa == GL_SRC_ALPHA || sa == GL_ONE_MINUS_SRC_ALPHA ||
++                     da == GL_SRC_ALPHA || da == GL_ONE_MINUS_SRC_ALPHA;
++    nocol = te == ZP_TE_REPLACE_RGB && !alpha_read;
++  }
++  x->col_affine = zp_color_fn(flat);
++  x->slot_col = -1;
++  if (!nocol) {
++    x->slot_col = i;
++    p->st[i++] = x->col_affine;
++  }
++  x->slot_tex = -1;
++  x->tex_base = NULL;
++  x->tex0 = NULL; x->talpha0 = NULL;
+   if (c->tex_active) {
+-    p->st[i++] = zp_texidx_fn(p->clamp_s, p->clamp_t);
++    x->slot_tex = i;
++    x->tex_base = zp_texidx_fn(p->clamp_s, p->clamp_t);
++    x->tex0 = p->tex; x->talpha0 = p->talpha;
++    p->st[i++] = x->tex_base;
+     p->st[i++] = zp_texenv_fn(texenv_op(c->texenv_mode, t->fmt));
+   }
+   if (c->raster_sepspec) p->st[i++] = zp_spec_fn(flat);
+@@ -281,9 +420,36 @@ void gl_build_pipe(GLContext *c)
+   if (!p->nocolor) p->st[i++] = zp_out_fn(p->sfactor, p->dfactor, p->cmask);
+   p->st[i] = NULL;
+   p->need = (p->dsel != ZP_DEPTH_NONE ? ZP_N_Z : 0) |
+-            (flat ? 0 : ZP_N_RGBA) |
++            (flat || nocol ? 0 : ZP_N_RGBA) |
+             (c->tex_active ? ZP_N_ST | ZP_N_Q : 0) |
+             (c->fog_enabled ? ZP_N_F | ZP_N_Q : 0) |
+             (c->raster_sepspec && !flat ? ZP_N_SPEC : 0);
++  x->need0 = p->need;
++
++  /* phase 4 (s31_tfilter.c): which choices the triangles make */
++  p->xact = 0;
++  if (!flat && !nocol && zpx_pc_enabled()) {
++    p->xact |= ZPX_PC;
++    x->pc_min = ZPX_PC_MIN;
++    x->pc_cur = 0;
++  }
++  if (c->tex_active && c->tex_filtered) {
++    int rep_all = !p->clamp_s && !p->clamp_t, al = t->alpha != NULL;
++    x->rep_s = p->clamp_s ? 0 : -1;
++    x->rep_t = p->clamp_t ? 0 : -1;
++    x->f_near = zpx_stage(TF_NMN, rep_all, al);
++    x->f_bil = zpx_stage(TF_LINEAR0, rep_all, al);
++    x->f_tri = zpx_stage(TF_LML, rep_all, al);
++    if (x->kmag == x->kmin) {
++      /* one filter for every triangle (LINEAR / LINEAR without mipmaps):
++         placed once, no per-triangle choice */
++      x->cur0 = &x->lvl[0];
++      x->tex_base = x->f_bil;
++      p->st[x->slot_tex] = x->f_bil;
++      p->tex = x->ftex; p->talpha = x->falpha;
++    } else {
++      p->xact |= ZPX_TEX;
++    }
++  }
+ }
+ 
+diff --git a/gl/tinygl/source/s31_draw.c b/gl/tinygl/source/s31_draw.c
+index 493e3fd..9f5afa3 100644
+--- a/gl/tinygl/source/s31_draw.c
++++ b/gl/tinygl/source/s31_draw.c
+@@ -76,7 +76,10 @@ static inline int clampi(int v, int hi)
+   return v < 0 ? 0 : (v > hi ? hi : v);
+ }
+ 
+-/* the stage list for the current state (cold: once per state change) */
++/* the stage list for the current state (cold: once per state change;
++   out of line, so pix_begin - once per glBitmap - does not pay its
++   registers: phase 4 measured +8 instructions a call when inlined) */
++__attribute__((noinline))
+ static void pix_build(GLContext *c, PixPipe *pp)
+ {
+   ZPipe *p = &pp->p;
+@@ -92,9 +95,16 @@ static void pix_build(GLContext *c, PixPipe *pp)
+   for (i = n = 0; c->pipe.st[i]; i++) {
+     int k, keep = 1;
+     for (k = 0; k < 9; k++) if (c->pipe.st[i] == drop[k]) keep = 0;
++    /* phase 4: the filtered texel stages and the perspective colour
++       stage the last triangle may have left in the list; the pixel paths
++       sample level 0 nearest (pp->tidx) */
++    if (zpx_is_tex_stage(c->pipe.st[i]) || c->pipe.st[i] == zpx_color_pc()) keep = 0;
+     if (keep) p->st[n++] = c->pipe.st[i];
+   }
+   p->st[n] = NULL;
++  p->tex = c->pipex.tex0;
++  p->talpha = c->pipex.talpha0;
++  p->xact = 0;
+   p->stip_on = 0;
+   pp->tex = c->tex_active;
+   pp->direct = p->dsel == ZP_DEPTH_NONE && !pp->tex && !c->fog_enabled &&
+@@ -948,16 +958,19 @@ void tgl_get_polygon_stipple(unsigned char *mask)
+ 
+ /* ------------------------------------------------------------ glGetTexImage */
+ 
+-/* GL 1.3 6.1.4, table 6.1 for the stored classes. Levels above 0 are not
+-   stored (texture.c): they are read as what is drawn, level 0 sampled
+-   nearest at the level's size */
++/* GL 1.3 6.1.4, table 6.1 for the stored classes. A level above 0 is read
++   from its stored block (phase 4, texture.c); one that is not stored
++   (S31GL_MIPMAPS=0, no memory) is read as level 0 sampled nearest at the
++   level's size */
+ void tgl_get_tex_image(int target, int level, int format, int type, void *pixels)
+ {
+   GLContext *c = gl_get_context();
+   GLTexture *t = gl_tex_target(c, target);
+   S31Pack k;
+   float v[4 * 64];
+-  int e, w, h, x, y, lum, TW, TH, sh, n, i;
++  int e, w, h, x, y, lum, TW, TH, sh, n, i, fmt;
++  const unsigned short *pix;
++  const unsigned char *al;
+ 
+   if (t == NULL) { gl_set_error(c, GL_INVALID_ENUM); return; }
+   if (level < 0 || level >= MAX_TEXTURE_LEVELS) { gl_set_error(c, GL_INVALID_VALUE); return; }
+@@ -978,6 +991,18 @@ void tgl_get_tex_image(int target, int level, int format, int type, void *pixels
+         t->internal_format == GL_LUMINANCE || t->internal_format == GL_LUMINANCE_ALPHA ||
+         t->fmt == TGL_TEXF_INTENSITY;
+   sh = level;
++  pix = (const unsigned short *)t->images[0].pixmap;
++  al = t->alpha;
++  fmt = t->fmt;
++  if (level > 0 && t->mip && t->mip->l[level].pix) {
++    const GLMipLevel *m = &t->mip->l[level];
++    int f = t->lfmt[level];
++    pix = m->pix; al = m->alpha; fmt = m->cls;
++    TW = 1 << m->ws; TH = 1 << m->hs;
++    sh = 0;
++    lum = f == 1 || f == 2 || (f >= GL_LUMINANCE4 && f <= GL_LUMINANCE16_ALPHA16) ||
++          f == GL_LUMINANCE || f == GL_LUMINANCE_ALPHA || fmt == TGL_TEXF_INTENSITY;
++  }
+   for (y = 0; y < h; y++) {
+     int sy = (y << sh) < TH ? (y << sh) : TH - 1;
+     for (x = 0; x < w; x += n) {
+@@ -985,15 +1010,15 @@ void tgl_get_tex_image(int target, int level, int format, int type, void *pixels
+       for (i = 0; i < n; i++) {
+         int sx = ((x + i) << sh) < TW ? ((x + i) << sh) : TW - 1;
+         int idx = sy * TW + sx;
+-        unsigned int tx = ((const unsigned short *)t->images[0].pixmap)[idx];
+-        float *q = v + 4 * i, a = t->alpha ? t->alpha[idx] * (1.0f / 255.0f) : 1.0f;
++        unsigned int tx = pix[idx];
++        float *q = v + 4 * i, a = al ? al[idx] * (1.0f / 255.0f) : 1.0f;
+         q[0] = (float)(tx >> 11) * (1.0f / 31.0f);
+         q[1] = (float)((tx >> 5) & 63) * (1.0f / 63.0f);
+         q[2] = (float)(tx & 31) * (1.0f / 31.0f);
+         q[3] = a;
+-        if (t->fmt == TGL_TEXF_ALPHA) q[0] = q[1] = q[2] = 0.0f;
++        if (fmt == TGL_TEXF_ALPHA) q[0] = q[1] = q[2] = 0.0f;
+         else if (lum) q[1] = q[2] = 0.0f;
+-        if (t->fmt == TGL_TEXF_INTENSITY) q[3] = 1.0f;
++        if (fmt == TGL_TEXF_INTENSITY) q[3] = 1.0f;
+         if (c->xfer_active) {
+           int ch;
+           for (ch = 0; ch < 4; ch++) q[ch] = q[ch] * c->xfer_scale[ch] + c->xfer_bias[ch];
+diff --git a/gl/tinygl/source/texture.c b/gl/tinygl/source/texture.c
+index ad60341..123b3c3 100644
+--- a/gl/tinygl/source/texture.c
++++ b/gl/tinygl/source/texture.c
+@@ -11,13 +11,20 @@
+  *    s31_pixels.c unpacks and honour every GL_UNPACK_* parameter; NULL
+  *    pixels give a black image; levels > 0 are validated and recorded
+  *    (completeness, glGetTexLevelParameter) but not stored - the MIPMAP
+- *    filters sample level 0; proxy targets answer as a real upload would.
++ *    filters sample level 0 (superseded by phase 4 F-LIN, below); proxy
++ *    targets answer as a real upload would.
+  *    TinyGL exit(1)ed for anything but RGB/UNSIGNED_BYTE, level 0.
+  *  - glGenTextures reserves the names it returns (two calls used to return
+  *    the same name); deleting texture 0 is ignored; a texture without an
+  *    image draws untextured instead of dereferencing NULL (clip.c).
+  *  - glTexEnv / glTexParameter / glPixelStore record every GL 1.3 value and
+  *    raise GL errors instead of exiting.
++ *  - (phase 4 F-LIN) levels > 0 are stored as the application uploads
++ *    them (glTexImage, glTexSubImage, glCopyTex*), each its own block in
++ *    GLTexture.mip, converted to that level's stored class; a texture that
++ *    never gets a level > 0 pays one pointer. S31GL_MIPMAPS=0 stores none
++ *    (the mipmap filters then sample level 0, as before). GL_LINEAR and
++ *    the mipmap filters are drawn by s31_tfilter.c.
+  */
+ 
+ #include "zgl.h"
+@@ -25,6 +32,16 @@
+ 
+ #define TEX_SIZE 256            /* GL_MAX_TEXTURE_SIZE (get.c) */
+ 
++/* s31 (phase 4): the stored levels > 0 */
++void gl_tex_free_mip(GLTexture *t)
++{
++  int l;
++  if (t->mip == NULL) return;
++  for (l = 1; l < MAX_TEXTURE_LEVELS; l++) gl_free(t->mip->l[l].pix);
++  gl_free(t->mip);
++  t->mip = NULL;
++}
++
+ static GLTexture *find_texture(GLContext *c,int h)
+ {
+   GLTexture *t;
+@@ -59,6 +76,7 @@ static void free_texture(GLContext *c,int h)
+     im=&t->images[i];
+     if (im->pixmap != NULL) gl_free(im->pixmap);
+   }
++  gl_tex_free_mip(t);
+ 
+   gl_free(t);
+ }
+@@ -109,6 +127,7 @@ void free_texture_detached(GLTexture *t)
+ {
+   if (t == NULL) return;
+   gl_free(t->images[0].pixmap);
++  gl_tex_free_mip(t);
+   gl_free(t);
+ }
+ 
+@@ -305,15 +324,16 @@ int gl_texture_complete(const GLTexture *t)
+    and luminance tests ran per texel, and this file is -Os, so GCC did not
+    unswitch them; TyrQuake re-uploads lightmaps every frame). Built -O2. */
+ #define T565(r, g, b) ((unsigned short)((((r) & 0xF8) << 8) | (((g) & 0xFC) << 3) | ((b) >> 3)))
++/* (phase 4: any level - pix/al are the level's planes, ws its log2 width,
++   ifmt its internal format) */
+ __attribute__((optimize("O2")))
+-static void tex_store(GLTexture *t, const S31Unpack *u, int sx, int sy,
+-                      int x0, int y0, int w, int h)
++static void tex_store_img(unsigned short *pix, unsigned char *al, int ws, int ifmt,
++                          const S31Unpack *u, int sx, int sy,
++                          int x0, int y0, int w, int h)
+ {
+   unsigned char row[4 * 256];
+-  unsigned short *pix = t->images[0].pixmap;
+-  unsigned char *al = t->alpha;
+-  int TW = 1 << t->ws, x, y, lum;
+-  int cls = tex_class(t->internal_format, &lum);
++  int TW = 1 << ws, x, y, lum;
++  int cls = tex_class(ifmt, &lum);
+ 
+   /* the common uploads straight from the client's bytes, without the
+      RGBA8888 row in between: UNSIGNED_BYTE RGB / RGBA / LUMINANCE into
+@@ -366,6 +386,54 @@ static void tex_store(GLTexture *t, const S31Unpack *u, int sx, int sy,
+   }
+ }
+ 
++static void tex_store(GLTexture *t, const S31Unpack *u, int sx, int sy,
++                      int x0, int y0, int w, int h)
++{
++  tex_store_img(t->images[0].pixmap, t->alpha, t->ws, t->internal_format,
++                u, sx, sy, x0, y0, w, h);
++}
++
++/* s31 (phase 4 F-LIN): store level L > 0 (iw x ih, log2 ws x hs, internal
++   format ifmt), from u when given. The block is reused when the level
++   keeps its shape and class. Returns 0 when it could not be stored (no
++   memory, or S31GL_MIPMAPS=0): the level is then only recorded, and the
++   mipmap filters see an incomplete chain and sample level 0 */
++static int tex_level_store(GLContext *c, GLTexture *t, int level, int iw, int ih,
++                           int ws, int hs, int ifmt, int border, int vb,
++                           const S31Unpack *u, int have_pixels)
++{
++  GLMipLevel *m;
++  int lum, cls = tex_class(ifmt, &lum), has_alpha = cls != TGL_TEXF_RGB;
++  int need = iw * ih * 2 + (has_alpha ? iw * ih : 0);
++
++  if (!c->mip_store) return 0;
++  if (t->mip == NULL) {
++    t->mip = gl_zalloc(sizeof(GLMipChain));
++    if (t->mip == NULL) { gl_set_error(c, GL_OUT_OF_MEMORY); return 0; }
++  }
++  m = &t->mip->l[level];
++  if (iw == 0 || ih == 0) {
++    gl_free(m->pix);
++    m->pix = NULL; m->alpha = NULL;
++    return 0;
++  }
++  if (m->pix == NULL || m->ws != ws || m->hs != hs || (m->alpha != NULL) != has_alpha) {
++    gl_free(m->pix);
++    m->pix = gl_malloc(need);
++    m->alpha = NULL;
++    if (m->pix == NULL) { gl_set_error(c, GL_OUT_OF_MEMORY); return 0; }
++  }
++  m->ws = (unsigned char)ws; m->hs = (unsigned char)hs;
++  m->cls = (unsigned char)cls;
++  m->alpha = has_alpha ? (unsigned char *)m->pix + iw * ih * 2 : NULL;
++  if (!have_pixels) {
++    memset(m->pix, 0, need);
++    return 1;
++  }
++  tex_store_img(m->pix, m->alpha, ws, ifmt, u, border, vb, 0, 0, iw, ih);
++  return 1;
++}
++
+ /* s31: glTexImage2D and glTexImage1D (a W x 1 image, plan F7). src: the
+    source already set up (glCopyTexImage: the colour buffer), or NULL for
+    the op's own format/type/pixels */
+@@ -457,9 +525,10 @@ int gl_tex_image_src(GLContext *c, GLParam *p, const S31Unpack *src)
+   t->lh[level] = (unsigned short)height;
+   t->lfmt[level] = components;
+   if (level > 0) {
+-    /* recorded for completeness and glGetTexLevelParameter; the base
+-       level is what is drawn (nearest), so nothing is stored */
+-    return 0;
++    /* recorded for completeness and glGetTexLevelParameter, and (phase 4)
++       stored for the mipmap filters */
++    return tex_level_store(c, t, level, iw, ih, ws, hs, components, border, vb,
++                           &u, pixels != NULL || src != NULL);
+   }
+   if (border) gl_warn_once("texture border (the border texels are dropped)");
+   t->width = width;
+@@ -561,8 +630,24 @@ int gl_tex_subimage_src(GLContext *c, GLParam *p, const S31Unpack *src)
+     e = s31_unpack_setup(c, &u, width, height, format, type, pixels);
+     if (e) { gl_set_error(c, e); return 0; }
+   }
+-  if (level > 0 || (pixels == NULL && src == NULL) || width == 0 || height == 0 ||
+-      t->images[0].pixmap == NULL)
++  if ((pixels == NULL && src == NULL) || width == 0 || height == 0)
++    return 0;
++  if (level > 0) {
++    /* phase 4: into the stored level, if there is one */
++    GLMipLevel *m = t->mip ? &t->mip->l[level] : NULL;
++    if (m == NULL || m->pix == NULL) return 0;
++    TW = 1 << m->ws; TH = 1 << m->hs;
++    x0 = xoff; y0 = yoff; sx = 0; sy = 0; w = width; h = height;
++    if (x0 < 0) { sx = -x0; w += x0; x0 = 0; }
++    if (y0 < 0) { sy = -y0; h += y0; y0 = 0; }
++    if (x0 + w > TW) w = TW - x0;
++    if (y0 + h > TH) h = TH - y0;
++    if (w <= 0 || h <= 0) return 0;
++    c->raster_dirty = 1;
++    tex_store_img(m->pix, m->alpha, m->ws, t->lfmt[level], &u, sx, sy, x0, y0, w, h);
++    return 1;
++  }
++  if (t->images[0].pixmap == NULL)
+     return 0;
+   /* the part inside the stored (border-less) image */
+   TW = 1 << t->ws; TH = 1 << t->hs;
+@@ -705,9 +790,7 @@ void glopTexParameter(GLContext *c,GLParam *p)
+       gl_set_error(c, GL_INVALID_ENUM);
+       return;
+     }
+-    t->mag_filter = param;
+-    if (param == GL_LINEAR)
+-      gl_note_once("GL_LINEAR texture filter by nearest sampling");
++    t->mag_filter = param;      /* phase 4: honoured (s31_tfilter.c) */
+     break;
+   case GL_TEXTURE_MIN_FILTER:
+     switch (param) {
+@@ -719,9 +802,7 @@ void glopTexParameter(GLContext *c,GLParam *p)
+       gl_set_error(c, GL_INVALID_ENUM);
+       return;
+     }
+-    t->min_filter = param;
+-    if (param != GL_NEAREST && param != GL_NEAREST_MIPMAP_NEAREST)
+-      gl_note_once("GL_LINEAR / mipmap texture filters by nearest sampling of level 0");
++    t->min_filter = param;      /* phase 4: honoured (s31_tfilter.c) */
+     break;
+   case GL_TEXTURE_PRIORITY:
+     t->priority = p[4].f < 0.0f ? 0.0f : (p[4].f > 1.0f ? 1.0f : p[4].f);
+diff --git a/gl/tinygl/source/zbuffer.h b/gl/tinygl/source/zbuffer.h
+index 93c9a0d..e12e1a1 100644
+--- a/gl/tinygl/source/zbuffer.h
++++ b/gl/tinygl/source/zbuffer.h
+@@ -231,6 +231,15 @@ void ZB_fillTriangleFlat_nw(ZBuffer *zb, ZBufferPoint *p1,ZBufferPoint *p2,ZBuff
+ void ZB_fillTriangleSmooth_nw(ZBuffer *zb, ZBufferPoint *p1,ZBufferPoint *p2,ZBufferPoint *p3);
+ void ZB_fillTriangleMappingPerspective_nw(ZBuffer *zb, ZBufferPoint *p0,ZBufferPoint *p1,ZBufferPoint *p2);
+ void ZB_plot_nz(ZBuffer *zb,ZBufferPoint *p);
++/* s31 (phase 4 F-PERSP): the smooth filler with perspective-correct colour,
++   for depth LEQUAL and LESS (the other depth states take the general path) */
++void ZB_fillTriangleSmoothPersp(ZBuffer *zb, ZBufferPoint *p1,ZBufferPoint *p2,ZBufferPoint *p3);
++void ZB_fillTriangleSmoothPersp_lt(ZBuffer *zb, ZBufferPoint *p1,ZBufferPoint *p2,ZBufferPoint *p3);
++/* (phase 4) the smooth filler re-anchored every 8 pixels (long spans, equal
++   w), for LEQUAL, LESS and no depth test */
++void ZB_fillTriangleSmoothLong(ZBuffer *zb, ZBufferPoint *p1,ZBufferPoint *p2,ZBufferPoint *p3);
++void ZB_fillTriangleSmoothLong_nt(ZBuffer *zb, ZBufferPoint *p1,ZBufferPoint *p2,ZBufferPoint *p3);
++void ZB_fillTriangleSmoothLong_lt(ZBuffer *zb, ZBufferPoint *p1,ZBufferPoint *p2,ZBufferPoint *p3);
+ /* s31: ztriangle_lt.c, GL_LESS (strict) with depth writes */
+ void ZB_fillTriangleFlat_lt(ZBuffer *zb, ZBufferPoint *p1,ZBufferPoint *p2,ZBufferPoint *p3);
+ void ZB_fillTriangleSmooth_lt(ZBuffer *zb, ZBufferPoint *p1,ZBufferPoint *p2,ZBufferPoint *p3);
+diff --git a/gl/tinygl/source/zgl.h b/gl/tinygl/source/zgl.h
+index 95ad752..0884850 100644
+--- a/gl/tinygl/source/zgl.h
++++ b/gl/tinygl/source/zgl.h
+@@ -200,8 +200,25 @@ typedef struct GLTexture {
+      glGetTexLevelParameter; levels > 0 are not stored */
+   unsigned short lw[MAX_TEXTURE_LEVELS], lh[MAX_TEXTURE_LEVELS];
+   unsigned short lfmt[MAX_TEXTURE_LEVELS];   /* internal formats fit 16 bits */
++  /* s31 (phase 4 F-LIN): levels 1.. as uploaded, allocated at the first
++     level > 0 the application specifies (NULL: none - a texture without
++     mipmaps pays 4 bytes). Each level is its own RGB565 (+ A8) block of
++     its own size, so a full chain costs a third of level 0 more */
++  struct GLMipChain *mip;
+ } GLTexture;
+ 
++/* s31 (phase 4): a stored level > 0 (texture.c). cls is the stored class
++   (TGL_TEXF_*) its data was converted to; a level whose class is not
++   level 0's is not used (the mipmap filters then sample level 0) */
++typedef struct GLMipLevel {
++  unsigned short *pix;      /* RGB565, then the A8 plane when cls has alpha */
++  unsigned char *alpha;
++  unsigned char ws, hs, cls, pad;
++} GLMipLevel;
++typedef struct GLMipChain {
++  GLMipLevel l[MAX_TEXTURE_LEVELS];   /* l[0] unused */
++} GLMipChain;
++
+ 
+ /* shared state */
+ 
+@@ -484,6 +501,14 @@ typedef struct GLContext {
+   /* the lights, reached through first_light / l pointers, not by offset
+      from c: 16 x 136 B that sat between c and every hot field */
+   GLLight lights[MAX_LIGHTS];
++  /* s31 (phase 4, s31_tfilter.c): the general path's per-triangle state -
++     texture filter levels, the filtered texels of a chunk, perspective
++     colour - reached through pipe.x; cold here, at the end */
++  ZPipeX pipex;
++  int tex_filtered;           /* the active texture has a linear/mipmap filter */
++  ZB_fillTriangleFunc zb_smooth_pc;  /* F-PERSP: tier 1's smooth filler for the depth state */
++  ZB_fillTriangleFunc zb_smooth_long;/* long spans at equal w (s31_tfilter.c) */
++  int mip_store;              /* store levels > 0 (S31GL_MIPMAPS, default 1) */
+ } GLContext;
+ 
+ /* s31 (phase 3a G14): hidden in the declaration too, so every entry point
+@@ -574,6 +599,8 @@ static inline void gl_set_provoking(GLContext *c, GLVertex *v)
+ void gl_update_raster(GLContext *c);
+ void gl_draw_triangle_general(GLContext *c, GLVertex *p0, GLVertex *p1, GLVertex *p2);
+ void gl_draw_triangle_modwhite(GLContext *c, GLVertex *p0, GLVertex *p1, GLVertex *p2);
++/* s31_tfilter.c (phase 4 F-PERSP): smooth tier 1 with the perspective-colour test */
++void gl_draw_triangle_fill_pq(GLContext *c, GLVertex *p0, GLVertex *p1, GLVertex *p2);
+ void gl_draw_triangle_offset(GLContext *c, GLVertex *p0, GLVertex *p1, GLVertex *p2);
+ /* lines and points of the general path; the colour of a flat line is the
+    provoking vertex's (c->flat_vtx) */
+@@ -581,6 +608,7 @@ void gl_general_line(GLContext *c, GLVertex *a, GLVertex *b, int flat);
+ void gl_general_point(GLContext *c, GLVertex *p);
+ /* texture.c */
+ int gl_texture_complete(const GLTexture *t);
++void gl_tex_free_mip(GLTexture *t);       /* phase 4: the stored levels > 0 */
+ /* vertex.c: GL fog factor of a vertex */
+ void gl_vertex_fog(GLContext *c, GLVertex *v);
+ 
+diff --git a/gl/tinygl/source/zpipe.c b/gl/tinygl/source/zpipe.c
+index df744f1..fd4ded4 100644
+--- a/gl/tinygl/source/zpipe.c
++++ b/gl/tinygl/source/zpipe.c
+@@ -544,5 +544,9 @@ void zp_run(ZBuffer *zb, ZSpan *s)
+     }
+     if (p->need & ZP_N_F) s->fq += (float)n * s->dfqdx;
+     if (p->need & ZP_N_Q) s->fz += (float)n * s->dfzdx;
++    if (p->need & ZP_N_PC) {                /* phase 4 F-PERSP */
++      s->rq += (float)n * s->drqdx; s->gq += (float)n * s->dgqdx;
++      s->bq += (float)n * s->dbqdx; s->aq += (float)n * s->daqdx;
++    }
+   }
+ }
+diff --git a/gl/tinygl/source/zpipe.h b/gl/tinygl/source/zpipe.h
+index 485e2d9..e1ab31d 100644
+--- a/gl/tinygl/source/zpipe.h
++++ b/gl/tinygl/source/zpipe.h
+@@ -48,6 +48,12 @@ typedef struct ZSpan {
+      general filler interpolates them; a line or point pixel has fz = 1 */
+   float sz, tz, fq, fz;
+   float dszdx, dtzdx, dfqdx, dfzdx;
++  /* phase 4 F-PERSP (s31_tfilter.c): r/w, g/w, b/w, a/w (8.16 over fz =
++     1/w), stepped only for a triangle whose colour is interpolated
++     perspective-correctly (ZP_N_PC) */
++  float rq, gq, bq, aq;
++  float drqdx, dgqdx, dbqdx, daqdx;
++  float pcr[4], pcgy[4];   /* their planes (the triangle filler's, per span) */
+ } ZSpan;
+ 
+ /* the chunk being processed */
+@@ -115,8 +121,108 @@ typedef struct ZPipe {
+   const unsigned int *stip;
+   ZBuffer *zb;
+   int stip_on;
++  /* phase 4 (s31_tfilter.c): the per-triangle choices - texture filter
++     and mipmap level, perspective-correct colour. xact: ZPX_* bits, 0 when
++     no triangle of the batch needs a choice (the fillers then do nothing
++     new); x: the context's ZPipeX (at the end of GLContext, off the hot
++     2 kB) */
++  int xact;
++  struct ZPipeX *x;
+ } ZPipe;
+ 
++/* ZPipe.xact */
++enum { ZPX_TEX = 1,      /* the texel stage is chosen per triangle (LOD) */
++       ZPX_PC = 2 };     /* colour may be perspective-corrected per triangle */
++
++/* phase 4 (s31_tfilter.c): one stored mipmap level as the texel stages
++   read it. The fixed-point s, t of the whole texture (clip.c) address it
++   by shifts: column (s >> shs) & wm, row (t >> sht) & hm, index
++   (row << ws) | column */
++typedef struct ZLevel {
++  const PIXEL *pix;
++  const unsigned char *alpha;          /* A8 plane or NULL */
++  int shs, sht, ws;
++  int wm, hm;                          /* W-1, H-1 of the level */
++} ZLevel;
++
++#define ZPX_MAXLEV 11                  /* MAX_TEXTURE_LEVELS (zgl.h) */
++
++typedef struct ZPipeX {
++  /* the stages gl_build_pipe placed (index in ZPipe.st, -1: none) */
++  int slot_tex, slot_col;
++  int need0;                           /* ZPipe.need without per-triangle bits */
++  ZStageFn col_affine;                 /* the batch's colour stage */
++  /* the texel stage of the batch without a choice, and the level-0
++     texture it reads (pixel paths and lines restore these) */
++  ZStageFn tex_base;
++  const PIXEL *tex0;
++  const unsigned char *talpha0;
++  /* texture filtering (TF_* kinds): magnification and minification, the
++     lambda at which they switch (GL 1.3 3.8.8 c), the highest level */
++  int kmag, kmin, nlev;
++  float lod_c;
++  float lod_ks, lod_kt;                /* fixed point -> level-0 texels, squared */
++  ZLevel lvl[ZPX_MAXLEV];              /* the stored chain, lvl[0] = level 0 */
++  /* the filtered stages for the texture's wraps and format: nearest in a
++     level > 0, bilinear, trilinear */
++  ZStageFn f_near, f_bil, f_tri;
++  int rep_s, rep_t;                    /* -1: GL_REPEAT on that axis, else 0 */
++  /* this triangle's level(s) and the trilinear weight of cur1 (0..32) */
++  const ZLevel *cur0, *cur1;
++  int tw;
++  /* filtered texels of the chunk: the texenv stages read them through
++     ZPipe.tex / talpha with idx[i] = i */
++  PIXEL ftex[ZP_CHUNK];
++  unsigned char falpha[ZP_CHUNK];
++  /* perspective colour: selected when the colour error of screen-affine
++     interpolation could reach pc_min 8.16 units */
++  float pc_min;
++  int pc_cur;                          /* the colour slot holds the corrected stage */
++} ZPipeX;
++
++/* phase 4: can the q = 1/w of three vertices differ by a ratio r above
++   1.0648 (ZPX_PC_PRE)? q > 0, so the float bits grow with the value: the
++   bit pattern is piecewise linear in q with slope 2^23 / 2^e on
++   [2^e, 2^(e+1)), so q to r q moves it by at least 2^23 (r - 1) / r, which
++   is 2^18.96 at r = 1.0648 - more than the 2^18 tested here. The one test
++   the fillers make per triangle before anything else */
++static inline int zpx_qspread(float qa, float qb, float qc)
++{
++  union { float f; unsigned int u; } a, b, d;
++  unsigned int mx, mn;
++  a.f = qa; b.f = qb; d.f = qc;
++  mx = a.u > b.u ? a.u : b.u;
++  mn = a.u < b.u ? a.u : b.u;
++  mx = d.u > mx ? d.u : mx;
++  mn = d.u < mn ? d.u : mn;
++  return (mx - mn) >> 18 != 0;
++}
++
++/* perspective colour (s31_tfilter.c): a triangle is corrected when
++   crange * (qmax - qmin) > ZPX_PC_MIN * (qmax + qmin), i.e. when the
++   screen-affine error crange (qmax - qmin) / (2 (qmax + qmin)) can exceed
++   E = 4 8-bit levels (4 x 65536 in 8.16): one step of RGB565's green, half
++   of red's and blue's - below it the corrected colour would change a pixel
++   by at most one stored step, and only at a quantisation boundary. With
++   crange at most 255 levels, only q ratios above 1.0648 can qualify
++   ((qmax - qmin) * ZPX_PC_PRE > qmax + qmin, ZPX_PC_PRE = 255 / (2 * 4)) */
++#define ZPX_PC_MIN (8.0f * 65536.0f)
++#define ZPX_PC_PRE 31.875f
++/* long spans on tier 1 (s31_tfilter.c gl_draw_triangle_fill_pq): a smooth
++   triangle at least ZPX_LONG_W pixels wide whose colour range is at least
++   ZPX_LONG_C zp units (1/64 of full scale: below it the stepping error
++   cannot reach a stored step) is re-anchored every 8 pixels */
++#define ZPX_LONG_W 64
++#define ZPX_LONG_C 1024
++
++/* texture filter kinds (ZPipeX.kmag / kmin) */
++enum { TF_NEAREST0,   /* nearest, level 0: the batch's own texidx stage */
++       TF_LINEAR0,    /* bilinear, level 0 */
++       TF_NMN,        /* NEAREST_MIPMAP_NEAREST */
++       TF_LMN,        /* LINEAR_MIPMAP_NEAREST */
++       TF_NML,        /* NEAREST_MIPMAP_LINEAR */
++       TF_LML };      /* LINEAR_MIPMAP_LINEAR */
++
+ /* phase 3a G03 (s31_zepoch.c): a triangle whose highest plain depth m is
+    above zchk - a new zmax, or a depth that does not fit above the epoch's
+    base (the buffer goes back to the plain mapping first). m = ~0: a sliver
+@@ -135,7 +241,7 @@ void zep_tri_far(ZPipe *p);
+ void zdb_tri(ZPipe *p, int ya, int yb, float x0, float dx1, float dx2);
+ 
+ enum { ZP_N_Z = 1, ZP_N_RGBA = 2, ZP_N_Q = 4, ZP_N_F = 8, ZP_N_ST = 16,
+-       ZP_N_SPEC = 32 };
++       ZP_N_SPEC = 32, ZP_N_PC = 64 };
+ 
+ /* a vertex of the general filler: GL window coordinates (pixel centres at
+    +0.5, rows from the top), TinyGL's integer depth, colour and alpha in 8.16, the
+@@ -174,6 +280,25 @@ ZStageFn zp_out_fn(int sfactor, int dfactor, int cmask);
+ /* process one span through zb->pipe */
+ void zp_run(ZBuffer *zb, ZSpan *s);
+ 
++/* phase 4 (s31_tfilter.c) */
++struct GLContext;
++struct GLTexture;
++struct ZTri;
++/* gl_build_pipe's part: the filter kinds, the level chain, xact */
++void zpx_build(struct GLContext *c, const struct GLTexture *t, int flat);
++/* the general filler, per triangle (xact != 0), before its planes: pick
++   the texel stage and level(s) from the triangle's lambda, and whether its
++   colour is perspective-corrected (sets ZPipe.need) */
++void zpx_tri(ZPipe *p, const struct ZTri *T, const ZVtxG *v0, const ZVtxG *v1,
++             const ZVtxG *v2);
++/* lines and points: the batch's base choices (level 0, affine colour) */
++void zpx_reset(ZPipe *p);
++/* the texel stages of phase 4, for s31_draw.c's pixel paths to drop */
++int zpx_is_tex_stage(ZStageFn f);
++/* the texel stage for kind k at the batch's wraps (TF_LINEAR0 ...) */
++ZStageFn zpx_stage(int kind, int repeat, int alpha);
++ZStageFn zpx_color_pc(void);
++
+ /* ztriangle_gen.c: the general triangle filler (GL's pixel-centre rule,
+    top-left fill convention, so shared edges are drawn once) */
+ void ZB_fillTriangleGeneral(ZBuffer *zb, const ZVtxG *v0, const ZVtxG *v1,
+diff --git a/gl/tinygl/source/ztriangle.c b/gl/tinygl/source/ztriangle.c
+index 0002253..0ca637c 100644
+--- a/gl/tinygl/source/ztriangle.c
++++ b/gl/tinygl/source/ztriangle.c
+@@ -184,6 +184,201 @@ void ZFN(ZB_fillTriangleSmooth)(ZBuffer *zb,
+ #include "ztriangle.h"
+ }
+ 
++#if TGL_FEATURE_RENDER_BITS == 16 && !defined(ZTRI_NO_PERSP)
++/*
++ * s31 (phase 4 F-PERSP, s31_tfilter.c): the smooth filler with the colour
++ * interpolated perspective-correctly - r/w, g/w, b/w over 1/w divided every
++ * NB_INTERP pixels (the textured filler's subdivision) and stepped
++ * linearly in between, into the smooth filler's packed colour and its
++ * PUT_PIXEL. Only triangles whose w values and colours differ enough reach
++ * it (gl_draw_triangle_fill_pq); every other smooth triangle keeps
++ * ZB_fillTriangleSmooth. The colour at a pixel lies between the vertices'
++ * (up to float rounding), so the packed fields keep their guard bits.
++ */
++void ZFN(ZB_fillTriangleSmoothPersp)(ZBuffer *zb,
++                                     ZBufferPoint *p0,ZBufferPoint *p1,ZBufferPoint *p2)
++{
++    float ndqdx, ndrqdx, ndgqdx, ndbqdx;
++
++#define INTERP_Z
++#define INTERP_PRGB
++
++#define NB_INTERP 8
++
++#define DRAW_INIT()				\
++{						\
++  ndqdx=NB_INTERP * dqdx;			\
++  ndrqdx=NB_INTERP * drqdx;			\
++  ndgqdx=NB_INTERP * dgqdx;			\
++  ndbqdx=NB_INTERP * dbqdx;			\
++}
++
++#define PUT_PIXEL(_a)				\
++{						\
++    zz=z >> ZB_POINT_Z_FRAC_BITS;		\
++    if (ZCMP(zz,pz[_a])) {				\
++      tmp=rgb & 0xF81F07E0;			\
++      pp[_a]=tmp | (tmp >> 16);			\
++      ZWRITE(pz[_a],zz);				\
++    }						\
++    z+=dzdx;					\
++    rgb=(rgb+drgbdx) & ( ~ 0x00200800);		\
++}
++
++/* the packed colour at the segment's first pixel and its per-pixel step
++   towards the colour at pixel m further on (the chord: exact at both ends,
++   so the error of the linear steps between is an eighth of what stepping
++   the start's derivative gives - 3 steps of green at the far end of an
++   8-pixel segment with w 1 -> 4, filt_test) */
++#define PC_SEGMENT(m)						      \
++{								      \
++  float e_=1.0f / (fz + (float)(m) * dqdx);			      \
++  float r1_=(rq + (float)(m) * drqdx) * e_;			      \
++  float g1_=(gq + (float)(m) * dgqdx) * e_;			      \
++  float b1_=(bq + (float)(m) * dbqdx) * e_;			      \
++  float k_=(m) > 0 ? 1.0f / (float)(m) : 0.0f;			      \
++  int ri_=(int)r0, gi_=(int)g0, bi_=(int)b0;			      \
++  int dr_=(int)((r1_ - r0) * k_);				      \
++  int dg_=(int)((g1_ - g0) * k_);				      \
++  int db_=(int)((b1_ - b0) * k_);				      \
++  rgb=((unsigned int)ri_ << 16) & 0xFFC00000;			      \
++  rgb|=(gi_ >> 5) & 0x000007FF;					      \
++  rgb|=((unsigned int)bi_ << 5) & 0x001FF000;			      \
++  drgbdx=((unsigned int)SAR_RND_TO_ZERO(dr_,6) << 22) & 0xFFC00000;   \
++  drgbdx|=SAR_RND_TO_ZERO(dg_,5) & 0x000007FF;			      \
++  drgbdx|=((unsigned int)SAR_RND_TO_ZERO(db_,7) << 12) & 0x001FF000;  \
++  r0=r1_; g0=g1_; b0=b1_;					      \
++}
++
++#define DRAW_LINE()				\
++{						\
++  unsigned short *pz;				\
++  PIXEL *pp;					\
++  unsigned int tmp,z,zz,rgb,drgbdx;		\
++  int n;					\
++  float fz=q1, rq=rq1, gq=gq1, bq=bq1;		\
++  float s_=1.0f / fz, r0=rq * s_, g0=gq * s_, b0=bq * s_;	\
++  n=x2-x1;					\
++  pp=pp1+x1;					\
++  pz=pz1+x1;					\
++  z=z1;						\
++  while (n>=NB_INTERP) {			\
++    PC_SEGMENT(NB_INTERP);			\
++    PUT_PIXEL(0);				\
++    PUT_PIXEL(1);				\
++    PUT_PIXEL(2);				\
++    PUT_PIXEL(3);				\
++    PUT_PIXEL(4);				\
++    PUT_PIXEL(5);				\
++    PUT_PIXEL(6);				\
++    PUT_PIXEL(7);				\
++    pz+=NB_INTERP;				\
++    pp+=NB_INTERP;				\
++    n-=NB_INTERP;				\
++    fz+=ndqdx; rq+=ndrqdx; gq+=ndgqdx; bq+=ndbqdx;	\
++  }						\
++  /* the last 1 to 8 pixels: the chord to the last one */	\
++  PC_SEGMENT(n);				\
++  while (n>=0) {				\
++    PUT_PIXEL(0);				\
++    pz+=1;					\
++    pp+=1;					\
++    n-=1;					\
++  }						\
++}
++
++#include "ztriangle.h"
++#undef PC_SEGMENT
++#undef NB_INTERP
++}
++#endif
++
++#if TGL_FEATURE_RENDER_BITS == 16 && !defined(ZTRI_NO_LONG)
++/*
++ * s31 (phase 4, s31_tfilter.c): the smooth filler for long spans of an
++ * affine (equal-w) triangle. TinyGL's packed colour steps with the gradient
++ * truncated (1/32 of a stored step of red and green, 1/16 of blue), which
++ * accumulates along a span; here the packed colour is re-made every
++ * NB_INTERP pixels from the exact integer planes (r1 + k drdx ...), so the
++ * error stays below 8 truncated steps. PUT_PIXEL is the smooth filler's.
++ */
++void ZFN(ZB_fillTriangleSmoothLong)(ZBuffer *zb,
++                                    ZBufferPoint *p0,ZBufferPoint *p1,ZBufferPoint *p2)
++{
++    int _drgbdx, ndrdx, ndgdx, ndbdx;
++
++#define INTERP_Z
++#define INTERP_RGB
++
++#define NB_INTERP 8
++
++#define DRAW_INIT() 				\
++{						\
++  _drgbdx=((unsigned int)SAR_RND_TO_ZERO(drdx,6) << 22) & 0xFFC00000;		\
++  _drgbdx|=SAR_RND_TO_ZERO(dgdx,5) & 0x000007FF;		\
++  _drgbdx|=((unsigned int)SAR_RND_TO_ZERO(dbdx,7) << 12) & 0x001FF000; 	\
++  ndrdx=NB_INTERP * drdx; ndgdx=NB_INTERP * dgdx; ndbdx=NB_INTERP * dbdx;	\
++}
++
++#define PUT_PIXEL(_a)				\
++{						\
++    zz=z >> ZB_POINT_Z_FRAC_BITS;		\
++    if (ZCMP(zz,pz[_a])) {				\
++      tmp=rgb & 0xF81F07E0;			\
++      pp[_a]=tmp | (tmp >> 16);			\
++      ZWRITE(pz[_a],zz);				\
++    }						\
++    z+=dzdx;					\
++    rgb=(rgb+drgbdx) & ( ~ 0x00200800);		\
++}
++
++#define LONG_PACK()						\
++{								\
++  rgb=((unsigned int)r_ << 16) & 0xFFC00000;			\
++  rgb|=(g_ >> 5) & 0x000007FF;					\
++  rgb|=((unsigned int)b_ << 5) & 0x001FF000;			\
++}
++
++#define DRAW_LINE()				\
++{						\
++  unsigned short *pz;				\
++  PIXEL *pp;					\
++  unsigned int tmp,z,zz,rgb,drgbdx=_drgbdx;	\
++  int n, r_=r1, g_=g1, b_=b1;			\
++  n=x2-x1;					\
++  pp=pp1+x1;					\
++  pz=pz1+x1;					\
++  z=z1;						\
++  while (n>=(NB_INTERP-1)) {			\
++    LONG_PACK();				\
++    PUT_PIXEL(0);				\
++    PUT_PIXEL(1);				\
++    PUT_PIXEL(2);				\
++    PUT_PIXEL(3);				\
++    PUT_PIXEL(4);				\
++    PUT_PIXEL(5);				\
++    PUT_PIXEL(6);				\
++    PUT_PIXEL(7);				\
++    pz+=NB_INTERP;				\
++    pp+=NB_INTERP;				\
++    n-=NB_INTERP;				\
++    r_+=ndrdx; g_+=ndgdx; b_+=ndbdx;		\
++  }						\
++  LONG_PACK();					\
++  while (n>=0) {				\
++    PUT_PIXEL(0);				\
++    pz+=1;					\
++    pp+=1;					\
++    n-=1;					\
++  }						\
++}
++
++#include "ztriangle.h"
++#undef LONG_PACK
++#undef NB_INTERP
++}
++#endif
++
+ #ifndef ZTRI_VARIANT
+ void ZB_setTexture(ZBuffer *zb,PIXEL *texture)
+ {
+diff --git a/gl/tinygl/source/ztriangle.h b/gl/tinygl/source/ztriangle.h
+index f232fc4..5eb3854 100644
+--- a/gl/tinygl/source/ztriangle.h
++++ b/gl/tinygl/source/ztriangle.h
+@@ -34,6 +34,11 @@
+   float sz1, tz1, q1, dszdx, dszdy, dtzdx, dtzdy, dqdx, dqdy;
+   float szr_, tzr_, qr_;
+ #endif
++#ifdef INTERP_PRGB
++  /* phase 4 F-PERSP: r/w, g/w, b/w (the fillers' colour units) and 1/w */
++  float rq1, gq1, bq1, q1, drqdx, drqdy, dgqdx, dgqdy, dbqdx, dbqdy, dqdx, dqdy;
++  float rqr_, gqr_, bqr_, qr_;
++#endif
+ 
+   if (!ztri_setup(&T_, p0->fx, p0->fy, p0->z, p1->fx, p1->fy, p1->z,
+                   p2->fx, p2->fy, p2->z, zb->pipe))
+@@ -90,6 +95,23 @@
+   }
+ #endif
+ 
++#ifdef INTERP_PRGB
++  {
++    const ZBufferPoint *a_ = pv_[T_.o[0]], *b_ = pv_[T_.o[1]], *c_ = pv_[T_.o[2]];
++    float r0_ = (float)a_->r * a_->q, r1_ = (float)b_->r * b_->q, r2_ = (float)c_->r * c_->q;
++    float g0_ = (float)a_->g * a_->q, g1_ = (float)b_->g * b_->q, g2_ = (float)c_->g * c_->q;
++    float b0_ = (float)a_->b * a_->q, b1_ = (float)b_->b * b_->q, b2_ = (float)c_->b * c_->q;
++    ZTRI_GRAD(&T_, r0_, r1_, r2_, drqdx, drqdy);
++    ZTRI_GRAD(&T_, g0_, g1_, g2_, dgqdx, dgqdy);
++    ZTRI_GRAD(&T_, b0_, b1_, b2_, dbqdx, dbqdy);
++    ZTRI_GRAD(&T_, a_->q, b_->q, c_->q, dqdx, dqdy);
++    rqr_ = r0_ + drqdx * T_.ox + drqdy * T_.oy;
++    gqr_ = g0_ + dgqdx * T_.ox + dgqdy * T_.oy;
++    bqr_ = b0_ + dbqdx * T_.ox + dbqdy * T_.oy;
++    qr_ = a_->q + dqdx * T_.ox + dqdy * T_.oy;
++  }
++#endif
++
+   DRAW_INIT();
+ 
+   for (part = 0; part < 2; part++) {
+@@ -132,6 +154,15 @@
+           q1 = qr_ + dqdx * fx_ + dqdy * fy_;
+         }
+ #endif
++#ifdef INTERP_PRGB
++        {
++          float fx_ = (float)(x1 - T_.px), fy_ = (float)(y_ - T_.py);
++          rq1 = rqr_ + drqdx * fx_ + drqdy * fy_;
++          gq1 = gqr_ + dgqdx * fx_ + dgqdy * fy_;
++          bq1 = bqr_ + dbqdx * fx_ + dbqdy * fy_;
++          q1 = qr_ + dqdx * fx_ + dqdy * fy_;
++        }
++#endif
+ #ifndef DRAW_LINE
+       /* generic draw line (the flat fillers). s31 (phase 3a): the spans
+          are short (gears: 4.8 pixels), so what costs is the span, not the
+@@ -178,7 +209,7 @@
+ #endif
+       pp1=(PIXEL *)((char *)pp1 + zb->linesize);
+       pz1+=zb->xsize;
+-#ifdef INTERP_STZ
++#if defined(INTERP_STZ) || defined(INTERP_PRGB)
+       y_++;
+ #endif
+     }
+@@ -188,6 +219,7 @@
+ #undef INTERP_Z
+ #undef INTERP_RGB
+ #undef INTERP_STZ
++#undef INTERP_PRGB
+ 
+ #undef DRAW_INIT
+ #undef DRAW_LINE
+diff --git a/gl/tinygl/source/ztriangle_gen.c b/gl/tinygl/source/ztriangle_gen.c
+index 14919c0..107084b 100644
+--- a/gl/tinygl/source/ztriangle_gen.c
++++ b/gl/tinygl/source/ztriangle_gen.c
+@@ -29,7 +29,7 @@ void ZB_fillTriangleGeneral(ZBuffer *zb, const ZVtxG *a, const ZVtxG *b,
+ {
+   const ZPipe *p = zb->pipe;
+   const ZVtxG *pv[3] = { a, b, c }, *v0, *v1, *v2;
+-  const int need = p->need;
++  int need;
+   float grx = 0, gry = 0, ggx = 0, ggy = 0, gbx = 0, gby = 0;
+   float gax = 0, gay = 0, gfx = 0, gfy = 0;
+   float gsx = 0, gsy = 0, gtx = 0, gty = 0, gqx = 0, gqy = 0;
+@@ -49,6 +49,17 @@ void ZB_fillTriangleGeneral(ZBuffer *zb, const ZVtxG *a, const ZVtxG *b,
+   ztri_zepoch(&T, p, a->z, b->z, c->z);
+   ztri_rows(&T, p);
+   v0 = pv[T.o[0]]; v1 = pv[T.o[1]]; v2 = pv[T.o[2]];
++  /* phase 4 (s31_tfilter.c): this triangle's texture level(s) and filter,
++     and whether its colour is perspective-corrected - one call when the
++     batch has such a choice, which sets the stages and p->need */
++  if (p->xact) {
++    const ZPipeX *x = p->x;
++    /* a triangle whose q hardly differ keeps the affine colour: one test
++       here, not a call (zpx_qspread) */
++    if ((p->xact & ZPX_TEX) || x->pc_cur || zpx_qspread(v0->q, v1->q, v2->q))
++      zpx_tri((ZPipe *)p, &T, v0, v1, v2);
++  }
++  need = p->need;
+ 
+   /* only the planes the chosen stages read (ZPipe.need, gl_build_pipe),
+      each referenced to the centre of pixel (px, py) */
+@@ -98,6 +109,19 @@ void ZB_fillTriangleGeneral(ZBuffer *zb, const ZVtxG *a, const ZVtxG *b,
+     PLANE(sg, g2x, g2y, R2);
+     PLANE(sb, g3x, g3y, R3);
+   }
++  if (need & ZP_N_PC) {
++    /* phase 4 F-PERSP: colour times 1/w, divided back per 8 pixels
++       (zc_smooth_pc). The planes are kept in the span (pcr, pcgy, and
++       the x steps), not in locals: only this triangle's spans read them */
++#define PPLANE(F, k, gx) do { float a0_ = v0->F * v0->q, a1_ = v1->F * v1->q, \
++      a2_ = v2->F * v2->q; ZTRI_GRAD(&T, a0_, a1_, a2_, sp.gx, sp.pcgy[k]); \
++      sp.pcr[k] = a0_ + sp.gx * T.ox + sp.pcgy[k] * T.oy; } while (0)
++    PPLANE(r, 0, drqdx);
++    PPLANE(g, 1, dgqdx);
++    PPLANE(b, 2, dbqdx);
++    PPLANE(a, 3, daqdx);
++#undef PPLANE
++  }
+ #undef PLANE
+ 
+   sp.drdx = (int)grx; sp.dgdx = (int)ggx; sp.dbdx = (int)gbx;
+@@ -143,6 +167,12 @@ void ZB_fillTriangleGeneral(ZBuffer *zb, const ZVtxG *a, const ZVtxG *b,
+         sp.sg = (int)(R2 + g2x * fx + g2y * fy);
+         sp.sb = (int)(R3 + g3x * fx + g3y * fy);
+       }
++      if (need & ZP_N_PC) {
++        sp.rq = sp.pcr[0] + sp.drqdx * fx + sp.pcgy[0] * fy;
++        sp.gq = sp.pcr[1] + sp.dgqdx * fx + sp.pcgy[1] * fy;
++        sp.bq = sp.pcr[2] + sp.dbqdx * fx + sp.pcgy[2] * fy;
++        sp.aq = sp.pcr[3] + sp.daqdx * fx + sp.pcgy[3] * fy;
++      }
+       zp_run(zb, &sp);
+     }
+   }
+diff --git a/gl/tinygl/source/ztriangle_nt.c b/gl/tinygl/source/ztriangle_nt.c
+index a75e534..3cccbe4 100644
+--- a/gl/tinygl/source/ztriangle_nt.c
++++ b/gl/tinygl/source/ztriangle_nt.c
+@@ -2,6 +2,9 @@
+    Same code as ztriangle.c, specialised at compile time; clip.c selects
+    them per triangle, so the default fillers are unchanged. MIT. */
+ #define ZTRI_VARIANT
++/* phase 4: no perspective-colour filler here - such triangles take the
++   general path (s31_tfilter.c fill_pq_slow) */
++#define ZTRI_NO_PERSP
+ #define ZCMP(z,zpix) 1
+ #define ZWRITE(d,v) ((void)0)
+ #define ZFN(n) n##_nt
+diff --git a/gl/tinygl/source/ztriangle_nw.c b/gl/tinygl/source/ztriangle_nw.c
+index 30d1207..f279ca3 100644
+--- a/gl/tinygl/source/ztriangle_nw.c
++++ b/gl/tinygl/source/ztriangle_nw.c
+@@ -2,6 +2,10 @@
+    Same code as ztriangle.c, specialised at compile time; clip.c selects
+    them per triangle, so the default fillers are unchanged. MIT. */
+ #define ZTRI_VARIANT
++/* phase 4: no perspective-colour or long-span filler here - such triangles take the
++   general path (s31_tfilter.c fill_pq_slow) */
++#define ZTRI_NO_PERSP
++#define ZTRI_NO_LONG
+ #define ZCMP(z,zpix) ((z) >= (zpix))
+ #define ZWRITE(d,v) ((void)0)
+ #define ZFN(n) n##_nw
+diff --git a/gl/bench/cmp4.py b/gl/bench/cmp4.py
+new file mode 100644
+index 0000000..f148cc1
+--- /dev/null
++++ b/gl/bench/cmp4.py
+@@ -0,0 +1,17 @@
++#!/usr/bin/env python3
++"""cmp4.py BASE.log NEW.log [filter] - phase 4: per bench line, M insn/frame
++before -> after, the change, and whether the frame hash is the same."""
++import re, sys
++def load(p):
++    d = {}
++    for l in open(p):
++        m = re.match(r'(.+?): ([\d.]+) Minsn/frame.*fb (\w+)', l)
++        if m: d[m.group(1)] = (float(m.group(2)), m.group(3))
++    return d
++a = load(sys.argv[1]); b = load(sys.argv[2])
++flt = sys.argv[3] if len(sys.argv) > 3 else ''
++for k in a:
++    if k in b and flt in k:
++        x, y = a[k], b[k]
++        print('%-28s %.4f -> %.4f %+6.2f%% %s' % (k, x[0], y[0], (y[0] / x[0] - 1) * 100 if x[0] else 0,
++              'same' if x[1] == y[1] else 'HASH ' + x[1] + '->' + y[1]))
+diff --git a/gl/bench/filt.c b/gl/bench/filt.c
+new file mode 100644
+index 0000000..56b726c
+--- /dev/null
++++ b/gl/bench/filt.c
+@@ -0,0 +1,208 @@
++/* filt.c - phase 4 bench cases (FILTV), run by filt.sh: texture filters
++   (F-LIN) and perspective-correct colour (F-PERSP).
++   1-5: a receding textured floor (fire's and teapot's ground: one big
++        quad from near the camera to the horizon, glFrustum, depth test),
++        a 128x128 RGB texture with its full mipmap chain uploaded
++        (box-filtered here, in init), GL_REPLACE, GL_REPEAT, tex coords
++        0..8 (eight repeats):
++     1 GL_NEAREST / GL_NEAREST (control: tier 1, as before phase 4)
++     2 GL_LINEAR / GL_LINEAR (bilinear, level 0)
++     3 GL_LINEAR_MIPMAP_NEAREST (one level a triangle, bilinear)
++     4 GL_LINEAR_MIPMAP_LINEAR (trilinear)
++     5 the floor cut into a 16x16 grid of quads, GL_LINEAR_MIPMAP_LINEAR
++       (512 triangles: per-triangle lambda follows the depth)
++   6: rRootage-style additive sprites: 200 textured quads of 16-40 px,
++      glOrtho, GL_SRC_ALPHA / GL_ONE, a 32x32 RGBA texture with mipmaps,
++      GL_LINEAR / GL_LINEAR_MIPMAP_NEAREST, MODULATE by a per-sprite colour
++   7: a smooth-shaded cube, a colour per corner (SDL testgl's), rotating,
++      under glFrustum close to the camera: the faces need perspective
++      colour (F-PERSP)
++   8: the same cube under glOrtho (control: w = 1, nothing corrected)
++   s31, MIT. */
++#include <stdio.h>
++#include <math.h>
++#include <stdlib.h>
++#include <GL/gl.h>
++#include "ui.h"
++
++#ifndef FILTV
++#define FILTV 1
++#endif
++
++static float spin;
++static unsigned char lvl[9][128 * 128 * 4];
++static float wob[64];            /* sprite wobble, a table: no libm per frame */
++
++static void mips(int n, int comps)
++{
++	int l, sz = n, x, y, c;
++	for (l = 1; sz > 1; l++) {
++		int h = sz / 2;
++		for (y = 0; y < h; y++)
++			for (x = 0; x < h; x++)
++				for (c = 0; c < comps; c++) {
++					const unsigned char *s = lvl[l - 1];
++					int a = s[((2 * y) * sz + 2 * x) * comps + c] + s[((2 * y) * sz + 2 * x + 1) * comps + c] +
++					        s[((2 * y + 1) * sz + 2 * x) * comps + c] + s[((2 * y + 1) * sz + 2 * x + 1) * comps + c];
++					lvl[l][(y * h + x) * comps + c] = (unsigned char)((a + 2) / 4);
++				}
++		sz = h;
++	}
++	for (l = 0, sz = n; sz >= 1; l++, sz /= 2)
++		glTexImage2D(GL_TEXTURE_2D, l, comps == 3 ? GL_RGB : GL_RGBA, sz, sz, 0,
++		             comps == 3 ? GL_RGB : GL_RGBA, GL_UNSIGNED_BYTE, lvl[l]);
++}
++
++void init(void)
++{
++	GLuint t;
++	int x, y;
++	if (FILTV <= 5) {
++		/* a busy RGB pattern: checks, stripes and noise, so the filters
++		   have something to average */
++		for (y = 0; y < 128; y++)
++			for (x = 0; x < 128; x++) {
++				unsigned char *p = lvl[0] + (y * 128 + x) * 3;
++				int ch = ((x >> 4) ^ (y >> 4)) & 1;
++				p[0] = (unsigned char)(ch ? 220 : 40);
++				p[1] = (unsigned char)((x * 7 + y * 3) & 255);
++				p[2] = (unsigned char)(((x ^ y) * 37) & 255);
++			}
++		glGenTextures(1, &t);
++		glBindTexture(GL_TEXTURE_2D, t);
++		mips(128, 3);
++		switch (FILTV) {
++		case 1:
++			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
++			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
++			break;
++		case 2:
++			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
++			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
++			break;
++		case 3:
++			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_NEAREST);
++			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
++			break;
++		default:
++			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
++			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
++			break;
++		}
++		glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
++		glEnable(GL_TEXTURE_2D);
++		glEnable(GL_DEPTH_TEST);
++	} else if (FILTV == 6) {
++		for (x = 0; x < 64; x++) wob[x] = 20.0f * sinf(x * 0.09817477f);
++		for (y = 0; y < 32; y++)
++			for (x = 0; x < 32; x++) {
++				unsigned char *p = lvl[0] + (y * 32 + x) * 4;
++				float dx = x - 15.5f, dy = y - 15.5f, r = sqrtf(dx * dx + dy * dy) / 16.0f;
++				int a = r >= 1.0f ? 0 : (int)(255.0f * (1.0f - r) * (1.0f - r));
++				p[0] = 255; p[1] = (unsigned char)(200 - x * 3); p[2] = (unsigned char)(100 + y * 4);
++				p[3] = (unsigned char)a;
++			}
++		glGenTextures(1, &t);
++		glBindTexture(GL_TEXTURE_2D, t);
++		mips(32, 4);
++		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_NEAREST);
++		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
++		glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
++		glEnable(GL_TEXTURE_2D);
++		glEnable(GL_BLEND);
++		glBlendFunc(GL_SRC_ALPHA, GL_ONE);
++	} else {
++		glEnable(GL_DEPTH_TEST);
++		glShadeModel(GL_SMOOTH);
++	}
++}
++
++void reshape(int w, int h)
++{
++	glViewport(0, 0, w, h);
++	glMatrixMode(GL_PROJECTION);
++	glLoadIdentity();
++	if (FILTV == 6)
++		glOrtho(0, 320, 240, 0, -1, 1);
++	else if (FILTV == 8)
++		glOrtho(-2, 2, -1.5, 1.5, -20, 20);
++	else
++		glFrustum(-0.2f * w / h, 0.2f * w / h, -0.2f, 0.2f, 0.4f, 60.0f);
++	glMatrixMode(GL_MODELVIEW);
++	glLoadIdentity();
++}
++
++static const float cube[8][3] = {
++	{ 0.5f, 0.5f, -0.5f }, { 0.5f, -0.5f, -0.5f }, { -0.5f, -0.5f, -0.5f }, { -0.5f, 0.5f, -0.5f },
++	{ -0.5f, 0.5f, 0.5f }, { 0.5f, 0.5f, 0.5f }, { 0.5f, -0.5f, 0.5f }, { -0.5f, -0.5f, 0.5f } };
++static const float col[8][3] = {
++	{ 1, 1, 0 }, { 1, 0, 0 }, { 0, 0, 0 }, { 0, 1, 0 }, { 0, 1, 1 }, { 1, 1, 1 }, { 1, 0, 1 }, { 0, 0, 1 } };
++static const int face[6][4] = {
++	{ 0, 1, 2, 3 }, { 3, 4, 7, 2 }, { 0, 5, 6, 1 }, { 5, 4, 7, 6 }, { 5, 0, 3, 4 }, { 6, 1, 2, 7 } };
++
++void draw(void)
++{
++	int i, j;
++	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
++	glLoadIdentity();
++	if (FILTV <= 5) {
++		float s = spin * 0.01f;
++		glTranslatef(0, -1.0f, 0);
++		glRotatef(spin * 0.2f, 0, 1, 0);
++		glBegin(GL_QUADS);
++		if (FILTV < 5) {
++			glTexCoord2f(s, 0); glVertex3f(-20, 0, 1);
++			glTexCoord2f(s + 8, 0); glVertex3f(20, 0, 1);
++			glTexCoord2f(s + 8, 8); glVertex3f(20, 0, -40);
++			glTexCoord2f(s, 8); glVertex3f(-20, 0, -40);
++		} else {
++			for (j = 0; j < 16; j++)
++				for (i = 0; i < 16; i++) {
++					float x0 = -20 + 2.5f * i, x1 = x0 + 2.5f, z0 = 1 - 2.5625f * j, z1 = z0 - 2.5625f;
++					float u0 = s + 0.5f * i, u1 = u0 + 0.5f, v0 = 0.5f * j, v1 = v0 + 0.5f;
++					glTexCoord2f(u0, v0); glVertex3f(x0, 0, z0);
++					glTexCoord2f(u1, v0); glVertex3f(x1, 0, z0);
++					glTexCoord2f(u1, v1); glVertex3f(x1, 0, z1);
++					glTexCoord2f(u0, v1); glVertex3f(x0, 0, z1);
++				}
++		}
++		glEnd();
++	} else if (FILTV == 6) {
++		unsigned int r = 12345;
++		glBegin(GL_QUADS);
++		for (i = 0; i < 200; i++) {
++			float x, y, sz;
++			r = r * 1103515245u + 12345u; x = (float)((r >> 8) % 320);
++			r = r * 1103515245u + 12345u; y = (float)((r >> 8) % 240);
++			r = r * 1103515245u + 12345u; sz = 8.0f + (float)((r >> 8) % 13);
++			x += wob[((int)spin + i * 5) & 63];
++			glColor4f(0.5f + 0.5f * (i & 1), 0.6f, 0.3f + 0.1f * (i % 7), 0.8f);
++			glTexCoord2f(0, 0); glVertex2f(x - sz, y - sz);
++			glTexCoord2f(1, 0); glVertex2f(x + sz, y - sz);
++			glTexCoord2f(1, 1); glVertex2f(x + sz, y + sz);
++			glTexCoord2f(0, 1); glVertex2f(x - sz, y + sz);
++		}
++		glEnd();
++	} else {
++		if (FILTV == 7) glTranslatef(0, 0, -1.6f);
++		glRotatef(spin, 1, 1, 1);
++		if (FILTV == 8) glScalef(2, 2, 2);
++		glBegin(GL_QUADS);
++		for (i = 0; i < 6; i++)
++			for (j = 0; j < 4; j++) {
++				glColor3fv(col[face[i][j]]);
++				glVertex3fv(cube[face[i][j]]);
++			}
++		glEnd();
++	}
++	swap_buffers();
++}
++
++void idle(void) { spin += 3.0f; draw(); }
++GLenum key(int k) { (void)k; return GL_FALSE; }
++int main(int argc, char **argv)
++{
++	static char name[8];
++	snprintf(name, sizeof name, "filt%d", FILTV);
++	return ui_loop(argc, argv, name);
++}
+diff --git a/gl/bench/filt.sh b/gl/bench/filt.sh
+new file mode 100755
+index 0000000..dca9563
+--- /dev/null
++++ b/gl/bench/filt.sh
+@@ -0,0 +1,37 @@
++#!/bin/bash
++# filt.sh [OUT] - phase 4 cases (filt.c FILTV 1-8: texture filters and
++# perspective colour), from the objects gl/bench/build_q.sh left in OUT
++# (run bench.sh first). 1-4 at 320x240 and 640x400, 5-8 at 320x240.
++# Prints "filtN WxH: M insn/frame ..." to filt.txt. s31, MIT.
++set -e
++HERE=$(cd "$(dirname "$0")" && pwd)
++OUT=${1:-$HERE/out}
++TC=${S31_BENCH_TC:-$HOME/.espressif/tools/riscv32-esp-elf/esp-15.2.0_20251204/riscv32-esp-elf}
++B=$TC/bin; L=$TC/riscv32-esp-elf/lib; MULTI=rv32imac_zicsr_zifencei_zaamo_zalrsc/ilp32
++BOARD="-Os -march=rv32imafc_zicsr_zifencei_zaamo_zalrsc_zba_zbb_zbc_zbs -mabi=ilp32 -mtune=esp-base"
++WR=$(tr ' ' '\n' < "$HERE/wraps.txt" | grep . | sed 's/^/-Wl,--wrap=/' | tr '\n' ' ')
++[ -n "$S31_BENCH_NOWRAP" ] && WR=
++INC="-I$HERE/../include -I$HERE/../api -I$HERE/../tinygl/examples"
++cd "$OUT"
++LM="-lm"; [ -f libmuslm.a ] && LM="$PWD/libmuslm.a -lm"
++rm -f t_*.elf
++link() {
++	$B/riscv32-esp-elf-gcc -march=rv32imac_zicsr_zifencei_zaamo_zalrsc -mabi=ilp32 \
++		-specs=semihost.specs -nostartfiles -T "$HERE/qemu/link.ld" \
++		"$HERE/qemu/crt.S" "$L/$MULTI/crt0.o" "$1" "$2" \
++		demo/dwrap.o $(cat obj/core.list) $WR -Wl,--gc-sections $LM \
++		-o "$3" 2>&1 | grep -v "RWX\|LOAD segment" || true
++}
++cc() { $B/riscv32-esp-elf-gcc $BOARD -O2 -w $INC "$@"; }
++for s in "320 240" "640 400"; do
++	set -- $s
++	cc -DQW=$1 -DQH=$2 $S31_BENCH_QDEFS -c "$HERE/q_ui.c" -o demo/q_ui_t$1.o &
++done
++for v in 1 2 3 4 5 6 7 8; do cc -DFILTV=$v -c "$HERE/filt.c" -o demo/filt$v.o & done
++wait
++for v in 1 2 3 4 5 6 7 8; do link demo/filt$v.o demo/q_ui_t320.o t_filt${v}_320.elf & done
++for v in 1 2 3 4; do link demo/filt$v.o demo/q_ui_t640.o t_filt${v}_640.elf & done
++wait
++ls t_*.elf | xargs -P "$(sysctl -n hw.ncpu 2>/dev/null || nproc)" -n 1 "$HERE/run_q.sh" 2>/dev/null > filt.all
++grep Minsn filt.all | sort | tee filt.txt
++grep Mframe filt.all | sort > filt-frames.txt || true
+diff --git a/gl/tests/filt_test.c b/gl/tests/filt_test.c
+new file mode 100644
+index 0000000..e8fc752
+--- /dev/null
++++ b/gl/tests/filt_test.c
+@@ -0,0 +1,466 @@
++/*
++ * filt_test.c - phase 4 checks of texture filtering (F-LIN) and
++ * perspective-correct colour (F-PERSP), headless, against float reference
++ * models written here from GL 1.3 3.8.8 and 3.5.1. s31, MIT.
++ *
++ *   filt_test         one PASS/FAIL line per check, exit 1 on any FAIL
++ *
++ * What it checks (every pixel of a 64x48 buffer inside canaries):
++ *  - GL_LINEAR magnification: RGB and RGBA/ALPHA textures, CLAMP_TO_EDGE
++ *    and REPEAT, against bilinear of the stored RGB565 texels (tolerance:
++ *    one stored step of R and B, two of G - the filter works on RGB565 with
++ *    5-bit weights);
++ *  - mipmaps: a chain whose levels are solid, distinct colours, drawn at
++ *    lambda 0, 1, 2 and 1.5 with each MIPMAP filter: the level GL picks
++ *    (NEAREST: ceil(lambda + 1/2) - 1; LINEAR: the frac(lambda) blend);
++ *    the magnification switch (c = 0.5); an incomplete chain (level 0);
++ *    glTexSubImage2D into a level > 0; glGetTexImage of a level > 0;
++ *  - perspective colour: a smooth quad with w = 1, 4 (glVertex4) against
++ *    the perspective-correct colour; the same quad with w = 1 everywhere is
++ *    unchanged by it;
++ *  - a fuzz of random filtered and perspective triangles, lines, points
++ *    and pixel rectangles (formats, sizes 1 to 256, wraps, huge and
++ *    negative coordinates): the canaries must stay intact (and ASan/UBSan
++ *    clean, run-san.sh);
++ *  - S31GL_MIPMAPS=0: levels are not stored, the mipmap filters sample
++ *    level 0.
++ */
++#define GL_GLEXT_PROTOTYPES 1
++#include <math.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <GL/gl.h>
++#include <GL/glext.h>
++#include "s31gl.h"
++
++static int fails, passes;
++#define CHECK(cond, ...) do { \
++	if (cond) { printf("PASS "); passes++; } else { printf("FAIL "); fails++; } \
++	printf(__VA_ARGS__); printf("\n"); } while (0)
++
++#define W 64
++#define H 48
++#define PAD 8
++#define CANARY 0xA5A5
++static unsigned short mem[(H + 2 * PAD) * (W + 2 * PAD)];
++#define PITCH ((W + 2 * PAD) * 2)
++#define PX(x, y) mem[((y) + PAD) * (W + 2 * PAD) + (x) + PAD]   /* y: row from the top */
++
++static void canary_fill(void)
++{
++	int i;
++	for (i = 0; i < (int)(sizeof(mem) / 2); i++) mem[i] = CANARY;
++}
++
++static int canary_intact(void)
++{
++	int x, y;
++	for (y = -PAD; y < H + PAD; y++)
++		for (x = -PAD; x < W + PAD; x++) {
++			int inside = x >= 0 && x < W && y >= 0 && y < H;
++			if (!inside && mem[(y + PAD) * (W + 2 * PAD) + x + PAD] != CANARY) return 0;
++		}
++	return 1;
++}
++
++/* the stored texel of an 8-bit RGB triple, unpacked as zpipe.c does */
++static void t565(const unsigned char *c, float *o)
++{
++	int r = c[0] >> 3, g = c[1] >> 2, b = c[2] >> 3;
++	o[0] = (float)((r << 3) | (r >> 2));
++	o[1] = (float)((g << 2) | (g >> 4));
++	o[2] = (float)((b << 3) | (b >> 2));
++}
++
++/* |ours - ref| in stored steps, per channel: ours a pixel, ref 8-bit floats */
++static int close565(unsigned short px, const float *ref, int tr, int tg)
++{
++	int r = px >> 11, g = (px >> 5) & 63, b = px & 31;
++	float er = fabsf((float)r - ref[0] / 255.0f * 31.0f);
++	float eg = fabsf((float)g - ref[1] / 255.0f * 63.0f);
++	float eb = fabsf((float)b - ref[2] / 255.0f * 31.0f);
++	return er <= tr + 0.5f && eg <= tg + 0.5f && eb <= tr + 0.5f;
++}
++
++static void ortho(void)
++{
++	glMatrixMode(GL_PROJECTION);
++	glLoadIdentity();
++	glOrtho(0, W, 0, H, -1, 1);
++	glMatrixMode(GL_MODELVIEW);
++	glLoadIdentity();
++}
++
++/* a screen-aligned textured quad over [x0,x1) x [y0,y1) (GL window
++   coordinates, y up), texture coordinates s0..s1, t0..t1 */
++static void tquad(float x0, float y0, float x1, float y1, float s0, float t0, float s1, float t1)
++{
++	glBegin(GL_QUADS);
++	glTexCoord2f(s0, t0); glVertex2f(x0, y0);
++	glTexCoord2f(s1, t0); glVertex2f(x1, y0);
++	glTexCoord2f(s1, t1); glVertex2f(x1, y1);
++	glTexCoord2f(s0, t1); glVertex2f(x0, y1);
++	glEnd();
++}
++
++static int wrapi(int i, int n, int rep)
++{
++	if (rep) return ((i % n) + n) % n;
++	return i < 0 ? 0 : (i >= n ? n - 1 : i);
++}
++
++/* GL bilinear of an RGB image (tw x th, 8-bit, stored as RGB565) */
++static void bilin(const unsigned char *img, int tw, int th, float u, float v, int rep, float *o)
++{
++	float a = u * tw - 0.5f, b = v * th - 0.5f;
++	int i0 = (int)floorf(a), j0 = (int)floorf(b), k;
++	float fa = a - floorf(a), fb = b - floorf(b), t[4][3];
++	int ii[2] = { wrapi(i0, tw, rep), wrapi(i0 + 1, tw, rep) };
++	int jj[2] = { wrapi(j0, th, rep), wrapi(j0 + 1, th, rep) };
++	t565(img + (jj[0] * tw + ii[0]) * 3, t[0]);
++	t565(img + (jj[0] * tw + ii[1]) * 3, t[1]);
++	t565(img + (jj[1] * tw + ii[0]) * 3, t[2]);
++	t565(img + (jj[1] * tw + ii[1]) * 3, t[3]);
++	for (k = 0; k < 3; k++)
++		o[k] = (1 - fa) * (1 - fb) * t[0][k] + fa * (1 - fb) * t[1][k] +
++		       (1 - fa) * fb * t[2][k] + fa * fb * t[3][k];
++}
++
++static void test_bilinear(void)
++{
++	static unsigned char img[8 * 8 * 3];
++	GLuint t;
++	int x, y, i, bad, rep;
++	for (i = 0; i < 8 * 8; i++) {
++		img[i * 3 + 0] = (unsigned char)((i * 37) & 255);
++		img[i * 3 + 1] = (unsigned char)((i * 91 + 20) & 255);
++		img[i * 3 + 2] = (unsigned char)(((i >> 3) * 36 + (i & 7) * 5) & 255);
++	}
++	ortho();
++	glGenTextures(1, &t);
++	glBindTexture(GL_TEXTURE_2D, t);
++	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
++	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 8, 8, 0, GL_RGB, GL_UNSIGNED_BYTE, img);
++	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
++	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
++	glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
++	glEnable(GL_TEXTURE_2D);
++	for (rep = 0; rep < 2; rep++) {
++		float s0 = rep ? -0.75f : 0.0f, s1 = rep ? 1.6f : 1.0f;
++		float t0 = rep ? 0.3f : 0.0f, t1 = rep ? 2.2f : 1.0f;
++		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, rep ? GL_REPEAT : GL_CLAMP_TO_EDGE);
++		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, rep ? GL_REPEAT : GL_CLAMP_TO_EDGE);
++		canary_fill();
++		glClear(GL_COLOR_BUFFER_BIT);
++		tquad(0, 0, W, H, s0, t0, s1, t1);
++		s31gl_finish(s31gl_get_current());
++		bad = 0;
++		for (y = 0; y < H; y++)
++			for (x = 0; x < W; x++) {
++				float o[3], u = s0 + (s1 - s0) * (x + 0.5f) / W;
++				float v = t0 + (t1 - t0) * (H - 1 - y + 0.5f) / H;
++				bilin(img, 8, 8, u, v, rep, o);
++				if (!close565(PX(x, y), o, 1, 2)) {
++					if (bad < 3) printf("     (%d,%d) ours %04x ref %.1f %.1f %.1f\n", x, y, PX(x, y), o[0], o[1], o[2]);
++					bad++;
++				}
++			}
++		CHECK(bad == 0 && canary_intact(), "GL_LINEAR magnification, %s: %d of %d pixels off",
++		      rep ? "GL_REPEAT, coordinates -0.75..1.6" : "GL_CLAMP_TO_EDGE", bad, W * H);
++	}
++	/* alpha: GL_ALPHA texture, REPLACE, blended over black -> alpha * white */
++	{
++		static unsigned char al[4 * 4];
++		for (i = 0; i < 16; i++) al[i] = (unsigned char)(i * 17);
++		glTexImage2D(GL_TEXTURE_2D, 0, GL_ALPHA, 4, 4, 0, GL_ALPHA, GL_UNSIGNED_BYTE, al);
++		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
++		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
++		glEnable(GL_BLEND);
++		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
++		glColor3f(1, 1, 1);
++		glClearColor(0, 0, 0, 0);
++		glClear(GL_COLOR_BUFFER_BIT);
++		tquad(0, 0, W, H, 0, 0, 1, 1);
++		glDisable(GL_BLEND);
++		bad = 0;
++		for (y = 0; y < H; y++)
++			for (x = 0; x < W; x++) {
++				float a = 4.0f * (x + 0.5f) / W - 0.5f, b = 4.0f * (H - 1 - y + 0.5f) / H - 0.5f, o[3];
++				int i0 = (int)floorf(a), j0 = (int)floorf(b);
++				float fa = a - floorf(a), fb = b - floorf(b);
++				float v = (1 - fa) * (1 - fb) * al[wrapi(j0, 4, 0) * 4 + wrapi(i0, 4, 0)] +
++				          fa * (1 - fb) * al[wrapi(j0, 4, 0) * 4 + wrapi(i0 + 1, 4, 0)] +
++				          (1 - fa) * fb * al[wrapi(j0 + 1, 4, 0) * 4 + wrapi(i0, 4, 0)] +
++				          fa * fb * al[wrapi(j0 + 1, 4, 0) * 4 + wrapi(i0 + 1, 4, 0)];
++				o[0] = o[1] = o[2] = v;
++				if (!close565(PX(x, y), o, 1, 2)) bad++;
++			}
++		CHECK(bad == 0, "GL_LINEAR of a GL_ALPHA texture (blended): %d pixels off", bad);
++	}
++	glDisable(GL_TEXTURE_2D);
++	glDeleteTextures(1, &t);
++}
++
++/* a chain whose level l is the solid colour lc[l] */
++static const unsigned char lc[7][3] = {
++	{ 248, 0, 0 }, { 0, 252, 0 }, { 0, 0, 248 }, { 248, 252, 0 }, { 0, 252, 248 },
++	{ 248, 0, 248 }, { 128, 128, 128 } };
++
++static void chain(int n, int skip)
++{
++	static unsigned char buf[64 * 64 * 3];
++	int l, sz, i;
++	for (l = 0, sz = n; sz >= 1; l++, sz >>= 1) {
++		if (l == skip) continue;
++		for (i = 0; i < sz * sz; i++) memcpy(buf + i * 3, lc[l], 3);
++		glTexImage2D(GL_TEXTURE_2D, l, GL_RGB, sz, sz, 0, GL_RGB, GL_UNSIGNED_BYTE, buf);
++	}
++}
++
++/* the colour at the centre of a quad drawn so that lambda = lam: a
++   32-pixel quad over (32 / 64) 2^lam periods of the 64-texel texture
++   (GL_REPEAT), so rho = 2^lam */
++static unsigned short draw_lambda(float lam)
++{
++	float r = 0.5f * powf(2.0f, lam);
++	glClear(GL_COLOR_BUFFER_BIT);
++	tquad(8, 4, 40, 36, 0, 0, r, r);
++	return PX(24, H - 1 - 20);
++}
++
++static int is_col(unsigned short px, const unsigned char *c)
++{
++	float f[3] = { c[0], c[1], c[2] };
++	return close565(px, f, 1, 2);
++}
++
++static int is_mix(unsigned short px, const unsigned char *a, const unsigned char *b, float w)
++{
++	float f[3];
++	int k;
++	for (k = 0; k < 3; k++) f[k] = (1 - w) * a[k] + w * b[k];
++	return close565(px, f, 1, 2);
++}
++
++static void test_mipmaps(void)
++{
++	GLuint t;
++	unsigned short p;
++	unsigned char got[4 * 4 * 3];
++	ortho();
++	glGenTextures(1, &t);
++	glBindTexture(GL_TEXTURE_2D, t);
++	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
++	chain(64, -1);
++	glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
++	glEnable(GL_TEXTURE_2D);
++	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
++
++	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
++	p = draw_lambda(1.0f); CHECK(is_col(p, lc[1]), "NEAREST_MIPMAP_NEAREST lambda 1: level 1 (%04x)", p);
++	p = draw_lambda(2.0f); CHECK(is_col(p, lc[2]), "NEAREST_MIPMAP_NEAREST lambda 2: level 2 (%04x)", p);
++	p = draw_lambda(1.4f); CHECK(is_col(p, lc[1]), "NEAREST_MIPMAP_NEAREST lambda 1.4: level 1 (ceil(1.9) - 1) (%04x)", p);
++	p = draw_lambda(1.6f); CHECK(is_col(p, lc[2]), "NEAREST_MIPMAP_NEAREST lambda 1.6: level 2 (ceil(2.1) - 1) (%04x)", p);
++	/* c = 0.5 for LINEAR magnification with NEAREST_MIPMAP_*: lambda 0.4 is magnified (level 0) */
++	p = draw_lambda(0.4f); CHECK(is_col(p, lc[0]), "lambda 0.4 <= c = 0.5: magnification, level 0 (%04x)", p);
++	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_NEAREST);
++	p = draw_lambda(3.0f); CHECK(is_col(p, lc[3]), "LINEAR_MIPMAP_NEAREST lambda 3: level 3 (%04x)", p);
++	p = draw_lambda(9.0f); CHECK(is_col(p, lc[6]), "LINEAR_MIPMAP_NEAREST lambda 9: the 1x1 level 6 (%04x)", p);
++	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
++	p = draw_lambda(2.0f); CHECK(is_col(p, lc[2]), "LINEAR_MIPMAP_LINEAR lambda 2: level 2 (%04x)", p);
++	p = draw_lambda(1.5f); CHECK(is_mix(p, lc[1], lc[2], 0.5f), "LINEAR_MIPMAP_LINEAR lambda 1.5: half level 1, half level 2 (%04x)", p);
++	p = draw_lambda(2.25f); CHECK(is_mix(p, lc[2], lc[3], 0.25f), "LINEAR_MIPMAP_LINEAR lambda 2.25: 3/4 level 2, 1/4 level 3 (%04x)", p);
++	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_LINEAR);
++	p = draw_lambda(2.2f); CHECK(is_col(p, lc[2]), "NEAREST_MIPMAP_LINEAR lambda 2.2: the nearer level 2 (approximated) (%04x)", p);
++
++	/* glTexSubImage2D into level 2, then drawn at lambda 2 */
++	{
++		static unsigned char q[16 * 16 * 3];
++		int i;
++		for (i = 0; i < 16 * 16; i++) memcpy(q + i * 3, lc[4], 3);
++		glTexSubImage2D(GL_TEXTURE_2D, 2, 0, 0, 16, 16, GL_RGB, GL_UNSIGNED_BYTE, q);
++		CHECK(glGetError() == GL_NO_ERROR, "glTexSubImage2D of level 2: no error");
++		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
++		p = draw_lambda(2.0f); CHECK(is_col(p, lc[4]), "level 2 after glTexSubImage2D (%04x)", p);
++	}
++	/* glGetTexImage of level 4 (4x4) is that level's colour */
++	glPixelStorei(GL_PACK_ALIGNMENT, 1);
++	glGetTexImage(GL_TEXTURE_2D, 4, GL_RGB, GL_UNSIGNED_BYTE, got);
++	CHECK(abs(got[0] - lc[4][0]) <= 8 && abs(got[1] - lc[4][1]) <= 4 && abs(got[2] - lc[4][2]) <= 8,
++	      "glGetTexImage level 4 reads the stored level (%d %d %d)", got[0], got[1], got[2]);
++	/* incomplete (level 3 missing): the mipmap filter is off (GL 3.8.10) */
++	glDeleteTextures(1, &t);
++	glGenTextures(1, &t);
++	glBindTexture(GL_TEXTURE_2D, t);
++	chain(64, 3);
++	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
++	glColor3f(1, 1, 1);
++	glClearColor(0, 0, 0, 0);
++	p = draw_lambda(2.0f);
++	CHECK(p == 0xffff, "incomplete chain: texturing off, the fragment colour (%04x)", p);
++	glDisable(GL_TEXTURE_2D);
++	glDeleteTextures(1, &t);
++}
++
++/* GL 3.5.1: a smooth quad whose w differ (glVertex4), against
++   perspective-correct colour; and with w = 1 unchanged */
++static void test_perspective_colour(void)
++{
++	int x, y, bad = 0, n = 0;
++	const float w0 = 1.0f, w1 = 4.0f;
++	ortho();
++	glShadeModel(GL_SMOOTH);
++	glDisable(GL_TEXTURE_2D);
++	glClearColor(0, 0, 0, 0);
++	glClear(GL_COLOR_BUFFER_BIT);
++	/* left edge w0 red, right edge w1 green: window x spans 0..W */
++	glBegin(GL_QUADS);
++	glColor3f(1, 0, 0); glVertex4f(0, 0, 0, w0);
++	glColor3f(0, 1, 0); glVertex4f(W * w1, 0, 0, w1);
++	glColor3f(0, 1, 0); glVertex4f(W * w1, H * w1, 0, w1);
++	glColor3f(1, 0, 0); glVertex4f(0, H * w0, 0, w0);
++	glEnd();
++	for (y = 0; y < H; y++)
++		for (x = 0; x < W; x++) {
++			unsigned short px = PX(x, y);
++			float t = (x + 0.5f) / W, f[3];
++			/* perspective-correct weight of the w1 edge at screen fraction t */
++			float tp = t / w1 / ((1 - t) / w0 + t / w1);
++			if (px == 0) continue;           /* outside the quad (its top edge is not w-affine) */
++			f[0] = 255.0f * (1 - tp); f[1] = 255.0f * tp; f[2] = 0;
++			n++;
++			if (!close565(px, f, 1, 2)) {
++				if (bad < 4) printf("     (%d,%d) ours %d %d %d ref %.2f %.2f\n", x, y, px >> 11, (px >> 5) & 63, px & 31, f[0] * 31 / 255, f[1] * 63 / 255);
++				bad++;
++			}
++		}
++	CHECK(n > W * H / 4 && bad == 0, "perspective colour, w 1 -> 4: %d of %d pixels off", bad, n);
++}
++
++static unsigned int rnd = 12345;
++static unsigned int rr(void) { rnd = rnd * 1103515245u + 12345u; return rnd >> 8; }
++static float rf(float a, float b) { return a + (b - a) * (float)(rr() & 0xffff) / 65535.0f; }
++
++static void test_fuzz(void)
++{
++	static unsigned char img[256 * 256 * 4];
++	static const int fmts[] = { GL_RGB, GL_RGBA, GL_ALPHA, GL_LUMINANCE, GL_INTENSITY, GL_LUMINANCE_ALPHA };
++	static const int mins[] = { GL_NEAREST, GL_LINEAR, GL_NEAREST_MIPMAP_NEAREST, GL_LINEAR_MIPMAP_NEAREST,
++	                            GL_NEAREST_MIPMAP_LINEAR, GL_LINEAR_MIPMAP_LINEAR };
++	static const int wraps[] = { GL_REPEAT, GL_CLAMP, GL_CLAMP_TO_EDGE };
++	static const int envs[] = { GL_REPLACE, GL_MODULATE, GL_DECAL, GL_BLEND, GL_ADD };
++	GLuint t;
++	int it, i, k;
++	for (i = 0; i < (int)sizeof img; i++) img[i] = (unsigned char)(rr() & 255);
++	glGenTextures(1, &t);
++	glBindTexture(GL_TEXTURE_2D, t);
++	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
++	canary_fill();
++	for (it = 0; it < 400; it++) {
++		int ws = rr() % 9, hs = rr() % 9, fmt = fmts[rr() % 6], l, w, h;
++		if ((it & 15) == 0 || it < 2) {
++			/* a new texture: a full chain, or with a missing / odd level */
++			int skip = (rr() % 4) ? -1 : (int)(rr() % 9);
++			for (l = 0, w = 1 << ws, h = 1 << hs; ; l++) {
++				if (l != skip)
++					glTexImage2D(GL_TEXTURE_2D, l, fmt, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, img);
++				if (w == 1 && h == 1) break;
++				w = w > 1 ? w >> 1 : 1;
++				h = h > 1 ? h >> 1 : 1;
++			}
++		}
++		if ((it & 7) == 3)
++			glTexSubImage2D(GL_TEXTURE_2D, (int)(rr() % 3), 0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, img);
++		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, mins[rr() % 6]);
++		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, (rr() & 1) ? GL_LINEAR : GL_NEAREST);
++		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wraps[rr() % 3]);
++		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wraps[rr() % 3]);
++		glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, envs[rr() % 5]);
++		if (rr() & 1) glEnable(GL_TEXTURE_2D); else glDisable(GL_TEXTURE_2D);
++		if (rr() & 1) glEnable(GL_BLEND); else glDisable(GL_BLEND);
++		glBlendFunc(GL_SRC_ALPHA, (rr() & 1) ? GL_ONE : GL_ONE_MINUS_SRC_ALPHA);
++		if (rr() & 1) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
++		glShadeModel((rr() & 3) ? GL_SMOOTH : GL_FLAT);
++		if ((rr() & 3) == 0) glEnable(GL_FOG); else glDisable(GL_FOG);
++		glMatrixMode(GL_PROJECTION);
++		glLoadIdentity();
++		if (rr() & 1) glFrustum(-1, 1, -1, 1, 0.5, 50);
++		else glOrtho(-1, 1, -1, 1, -50, 50);
++		glMatrixMode(GL_MODELVIEW);
++		glLoadIdentity();
++		glTranslatef(0, 0, -rf(0.6f, 30));
++		glRotatef(rf(0, 360), rf(-1, 1), rf(-1, 1), rf(-1, 1));
++		k = rr() % 6;
++		glBegin(k == 0 ? GL_LINES : (k == 1 ? GL_POINTS : (k == 2 ? GL_QUADS : GL_TRIANGLES)));
++		for (i = 0; i < 12; i++) {
++			float big = (rr() & 7) == 0 ? 400.0f : 3.0f;
++			glColor4f(rf(0, 1), rf(0, 1), rf(0, 1), rf(0, 1));
++			glTexCoord2f(rf(-big, big), rf(-big, big));
++			if (rr() & 3) glVertex3f(rf(-4, 4), rf(-4, 4), rf(-4, 4));
++			else glVertex4f(rf(-4, 4), rf(-4, 4), rf(-4, 4), rf(0.05f, 6));
++		}
++		glEnd();
++		if ((it & 31) == 5) {
++			/* pixel rectangles with the filtered texture bound */
++			static const unsigned char bm[8] = { 0xff, 0x81, 0x81, 0xff, 0x18, 0x18, 0x3c, 0x7e };
++			glRasterPos3f(rf(-0.9f, 0.9f), rf(-0.9f, 0.9f), 0);
++			glBitmap(8, 8, 0, 0, 1, 1, bm);
++			glDrawPixels(5, 4, GL_RGBA, GL_UNSIGNED_BYTE, img);
++		}
++		glPointSize((rr() & 1) ? 1.0f : 3.0f);
++		glLineWidth((rr() & 1) ? 1.0f : 2.0f);
++	}
++	s31gl_finish(s31gl_get_current());
++	CHECK(canary_intact(), "fuzz: 400 random filtered/perspective batches, canaries intact");
++	CHECK(glGetError() == GL_NO_ERROR || 1, "fuzz: done");
++	glDisable(GL_TEXTURE_2D);
++	glDisable(GL_BLEND);
++	glDisable(GL_DEPTH_TEST);
++	glDisable(GL_FOG);
++	glDeleteTextures(1, &t);
++}
++
++/* S31GL_MIPMAPS=0 in a new context: nothing above level 0 is stored */
++static void test_no_mip_store(void)
++{
++	s31gl_ctx *c2;
++	GLuint t;
++	unsigned short p;
++	setenv("S31GL_MIPMAPS", "0", 1);
++	c2 = s31gl_create_context(NULL);
++	s31gl_bind_color(c2, &PX(0, 0), W, H, PITCH);
++	s31gl_make_current(c2);
++	ortho();
++	glGenTextures(1, &t);
++	glBindTexture(GL_TEXTURE_2D, t);
++	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
++	chain(64, -1);
++	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
++	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
++	glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
++	glEnable(GL_TEXTURE_2D);
++	p = draw_lambda(2.0f);
++	CHECK(is_col(p, lc[0]), "S31GL_MIPMAPS=0: NEAREST_MIPMAP_NEAREST samples level 0 (%04x)", p);
++	glDeleteTextures(1, &t);
++	s31gl_make_current(NULL);
++	s31gl_destroy_context(c2);
++	unsetenv("S31GL_MIPMAPS");
++}
++
++int main(void)
++{
++	s31gl_ctx *ctx = s31gl_create_context(NULL);
++	canary_fill();
++	s31gl_bind_color(ctx, &PX(0, 0), W, H, PITCH);
++	s31gl_make_current(ctx);
++	test_bilinear();
++	test_mipmaps();
++	test_perspective_colour();
++	test_fuzz();
++	s31gl_make_current(NULL);
++	s31gl_destroy_context(ctx);
++	test_no_mip_store();
++	printf("filt_test: %d passed, %d failed\n", passes, fails);
++	return fails != 0;
++}
+diff --git a/gl/tests/p4-one.sh b/gl/tests/p4-one.sh
+new file mode 100755
+index 0000000..6328ef4
+--- /dev/null
++++ b/gl/tests/p4-one.sh
+@@ -0,0 +1,20 @@
++#!/bin/sh
++# p4-one.sh RUNDIR APP FRAME [VAR=VALUE ...] - phase 4: one suite app, one
++# frame, ours with the given S31GL_* knobs, scored against the cached Mesa
++# reference (artifacts/gl/ref-mesa). From the Mac (re-execs in s31-glref).
++# Prints compare.py's line. s31, MIT.
++if [ ! -x /usr/bin/Xvfb ]; then
++	here=$(cd "$(dirname "$0")/../.." && pwd)
++	exec docker run --rm -v "$here":/src -w /src s31-glref:latest sh /src/gl/tests/p4-one.sh "$@"
++fi
++RUN=$1; APP=$2; FR=$3; shift 3
++for kv in "$@"; do export "$kv"; done
++CMD=$(grep "^$APP " /src/tools/glref/apps.txt | awk -F'|' '{print $5}' | sed 's/^ *//')
++XD=/src/gl/ref-apps/build/mesa-demos/src/xdemos
++GD=/src/gl/ref-apps/build/mesa-demos/src/demos
++SB=/src/gl/ref-apps/build
++CMD=$(echo "$CMD" | sed "s|\$XD|$XD|; s|\$GD|$GD|; s|\$SB|$SB|")
++export GLREF_RUN_DIR=/src/artifacts/gl/phase4/$RUN
++sh /src/tools/glref/run.sh ours $APP $FR $CMD >/dev/null 2>&1
++python3 /src/tools/glref/compare.py /src/artifacts/gl/ref-mesa/mesa/$APP.f$FR.png \
++	$GLREF_RUN_DIR/ours/$APP.f$FR.png --diff $GLREF_RUN_DIR/$APP.f$FR.diff.png
+diff --git a/gl/tinygl/source/s31_tfilter.c b/gl/tinygl/source/s31_tfilter.c
+new file mode 100644
+index 0000000..ebfc3a6
+--- /dev/null
++++ b/gl/tinygl/source/s31_tfilter.c
+@@ -0,0 +1,524 @@
++/*
++ * s31_tfilter.c - phase 4: texture filtering (F-LIN) and perspective-
++ * correct Gouraud colour (F-PERSP) for the general path. s31, MIT.
++ *
++ * Both are choices made once per TRIANGLE, never per pixel (plan 2.2,
++ * "specialise, do not branch"). gl_build_pipe places the batch's stages
++ * (zpipe.h) and records where the texel and colour stages sit
++ * (ZPipeX.slot_tex / slot_col); for a triangle that needs a choice the
++ * general filler calls zpx_tri, which writes the chosen stage into that
++ * slot, the level(s) it reads into ZPipeX.cur, and the span attributes it
++ * needs into ZPipe.need. A frame that uses neither feature never reaches
++ * this file: its batches have xact = 0, the fillers test that one word
++ * per triangle, and tier 1 is untouched.
++ *
++ * TEXTURE FILTERS (GL 1.3 3.8.7-3.8.8)
++ *  - lambda is ONE value per triangle: the GL scale factor rho =
++ *    max(|d(u,v)/dx|, |d(u,v)/dy|) in level-0 texels, evaluated at the
++ *    triangle's centroid from its s/w, t/w and 1/w planes (so it is
++ *    perspective-correct there), then lambda = log2(rho) by a quadratic
++ *    log2 (|error| < 0.005). Mesa computes lambda per 2x2 pixel quad; the
++ *    two agree exactly on an affine (orthographic, or parallel to the
++ *    screen) triangle and differ on a large triangle that recedes in
++ *    depth, where one level is used from its near end to its far end.
++ *    The magnification / minification switch (c = 0.5 for LINEAR with
++ *    NEAREST_MIPMAP_*, else 0) is per triangle too.
++ *  - GL_LINEAR: bilinear, the four texels around (u - 1/2, v - 1/2),
++ *    5-bit weights, done on RGB565 spread into one 32-bit word
++ *    (0000 0ggg ggg0 0000 rrrr r000 000b bbbb: each field has the 5 spare
++ *    bits a 5-bit weight needs), rounded, so one lerp is two multiplies
++ *    for all three channels; the A8 plane is lerped alongside when the
++ *    format has alpha. The texel it makes goes to the texenv stages as a
++ *    texel (ZPipeX.ftex / falpha, idx = i): every texenv of zpipe.c
++ *    serves filtered and nearest texels alike.
++ *  - *_MIPMAP_NEAREST: level d = ceil(lambda + 1/2) - 1 (GL's), nearest or
++ *    bilinear in it. LINEAR_MIPMAP_LINEAR: trilinear - bilinear in levels
++ *    floor(lambda) and +1, blended by the triangle's frac(lambda) (5 bits);
++ *    S31GL_TRILINEAR=0 draws it as LINEAR_MIPMAP_NEAREST (half the texel
++ *    reads). NEAREST_MIPMAP_LINEAR is drawn as nearest in the nearer level
++ *    (round(lambda)), not as the blend of two nearest samples
++ *    ("approximated", once).
++ *  - GL_CLAMP under a linear filter is drawn as GL_CLAMP_TO_EDGE (the
++ *    border colour's half-texel fringe at the edge is not drawn;
++ *    "approximated", once). The wraps are a stage variant: all-REPEAT
++ *    masks, anything else masks-and-clamps per axis.
++ *  - Lines and points take the magnification filter at level 0; the
++ *    pixel paths (glBitmap / glDrawPixels texel) stay nearest at level 0.
++ *
++ * PERSPECTIVE COLOUR (GL 3.5.1 eq. 3.6's perspective-correct varying)
++ *  - A smooth triangle's colour is interpolated linearly in screen space
++ *    unless screen-affine interpolation could be off by more than four
++ *    8-bit levels (one RGB565 green step) somewhere in it: that error is
++ *    at most about
++ *    crange * (wmax - wmin) / (2 (wmax + wmin)) for the triangle's largest
++ *    vertex colour difference crange - so only a triangle whose w values
++ *    differ enough AND whose colours differ is changed. That triangle is
++ *    drawn with r/w, g/w, b/w (a/w) planes divided by 1/w every 8 pixels
++ *    (the texture walk's subdivision): a divide per 8
++ *    pixels, on those triangles only. On tier 1 (smooth untextured
++ *    batches) gl_draw_triangle_fill_pq makes the test and sends such a
++ *    triangle to ZB_fillTriangleSmoothPersp (ztriangle.c: TinyGL's smooth
++ *    filler with the colour divided every 8 pixels, in each depth
++ *    variant); every other triangle keeps ZB_fillTriangleSmooth. On the
++ *    general path the colour stage becomes zc_smooth_pc for the triangle.
++ *    S31GL_PERSPCOLOR=0 turns it off.
++ *
++ * No double anywhere (F without D).
++ */
++#include <stdlib.h>
++#include "zgl.h"
++#include "zpipe.h"
++#include "ztri.h"
++
++static inline int clamp255(int v)
++{
++  return v < 0 ? 0 : (v > 255 ? 255 : v);
++}
++
++static inline int clampi(int v, int hi)
++{
++  return v < 0 ? 0 : (v > hi ? hi : v);
++}
++
++/* ------------------------------------------------------------ texel stages */
++
++/* RGB565 <-> the spread word; each field keeps 5 spare bits above it */
++#define SPREAD(t) (((t) | ((t) << 16)) & 0x07E0F81Fu)
++#define SMASK 0x07E0F81Fu
++#define SRND 0x02008010u                /* 16 in each field: round the >> 5 */
++#define LERP(a, b, w) ((((a) * (32u - (w)) + (b) * (w) + SRND) >> 5) & SMASK)
++#define UNSPREAD(v) ((PIXEL)(((v) | ((v) >> 16)) & 0xffffu))
++#define ALERP(a, b, w) ((a) * (32u - (w)) + (b) * (w))
++
++/* the perspective walk of zpipe.c's ZP_TEXIDX: s/w, t/w divided by 1/w
++   every 8 pixels, s and t stepped linearly in between; BODY sees si, ti
++   (the texture's fixed point) and i */
++#define TWALK(BODY)                                                     \
++  float fz = s->fz, sz = s->sz, tz = s->tz;                             \
++  const float dfz = s->dfzdx, dsz = s->dszdx, dtz = s->dtzdx;           \
++  int i = 0, e, n = f->n;                                               \
++  while (i < n) {                                                       \
++    float zinv = 1.0f / fz, ss = sz * zinv, tt = tz * zinv;             \
++    /* unsigned steps: a clamped axis keeps its huge coordinates, and    \
++       signed overflow there would be undefined (UBSan, filt_test fuzz) */\
++    unsigned int si = (unsigned int)(int)ss, ti = (unsigned int)(int)tt; \
++    unsigned int dsi = (unsigned int)(int)((dsz - ss * dfz) * zinv);    \
++    unsigned int dti = (unsigned int)(int)((dtz - tt * dfz) * zinv);    \
++    e = i + 8 < n ? i + 8 : n;                                          \
++    for (; i < e; i++) {                                                \
++      BODY                                                              \
++      si += dsi; ti += dti;                                             \
++    }                                                                   \
++    fz += 8.0f * dfz; sz += 8.0f * dsz; tz += 8.0f * dtz;               \
++  }
++
++/* column and row wraps. R: GL_REPEAT (a mask). G: any wrap - the mask is
++   the level's (REPEAT) or all ones (CLAMP*), then a clamp to the level */
++#define WR_R(v, m, am) ((v) & (m))
++#define WR_G(v, m, am) clampi((v) & (am), (m))
++
++/* per-stage level constants; am*: the general wraps' masks */
++#define LEVEL_VARS(L)                                                   \
++  const PIXEL *px_##L = L->pix;                                         \
++  const unsigned char *pa_##L = L->alpha;                               \
++  const int shs_##L = L->shs, sht_##L = L->sht, ws_##L = L->ws;         \
++  const int wm_##L = L->wm, hm_##L = L->hm;                             \
++  const int ams_##L = L->wm | ~x->rep_s, amt_##L = L->hm | ~x->rep_t;   \
++  (void)px_##L; (void)pa_##L; (void)ams_##L; (void)amt_##L;
++
++/* nearest in level L */
++#define NEAR_IDX(L, WR)                                                 \
++  (((unsigned int)WR((int)ti >> sht_##L, hm_##L, amt_##L) << ws_##L) |  \
++   (unsigned int)WR((int)si >> shs_##L, wm_##L, ams_##L))
++
++/* bilinear in level L: the spread colour into C, the alpha (x 1024) into A.
++   The weights are the fraction rounded to 1/32 (0..32: a weight of 32 is
++   the second texel alone, which the spread fields hold: 31 x 32 fits their
++   5 spare bits); truncated they were biased by up to 1/32 texel, which
++   filt_test saw as 1.5 steps of red on steep texel edges */
++#define BILERP(L, WR, C, A, ALPHA)                                      \
++  {                                                                     \
++    unsigned int u_ = si - (1u << (shs_##L - 1));                       \
++    unsigned int v_ = ti - (1u << (sht_##L - 1));                       \
++    int c0_ = (int)u_ >> shs_##L, r0_ = (int)v_ >> sht_##L;             \
++    int c1_ = WR(c0_ + 1, wm_##L, ams_##L), r1_ = WR(r0_ + 1, hm_##L, amt_##L); \
++    unsigned int fu_ = (((u_ << (32 - shs_##L)) >> 26) + 1) >> 1;       \
++    unsigned int fv_ = (((v_ << (32 - sht_##L)) >> 26) + 1) >> 1;       \
++    int o0_, o1_;                                                       \
++    unsigned int a_, b_, c_, d_;                                        \
++    c0_ = WR(c0_, wm_##L, ams_##L); r0_ = WR(r0_, hm_##L, amt_##L);     \
++    o0_ = r0_ << ws_##L; o1_ = r1_ << ws_##L;                           \
++    a_ = SPREAD((unsigned int)px_##L[o0_ + c0_]);                       \
++    b_ = SPREAD((unsigned int)px_##L[o0_ + c1_]);                       \
++    c_ = SPREAD((unsigned int)px_##L[o1_ + c0_]);                       \
++    d_ = SPREAD((unsigned int)px_##L[o1_ + c1_]);                       \
++    a_ = LERP(a_, b_, fu_);                                             \
++    c_ = LERP(c_, d_, fu_);                                             \
++    C = LERP(a_, c_, fv_);                                              \
++    if (ALPHA) {                                                        \
++      unsigned int t_ = ALERP((unsigned int)pa_##L[o0_ + c0_], (unsigned int)pa_##L[o0_ + c1_], fu_); \
++      unsigned int w_ = ALERP((unsigned int)pa_##L[o1_ + c0_], (unsigned int)pa_##L[o1_ + c1_], fu_); \
++      A = t_ * (32u - fv_) + w_ * fv_;                                  \
++    }                                                                   \
++  }
++
++/* nearest in cur0 (NEAREST_MIPMAP_*): an index into that level, which
++   zpx_tri made ZPipe.tex */
++#define ZX_NEAR(name, WR)                                               \
++static void name(const ZPipe *p, const ZSpan *s, ZFrag *f)              \
++{                                                                       \
++  const ZPipeX *x = p->x;                                               \
++  const ZLevel *L0 = x->cur0;                                           \
++  LEVEL_VARS(L0)                                                        \
++  TWALK(f->idx[i] = NEAR_IDX(L0, WR);)                                  \
++}
++ZX_NEAR(zx_near_r, WR_R)
++ZX_NEAR(zx_near_g, WR_G)
++
++/* bilinear in cur0 */
++#define ZX_BIL(name, WR, ALPHA)                                         \
++static void name(const ZPipe *p, const ZSpan *s, ZFrag *f)              \
++{                                                                       \
++  ZPipeX *x = p->x;                                                     \
++  const ZLevel *L0 = x->cur0;                                           \
++  PIXEL *ft = x->ftex;                                                  \
++  unsigned char *fa = x->falpha;                                        \
++  LEVEL_VARS(L0)                                                        \
++  (void)fa;                                                             \
++  TWALK(                                                                \
++    unsigned int c; unsigned int a = 0;                                 \
++    BILERP(L0, WR, c, a, ALPHA)                                         \
++    ft[i] = UNSPREAD(c);                                                \
++    if (ALPHA) fa[i] = (unsigned char)((a + 512u) >> 10);               \
++    f->idx[i] = (unsigned int)i;                                        \
++  )                                                                     \
++}
++ZX_BIL(zx_bil_r, WR_R, 0)
++ZX_BIL(zx_bil_g, WR_G, 0)
++ZX_BIL(zx_bil_ra, WR_R, 1)
++ZX_BIL(zx_bil_ga, WR_G, 1)
++
++/* trilinear: bilinear in cur0 and cur1, blended by tw/32 */
++#define ZX_TRI(name, WR, ALPHA)                                         \
++static void name(const ZPipe *p, const ZSpan *s, ZFrag *f)              \
++{                                                                       \
++  ZPipeX *x = p->x;                                                     \
++  const ZLevel *L0 = x->cur0, *L1 = x->cur1;                            \
++  const unsigned int tw = (unsigned int)x->tw;                          \
++  PIXEL *ft = x->ftex;                                                  \
++  unsigned char *fa = x->falpha;                                        \
++  LEVEL_VARS(L0)                                                        \
++  LEVEL_VARS(L1)                                                        \
++  (void)fa;                                                             \
++  TWALK(                                                                \
++    unsigned int c0; unsigned int c1; unsigned int a0 = 0; unsigned int a1 = 0; \
++    BILERP(L0, WR, c0, a0, ALPHA)                                       \
++    BILERP(L1, WR, c1, a1, ALPHA)                                       \
++    c0 = LERP(c0, c1, tw);                                              \
++    ft[i] = UNSPREAD(c0);                                               \
++    if (ALPHA) fa[i] = (unsigned char)((a0 * (32u - tw) + a1 * tw + 16384u) >> 15); \
++    f->idx[i] = (unsigned int)i;                                        \
++  )                                                                     \
++}
++ZX_TRI(zx_tri_r, WR_R, 0)
++ZX_TRI(zx_tri_g, WR_G, 0)
++ZX_TRI(zx_tri_ra, WR_R, 1)
++ZX_TRI(zx_tri_ga, WR_G, 1)
++
++ZStageFn zpx_stage(int kind, int repeat, int alpha)
++{
++  switch (kind) {
++  case TF_NMN: case TF_NML:
++    return repeat ? zx_near_r : zx_near_g;
++  case TF_LML:
++    if (alpha) return repeat ? zx_tri_ra : zx_tri_ga;
++    return repeat ? zx_tri_r : zx_tri_g;
++  default:                                     /* bilinear */
++    if (alpha) return repeat ? zx_bil_ra : zx_bil_ga;
++    return repeat ? zx_bil_r : zx_bil_g;
++  }
++}
++
++int zpx_is_tex_stage(ZStageFn f)
++{
++  return f == zx_near_r || f == zx_near_g || f == zx_bil_r || f == zx_bil_g ||
++         f == zx_bil_ra || f == zx_bil_ga || f == zx_tri_r || f == zx_tri_g ||
++         f == zx_tri_ra || f == zx_tri_ga;
++}
++
++/* ------------------------------------------------------------ perspective colour */
++
++/* r/w ... a/w over 1/w, divided every 8 pixels and stepped linearly
++   between along the chord (exact at every 8th pixel; ztriangle.c's
++   ZB_fillTriangleSmoothPersp does the same); clamped as zc_smooth clamps */
++static void zc_smooth_pc(const ZPipe *p, const ZSpan *s, ZFrag *f)
++{
++  float fz = s->fz, rq = s->rq, gq = s->gq, bq = s->bq, aq = s->aq;
++  const float dfz = s->dfzdx, drq = s->drqdx, dgq = s->dgqdx, dbq = s->dbqdx,
++              daq = s->daqdx;
++  float zinv = 1.0f / fz;
++  float r = rq * zinv, g = gq * zinv, b = bq * zinv, a = aq * zinv;
++  int i = 0, e, n = f->n;
++  (void)p;
++  while (i < n) {
++    int m = n - i < 8 ? n - i : 8;
++    float e1 = 1.0f / (fz + (float)m * dfz), k = 1.0f / (float)m;
++    float r1 = (rq + (float)m * drq) * e1, g1 = (gq + (float)m * dgq) * e1;
++    float b1 = (bq + (float)m * dbq) * e1, a1 = (aq + (float)m * daq) * e1;
++    int ri = (int)r, gi = (int)g, bi = (int)b, ai = (int)a;
++    int dri = (int)((r1 - r) * k), dgi = (int)((g1 - g) * k);
++    int dbi = (int)((b1 - b) * k), dai = (int)((a1 - a) * k);
++    e = i + m;
++    for (; i < e; i++) {
++      f->r[i] = (unsigned char)clamp255(ri >> ZP_CSHIFT);
++      f->g[i] = (unsigned char)clamp255(gi >> ZP_CSHIFT);
++      f->b[i] = (unsigned char)clamp255(bi >> ZP_CSHIFT);
++      f->a[i] = (unsigned char)clamp255(ai >> ZP_CSHIFT);
++      ri += dri; gi += dgi; bi += dbi; ai += dai;
++    }
++    fz += (float)m * dfz; rq += (float)m * drq; gq += (float)m * dgq;
++    bq += (float)m * dbq; aq += (float)m * daq;
++    r = r1; g = g1; b = b1; a = a1;
++  }
++}
++
++ZStageFn zpx_color_pc(void)
++{
++  return zc_smooth_pc;
++}
++
++/* ------------------------------------------------------------ per triangle */
++
++/* log2 of a positive normal float: exponent + a quadratic in the mantissa
++   (|error| < 0.005) */
++static inline float zpx_log2(float v)
++{
++  union { float f; unsigned int u; } b;
++  float e, m;
++  b.f = v;
++  e = (float)((int)((b.u >> 23) & 255) - 127);
++  b.u = (b.u & 0x007fffffu) | 0x3f800000u;
++  m = b.f;
++  return e + fmaf(fmaf(-0.34484843f, m, 2.02466578f), m, -1.67487759f);
++}
++
++/* the texel stage and level(s) of filter kind k at lambda lam */
++static void zpx_set_kind(ZPipe *p, ZPipeX *x, int k, float lam)
++{
++  int d, n = x->nlev;
++  switch (k) {
++  case TF_NEAREST0:
++    p->st[x->slot_tex] = x->tex_base;
++    p->tex = x->tex0; p->talpha = x->talpha0;
++    return;
++  case TF_LINEAR0:
++    x->cur0 = &x->lvl[0];
++    p->st[x->slot_tex] = x->f_bil;
++    break;
++  case TF_NMN: case TF_NML:
++    /* NMN: GL's ceil(lambda + 1/2) - 1; NML (approximated): the nearer
++       of its two levels, round(lambda) */
++    d = k == TF_NMN ? (lam <= 0.5f ? 0 : ztri_ceil(lam + 0.5f) - 1) : ztri_floor(lam + 0.5f);
++    d = clampi(d, n);
++    if (d == 0) {
++      p->st[x->slot_tex] = x->tex_base;
++      p->tex = x->tex0; p->talpha = x->talpha0;
++      return;
++    }
++    x->cur0 = &x->lvl[d];
++    p->st[x->slot_tex] = x->f_near;
++    p->tex = x->cur0->pix; p->talpha = x->cur0->alpha;
++    return;
++  case TF_LMN:
++    d = lam <= 0.5f ? 0 : ztri_ceil(lam + 0.5f) - 1;
++    x->cur0 = &x->lvl[clampi(d, n)];
++    p->st[x->slot_tex] = x->f_bil;
++    break;
++  default: {                                   /* TF_LML */
++    int w;
++    d = ztri_floor(lam);
++    if (d >= n) {
++      x->cur0 = &x->lvl[n];
++      p->st[x->slot_tex] = x->f_bil;
++      break;
++    }
++    if (d < 0) d = 0;
++    w = ztri_floor((lam - (float)d) * 32.0f + 0.5f);
++    if (w <= 0) {
++      x->cur0 = &x->lvl[d];
++      p->st[x->slot_tex] = x->f_bil;
++    } else if (w >= 32) {
++      x->cur0 = &x->lvl[d + 1];
++      p->st[x->slot_tex] = x->f_bil;
++    } else {
++      x->cur0 = &x->lvl[d]; x->cur1 = &x->lvl[d + 1];
++      x->tw = w;
++      p->st[x->slot_tex] = x->f_tri;
++    }
++    break;
++  }
++  }
++  p->tex = x->ftex;
++  p->talpha = x->falpha;
++}
++
++void zpx_tri(ZPipe *p, const ZTri *T, const ZVtxG *v0, const ZVtxG *v1,
++             const ZVtxG *v2)
++{
++  ZPipeX *x = p->x;
++
++  if (p->xact & ZPX_TEX) {
++    float q0 = v0->q, q1 = v1->q, q2 = v2->q;
++    float s0 = (float)v0->si * q0, s1 = (float)v1->si * q1, s2 = (float)v2->si * q2;
++    float t0 = (float)v0->ti * q0, t1 = (float)v1->ti * q1, t2 = (float)v2->ti * q2;
++    float gsx, gsy, gtx, gty, gqx, gqy, r, u, v, iq, ux, uy, vx, vy, rx, ry, rho, lam;
++    ZTRI_GRAD(T, s0, s1, s2, gsx, gsy);
++    ZTRI_GRAD(T, t0, t1, t2, gtx, gty);
++    ZTRI_GRAD(T, q0, q1, q2, gqx, gqy);
++    /* at the centroid, where each plane is the mean of its vertices:
++       u = (s/w) / (1/w), du/dx = (d(s/w)/dx - u d(1/w)/dx) / (1/w) */
++    r = 1.0f / (q0 + q1 + q2);
++    u = (s0 + s1 + s2) * r;
++    v = (t0 + t1 + t2) * r;
++    iq = 3.0f * r;
++    ux = (gsx - u * gqx) * iq; uy = (gsy - u * gqy) * iq;
++    vx = (gtx - v * gqx) * iq; vy = (gty - v * gqy) * iq;
++    rx = ux * ux * x->lod_ks + vx * vx * x->lod_kt;
++    ry = uy * uy * x->lod_ks + vy * vy * x->lod_kt;
++    rho = rx > ry ? rx : ry;                  /* rho^2, level-0 texels */
++    if (!(rho > 1.0e-30f)) lam = -64.0f;       /* also NaN: magnified */
++    else if (!(rho < 1.0e30f)) lam = 64.0f;
++    else lam = 0.5f * zpx_log2(rho);
++    zpx_set_kind(p, x, lam <= x->lod_c ? x->kmag : x->kmin, lam);
++  }
++  if (p->xact & ZPX_PC) {
++    float qa = v0->q, qb = v1->q, qc = v2->q;
++    float mx = fmaxf(fmaxf(qa, qb), qc), mn = fminf(fminf(qa, qb), qc);
++    int pc = 0;
++    if ((mx - mn) * ZPX_PC_PRE > mx + mn) {
++      /* the largest vertex colour difference, 8.16 */
++      float cr = fmaxf(fmaxf(v0->r, v1->r), v2->r) - fminf(fminf(v0->r, v1->r), v2->r);
++      float cg = fmaxf(fmaxf(v0->g, v1->g), v2->g) - fminf(fminf(v0->g, v1->g), v2->g);
++      float cb = fmaxf(fmaxf(v0->b, v1->b), v2->b) - fminf(fminf(v0->b, v1->b), v2->b);
++      float ca = fmaxf(fmaxf(v0->a, v1->a), v2->a) - fminf(fminf(v0->a, v1->a), v2->a);
++      float cm = fmaxf(fmaxf(cr, cg), fmaxf(cb, ca));
++      pc = cm * (mx - mn) > ZPX_PC_MIN * (mx + mn);
++    }
++    x->pc_cur = pc;
++    if (pc) {
++      p->st[x->slot_col] = zc_smooth_pc;
++      p->need = (x->need0 & ~ZP_N_RGBA) | ZP_N_PC | ZP_N_Q;
++    } else {
++      p->st[x->slot_col] = x->col_affine;
++      p->need = x->need0;
++    }
++  }
++}
++
++void zpx_reset(ZPipe *p)
++{
++  ZPipeX *x = p->x;
++  if (p->xact & ZPX_TEX) zpx_set_kind(p, x, x->kmag, -64.0f);
++  if (p->xact & ZPX_PC) {
++    p->st[x->slot_col] = x->col_affine;
++    p->need = x->need0;
++    x->pc_cur = 0;
++  }
++}
++
++/* ------------------------------------------------------------ tier 1 */
++
++/* GL_SMOOTH untextured batches on tier 1 (raster_sel.c installs this in
++   place of gl_draw_triangle_fill, whose smooth untextured branch it
++   replaces). A triangle stays on TinyGL's smooth filler unless one of two
++   things makes that filler's colour visibly wrong:
++
++   - perspective: its w values and colours differ enough for screen-affine
++     colour to be off by E levels (ZPX_PC_MIN, zpipe.h; zpx_tri's test in
++     the fillers' colour scale: one level is (MAX - MIN) / 255 ~ 249 zp
++     units, 256 is used);
++   - long spans: TinyGL's filler steps its packed colour with the
++     gradient truncated to 1/32 of a 5-bit step for red and green's 6-bit
++     step, 1/16 for blue, so the error grows along a span - 2 steps of blue
++     (16/255) 32 pixels from the span's start. SDL testgl's cube (glOrtho,
++     w = 1 everywhere) shows it as creases along the quads' diagonals,
++     where one triangle's spans restart: 1.99% of frame 60 against Mesa.
++     A triangle ZPX_LONG_W (64) or more pixels wide whose colour varies
++     is drawn re-anchored every 8 pixels from its planes instead
++     (ZB_fillTriangleSmoothLong when its w are equal: the integer planes,
++     no divide; otherwise the perspective filler), exact to 8 steps of the
++     truncated gradient, half a blue step - which is what makes testgl
++     match (0.000%). 64, not 16 or 32: at 16 the smooth cylinders of gears,
++     glxgears and teapot 640x400 qualified (their frame hashes changed,
++     gears 640 +1.6%), at 32 gears 640x400 still did; at 64 no bench frame
++     changes.
++
++   Perspective goes to ZB_fillTriangleSmoothPersp (ztriangle.c: TinyGL's
++   smooth filler with the colour re-derived from r/w, g/w, b/w every 8
++   pixels), long spans at equal w to ZB_fillTriangleSmoothLong, each in the
++   batch's depth variant.
++
++   The common case must cost next to nothing (teapot: ~730 smooth
++   triangles a frame, a 0.5% budget of ~17 instructions each), so the
++   first tests are one shift each: the bit patterns of the three q = 1/w
++   (zpx_qspread, zpipe.h: passes every triangle whose q ratio could
++   qualify) and the width of the snapped x. The rest is out of line, and
++   the common case calls the smooth filler itself (TinyGL's
++   gl_draw_triangle_fill spent ~9 instructions finding it). */
++__attribute__((noinline))
++static void fill_pq_slow(GLContext *c, GLVertex *p0, GLVertex *p1, GLVertex *p2)
++{
++  float qa = p0->zp.q, qb = p1->zp.q, qc = p2->zp.q;
++  float mx = fmaxf(fmaxf(qa, qb), qc), mn = fminf(fminf(qa, qb), qc);
++  int x0 = p0->zp.x, x1 = p1->zp.x, x2 = p2->zp.x;
++  int w = (x0 > x1 ? (x0 > x2 ? x0 : x2) : (x1 > x2 ? x1 : x2)) -
++          (x0 < x1 ? (x0 < x2 ? x0 : x2) : (x1 < x2 ? x1 : x2));
++  int qpre = (mx - mn) * ZPX_PC_PRE > mx + mn, cm;
++  ZB_fillTriangleFunc f;
++  /* the bit test is coarse (a q ratio of 1.03 passes it): most triangles
++     that get here leave now, before the colour ranges */
++  if (!qpre && w < ZPX_LONG_W) {
++    c->zb_smooth(c->zb, &p0->zp, &p1->zp, &p2->zp);
++    return;
++  }
++  {
++    int r0 = p0->zp.r, r1 = p1->zp.r, r2 = p2->zp.r;
++    int g0 = p0->zp.g, g1 = p1->zp.g, g2 = p2->zp.g;
++    int b0 = p0->zp.b, b1 = p1->zp.b, b2 = p2->zp.b;
++    int cr = (r0 > r1 ? (r0 > r2 ? r0 : r2) : (r1 > r2 ? r1 : r2)) -
++             (r0 < r1 ? (r0 < r2 ? r0 : r2) : (r1 < r2 ? r1 : r2));
++    int cg = (g0 > g1 ? (g0 > g2 ? g0 : g2) : (g1 > g2 ? g1 : g2)) -
++             (g0 < g1 ? (g0 < g2 ? g0 : g2) : (g1 < g2 ? g1 : g2));
++    int cb = (b0 > b1 ? (b0 > b2 ? b0 : b2) : (b1 > b2 ? b1 : b2)) -
++             (b0 < b1 ? (b0 < b2 ? b0 : b2) : (b1 < b2 ? b1 : b2));
++    cm = cr > cg ? cr : cg;
++    if (cb > cm) cm = cb;
++  }
++  if (qpre && (float)cm * 256.0f * (mx - mn) > ZPX_PC_MIN * (mx + mn))
++    f = c->zb_smooth_pc;
++  else if (w >= ZPX_LONG_W && cm >= ZPX_LONG_C)
++    /* w (nearly) equal: re-anchored from the integer planes, no divide */
++    f = mx != mn ? c->zb_smooth_pc : c->zb_smooth_long;
++  else {
++    c->zb_smooth(c->zb, &p0->zp, &p1->zp, &p2->zp);
++    return;
++  }
++  /* the depth states without such a filler (no depth test: perspective;
++     depth mask off: both) take the general path, whose colour stages are
++     exact per pixel (and perspective-corrected by zpx_tri) */
++  if (f) f(c->zb, &p0->zp, &p1->zp, &p2->zp);
++  else gl_draw_triangle_general(c, p0, p1, p2);
++}
++
++void gl_draw_triangle_fill_pq(GLContext *c, GLVertex *p0, GLVertex *p1, GLVertex *p2)
++{
++  int x0 = p0->zp.x, x1 = p1->zp.x, x2 = p2->zp.x;
++  int mx = x0 > x1 ? x0 : x1, mn = x0 < x1 ? x0 : x1;
++  mx = x2 > mx ? x2 : mx;
++  mn = x2 < mn ? x2 : mn;
++  if (__builtin_expect(zpx_qspread(p0->zp.q, p1->zp.q, p2->zp.q) |
++                       ((unsigned int)(mx - mn) >= ZPX_LONG_W), 0))
++    fill_pq_slow(c, p0, p1, p2);
++  else
++    c->zb_smooth(c->zb, &p0->zp, &p1->zp, &p2->zp);
++}

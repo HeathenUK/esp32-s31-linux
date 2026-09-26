@@ -213,8 +213,15 @@ static void test_basics(s31gl_ctx *ctx)
 	glDisable(GL_BLEND);
 	CHECK(glIsEnabled(GL_DITHER) == GL_TRUE, "GL_DITHER is enabled by default");
 	CHECK(glIsEnabled(GL_LIGHT3) == GL_FALSE, "GL_LIGHT3 disabled by default");
+	/* phase 4: GL 1.4 factor rules, as Mesa (SRC_COLOR as a source factor
+	   is NV_blend_square, core in 1.4); SRC_ALPHA_SATURATE stays source-only */
 	glBlendFunc(GL_SRC_COLOR, GL_ONE);
-	CHECK(glGetError() == GL_INVALID_ENUM, "glBlendFunc(GL_SRC_COLOR as src) -> GL_INVALID_ENUM");
+	CHECK(glGetError() == GL_NO_ERROR, "glBlendFunc(GL_SRC_COLOR as src) accepted (GL 1.4)");
+	glBlendFunc(GL_ONE, GL_SRC_ALPHA_SATURATE);
+	CHECK(glGetError() == GL_INVALID_ENUM, "glBlendFunc(GL_SRC_ALPHA_SATURATE as dst) -> GL_INVALID_ENUM");
+	glBlendEquation(GL_LOGIC_OP);
+	CHECK(glGetError() == GL_INVALID_ENUM, "glBlendEquation(GL_LOGIC_OP) -> GL_INVALID_ENUM");
+	glBlendFunc(GL_ONE, GL_ZERO);
 	glPixelStorei(GL_UNPACK_ALIGNMENT, 3);
 	CHECK(glGetError() == GL_INVALID_VALUE, "glPixelStorei(alignment 3) -> GL_INVALID_VALUE");
 	glPixelStorei(GL_UNPACK_ROW_LENGTH, 17);
@@ -617,6 +624,7 @@ static void test_raster_features(void)
 	glGenTextures(1, &t);
 	glBindTexture(GL_TEXTURE_2D, t);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);   /* phase 4: GL_LINEAR (the default) is bilinear now */
 	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 	/* GL 1.1: power-of-two sizes only, up to GL_MAX_TEXTURE_SIZE */
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 12, 8, 0, GL_RGBA, GL_UNSIGNED_BYTE, img);
@@ -815,6 +823,379 @@ static void test_arrays(void)
 	glColor3f(1, 1, 1);
 }
 
+/* phase 4 BLEND-EQ: every equation, separate factors, constant colour,
+   glGet and glPush/PopAttrib (expected values exact in RGB565) */
+static unsigned short blend_px(GLenum eq, GLenum sf, GLenum df, float sr, float sg,
+			       float sb)
+{
+	glDisable(GL_BLEND);
+	glClearColor(1, 0, 0, 1);		/* destination: red */
+	glClear(GL_COLOR_BUFFER_BIT);
+	glEnable(GL_BLEND);
+	glBlendEquation(eq);
+	glBlendFunc(sf, df);
+	glColor4f(sr, sg, sb, 1);
+	quad(-1, -1, 1, 1);
+	glDisable(GL_BLEND);
+	return PX(W / 2, H / 2);
+}
+
+static void test_blend_eq(void)
+{
+	GLint iv[4];
+	unsigned short v;
+
+	ident();
+	glDisable(GL_DEPTH_TEST);
+	glDisable(GL_TEXTURE_2D);
+	v = blend_px(GL_FUNC_ADD, GL_ONE, GL_ONE, 0, 1, 0);
+	CHECK(v == 0xFFE0, "blend ADD ONE,ONE red + green = 0x%04x (want 0xffe0)", v);
+	v = blend_px(GL_FUNC_SUBTRACT, GL_ONE, GL_ONE, 0, 1, 0);
+	CHECK(v == 0x07E0, "blend SUBTRACT green - red = 0x%04x (want 0x07e0)", v);
+	v = blend_px(GL_FUNC_REVERSE_SUBTRACT, GL_ONE, GL_ONE, 0, 1, 0);
+	CHECK(v == 0xF800, "blend REVERSE_SUBTRACT red - green = 0x%04x (want 0xf800)", v);
+	v = blend_px(GL_FUNC_REVERSE_SUBTRACT, GL_ONE, GL_ZERO, 1, 1, 1);
+	CHECK(v == 0x0000, "blend REVERSE_SUBTRACT ONE,ZERO = 0x%04x (want 0)", v);
+	v = blend_px(GL_FUNC_SUBTRACT, GL_ZERO, GL_ONE, 1, 1, 1);
+	CHECK(v == 0x0000, "blend SUBTRACT ZERO,ONE (0 - dst) = 0x%04x (want 0)", v);
+	/* the generic path (a pair nothing fuses) under each equation */
+	v = blend_px(GL_FUNC_SUBTRACT, GL_ONE, GL_ONE_MINUS_SRC_COLOR, 0, 1, 0);
+	CHECK(v == 0x07E0, "blend SUBTRACT ONE,1-SRC_COLOR (generic) = 0x%04x (want 0x07e0)", v);
+	v = blend_px(GL_FUNC_REVERSE_SUBTRACT, GL_ONE, GL_ONE_MINUS_SRC_COLOR, 0, 1, 0);
+	CHECK(v == 0xF800, "blend REVERSE_SUBTRACT ONE,1-SRC_COLOR (generic) = 0x%04x (want 0xf800)", v);
+	v = blend_px(GL_FUNC_ADD, GL_ONE, GL_ONE_MINUS_SRC_COLOR, 0, 1, 0);
+	CHECK(v == 0xFFE0, "blend ADD ONE,1-SRC_COLOR (generic) = 0x%04x (want 0xffe0)", v);
+	v = blend_px(GL_MIN, GL_ZERO, GL_ZERO, 0, 1, 1);
+	CHECK(v == 0x0000, "blend MIN (factors unused) = 0x%04x (want 0)", v);
+	v = blend_px(GL_MAX, GL_ZERO, GL_ZERO, 0, 1, 0);
+	CHECK(v == 0xFFE0, "blend MAX (factors unused) = 0x%04x (want 0xffe0)", v);
+	glBlendColor(1, 0, 1, 1);
+	v = blend_px(GL_FUNC_ADD, GL_CONSTANT_COLOR, GL_ZERO, 1, 1, 1);
+	CHECK(v == 0xF81F, "blend CONSTANT_COLOR = 0x%04x (want 0xf81f)", v);
+	glBlendColor(0, 0, 0, 0);
+	/* separate: the alpha factors change no stored pixel (no alpha plane) */
+	glDisable(GL_BLEND);
+	glClear(GL_COLOR_BUFFER_BIT);
+	glEnable(GL_BLEND);
+	glBlendEquationSeparate(GL_FUNC_ADD, GL_MIN);
+	glBlendFuncSeparate(GL_ONE, GL_ONE, GL_ZERO, GL_SRC_ALPHA);
+	glColor4f(0, 1, 0, 0.25f);
+	quad(-1, -1, 1, 1);
+	glDisable(GL_BLEND);
+	CHECK(PX(W / 2, H / 2) == 0xFFE0, "glBlendFuncSeparate: RGB ONE,ONE whatever the alpha factors (0x%04x)",
+	      PX(W / 2, H / 2));
+	glGetIntegerv(GL_BLEND_SRC_RGB, &iv[0]);
+	glGetIntegerv(GL_BLEND_DST_RGB, &iv[1]);
+	glGetIntegerv(GL_BLEND_SRC_ALPHA, &iv[2]);
+	glGetIntegerv(GL_BLEND_DST_ALPHA, &iv[3]);
+	CHECK(iv[0] == GL_ONE && iv[1] == GL_ONE && iv[2] == GL_ZERO && iv[3] == GL_SRC_ALPHA,
+	      "glGet BLEND_SRC/DST_RGB/ALPHA");
+	glGetIntegerv(GL_BLEND_EQUATION, &iv[0]);
+	glGetIntegerv(GL_BLEND_EQUATION_ALPHA, &iv[1]);
+	CHECK(iv[0] == GL_FUNC_ADD && iv[1] == GL_MIN, "glGet BLEND_EQUATION_RGB/ALPHA");
+	glPushAttrib(GL_COLOR_BUFFER_BIT);
+	glBlendEquation(GL_MAX);
+	glBlendFunc(GL_ZERO, GL_ZERO);
+	glPopAttrib();
+	glGetIntegerv(GL_BLEND_EQUATION_ALPHA, &iv[1]);
+	glGetIntegerv(GL_BLEND_DST_ALPHA, &iv[3]);
+	CHECK(iv[1] == GL_MIN && iv[3] == GL_SRC_ALPHA, "glPopAttrib restores the blend equation and separate factors");
+	glBlendEquation(GL_FUNC_ADD);
+	glBlendFunc(GL_ONE, GL_ZERO);
+	CHECK(glGetError() == GL_NO_ERROR, "no error after the blend tests");
+	glColor4f(1, 1, 1, 1);
+}
+
+/* phase 4 F8-STENCIL: no stencil memory without stencil bits (and the test
+   passes), then with 8 bits every op, both masks, the depth interplay, the
+   clears (full with the dirty range, scissored, write-masked), glPushAttrib,
+   and the stencil index pixel paths */
+static unsigned char sten[W * H];
+static int st_read(void)
+{
+	memset(sten, 0xEE, sizeof sten);
+	glPixelStorei(GL_PACK_ALIGNMENT, 1);
+	glReadPixels(0, 0, W, H, GL_STENCIL_INDEX, GL_UNSIGNED_BYTE, sten);
+	glPixelStorei(GL_PACK_ALIGNMENT, 4);
+	return glGetError();
+}
+static int st_count(int v)
+{
+	int i, n = 0;
+	for (i = 0; i < W * H; i++) n += sten[i] == v;
+	return n;
+}
+static void st_op(GLenum func, int ref, GLenum sf, GLenum zf, GLenum zp)
+{
+	glStencilFunc(func, ref, 0xff);
+	glStencilOp(sf, zf, zp);
+}
+
+static void test_stencil(s31gl_ctx *ctx)
+{
+	GLint b = -1;
+	int e, i, ok;
+
+	ident();
+	glDisable(GL_DEPTH_TEST);
+	glDisable(GL_BLEND);
+	glGetIntegerv(GL_STENCIL_BITS, &b);
+	CHECK(b == 0 && s31gl_stencil_bytes(ctx) == 0, "no stencil bits: GL_STENCIL_BITS 0, no stencil memory");
+	glClearColor(0, 0, 0, 1);
+	glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+	glEnable(GL_STENCIL_TEST);
+	glStencilFunc(GL_NEVER, 0, 0xff);
+	glColor3f(0, 1, 0);
+	quad(-1, -1, 1, 1);
+	glDisable(GL_STENCIL_TEST);
+	CHECK(count_px(0x07E0) == W * H, "no stencil buffer: the stencil test passes (GL 4.1.5)");
+	glReadPixels(0, 0, 1, 1, GL_STENCIL_INDEX, GL_UNSIGNED_BYTE, sten);
+	CHECK(glGetError() == GL_INVALID_OPERATION, "glReadPixels(GL_STENCIL_INDEX) without a buffer -> INVALID_OPERATION");
+
+	s31gl_set_stencil_bits(ctx, 8);
+	glGetIntegerv(GL_STENCIL_BITS, &b);
+	glClearStencil(0);
+	glClear(GL_STENCIL_BUFFER_BIT);
+	CHECK(b == 8 && s31gl_stencil_bytes(ctx) == W * H, "stencil bits 8: %d bits, %d bytes", b,
+	      s31gl_stencil_bytes(ctx));
+	e = st_read();
+	CHECK(e == 0 && st_count(0) == W * H, "cleared to 0");
+
+	glEnable(GL_STENCIL_TEST);
+	st_op(GL_ALWAYS, 1, GL_KEEP, GL_KEEP, GL_REPLACE);
+	quad(-1, -1, 0, 1);				/* the left half */
+	st_read();
+	CHECK(st_count(1) == W * H / 2 && sten[0] == 1 && sten[W - 1] == 0, "REPLACE: left half 1 (%d)", st_count(1));
+	/* only where stencil == 1 */
+	glClear(GL_COLOR_BUFFER_BIT);
+	st_op(GL_EQUAL, 1, GL_KEEP, GL_KEEP, GL_KEEP);
+	glColor3f(1, 0, 0);
+	quad(-1, -1, 1, 1);
+	CHECK(count_px(0xF800) == W * H / 2 && PX(0, 0) == 0xF800 && PX(W - 1, 0) == 0,
+	      "EQUAL 1: the quad lands on the left half only (%d)", count_px(0xF800));
+	/* INCR everywhere, twice: 3 on the left, 2 on the right; DECR once */
+	st_op(GL_ALWAYS, 0, GL_KEEP, GL_KEEP, GL_INCR);
+	quad(-1, -1, 1, 1);
+	quad(-1, -1, 1, 1);
+	st_op(GL_ALWAYS, 0, GL_KEEP, GL_KEEP, GL_DECR);
+	quad(0, -1, 1, 1);
+	st_read();
+	CHECK(st_count(3) == W * H / 2 && st_count(1) == W * H / 2, "INCR x2, DECR on the right: 3 / 1");
+	/* saturation and wrapping */
+	glClearStencil(255);
+	glClear(GL_STENCIL_BUFFER_BIT);
+	st_op(GL_ALWAYS, 0, GL_KEEP, GL_KEEP, GL_INCR);
+	quad(-1, -1, 0, 1);
+	st_op(GL_ALWAYS, 0, GL_KEEP, GL_KEEP, GL_INCR_WRAP);
+	quad(0, -1, 1, 1);
+	st_read();
+	CHECK(st_count(255) == W * H / 2 && st_count(0) == W * H / 2, "INCR saturates at 255, INCR_WRAP wraps to 0");
+	st_op(GL_ALWAYS, 0, GL_KEEP, GL_KEEP, GL_DECR_WRAP);
+	quad(0, -1, 1, 1);
+	st_op(GL_ALWAYS, 0, GL_KEEP, GL_KEEP, GL_INVERT);
+	quad(-1, -1, 0, 1);
+	st_read();
+	CHECK(st_count(255) == W * H / 2 && st_count(0) == W * H / 2, "DECR_WRAP 0 -> 255, INVERT 255 -> 0");
+	/* write mask and value mask */
+	glClearStencil(0);
+	glClear(GL_STENCIL_BUFFER_BIT);
+	glStencilMask(0x0f);
+	st_op(GL_ALWAYS, 0xff, GL_KEEP, GL_KEEP, GL_REPLACE);
+	quad(-1, -1, 1, 1);
+	glStencilMask(0xff);
+	st_read();
+	CHECK(st_count(0x0f) == W * H, "write mask 0x0f: REPLACE 0xff stores 0x0f");
+	glClear(GL_COLOR_BUFFER_BIT);
+	glStencilFunc(GL_EQUAL, 0x3f, 0x0f);
+	glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+	quad(-1, -1, 1, 1);
+	CHECK(count_px(0xF800) == W * H, "value mask 0x0f: 0x3f EQUAL 0x0f");
+	/* the stencil test fails: GL_STENCIL_FAIL op; depth fails: ZFAIL */
+	glClear(GL_STENCIL_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+	glEnable(GL_DEPTH_TEST);
+	glDepthFunc(GL_LESS);
+	glDisable(GL_STENCIL_TEST);
+	glBegin(GL_QUADS);			/* a near quad on the left writes depth */
+	glVertex3f(-1, -1, -0.5f); glVertex3f(0, -1, -0.5f); glVertex3f(0, 1, -0.5f); glVertex3f(-1, 1, -0.5f);
+	glEnd();
+	glEnable(GL_STENCIL_TEST);
+	st_op(GL_ALWAYS, 7, GL_KEEP, GL_INCR, GL_REPLACE);
+	glBegin(GL_QUADS);			/* a far quad over all */
+	glVertex3f(-1, -1, 0.5f); glVertex3f(1, -1, 0.5f); glVertex3f(1, 1, 0.5f); glVertex3f(-1, 1, 0.5f);
+	glEnd();
+	glDisable(GL_DEPTH_TEST);
+	st_read();
+	CHECK(st_count(1) == W * H / 2 && st_count(7) == W * H / 2, "depth fail -> INCR (1), pass -> REPLACE 7");
+	st_op(GL_LESS, 3, GL_ZERO, GL_KEEP, GL_KEEP);	/* 3 < s: 7 passes, 1 fails -> 0 */
+	quad(-1, -1, 1, 1);
+	st_read();
+	CHECK(st_count(0) == W * H / 2 && st_count(7) == W * H / 2, "stencil fail -> GL_ZERO");
+	/* clears: full with a dirty range, scissored, write-masked */
+	glClearStencil(0);
+	glClear(GL_STENCIL_BUFFER_BIT);
+	st_op(GL_ALWAYS, 9, GL_KEEP, GL_KEEP, GL_REPLACE);
+	quad(-0.2f, -0.2f, 0.2f, 0.2f);
+	glClear(GL_STENCIL_BUFFER_BIT);		/* same value: the range only */
+	st_read();
+	CHECK(st_count(0) == W * H, "full clear after a small write (dirty range): all 0");
+	glClearStencil(4);
+	glClear(GL_STENCIL_BUFFER_BIT);		/* another value: everything */
+	st_read();
+	CHECK(st_count(4) == W * H, "full clear to a new value: all 4");
+	glEnable(GL_SCISSOR_TEST);
+	glScissor(0, 0, 8, 4);
+	glClearStencil(2);
+	glClear(GL_STENCIL_BUFFER_BIT);
+	glDisable(GL_SCISSOR_TEST);
+	st_read();
+	CHECK(st_count(2) == 32 && sten[0] == 2 && sten[8] == 4 && sten[4 * W] == 4, "scissored stencil clear: 8x4");
+	glClearStencil(4);
+	glClear(GL_STENCIL_BUFFER_BIT);		/* after a scissored clear: its rows */
+	st_read();
+	CHECK(st_count(4) == W * H, "full clear after a scissored one: all 4");
+	glStencilMask(0x01);
+	glClearStencil(0xff);
+	glClear(GL_STENCIL_BUFFER_BIT);
+	glStencilMask(0xff);
+	st_read();
+	CHECK(st_count(5) == W * H, "write-masked clear: 4 | (0xff & 1) = 5");
+	/* glPushAttrib(GL_STENCIL_BUFFER_BIT) and GL_ENABLE_BIT */
+	glStencilFunc(GL_GREATER, 3, 0x7f);
+	glPushAttrib(GL_STENCIL_BUFFER_BIT | GL_ENABLE_BIT);
+	glDisable(GL_STENCIL_TEST);
+	glStencilFunc(GL_ALWAYS, 0, 0xff);
+	glPopAttrib();
+	{
+		GLint f = 0, r = 0, m = 0;
+		glGetIntegerv(GL_STENCIL_FUNC, &f);
+		glGetIntegerv(GL_STENCIL_REF, &r);
+		glGetIntegerv(GL_STENCIL_VALUE_MASK, &m);
+		CHECK(f == GL_GREATER && r == 3 && m == 0x7f && glIsEnabled(GL_STENCIL_TEST),
+		      "glPopAttrib restores the stencil state and GL_STENCIL_TEST");
+	}
+	glDisable(GL_STENCIL_TEST);
+	/* glDrawPixels / glReadPixels of indices, with the index offset */
+	{
+		unsigned char img[4 * 4];
+		unsigned short rd[16];
+		for (i = 0; i < 16; i++) img[i] = (unsigned char)(i * 10);
+		glRasterPos2f(-1, -1);			/* window (0, 0) */
+		glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+		glDrawPixels(4, 4, GL_STENCIL_INDEX, GL_UNSIGNED_BYTE, img);
+		glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+		glPixelTransferi(GL_INDEX_OFFSET, 1);
+		glReadPixels(0, 0, 4, 4, GL_STENCIL_INDEX, GL_UNSIGNED_SHORT, rd);
+		glPixelTransferi(GL_INDEX_OFFSET, 0);
+		ok = glGetError() == GL_NO_ERROR;
+		for (i = 0; i < 16; i++) ok &= rd[i] == i * 10 + 1;
+		CHECK(ok, "glDrawPixels + glReadPixels(GL_STENCIL_INDEX), offset 1 at the read");
+		glRasterPos2f(0, 0);			/* window (32, 24) */
+		glCopyPixels(0, 0, 4, 4, GL_STENCIL);
+		st_read();
+		ok = 1;
+		for (i = 0; i < 16; i++) ok &= sten[(24 + i / 4) * W + 32 + i % 4] == i * 10;
+		CHECK(ok, "glCopyPixels(GL_STENCIL)");
+	}
+	CHECK(glGetError() == GL_NO_ERROR, "no error after the stencil tests");
+	s31gl_set_stencil_bits(ctx, 0);
+	CHECK(s31gl_stencil_bytes(ctx) == 0, "stencil bits back to 0: the buffer is freed");
+	{
+		/* review 4 R3-stencil: a caller buffer said to be zero is trusted,
+		   so a full clear to 0 writes nothing (the byte planted after the
+		   statement survives it); a clear to 3 then writes everything */
+		static unsigned char sb[W * H + S31GL_STENCIL_TAIL];
+		s31gl_set_stencil_bits(ctx, 8);
+		memset(sb, 0, sizeof sb);
+		s31gl_stencil_zeroed(sb, W, H);
+		CHECK(s31gl_bind_stencil(ctx, sb) == 0, "s31gl_bind_stencil of a zeroed buffer");
+		sb[5] = 77;
+		glClearStencil(0);
+		glClear(GL_STENCIL_BUFFER_BIT);
+		s31gl_finish(ctx);
+		CHECK(sb[5] == 77, "s31gl_stencil_zeroed: a full clear to 0 writes nothing (%d)", sb[5]);
+		glClearStencil(3);
+		glClear(GL_STENCIL_BUFFER_BIT);
+		s31gl_finish(ctx);
+		CHECK(sb[5] == 3 && sb[W * H - 1] == 3, "then a full clear to 3 writes every value");
+		s31gl_bind_stencil(ctx, NULL);
+		s31gl_set_stencil_bits(ctx, 0);
+		glClearStencil(0);
+	}
+	glStencilFunc(GL_ALWAYS, 0, 0xff);
+	glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+	glClearStencil(0);
+	glColor3f(1, 1, 1);
+}
+
+/* phase 4 SMOOTH: the coverage model (zpipe.c zv_cover) at pixel centres -
+   white lines and points, SRC_ALPHA ONE over black, read by green (6 bits) */
+static int g6(int x, int ygl) { return (PX(x, H - 1 - ygl) >> 5) & 63; }
+static void pix_ortho(void)
+{
+	glMatrixMode(GL_PROJECTION);
+	glLoadIdentity();
+	glOrtho(0, W, 0, H, -1, 1);
+	glMatrixMode(GL_MODELVIEW);
+	glLoadIdentity();
+}
+static void hline(float y, float w)
+{
+	glClear(GL_COLOR_BUFFER_BIT);
+	glLineWidth(w);
+	glBegin(GL_LINES); glVertex2f(8, y); glVertex2f(40, y); glEnd();
+}
+static int near(int v, int want) { return v >= want - 1 && v <= want + 1; }
+
+static void test_smooth(void)
+{
+	GLfloat gr = 0;
+
+	glDisable(GL_DEPTH_TEST);
+	glDisable(GL_TEXTURE_2D);
+	pix_ortho();
+	glViewport(0, 0, W, H);
+	glClearColor(0, 0, 0, 1);
+	glColor4f(1, 1, 1, 1);
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+	glEnable(GL_LINE_SMOOTH);
+	hline(10.5f, 1);
+	CHECK(g6(20, 10) == 63 && g6(20, 9) == 0 && g6(20, 11) == 0, "smooth w1 on a centre: one full row (%d %d %d)",
+	      g6(20, 9), g6(20, 10), g6(20, 11));
+	hline(10.25f, 1);
+	CHECK(near(g6(20, 10), 47) && near(g6(20, 9), 16) && g6(20, 11) == 0,
+	      "smooth w1 a quarter off: 3/4 and 1/4 (%d %d)", g6(20, 10), g6(20, 9));
+	hline(10.5f, 2);
+	CHECK(g6(20, 10) == 63 && near(g6(20, 9), 32) && near(g6(20, 11), 32), "smooth w2: half on either side (%d %d)",
+	      g6(20, 9), g6(20, 11));
+	CHECK(g6(8, 10) == 63 && g6(7, 10) == 0 && g6(39, 10) == 63 && g6(40, 10) == 0,
+	      "smooth line ends: pixel centres half a pixel inside are full, outside empty");
+	glLineWidth(1);
+	glDisable(GL_LINE_SMOOTH);
+	hline(10.25f, 1);
+	CHECK(g6(20, 10) == 63 && g6(20, 9) == 0, "GL_LINE_SMOOTH off: aliased again");
+	glEnable(GL_POINT_SMOOTH);
+	glClear(GL_COLOR_BUFFER_BIT);
+	glPointSize(3);
+	glBegin(GL_POINTS); glVertex2f(20.5f, 20.5f); glEnd();
+	CHECK(g6(20, 20) == 63 && g6(21, 20) == 63 && near(g6(21, 21), 37) && g6(22, 20) == 0,
+	      "smooth point size 3: centre and edge-neighbours full, diagonal 0.59 (%d)", g6(21, 21));
+	glPointSize(1);
+	glDisable(GL_POINT_SMOOTH);
+	/* blending off: the footprint is written opaque (GL, Mesa) */
+	glDisable(GL_BLEND);
+	glEnable(GL_LINE_SMOOTH);
+	hline(10.25f, 1);
+	CHECK(g6(20, 10) == 63 && g6(20, 9) == 63 && g6(20, 11) == 0,
+	      "smooth w1 without blending: its footprint rows at full colour");
+	glDisable(GL_LINE_SMOOTH);
+	glGetFloatv(GL_LINE_WIDTH_GRANULARITY, &gr);
+	CHECK(gr == 0.125f, "GL_LINE_WIDTH_GRANULARITY 1/8 (smooth widths are exact)");
+	CHECK(glGetError() == GL_NO_ERROR, "no error after the smooth tests");
+	glBlendFunc(GL_ONE, GL_ZERO);
+	ident();
+}
+
 static void test_procs_and_stubs(void)
 {
 	void *self = dlopen(NULL, RTLD_NOW);
@@ -825,15 +1206,22 @@ static void test_procs_and_stubs(void)
 	CHECK(s31gl_get_proc("glGetString") != NULL && s31gl_get_proc("glFinish") != NULL,
 	      "get_proc(glGetString, glFinish)");
 	CHECK(s31gl_get_proc("glCreateShader") == NULL, "get_proc(unimplemented glCreateShader) = NULL");
-	CHECK(s31gl_get_proc("glBlendEquation") == NULL && s31gl_get_proc("glBlendFuncSeparate") == NULL,
-	      "get_proc(glBlendEquation / glBlendFuncSeparate) = NULL");
+	/* phase 4 BLEND-EQ: exported and returned since SDL2 is built without
+	   its GL render driver (plan 4.2 option B; gl/api/mkstubs.py) */
+	CHECK(s31gl_get_proc("glBlendEquation") == (void *)glBlendEquation &&
+	      s31gl_get_proc("glBlendFuncSeparate") == (void *)glBlendFuncSeparate &&
+	      s31gl_get_proc("glBlendEquationEXT") != NULL &&
+	      s31gl_get_proc("glBlendFuncSeparateEXT") != NULL &&
+	      s31gl_get_proc("glBlendEquationSeparate") != NULL,
+	      "get_proc(glBlendEquation / glBlendFuncSeparate and the EXT names)");
 	CHECK(s31gl_get_proc("glBogus") == NULL && s31gl_get_proc("") == NULL && s31gl_get_proc(NULL) == NULL,
 	      "get_proc(unknown) = NULL");
 	if (self == NULL) {
 		printf("SKIP export checks (static build: no dynamic symbol table)\n");
 	} else {
-		CHECK(dlsym(self, "glBlendEquation") == NULL && dlsym(self, "glBlendFuncSeparate") == NULL,
-		      "glBlendEquation / glBlendFuncSeparate are not exported");
+		CHECK(dlsym(self, "glBlendEquation") != NULL && dlsym(self, "glBlendFuncSeparate") != NULL &&
+		      dlsym(self, "glBlendEquationSeparateATI") == NULL,
+		      "glBlendEquation / glBlendFuncSeparate are exported (ATI alias is not)");
 		CHECK(dlsym(self, "glCreateShader") != NULL && dlsym(self, "glWindowPos2i") != NULL &&
 		      dlsym(self, "glGenBuffers") != NULL && dlsym(self, "glRasterPos3d") != NULL,
 		      "GL 1.x-2.0 names (implemented or not) are exported (eager binding)");
@@ -1216,6 +1604,9 @@ int main(void)
 	test_raster_features();
 	test_arrays();
 	test_procs_and_stubs();
+	test_blend_eq();
+	test_stencil(ctx);
+	test_smooth();
 	test_push_pop_attrib();
 	test_f7();
 	s31gl_make_current(NULL);

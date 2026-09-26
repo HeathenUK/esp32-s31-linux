@@ -140,6 +140,27 @@ int s31gl_bind_depth(s31gl_ctx *ctx, void *depth)
 	return ctx ? tgl_ctx_bind_depth(ctx->tgl, depth) : -1;
 }
 
+void s31gl_set_stencil_bits(s31gl_ctx *ctx, int bits)
+{
+	if (ctx)
+		tgl_ctx_set_stencil_bits(ctx->tgl, bits);
+}
+
+int s31gl_bind_stencil(s31gl_ctx *ctx, void *stencil)
+{
+	return ctx ? tgl_ctx_bind_stencil(ctx->tgl, stencil) : -1;
+}
+
+void s31gl_stencil_zeroed(void *stencil, int w, int h)
+{
+	tgl_stencil_zeroed(stencil, w, h);
+}
+
+int s31gl_stencil_bytes(s31gl_ctx *ctx)
+{
+	return ctx ? tgl_ctx_stencil_bytes(ctx->tgl) : 0;
+}
+
 void s31_hook_viewport(int x, int y, int w, int h)
 {
 	if (current && current->hooks.viewport)

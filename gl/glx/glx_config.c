@@ -7,16 +7,28 @@
  *     TrueColor). The rasteriser writes RGB565 and the present is a straight
  *     ShmPutImage, so any other visual would need a conversion per pixel.
  *   - Each visual as TWO configs, double- and single-buffered (Mesa fakeglx
- *     style: the same pixels serve both).
- *   - DEPTH 16, STENCIL 0, ACCUM 0, ALPHA 0, AUX 0, no stereo, no multisample,
+ *     style: the same pixels serve both), with STENCIL 0 - and (phase 4
+ *     F8-STENCIL) the same two again with STENCIL 8, listed AFTER every
+ *     stencil-0 config: an app that does not ask for stencil matches a
+ *     stencil-0 config first (ChooseVisual) or sorts one first
+ *     (ChooseFBConfig: STENCIL_SIZE sorts "smaller", GLX 1.4 table 3.4), so
+ *     it gets no stencil memory. A stencil-8 config's drawable gets a
+ *     w * h byte stencil buffer, made with the depth buffer.
+ *   - DEPTH 16, ACCUM 0, ALPHA 0, AUX 0, no stereo, no multisample,
  *     no sRGB, windows only (no pixmaps, no pbuffers), caveat SLOW.
  *
  * Every *_SIZE request is a MINIMUM (GLX 1.2 and 1.3 alike). So a request for
- * stencil, accum, alpha, more than 16 bits of depth or more than 5/6/5 bits of
- * colour gets NO visual/config. That is honest: the app then fails in a way it
- * reports, rather than rendering wrongly. SDL 1.2 asks for DirectColor first
- * and retries without it when we say no (SDL_x11gl.c:198-212); SDL2 does the
- * same through ChooseFBConfig then ChooseVisual.
+ * more than 8 bits of stencil, accum, alpha, more than 16 bits of depth or
+ * more than 5/6/5 bits of colour gets NO visual/config. That is honest: the
+ * app then fails in a way it reports, rather than rendering wrongly. SDL 1.2
+ * asks for DirectColor first and retries without it when we say no
+ * (SDL_x11gl.c:198-212); SDL2 does the same through ChooseFBConfig then
+ * ChooseVisual.
+ *
+ * One X visual stands for several configs, so ChooseVisual (and
+ * GetVisualFromFBConfig) remember which one the visual was chosen as - its
+ * DOUBLEBUFFER and STENCIL_SIZE - for glXCreateContext(visual) and
+ * glXGetConfig, as Mesa's fakeglx remembers the requested attributes.
  */
 #include <stdlib.h>
 #include <string.h>
@@ -64,7 +76,7 @@ static void build_configs(struct glxi_dpy *d)
 
 	for (s = 0; s < nscr; s++) {
 		XVisualInfo tmpl, *vi;
-		int n = 0, i;
+		int n = 0, i, st;
 
 		memset(&tmpl, 0, sizeof tmpl);
 		tmpl.screen = s;
@@ -74,25 +86,28 @@ static void build_configs(struct glxi_dpy *d)
 				    VisualClassMask, &tmpl, &n);
 		if (!vi)
 			continue;
-		for (i = 0; i < n; i++) {
-			int db;
+		/* stencil 0 for every visual first, then stencil 8 */
+		for (st = 0; st <= 8; st += 8)
+			for (i = 0; i < n; i++) {
+				int db;
 
-			if (vi[i].red_mask != 0xF800 || vi[i].green_mask != 0x07E0 ||
-			    vi[i].blue_mask != 0x001F)
-				continue;
-			for (db = 1; db >= 0; db--) {
-				struct __GLXFBConfigRec *c;
+				if (vi[i].red_mask != 0xF800 || vi[i].green_mask != 0x07E0 ||
+				    vi[i].blue_mask != 0x001F)
+					continue;
+				for (db = 1; db >= 0; db--) {
+					struct __GLXFBConfigRec *c;
 
-				if (d->ncfg >= GLXI_MAXCFG)
-					break;
-				c = &d->cfg[d->ncfg];
-				c->id = d->ncfg + 1;
-				c->screen = s;
-				c->vid = vi[i].visualid;
-				c->db = db;
-				d->ncfg++;
+					if (d->ncfg >= GLXI_MAXCFG)
+						break;
+					c = &d->cfg[d->ncfg];
+					c->id = d->ncfg + 1;
+					c->screen = s;
+					c->vid = vi[i].visualid;
+					c->db = db;
+					c->stencil = st;
+					d->ncfg++;
+				}
 			}
-		}
 		XFree(vi);
 	}
 }
@@ -147,7 +162,7 @@ int glxi_is_our_cfg(struct glxi_dpy *d, const struct __GLXFBConfigRec *c)
 }
 
 struct __GLXFBConfigRec *glxi_cfg_for_visual(struct glxi_dpy *d, int screen,
-					     VisualID vid, int db)
+					     VisualID vid, int db, int stencil)
 {
 	int i;
 
@@ -155,23 +170,27 @@ struct __GLXFBConfigRec *glxi_cfg_for_visual(struct glxi_dpy *d, int screen,
 		return NULL;
 	for (i = 0; i < d->ncfg; i++)
 		if (d->cfg[i].vid == vid && d->cfg[i].db == db &&
+		    d->cfg[i].stencil == stencil &&
 		    (screen < 0 || d->cfg[i].screen == screen))
 			return &d->cfg[i];
 	return NULL;
 }
 
-static void remember_db(struct glxi_dpy *d, VisualID vid, int db)
+/* the config a visual was chosen as (ChooseVisual, GetVisualFromFBConfig) */
+static void remember_cfg(struct glxi_dpy *d, VisualID vid, int db, int stencil)
 {
 	int i;
 
 	for (i = 0; i < d->nchosen; i++)
 		if (d->chosen_vid[i] == vid) {
 			d->chosen_db[i] = db;
+			d->chosen_stencil[i] = stencil;
 			return;
 		}
 	if (d->nchosen < GLXI_MAXCFG) {
 		d->chosen_vid[d->nchosen] = vid;
 		d->chosen_db[d->nchosen] = db;
+		d->chosen_stencil[d->nchosen] = stencil;
 		d->nchosen++;
 	}
 }
@@ -186,6 +205,17 @@ int glxi_visual_db(struct glxi_dpy *d, VisualID vid)
 		if (d->chosen_vid[i] == vid)
 			return d->chosen_db[i];
 	return 1;
+}
+
+/* phase 4 F8: stencil 0 unless the visual was chosen with stencil */
+int glxi_visual_stencil(struct glxi_dpy *d, VisualID vid)
+{
+	int i;
+
+	for (i = 0; d && i < d->nchosen; i++)
+		if (d->chosen_vid[i] == vid)
+			return d->chosen_stencil[i];
+	return 0;
 }
 
 /*
@@ -211,7 +241,7 @@ int glxi_cfg_attrib(Display *dpy, const struct __GLXFBConfigRec *c,
 	case GLX_BLUE_SIZE:		v = 5; break;
 	case GLX_ALPHA_SIZE:		v = 0; break;
 	case GLX_DEPTH_SIZE:		v = 16; break;
-	case GLX_STENCIL_SIZE:		v = 0; break;
+	case GLX_STENCIL_SIZE:		v = c->stencil; break;
 	case GLX_ACCUM_RED_SIZE:
 	case GLX_ACCUM_GREEN_SIZE:
 	case GLX_ACCUM_BLUE_SIZE:
@@ -395,7 +425,7 @@ static int req_match(const struct req *q, const struct __GLXFBConfigRec *c)
 		return 0;
 	if (!min_ok(q->aux, 0) || !min_ok(q->buffer_size, 16) ||
 	    !min_ok(q->r, 5) || !min_ok(q->g, 6) || !min_ok(q->b, 5) ||
-	    !min_ok(q->a, 0) || !min_ok(q->depth, 16) || !min_ok(q->stencil, 0) ||
+	    !min_ok(q->a, 0) || !min_ok(q->depth, 16) || !min_ok(q->stencil, c->stencil) ||
 	    !min_ok(q->ar, 0) || !min_ok(q->ag, 0) || !min_ok(q->ab, 0) ||
 	    !min_ok(q->aa, 0))
 		return 0;
@@ -454,7 +484,7 @@ GLXI_EXPORT XVisualInfo *glXChooseVisual(Display *dpy, int screen,
 
 		if (c->screen != screen || !req_match(&q, c))
 			continue;
-		remember_db(d, c->vid, c->db);
+		remember_cfg(d, c->vid, c->db, c->stencil);
 		return visual_info(dpy, screen, c->vid);
 	}
 	return NULL;
@@ -473,7 +503,8 @@ GLXI_EXPORT int glXGetConfig(Display *dpy, XVisualInfo *vis, int attrib,
 	if (vis->screen < 0 || vis->screen >= ScreenCount(dpy))
 		return GLX_BAD_SCREEN;
 	c = glxi_cfg_for_visual(d, vis->screen, vis->visualid,
-				glxi_visual_db(d, vis->visualid));
+				glxi_visual_db(d, vis->visualid),
+				glxi_visual_stencil(d, vis->visualid));
 	if (!c) {
 		/* The spec's one exception: GLX_USE_GL on a non-GL visual is
 		 * a successful "False". */
@@ -545,14 +576,18 @@ GLXI_EXPORT GLXFBConfig *glXChooseFBConfig(Display *dpy, int screen,
 	/*
 	 * The spec's sort: everything that differs between our configs ties
 	 * except GLX_DOUBLEBUFFER, where single-buffered sorts first (GLX 1.4
-	 * table 3.4, "Smaller"). Then config id, for a stable order.
+	 * table 3.4, "Smaller"), then GLX_STENCIL_SIZE ("Smaller": a stencil
+	 * config comes after the same config without). Then config id, for a
+	 * stable order.
 	 */
 	for (i = 1; i < n; i++) {
 		GLXFBConfig c = out[i];
 
 		for (j = i; j > 0 && (out[j - 1]->db > c->db ||
 				      (out[j - 1]->db == c->db &&
-				       out[j - 1]->id > c->id)); j--)
+				       (out[j - 1]->stencil > c->stencil ||
+					(out[j - 1]->stencil == c->stencil &&
+					 out[j - 1]->id > c->id)))); j--)
 			out[j] = out[j - 1];
 		out[j] = c;
 	}
@@ -580,5 +615,9 @@ GLXI_EXPORT XVisualInfo *glXGetVisualFromFBConfig(Display *dpy,
 
 	if (!d || !glxi_is_our_cfg(d, config))
 		return NULL;
+	/* glXCreateContext(this visual) makes a context of THIS config
+	 * (SDL2 takes the FBConfig path to a visual, then creates the context
+	 * from the visual) */
+	remember_cfg(d, config->vid, config->db, config->stencil);
 	return visual_info(dpy, config->screen, config->vid);
 }

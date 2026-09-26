@@ -1,0 +1,2 @@
+libGL.so.1.unstripped: ramtext_objdump: 3402 instructions in 0x39060-0x3b9dc; 35 jumps and 61 auipc pairs leave the range, 61 annotated low halves outside; table: 61 auipc, 61 low halves, 35 jal; 0 problems
+headless_gears.qemu: ramtext_objdump: 3401 instructions in 0x46580-0x48efc; 35 jumps and 60 auipc pairs leave the range, 60 annotated low halves outside; table: 60 auipc, 60 low halves, 35 jal; 0 problems

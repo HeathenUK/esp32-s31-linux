@@ -29,7 +29,7 @@ void ZB_fillTriangleGeneral(ZBuffer *zb, const ZVtxG *a, const ZVtxG *b,
 {
   const ZPipe *p = zb->pipe;
   const ZVtxG *pv[3] = { a, b, c }, *v0, *v1, *v2;
-  const int need = p->need;
+  int need;
   float grx = 0, gry = 0, ggx = 0, ggy = 0, gbx = 0, gby = 0;
   float gax = 0, gay = 0, gfx = 0, gfy = 0;
   float gsx = 0, gsy = 0, gtx = 0, gty = 0, gqx = 0, gqy = 0;
@@ -49,6 +49,18 @@ void ZB_fillTriangleGeneral(ZBuffer *zb, const ZVtxG *a, const ZVtxG *b,
   ztri_zepoch(&T, p, a->z, b->z, c->z);
   ztri_rows(&T, p);
   v0 = pv[T.o[0]]; v1 = pv[T.o[1]]; v2 = pv[T.o[2]];
+  sp.run = zp_run;
+  /* phase 4 (s31_tfilter.c): this triangle's texture level(s) and filter,
+     and whether its colour is perspective-corrected - one call when the
+     batch has such a choice, which sets the stages and p->need */
+  if (p->xact) {
+    const ZPipeX *x = p->x;
+    /* a triangle whose q hardly differ keeps the affine colour: one test
+       here, not a call (zpx_qspread) */
+    if ((p->xact & ZPX_TEX) || x->pc_cur || zpx_qspread(v0->q, v1->q, v2->q))
+      if (zpx_tri((ZPipe *)p, &T, v0, v1, v2)) sp.run = zp_run_lod;
+  }
+  need = p->need;
 
   /* only the planes the chosen stages read (ZPipe.need, gl_build_pipe),
      each referenced to the centre of pixel (px, py) */
@@ -92,11 +104,26 @@ void ZB_fillTriangleGeneral(ZBuffer *zb, const ZVtxG *a, const ZVtxG *b,
     ZTRI_GRAD(&T, t0, t1, t2, gtx, gty);
     Rs = s0 + gsx * T.ox + gsy * T.oy;
     Rt = t0 + gtx * T.ox + gty * T.oy;
+    /* phase 4 (review 4 R1): for the level per 8-pixel block */
+    sp.dszdy = gsy; sp.dtzdy = gty; sp.dfzdy = gqy;
   }
   if (need & ZP_N_SPEC) {
     PLANE(sr, g1x, g1y, R1);
     PLANE(sg, g2x, g2y, R2);
     PLANE(sb, g3x, g3y, R3);
+  }
+  if (need & ZP_N_PC) {
+    /* phase 4 F-PERSP: colour times 1/w, divided back per 8 pixels
+       (zc_smooth_pc). The planes are kept in the span (pcr, pcgy, and
+       the x steps), not in locals: only this triangle's spans read them */
+#define PPLANE(F, k, gx) do { float a0_ = v0->F * v0->q, a1_ = v1->F * v1->q, \
+      a2_ = v2->F * v2->q; ZTRI_GRAD(&T, a0_, a1_, a2_, sp.gx, sp.pcgy[k]); \
+      sp.pcr[k] = a0_ + sp.gx * T.ox + sp.pcgy[k] * T.oy; } while (0)
+    PPLANE(r, 0, drqdx);
+    PPLANE(g, 1, dgqdx);
+    PPLANE(b, 2, dbqdx);
+    PPLANE(a, 3, daqdx);
+#undef PPLANE
   }
 #undef PLANE
 
@@ -143,7 +170,17 @@ void ZB_fillTriangleGeneral(ZBuffer *zb, const ZVtxG *a, const ZVtxG *b,
         sp.sg = (int)(R2 + g2x * fx + g2y * fy);
         sp.sb = (int)(R3 + g3x * fx + g3y * fy);
       }
-      zp_run(zb, &sp);
+      if (need & ZP_N_PC) {
+        sp.rq = sp.pcr[0] + sp.drqdx * fx + sp.pcgy[0] * fy;
+        sp.gq = sp.pcr[1] + sp.dgqdx * fx + sp.pcgy[1] * fy;
+        sp.bq = sp.pcr[2] + sp.dbqdx * fx + sp.pcgy[2] * fy;
+        sp.aq = sp.pcr[3] + sp.daqdx * fx + sp.pcgy[3] * fy;
+      }
+      /* zp_run, or zp_run_lod for a triangle whose mipmap level is chosen
+         per 8-pixel block (zpx_tri): one load from the span, not a test
+         (a test, or the runner in ZPipe, kept one more register live
+         across the span loop: +0.4% on untextured general-path frames) */
+      sp.run(zb, &sp);
     }
   }
 }

@@ -1,0 +1,15 @@
+dinoshade f20: PASS  320x240  strict 0.016% (12 px >16)  tolerant 0.000% (0 px)  max 255  mean 0.63  diff /src/artifacts/gl/phase4/final-p4apps/dinoshade.f20.diff.png unimpl=0
+dinoshade f3: PASS  320x240  strict 0.017% (13 px >16)  tolerant 0.000% (0 px)  max 255  mean 0.65  diff /src/artifacts/gl/phase4/final-p4apps/dinoshade.f3.diff.png unimpl=0
+dinoshade f60: PASS  320x240  strict 0.023% (18 px >16)  tolerant 0.000% (0 px)  max 255  mean 0.66  diff /src/artifacts/gl/phase4/final-p4apps/dinoshade.f60.diff.png unimpl=0
+dissolve f20: PASS  320x240  strict 1.586% (1218 px >16)  tolerant 0.458% (352 px)  max 148  mean 0.81  diff /src/artifacts/gl/phase4/final-p4apps/dissolve.f20.diff.png unimpl=0
+dissolve f3: PASS  320x240  strict 1.663% (1277 px >16)  tolerant 0.405% (311 px)  max 58  mean 0.84  diff /src/artifacts/gl/phase4/final-p4apps/dissolve.f3.diff.png unimpl=0
+floor-lin f2: PASS  320x240  strict 0.005% (4 px >16)  tolerant 0.001% (1 px)  max 17  mean 2.33  diff /src/artifacts/gl/phase4/final-p4apps/floor-lin.f2.diff.png unimpl=0
+floor-lml f2: PASS  320x240  strict 0.053% (41 px >16)  tolerant 0.013% (10 px)  max 17  mean 2.39  diff /src/artifacts/gl/phase4/final-p4apps/floor-lml.f2.diff.png unimpl=0
+floor-lmn f2: PASS  320x240  strict 0.474% (364 px >16)  tolerant 0.344% (264 px)  max 91  mean 2.39  diff /src/artifacts/gl/phase4/final-p4apps/floor-lmn.f2.diff.png unimpl=0
+floor-near f2: PASS  320x240  strict 0.018% (14 px >16)  tolerant 0.001% (1 px)  max 197  mean 1.54  diff /src/artifacts/gl/phase4/final-p4apps/floor-near.f2.diff.png unimpl=0
+floor-nml f2: PASS  320x240  strict 0.036% (28 px >16)  tolerant 0.014% (11 px)  max 197  mean 1.82  diff /src/artifacts/gl/phase4/final-p4apps/floor-nml.f2.diff.png unimpl=0
+floor-nmn f2: PASS  320x240  strict 0.435% (334 px >16)  tolerant 0.264% (203 px)  max 197  mean 1.71  diff /src/artifacts/gl/phase4/final-p4apps/floor-nmn.f2.diff.png unimpl=0
+floor8-lml f2: PASS  320x240  strict 0.059% (45 px >16)  tolerant 0.013% (10 px)  max 17  mean 2.39  diff /src/artifacts/gl/phase4/final-p4apps/floor8-lml.f2.diff.png unimpl=0
+p4 f2: PASS  320x240  strict 0.604% (464 px >16)  tolerant 0.268% (206 px)  max 230  mean 0.49  diff /src/artifacts/gl/phase4/final-p4apps/p4.f2.diff.png unimpl=0
+stencilwrap f3: EXACT  400x400  strict 0.000% (0 px >16)  tolerant 0.000% (0 px)  max 0  mean 0.00 unimpl=0
+tri-stencil f3: EXACT  300x300  strict 0.000% (0 px >16)  tolerant 0.000% (0 px)  max 0  mean 0.00 unimpl=0

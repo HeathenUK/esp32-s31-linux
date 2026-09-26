@@ -337,6 +337,8 @@ void glxi_surf_free_buffers(struct glxi_surf *s)
 	s->rscale = 0;
 	free(s->depth);
 	s->depth = NULL;
+	free(s->stencil);
+	s->stencil = NULL;
 	s->nbuf = s->cur = 0;
 	s->pixels = NULL;
 	s->bw = s->bh = s->pitch = 0;

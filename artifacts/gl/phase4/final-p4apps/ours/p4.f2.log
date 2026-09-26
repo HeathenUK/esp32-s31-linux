@@ -1,0 +1,7 @@
+# glref run: impl=ours name=p4 frame=2 display=:90
+# cmd: /src/gl/out-host/glx_p4
+# libGL.so.1 resolves to:
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000ecfeaab90000)
+libGL: context 1 created (pid 910, comm glx_p4)
+glx_p4: GL_STENCIL_BITS 8
+glref: ok at swap 2 -> /src/artifacts/gl/phase4/final-p4apps/ours/p4.f2

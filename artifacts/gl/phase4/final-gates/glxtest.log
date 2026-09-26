@@ -1,0 +1,426 @@
+=== MIT-SHM
+PASS glXQueryExtension(NULL, NULL)
+PASS glXQueryVersion = 1.4
+PASS extensions string: "GLX_ARB_get_proc_address GLX_EXT_swap_control GLX_MESA_swap_control GLX_SGI_swap_control"
+PASS GLX_EXT_visual_rating not advertised
+PASS GLX_ARB_create_context not advertised
+PASS client GLX_VERSION 1.4
+PASS server GLX_EXTENSIONS = client
+PASS GetProcAddress(glXSwapIntervalMESA)
+PASS GetProcAddress(glXChooseVisual)
+PASS GetProcAddress(glXCreateContextAttribsARB) == NULL
+PASS GetProcAddress(glXBogusS31) == NULL
+PASS GetProcAddress(glBogusS31) == NULL
+PASS GetProcAddress(glClear) != NULL
+PASS ChooseVisual gives TrueColor RGB565 depth 16
+PASS DirectColor request -> NULL
+PASS SDL 1.2 retry without DirectColor -> visual 0x21
+PASS stencil 9 -> NULL (phase 4: 8 bits)
+PASS alpha 1 -> NULL
+PASS accum 1 -> NULL
+PASS depth 24 -> NULL (minimum semantics)
+PASS red 8 -> NULL
+PASS samples 4 -> NULL
+PASS stereo -> NULL
+PASS colour index (no GLX_RGBA) -> NULL
+PASS caveat NONE -> NULL (we are SLOW)
+PASS caveat SLOW -> visual
+PASS GetConfig: use=1 rgb=565 a=0 z=16 s=0 db=1 caveat=0x8001
+PASS GetConfig unknown attribute -> GLX_BAD_ATTRIBUTE
+PASS GetFBConfigs: 32 configs
+PASS ChooseFBConfig(NULL) -> all
+PASS ChooseFBConfig(DONT_CARE db): 32, first db=0 (spec: single first)
+PASS ChooseFBConfig(freeglut double RGBA depth) -> 16
+PASS GetFBConfigAttrib: all 34 table attributes answer
+PASS chosen config is double-buffered
+PASS drawable type WINDOW only
+PASS caveat SLOW_CONFIG
+PASS GetVisualFromFBConfig depth 16
+PASS GetFBConfigAttrib unknown -> GLX_BAD_ATTRIBUTE
+PASS PIXMAP_BIT -> none
+PASS PBUFFER_BIT -> none
+PASS sRGB True -> none
+PASS sRGB False -> configs
+PASS COLOR_INDEX_BIT -> none
+PASS multisample -> none
+PASS DirectColor -> none
+PASS unknown attribute -> none
+PASS glXCreateContext
+PASS glXIsDirect
+libGL: context 1 created (pid 16, comm glxtest)
+PASS glXMakeCurrent
+PASS GetCurrent{Context,Drawable,ReadDrawable,Display}
+PASS lazy: no SHM segment at MakeCurrent (0 -> 0)
+PASS lazy: none after glViewport either
+libGL: drawable 0x200002 64x48: buffers 64x48
+PASS first draw allocates (SYSV maps 0 -> 2)
+PASS red clear presented: pixel 0xf800
+PASS bottom-right corner: pixel 0xf800
+PASS app ClientMessage not consumed by the wait
+PASS blue frame presented: pixel 0x001f
+PASS 50 eaten-completion frames, last green: 0x07e0
+PASS 20 slow eaten-completion frames, red: 0xf800
+PASS default swap interval 1 (got 1)
+PASS SwapIntervalEXT(0) -> 0
+PASS SwapIntervalMESA(1)
+PASS SwapIntervalSGI(0) -> BAD_VALUE
+PASS SwapIntervalSGI(1)
+PASS max swap interval 1
+PASS QueryDrawable GLX_WIDTH 64
+PASS QueryDrawable GLX_HEIGHT 48
+PASS interval 0 frame presented: 0xffff
+libGL: drawable 0x200002 101x77: buffers 101x77
+PASS [core: odd width, TinyGL rounds xsize to 4] resized to 101x77, far corner green: 0x07e0
+PASS resized, middle green: 0x07e0
+PASS QueryDrawable width after resize 101
+PASS re-MakeCurrent same pair
+PASS MakeCurrent on a bogus drawable -> False
+PASS still current after the failure
+PASS release
+PASS nothing current
+PASS buffers given back after release+destroy (0)
+libGL: context 2 created (pid 16, comm glxtest)
+libGL: drawable 0x200002 101x77 MIT-SHM x2: 74 presents, 2 allocs; waits: 1 event, 22 serial, 0 earlier-round-trip, 24 XSync, 0 none
+libGL: drawable 0x200009 64x48: buffers 64x48
+PASS [core] early glViewport kept by the lazy bind: in 0xffff out 0x0000
+PASS single-buffered visual
+libGL: context 3 created (pid 16, comm glxtest)
+libGL: drawable 0x200009 64x48 MIT-SHM x2: 1 presents, 1 allocs; waits: 0 event, 0 serial, 0 earlier-round-trip, 0 XSync, 0 none
+libGL: drawable 0x20000e 40x30: buffers 40x30
+PASS single-buffered glFlush presents magenta: 0xf81f
+PASS single-buffered context: GL_DOUBLEBUFFER 0, GL_DRAW_BUFFER 0x404 (GL_FRONT)
+PASS glXCreateWindow
+PASS CreateNewContext(COLOR_INDEX) -> NULL
+PASS glXCreateNewContext
+PASS glXMakeContextCurrent
+PASS QueryContext FBCONFIG_ID 1 == 1
+libGL: context 4 created (pid 16, comm glxtest)
+libGL: drawable 0x20000e 40x30 MIT-SHM x1: 2 presents, 1 allocs; waits: 0 event, 0 serial, 0 earlier-round-trip, 0 XSync, 0 none
+libGL: drawable 0x200012 32x32: buffers 32x32
+PASS GLX 1.3 window presents cyan: 0x07ff
+PASS CreatePixmap -> None
+PASS CreatePbuffer -> None
+PASS CreateGLXPixmap -> None
+libGL: context 5 created (pid 16, comm glxtest)
+libGL: drawable 0x200012 32x32 MIT-SHM x2: 1 presents, 1 allocs; waits: 0 event, 0 serial, 0 earlier-round-trip, 0 XSync, 0 none
+libGL: drawable 0x200017 800x480: buffers 800x480
+PASS interval0: 0 of 50 frames showed unswapped pixels
+libGL: context 6 created (pid 16, comm glxtest)
+libGL: drawable 0x20001b 160x120: buffers 160x120
+PASS vpmem step 0 160x120: centre 0xf800 (red), corner 0x001f (blue), GLX_WIDTH 160
+libGL: drawable 0x20001b 320x240: buffers 320x240
+PASS vpmem step 1 320x240: centre 0xf800 (red), corner 0x001f (blue), GLX_WIDTH 320
+libGL: drawable 0x20001b 160x120: buffers 160x120
+PASS vpmem step 2 160x120: centre 0xf800 (red), corner 0x001f (blue), GLX_WIDTH 160
+libGL: context 7 created (pid 16, comm glxtest)
+libGL: drawable 0x20001b 160x120 MIT-SHM x2: 3 presents, 3 allocs; waits: 0 event, 0 serial, 0 earlier-round-trip, 0 XSync, 0 none
+PASS trap: MakeCurrent succeeds with an app error in flight
+PASS trap: the app's handler saw its BadMatch (1)
+libGL: drawable 0x200024 64x48: buffers 64x48
+libGL: drawable 0x200024 120x90: buffers 120x90
+PASS trap: resize seen through glViewport with an app error in flight: corner 0x07e0, app errors 1
+libGL: context 8 created (pid 16, comm glxtest)
+libGL: context 9 created (pid 16, comm glxtest)
+libGL: drawable 0x200024 120x90 MIT-SHM x2: 2 presents, 2 allocs; waits: 0 event, 0 serial, 0 earlier-round-trip, 0 XSync, 0 none
+libGL: drawable 0x20002d 80x60: buffers 80x60
+PASS depthshare: ctx2's far quad hidden by ctx1's near one: 0x07e0
+PASS depthshare: nothing left mapped
+PASS stencil: ChooseVisual(STENCIL_SIZE 1) -> visual
+PASS stencil: GetConfig(stencil visual) STENCIL_SIZE = 8 (want 8)
+libGL: context 10 created (pid 16, comm glxtest)
+PASS stencil: CreateContext(stencil visual): GL_STENCIL_BITS 8
+libGL: drawable 0x20002d 80x60 MIT-SHM x2: 1 presents, 1 allocs; waits: 0 event, 0 serial, 0 earlier-round-trip, 0 XSync, 0 none
+libGL: drawable 0x200032 80x60: buffers 80x60
+libGL: context 11 created (pid 16, comm glxtest)
+PASS stencil: masked quad inside (0x001f) only, corner 0xf800
+libGL: context 12 created (pid 16, comm glxtest)
+PASS stencilshare: ctx2 tests ctx's stencil (0x001f, corner 0x07e0)
+PASS stencil: ChooseVisual without stencil -> STENCIL_SIZE 0 (want 0)
+PASS stencil: CreateContext(plain visual): GL_STENCIL_BITS 0
+PASS stencil: without a stencil buffer the test passes (0x001f 0x001f)
+PASS stencil: ChooseFBConfig(STENCIL_SIZE 8): 6 configs, all stencil 8
+libGL: context 13 created (pid 16, comm glxtest)
+libGL: drawable 0x200032 80x60 MIT-SHM x2: 3 presents, 1 allocs; waits: 1 event, 0 serial, 0 earlier-round-trip, 0 XSync, 0 none
+libGL: context 14 created (pid 16, comm glxtest)
+PASS stencil: GetVisualFromFBConfig(stencil) + CreateContext: bits 8
+PASS stencil: ChooseFBConfig without stencil: first STENCIL_SIZE 0 (want 0)
+PASS stencil: CreateNewContext(first config): bits 0
+ALL PASS: 0 failure(s)
+libGL: drawable 0x200017 800x480 MIT-SHM x1: 50 presents, 1 allocs; waits: 0 event, 0 serial, 0 earlier-round-trip, 50 XSync, 0 none
+=== S31GL_NOSHM=1
+PASS glXQueryExtension(NULL, NULL)
+PASS glXQueryVersion = 1.4
+PASS extensions string: "GLX_ARB_get_proc_address GLX_EXT_swap_control GLX_MESA_swap_control GLX_SGI_swap_control"
+PASS GLX_EXT_visual_rating not advertised
+PASS GLX_ARB_create_context not advertised
+PASS client GLX_VERSION 1.4
+PASS server GLX_EXTENSIONS = client
+PASS GetProcAddress(glXSwapIntervalMESA)
+PASS GetProcAddress(glXChooseVisual)
+PASS GetProcAddress(glXCreateContextAttribsARB) == NULL
+PASS GetProcAddress(glXBogusS31) == NULL
+PASS GetProcAddress(glBogusS31) == NULL
+PASS GetProcAddress(glClear) != NULL
+PASS ChooseVisual gives TrueColor RGB565 depth 16
+PASS DirectColor request -> NULL
+PASS SDL 1.2 retry without DirectColor -> visual 0x21
+PASS stencil 9 -> NULL (phase 4: 8 bits)
+PASS alpha 1 -> NULL
+PASS accum 1 -> NULL
+PASS depth 24 -> NULL (minimum semantics)
+PASS red 8 -> NULL
+PASS samples 4 -> NULL
+PASS stereo -> NULL
+PASS colour index (no GLX_RGBA) -> NULL
+PASS caveat NONE -> NULL (we are SLOW)
+PASS caveat SLOW -> visual
+PASS GetConfig: use=1 rgb=565 a=0 z=16 s=0 db=1 caveat=0x8001
+PASS GetConfig unknown attribute -> GLX_BAD_ATTRIBUTE
+PASS GetFBConfigs: 32 configs
+PASS ChooseFBConfig(NULL) -> all
+PASS ChooseFBConfig(DONT_CARE db): 32, first db=0 (spec: single first)
+PASS ChooseFBConfig(freeglut double RGBA depth) -> 16
+PASS GetFBConfigAttrib: all 34 table attributes answer
+PASS chosen config is double-buffered
+PASS drawable type WINDOW only
+PASS caveat SLOW_CONFIG
+PASS GetVisualFromFBConfig depth 16
+PASS GetFBConfigAttrib unknown -> GLX_BAD_ATTRIBUTE
+PASS PIXMAP_BIT -> none
+PASS PBUFFER_BIT -> none
+PASS sRGB True -> none
+PASS sRGB False -> configs
+PASS COLOR_INDEX_BIT -> none
+PASS multisample -> none
+PASS DirectColor -> none
+PASS unknown attribute -> none
+libGL: context 1 created (pid 17, comm glxtest)
+PASS glXCreateContext
+PASS glXIsDirect
+PASS glXMakeCurrent
+PASS GetCurrent{Context,Drawable,ReadDrawable,Display}
+PASS lazy: no SHM segment at MakeCurrent (0 -> 0)
+PASS lazy: none after glViewport either
+PASS first draw allocates (SYSV maps 0 -> 0)
+PASS red clear presented: pixel 0xf800
+PASS bottom-right corner: pixel 0xf800
+PASS app ClientMessage not consumed by the wait
+PASS blue frame presented: pixel 0x001f
+PASS 50 eaten-completion frames, last green: 0x07e0
+PASS 20 slow eaten-completion frames, red: 0xf800
+PASS default swap interval 1 (got 1)
+PASS SwapIntervalEXT(0) -> 0
+PASS SwapIntervalMESA(1)
+PASS SwapIntervalSGI(0) -> BAD_VALUE
+PASS SwapIntervalSGI(1)
+PASS max swap interval 1
+PASS QueryDrawable GLX_WIDTH 64
+PASS QueryDrawable GLX_HEIGHT 48
+PASS interval 0 frame presented: 0xffff
+PASS [core: odd width, TinyGL rounds xsize to 4] resized to 101x77, far corner green: 0x07e0
+PASS resized, middle green: 0x07e0
+PASS QueryDrawable width after resize 101
+PASS re-MakeCurrent same pair
+PASS MakeCurrent on a bogus drawable -> False
+PASS still current after the failure
+PASS release
+PASS nothing current
+PASS buffers given back after release+destroy (0)
+libGL: context 2 created (pid 17, comm glxtest)
+PASS [core] early glViewport kept by the lazy bind: in 0xffff out 0x0000
+PASS single-buffered visual
+libGL: context 3 created (pid 17, comm glxtest)
+PASS single-buffered glFlush presents magenta: 0xf81f
+PASS single-buffered context: GL_DOUBLEBUFFER 0, GL_DRAW_BUFFER 0x404 (GL_FRONT)
+libGL: context 4 created (pid 17, comm glxtest)
+PASS glXCreateWindow
+PASS CreateNewContext(COLOR_INDEX) -> NULL
+PASS glXCreateNewContext
+PASS glXMakeContextCurrent
+PASS QueryContext FBCONFIG_ID 1 == 1
+PASS GLX 1.3 window presents cyan: 0x07ff
+PASS CreatePixmap -> None
+PASS CreatePbuffer -> None
+PASS CreateGLXPixmap -> None
+libGL: context 5 created (pid 17, comm glxtest)
+PASS interval0: 0 of 50 frames showed unswapped pixels
+libGL: context 6 created (pid 17, comm glxtest)
+PASS vpmem step 0 160x120: centre 0xf800 (red), corner 0x001f (blue), GLX_WIDTH 160
+PASS vpmem step 1 320x240: centre 0xf800 (red), corner 0x001f (blue), GLX_WIDTH 320
+PASS vpmem step 2 160x120: centre 0xf800 (red), corner 0x001f (blue), GLX_WIDTH 160
+libGL: context 7 created (pid 17, comm glxtest)
+PASS trap: MakeCurrent succeeds with an app error in flight
+PASS trap: the app's handler saw its BadMatch (1)
+PASS trap: resize seen through glViewport with an app error in flight: corner 0x07e0, app errors 1
+libGL: context 8 created (pid 17, comm glxtest)
+libGL: context 9 created (pid 17, comm glxtest)
+PASS depthshare: ctx2's far quad hidden by ctx1's near one: 0x07e0
+PASS depthshare: nothing left mapped
+PASS stencil: ChooseVisual(STENCIL_SIZE 1) -> visual
+PASS stencil: GetConfig(stencil visual) STENCIL_SIZE = 8 (want 8)
+libGL: context 10 created (pid 17, comm glxtest)
+PASS stencil: CreateContext(stencil visual): GL_STENCIL_BITS 8
+PASS stencil: masked quad inside (0x001f) only, corner 0xf800
+libGL: context 11 created (pid 17, comm glxtest)
+PASS stencilshare: ctx2 tests ctx's stencil (0x001f, corner 0x07e0)
+PASS stencil: ChooseVisual without stencil -> STENCIL_SIZE 0 (want 0)
+libGL: context 12 created (pid 17, comm glxtest)
+PASS stencil: CreateContext(plain visual): GL_STENCIL_BITS 0
+libGL: context 13 created (pid 17, comm glxtest)
+PASS stencil: without a stencil buffer the test passes (0x001f 0x001f)
+PASS stencil: ChooseFBConfig(STENCIL_SIZE 8): 6 configs, all stencil 8
+PASS stencil: GetVisualFromFBConfig(stencil) + CreateContext: bits 8
+PASS stencil: ChooseFBConfig without stencil: first STENCIL_SIZE 0 (want 0)
+libGL: context 14 created (pid 17, comm glxtest)
+PASS stencil: CreateNewContext(first config): bits 0
+ALL PASS: 0 failure(s)
+=== S31GL_SHMBUFS=2
+PASS glXQueryExtension(NULL, NULL)
+PASS glXQueryVersion = 1.4
+PASS extensions string: "GLX_ARB_get_proc_address GLX_EXT_swap_control GLX_MESA_swap_control GLX_SGI_swap_control"
+PASS GLX_EXT_visual_rating not advertised
+PASS GLX_ARB_create_context not advertised
+PASS client GLX_VERSION 1.4
+PASS server GLX_EXTENSIONS = client
+PASS GetProcAddress(glXSwapIntervalMESA)
+PASS GetProcAddress(glXChooseVisual)
+PASS GetProcAddress(glXCreateContextAttribsARB) == NULL
+PASS GetProcAddress(glXBogusS31) == NULL
+PASS GetProcAddress(glBogusS31) == NULL
+PASS GetProcAddress(glClear) != NULL
+PASS ChooseVisual gives TrueColor RGB565 depth 16
+PASS DirectColor request -> NULL
+PASS SDL 1.2 retry without DirectColor -> visual 0x21
+PASS stencil 9 -> NULL (phase 4: 8 bits)
+PASS alpha 1 -> NULL
+PASS accum 1 -> NULL
+PASS depth 24 -> NULL (minimum semantics)
+PASS red 8 -> NULL
+PASS samples 4 -> NULL
+PASS stereo -> NULL
+PASS colour index (no GLX_RGBA) -> NULL
+PASS caveat NONE -> NULL (we are SLOW)
+PASS caveat SLOW -> visual
+PASS GetConfig: use=1 rgb=565 a=0 z=16 s=0 db=1 caveat=0x8001
+PASS GetConfig unknown attribute -> GLX_BAD_ATTRIBUTE
+PASS GetFBConfigs: 32 configs
+PASS ChooseFBConfig(NULL) -> all
+PASS ChooseFBConfig(DONT_CARE db): 32, first db=0 (spec: single first)
+PASS ChooseFBConfig(freeglut double RGBA depth) -> 16
+PASS GetFBConfigAttrib: all 34 table attributes answer
+PASS chosen config is double-buffered
+PASS drawable type WINDOW only
+PASS caveat SLOW_CONFIG
+PASS GetVisualFromFBConfig depth 16
+PASS GetFBConfigAttrib unknown -> GLX_BAD_ATTRIBUTE
+PASS PIXMAP_BIT -> none
+PASS PBUFFER_BIT -> none
+PASS sRGB True -> none
+PASS sRGB False -> configs
+PASS COLOR_INDEX_BIT -> none
+PASS multisample -> none
+PASS DirectColor -> none
+PASS unknown attribute -> none
+libGL: context 1 created (pid 20, comm glxtest)
+PASS glXCreateContext
+PASS glXIsDirect
+PASS glXMakeCurrent
+PASS GetCurrent{Context,Drawable,ReadDrawable,Display}
+PASS lazy: no SHM segment at MakeCurrent (0 -> 0)
+PASS lazy: none after glViewport either
+libGL: drawable 0x200002 64x48: buffers 64x48
+PASS first draw allocates (SYSV maps 0 -> 2)
+PASS red clear presented: pixel 0xf800
+PASS bottom-right corner: pixel 0xf800
+PASS app ClientMessage not consumed by the wait
+PASS blue frame presented: pixel 0x001f
+PASS 50 eaten-completion frames, last green: 0x07e0
+PASS 20 slow eaten-completion frames, red: 0xf800
+PASS default swap interval 1 (got 1)
+PASS SwapIntervalEXT(0) -> 0
+PASS SwapIntervalMESA(1)
+PASS SwapIntervalSGI(0) -> BAD_VALUE
+PASS SwapIntervalSGI(1)
+PASS max swap interval 1
+PASS QueryDrawable GLX_WIDTH 64
+PASS QueryDrawable GLX_HEIGHT 48
+PASS interval 0 frame presented: 0xffff
+libGL: drawable 0x200002 101x77: buffers 101x77
+PASS [core: odd width, TinyGL rounds xsize to 4] resized to 101x77, far corner green: 0x07e0
+PASS resized, middle green: 0x07e0
+PASS QueryDrawable width after resize 101
+PASS re-MakeCurrent same pair
+PASS MakeCurrent on a bogus drawable -> False
+PASS still current after the failure
+PASS release
+PASS nothing current
+PASS buffers given back after release+destroy (0)
+libGL: context 2 created (pid 20, comm glxtest)
+libGL: drawable 0x200002 101x77 MIT-SHM x2: 74 presents, 2 allocs; waits: 1 event, 22 serial, 0 earlier-round-trip, 24 XSync, 0 none
+libGL: drawable 0x200009 64x48: buffers 64x48
+PASS [core] early glViewport kept by the lazy bind: in 0xffff out 0x0000
+PASS single-buffered visual
+libGL: context 3 created (pid 20, comm glxtest)
+libGL: drawable 0x200009 64x48 MIT-SHM x2: 1 presents, 1 allocs; waits: 0 event, 0 serial, 0 earlier-round-trip, 0 XSync, 0 none
+libGL: drawable 0x20000e 40x30: buffers 40x30
+PASS single-buffered glFlush presents magenta: 0xf81f
+PASS single-buffered context: GL_DOUBLEBUFFER 0, GL_DRAW_BUFFER 0x404 (GL_FRONT)
+libGL: context 4 created (pid 20, comm glxtest)
+PASS glXCreateWindow
+PASS CreateNewContext(COLOR_INDEX) -> NULL
+PASS glXCreateNewContext
+PASS glXMakeContextCurrent
+PASS QueryContext FBCONFIG_ID 1 == 1
+libGL: drawable 0x20000e 40x30 MIT-SHM x1: 2 presents, 1 allocs; waits: 0 event, 0 serial, 0 earlier-round-trip, 0 XSync, 0 none
+libGL: drawable 0x200012 32x32: buffers 32x32
+PASS GLX 1.3 window presents cyan: 0x07ff
+PASS CreatePixmap -> None
+PASS CreatePbuffer -> None
+PASS CreateGLXPixmap -> None
+libGL: context 5 created (pid 20, comm glxtest)
+libGL: drawable 0x200012 32x32 MIT-SHM x2: 1 presents, 1 allocs; waits: 0 event, 0 serial, 0 earlier-round-trip, 0 XSync, 0 none
+libGL: drawable 0x200017 800x480: buffers 800x480
+PASS interval0: 0 of 50 frames showed unswapped pixels
+libGL: context 6 created (pid 20, comm glxtest)
+libGL: drawable 0x20001c 160x120: buffers 160x120
+PASS vpmem step 0 160x120: centre 0xf800 (red), corner 0x001f (blue), GLX_WIDTH 160
+libGL: drawable 0x20001c 320x240: buffers 320x240
+PASS vpmem step 1 320x240: centre 0xf800 (red), corner 0x001f (blue), GLX_WIDTH 320
+libGL: drawable 0x20001c 160x120: buffers 160x120
+PASS vpmem step 2 160x120: centre 0xf800 (red), corner 0x001f (blue), GLX_WIDTH 160
+libGL: context 7 created (pid 20, comm glxtest)
+libGL: drawable 0x20001c 160x120 MIT-SHM x2: 3 presents, 3 allocs; waits: 0 event, 0 serial, 0 earlier-round-trip, 0 XSync, 0 none
+PASS trap: MakeCurrent succeeds with an app error in flight
+PASS trap: the app's handler saw its BadMatch (1)
+libGL: drawable 0x200025 64x48: buffers 64x48
+libGL: drawable 0x200025 120x90: buffers 120x90
+PASS trap: resize seen through glViewport with an app error in flight: corner 0x07e0, app errors 1
+libGL: context 8 created (pid 20, comm glxtest)
+libGL: context 9 created (pid 20, comm glxtest)
+libGL: drawable 0x200025 120x90 MIT-SHM x2: 2 presents, 2 allocs; waits: 0 event, 0 serial, 0 earlier-round-trip, 0 XSync, 0 none
+libGL: drawable 0x20002e 80x60: buffers 80x60
+PASS depthshare: ctx2's far quad hidden by ctx1's near one: 0x07e0
+PASS depthshare: nothing left mapped
+PASS stencil: ChooseVisual(STENCIL_SIZE 1) -> visual
+PASS stencil: GetConfig(stencil visual) STENCIL_SIZE = 8 (want 8)
+libGL: context 10 created (pid 20, comm glxtest)
+libGL: drawable 0x20002e 80x60 MIT-SHM x2: 1 presents, 1 allocs; waits: 0 event, 0 serial, 0 earlier-round-trip, 0 XSync, 0 none
+PASS stencil: CreateContext(stencil visual): GL_STENCIL_BITS 8
+libGL: drawable 0x200033 80x60: buffers 80x60
+libGL: context 11 created (pid 20, comm glxtest)
+PASS stencil: masked quad inside (0x001f) only, corner 0xf800
+PASS stencilshare: ctx2 tests ctx's stencil (0x001f, corner 0x07e0)
+PASS stencil: ChooseVisual without stencil -> STENCIL_SIZE 0 (want 0)
+libGL: context 12 created (pid 20, comm glxtest)
+PASS stencil: CreateContext(plain visual): GL_STENCIL_BITS 0
+PASS stencil: without a stencil buffer the test passes (0x001f 0x001f)
+PASS stencil: ChooseFBConfig(STENCIL_SIZE 8): 6 configs, all stencil 8
+libGL: context 13 created (pid 20, comm glxtest)
+PASS stencil: GetVisualFromFBConfig(stencil) + CreateContext: bits 8
+PASS stencil: ChooseFBConfig without stencil: first STENCIL_SIZE 0 (want 0)
+libGL: drawable 0x200033 80x60 MIT-SHM x2: 3 presents, 1 allocs; waits: 1 event, 0 serial, 0 earlier-round-trip, 0 XSync, 0 none
+libGL: context 14 created (pid 20, comm glxtest)
+PASS stencil: CreateNewContext(first config): bits 0
+ALL PASS: 0 failure(s)
+libGL: drawable 0x200017 800x480 MIT-SHM x2: 50 presents, 1 allocs; waits: 49 event, 0 serial, 0 earlier-round-trip, 0 XSync, 0 none
+exit shm=0 noshm=0 shmbufs2=0

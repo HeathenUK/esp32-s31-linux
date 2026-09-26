@@ -34,6 +34,11 @@
   float sz1, tz1, q1, dszdx, dszdy, dtzdx, dtzdy, dqdx, dqdy;
   float szr_, tzr_, qr_;
 #endif
+#ifdef INTERP_PRGB
+  /* phase 4 F-PERSP: r/w, g/w, b/w (the fillers' colour units) and 1/w */
+  float rq1, gq1, bq1, q1, drqdx, drqdy, dgqdx, dgqdy, dbqdx, dbqdy, dqdx, dqdy;
+  float rqr_, gqr_, bqr_, qr_;
+#endif
 
   if (!ztri_setup(&T_, p0->fx, p0->fy, p0->z, p1->fx, p1->fy, p1->z,
                   p2->fx, p2->fy, p2->z, zb->pipe))
@@ -90,6 +95,23 @@
   }
 #endif
 
+#ifdef INTERP_PRGB
+  {
+    const ZBufferPoint *a_ = pv_[T_.o[0]], *b_ = pv_[T_.o[1]], *c_ = pv_[T_.o[2]];
+    float r0_ = (float)a_->r * a_->q, r1_ = (float)b_->r * b_->q, r2_ = (float)c_->r * c_->q;
+    float g0_ = (float)a_->g * a_->q, g1_ = (float)b_->g * b_->q, g2_ = (float)c_->g * c_->q;
+    float b0_ = (float)a_->b * a_->q, b1_ = (float)b_->b * b_->q, b2_ = (float)c_->b * c_->q;
+    ZTRI_GRAD(&T_, r0_, r1_, r2_, drqdx, drqdy);
+    ZTRI_GRAD(&T_, g0_, g1_, g2_, dgqdx, dgqdy);
+    ZTRI_GRAD(&T_, b0_, b1_, b2_, dbqdx, dbqdy);
+    ZTRI_GRAD(&T_, a_->q, b_->q, c_->q, dqdx, dqdy);
+    rqr_ = r0_ + drqdx * T_.ox + drqdy * T_.oy;
+    gqr_ = g0_ + dgqdx * T_.ox + dgqdy * T_.oy;
+    bqr_ = b0_ + dbqdx * T_.ox + dbqdy * T_.oy;
+    qr_ = a_->q + dqdx * T_.ox + dqdy * T_.oy;
+  }
+#endif
+
   DRAW_INIT();
 
   for (part = 0; part < 2; part++) {
@@ -129,6 +151,15 @@
           float fx_ = (float)(x1 - T_.px), fy_ = (float)(y_ - T_.py);
           sz1 = szr_ + dszdx * fx_ + dszdy * fy_;
           tz1 = tzr_ + dtzdx * fx_ + dtzdy * fy_;
+          q1 = qr_ + dqdx * fx_ + dqdy * fy_;
+        }
+#endif
+#ifdef INTERP_PRGB
+        {
+          float fx_ = (float)(x1 - T_.px), fy_ = (float)(y_ - T_.py);
+          rq1 = rqr_ + drqdx * fx_ + drqdy * fy_;
+          gq1 = gqr_ + dgqdx * fx_ + dgqdy * fy_;
+          bq1 = bqr_ + dbqdx * fx_ + dbqdy * fy_;
           q1 = qr_ + dqdx * fx_ + dqdy * fy_;
         }
 #endif
@@ -178,7 +209,7 @@
 #endif
       pp1=(PIXEL *)((char *)pp1 + zb->linesize);
       pz1+=zb->xsize;
-#ifdef INTERP_STZ
+#if defined(INTERP_STZ) || defined(INTERP_PRGB)
       y_++;
 #endif
     }
@@ -188,6 +219,7 @@
 #undef INTERP_Z
 #undef INTERP_RGB
 #undef INTERP_STZ
+#undef INTERP_PRGB
 
 #undef DRAW_INIT
 #undef DRAW_LINE

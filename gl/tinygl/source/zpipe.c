@@ -6,6 +6,7 @@
  * decided once per primitive, never per pixel. No double anywhere here
  * (F without D: a double is a libcall on this hart).
  */
+#include <math.h>
 #include <string.h>
 #include "zgl.h"
 #include "zpipe.h"
@@ -383,6 +384,134 @@ ZStageFn zp_zwrite_fn(void)
   return zw_write;
 }
 
+/* ------------------------------------------------------------ stencil */
+
+/* phase 4 F8 (GL 1.3 4.1.5): after the alpha test, before the depth test.
+   Each stored value s looks up ZPipeX.stab[s]: bit 24 is the stencil
+   test's result, and the byte at shift 0 / 8 / 16 is the value to store
+   when the stencil test fails / the depth test fails / both pass - so the
+   store is always a shift of one table word by 8 * st << zpass, and no GL
+   state is tested per fragment. The depth test itself is the batch's
+   read-only one (x->st_zfn: f->m = depth pass, f->zz = depth), and the
+   depth write is fused (DW). The stencil buffer's dirty range (ZStencilState
+   lo/hi, clear.c) grows by the chunk when it is written (RW). A chunk with
+   nothing left alive ends the stage list (f->n = 0: every later stage loops
+   to f->n, and the runners step by their own count) */
+static int zd_never_m(const ZSpan *s, ZFrag *f)
+{
+  (void)s;
+  memset(f->m, 0, f->n);
+  return 0;
+}
+
+ZDepthFn zp_depth_never_m(void)
+{
+  return zd_never_m;
+}
+
+static inline void zs_track(const ZPipe *p, const unsigned char *ps, int n)
+{
+  const ZBuffer *zb = p->zb;
+  ZStencilState *ss = zb->sst;
+  unsigned long off = (unsigned long)ps - (unsigned long)zb->sbuf;
+  int lo;
+  /* not in the buffer: a line's gathered copy (raster.c made the range
+     the whole buffer already) */
+  if (off >= (unsigned long)(zb->xsize * zb->ysize)) return;
+  lo = (int)off;
+  if (lo < ss->lo) ss->lo = lo;
+  if (lo + n > ss->hi) ss->hi = lo + n;
+}
+
+#define ZS_STAGE(name, LATE, RW, DW)                                    \
+static void name(const ZPipe *p, const ZSpan *s, ZFrag *f)              \
+{                                                                       \
+  const ZPipeX *x = p->x;                                               \
+  const unsigned int *tab = x->stab;                                    \
+  unsigned char *ps = x->st_sb + (s->pz - x->st_zb), pre[ZP_CHUNK];     \
+  unsigned short *pz = s->pz;                                           \
+  int i, n = f->n, alive = 0;                                           \
+  unsigned int e, st, m;                                                \
+  (void)pz; (void)pre;                                                  \
+  if (LATE) memcpy(pre, f->m, n);                                       \
+  x->st_zfn(s, f);                    /* f->m: depth pass */            \
+  if (RW) zs_track(p, ps, n);                                           \
+  for (i = 0; i < n; i++) {                                             \
+    if (LATE && !pre[i]) { f->m[i] = 0; continue; }                     \
+    e = tab[ps[i]]; st = e >> 24; m = f->m[i];                          \
+    if (RW) ps[i] = (unsigned char)(e >> ((st << 3) << m));             \
+    m &= st;                                                            \
+    if (DW && m) pz[i] = f->zz[i];                                      \
+    f->m[i] = (unsigned char)m;                                         \
+    alive += (int)m;                                                    \
+  }                                                                     \
+  if (!alive) f->n = 0;                                                 \
+}
+ZS_STAGE(zs_e_ro, 0, 0, 0)
+ZS_STAGE(zs_e_ro_w, 0, 0, 1)
+ZS_STAGE(zs_e_rw, 0, 1, 0)
+ZS_STAGE(zs_e_rw_w, 0, 1, 1)
+ZS_STAGE(zs_l_ro, 1, 0, 0)
+ZS_STAGE(zs_l_ro_w, 1, 0, 1)
+ZS_STAGE(zs_l_rw, 1, 1, 0)
+ZS_STAGE(zs_l_rw_w, 1, 1, 1)
+
+ZStageFn zp_stencil_fn(int late, int rw, int dwrite)
+{
+  static const ZStageFn t[8] = {
+    zs_e_ro, zs_e_ro_w, zs_e_rw, zs_e_rw_w, zs_l_ro, zs_l_ro_w, zs_l_rw, zs_l_rw_w,
+  };
+  return t[(late ? 4 : 0) | (rw ? 2 : 0) | (dwrite ? 1 : 0)];
+}
+
+/* ------------------------------------------------------------ coverage */
+
+/* phase 4 SMOOTH (GL 1.3 3.4.2 / 3.3.1 antialiasing, 3.11 application):
+   the fragment's alpha times its coverage. The coverage is that of the
+   primitive's footprint over the pixel, evaluated at the pixel centre from
+   its distance to the primitive - the same model Mesa's draw/llvmpipe uses
+   for smooth lines (measured: artifacts/gl/phase4/smooth/mesa-probe.txt):
+     line:  clamp(w/2 + 1/2 - |d|, 0, 1) * clamp(len/2 + 1/2 - |l|, 0, min(1, len))
+            with d across and l along the line from its middle - exact for a
+            pixel square against a straight edge, a box filter
+     point: clamp(size/2 + 1/2 - r, 0, 1), r the distance to the centre
+   Only the smooth rasterisers set cov_kind; for a triangle in the same
+   batch the stage returns at once. The span carries the coordinates of its
+   first pixel (ZSpan.cva/cvb), a chunk its offset from it */
+static void zv_cover(const ZPipe *p, const ZSpan *s, ZFrag *f)
+{
+  const ZPipeX *x = p->x;
+  int i, n = f->n;
+  float k, a, b;
+
+  if (x->cov_kind == 0) return;
+  k = (float)(s->pp - s->cvpp);
+  a = s->cva + k * s->cvda;
+  b = s->cvb + k * s->cvdb;
+  if (x->cov_kind == 1) {
+    const float hw = x->cv_hw, hl = x->cv_hl, lc = x->cv_lcap;
+    const float da = s->cvda, db = s->cvdb;
+    for (i = 0; i < n; i++) {
+      float cw = fminf(fmaxf(hw - fabsf(a), 0.0f), 1.0f);
+      float cl = fminf(fmaxf(hl - fabsf(b), 0.0f), lc);
+      f->a[i] = (unsigned char)((float)f->a[i] * (cw * cl) + 0.5f);
+      a += da; b += db;
+    }
+  } else {
+    const float rr = x->cv_rr, b2 = b * b;
+    for (i = 0; i < n; i++) {
+      float c = fminf(fmaxf(rr - sqrtf(a * a + b2), 0.0f), 1.0f);
+      f->a[i] = (unsigned char)((float)f->a[i] * c + 0.5f);
+      a += 1.0f;
+    }
+  }
+}
+
+ZStageFn zp_cover_fn(void)
+{
+  return zv_cover;
+}
+
 /* ------------------------------------------------------------ polygon stipple */
 
 /* GL 1.3 3.5.6: fragment (x_w, y_w) survives if bit x_w % 32 of row
@@ -450,10 +579,21 @@ ZP_OUT(zo_mul, PUT(MUL8(f->r[i], dr), MUL8(f->g[i], dg), MUL8(f->b[i], db)))
 ZP_OUT(zo_mul2, PUT(clamp255(2 * MUL8(f->r[i], dr)), clamp255(2 * MUL8(f->g[i], dg)),
                      clamp255(2 * MUL8(f->b[i], db))))
 
-/* one blend factor for a chunk (GL 1.3 table 4.1; the destination alpha
-   factors are folded by raster.c: there is no alpha plane, so dst alpha
-   is 1) */
-static void factor(int fac, const ZFrag *f, const unsigned char *d,
+/* phase 4 BLEND-EQ: the (reverse) subtract of the two commonest pairs,
+   fused as the ADD pairs above (clamped at 0: GL 1.4 4.1.7) */
+ZP_OUT(zo_sub_one_one, PUT(clamp255(f->r[i] - dr), clamp255(f->g[i] - dg),
+                            clamp255(f->b[i] - db)))
+ZP_OUT(zo_rsub_one_one, PUT(clamp255(dr - f->r[i]), clamp255(dg - f->g[i]),
+                             clamp255(db - f->b[i])))
+ZP_OUT(zo_sub_sa_one, PUT(clamp255(MUL8(f->r[i], sa) - dr), clamp255(MUL8(f->g[i], sa) - dg),
+                           clamp255(MUL8(f->b[i], sa) - db)))
+ZP_OUT(zo_rsub_sa_one, PUT(clamp255(dr - MUL8(f->r[i], sa)), clamp255(dg - MUL8(f->g[i], sa)),
+                            clamp255(db - MUL8(f->b[i], sa))))
+
+/* one blend factor for a chunk (GL 1.4 table 4.1; the destination alpha
+   factors are folded by raster_sel.c: there is no alpha plane, so dst
+   alpha is 1). The constant factors read GL_BLEND_COLOR (ZPipeX.bcol) */
+static void factor(const ZPipe *p, int fac, const ZFrag *f, const unsigned char *d,
                    int ch, unsigned char *out)
 {
   const unsigned char *src = ch == 0 ? f->r : (ch == 1 ? f->g : f->b);
@@ -466,28 +606,41 @@ static void factor(int fac, const ZFrag *f, const unsigned char *d,
   case GL_ONE_MINUS_DST_COLOR: for (i = 0; i < n; i++) out[i] = (unsigned char)(255 - d[i]); break;
   case GL_SRC_ALPHA: memcpy(out, f->a, n); break;
   case GL_ONE_MINUS_SRC_ALPHA: for (i = 0; i < n; i++) out[i] = (unsigned char)(255 - f->a[i]); break;
+  case GL_CONSTANT_COLOR: memset(out, p->x->bcol[ch], n); break;
+  case GL_ONE_MINUS_CONSTANT_COLOR: memset(out, 255 - p->x->bcol[ch], n); break;
+  case GL_CONSTANT_ALPHA: memset(out, p->x->bcol[3], n); break;
+  case GL_ONE_MINUS_CONSTANT_ALPHA: memset(out, 255 - p->x->bcol[3], n); break;
   default: memset(out, 255, n); break;           /* GL_ONE */
   }
 }
 
-/* any pair, and the colour write mask */
+/* any pair, the three factor equations and the colour write mask (the
+   equation is chosen once per channel of a chunk, never per pixel: this is
+   the path of the uncommon pairs, one function for all of them) */
 static void zo_generic(const ZPipe *p, const ZSpan *s, ZFrag *f)
 {
   PIXEL *pp = s->pp;
   unsigned char d[3][ZP_CHUNK], fs[ZP_CHUNK], fd[ZP_CHUNK], res[3][ZP_CHUNK];
   const unsigned char *src[3] = { f->r, f->g, f->b };
   unsigned int cm = p->cmask, v;
-  int i, n = f->n, ch, dr, dg, db;
+  int i, n = f->n, ch, dr, dg, db, eq = p->x->beq;
 
   for (i = 0; i < n; i++) {
     UNPACK(pp[i], dr, dg, db);
     d[0][i] = (unsigned char)dr; d[1][i] = (unsigned char)dg; d[2][i] = (unsigned char)db;
   }
   for (ch = 0; ch < 3; ch++) {
-    factor(p->sfactor, f, d[ch], ch, fs);
-    factor(p->dfactor, f, d[ch], ch, fd);
-    for (i = 0; i < n; i++)
-      res[ch][i] = (unsigned char)clamp255(MUL8(src[ch][i], fs[i]) + MUL8(d[ch][i], fd[i]));
+    const unsigned char *sc = src[ch], *dc = d[ch];
+    unsigned char *rc = res[ch];
+    factor(p, p->sfactor, f, dc, ch, fs);
+    factor(p, p->dfactor, f, dc, ch, fd);
+    /* GL 1.4 4.1.7, clamped to [0, 1] */
+    if (eq == GL_FUNC_SUBTRACT)
+      for (i = 0; i < n; i++) rc[i] = (unsigned char)clamp255(MUL8(sc[i], fs[i]) - MUL8(dc[i], fd[i]));
+    else if (eq == GL_FUNC_REVERSE_SUBTRACT)
+      for (i = 0; i < n; i++) rc[i] = (unsigned char)clamp255(MUL8(dc[i], fd[i]) - MUL8(sc[i], fs[i]));
+    else
+      for (i = 0; i < n; i++) rc[i] = (unsigned char)clamp255(MUL8(sc[i], fs[i]) + MUL8(dc[i], fd[i]));
   }
   for (i = 0; i < n; i++) {
     if (!f->m[i]) continue;
@@ -496,8 +649,41 @@ static void zo_generic(const ZPipe *p, const ZSpan *s, ZFrag *f)
   }
 }
 
-ZStageFn zp_out_fn(int sf, int df, int cmask)
+/* GL_MIN / GL_MAX: per channel, the factors are not used (GL 1.4 4.1.7);
+   on the stored 8-bit expansion of the destination */
+#define ZO_MINMAX(name, OP)                                             \
+static void name(const ZPipe *p, const ZSpan *s, ZFrag *f)              \
+{                                                                       \
+  PIXEL *pp = s->pp;                                                    \
+  unsigned int cm = p->cmask, v;                                        \
+  int i, n = f->n, dr, dg, db;                                          \
+  for (i = 0; i < n; i++) {                                             \
+    if (!f->m[i]) continue;                                             \
+    UNPACK(pp[i], dr, dg, db);                                          \
+    v = PACK(OP(f->r[i], dr), OP(f->g[i], dg), OP(f->b[i], db));        \
+    pp[i] = (PIXEL)((v & cm) | (pp[i] & ~cm));                          \
+  }                                                                     \
+}
+#define OP_MIN(a_, b_) ((int)(a_) < (b_) ? (int)(a_) : (b_))
+#define OP_MAX(a_, b_) ((int)(a_) > (b_) ? (int)(a_) : (b_))
+ZO_MINMAX(zo_min, OP_MIN)
+ZO_MINMAX(zo_max, OP_MAX)
+
+ZStageFn zp_out_fn(int sf, int df, int cmask, int eq)
 {
+  switch (eq) {
+  case GL_FUNC_SUBTRACT:
+    if (cmask == 0xffff && df == GL_ONE && sf == GL_ONE) return zo_sub_one_one;
+    if (cmask == 0xffff && df == GL_ONE && sf == GL_SRC_ALPHA) return zo_sub_sa_one;
+    return zo_generic;
+  case GL_FUNC_REVERSE_SUBTRACT:
+    if (cmask == 0xffff && df == GL_ONE && sf == GL_ONE) return zo_rsub_one_one;
+    if (cmask == 0xffff && df == GL_ONE && sf == GL_SRC_ALPHA) return zo_rsub_sa_one;
+    return zo_generic;
+  case GL_MIN: return zo_min;
+  case GL_MAX: return zo_max;
+  default: break;
+  }
   if (cmask == 0xffff) {
     if (sf == GL_ONE && df == GL_ZERO) return zo_store;
     if (sf == GL_SRC_ALPHA && df == GL_ONE_MINUS_SRC_ALPHA) return zo_sa_omsa;
@@ -544,5 +730,9 @@ void zp_run(ZBuffer *zb, ZSpan *s)
     }
     if (p->need & ZP_N_F) s->fq += (float)n * s->dfqdx;
     if (p->need & ZP_N_Q) s->fz += (float)n * s->dfzdx;
+    if (p->need & ZP_N_PC) {                /* phase 4 F-PERSP */
+      s->rq += (float)n * s->drqdx; s->gq += (float)n * s->dgqdx;
+      s->bq += (float)n * s->dbqdx; s->aq += (float)n * s->daqdx;
+    }
   }
 }

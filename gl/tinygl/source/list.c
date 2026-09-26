@@ -1,4 +1,5 @@
 #include "zgl.h"
+#include "s31_ramtext.h"
 
 static char *op_table_str[]=
 {
@@ -273,6 +274,7 @@ void glNewList(unsigned int list, int mode)
   
   c->compile_flag=1;
   c->exec_flag=(mode == GL_COMPILE_AND_EXECUTE);
+  gl_update_vtx_run(c);
 }
 
 void glEndList(void)
@@ -291,6 +293,7 @@ void glEndList(void)
   
   c->compile_flag=0;
   c->exec_flag=1;
+  gl_update_vtx_run(c);
   c->list_index=0;
   c->list_mode=0;
 }

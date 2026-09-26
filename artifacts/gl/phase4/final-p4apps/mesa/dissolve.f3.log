@@ -1,0 +1,10 @@
+# glref run: impl=mesa name=dissolve frame=3 display=:91
+# cmd: env PRE=/src/gl/out-host/apprand.so sh /src/gl/tests/apprand.sh /src/gl/ref-apps/build/mesa-demos/src/demos/dissolve -geometry 320x240+0+0
+# libGL.so.1 resolves to:
+Keys:
+  a/SPACE  toggle animation
+  +/-      single step
+  i        re-init pattern
+  m        change pattern/dissolve mode
+  ESC      exit
+glref: ok at swap 3 -> /src/artifacts/gl/phase4/final-p4apps/mesa/dissolve.f3

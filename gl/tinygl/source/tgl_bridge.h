@@ -104,6 +104,10 @@ void *tgl_ctx_current(void);           /* NULL when none is current */
 int tgl_ctx_depth_bytes(void *ctx);    /* bytes of depth allocated now */
 void tgl_ctx_release_depth(void *ctx);
 int tgl_ctx_bind_depth(void *ctx, void *depth); /* caller-owned depth, NULL: private */
+void tgl_ctx_set_stencil_bits(void *ctx, int bits); /* phase 4 F8: 0 or 8 */
+int tgl_ctx_bind_stencil(void *ctx, void *stencil); /* caller-owned stencil, NULL: private */
+void tgl_stencil_zeroed(void *stencil, int w, int h); /* s31gl_stencil_zeroed */
+int tgl_ctx_stencil_bytes(void *ctx);
 void tgl_ctx_set_doublebuffer(void *ctx, int on);
 void tgl_ctx_set_retained(void *ctx, int on);  /* phase 3a dirty boxes */
 void tgl_ctx_arm(void *ctx);            /* frame hook before the next access */
@@ -158,6 +162,8 @@ enum {
   S31_ST_LIST_BASE,        /* i */
   S31_ST_PIXEL_ZOOM,       /* f: xfactor, yfactor */
   S31_ST_PIXEL_TRANSFER,   /* pname in a, value in b (tgl_state_pf) */
+  S31_ST_BLEND_FUNC_SEP,   /* i: src rgb, dst rgb, src alpha, dst alpha (phase 4) */
+  S31_ST_BLEND_EQ,         /* i: rgb, alpha (phase 4) */
 };
 void tgl_state_alpha(int func, float ref);
 void tgl_state_pf(int code, int pname, float v);   /* p[2].i = pname, p[3].f = v */

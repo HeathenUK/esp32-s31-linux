@@ -97,21 +97,28 @@ OP_State). What the rasteriser HONOURS today (plan F3-F6, 2026-09-26):
                 alpha plane); glAlphaFunc (all 8); glColorMask (drawing and
                 glClear); fog LINEAR/EXP/EXP2; glScissor (drawing and
                 glClear); glPolygonOffset (GL_FILL); glLineWidth and
-                glPointSize (nearest integer, aliased); the texture
+                glPointSize (nearest integer when aliased, exact when
+                smooth); the texture
                 environments REPLACE, MODULATE (the default), DECAL, BLEND
                 (with GL_TEXTURE_ENV_COLOR) and ADD for every base format;
                 GL_CLAMP / GL_CLAMP_TO_EDGE / GL_REPEAT; GL_SEPARATE_SPECULAR_
                 COLOR; GL_RESCALE_NORMAL; texture completeness (an
-                incomplete texture is off, as GL 3.8.10 says); stencil state
-                (there are no stencil bits, so ignoring it is exact);
+                incomplete texture is off, as GL 3.8.10 says); the stencil
+                test, ops and clears with an 8-bit stencil buffer, and none
+                of it without one (phase 4 F8, below); glBlendEquation(
+                Separate) and glBlendFuncSeparate (phase 4 BLEND-EQ);
+                GL_LINE_SMOOTH and GL_POINT_SMOOTH (phase 4 SMOOTH);
                 glHint; GL_DITHER/GL_MULTISAMPLE (no effect by definition);
                 GL_LIGHT_MODEL_TWO_SIDE (the back material and -n on
                 back-facing polygons, light.c / clip.c; it was |n.l| on the
                 front material); glPushAttrib(GL_TEXTURE_BIT) with the bound
                 objects' filters, wraps, border colour and priority.
   approximated  (prints "libGL: approximated ..." once; tools/glref does not
-                count it as a gap) GL_LINEAR and the mipmap filters, drawn
-                as nearest sampling of level 0.
+                count it as a gap) since phase 4, only details of the
+                texture filters (see "Phase 4" below): one mipmap level
+                (lambda) per triangle, NEAREST_MIPMAP_LINEAR as nearest in
+                the nearer level, GL_CLAMP under a linear filter as
+                CLAMP_TO_EDGE.
                 Not printed: the texture q (glTexCoord4, texgen Q) divides
                 s and t per vertex - exact when q is the same at every
                 vertex of a primitive; where it varies (projective
@@ -121,9 +128,8 @@ OP_State). What the rasteriser HONOURS today (plan F3-F6, 2026-09-26):
                 exact) but cannot tell a vertex alpha of 0.5 from 128/255
                 (raster_sel.c). Fog is per vertex (EXP/EXP2 differ from
                 Mesa's per-fragment fog on large polygons); Gouraud colour
-                is linear in screen space (a quad whose corner colours are
-                affine in object space shows its split diagonal under
-                perspective, testgl frame 60).
+                is linear in screen space except where that is visibly
+                wrong (phase 4 F-PERSP, below).
                 Plan F7 (2026-09-26, see "Pixel paths" below): the raster
                 position, glBitmap, glDrawPixels, glReadPixels,
                 glCopyPixels, glCopyTexImage/SubImage 1D/2D, glPixelZoom,
@@ -131,7 +137,7 @@ OP_State). What the rasteriser HONOURS today (plan F3-F6, 2026-09-26):
                 EYE_LINEAR, SPHERE_MAP), six user clip planes, polygon and
                 line stipple, 1D textures, glGetTexImage.
   recorded only (prints "libGL: unimplemented ..." once when used):
-                logic op, smooth points/lines/polygons (drawn aliased),
+                logic op, smooth polygons (drawn aliased),
                 GL_COMBINE (drawn as MODULATE), 3D/cube textures, texture
                 borders (dropped), GL_NORMAL_MAP / GL_REFLECTION_MAP
                 texgen (cube maps), GL_MAP_COLOR (pixel maps; glPixelMap
@@ -200,8 +206,8 @@ with one "libGL:" line; the proxy answers what a real upload would accept
 accept every GL 1.3 format/type in s31_pixels.c and honour every
 GL_UNPACK_* parameter; inside glNewList the pixels are unpacked at compile
 time and the list owns the copy. Levels > 0 are validated and recorded
-(completeness, glGetTexLevelParameter) but not stored: the mipmap filters
-sample level 0. The fixed-point s/t layout keeps GL_REPEAT to masks, the
+(completeness, glGetTexLevelParameter) and, since phase 4, stored and
+filtered (below). The fixed-point s/t layout keeps GL_REPEAT to masks, the
 same three operations per pixel as TinyGL's 256x256 constants (zbuffer.h);
 |texcoord| up to 512 repeats is exact. Level L is at most 256 >> L, for
 proxies and real uploads (review G3: GLU's closestFit probes level 1, and a
@@ -210,7 +216,8 @@ success with no texture); a proxy remembers its level and border. The
 common uploads (UNSIGNED_BYTE RGB, RGBA, LUMINANCE, no pixel transfer) are
 converted straight from the client's bytes, one loop per stored class
 (review P7: 12-17 instructions a texel, were 25-31). A texture object is
-148 bytes on RV32 (was 288): one stored image, not MAX_TEXTURE_LEVELS.
+152 bytes on RV32 (was 288): one stored image, not MAX_TEXTURE_LEVELS,
+and a pointer to the levels > 0 (phase 4).
 
 Pixel paths (plan F7: s31_draw.c, s31_pixels.c, s31_rpos.c, s31_xform.c;
 gl/api/gl_pixels.c):
@@ -366,11 +373,9 @@ artifacts/gl/phase3a/LEVERS.md):
     Mesa (were 0.016-0.034%).
   - glopDisableClientState cleared the wrong bits (unreachable: the entry
     point sets the state directly).
-- Known and unchanged: Gouraud colour is interpolated linearly in screen
-  space, so a triangle whose vertices have different w (glVertex4, or
-  perspective) differs from Mesa's perspective-correct colour (glx_geo row
-  0, testgl frame 60); the specular table quantises the highlight (a few
-  pixels per lit sphere, glx_geo row 3).
+- Known and unchanged: the specular table quantises the highlight (a few
+  pixels per lit sphere, glx_geo row 3). (Gouraud colour under differing w:
+  phase 4, below.)
 
 
 Phase 3a, pixel side (2026-09-26; measured on the host only, see
@@ -410,3 +415,171 @@ artifacts/gl/phase3a/LEVERS.md part B):
   as an end-pointer loop (+0.1-0.4%); depth epochs by fixed halves or by
   shrinking precision (one or two apps' error against Mesa grew: geartrain
   0.030 -> 0.047%).
+
+
+Phase 4 (2026-09-26; measurements in artifacts/gl/phase4/REPORT.md)
+------------------------------------------------------------------
+Every choice below is made once per triangle (or batch), never per pixel;
+a frame that uses none of it runs the phase 3a code (gl/bench: every
+frame hash the same, gears/glxgears/texobj/teapot at most +0.37%).
+- F-LIN, texture filters (s31_tfilter.c; the kinds and the level chain in
+  raster_sel.c zpx_prepare; the per-triangle choice zpx_tri, called by the
+  general filler when ZPipe.xact says a batch has one):
+  - levels > 0 are stored as uploaded (texture.c tex_level_store: each its
+    own RGB565 + A8 block in GLTexture.mip, allocated at the first level
+    > 0; a full chain is +33%, a texture without one pays 4 bytes;
+    S31GL_MIPMAPS=0 stores none). glTexSubImage2D, glCopyTex* and
+    glGetTexImage reach them.
+  - GL_LINEAR: bilinear on RGB565 spread into one word (5 spare bits a
+    field), 5-bit rounded weights, the A8 plane lerped alongside; the
+    filtered texel feeds the unchanged texenv stages (ZPipeX.ftex, idx =
+    i). REPEAT-only and general-wrap variants, with and without alpha.
+  - mipmaps: rho = max(|d(u,v)/dx|, |d(u,v)/dy|) from the s/w, t/w, 1/w
+    planes (perspective-correct). Review 4 R1: a triangle whose 1/w differ
+    by more than ~3% takes lambda per 8-pixel block (s31_tfilter.c
+    zp_run_lod: one divide a block, runs of blocks with the same levels
+    form a chunk, the trilinear weight is per block); any other triangle
+    once at its centroid (lambda varies < 0.09 across it). One lambda per
+    triangle had a receding one-quad floor 13-16% off Mesa; per block it is
+    0.01-0.34% (gl/tests/glx_floor.c in run-p4apps.sh, filt_test's
+    per-pixel model). The NEAREST levels are exact from the float bits,
+    the LINEAR blends use a quadratic log2. LINEAR_MIPMAP_LINEAR trilinear
+    (S31GL_TRILINEAR=0: as LINEAR_MIPMAP_NEAREST); NEAREST_MIPMAP_LINEAR
+    two nearest samples blended (review 4 R2).
+  - the switch to minification is Mesa's lambda > 0, not GL 1.3's c = 0.5
+    for LINEAR magnification with NEAREST_MIPMAP_* (review 4 R3: the suite
+    is scored against Mesa; with c = 0.5 a glx_rev cell was 99.2% off).
+  - GL 1.2 texture LOD state (review 4 R4): GL_TEXTURE_MAX_LEVEL ends the
+    chain (completeness and sampling), MIN_LOD / MAX_LOD clamp lambda,
+    BASE_LEVEL is recorded (a value above 0 is noted once: level 0 stays
+    the base); all four are queried and pushed. A level whose internal
+    format differs from level 0's makes the texture incomplete (GL 1.3
+    3.8.10; formats 1-4 count as their base formats).
+  - a filtered texture takes the general path (tier 1 is nearest level 0);
+    lines and points use the magnification filter at level 0; the pixel
+    paths stay nearest. S31GL_TEXFILTER=0 draws every filter as nearest in
+    level 0 on tier 1 and stores no level > 0 - exactly the pre-phase-4
+    library (gl/bench filt1-4 0.638 M a frame, the NEAREST control's hash),
+    the arm for a board A/B of filtered apps: gl/bench filt11 (QuakeSpasm's
+    default trilinear world plus a lightmap pass) is 14.7 M a frame
+    filtered, 7.6 M with it off.
+  - known differences from Mesa, measured (artifacts/gl/phase4/REPORT.md):
+    GL_CLAMP under a linear filter is drawn as CLAMP_TO_EDGE (the border
+    colour is not blended: 68% of a glx_rev cell whose coordinates run to
+    -0.25..1.25, 58% with a border texture; neither QuakeSpasm 0.96.3 nor
+    TyrQuake 0.71 uses GL_CLAMP); a smooth point's coverage footprint is
+    GL's clamp(size/2 + 1/2 - r), ~50% larger than llvmpipe's hard disc,
+    and every covered fragment runs the stencil and depth ops (size 4:
+    4,546 stencil writes against Mesa's 2,973; smooth lines match Mesa's
+    footprint exactly); the long-span re-anchoring starts at 64 pixels
+    (below, 40x40 quads with a 4-corner gradient are 2.4-2.9% off Mesa;
+    16 or 32 would fix them and change the gears / glxgears / teapot
+    frame hashes the bench pins); Mesa's 1D LINEAR_MIPMAP_LINEAR blend
+    weight differs (a glx_rev2 cell: 0.35 against GL's 0.40).
+  - a colour stage nothing reads is not placed (RGB REPLACE/DECAL with no
+    alpha test or alpha blend factor): -20% on the general path's
+    REPLACE/DECAL spans (gl/bench feat1/feat2 texobj), same pixels.
+- F-PERSP, Gouraud colour:
+  - perspective: a smooth triangle whose w and colours differ enough for
+    screen-affine colour to be off by 4 8-bit levels (one RGB565 green
+    step) gets r/w, g/w, b/w over 1/w re-derived every 8 pixels, stepped
+    along the chord: tier 1 ZB_fillTriangleSmoothPersp (LEQUAL, LESS), the
+    general path's zc_smooth_pc for everything else.
+  - long spans: TinyGL's packed colour steps with a truncated gradient
+    (1/32 of a step, 1/16 for blue), so a 64-pixel span drifts by up to 4
+    blue steps (SDL testgl's creases, glOrtho, w = 1): a smooth triangle 64
+    or more pixels wide is re-anchored every 8 pixels from its integer
+    planes (ZB_fillTriangleSmoothLong: LEQUAL, LESS, no depth test).
+  - the test is one per smooth tier-1 triangle (gl_draw_triangle_fill_pq:
+    the bits of the three 1/w and the snapped x width, one shift each);
+    S31GL_PERSPCOLOR=0 turns both off.
+- light.c: GL_SPOT_DIRECTION is transformed by the modelview's upper 3x3
+  when specified (GL 1.3 2.13.1); TinyGL stored it as given, so a spot set
+  after gluLookAt pointed elsewhere (mesa-demos teapot: 4-6% of every
+  frame).
+Tests: gl/tests/filt_test.c (bilinear against a float model, the mip
+level rules, perspective colour, a 400-batch fuzz with canaries; host,
+RV32 qemu-user and ASan/UBSan), gl/bench/filt.sh (the costs).
+
+Phase 4, step 2 (2026-09-26): stencil, blend equations, smooth lines and
+points. Measured in artifacts/gl/phase4/bench/p4s-*, smooth/ and s2final/.
+None of it runs, or is
+tested, on a primitive or pixel that does not use it: each is a stage of
+the general path chosen at glBegin (raster_sel.c), and a frame without them
+takes exactly the code it took before (gl/bench: <= +0.03% instructions,
+same frame hashes).
+- F8-STENCIL (s31_stencil.c, zpipe.c zs_*, raster_sel.c zs_build):
+  - an 8-bit buffer only for a context with GL_STENCIL_BITS 8
+    (s31gl_set_stencil_bits: GLX gives it to the STENCIL_SIZE 8 configs,
+    listed after the stencil-0 ones, gl/glx/glx_config.c); the drawable's
+    (s31gl_bind_stencil, shared like depth) or a private one made with the
+    depth buffer. Without it the stencil test passes and nothing is
+    modified (GL 1.3 4.1.5), exactly.
+  - the test and ops are one table load per fragment: ZPipeX.stab[s] holds
+    the value each outcome leaves (fail / depth fail / pass, through the
+    write mask) and the test's result, built at state change (256 entries,
+    cached by state). Eight stage variants: first in the list or after the
+    alpha test / polygon stipple (GL's order), read-only or writing, with
+    the depth write fused or not; the depth test runs inside it.
+  - the stencil pointer is the depth pointer's offset (ZPipeX.st_zb/st_sb),
+    so no span producer or runner carries one; lines point them at their
+    gathered copies for the line.
+  - clears honour scissor and GL_STENCIL_WRITEMASK; a full clear to the
+    value of the last full clear writes only the byte range written since
+    (ZStencilState in the buffer's tail; S31GL_STENCILRANGE=0: always all).
+  - glDrawPixels / glReadPixels(GL_STENCIL_INDEX) and glCopyPixels(
+    GL_STENCIL), with zoom, the index shift/offset and render scale
+    (GL_MAP_STENCIL recorded, not applied; GL_BITMAP type not taken).
+  - INCR_WRAP / DECR_WRAP (EXT_stencil_wrap, advertised).
+  - memory (review 4): GLX callocs the drawable's stencil and says so
+    (s31gl_stencil_zeroed), and a private one is calloc'd too, so full
+    clears to 0 write nothing until something draws into it - QuakeSpasm
+    asks for 8 bits and clears them every frame without a stencil test,
+    and its 256-384 kB stay non-resident; the 1 kB stencil table is
+    allocated at a context's first stencil batch, not in every context.
+- BLEND-EQ (zpipe.c zp_out_fn): all five equations; SUBTRACT and
+  REVERSE_SUBTRACT with ONE,ONE and SRC_ALPHA,ONE fused, MIN/MAX direct,
+  the rest generic. The GL_CONSTANT_* factors (glBlendColor) and GL 1.4's
+  factor rules. glBlendFuncSeparate's alpha factors and the alpha equation
+  are recorded (glGet, glPushAttrib) and change no pixel - exact, as there
+  is no destination alpha plane. Exported since SDL2 is built without its
+  GL render driver (plan 4.2 option B; gl/api/mkstubs.py).
+- SMOOTH (raster.c gl_aa_line / gl_aa_point, zpipe.c zv_cover): coverage
+  at the pixel centre from the distance to the primitive - a line:
+  clamp(w/2 + 1/2 - |d|, 0, 1) * clamp(len/2 + 1/2 - |l|, 0, min(1, len)),
+  Mesa's model to the pixel (artifacts/gl/phase4/smooth/); a point:
+  clamp(size/2 + 1/2 - r, 0, 1) (Mesa's llvmpipe draws smooth points as
+  hard-edged disks; this follows GL). Alpha times coverage after fog,
+  before the alpha test. Real widths from 1 up (granularity 1/8). With
+  blending off the footprint is written opaque, as GL and Mesa do
+  (S31GL_SMOOTH_NOBLEND=0: aliased then). Line stipple does not apply to
+  smooth lines (noted once).
+Tests: gl/tests/core_test.c (test_blend_eq, test_stencil, test_smooth),
+gl/glx/test/glxtest.c (stencil_tests), gl/tests/glx_p4.c and
+run-p4apps.sh (against Mesa, with mesa-demos dinoshade, dissolve,
+tri-stencil, stencilwrap), gl/tests/run-stencil-pick.sh (SDL2, SDL 1.2,
+freeglut get stencil 0 unless they ask), gl/bench/p4.sh (the costs).
+
+Hot code in RAM (phase 4, lever L1: s31_ramtext.c, s31_ramtext.h,
+gl/api/ramtext.list, ramtext.ld, ramtext.py; artifacts/gl/phase4/REPORT.md):
+- The functions gl/api/ramtext.list names (the GL_LESS fillers and their
+  setup, glVertex's transform/lighting/assembly, the triangle entry,
+  glopCallList: ~10 kB) are linked as one range behind the GL stubs.
+  S31GL_RAMTEXT=1 copies it at the first context creation into whole pages
+  of libGL's .bss, retargets its references out of the range from a table
+  build-lib.sh writes into the linked file (ramtext.py, from the linker's
+  -q relocations; the build fails if the range cannot move), and makes the
+  pages RX. The default is 0 until the board A/B says otherwise.
+- Only the entry points in s31_rt reach the copy, all chosen at state
+  changes: the fillers (raster_sel.c), the GL_FILL entry (raster_sel.c),
+  glVertex (api.c, through GLContext.vtx_run, which also replaced the
+  per-vertex flag test: -2 instructions a vertex) and glCallList (api.c,
+  straight to glopCallList when executing). Everything else - the
+  clipper, vertex arrays, rasterpos - keeps calling the XIP copy.
+- On the S31 the order is load-bearing: all writes, then mprotect(RX),
+  which is what makes the kernel write the D-cache back and invalidate the
+  I-cache for the pages (flush_icache_pte -> esp32s31_cache_sync_for_exec);
+  fence.i alone would not.
+- Checks: gl/tests/run-ramtext.sh (qemu-user RV32, static and through
+  musl's ld.so; the host rig; the glref suite with S31GL_RAMTEXT=1),
+  gl/tests/ramtext_trace.py (where the hot blocks really run), run-san.sh.

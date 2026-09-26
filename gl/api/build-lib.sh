@@ -54,6 +54,7 @@ TGLFP=""
 # it, so it buys nothing and would silently narrow any future double
 # constant)
 TGLFLAGS="$COMMON $TGLFP -O2 -std=gnu99 -fvisibility=hidden -DNDEBUG -DTGL_FEATURE_RENDER_BITS=16 \
+	${S31GL_NO_RAMTEXT:+-DS31GL_NO_RAMTEXT} \
 	-I$GL/tinygl/include -I$GL/tinygl/source \
 	-Wno-unused-but-set-variable"
 # (only the template leftovers - zz/sx set but unused in ztriangle.h/zline.h -
@@ -87,7 +88,7 @@ echo "--- compiling TinyGL core, the GL ABI layer and GLX ($JOBS jobs)"
 # S31GL_TGLCOLD (set, even empty) replaces the list: gl/bench/build_q.sh
 # compiles a pre-F3 baseline tree with it empty, as that tree's own
 # build script built every TinyGL file -O2 (review P5b)
-TGLCOLD=${S31GL_TGLCOLD-" raster_sel texture s31_pixels s31_state get s31_rpos s31_draw s31_zepoch "}
+TGLCOLD=${S31GL_TGLCOLD-" raster_sel texture s31_pixels s31_state get s31_rpos s31_draw s31_zepoch s31_stencil s31_ramtext "}
 for f in "$GL"/tinygl/source/*.c; do
 	b=$(basename "$f" .c)
 	case $b in glu|ostinygl) continue ;; esac
@@ -137,10 +138,33 @@ echo "$CC $APIFLAGS -c '$OBJ/gen_stubs.c' -o '$OBJ/api_gen_stubs.o'" >> "$CMDS"
 echo "$CC $APIFLAGS -I'$OBJ' -c '$GL/api/procs.c' -o '$OBJ/api_procs.o'" >> "$CMDS"
 run_cmds
 ls "$OBJ"/tgl_*.o "$OBJ"/api_*.o > "$OBJ/core.list"
+
+# phase 4 L1 (tinygl/source/s31_ramtext.c): the hot functions of
+# api/ramtext.list into one section, "s31hot_text" - a rename after
+# compiling, so every object's code is exactly what the compiler made.
+# Every link of these objects for Linux then needs api/ramtext.ld, which
+# places that section, and api/ramtext.py fix, which writes the table the
+# RAM copy needs (S31GL_RAMTEXT=1). S31GL_NO_RAMTEXT=1 builds without it
+# (s31_ramtext.c then keeps the XIP copy). The bench's bare-metal images get
+# the renamed section too, and link it wherever their script puts it.
+OBJCOPY=${OBJCOPY:-${NM%nm}objcopy}
+if [ -z "$S31GL_NO_RAMTEXT" ]; then
+	python3 "$GL/api/ramtext.py" rename "$OBJCOPY" "$GL/api/ramtext.list" "$OBJ"
+	RAMLD="-Wl,-T,$GL/api/ramtext.ld"
+fi
 [ -n "$S31GL_OBJONLY" ] && exit 0
 
 echo "--- linking $OUT"
 # -Bsymbolic-functions: internal calls bind at link time (xstubs/build.sh);
 # -z defs: an unresolved symbol fails the build instead of the app's load
-$CC -shared -fPIC $ARCHFLAGS $LDFLAGS -Wl,-soname,libGL.so.1 -Wl,-Bsymbolic-functions \
-	${ZDEFS--Wl,-z,defs} -Wl,--gc-sections -o "$OUT" $(cat "$OBJ/core.list") $GLXOBJ $LIBS
+link() {
+	$CC -shared -fPIC $ARCHFLAGS $LDFLAGS -Wl,-soname,libGL.so.1 -Wl,-Bsymbolic-functions \
+		${ZDEFS--Wl,-z,defs} -Wl,--gc-sections $RAMLD "$@" $(cat "$OBJ/core.list") $GLXOBJ $LIBS
+}
+link -o "$OUT"
+if [ -n "$RAMLD" ]; then
+	# L1: the same link with the linker's relocations kept (-q), read by
+	# ramtext.py, which checks the two are identical and patches $OUT
+	link -Wl,-q -o "$OBJ/libGL.q.so"
+	python3 "$GL/api/ramtext.py" fix "$OBJ/libGL.q.so" "$OUT" || { rm -f "$OUT"; exit 1; }
+fi

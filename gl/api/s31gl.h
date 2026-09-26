@@ -158,6 +158,38 @@ S31GL_API int s31gl_bind_depth(s31gl_ctx *ctx, void *depth);
    success, -1 = unsupported shift (0..2 are supported; 0 is native). */
 S31GL_API int s31gl_set_render_scale(s31gl_ctx *ctx, int shift);
 
+/* STENCIL (phase 4 F8). GL_STENCIL_BITS of ctx: 0 (the default: no stencil
+   buffer, no stencil memory, the stencil test passes) or 8. The GLX layer
+   sets it from the config (GLX_STENCIL_SIZE). With 8 the context renders
+   stencil into the buffer bound by s31gl_bind_stencil, or else into a
+   private one allocated lazily with the depth buffer (w * h bytes). */
+S31GL_API void s31gl_set_stencil_bits(s31gl_ctx *ctx, int bits);
+
+/* bytes the caller allocates after the w * h stencil values of
+   s31gl_bind_stencil: the core's state of the buffer (its dirty range;
+   ZB_STENCIL_TAIL in gl/tinygl/source/zbuffer.h) */
+#define S31GL_STENCIL_TAIL 20
+
+/* Render stencil into caller-owned memory: w * h bytes for the size bound
+   by the last s31gl_bind_color, followed by S31GL_STENCIL_TAIL bytes, with
+   the same contract as s31gl_bind_depth: any contents (GL leaves the buffer
+   undefined until it is cleared; the core takes the tail over and makes its
+   first full clear write everything), shared by every context bound to it,
+   never freed by the core, forgotten by a size change. NULL returns to a
+   private buffer. 0 = success, -1 = no size bound. */
+S31GL_API int s31gl_bind_stencil(s31gl_ctx *ctx, void *stencil);
+
+/* The caller states that the w * h stencil values at stencil are all 0 (a
+   fresh calloc), before binding it: the core then trusts them, so a full
+   clear to 0 writes nothing until something is drawn - a stencil that is
+   only ever cleared never becomes resident. Without it the first full
+   clear writes the whole buffer (review 4 R3-stencil) */
+S31GL_API void s31gl_stencil_zeroed(void *stencil, int w, int h);
+
+/* bytes of stencil the core renders into for ctx right now (0 before the
+   first draw or with no stencil bits); for RSS accounting in gates */
+S31GL_API int s31gl_stencil_bytes(s31gl_ctx *ctx);
+
 #ifdef __cplusplus
 }
 #endif

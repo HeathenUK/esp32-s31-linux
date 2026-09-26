@@ -70,7 +70,7 @@ int glxi_trace(void)
 /* ------------------------------------------------------------- contexts */
 
 static GLXContext make_context(Display *dpy, int screen, VisualID vid, int db,
-			       int fbid, GLXContext share)
+			       int stencil, int fbid, GLXContext share)
 {
 	struct __GLXcontextRec *c = calloc(1, sizeof(*c));
 
@@ -80,6 +80,7 @@ static GLXContext make_context(Display *dpy, int screen, VisualID vid, int db,
 	c->screen = screen;
 	c->vid = vid;
 	c->db = db;
+	c->stencil = stencil;
 	c->fbconfig_id = fbid;
 	c->core = glxi_core_create(share ? share->core : NULL, c);
 	if (!c->core) {
@@ -101,11 +102,12 @@ GLXI_EXPORT GLXContext glXCreateContext(Display *dpy, XVisualInfo *vis,
 	if (!d || !vis)
 		return NULL;
 	db = glxi_visual_db(d, vis->visualid);
-	cfg = glxi_cfg_for_visual(d, vis->screen, vis->visualid, db);
+	cfg = glxi_cfg_for_visual(d, vis->screen, vis->visualid, db,
+				  glxi_visual_stencil(d, vis->visualid));
 	if (!cfg)
 		return NULL;	/* not a GL visual (BadValue in real GLX) */
-	return make_context(dpy, vis->screen, vis->visualid, db, cfg->id,
-			    shareList);
+	return make_context(dpy, vis->screen, vis->visualid, db, cfg->stencil,
+			    cfg->id, shareList);
 }
 
 GLXI_EXPORT GLXContext glXCreateNewContext(Display *dpy, GLXFBConfig config,
@@ -120,7 +122,7 @@ GLXI_EXPORT GLXContext glXCreateNewContext(Display *dpy, GLXFBConfig config,
 	if (renderType != GLX_RGBA_TYPE)
 		return NULL;	/* no colour-index rendering */
 	return make_context(dpy, config->screen, config->vid, config->db,
-			    config->id, shareList);
+			    config->stencil, config->id, shareList);
 }
 
 static void context_free(struct __GLXcontextRec *c)
@@ -140,10 +142,23 @@ static void bind_surf(struct __GLXcontextRec *c, struct glxi_surf *s)
 		glxi_core_set_scale(c->core, s->rscale);
 		glxi_core_bind(c->core, s->pixels, s->bw, s->bh, s->pitch);
 		glxi_core_bind_depth(c->core, s->depth);
+		/* phase 4 F8: the drawable's stencil, made by the first context
+		 * with stencil bits that binds it. calloc'd and said to be zero,
+		 * so the core's clears write nothing until something draws into
+		 * it: QuakeSpasm asks for 8 bits and clears them every frame
+		 * without using them, and its pages stay untouched (review 4
+		 * R3-stencil: 256-384 kB of RSS). A failure is not fatal: the
+		 * core then allocates a private one */
+		if (c->stencil && !s->stencil) {
+			s->stencil = calloc((size_t)s->bw * s->bh + S31GL_STENCIL_TAIL, 1);
+			if (s->stencil) glxi_core_stencil_zeroed(s->stencil, s->bw, s->bh);
+		}
+		glxi_core_bind_stencil(c->core, c->stencil ? s->stencil : NULL);
 	} else {
 		glxi_core_set_scale(c->core, 0);
 		glxi_core_bind(c->core, NULL, s->w, s->h, 0);
 		glxi_core_bind_depth(c->core, NULL);
+		glxi_core_bind_stencil(c->core, NULL);
 	}
 }
 
@@ -430,6 +445,7 @@ void glxi_hook_viewport(void *user, int x, int y, int w, int h)
 	if (glxi_surf_alloc(s, c->vid, c->screen, c->db) != 0) {
 		glxi_core_bind(c->core, NULL, 0, 0, 0);
 		glxi_core_bind_depth(c->core, NULL);
+		glxi_core_bind_stencil(c->core, NULL);
 		return;
 	}
 	bind_surf(c, s);
@@ -471,6 +487,7 @@ GLXI_EXPORT void glXSwapBuffers(Display *dpy, GLXDrawable drawable)
 			glxi_core_set_scale(cur->core, 0);
 			glxi_core_bind(cur->core, NULL, s->w, s->h, 0);
 			glxi_core_bind_depth(cur->core, NULL);
+			glxi_core_bind_stencil(cur->core, NULL);
 		}
 		return;
 	}

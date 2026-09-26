@@ -33,9 +33,10 @@ struct __GLXFBConfigRec {
 	int screen;
 	VisualID vid;
 	int db;			/* GLX_DOUBLEBUFFER */
+	int stencil;		/* GLX_STENCIL_SIZE: 0 or 8 (phase 4 F8) */
 };
 
-#define GLXI_MAXCFG 16
+#define GLXI_MAXCFG 32
 
 struct glxi_dpy {
 	struct glxi_dpy *next;
@@ -47,6 +48,7 @@ struct glxi_dpy {
 	 * fakeglx does the same). */
 	VisualID chosen_vid[GLXI_MAXCFG];
 	int chosen_db[GLXI_MAXCFG];
+	int chosen_stencil[GLXI_MAXCFG];	/* phase 4 F8: the same for stencil */
 	int nchosen;
 	int shm;		/* -1 unknown, 0 no MIT-SHM, 1 usable */
 	int shm_event;		/* XShmGetEventBase + ShmCompletion */
@@ -64,11 +66,12 @@ void glxi_dpy_proven(Display *dpy, unsigned long serial);
 struct glxi_dpy *glxi_dpy_get(Display *dpy);
 void glxi_dpy_closed(Display *dpy);
 struct __GLXFBConfigRec *glxi_cfg_for_visual(struct glxi_dpy *d, int screen,
-					     VisualID vid, int db);
+					     VisualID vid, int db, int stencil);
 int glxi_cfg_attrib(Display *dpy, const struct __GLXFBConfigRec *c,
 		    int attr, int *value);
 int glxi_is_our_cfg(struct glxi_dpy *d, const struct __GLXFBConfigRec *c);
 int glxi_visual_db(struct glxi_dpy *d, VisualID vid);
+int glxi_visual_stencil(struct glxi_dpy *d, VisualID vid);
 
 /* -------------------------------------------------------------- surfaces */
 
@@ -98,6 +101,10 @@ struct glxi_surf {
 	 * colour buffer: GL's ancillary buffers belong to the drawable, so
 	 * every context current on this window renders into the same one */
 	void *depth;
+	/* phase 4 F8: the drawable's stencil buffer, bw * bh bytes (+ the
+	 * core's S31GL_STENCIL_TAIL), made when a context with stencil bits
+	 * first binds the drawable's buffers, shared like depth */
+	void *stencil;
 	int bw, bh, pitch;
 	/* RENDER SCALE (glx_present.c, plan G04): the buffers are the window
 	 * at 1/2^rscale in each axis and the server scales them back up; 0 =
@@ -150,6 +157,7 @@ struct __GLXcontextRec {
 	int screen;
 	VisualID vid;
 	int db;
+	int stencil;		/* GLX_STENCIL_SIZE of its config (phase 4 F8) */
 	int fbconfig_id;
 	s31gl_ctx *core;
 	struct glxi_surf *draw;
@@ -168,6 +176,8 @@ void glxi_core_finish(s31gl_ctx *ctx);
 void *glxi_core_get_proc(const char *name);
 void glxi_core_release_depth(s31gl_ctx *ctx);
 int glxi_core_bind_depth(s31gl_ctx *ctx, void *depth);
+int glxi_core_bind_stencil(s31gl_ctx *ctx, void *stencil);
+void glxi_core_stencil_zeroed(void *stencil, int w, int h);
 int glxi_core_can_scale(void);
 int glxi_core_set_scale(s31gl_ctx *ctx, int shift);
 /* callbacks the core calls, defined in glx.c */

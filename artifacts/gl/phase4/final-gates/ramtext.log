@@ -1,0 +1,29 @@
+ramtext: 15 sections moved to s31hot_text
+ramtext: libGL.so.1: 10620 bytes at 0x39060-0x3b9dc, 3 pages in RAM, 96 sites (auipc 61, jal 35), 157 table entries; slot 0x45000, displacement +49088; 68 references into the range from outside
+libGL.so.1.unstripped: ramtext_objdump: 3402 instructions in 0x39060-0x3b9dc; 35 jumps and 61 auipc pairs leave the range, 61 annotated low halves outside; table: 61 auipc, 61 low halves, 35 jal; 0 problems
+headless_gears.qemu: ramtext_objdump: 3401 instructions in 0x46580-0x48efc; 35 jumps and 60 auipc pairs leave the range, 60 annotated low halves outside; table: 60 auipc, 60 low halves, 35 jal; 0 problems
+headless_gears 320x240x100 S31GL_RAMTEXT=0: rc 0 38859f0c896efe6b12bc68e0fe3afe1f 
+headless_gears 320x240x100 S31GL_RAMTEXT=1: rc 0 38859f0c896efe6b12bc68e0fe3afe1f libGL: ramtext on: 10620 bytes in 3 pages, 155 fixup entries, 7 entry points
+headless_gears: frames identical on/off
+core_test: output identical on/off (core_test: 237 passed, 0 failed)
+raster_gate: output identical on/off (raster_gate: 51 passed, 0 failed)
+d2f_test: output identical on/off (d2f: 49987811 tested, 0 mismatches)
+filt_test: output identical on/off (filt_test: 32 passed, 0 failed)
+zepoch_test: output identical on/off (zepoch: 304 full clears, 128 left the depth memory as it was)
+S31GL_RAMTEXT=0: exit 0, hot-range blocks 219351: XIP 219351, RAM 0 (0.0% in RAM) 
+S31GL_RAMTEXT=1: exit 0, hot-range blocks 213036: XIP 2037, RAM 210999 (99.0% in RAM) libGL: ramtext on: 10620 bytes in 3 pages, 155 fixup entries, 7 entry points
+        268 entries into the XIP range: updateTmp -> gl_transform_to_viewport
+        207 entries into the XIP range: gl_draw_triangle_clip -> gl_draw_triangle
+ramtext: libGL.so.1: 10620 bytes at 0x352c0-0x37c3c, 3 pages in RAM, 96 sites (auipc 61, jal 35), 157 table entries; slot 0x41000, displacement +48448; 68 references into the range from outside
+hg_dyn 320x240x30 S31GL_RAMTEXT=0: rc 0 e48c3678bbeeb8843117a2ac488eaf67 
+    libGL at 0x2b358000: hot-range blocks run from XIP 4141846, from the RAM copy 0; no mprotect of the slot
+hg_dyn 320x240x30 S31GL_RAMTEXT=1: rc 0 e48c3678bbeeb8843117a2ac488eaf67 libGL: ramtext on: 10620 bytes in 3 pages, 157 fixup entries, 7 entry points
+    libGL at 0x2b358000: hot-range blocks run from XIP 22323, from the RAM copy 4111350; 14 mprotect(0x2b399000,12288,PROT_EXEC|PROT_READ) = 0
+hg_dyn: frames identical on/off
+headless_gears 320x240x100 S31GL_RAMTEXT=0: rc 0 38859f0c896efe6b12bc68e0fe3afe1f 
+headless_gears 320x240x100 S31GL_RAMTEXT=1: rc 0 38859f0c896efe6b12bc68e0fe3afe1f libGL: ramtext on: 14208 bytes in 4 pages, 62 fixup entries, 7 entry points
+headless_gears: frames identical on/off
+core_test: output identical on/off (core_test: 239 passed, 0 failed)
+raster_gate: output identical on/off (raster_gate: 51 passed, 0 failed)
+filt_test: output identical on/off (filt_test: 32 passed, 0 failed)
+zepoch_test: output identical on/off (zepoch: 304 full clears, 128 left the depth memory as it was)

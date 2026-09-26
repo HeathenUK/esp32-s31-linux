@@ -1,0 +1,13 @@
+result=stalled
+rc=3
+unimplemented=0
+missing=
+unresolved=
+meta_status=stalled
+meta_swap=0
+meta_want_frame=3
+meta_x=0
+meta_y=0
+meta_w=300
+meta_h=300
+meta_virtual_ms=21120000

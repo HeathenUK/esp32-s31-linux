@@ -85,4 +85,9 @@ void glopClear(GLContext *c,GLParam *p)
     if ((dz && !full) || (dc && !creset)) zdb_grow(c, x0, y0, x1, y1);
     zdb_fold(c, creset, zreset);
   }
+  /* phase 4 F8: the stencil buffer, last and on its own (s31_stencil.c:
+     its own dirty range; placed here, a test in the middle made GCC
+     duplicate the colour and depth paths: +310 B of hot code) */
+  if ((mask & GL_STENCIL_BUFFER_BIT) && zb->sbuf)
+    zst_clear(c, x0, y0, x1, y1, full);
 }

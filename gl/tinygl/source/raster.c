@@ -178,6 +178,210 @@ static void to_lp(GLContext *c, LinePt *l, const GLVertex *v)
   }
 }
 
+/* ------------------------------------------------------------ smooth */
+
+/* floor and ceil without the libm calls (musl's floorf is a function) */
+static inline int ifloorf(float v)
+{
+  int i = (int)v;
+  return i - (v < (float)i);
+}
+static inline int iceilf(float v)
+{
+  int i = (int)v;
+  return i + (v > (float)i);
+}
+
+/* phase 4 SMOOTH: a smooth primitive's attributes as functions of the line
+   parameter t (0 at the first end, 1 at the second; a point has one end),
+   made once per primitive; aa_span evaluates them per row, only those the
+   stages read (ZPipe.need) */
+typedef struct {
+  float z0, dz, zlo, zhi;
+  float r0, dr, g0, dg, b0, db, a0, da;
+  float s0, ds, t0, dt_, f0, df, q0, dq;
+  float dtdx;                   /* t per pixel along a row */
+  int need;
+} AAPrim;
+
+static void aa_prim(const ZPipe *p, AAPrim *a, const LinePt *p1, const LinePt *p2,
+                    float dtdx)
+{
+  a->need = p->need;
+  a->z0 = (float)p1->z; a->dz = (float)(p2->z - p1->z);
+  a->zlo = (float)(p1->z < p2->z ? p1->z : p2->z);
+  a->zhi = (float)(p1->z > p2->z ? p1->z : p2->z);
+  a->r0 = (float)p1->r; a->dr = (float)(p2->r - p1->r);
+  a->g0 = (float)p1->g; a->dg = (float)(p2->g - p1->g);
+  a->b0 = (float)p1->b; a->db = (float)(p2->b - p1->b);
+  a->a0 = (float)p1->a; a->da = (float)(p2->a - p1->a);
+  a->s0 = p1->s; a->ds = p2->s - p1->s;
+  a->t0 = p1->t; a->dt_ = p2->t - p1->t;
+  a->f0 = p1->f; a->df = p2->f - p1->f;
+  a->q0 = p1->q; a->dq = p2->q - p1->q;
+  a->dtdx = dtdx;
+}
+
+/* a span of a smooth primitive: row `row`, columns x0..x1-1, the line
+   parameter t0 at the first pixel centre, and the coverage coordinates
+   (ZSpan.cva/cvb, zpipe.c zv_cover). Depth is kept inside the two ends'
+   range: the footprint reaches half a pixel past them */
+static void aa_span(ZBuffer *zb, const AAPrim *a, int row, int x0, int x1,
+                    float t0, float ca, float cda, float cb, float cdb)
+{
+  ZSpan sp;
+  int n = x1 - x0, need = a->need;
+  float dt = a->dtdx;
+
+  sp.pp = (PIXEL *)((char *)zb->pbuf + row * zb->linesize) + x0;
+  sp.pz = zb->zbuf + row * zb->xsize + x0;
+  sp.n = n;
+  if (need & ZP_N_Z) {
+    float za = fminf(fmaxf(a->z0 + t0 * a->dz, a->zlo), a->zhi);
+    float zb1 = fminf(fmaxf(a->z0 + (t0 + dt * (float)(n - 1)) * a->dz, a->zlo), a->zhi);
+    sp.z = (unsigned int)za;
+    sp.dzdx = n > 1 ? (int)((zb1 - za) / (float)(n - 1)) : 0;
+  }
+  if (need & ZP_N_RGBA) {
+    sp.r = (int)(a->r0 + t0 * a->dr); sp.drdx = (int)(dt * a->dr);
+    sp.g = (int)(a->g0 + t0 * a->dg); sp.dgdx = (int)(dt * a->dg);
+    sp.b = (int)(a->b0 + t0 * a->db); sp.dbdx = (int)(dt * a->db);
+    sp.a = (int)(a->a0 + t0 * a->da); sp.dadx = (int)(dt * a->da);
+  }
+  if (need & ZP_N_ST) {
+    sp.sz = a->s0 + t0 * a->ds; sp.dszdx = dt * a->ds;
+    sp.tz = a->t0 + t0 * a->dt_; sp.dtzdx = dt * a->dt_;
+  }
+  if (need & ZP_N_F) { sp.fq = a->f0 + t0 * a->df; sp.dfqdx = dt * a->df; }
+  if (need & ZP_N_Q) { sp.fz = a->q0 + t0 * a->dq; sp.dfzdx = dt * a->dq; }
+  sp.cva = ca; sp.cvda = cda; sp.cvb = cb; sp.cvdb = cdb;
+  sp.cvpp = sp.pp;
+  zp_run(zb, &sp);
+}
+
+/* GL_LINE_SMOOTH (GL 1.3 3.4.2): every pixel whose centre is within
+   w/2 + 1/2 of the segment across and len/2 + 1/2 of its middle along, its
+   alpha times the coverage (zv_cover). The rectangle is walked row by row,
+   each row's pixels found by solving the two distances for x; attributes
+   are interpolated along the line from the projection of each pixel centre
+   onto it, as the aliased walk interpolates them per pixel. Floats only.
+   Line stipple is not applied to smooth lines */
+__attribute__((noinline))
+static void gl_aa_line(GLContext *c, GLVertex *va, GLVertex *vb, int flat)
+{
+  ZBuffer *zb = c->zb;
+  ZPipeX *x = &c->pipex;
+  LinePt p1, p2;
+  AAPrim ap;
+  float x0 = va->zp.fx, y0 = va->zp.fy, dx = vb->zp.fx - x0, dy = vb->zp.fy - y0;
+  float len2 = dx * dx + dy * dy, len, inv, ux, uy, mx, my, hw1, hl, ey, cy0;
+  float lo1, hi1, lo2, hi2, slo1, shi1, slo2, shi2;
+  int row, r0, r1, bx0 = c->rast_box[0], by0 = c->rast_box[1];
+  int bx1 = c->rast_box[2], by1 = c->rast_box[3];
+
+  if (len2 < 1e-12f) return;             /* a zero-length line draws nothing */
+  if (c->line_stipple_enabled) gl_note_once("GL_LINE_STIPPLE on smooth lines (not stippled)");
+  to_lp(c, &p1, va);
+  to_lp(c, &p2, vb);
+  if (flat) set_flat(c);
+  len = sqrtf(len2);
+  inv = 1.0f / len;
+  ux = dx * inv; uy = dy * inv;
+  mx = x0 + 0.5f * dx; my = y0 + 0.5f * dy;
+  hw1 = 0.5f * c->aa_lw + 0.5f;
+  hl = 0.5f * len + 0.5f;
+  x->cv_hw = hw1; x->cv_hl = hl;
+  x->cv_lcap = len < 1.0f ? len : 1.0f;
+  x->cov_kind = 1;
+  aa_prim(&c->pipe, &ap, &p1, &p2, ux * inv);
+  /* rows whose centre is inside the rectangle's y extent */
+  ey = fabsf(uy) * hl + fabsf(ux) * hw1;
+  r0 = ifloorf(my - ey - 0.5f) + 1;
+  r1 = iceilf(my + ey - 0.5f) - 1;
+  if (r0 < by0) r0 = by0;
+  if (r1 > by1 - 1) r1 = by1 - 1;
+  /* In a row at centre offset cy = row + 1/2 - my, a pixel centre at offset
+     X = x - mx is along l = cy uy + X ux and across d = cy ux - X uy. The
+     x where |l| < hl and where |d| < w/2 + 1/2 are two intervals whose ends
+     are linear in cy: kept as (lo, hi) plus the step per row, in pixel
+     column units (+ mx - 1/2), so a row costs four adds. A direction with
+     no x component (a vertical line's along, a horizontal one's across)
+     bounds only the rows, and the row range already holds it */
+  cy0 = (float)r0 + 0.5f - my;
+  lo1 = lo2 = -1e30f; hi1 = hi2 = 1e30f;
+  slo1 = shi1 = slo2 = shi2 = 0.0f;
+  if (fabsf(ux) > 1e-6f) {
+    float iu = 1.0f / ux, a = (-hl - cy0 * uy) * iu, b = (hl - cy0 * uy) * iu, st = -uy * iu;
+    lo1 = (a < b ? a : b) + mx - 0.5f; hi1 = (a < b ? b : a) + mx - 0.5f;
+    slo1 = shi1 = st;
+  }
+  if (fabsf(uy) > 1e-6f) {
+    float iu = 1.0f / uy, a = (cy0 * ux - hw1) * iu, b = (cy0 * ux + hw1) * iu, st = ux * iu;
+    lo2 = (a < b ? a : b) + mx - 0.5f; hi2 = (a < b ? b : a) + mx - 0.5f;
+    slo2 = shi2 = st;
+  }
+  for (row = r0; row <= r1; row++, lo1 += slo1, hi1 += shi1, lo2 += slo2, hi2 += shi2) {
+    float lo = lo1 > lo2 ? lo1 : lo2, hi = hi1 < hi2 ? hi1 : hi2, cy, cx0, l0;
+    int c0, c1;
+    if (hi <= lo) continue;
+    /* columns whose centre is strictly inside */
+    c0 = ifloorf(lo) + 1;
+    c1 = iceilf(hi);
+    if (c0 < bx0) c0 = bx0;
+    if (c1 > bx1) c1 = bx1;
+    if (c1 <= c0) continue;
+    cy = (float)row + 0.5f - my;
+    cx0 = (float)c0 + 0.5f - mx;
+    l0 = cy * uy + ux * cx0;
+    aa_span(zb, &ap, row, c0, c1, l0 * inv + 0.5f, cy * ux - uy * cx0, -uy, l0, ux);
+  }
+  x->cov_kind = 0;
+}
+
+/* GL_POINT_SMOOTH (GL 1.3 3.3.1): the disk of radius size/2 + 1/2 around
+   the point, each pixel's alpha times its coverage clamp(size/2 + 1/2 - r,
+   0, 1) at its centre */
+__attribute__((noinline))
+static void gl_aa_point(GLContext *c, GLVertex *v)
+{
+  ZBuffer *zb = c->zb;
+  ZPipeX *x = &c->pipex;
+  LinePt q;
+  AAPrim ap;
+  float cx = v->zp.fx, cy = v->zp.fy, rr = 0.5f * c->aa_ps + 0.5f;
+  int row, r0, r1, bx0 = c->rast_box[0], by0 = c->rast_box[1];
+  int bx1 = c->rast_box[2], by1 = c->rast_box[3];
+
+  to_lp(c, &q, v);
+  if (c->current_shade_model != GL_SMOOTH) {
+    ZPipe *p = &c->pipe;
+    p->flat[0] = (unsigned char)(q.r >> ZP_CSHIFT);
+    p->flat[1] = (unsigned char)(q.g >> ZP_CSHIFT);
+    p->flat[2] = (unsigned char)(q.b >> ZP_CSHIFT);
+    p->flat[3] = (unsigned char)(q.a >> ZP_CSHIFT);
+  }
+  x->cv_rr = rr;
+  x->cov_kind = 2;
+  aa_prim(&c->pipe, &ap, &q, &q, 0.0f);
+  r0 = ifloorf(cy - rr - 0.5f) + 1;
+  r1 = iceilf(cy + rr - 0.5f) - 1;
+  if (r0 < by0) r0 = by0;
+  if (r1 > by1 - 1) r1 = by1 - 1;
+  for (row = r0; row <= r1; row++) {
+    float dy = (float)row + 0.5f - cy, h2 = rr * rr - dy * dy, h;
+    int c0, c1;
+    if (h2 <= 0.0f) continue;
+    h = sqrtf(h2);
+    c0 = ifloorf(cx - h - 0.5f) + 1;
+    c1 = iceilf(cx + h - 0.5f);
+    if (c0 < bx0) c0 = bx0;
+    if (c1 > bx1) c1 = bx1;
+    if (c1 <= c0) continue;
+    aa_span(zb, &ap, row, c0, c1, 0.0f, (float)c0 + 0.5f - cx, 1.0f, dy, 0.0f);
+  }
+  x->cov_kind = 0;
+}
+
 /* GL lines through the general path: TinyGL's Bresenham walk (zline.h),
    and for width w > 1 the w pixels of the minor axis GL 1.3 3.4.2 asks
    for, clipped to the buffer and scissor box.
@@ -207,9 +411,27 @@ void gl_general_line(GLContext *c, GLVertex *va, GLVertex *vb, int flat)
   unsigned short zbuf[LN_BUF];
   PIXEL *pa[LN_BUF];          /* where each came from, or NULL: discard */
   unsigned short *za[LN_BUF];
+  /* phase 4 F8: with the stencil test, its values are gathered and
+     scattered the same way, in a pass of their own per block (sten: the
+     test runs), so the pixel walk is the same loop with or without it */
+  unsigned char sbuf[LN_BUF];
+  int sten = RASTER_STENCIL(c);
 
   if (c->pipe_dirty) gl_build_pipe(c);
   c->pipe.stip_on = 0;
+  if (c->pipe.xact) zpx_reset(&c->pipe);   /* phase 4: level 0, affine colour */
+  if (RASTER_AA_LINES(c)) {                /* phase 4 SMOOTH */
+    gl_aa_line(c, va, vb, flat);
+    return;
+  }
+  /* phase 4 F8: the stages see the gathered copies (ZPipeX.st_zb/st_sb
+     point at them while the line runs), not the buffer, so the stencil's
+     dirty range cannot follow them: it becomes the whole buffer */
+  if (sten) {
+    if (RASTER_STENCIL_W(c)) zst_touch_all(zb);
+    c->pipex.st_zb = zbuf;
+    c->pipex.st_sb = sbuf;
+  }
   /* line stipple (GL 1.3 3.4.2, plan F7): the counter restarts at each
      independent segment and at the first segment of a strip or loop,
      and runs on along the strip */
@@ -288,6 +510,9 @@ void gl_general_line(GLContext *c, GLVertex *va, GLVertex *vb, int flat)
       }
       if (j == LN_BUF || i == n) {
         /* pixels i0 .. i0 + j - 1 of the line, as one span */
+        if (sten)
+          for (jj = 0; jj < j; jj++)
+            sbuf[jj] = pa[jj] ? zb->sbuf[za[jj] - zb->zbuf] : 0;
         sp.pp = pbuf; sp.pz = zbuf; sp.n = j;
         sp.z = (unsigned int)p1.z + (unsigned int)i0 * (unsigned int)dz;
         sp.dzdx = dz;
@@ -303,10 +528,17 @@ void gl_general_line(GLContext *c, GLVertex *va, GLVertex *vb, int flat)
         zp_run(zb, &sp);
         for (jj = 0; jj < j; jj++)
           if (pa[jj]) { *pa[jj] = pbuf[jj]; *za[jj] = zbuf[jj]; }
+        if (sten)
+          for (jj = 0; jj < j; jj++)
+            if (pa[jj]) zb->sbuf[za[jj] - zb->zbuf] = sbuf[jj];
         i0 += j;
         j = 0;
       }
     }
+  }
+  if (sten) {                         /* the buffers' own again */
+    c->pipex.st_zb = zb->zbuf;
+    c->pipex.st_sb = zb->sbuf;
   }
 }
 
@@ -326,6 +558,11 @@ void gl_general_point(GLContext *c, GLVertex *v)
     zdb_grow(c, v->zp.x - w, v->zp.y - w, v->zp.x + w + 1, v->zp.y + w + 1);
   if (c->pipe_dirty) gl_build_pipe(c);
   c->pipe.stip_on = 0;
+  if (c->pipe.xact) zpx_reset(&c->pipe);   /* phase 4: level 0, affine colour */
+  if (RASTER_AA_POINTS(c)) {               /* phase 4 SMOOTH */
+    gl_aa_point(c, v);
+    return;
+  }
   to_lp(c, &q, v);
   if (c->current_shade_model != GL_SMOOTH) {
     ZPipe *p = &c->pipe;

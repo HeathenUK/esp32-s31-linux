@@ -11,19 +11,36 @@
  *    s31_pixels.c unpacks and honour every GL_UNPACK_* parameter; NULL
  *    pixels give a black image; levels > 0 are validated and recorded
  *    (completeness, glGetTexLevelParameter) but not stored - the MIPMAP
- *    filters sample level 0; proxy targets answer as a real upload would.
+ *    filters sample level 0 (superseded by phase 4 F-LIN, below); proxy
+ *    targets answer as a real upload would.
  *    TinyGL exit(1)ed for anything but RGB/UNSIGNED_BYTE, level 0.
  *  - glGenTextures reserves the names it returns (two calls used to return
  *    the same name); deleting texture 0 is ignored; a texture without an
  *    image draws untextured instead of dereferencing NULL (clip.c).
  *  - glTexEnv / glTexParameter / glPixelStore record every GL 1.3 value and
  *    raise GL errors instead of exiting.
+ *  - (phase 4 F-LIN) levels > 0 are stored as the application uploads
+ *    them (glTexImage, glTexSubImage, glCopyTex*), each its own block in
+ *    GLTexture.mip, converted to that level's stored class; a texture that
+ *    never gets a level > 0 pays one pointer. S31GL_MIPMAPS=0 stores none
+ *    (the mipmap filters then sample level 0, as before). GL_LINEAR and
+ *    the mipmap filters are drawn by s31_tfilter.c.
  */
 
 #include "zgl.h"
 #include "s31_pixels.h"
 
 #define TEX_SIZE 256            /* GL_MAX_TEXTURE_SIZE (get.c) */
+
+/* s31 (phase 4): the stored levels > 0 */
+void gl_tex_free_mip(GLTexture *t)
+{
+  int l;
+  if (t->mip == NULL) return;
+  for (l = 1; l < MAX_TEXTURE_LEVELS; l++) gl_free(t->mip->l[l].pix);
+  gl_free(t->mip);
+  t->mip = NULL;
+}
 
 static GLTexture *find_texture(GLContext *c,int h)
 {
@@ -59,6 +76,7 @@ static void free_texture(GLContext *c,int h)
     im=&t->images[i];
     if (im->pixmap != NULL) gl_free(im->pixmap);
   }
+  gl_tex_free_mip(t);
 
   gl_free(t);
 }
@@ -85,6 +103,8 @@ GLTexture *alloc_texture(GLContext *c,int h)
   t->wrap_t=GL_REPEAT;
   t->priority=1.0f;
   t->internal_format=1;
+  t->max_level=1000;              /* GL 1.2 defaults */
+  t->min_lod=-1000.0f; t->max_lod=1000.0f;
 
   return t;
 }
@@ -102,6 +122,8 @@ GLTexture *alloc_texture_detached(void)
   t->wrap_t=GL_REPEAT;
   t->priority=1.0f;
   t->internal_format=1;
+  t->max_level=1000;              /* GL 1.2 defaults */
+  t->min_lod=-1000.0f; t->max_lod=1000.0f;
   return t;
 }
 
@@ -109,6 +131,7 @@ void free_texture_detached(GLTexture *t)
 {
   if (t == NULL) return;
   gl_free(t->images[0].pixmap);
+  gl_tex_free_mip(t);
   gl_free(t);
 }
 
@@ -277,22 +300,34 @@ static int ilog2(int v)
   return l;
 }
 
+/* internal formats 1-4 are the base formats by another name */
+static int fmt_norm(int f)
+{
+  static const unsigned short base[5] = { 0, GL_LUMINANCE, GL_LUMINANCE_ALPHA, GL_RGB, GL_RGBA };
+  return f >= 1 && f <= 4 ? base[f] : f;
+}
+
 /* GL 1.3 3.8.10: a texture is complete when level 0 exists and, for a
-   mipmap minification filter, every level down to 1x1 was specified with
-   the halved size. Levels > 0 are recorded, not stored: the MIPMAP filters
-   sample the base level (nearest). Incomplete = texturing off (clip.c). */
+   mipmap minification filter, every level down to 1x1 (GL 1.2: or
+   GL_TEXTURE_MAX_LEVEL) was specified with the halved size and level 0's
+   internal format. Incomplete = texturing off (clip.c). */
 int gl_texture_complete(const GLTexture *t)
 {
-  int l, w, h, b = 2 * t->border, n;
+  int l, w, h, b = 2 * t->border, n, f0;
   if (t->images[0].pixmap == NULL || t->lw[0] == 0) return 0;
   if (t->min_filter == GL_NEAREST || t->min_filter == GL_LINEAR) return 1;
   w = t->lw[0] - b; h = t->lh[0] - b;
   n = t->ws > t->hs ? t->ws : t->hs;
+  if (n > t->max_level) n = t->max_level;      /* GL 1.2 (review 4 R4) */
+  f0 = fmt_norm(t->lfmt[0]);
   for (l = 1; l <= n; l++) {
     w = w > 1 ? w >> 1 : 1;
     h = h > 1 ? h >> 1 : 1;
     if (l >= MAX_TEXTURE_LEVELS || t->lw[l] - b != w || t->lh[l] - b != h)
       return 0;
+    /* GL 1.3 3.8.10: the same internal format at every level (review 4
+       R4: a level of another format was sampled, or level 0 drawn) */
+    if (fmt_norm(t->lfmt[l]) != f0) return 0;
   }
   return 1;
 }
@@ -305,15 +340,16 @@ int gl_texture_complete(const GLTexture *t)
    and luminance tests ran per texel, and this file is -Os, so GCC did not
    unswitch them; TyrQuake re-uploads lightmaps every frame). Built -O2. */
 #define T565(r, g, b) ((unsigned short)((((r) & 0xF8) << 8) | (((g) & 0xFC) << 3) | ((b) >> 3)))
+/* (phase 4: any level - pix/al are the level's planes, ws its log2 width,
+   ifmt its internal format) */
 __attribute__((optimize("O2")))
-static void tex_store(GLTexture *t, const S31Unpack *u, int sx, int sy,
-                      int x0, int y0, int w, int h)
+static void tex_store_img(unsigned short *pix, unsigned char *al, int ws, int ifmt,
+                          const S31Unpack *u, int sx, int sy,
+                          int x0, int y0, int w, int h)
 {
   unsigned char row[4 * 256];
-  unsigned short *pix = t->images[0].pixmap;
-  unsigned char *al = t->alpha;
-  int TW = 1 << t->ws, x, y, lum;
-  int cls = tex_class(t->internal_format, &lum);
+  int TW = 1 << ws, x, y, lum;
+  int cls = tex_class(ifmt, &lum);
 
   /* the common uploads straight from the client's bytes, without the
      RGBA8888 row in between: UNSIGNED_BYTE RGB / RGBA / LUMINANCE into
@@ -364,6 +400,54 @@ static void tex_store(GLTexture *t, const S31Unpack *u, int sx, int sy,
       break;
     }
   }
+}
+
+static void tex_store(GLTexture *t, const S31Unpack *u, int sx, int sy,
+                      int x0, int y0, int w, int h)
+{
+  tex_store_img(t->images[0].pixmap, t->alpha, t->ws, t->internal_format,
+                u, sx, sy, x0, y0, w, h);
+}
+
+/* s31 (phase 4 F-LIN): store level L > 0 (iw x ih, log2 ws x hs, internal
+   format ifmt), from u when given. The block is reused when the level
+   keeps its shape and class. Returns 0 when it could not be stored (no
+   memory, or S31GL_MIPMAPS=0): the level is then only recorded, and the
+   mipmap filters see an incomplete chain and sample level 0 */
+static int tex_level_store(GLContext *c, GLTexture *t, int level, int iw, int ih,
+                           int ws, int hs, int ifmt, int border, int vb,
+                           const S31Unpack *u, int have_pixels)
+{
+  GLMipLevel *m;
+  int lum, cls = tex_class(ifmt, &lum), has_alpha = cls != TGL_TEXF_RGB;
+  int need = iw * ih * 2 + (has_alpha ? iw * ih : 0);
+
+  if (!c->mip_store) return 0;
+  if (t->mip == NULL) {
+    t->mip = gl_zalloc(sizeof(GLMipChain));
+    if (t->mip == NULL) { gl_set_error(c, GL_OUT_OF_MEMORY); return 0; }
+  }
+  m = &t->mip->l[level];
+  if (iw == 0 || ih == 0) {
+    gl_free(m->pix);
+    m->pix = NULL; m->alpha = NULL;
+    return 0;
+  }
+  if (m->pix == NULL || m->ws != ws || m->hs != hs || (m->alpha != NULL) != has_alpha) {
+    gl_free(m->pix);
+    m->pix = gl_malloc(need);
+    m->alpha = NULL;
+    if (m->pix == NULL) { gl_set_error(c, GL_OUT_OF_MEMORY); return 0; }
+  }
+  m->ws = (unsigned char)ws; m->hs = (unsigned char)hs;
+  m->cls = (unsigned char)cls;
+  m->alpha = has_alpha ? (unsigned char *)m->pix + iw * ih * 2 : NULL;
+  if (!have_pixels) {
+    memset(m->pix, 0, need);
+    return 1;
+  }
+  tex_store_img(m->pix, m->alpha, ws, ifmt, u, border, vb, 0, 0, iw, ih);
+  return 1;
 }
 
 /* s31: glTexImage2D and glTexImage1D (a W x 1 image, plan F7). src: the
@@ -457,9 +541,10 @@ int gl_tex_image_src(GLContext *c, GLParam *p, const S31Unpack *src)
   t->lh[level] = (unsigned short)height;
   t->lfmt[level] = components;
   if (level > 0) {
-    /* recorded for completeness and glGetTexLevelParameter; the base
-       level is what is drawn (nearest), so nothing is stored */
-    return 0;
+    /* recorded for completeness and glGetTexLevelParameter, and (phase 4)
+       stored for the mipmap filters */
+    return tex_level_store(c, t, level, iw, ih, ws, hs, components, border, vb,
+                           &u, pixels != NULL || src != NULL);
   }
   if (border) gl_warn_once("texture border (the border texels are dropped)");
   t->width = width;
@@ -561,8 +646,24 @@ int gl_tex_subimage_src(GLContext *c, GLParam *p, const S31Unpack *src)
     e = s31_unpack_setup(c, &u, width, height, format, type, pixels);
     if (e) { gl_set_error(c, e); return 0; }
   }
-  if (level > 0 || (pixels == NULL && src == NULL) || width == 0 || height == 0 ||
-      t->images[0].pixmap == NULL)
+  if ((pixels == NULL && src == NULL) || width == 0 || height == 0)
+    return 0;
+  if (level > 0) {
+    /* phase 4: into the stored level, if there is one */
+    GLMipLevel *m = t->mip ? &t->mip->l[level] : NULL;
+    if (m == NULL || m->pix == NULL) return 0;
+    TW = 1 << m->ws; TH = 1 << m->hs;
+    x0 = xoff; y0 = yoff; sx = 0; sy = 0; w = width; h = height;
+    if (x0 < 0) { sx = -x0; w += x0; x0 = 0; }
+    if (y0 < 0) { sy = -y0; h += y0; y0 = 0; }
+    if (x0 + w > TW) w = TW - x0;
+    if (y0 + h > TH) h = TH - y0;
+    if (w <= 0 || h <= 0) return 0;
+    c->raster_dirty = 1;
+    tex_store_img(m->pix, m->alpha, m->ws, t->lfmt[level], &u, sx, sy, x0, y0, w, h);
+    return 1;
+  }
+  if (t->images[0].pixmap == NULL)
     return 0;
   /* the part inside the stored (border-less) image */
   TW = 1 << t->ws; TH = 1 << t->hs;
@@ -705,9 +806,7 @@ void glopTexParameter(GLContext *c,GLParam *p)
       gl_set_error(c, GL_INVALID_ENUM);
       return;
     }
-    t->mag_filter = param;
-    if (param == GL_LINEAR)
-      gl_note_once("GL_LINEAR texture filter by nearest sampling");
+    t->mag_filter = param;      /* phase 4: honoured (s31_tfilter.c) */
     break;
   case GL_TEXTURE_MIN_FILTER:
     switch (param) {
@@ -719,16 +818,22 @@ void glopTexParameter(GLContext *c,GLParam *p)
       gl_set_error(c, GL_INVALID_ENUM);
       return;
     }
-    t->min_filter = param;
-    if (param != GL_NEAREST && param != GL_NEAREST_MIPMAP_NEAREST)
-      gl_note_once("GL_LINEAR / mipmap texture filters by nearest sampling of level 0");
+    t->min_filter = param;      /* phase 4: honoured (s31_tfilter.c) */
     break;
   case GL_TEXTURE_PRIORITY:
     t->priority = p[4].f < 0.0f ? 0.0f : (p[4].f > 1.0f ? 1.0f : p[4].f);
     break;
-  case GL_TEXTURE_BORDER_COLOR:
-  case GL_TEXTURE_MIN_LOD: case GL_TEXTURE_MAX_LOD:
+  /* GL 1.2 (review 4 R4): recorded and used - they were accepted and
+     ignored, while glGet raised INVALID_ENUM for them */
   case GL_TEXTURE_BASE_LEVEL: case GL_TEXTURE_MAX_LEVEL:
+    if (param < 0) { gl_set_error(c, GL_INVALID_VALUE); return; }
+    if (param > 30000) param = 30000;
+    if (pname == GL_TEXTURE_BASE_LEVEL) t->base_level = (short)param;
+    else t->max_level = (short)param;
+    break;
+  case GL_TEXTURE_MIN_LOD: t->min_lod = p[4].f; break;
+  case GL_TEXTURE_MAX_LOD: t->max_lod = p[4].f; break;
+  case GL_TEXTURE_BORDER_COLOR:
   case GL_GENERATE_MIPMAP:
     break;
   default:
@@ -764,6 +869,12 @@ int tgl_get_tex_parameter(int target, int pname, int *iv, float *fv, int *kind)
   case GL_TEXTURE_PRIORITY: fv[0] = t->priority; *kind = TGL_GET_FLOAT;
     iv[0] = (int)t->priority; return 1;
   case GL_TEXTURE_RESIDENT: iv[0] = 1; break;
+  case GL_TEXTURE_BASE_LEVEL: iv[0] = t->base_level; break;
+  case GL_TEXTURE_MAX_LEVEL: iv[0] = t->max_level; break;
+  case GL_TEXTURE_MIN_LOD: case GL_TEXTURE_MAX_LOD:
+    fv[0] = pname == GL_TEXTURE_MIN_LOD ? t->min_lod : t->max_lod;
+    iv[0] = (int)fv[0]; *kind = TGL_GET_FLOAT;
+    return 1;
   case GL_TEXTURE_BORDER_COLOR:
     fv[0] = fv[1] = fv[2] = fv[3] = 0.0f; iv[0] = iv[1] = iv[2] = iv[3] = 0;
     *kind = TGL_GET_COLOR; return 4;

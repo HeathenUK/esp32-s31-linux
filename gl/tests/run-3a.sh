@@ -3,7 +3,7 @@
 # the Mac (host only: nothing touches the board). Output in
 # artifacts/gl/phase3a/LABEL/:
 #   host.log      gl/host-build.sh (host libGL + tests), core_test, raster_gate,
-#                 fmath_test and f2d_test (host)
+#                 filt_test (phase 4), fmath_test and f2d_test (host)
 #   suite/        tools/glref/suite.sh (22 apps), and suitecmp.txt against
 #                 artifacts/gl/phase3a/suite-base (= phase2 SUITE.md 10.2)
 #   pixels/       gl/tests/run-pixels.sh (glx_pixels p1-p4, GLU g1-g3, b1-b2)
@@ -25,6 +25,7 @@ mkdir -p $F
 	gl/host-build.sh
 	echo "--- core_test"; docker run --rm -v "$R":/src -w /src s31-glref:latest sh -c 'cd /src/gl/out-host && ./core_test 2>&1 | tail -3'
 	echo "--- raster_gate"; docker run --rm -v "$R":/src -w /src s31-glref:latest sh -c 'cd /src/gl/out-host && ./raster_gate 2>&1 | tail -3'
+	echo "--- filt_test (phase 4)"; docker run --rm -v "$R":/src -w /src s31-glref:latest sh -c 'cd /src/gl/out-host && ./filt_test 2>&1 | grep -v "^PASS\|^libGL"'
 	echo "--- headless_gears md5"; docker run --rm -v "$R":/src -w /src s31-glref:latest sh -c 'cd /tmp && /src/gl/out-host/headless_gears 320 240 100 /tmp/hg.ppm >/dev/null 2>&1; md5sum /tmp/hg.ppm'
 	echo "--- fmath_test, f2d_test (host arm64 in the rig)"
 	docker run --rm -v "$R":/src -w /src s31-glref:latest sh -c 'gcc -O2 -ffp-contract=off -I/src/gl/tinygl/source /src/gl/tests/fmath_test.c /src/gl/tinygl/source/s31_fmath.c -lm -o /tmp/fm && /tmp/fm; gcc -O2 -I/src/gl/tinygl/source /src/gl/tests/f2d_test.c -o /tmp/f2d && /tmp/f2d'
@@ -45,7 +46,7 @@ docker run --rm -v "$R":/src -w /src s31-glref:latest sh /src/gl/tests/run-prims
 echo "prims: $(tail -2 "$A/prims.log" | tr '\n' ' ')"
 {
 	S31GL_IMAGE=/src/gl/out-rv32/libGL.so.1 gl/build.sh
-	for t in core_test raster_gate d2f_test; do
+	for t in core_test raster_gate d2f_test filt_test; do
 		echo "--- $t (RV32 qemu-user)"
 		docker run --rm -v "$R":/src s31-glref-qemu qemu-riscv32 -cpu rv32,zba=true,zbb=true,zbc=true,zbs=true /src/gl/out-rv32/$t.qemu 2>&1 | tail -3
 	done

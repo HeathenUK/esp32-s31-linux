@@ -15,8 +15,16 @@
 static const char s_vendor[] = "s31";
 static const char s_renderer[] = "Software Rasterizer";
 static const char s_version[] = "1.1 s31-tinygl";
+/* phase 4 BLEND-EQ: the blend equations (EXT_blend_minmax,
+   EXT_blend_subtract), separate factors and equations
+   (EXT_blend_func_separate, EXT_blend_equation_separate) and the constant
+   colour (EXT_blend_color) are drawn (zpipe.c); the separate alpha parts
+   are exact without an alpha plane (gl_core.c); phase 4 F8: the wrapping
+   stencil ops (EXT_stencil_wrap), drawn with a GLX_STENCIL_SIZE 8 config */
 static const char s_extensions[] =
-	"GL_EXT_bgra GL_EXT_texture_object GL_EXT_vertex_array";
+	"GL_EXT_bgra GL_EXT_blend_color GL_EXT_blend_equation_separate "
+	"GL_EXT_blend_func_separate GL_EXT_blend_minmax GL_EXT_blend_subtract "
+	"GL_EXT_stencil_wrap GL_EXT_texture_object GL_EXT_vertex_array";
 
 const GLubyte *GLAPIENTRY glGetString(GLenum name)
 {

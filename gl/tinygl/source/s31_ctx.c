@@ -14,6 +14,7 @@
  * made after glXMakeCurrent(None) cannot touch freed memory.
  */
 #include "zgl.h"
+#include "s31_ramtext.h"
 
 static GLContext *null_ctx;     /* current when nothing is */
 
@@ -43,10 +44,20 @@ static void zb_drop_depth(ZBuffer *zb)
   zb->zst = NULL;               /* re-attached with the next buffer */
 }
 
+/* phase 4 F8: the same for the stencil buffer */
+static void zb_drop_stencil(ZBuffer *zb)
+{
+  if (!zb->sbuf_ext) gl_free(zb->sbuf);
+  zb->sbuf = NULL;
+  zb->sbuf_ext = 0;
+  zb->sst = NULL;
+}
+
 static void zb_free(ZBuffer *zb)
 {
   if (zb == NULL) return;
   zb_drop_depth(zb);
+  zb_drop_stencil(zb);
   gl_free(zb);
 }
 
@@ -92,6 +103,8 @@ void *tgl_ctx_create(void *share)
 {
   GLContext *c;
 
+  /* phase 4 L1: before the first context exists (s31_ramtext.h) */
+  s31_ramtext_init();
   if (null_ctx == NULL) {
     null_ctx = ctx_new(NULL);
     if (null_ctx == NULL) return NULL;
@@ -165,6 +178,7 @@ int tgl_ctx_bind(void *ctx, void *pixels, int width, int height, int pitch)
      later (the GLX layer allocates it in frame_begin) */
   if (zb->xsize != width || zb->ysize != height) {
     zb_drop_depth(zb);
+    zb_drop_stencil(zb);
     zb->xsize = width;
     zb->ysize = height;
   }
@@ -252,7 +266,52 @@ void tgl_ctx_release_depth(void *ctx)
   if (c == NULL) return;
   tgl_bind_serial++;
   zb_drop_depth(c->zb);
+  zb_drop_stencil(c->zb);        /* phase 4 F8: the ancillary buffers go together */
   c->ready = 0;
+}
+
+/* phase 4 F8-STENCIL: GL_STENCIL_BITS of the context, 0 or 8 (the GLX
+   config's). With 8 the context has a stencil buffer: the caller's
+   (tgl_ctx_bind_stencil) or a private one, allocated lazily with depth */
+void tgl_ctx_set_stencil_bits(void *ctx, int bits)
+{
+  GLContext *c = ctx;
+  if (c == NULL) return;
+  bits = bits > 0 ? 8 : 0;
+  if (bits == c->stencil_bits) return;
+  c->stencil_bits = bits;
+  if (!bits) zb_drop_stencil(c->zb);
+  c->ready = 0;
+  c->raster_dirty = 1;
+}
+
+/* s31gl_stencil_zeroed (review 4 R3-stencil) */
+void tgl_stencil_zeroed(void *stencil, int w, int h)
+{
+  zst_mark_zero(stencil, w > 0 && h > 0 ? w * h : 0);
+}
+
+/* caller-owned stencil memory (xsize * ysize bytes + ZB_STENCIL_TAIL at the
+   size bound now), as tgl_ctx_bind_depth; NULL: a private one */
+int tgl_ctx_bind_stencil(void *ctx, void *stencil)
+{
+  GLContext *c = ctx;
+  ZBuffer *zb;
+  if (c == NULL) return -1;
+  zb = c->zb;
+  if (stencil != NULL && (zb->xsize <= 0 || zb->ysize <= 0)) return -1;
+  if (stencil == zb->sbuf && zb->sbuf_ext == (stencil != NULL)) return 0;
+  zb_drop_stencil(zb);
+  zb->sbuf = stencil;
+  zb->sbuf_ext = stencil != NULL;
+  c->ready = 0;
+  return 0;
+}
+
+int tgl_ctx_stencil_bytes(void *ctx)
+{
+  GLContext *c = ctx;
+  return c && c->zb->sbuf ? c->zb->xsize * c->zb->ysize : 0;
 }
 
 /*
@@ -331,6 +390,21 @@ int gl_prepare_slow(GLContext *c)
     /* GL leaves new depth undefined; far is the useful value (and a zero
        state is "plain, nothing stale") */
     memset(zb->zbuf, 0, bytes);
+  }
+  /* phase 4 F8: the stencil buffer, when the context has stencil bits */
+  if (c->stencil_bits && zb->sbuf == NULL) {
+    int npix = zb->xsize * zb->ysize;
+    /* zeroed by the allocator (calloc: a large block is fresh pages,
+       untouched until drawn into; review 4 R3-stencil) */
+    zb->sbuf = gl_zalloc(npix + ZB_STENCIL_TAIL);
+    if (zb->sbuf == NULL) {
+      gl_set_error(c, GL_OUT_OF_MEMORY);
+      return 0;
+    }
+    zb->sbuf_ext = 0;
+    zst_attach(zb, 1);
+  } else if (zb->sbuf != NULL && zb->sst == NULL) {
+    zst_attach(zb, 0);
   }
   /* phase 3a G03: this context's depth mapping follows the buffer's */
   zep_attach(c);

@@ -1,0 +1,10 @@
+# glref run: impl=ours name=dinoshade frame=3 display=:91
+# cmd: /src/gl/ref-apps/build/mesa-demos/src/demos/dinoshade -geometry 320x240+0+0
+# libGL.so.1 resolves to:
+#   	libGLU.so.1 => /src/gl/ref-apps/prefix/lib/libGLU.so.1 (0x0000ee274cd40000)
+#   	libglut.so.3 => /src/gl/ref-apps/prefix/lib/libglut.so.3 (0x0000ee274cc60000)
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000ee274c980000)
+libGL: context 1 created (pid 196, comm dinoshade)
+libGL: context 2 created (pid 196, comm dinoshade)
+libGL: context 3 created (pid 196, comm dinoshade)
+glref: ok at swap 3 -> /src/artifacts/gl/phase4/final-p4apps/ours/dinoshade.f3

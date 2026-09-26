@@ -13,3 +13,8 @@
 /bench/base3ra/
 /bench/qemu/*.dylib
 /bench/out-*.log
+/bench/base4/
+/bench/p4s*/
+/bench/base4f/
+/bench/p4l1*/
+/bench/p4pre/

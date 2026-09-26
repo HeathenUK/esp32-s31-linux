@@ -322,6 +322,156 @@ static void review_tests(Display *d)
 	XFree(vi);
 }
 
+/* phase 4 F8-STENCIL: stencil-8 configs next to the stencil-0 ones; a
+ * request without stencil gets stencil 0 (and no stencil memory), one with
+ * stencil gets 8 through every path (ChooseVisual, ChooseFBConfig +
+ * CreateNewContext, SDL2's FBConfig -> visual -> CreateContext); the
+ * stencil buffer is the drawable's, shared by its contexts */
+static int stencil_bits(void)
+{
+	GLint b = -1;
+	glGetIntegerv(GL_STENCIL_BITS, &b);
+	return b;
+}
+
+/* stencil 1 inside the middle quad, then a full-window blue quad where
+ * stencil == 1: the middle becomes blue, the corners keep the clear */
+static void stencil_pass(int write)
+{
+	glDisable(GL_DEPTH_TEST);
+	if (write) {
+		glClearStencil(0);
+		glClear(GL_STENCIL_BUFFER_BIT);
+		glEnable(GL_STENCIL_TEST);
+		glStencilFunc(GL_ALWAYS, 1, 0xff);
+		glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
+		glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+		mid_quad(1, 1, 1, 0);
+		glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+	}
+	glEnable(GL_STENCIL_TEST);
+	glStencilFunc(GL_EQUAL, 1, 0xff);
+	glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+	glColor3f(0, 0, 1);
+	glBegin(GL_QUADS);
+	glVertex2f(-1, -1); glVertex2f(1, -1); glVertex2f(1, 1); glVertex2f(-1, 1);
+	glEnd();
+	glDisable(GL_STENCIL_TEST);
+}
+
+static void stencil_tests(Display *d)
+{
+	int scr = DefaultScreen(d), n, v, i, all8;
+	int st1[] = { GLX_RGBA, GLX_DOUBLEBUFFER, GLX_DEPTH_SIZE, 16, GLX_STENCIL_SIZE, 1, None };
+	int st0[] = { GLX_RGBA, GLX_DOUBLEBUFFER, GLX_DEPTH_SIZE, 16, None };
+	int fst[] = { GLX_STENCIL_SIZE, 8, GLX_DOUBLEBUFFER, True, None };
+	int fany[] = { GLX_DOUBLEBUFFER, True, None };
+	XVisualInfo *vi, *vi0;
+	GLXFBConfig *c;
+	GLXContext ctx, ctx2;
+	Window w;
+	unsigned px, pc;
+
+	vi = choose(d, st1);
+	CHECK(vi != NULL, "stencil: ChooseVisual(STENCIL_SIZE 1) -> visual");
+	if (!vi)
+		return;
+	v = -1;
+	glXGetConfig(d, vi, GLX_STENCIL_SIZE, &v);
+	CHECK(v == 8, "stencil: GetConfig(stencil visual) STENCIL_SIZE = %d (want 8)", v);
+	ctx = glXCreateContext(d, vi, NULL, True);
+	w = make_window(d, vi, 80, 60);
+	glXMakeCurrent(d, w, ctx);
+	CHECK(stencil_bits() == 8, "stencil: CreateContext(stencil visual): GL_STENCIL_BITS %d",
+	      stencil_bits());
+	clear_to(1, 0, 0);
+	stencil_pass(1);
+	glXSwapBuffers(d, w);
+	XSync(d, False);
+	pc = pixel_at(d, w, 40, 30);
+	px = pixel_at(d, w, 4, 4);
+	CHECK(pc == 0x001F && px == 0xF800, "stencil: masked quad inside (0x%04x) only, corner 0x%04x",
+	      pc, px);
+	/* stencilshare: a second stencil context on the window sees ctx's stencil */
+	ctx2 = glXCreateContext(d, vi, NULL, True);
+	glXMakeCurrent(d, w, ctx2);
+	glClearColor(0, 1, 0, 1);
+	glClear(GL_COLOR_BUFFER_BIT);
+	stencil_pass(0);
+	glXSwapBuffers(d, w);
+	XSync(d, False);
+	pc = pixel_at(d, w, 40, 30);
+	px = pixel_at(d, w, 4, 4);
+	CHECK(pc == 0x001F && px == 0x07E0, "stencilshare: ctx2 tests ctx's stencil (0x%04x, corner 0x%04x)",
+	      pc, px);
+	glXMakeCurrent(d, None, NULL);
+	glXDestroyContext(d, ctx2);
+
+	/* the same visual chosen WITHOUT stencil: stencil 0, and the test passes */
+	vi0 = choose(d, st0);
+	v = -1;
+	glXGetConfig(d, vi0, GLX_STENCIL_SIZE, &v);
+	CHECK(vi0 && v == 0, "stencil: ChooseVisual without stencil -> STENCIL_SIZE %d (want 0)", v);
+	ctx2 = glXCreateContext(d, vi0, NULL, True);
+	glXMakeCurrent(d, w, ctx2);
+	CHECK(stencil_bits() == 0, "stencil: CreateContext(plain visual): GL_STENCIL_BITS %d",
+	      stencil_bits());
+	clear_to(1, 0, 0);
+	stencil_pass(1);		/* no stencil buffer: every test passes */
+	glXSwapBuffers(d, w);
+	XSync(d, False);
+	pc = pixel_at(d, w, 40, 30);
+	px = pixel_at(d, w, 4, 4);
+	CHECK(pc == 0x001F && px == 0x001F, "stencil: without a stencil buffer the test passes (0x%04x 0x%04x)",
+	      pc, px);
+	glXMakeCurrent(d, None, NULL);
+	glXDestroyContext(d, ctx2);
+	glXDestroyContext(d, ctx);
+	XDestroyWindow(d, w);
+	XFree(vi0);
+
+	/* FBConfigs: a stencil request gets only stencil 8; a request without
+	 * one gets stencil 0 first (STENCIL_SIZE sorts smaller) */
+	c = glXChooseFBConfig(d, scr, fst, &n);
+	all8 = c != NULL && n > 0;
+	for (i = 0; c && i < n; i++) {
+		glXGetFBConfigAttrib(d, c[i], GLX_STENCIL_SIZE, &v);
+		all8 &= v == 8;
+	}
+	CHECK(all8, "stencil: ChooseFBConfig(STENCIL_SIZE 8): %d configs, all stencil 8", n);
+	if (c) {
+		/* SDL2: the FBConfig's visual, then glXCreateContext(visual) */
+		XVisualInfo *fv = glXGetVisualFromFBConfig(d, c[0]);
+		ctx = glXCreateContext(d, fv, NULL, True);
+		w = make_window(d, fv, 40, 30);
+		glXMakeCurrent(d, w, ctx);
+		CHECK(stencil_bits() == 8, "stencil: GetVisualFromFBConfig(stencil) + CreateContext: bits %d",
+		      stencil_bits());
+		glXMakeCurrent(d, None, NULL);
+		glXDestroyContext(d, ctx);
+		XDestroyWindow(d, w);
+		XFree(fv);
+		XFree(c);
+	}
+	c = glXChooseFBConfig(d, scr, fany, &n);
+	v = -1;
+	if (c) glXGetFBConfigAttrib(d, c[0], GLX_STENCIL_SIZE, &v);
+	CHECK(c && v == 0, "stencil: ChooseFBConfig without stencil: first STENCIL_SIZE %d (want 0)", v);
+	if (c) {
+		XVisualInfo *fv = glXGetVisualFromFBConfig(d, c[0]);
+		ctx = glXCreateNewContext(d, c[0], GLX_RGBA_TYPE, NULL, True);
+		w = make_window(d, fv, 40, 30);
+		glXMakeCurrent(d, w, ctx);
+		CHECK(stencil_bits() == 0, "stencil: CreateNewContext(first config): bits %d", stencil_bits());
+		glXMakeCurrent(d, None, NULL);
+		glXDestroyContext(d, ctx);
+		XDestroyWindow(d, w);
+		XFree(fv);
+		XFree(c);
+	}
+	XSync(d, False);
+}
+
 int main(void)
 {
 	Display *d = XOpenDisplay(NULL);
@@ -378,7 +528,7 @@ int main(void)
 	{
 		int dc[] = { GLX_RGBA, GLX_DOUBLEBUFFER, GLX_DEPTH_SIZE, 16,
 			     GLX_X_VISUAL_TYPE, GLX_DIRECT_COLOR, None };
-		int st[] = { GLX_RGBA, GLX_STENCIL_SIZE, 1, None };
+		int st[] = { GLX_RGBA, GLX_STENCIL_SIZE, 9, None };
 		int al[] = { GLX_RGBA, GLX_ALPHA_SIZE, 1, None };
 		int ac[] = { GLX_RGBA, GLX_ACCUM_RED_SIZE, 1, None };
 		int d24[] = { GLX_RGBA, GLX_DEPTH_SIZE, 24, None };
@@ -398,7 +548,7 @@ int main(void)
 		CHECK(vi != NULL, "SDL 1.2 retry without DirectColor -> visual 0x%lx",
 		      vi ? vi->visualid : 0);
 		XFree(vi);
-		CHECK(!choose(d, st), "stencil 1 -> NULL");
+		CHECK(!choose(d, st), "stencil 9 -> NULL (phase 4: 8 bits)");
 		CHECK(!choose(d, al), "alpha 1 -> NULL");
 		CHECK(!choose(d, ac), "accum 1 -> NULL");
 		CHECK(!choose(d, d24), "depth 24 -> NULL (minimum semantics)");
@@ -532,9 +682,12 @@ int main(void)
 		glClearColor(1, 0, 0, 1);
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 		m2 = count_sysv_maps();
+		/* two segments by default for a double-buffered drawable of at
+		 * most 200 kB (glx_present.c want_bufs, plan 9.3); this check
+		 * predated that default and failed since (found in phase 4) */
 		CHECK(getenv("S31GL_NOSHM") ? m2 == m0 :
-		      m2 == m0 + (getenv("S31GL_SHMBUFS") &&
-				  atoi(getenv("S31GL_SHMBUFS")) >= 2 ? 2 : 1),
+		      m2 == m0 + (getenv("S31GL_SHMBUFS") ?
+				  (atoi(getenv("S31GL_SHMBUFS")) >= 2 ? 2 : 1) : 2),
 		      "first draw allocates (SYSV maps %d -> %d)", m0, m2);
 		glXSwapBuffers(d, win);
 		XSync(d, False);
@@ -770,6 +923,7 @@ int main(void)
 	/* ---- review regressions (2026-09-25 review, probes in
 	 * ~/.cache/s31-glreview/atk.c; each FAILED before its fix) */
 	review_tests(d);
+	stencil_tests(d);
 
 	XCloseDisplay(d);
 	printf("%s: %d failure(s)\n", fails ? "FAILED" : "ALL PASS", fails);

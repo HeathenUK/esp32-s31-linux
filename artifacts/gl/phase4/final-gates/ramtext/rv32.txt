@@ -1,0 +1,8 @@
+headless_gears 320x240x100 S31GL_RAMTEXT=0: rc 0 38859f0c896efe6b12bc68e0fe3afe1f 
+headless_gears 320x240x100 S31GL_RAMTEXT=1: rc 0 38859f0c896efe6b12bc68e0fe3afe1f libGL: ramtext on: 10620 bytes in 3 pages, 155 fixup entries, 7 entry points
+headless_gears: frames identical on/off
+core_test: output identical on/off (core_test: 237 passed, 0 failed)
+raster_gate: output identical on/off (raster_gate: 51 passed, 0 failed)
+d2f_test: output identical on/off (d2f: 49987811 tested, 0 mismatches)
+filt_test: output identical on/off (filt_test: 32 passed, 0 failed)
+zepoch_test: output identical on/off (zepoch: 304 full clears, 128 left the depth memory as it was)

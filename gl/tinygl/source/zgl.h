@@ -190,6 +190,11 @@ typedef struct GLTexture {
   int width, height, internal_format; /* level 0 as specified (incl. border) */
   int min_filter, mag_filter, wrap_s, wrap_t;
   float priority;
+  /* GL 1.2 (review 4 R4): GL_TEXTURE_BASE_LEVEL / MAX_LEVEL (the chain
+     ends at MAX_LEVEL; a BASE_LEVEL above 0 is recorded, level 0 stays
+     the base) and MIN_LOD / MAX_LOD (lambda is clamped to them) */
+  short base_level, max_level;
+  float min_lod, max_lod;
   /* s31 (plan F3): level 0 at its own power-of-two size */
   unsigned char *alpha;     /* A8 plane after the colour plane, or NULL */
   int ws, hs;               /* log2 of the stored width and height */
@@ -200,7 +205,24 @@ typedef struct GLTexture {
      glGetTexLevelParameter; levels > 0 are not stored */
   unsigned short lw[MAX_TEXTURE_LEVELS], lh[MAX_TEXTURE_LEVELS];
   unsigned short lfmt[MAX_TEXTURE_LEVELS];   /* internal formats fit 16 bits */
+  /* s31 (phase 4 F-LIN): levels 1.. as uploaded, allocated at the first
+     level > 0 the application specifies (NULL: none - a texture without
+     mipmaps pays 4 bytes). Each level is its own RGB565 (+ A8) block of
+     its own size, so a full chain costs a third of level 0 more */
+  struct GLMipChain *mip;
 } GLTexture;
+
+/* s31 (phase 4): a stored level > 0 (texture.c). cls is the stored class
+   (TGL_TEXF_*) its data was converted to; a level whose class is not
+   level 0's is not used (the mipmap filters then sample level 0) */
+typedef struct GLMipLevel {
+  unsigned short *pix;      /* RGB565, then the A8 plane when cls has alpha */
+  unsigned char *alpha;
+  unsigned char ws, hs, cls, pad;
+} GLMipLevel;
+typedef struct GLMipChain {
+  GLMipLevel l[MAX_TEXTURE_LEVELS];   /* l[0] unused */
+} GLMipChain;
 
 
 /* shared state */
@@ -246,6 +268,10 @@ typedef struct GLContext {
   GLParamBuffer *current_op_buffer;
   int current_op_buffer_index;
   int exec_flag,compile_flag,print_flag;
+  /* phase 4 L1 (s31_ramtext.h): glVertex's executing path, NULL while
+     compiling or printing - one load and test in place of the two flags,
+     and the RAM copy of gl_vertex4f when S31GL_RAMTEXT put one there */
+  void (*vtx_run)(float x, float y, float z, float w, struct GLContext *c);
 
   /* matrix */
 
@@ -484,7 +510,49 @@ typedef struct GLContext {
   /* the lights, reached through first_light / l pointers, not by offset
      from c: 16 x 136 B that sat between c and every hot field */
   GLLight lights[MAX_LIGHTS];
+  /* s31 (phase 4, s31_tfilter.c): the general path's per-triangle state -
+     texture filter levels, the filtered texels of a chunk, perspective
+     colour - reached through pipe.x; cold here, at the end */
+  ZPipeX pipex;
+  int tex_filtered;           /* the active texture has a linear/mipmap filter */
+  ZB_fillTriangleFunc zb_smooth_pc;  /* F-PERSP: tier 1's smooth filler for the depth state */
+  ZB_fillTriangleFunc zb_smooth_long;/* long spans at equal w (s31_tfilter.c) */
+  int mip_store;              /* store levels > 0 (S31GL_MIPMAPS, default 1) */
+  int pc_enable;              /* S31GL_PERSPCOLOR (default 1): perspective-
+                                 correct Gouraud colour (s31_tfilter.c) */
+  int tex_filter;             /* S31GL_TEXFILTER (default 1): 0 draws every
+                                 filter as nearest in level 0 (review 4) */
+  /* s31 (phase 4 BLEND-EQ): glBlendEquation(Separate) and the separate
+     alpha factors of glBlendFuncSeparate (blend_src / blend_dst are the RGB
+     ones). There is no destination alpha plane, so the alpha factors and
+     the alpha equation are recorded for glGet and change no stored pixel
+     (raster_sel.c) */
+  int blend_src_a, blend_dst_a, blend_eq, blend_eq_a;
+  /* s31 (phase 4 F8-STENCIL, SMOOTH): GL_STENCIL_BITS of this context (0
+     or 8, s31gl_set_stencil_bits: the GLX config's); the enables of the
+     phase 4 features as one word (P4_EN_*), so gl_update_raster pays one
+     load and one test for all of them when none is on; and what it
+     decided, as one word too (P4_R_*: the stencil test runs - enabled and
+     a buffer - and whether it can write; lines / points are drawn with
+     coverage). Far from the context pointer (past 2 kB), so one of each */
+  int stencil_bits;
+  int p4_en, p4_raster;
+  float aa_lw, aa_ps;         /* smooth width and size in buffer pixels (>= 1) */
 } GLContext;
+
+/* GLContext.p4_en */
+#define P4_EN_STENCIL 1
+#define P4_EN_LSMOOTH 2
+#define P4_EN_PSMOOTH 4
+/* GLContext.p4_raster */
+#define P4_R_STENCIL 1
+#define P4_R_STENCIL_W 2
+#define P4_R_AA_LINES 4
+#define P4_R_AA_POINTS 8
+#define RASTER_STENCIL(c) ((c)->p4_raster & P4_R_STENCIL)
+#define RASTER_STENCIL_W(c) ((c)->p4_raster & P4_R_STENCIL_W)
+#define RASTER_AA_LINES(c) ((c)->p4_raster & P4_R_AA_LINES)
+#define RASTER_AA_POINTS(c) ((c)->p4_raster & P4_R_AA_POINTS)
 
 /* s31 (phase 3a G14): hidden in the declaration too, so every entry point
    reaches it PC-relative (auipc + lw) instead of through the GOT (one
@@ -531,6 +599,15 @@ void zdb_clear_colour(GLContext *c, unsigned int v);
 void zdb_fold(GLContext *c, int colour_reset, int depth_reset);
 void zdb_rebind(GLContext *c);
 void zdb_invalidate(ZBuffer *zb);
+/* s31_stencil.c (phase 4 F8-STENCIL) */
+void zst_attach(ZBuffer *zb, int own);
+void zst_mark_zero(unsigned char *sbuf, int npix);
+void zst_touch_all(ZBuffer *zb);
+void zst_touch(ZBuffer *zb, int x0, int y0, int x1, int y1);
+void zst_clear(GLContext *c, int x0, int y0, int x1, int y1, int full);
+void zst_put(ZBuffer *zb, int x, int row, unsigned int v, unsigned int wm);
+unsigned int *zst_unpack(GLContext *c, int w, int h, int type, const void *pixels, int *err);
+void zst_read(GLContext *c, int x, int y, int w, int h, int type, void *pixels);
 void gl_warn_once(const char *what);
 /* s31: "libGL: approximated <what>", once: an honoured feature drawn by a
    documented approximation (not a gap: tools/glref does not count it) */
@@ -574,6 +651,8 @@ static inline void gl_set_provoking(GLContext *c, GLVertex *v)
 void gl_update_raster(GLContext *c);
 void gl_draw_triangle_general(GLContext *c, GLVertex *p0, GLVertex *p1, GLVertex *p2);
 void gl_draw_triangle_modwhite(GLContext *c, GLVertex *p0, GLVertex *p1, GLVertex *p2);
+/* s31_tfilter.c (phase 4 F-PERSP): smooth tier 1 with the perspective-colour test */
+void gl_draw_triangle_fill_pq(GLContext *c, GLVertex *p0, GLVertex *p1, GLVertex *p2);
 void gl_draw_triangle_offset(GLContext *c, GLVertex *p0, GLVertex *p1, GLVertex *p2);
 /* lines and points of the general path; the colour of a flat line is the
    provoking vertex's (c->flat_vtx) */
@@ -581,6 +660,7 @@ void gl_general_line(GLContext *c, GLVertex *a, GLVertex *b, int flat);
 void gl_general_point(GLContext *c, GLVertex *p);
 /* texture.c */
 int gl_texture_complete(const GLTexture *t);
+void gl_tex_free_mip(GLTexture *t);       /* phase 4: the stored levels > 0 */
 /* vertex.c: GL fog factor of a vertex */
 void gl_vertex_fog(GLContext *c, GLVertex *v);
 

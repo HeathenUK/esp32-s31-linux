@@ -1,0 +1,32 @@
+enumcmp: 0 mismatches
+PASS destroying the current context releases it
+PASS no current context: glGetString = NULL, draws ignored
+core_test: 239 passed, 0 failed
+raster_gate: 51 passed, 0 failed
+filt_test: 32 passed, 0 failed
+--- headless_gears md5
+fmath_test: PASS
+f2d/i2d: 4299173934 tested, 0 mismatches
+suitecmp: 0 apps worse
+pixels: DIFFER
+3c3
+< p3: PASS  320x240  strict 0.736% (565 px >16)  tolerant 0.091% (70 px)  max 255  mean 3.22  
+---
+> p3: PASS  320x240  strict 0.691% (531 px >16)  tolerant 0.091% (70 px)  max 255  mean 3.06  
+   1 1 lines compared, 0 differ
+   1 11 lines compared, 0 differ
+   1 13 lines compared, 0 differ
+   2 2 lines compared, 0 differ
+   1 22 lines compared, 0 differ
+raster: identical to artifacts/gl/f3f6/raster
+prims: PASS  320x240  strict 1.154% (886 px >16)  tolerant 0.003% (2 px)  max 255  mean 2.43  diff /src/artifacts/gl/phase1/prims/diff.png 
+enumcmp: 0 mismatches
+PASS destroying the current context releases it
+PASS no current context: glGetString = NULL, draws ignored
+core_test: 237 passed, 0 failed
+raster_gate: 51 passed, 0 failed
+d2f: 49987811 tested, 0 mismatches
+PASS S31GL_MIPMAPS=0: NEAREST_MIPMAP_NEAREST samples level 0 (f800)
+PASS S31GL_TEXFILTER=0: LINEAR_MIPMAP_LINEAR is nearest in level 0 (f800)
+filt_test: 32 passed, 0 failed
+38859f0c896efe6b12bc68e0fe3afe1f  /tmp/hg.ppm

@@ -1,0 +1,4 @@
+mesa-utils 9.0.0-2+b2
+frame 3: PASS  320x240  strict 0.004% (3 px >16)  tolerant 0.000% (0 px)  max 173  mean 0.15  diff /src/artifacts/gl/phase1/sysgears/diff.f3.png
+frame 20: PASS  320x240  strict 0.000% (0 px >16)  tolerant 0.000% (0 px)  max 16  mean 0.17  diff /src/artifacts/gl/phase1/sysgears/diff.f20.png
+frame 60: PASS  320x240  strict 0.001% (1 px >16)  tolerant 0.000% (0 px)  max 154  mean 0.18  diff /src/artifacts/gl/phase1/sysgears/diff.f60.png

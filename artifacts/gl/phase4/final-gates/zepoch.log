@@ -1,0 +1,22 @@
+zepoch host 96 z: IDENTICAL to ref, 304 frames; 304 full clears, 128 left the depth memory as it was
+zepoch host 96 d: IDENTICAL to ref, 304 frames; 304 full clears, 0 left the depth memory as it was
+zepoch host 96 zd: IDENTICAL to ref, 304 frames; 304 full clears, 128 left the depth memory as it was
+zepoch host 96 x: IDENTICAL to ref, 304 frames; 304 full clears, 0 left the depth memory as it was
+zepoch host 96 zx: IDENTICAL to ref, 304 frames; 304 full clears, 128 left the depth memory as it was
+zepoch rv32 96 z: IDENTICAL to ref, 304 frames; 304 full clears, 128 left the depth memory as it was
+zepoch rv32 96 d: IDENTICAL to ref, 304 frames; 304 full clears, 0 left the depth memory as it was
+zepoch rv32 96 zd: IDENTICAL to ref, 304 frames; 304 full clears, 128 left the depth memory as it was
+zepoch rv32 96 x: IDENTICAL to ref, 304 frames; 304 full clears, 0 left the depth memory as it was
+zepoch rv32 96 zx: IDENTICAL to ref, 304 frames; 304 full clears, 128 left the depth memory as it was
+zepoch host 320 z: IDENTICAL to ref, 304 frames; 304 full clears, 135 left the depth memory as it was
+zepoch host 320 d: IDENTICAL to ref, 304 frames; 304 full clears, 0 left the depth memory as it was
+zepoch host 320 zd: IDENTICAL to ref, 304 frames; 304 full clears, 135 left the depth memory as it was
+zepoch host 320 x: IDENTICAL to ref, 304 frames; 304 full clears, 0 left the depth memory as it was
+zepoch host 320 zx: IDENTICAL to ref, 304 frames; 304 full clears, 135 left the depth memory as it was
+zepoch rv32 320 z: IDENTICAL to ref, 304 frames; 304 full clears, 135 left the depth memory as it was
+zepoch rv32 320 d: IDENTICAL to ref, 304 frames; 304 full clears, 0 left the depth memory as it was
+zepoch rv32 320 zd: IDENTICAL to ref, 304 frames; 304 full clears, 135 left the depth memory as it was
+zepoch rv32 320 x: IDENTICAL to ref, 304 frames; 304 full clears, 0 left the depth memory as it was
+zepoch rv32 320 zx: IDENTICAL to ref, 304 frames; 304 full clears, 135 left the depth memory as it was
+zepoch host = rv32 (320, ref)
+zepoch host = rv32 (320, zd)

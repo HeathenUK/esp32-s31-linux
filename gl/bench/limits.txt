@@ -54,3 +54,65 @@ glxgears 300x300 | 1.1465 | tripwire | phase 3a final 1.1240 + 2%
 # phase 3a pixel levers (2026-09-26): glxgears drawn into two colour
 # buffers in turn, as GLX does for a 300x300 window (geo.sh); + 2%
 glxgears-2buf 300x300 | 0.9888 | tripwire | phase 3a pixel final 0.9694 + 2%
+
+# phase 4 (2026-09-26, artifacts/gl/phase4/REPORT.md). Later lines win.
+# pix1 and pix8 were already over their tripwires at the phase 3a final
+# (gl/bench/base4: 2.0115 and 1.2370 - the dirty-box bookkeeping of phase
+# 3a part B); re-based to that final + 2%:
+pix1 320x240 | 2.0517 | tripwire | phase 3a final 2.0115 + 2%
+pix8 320x240 | 1.2617 | tripwire | phase 3a final 1.2370 + 2%
+# the phase 4 bar: a frame that uses no phase-4 feature costs at most the
+# phase 3a final + 0.5% (gl/bench/base4), and keeps its frame hash:
+gears 320x240 | 1.0361 | guard | phase 3a final 1.0309 + 0.5%
+gears 640x400 | 1.8896 | guard | phase 3a final 1.8802 + 0.5%
+teapot 320x240 | 2.5779 | guard | phase 3a final 2.5651 + 0.5%
+teapot 640x400 | 3.0669 | guard | phase 3a final 3.0516 + 0.5%
+texobj 320x240 | 0.3268 | guard | phase 3a final 0.3252 + 0.5%
+texobj 640x400 | 1.0130 | guard | phase 3a final 1.0080 + 0.5%
+glxgears 300x300 | 0.9714 | guard | phase 3a final 0.9666 + 0.5%
+glxgears-2buf 300x300 | 0.9717 | guard | phase 3a final 0.9669 + 0.5%
+# phase 4 cases (filt.sh): the phase 4 final + 2%
+filt1 320x240 | 0.6506 | tripwire | phase 4 final 0.6378 + 2%
+filt1 640x400 | 2.1008 | tripwire | phase 4 final 2.0596 + 2%
+filt2 320x240 | 5.0091 | tripwire | phase 4 final 4.9109 + 2%
+filt2 640x400 | 16.5335 | tripwire | phase 4 final 16.2093 + 2%
+filt3 320x240 | 5.0102 | tripwire | phase 4 final 4.9120 + 2%
+filt3 640x400 | 16.5346 | tripwire | phase 4 final 16.2104 + 2%
+filt4 320x240 | 6.8200 | tripwire | phase 4 final 6.6863 + 2%
+filt4 640x400 | 21.4411 | tripwire | phase 4 final 21.0207 + 2%
+filt5 320x240 | 7.3953 | tripwire | phase 4 final 7.2503 + 2%
+filt6 320x240 | 38.1606 | tripwire | phase 4 final 37.4124 + 2%
+filt7 320x240 | 1.7386 | tripwire | phase 4 final 1.7045 + 2%
+filt8 320x240 | 1.2079 | tripwire | phase 4 final 1.1842 + 2%
+
+# phase 4 step 2 (2026-09-26, artifacts/gl/phase4/bench/p4s-*): p4.sh - stencil,
+# blend equations, smooth lines and points; that step's final + 2%
+p4v1 320x240 | 4.7058 | tripwire | phase 4 step 2 final 4.6135 + 2%
+p4v2 320x240 | 5.5324 | tripwire | phase 4 step 2 final 5.4239 + 2%
+p4v3 320x240 | 0.1523 | tripwire | phase 4 step 2 final 0.1493 + 2%
+p4v4 320x240 | 4.3104 | tripwire | phase 4 step 2 final 4.2259 + 2%
+p4v5 320x240 | 4.3998 | tripwire | phase 4 step 2 final 4.3135 + 2%
+p4v6 320x240 | 10.7390 | tripwire | phase 4 step 2 final 10.5284 + 2%
+p4v7 320x240 | 18.6238 | tripwire | phase 4 step 2 final 18.2586 + 2%
+p4v8 320x240 | 0.7253 | tripwire | phase 4 step 2 final 0.7111 + 2%
+# phase 4 review (2026-09-26, artifacts/gl/phase4/REPORT.md, "Review 4"):
+# the mipmap level per 8-pixel block (R1) makes the receding floors 3-5
+# dearer and changes their frames (correct levels); re-based to the fix
+# round's final + 2%, and the new floor cases (filt9 NEAREST_MIPMAP_NEAREST,
+# filt10 NEAREST_MIPMAP_LINEAR, filt11 QuakeSpasm's trilinear world plus a
+# lightmap pass) added as tripwires:
+filt3 320x240 | 5.4072 | tripwire | review 4 final 5.3012 + 2%
+filt3 640x400 | 17.7596 | tripwire | review 4 final 17.4114 + 2%
+filt4 320x240 | 7.6737 | tripwire | review 4 final 7.5232 + 2%
+filt4 640x400 | 23.5384 | tripwire | review 4 final 23.0769 + 2%
+filt5 320x240 | 8.4429 | tripwire | review 4 final 8.2774 + 2%
+filt9 320x240 | 3.0995 | tripwire | review 4 final 3.0387 + 2%
+filt10 320x240 | 4.0178 | tripwire | review 4 final 3.9390 + 2%
+filt11 320x240 | 15.0538 | tripwire | review 4 final 14.7586 + 2%
+filt11 640x400 | 47.9234 | tripwire | review 4 final 46.9837 + 2%
+# the smooth tier-1 dispatch (review 4 R2-smooth): many-smooth-triangle
+# frames pay it. prim8 (2,400 smooth triangles) and geo3 are recorded as
+# bar cases at their present cost + 0.2% - over the +0.5% bar in spirit
+# (+0.95% and +0.69% on the phase 3a final), so they may not grow further:
+prim8 320x240 | 3.0675 | guard | review 4 final 3.0614 + 0.2% (phase 3a final 3.0326)
+geo3 320x240 | 2.4640 | guard | review 4 final 2.4591 + 0.2% (phase 3a final 2.4422)

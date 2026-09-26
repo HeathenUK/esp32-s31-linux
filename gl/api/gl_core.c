@@ -97,10 +97,66 @@ void GLAPIENTRY glBlendFunc(GLenum s, GLenum d)
 	tgl_state_i(S31_ST_BLEND_FUNC, (int)s, (int)d, 0, 0);
 }
 
-/* GL 1.2 imaging subset / GL 1.4 core; state only */
+/* GL 1.2 imaging subset / GL 1.4 core: the GL_CONSTANT_* factors
+   (zpipe.c factor()) */
 void GLAPIENTRY glBlendColor(GLclampf r, GLclampf g, GLclampf b, GLclampf a)
 {
 	tgl_state_f(S31_ST_BLEND_COLOR, r, g, b, a);
+}
+
+/*
+ * Phase 4 BLEND-EQ: glBlendEquation (GL 1.2 imaging subset, GL 1.4 core,
+ * EXT_blend_minmax / EXT_blend_subtract), glBlendFuncSeparate (GL 1.4,
+ * EXT_blend_func_separate) and glBlendEquationSeparate (GL 2.0,
+ * EXT_blend_equation_separate). All five equations are drawn
+ * (zpipe.c zp_out_fn). The separate ALPHA factors and the alpha equation
+ * are recorded (glGet, glPushAttrib) and have no stored effect, exactly:
+ * there is no destination alpha plane (GL_ALPHA_BITS 0), so the blended
+ * alpha is never written, and the RGB result reads destination alpha as 1
+ * whatever was blended (raster_sel.c folds GL_DST_ALPHA to GL_ONE).
+ *
+ * Plan 4.2 withheld these two names until SDL2 was built without its GL
+ * render driver: SDL2's SDL_render_gl.c loads glBlendEquation and
+ * glBlendFuncSeparate, and exporting them would have let "opengl" become
+ * every SDL2 app's renderer. The SDL2 build is now GL contexts ON, the GL
+ * render driver OFF (plan 4.2 option B), which removes that reason; SDL2's
+ * own test/testgl2 loads the same function list (SDL_glfuncs.h) and
+ * failed without them. mkstubs.py exports them and core_test checks they
+ * are found.
+ */
+void GLAPIENTRY glBlendColorEXT(GLclampf r, GLclampf g, GLclampf b, GLclampf a)
+{
+	glBlendColor(r, g, b, a);
+}
+
+void GLAPIENTRY glBlendEquation(GLenum mode)
+{
+	tgl_state_i(S31_ST_BLEND_EQ, (int)mode, (int)mode, 0, 0);
+}
+
+void GLAPIENTRY glBlendEquationEXT(GLenum mode)
+{
+	glBlendEquation(mode);
+}
+
+void GLAPIENTRY glBlendEquationSeparate(GLenum rgb, GLenum alpha)
+{
+	tgl_state_i(S31_ST_BLEND_EQ, (int)rgb, (int)alpha, 0, 0);
+}
+
+void GLAPIENTRY glBlendEquationSeparateEXT(GLenum rgb, GLenum alpha)
+{
+	glBlendEquationSeparate(rgb, alpha);
+}
+
+void GLAPIENTRY glBlendFuncSeparate(GLenum srgb, GLenum drgb, GLenum sa, GLenum da)
+{
+	tgl_state_i(S31_ST_BLEND_FUNC_SEP, (int)srgb, (int)drgb, (int)sa, (int)da);
+}
+
+void GLAPIENTRY glBlendFuncSeparateEXT(GLenum srgb, GLenum drgb, GLenum sa, GLenum da)
+{
+	glBlendFuncSeparate(srgb, drgb, sa, da);
 }
 
 void GLAPIENTRY glLogicOp(GLenum op)
@@ -145,8 +201,10 @@ void GLAPIENTRY glReadBuffer(GLenum mode)
 	tgl_state_i(S31_ST_READ_BUFFER, (int)mode, 0, 0, 0);
 }
 
-/* no stencil buffer: state only; with zero stencil bits the stencil test
-   always passes, so ignoring it is exact (GL 1.3 section 4.1.5) */
+/* phase 4 F8-STENCIL: honoured when the context has a stencil buffer
+   (GLX_STENCIL_SIZE 8: gl/tinygl/source/zpipe.c zp_stencil_fn); with zero
+   stencil bits the stencil test always passes and nothing is modified, so
+   not running it is exact (GL 1.3 section 4.1.5) */
 void GLAPIENTRY glStencilFunc(GLenum func, GLint ref, GLuint mask)
 {
 	tgl_state_i(S31_ST_STENCIL_FUNC, (int)func, ref, (int)mask, 0);
@@ -159,8 +217,10 @@ void GLAPIENTRY glStencilMask(GLuint mask)
 
 static int valid_stencil_op(GLenum op)
 {
+	/* GL 1.4 (EXT_stencil_wrap) adds the wrapping pair */
 	return op == GL_KEEP || op == GL_ZERO || op == GL_REPLACE ||
-	       op == GL_INCR || op == GL_DECR || op == GL_INVERT;
+	       op == GL_INCR || op == GL_DECR || op == GL_INVERT ||
+	       op == GL_INCR_WRAP || op == GL_DECR_WRAP;
 }
 
 void GLAPIENTRY glStencilOp(GLenum fail, GLenum zfail, GLenum zpass)
