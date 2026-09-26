@@ -12488,9 +12488,14 @@ static void bt_render(void)
 					    (void *)(intptr_t)i);
 			if (btdevs[i].conn)
 				lv_obj_add_state(b, LV_STATE_CHECKED);
-			/* an unpaired row is a weaker offer, so say so */
-			if (pass == 1)
-				lv_obj_set_style_text_color(b, lv_color_hex(COL_PANEL_TEXT_DIM), 0);
+			/*
+			 * Rows keep the normal text colour in both sections.
+			 * Dimming the AVAILABLE rows made them the same grey as
+			 * the PAIRED/AVAILABLE headings, so a device you had
+			 * just found read as a label rather than a thing you can
+			 * tap (reported 2026-09-26). The heading already says
+			 * which section a row is in.
+			 */
 
 			/* class on the right, state inside it - the same
 			 * two-column idiom the Wi-Fi list uses. */
