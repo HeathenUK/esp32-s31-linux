@@ -417,6 +417,20 @@ ifeq ($(SMP),1)
 SMP_TWEAKS := --enable SMP --set-val NR_CPUS 2 --enable HOTPLUG_CPU --disable RISCV_BOOT_SPINWAIT \
 	--enable RCU_EXPERT --enable RCU_NOCB_CPU $(SLIM_TWEAKS) \
 	--enable RPS
+# SCHED_MC=1 puts back the scheduler's multi-core (shared-LLC) domain that the
+# diet drops, so a wake-up can search for the idle CPU (select_idle_sibling
+# needs sd_llc). MEASURED AND REJECTED 2026-09-26 (#395 vs #393, the .config
+# differing in CONFIG_SCHED_MC alone; core_siblings 0-1, so the MC domain spans
+# both harts): fullscreen glxgears 47.0/40.8 and 47.3/46.8 fps on two fresh
+# boots, still bimodal by placement (the 40.8 window ran 70% on the lent CPU),
+# against #393's 38.8-47.8 on the same afternoon; windowed 48.8-51.8 with one
+# 38.3 run against 49-54. There is no idle CPU to find - the client and the
+# desktop are both 75-98% busy - and equal capacities give the scheduler no
+# reason to prefer CPU0. Kept as a knob, default off. docs/current-state.md.
+SCHED_MC ?= 0
+ifeq ($(SCHED_MC),1)
+SMP_TWEAKS += --enable SCHED_MC
+endif
 # RPS back ON for SMP, after the diet that turns it off: it is THE standard knob
 # for moving network receive processing to another CPU (rx-0/rps_cpus), i.e.
 # step 2 of docs/smp-finish-plan.md, and it is a few kB of a 140 kB margin. On a

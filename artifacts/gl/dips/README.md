@@ -140,9 +140,10 @@ TyrQuake GL, and c551c63's Bluetooth-row colour), /usr/lib/libXxf86vm
 ## Open
 
 - The placement lottery: ~40 fps when glxgears lands on the lent CPU, ~47
-  on CPU0, in every arm. CONFIG_SCHED_MC (a shared-LLC domain, so wake-ups
-  can find the idle CPU; the two harts do share the cache) is the untested
-  generic lever; capacity-dmips-mhz was measured worse (2026-09-21).
+  on CPU0, in every arm. CONFIG_SCHED_MC was tested and rejected on
+  2026-09-26 (#395: 47.0/40.8 and 47.3/46.8, still bimodal; arms/mc395-*,
+  arms/place-0926, docs/current-state.md). capacity-dmips-mhz was measured
+  worse on 2026-09-21.
 - The remaining bounces are other tasks and libc-internal calls (printf
   "%s", fgets, sscanf in rare paths); libGL's glBegin copy/compare is for
   the library round (LIBGL-OPPORTUNITIES O7).

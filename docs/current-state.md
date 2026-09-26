@@ -24,6 +24,47 @@ be measured. See `docs/smp-plan.md` for the next steps. User also reported a
 Quake crash (deferred) and an uncaptured SD interrupt-latency boot hang; neither
 is claimed fixed by the vblank change.
 
+## CONFIG_SCHED_MC: measured, rejected (2026-09-26, #395 vs #393)
+
+**Question.** Fullscreen GL clients run at ~47 fps on CPU0 (hart 1) and ~40
+on CPU1 (hart 0, the lent CPU: slower, no PIE), and they stay where they land.
+The SMP diet disables CONFIG_SCHED_MC, so there is no LLC domain and a wake-up
+never searches for an idle CPU. Does turning it on (stock, no patch) fix the
+placement?
+
+**Build.** `make linux SCHED_MC=1` (new Makefile knob, default 0), kernel
+#395: the generated .config differs from #393's in `CONFIG_SCHED_MC=y` alone
+(SCHED_CLUSTER is not offered on riscv). esp32s31-ext.c was the pre-0072 file,
+so the diagnostic pie_log was not in it. On the board `core_siblings_list` is
+0-1 on both CPUs, so the MC domain spans both harts and PKG degenerates.
+Same size as #393 (5,160,565 bytes).
+
+**Result: no change.** Quiet harness (swt-arm.sh: 2 fullscreen windows of
+1,500 frames + windowed gl-arm), fresh boot per arm:
+
+| kernel | boot | fullscreen fps | client on CPU1 (frac of frames) | frames >= 35 / >= 50 ms, worst | PIE bounces / window | windowed fps (5 runs) |
+|---|---|---|---|---|---|---|
+| #395 SCHED_MC | 1 | 47.0, 40.8 | 0.00, 0.70 | 5/0 47.3; 17/1 58.5 | 4, 8 | 50.7 50.5 51.1 50.6 **38.3** |
+| #395 SCHED_MC | 2 | 47.3, 46.8 | 0.00, 0.00 | 6/0 49.9; 3/0 40.5 | 5, 8 | 51.8 50.8 51.1 48.8 51.4 |
+| #393 (same lvdesk, same afternoon, 3 boots) | | 38.8/47.8, 47.2/40.4, 47.0/39.0 | | | 1-8 | 51.3-53.5 (one 44.3 run on the gate2 boot) |
+
+A cheaper placement sampler (scripts/board/gears-place.sh: 8 draws per boot,
+each a fresh desktop + fresh glxgears -fullscreen, glxgears' own FPS lines at
+5-15 s, no LD_PRELOAD): #395 7 of 8 draws at 48.8-50.2 fps, one at 40.6/45.2;
+#393 6 of 8 at 47.9-50.5, one at 41.2/41.3, one at 43.3/49.7. The instantaneous
+CPU of either task at 16 s does not predict the fps (both migrate 4-13 times a
+window). Raw: artifacts/gl/dips/arms/mc395-*, place-0926/.
+
+**Why it cannot help.** SCHED_MC adds an idle-CPU search to the wake-up path.
+During a fullscreen GL run the client is 75-98% and the desktop 80-96% busy, so
+there is rarely an idle CPU to find, and with equal capacities the scheduler has
+no reason to prefer CPU0 for either task: the pair's split is still a coin
+flip. Expressing "CPU1 is slower" is the capacity knob's job, and
+capacity-dmips-mhz was measured worse on 2026-09-21. The windowed 38.3 run is a
+low run of the kind #393 also showed once (44.3 on its gate2 boot), so it is
+not counted against it - but nothing here is a win, and a kernel that does not
+ship gets no regression pass. Board and images/xipImage are back on #393.
+
 ## tiopex-quake has no mouse, by construction - CLOSED, not ours (2026-09-24)
 
 **Symptom** (2026-09-23, XLITE_TRACE_INPUT=1): TyrQuake fullscreen 320x240

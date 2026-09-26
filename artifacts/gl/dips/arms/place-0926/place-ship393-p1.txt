@@ -1,0 +1,10 @@
+PLACE ship393-p1 K=8 #393 SMP Sat Sep 26 12:31:02 UTC 2026 up 62.91
+D 1 gears_cpu 1 lvdesk_cpu 0 | 240 frames in 5.0 seconds = 47.874 FPS 243 frames in 5.0 seconds = 48.409 FPS 
+D 2 gears_cpu 0 lvdesk_cpu 1 | 243 frames in 5.0 seconds = 48.505 FPS 252 frames in 5.0 seconds = 50.266 FPS 
+D 3 gears_cpu 0 lvdesk_cpu 1 | 207 frames in 5.0 seconds = 41.317 FPS 206 frames in 5.0 seconds = 41.176 FPS 
+D 4 gears_cpu 1 lvdesk_cpu 1 | 253 frames in 5.0 seconds = 50.518 FPS 253 frames in 5.0 seconds = 50.539 FPS 
+D 5 gears_cpu 1 lvdesk_cpu 1 | 249 frames in 5.0 seconds = 49.667 FPS 249 frames in 5.0 seconds = 49.767 FPS 
+D 6 gears_cpu 1 lvdesk_cpu 0 | 251 frames in 5.0 seconds = 50.126 FPS 251 frames in 5.0 seconds = 50.184 FPS 
+D 7 gears_cpu 1 lvdesk_cpu 0 | 249 frames in 5.0 seconds = 49.790 FPS 252 frames in 5.0 seconds = 50.210 FPS 
+D 8 gears_cpu 1 lvdesk_cpu 0 | 217 frames in 5.0 seconds = 43.341 FPS 249 frames in 5.0 seconds = 49.662 FPS 
+PIEB 1238

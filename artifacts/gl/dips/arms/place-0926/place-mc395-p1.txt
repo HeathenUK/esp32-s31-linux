@@ -1,0 +1,10 @@
+PLACE mc395-p1 K=8 #395 SMP Sat Sep 26 17:48:27 UTC 2026 up 63.15
+D 1 gears_cpu 0 lvdesk_cpu 1 | 250 frames in 5.0 seconds = 49.830 FPS 251 frames in 5.0 seconds = 50.019 FPS 
+D 2 gears_cpu 1 lvdesk_cpu 1 | 245 frames in 5.0 seconds = 48.901 FPS 248 frames in 5.0 seconds = 49.509 FPS 
+D 3 gears_cpu 1 lvdesk_cpu 0 | 250 frames in 5.0 seconds = 49.854 FPS 249 frames in 5.0 seconds = 49.793 FPS 
+D 4 gears_cpu 0 lvdesk_cpu 0 | 247 frames in 5.0 seconds = 49.317 FPS 248 frames in 5.0 seconds = 49.488 FPS 
+D 5 gears_cpu 0 lvdesk_cpu 1 | 247 frames in 5.0 seconds = 49.265 FPS 251 frames in 5.0 seconds = 50.000 FPS 
+D 6 gears_cpu 1 lvdesk_cpu 1 | 249 frames in 5.0 seconds = 49.732 FPS 250 frames in 5.0 seconds = 49.891 FPS 
+D 7 gears_cpu 1 lvdesk_cpu 0 | 203 frames in 5.0 seconds = 40.568 FPS 226 frames in 5.0 seconds = 45.157 FPS 
+D 8 gears_cpu 0 lvdesk_cpu 1 | 251 frames in 5.0 seconds = 50.184 FPS 244 frames in 5.0 seconds = 48.775 FPS 
+PIEB 1216
