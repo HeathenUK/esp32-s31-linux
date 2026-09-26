@@ -42,9 +42,15 @@ void glopClear(GLContext *c,GLParam *p)
        (c->color_mask[2] ? 0x001f : 0);
   x0 = 0; y0 = 0; x1 = zb->xsize; y1 = zb->ysize;
   if (c->scissor_enabled) {
+    /* the box is in the window's units (render scale: GLContext.rscale) */
+    int rs = c->rscale, vh = zb->ysize << rs;
     int sx0 = c->scissor[0], sx1 = c->scissor[0] + c->scissor[2];
-    int sy0 = zb->ysize - (c->scissor[1] + c->scissor[3]);
-    int sy1 = zb->ysize - c->scissor[1];
+    int sy0 = vh - (c->scissor[1] + c->scissor[3]);
+    int sy1 = vh - c->scissor[1];
+    if (rs) {
+      sx0 >>= rs; sy0 >>= rs;
+      sx1 = -((-sx1) >> rs); sy1 = -((-sy1) >> rs);
+    }
     if (sx0 > x0) x0 = sx0;
     if (sx1 < x1) x1 = sx1;
     if (sy0 > y0) y0 = sy0;

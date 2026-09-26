@@ -71,13 +71,29 @@ void gl_eval_viewport(GLContext * c)
     int ix0, ix1, iy0, iy1;      /* its intersection with the buffer */
     float sx, tx, sy, ty;        /* full viewport transform */
     float isx, itx, isy, ity;    /* rasteriser transform */
+    /* s31 render scale (GLContext.rscale): the viewport and scissor are in
+       the WINDOW's units, bh << rs rows high; the buffer is 1/2^rs of it.
+       fx0/fy0/fw/fh are the full viewport in BUFFER units, the integer
+       rectangle x0..y1 the buffer pixels it touches. rs == 0 is TinyGL's
+       own arithmetic, unchanged. */
+    int rs = c->rscale, vbh = bh << rs;
+    float rf = rs ? 1.0f / (float)(1 << rs) : 1.0f;
+    float fx0, fy0, fw, fh;
 
     v = &c->viewport;
 
     x0 = v->xmin;
     x1 = v->xmin + v->xsize;
-    y0 = bh - (v->ymin + v->ysize);
-    y1 = bh - v->ymin;
+    y0 = vbh - (v->ymin + v->ysize);
+    y1 = vbh - v->ymin;
+    fx0 = (float)x0 * rf;
+    fy0 = (float)y0 * rf;
+    fw = (float)v->xsize * rf;
+    fh = (float)v->ysize * rf;
+    if (rs) {                   /* floor the start, ceil the end */
+        x0 >>= rs; y0 >>= rs;
+        x1 = -((-x1) >> rs); y1 = -((-y1) >> rs);
+    }
     ix0 = x0 < 0 ? 0 : x0;
     ix1 = x1 > bw ? bw : x1;
     iy0 = y0 < 0 ? 0 : y0;
@@ -90,7 +106,11 @@ void gl_eval_viewport(GLContext * c)
         int bx0 = 0, by0 = 0, bx1 = bw, by1 = bh;
         if (c->scissor_enabled) {
             int sx0 = c->scissor[0], sx1 = c->scissor[0] + c->scissor[2];
-            int sy0 = bh - (c->scissor[1] + c->scissor[3]), sy1 = bh - c->scissor[1];
+            int sy0 = vbh - (c->scissor[1] + c->scissor[3]), sy1 = vbh - c->scissor[1];
+            if (rs) {           /* every buffer pixel the box touches */
+                sx0 >>= rs; sy0 >>= rs;
+                sx1 = -((-sx1) >> rs); sy1 = -((-sy1) >> rs);
+            }
             if (sx0 > bx0) bx0 = sx0;
             if (sx1 < bx1) bx1 = sx1;
             if (sy0 > by0) by0 = sy0;
@@ -107,10 +127,10 @@ void gl_eval_viewport(GLContext * c)
     v->empty = (ix1 <= ix0 || iy1 <= iy0);
     v->guard = !v->empty && (ix0 != x0 || ix1 != x1 || iy0 != y0 || iy1 != y1);
 
-    sx = (v->xsize - 0.5f) / 2.0f;
-    tx = sx + x0;
-    sy = -(v->ysize - 0.5f) / 2.0f;
-    ty = (v->ysize - 0.5f) / 2.0f + y0;
+    sx = (fw - 0.5f) / 2.0f;
+    tx = sx + fx0;
+    sy = -(fh - 0.5f) / 2.0f;
+    ty = (fh - 0.5f) / 2.0f + fy0;
 
     if (v->guard) {
         isx = (ix1 - ix0 - 0.5f) / 2.0f;
@@ -130,10 +150,10 @@ void gl_eval_viewport(GLContext * c)
     {
         float gx0 = v->guard ? v->gx[0] : 1.0f, gx1 = v->guard ? v->gx[1] : 0.0f;
         float gy0 = v->guard ? v->gy[0] : 1.0f, gy1 = v->guard ? v->gy[1] : 0.0f;
-        v->ex[0] = (float)v->xsize * 0.5f / gx0;
-        v->ex[1] = (float)x0 + (float)v->xsize * 0.5f - v->ex[0] * gx1;
-        v->ey[0] = -(float)v->ysize * 0.5f / gy0;
-        v->ey[1] = (float)y0 + (float)v->ysize * 0.5f - v->ey[0] * gy1;
+        v->ex[0] = fw * 0.5f / gx0;
+        v->ex[1] = fx0 + fw * 0.5f - v->ex[0] * gx1;
+        v->ey[0] = -fh * 0.5f / gy0;
+        v->ey[1] = fy0 + fh * 0.5f - v->ey[0] * gy1;
     }
     c->pipe.box[0] = ix0; c->pipe.box[1] = iy0;
     c->pipe.box[2] = ix1; c->pipe.box[3] = iy1;

@@ -350,6 +350,13 @@ typedef struct GLContext {
   void *prepare_user;
   M4 *proj_used;              /* &matrix_proj_eff or matrix_stack_ptr[1] */
   int vp_initialized;         /* first buffer bind sets viewport + scissor */
+  /* s31 render scale (plan G04, s31gl_set_render_scale): the colour and
+     depth buffers hold the window at 1/2^rscale in each axis. Viewport,
+     scissor, raster position and every pixel-rectangle coordinate stay in
+     the WINDOW's units (what glGet reports); they are mapped onto the
+     buffer where they are used: gl_eval_viewport, the scissored clear,
+     the line/point widths and s31_draw.c's pixel paths. 0 = native. */
+  int rscale;
   int doublebuffer;           /* GL_DOUBLEBUFFER, set by the GLX layer */
 
   int depth_func, depth_mask;

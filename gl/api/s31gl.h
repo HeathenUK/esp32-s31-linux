@@ -146,6 +146,18 @@ S31GL_API void s31gl_release_depth(s31gl_ctx *ctx);
    0 = success, -1 = no size bound. */
 S31GL_API int s31gl_bind_depth(s31gl_ctx *ctx, void *depth);
 
+/* RENDER SCALE (plan G04). The colour buffer bound next (and every one
+   after it until this is called again) holds the window at 1/2^shift of its
+   size in each axis: bind_color gets the BUFFER's size (the window's >>
+   shift). GL's window coordinates stay the application's - the window's
+   real size - and are mapped onto the buffer: viewport, scissor, raster
+   position and glWindowPos, glBitmap/glDrawPixels/glCopyPixels/glReadPixels/
+   glCopyTex*, line width and point size; every glGet reports the
+   application's values. The GLX layer uses it for panel-size fullscreen
+   windows that the server scales back up (gl/glx/glx_present.c). 0 =
+   success, -1 = unsupported shift (0..2 are supported; 0 is native). */
+S31GL_API int s31gl_set_render_scale(s31gl_ctx *ctx, int shift);
+
 #ifdef __cplusplus
 }
 #endif

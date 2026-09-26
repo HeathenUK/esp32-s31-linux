@@ -173,15 +173,32 @@ int tgl_ctx_bind(void *ctx, void *pixels, int width, int height, int pitch)
   zb->frame_buffer_allocated = 0;
   c->viewport.updated = 1;
   if (!c->vp_initialized && width > 0 && height > 0) {
+    /* the WINDOW's size: a render-scaled buffer is 1/2^rscale of it */
     c->vp_initialized = 1;
     c->viewport.xmin = 0;
     c->viewport.ymin = 0;
-    c->viewport.xsize = width;
-    c->viewport.ysize = height;
+    c->viewport.xsize = width << c->rscale;
+    c->viewport.ysize = height << c->rscale;
     c->scissor[0] = 0;
     c->scissor[1] = 0;
-    c->scissor[2] = width;
-    c->scissor[3] = height;
+    c->scissor[2] = width << c->rscale;
+    c->scissor[3] = height << c->rscale;
+  }
+  return 0;
+}
+
+/* s31 render scale (plan G04): see GLContext.rscale. Takes effect with the
+   next bind; 0..2 supported. */
+int tgl_ctx_set_scale(void *ctx, int shift)
+{
+  GLContext *c = ctx;
+
+  if (c == NULL || shift < 0 || shift > 2)
+    return -1;
+  if (c->rscale != shift) {
+    c->rscale = shift;
+    c->viewport.updated = 1;     /* the buffer mapping changed */
+    c->raster_dirty = 1;         /* line and point widths */
   }
   return 0;
 }

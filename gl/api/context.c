@@ -74,6 +74,11 @@ int s31gl_make_current(s31gl_ctx *ctx)
 	return 0;
 }
 
+int s31gl_set_render_scale(s31gl_ctx *ctx, int shift)
+{
+	return ctx ? tgl_ctx_set_scale(ctx->tgl, shift) : -1;
+}
+
 int s31gl_bind_color(s31gl_ctx *ctx, void *pixels, int w, int h, int pitch)
 {
 	if (ctx == NULL)

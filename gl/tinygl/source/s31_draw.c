@@ -242,6 +242,41 @@ static inline int ifloor(float v)
   return i - (v < (float)i);
 }
 
+/*
+ * s31 render scale (GLContext.rscale, plan G04): the buffer holds the window
+ * at 1/2^rs, and every coordinate here is the WINDOW's. rs_px() fetches the
+ * buffer pixel under window pixel (wx, wy) - wy counted up from the bottom,
+ * GL's way - or returns 0 when it is off the window; rs_read() makes a w x h
+ * RGB565 copy of window rectangle (x, y) nearest-neighbour, top row first,
+ * as glCopyPixels' snapshot is. Only the scaled paths call them.
+ */
+static int rs_px(const GLContext *c, int wx, int wy, unsigned int *pix, unsigned int *z)
+{
+  const ZBuffer *zb = c->zb;
+  int rs = c->rscale, row = (zb->ysize << rs) - 1 - wy;
+  if (wx < 0 || row < 0 || wx >= (zb->xsize << rs) || row >= (zb->ysize << rs))
+    return 0;
+  row >>= rs; wx >>= rs;
+  if (pix) *pix = ((const PIXEL *)((const char *)zb->pbuf + row * zb->linesize))[wx];
+  if (z) *z = zb->zbuf ? zb->zbuf[row * zb->xsize + wx] : 0;
+  return 1;
+}
+
+static unsigned short *rs_read(GLContext *c, int x, int y, int w, int h)
+{
+  unsigned short *tmp = gl_malloc(w * h * 2 + 2);
+  int i, j;
+  if (tmp == NULL) return NULL;
+  for (j = 0; j < h; j++) {
+    unsigned short *d = tmp + (h - 1 - j) * w;
+    for (i = 0; i < w; i++) {
+      unsigned int t = 0;
+      d[i] = rs_px(c, x + i, y + j, &t, NULL) ? (unsigned short)t : 0;
+    }
+  }
+  return tmp;
+}
+
 static void raster_col8(GLContext *c, unsigned char *col)
 {
   int i;
@@ -286,7 +321,43 @@ void glopBitmap(GLContext *c, GLParam *p)
   int x0, y0, j, i, bh, whole, lo, hi;
 
   if (!c->raster_valid) return;   /* GL 1.3 3.7: no fragments, no move */
-  if (w > 0 && h > 0 && bits != NULL && (pp = pix_begin(c)) != NULL) {
+  if (c->rscale && w > 0 && h > 0 && bits != NULL && (pp = pix_begin(c)) != NULL) {
+    /* render scale: each buffer pixel takes the bit under its centre, in
+       window units (a glyph at half size; nearest, as the image paths) */
+    int rs = c->rscale, xs, xe, ys, ye, bx, by;
+    float sc = (float)(1 << rs), fx0, fy0;
+    bh = c->zb->ysize;
+    fx0 = (float)ifloor(c->raster_pos[0] - xorig + 0.0001f);
+    fy0 = (float)ifloor(c->raster_pos[1] - yorig + 0.0001f);
+    if (canon) {
+      b.base = bits; b.pitch = (w + 7) / 8; b.skip = 0; b.lsb = 0;
+    } else {
+      s31_bits_setup(c, &b, w, bits);
+    }
+    raster_col8(c, col);
+    pix_span_init(pp, &sp);
+    xs = (int)ceilf(fx0 / sc - 0.5f); xe = (int)ceilf((fx0 + (float)w) / sc - 0.5f);
+    ys = (int)ceilf(fy0 / sc - 0.5f); ye = (int)ceilf((fy0 + (float)h) / sc - 0.5f);
+    if (xs < pp->box[0]) xs = pp->box[0];
+    if (xe > pp->box[2]) xe = pp->box[2];
+    if (ys < bh - pp->box[3]) ys = bh - pp->box[3];
+    if (ye > bh - pp->box[1]) ye = bh - pp->box[1];
+    for (by = ys; by < ye; by++) {
+      int jj = (int)floorf(((float)by + 0.5f) * sc - fy0), run = -1;
+      const unsigned char *rp;
+      if (jj < 0 || jj >= h) continue;
+      rp = b.base + jj * b.pitch;
+      for (bx = xs; bx <= xe; bx++) {
+        int ii = (int)floorf(((float)bx + 0.5f) * sc - fx0);
+        int on = bx < xe && ii >= 0 && ii < w && (row_bits(&b, rp, ii, 1) & 1u);
+        if (on && run < 0) run = bx;
+        if (!on && run >= 0) {
+          pix_span(c, pp, &sp, run, bh - 1 - by, bx - run, NULL, col, NULL);
+          run = -1;
+        }
+      }
+    }
+  } else if (w > 0 && h > 0 && bits != NULL && (pp = pix_begin(c)) != NULL) {
     bh = c->zb->ysize;
     /* Mesa's placement (drawpix.c): the lower left at floor(raster -
        origin + epsilon), so integer positions are not moved by rounding */
@@ -403,8 +474,14 @@ static void draw_image(GLContext *c, PixPipe *pp, const S31Unpack *u, int w, int
   int xs, xe, ys, ye, y, bh = c->zb->ysize;
   unsigned char buf[ROWBUF * 4], *full = NULL;
   unsigned int zbuf[ROWBUF];
-  int unit = zx == 1.0f;
+  int unit;
   ZSpan sp;
+
+  if (c->rscale) {              /* render scale: into buffer units */
+    float rf = 1.0f / (float)(1 << c->rscale);
+    zx *= rf; zy *= rf; rx *= rf; ry *= rf;
+  }
+  unit = zx == 1.0f;
 
   zoom_range(rx, zx, w, &xs, &xe);
   zoom_range(ry, zy, h, &ys, &ye);
@@ -580,10 +657,10 @@ void glopCopyPixels(GLContext *c, GLParam *p)
     /* a copy of the source first: the rectangles may overlap. Kept as
        RGB565 (2 bytes a pixel), read back through the same unpacker,
        which applies the pixel transfer */
-    unsigned short *tmp = gl_malloc(w * h * 2);
+    unsigned short *tmp = c->rscale ? rs_read(c, x, y, w, h) : gl_malloc(w * h * 2);
     S31Unpack u;
     if (tmp == NULL) { gl_set_error(c, GL_OUT_OF_MEMORY); return; }
-    for (j = 0; j < h; j++) {
+    for (j = 0; j < h && !c->rscale; j++) {
       int wy = y + j, row = zb->ysize - 1 - wy;
       unsigned short *d = tmp + (h - 1 - j) * w;
       const PIXEL *s = (const PIXEL *)((const char *)zb->pbuf + row * zb->linesize);
@@ -608,9 +685,15 @@ void glopCopyPixels(GLContext *c, GLParam *p)
       int row = zb->ysize - 1 - (y + j);
       for (i = 0; i < w; i++) {
         int wx = x + i;
-        /* outside the buffer: 1.0, as a stored 0 was */
-        float d = (row >= 0 && row < zb->ysize && wx >= 0 && wx < zb->xsize) ?
-                  zep_depth(zb, zb->zbuf[row * zb->xsize + wx]) : 1.0f;
+        /* outside the buffer: 1.0, as a stored 0 was. Render scale maps
+           the window's pixel onto the buffer (rs_px). */
+        unsigned int v;
+        float d;
+        if (c->rscale)
+          d = rs_px(c, wx, y + j, NULL, &v) ? zep_depth(zb, v) : 1.0f;
+        else
+          d = (row >= 0 && row < zb->ysize && wx >= 0 && wx < zb->xsize) ?
+              zep_depth(zb, zb->zbuf[row * zb->xsize + wx]) : 1.0f;
         d = d * c->depth_scale + c->depth_bias;
         d = d < 0.0f ? 0.0f : (d > 1.0f ? 1.0f : d);
         z[j * w + i] = raster_zp(d);
@@ -654,6 +737,40 @@ void tgl_read_pixels(int x, int y, int w, int h, int format, int type, void *pix
   if (e) { gl_set_error(c, e); return; }
   if (pixels == NULL || w == 0 || h == 0 || !gl_prepare(c)) return;
   zb = c->zb;
+  if (c->rscale) {
+    /* render scale: window pixels sampled from the smaller buffer; only
+       the part inside the WINDOW is written */
+    int vw = zb->xsize << c->rscale;
+    x0 = x < 0 ? 0 : x;
+    x1 = x + w > vw ? vw : x + w;
+    for (j = 0; j < h; j++) {
+      int xx;
+      unsigned int t, zv;
+      if (!rs_px(c, x0, y + j, &t, &zv)) continue;
+      for (xx = x0; xx < x1; ) {
+        int n = x1 - xx < 64 ? x1 - xx : 64;
+        for (i = 0; i < n; i++) {
+          rs_px(c, xx + i, y + j, &t, &zv);
+          if (format == GL_DEPTH_COMPONENT) {
+            float d = 1.0f - (float)zv * (1.0f / 65535.0f);
+            v[i] = d * c->depth_scale + c->depth_bias;
+          } else {
+            float *q = v + 4 * i;
+            int ch;
+            q[0] = (float)(t >> 11) * (1.0f / 31.0f);
+            q[1] = (float)((t >> 5) & 63) * (1.0f / 63.0f);
+            q[2] = (float)(t & 31) * (1.0f / 31.0f);
+            q[3] = 1.0f;
+            if (c->xfer_active)
+              for (ch = 0; ch < 4; ch++) q[ch] = q[ch] * c->xfer_scale[ch] + c->xfer_bias[ch];
+          }
+        }
+        s31_pack_span(&k, xx - x, j, n, v);
+        xx += n;
+      }
+    }
+    return;
+  }
   /* only the part inside the buffer is written (GL leaves the rest
      undefined; Mesa leaves it untouched too) */
   x0 = x < 0 ? 0 : x;
@@ -743,6 +860,26 @@ void glopCopyTex(GLContext *c, GLParam *p)
   if (!gl_prepare(c)) return;
   zb = c->zb;
   if (is1d) h = 1;
+  if (c->rscale) {
+    /* render scale: the window rectangle, sampled from the smaller buffer */
+    unsigned short *tmp = rs_read(c, x, y, w, h);
+    if (tmp == NULL) { gl_set_error(c, GL_OUT_OF_MEMORY); return; }
+    s31_unpack_fb(c, &u, tmp, w, h, w * 2, 0, 0, w, h);
+    q[0].op = p[11].i ? OP_TexSubImage2D : OP_TexImage2D;
+    q[1].i = target; q[2].i = level;
+    if (p[11].i) {
+      q[3].i = p[9].i; q[4].i = is1d ? 0 : p[10].i;
+      q[5].i = w; q[6].i = h;
+      q[7].i = S31_FB_565; q[8].i = GL_UNSIGNED_SHORT_5_6_5; q[9].p = tmp;
+      gl_tex_subimage_src(c, q, &u);
+    } else {
+      q[3].i = ifmt; q[4].i = w; q[5].i = h; q[6].i = border;
+      q[7].i = S31_FB_565; q[8].i = GL_UNSIGNED_SHORT_5_6_5; q[9].p = tmp;
+      gl_tex_image_src(c, q, &u);
+    }
+    gl_free(tmp);
+    return;
+  }
   s31_unpack_fb(c, &u, zb->pbuf, zb->xsize, zb->ysize, zb->linesize, x, y, w, h);
   q[0].op = p[11].i ? OP_TexSubImage2D : OP_TexImage2D;
   q[1].i = target; q[2].i = level;

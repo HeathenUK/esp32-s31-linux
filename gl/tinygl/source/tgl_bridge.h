@@ -97,6 +97,7 @@ void tgl_glPolygonOffset(float factor, float units);
 void *tgl_ctx_create(void *share);
 void tgl_ctx_destroy(void *ctx);
 int tgl_ctx_bind(void *ctx, void *pixels, int width, int height, int pitch);
+int tgl_ctx_set_scale(void *ctx, int shift);   /* render scale, s31gl.h */
 void tgl_ctx_set_prepare(void *ctx, int (*prepare)(void *user), void *user);
 void tgl_ctx_make_current(void *ctx);  /* NULL: a context that draws nothing */
 void *tgl_ctx_current(void);           /* NULL when none is current */

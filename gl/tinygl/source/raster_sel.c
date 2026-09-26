@@ -169,8 +169,18 @@ void gl_update_raster(GLContext *c)
   /* ---- polygon stipple (plan F7): a stage of the general path */
   if (c->poly_stipple_enabled && !skip) gen = 1;
 
-  c->line_w = c->line_width < 1.5f ? 1 : (int)(c->line_width + 0.5f);
-  c->point_w = c->point_size < 1.5f ? 1 : (int)(c->point_size + 0.5f);
+  {
+    /* widths are in window pixels; a render-scaled buffer's are 2^rscale
+       of them (GLContext.rscale) */
+    float lw = c->line_width, ps = c->point_size;
+    if (c->rscale) {
+      float rf = 1.0f / (float)(1 << c->rscale);
+      lw *= rf;
+      ps *= rf;
+    }
+    c->line_w = lw < 1.5f ? 1 : (int)(lw + 0.5f);
+    c->point_w = ps < 1.5f ? 1 : (int)(ps + 0.5f);
+  }
   c->raster_general = gen;
   c->raster_gen_lines = gen || tex || (c->depth_test && !c->depth_mask) || c->line_w > 1 ||
                        c->line_stipple_enabled;
