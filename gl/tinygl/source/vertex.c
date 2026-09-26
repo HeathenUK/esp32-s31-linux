@@ -650,13 +650,14 @@ void gl_vertex_core(GLContext * c, float x, float y, float z, float w,
     }
 
     /* precompute the mapping to the viewport */
-    if (v->clip_code == 0)
+    if (v->clip_code == 0) {
 	/* s31 (phase 6 V1): inline (s31_ttv.h) in glVertex's instance; the
 	   glDrawElements instances keep the call (+~240 B each otherwise) */
 	if (inl)
 	    gl_ttv(c, v);
 	else
 	    gl_transform_to_viewport(c, v);
+    }
 
     /* edge flag */
 
