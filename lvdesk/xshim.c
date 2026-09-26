@@ -525,6 +525,79 @@ static const struct { uint16_t w, h; } vm_modes[] = {
 };
 static int vm_cur;			/* index into vm_modes */
 static int vm_cli = -1;			/* who switched away from the panel */
+/*
+ * XF86VidModeSetGamma (VidMode minor 15), 2026-09-26. SDL 1.2 has no gamma
+ * RAMP on a TrueColor visual (X11_SetGammaRamp wants DirectColor), so
+ * SDL_SetGamma() falls back to VidMode SetGamma - which this server used to
+ * swallow. Stock QuakeSpasm (GLQuake) on SDL 1.2 sets its "gamma" cvar -
+ * the menu's Brightness slider - exactly that way (gl_vidsdl.c,
+ * USE_GAMMA_RAMPS 0), found SetGamma "working" and changed nothing: the
+ * game could not be brightened at all, on a renderer whose default look is
+ * already dark.
+ *
+ * Gamma is a SCREEN property in X. Here it is applied where X clients'
+ * pixels enter the server - the ShmPutImage copy of 16-bit images, which
+ * is every GL frame (our libGL presents with MIT-SHM) and every 16-bit SDL
+ * frame, windowed and fullscreen (with the scanout alias that copy IS the
+ * present) - and not to the desktop's own drawing, which is not X. It
+ * belongs to the client that set it and goes back to 1.0 when that client
+ * leaves, as a real server restores nothing but SDL restores on exit.
+ * Identity costs one test per row; a ramp costs three table lookups per
+ * pixel (~2 ms per 320x240 frame). XSHIM_NOGAMMA=1 ignores SetGamma, as
+ * before. The value is gamma x 10000 on the wire; output = input^(1/gamma),
+ * clamped to X's own 0.1 - 10.0.
+ */
+static int vm_gamma_on;			/* a non-identity ramp is in force */
+static int vm_gamma_cli = -1;		/* who set it */
+static uint32_t vm_gamma_v[3] = { 10000, 10000, 10000 };
+static uint32_t vm_gamma_gen;		/* seeds the row hash: a change repaints */
+static uint16_t vm_glr[32], vm_glg[64], vm_glb[32];
+
+static void vm_gamma_table(uint16_t *t, int n, int shift, uint32_t v)
+{
+	float g = (float)v / 10000.0f, e;
+	int i, o;
+
+	if (g < 0.1f)
+		g = 0.1f;
+	if (g > 10.0f)
+		g = 10.0f;
+	e = 1.0f / g;
+	for (i = 0; i < n; i++) {
+		o = (int)((float)(n - 1) * powf((float)i / (float)(n - 1), e) + 0.5f);
+		if (o > n - 1)
+			o = n - 1;
+		t[i] = (uint16_t)(o << shift);
+	}
+}
+
+static void vm_gamma_set(int owner, uint32_t r, uint32_t g, uint32_t b)
+{
+	vm_gamma_v[0] = r;
+	vm_gamma_v[1] = g;
+	vm_gamma_v[2] = b;
+	vm_gamma_on = !(r == 10000 && g == 10000 && b == 10000);
+	vm_gamma_cli = vm_gamma_on ? owner : -1;
+	vm_gamma_table(vm_glr, 32, 11, r);
+	vm_gamma_table(vm_glg, 64, 5, g);
+	vm_gamma_table(vm_glb, 32, 0, b);
+	vm_gamma_gen++;
+	fprintf(stderr, "xshim: VidMode gamma %.2f %.2f %.2f (client %d)\n",
+		r / 10000.0, g / 10000.0, b / 10000.0, owner);
+}
+
+/* one row of RGB565, in place */
+static void vm_gamma_row16(uint16_t *p, size_t n)
+{
+	size_t i;
+
+	for (i = 0; i < n; i++) {
+		unsigned int v = p[i];
+
+		p[i] = (uint16_t)(vm_glr[v >> 11] | vm_glg[(v >> 5) & 63] |
+				  vm_glb[v & 31]);
+	}
+}
 
 /*
  * EWMH fullscreen, answered the way VidMode is: the panel switches to the
@@ -6298,6 +6371,9 @@ static void HOTTEXT mitshm_request(struct cli *c, const uint8_t *r, int len)
 
 				if (!b->rowhash || !rowdmg_on()) {
 					memcpy(dp, sp, n);
+					if (vm_gamma_on && bpp == 2)
+						vm_gamma_row16((uint16_t *)dp,
+							       (size_t)cw);
 					if (cy0 < 0)
 						cy0 = y;
 					cy1 = y;
@@ -6329,6 +6405,11 @@ static void HOTTEXT mitshm_request(struct cli *c, const uint8_t *r, int len)
 						dp[k] = sp[k];
 					}
 				}
+				/* the ramp is part of what is shown */
+				hv ^= vm_gamma_gen * 0x9e3779b9u;
+				if (vm_gamma_on && bpp == 2)
+					vm_gamma_row16((uint16_t *)dp,
+						       (size_t)cw);
 				changed = hforce || b->rowhash[ty] != hv;
 				b->rowhash[ty] = hv;
 				if (changed) {
@@ -9453,10 +9534,15 @@ static void vidmode_request(struct cli *c, const uint8_t *r, int len)
 	case 11:					/* GetViewPort */
 		send_reply(c, 0, d24, NULL, 0);		/* 0,0 */
 		break;
+	case 15:					/* SetGamma */
+		if (len >= 20 && !getenv("XSHIM_NOGAMMA"))
+			vm_gamma_set((int)(c - cli), get32(r + 8),
+				     get32(r + 12), get32(r + 16));
+		break;
 	case 16:					/* GetGamma */
-		put32(d24 + 0, 10000);			/* 1.0 in the client's units */
-		put32(d24 + 4, 10000);
-		put32(d24 + 8, 10000);
+		put32(d24 + 0, vm_gamma_v[0]);		/* x 10000 */
+		put32(d24 + 4, vm_gamma_v[1]);
+		put32(d24 + 8, vm_gamma_v[2]);
 		send_reply(c, 0, d24, NULL, 0);
 		break;
 	case 19:					/* GetGammaRampSize: none */
@@ -9465,8 +9551,8 @@ static void vidmode_request(struct cli *c, const uint8_t *r, int len)
 	case 4:						/* GetMonitor: nothing known */
 		send_reply(c, 0, d24, NULL, 0);
 		break;
-	case 3: case 5: case 12: case 14: case 15:	/* SwitchMode, Lock, */
-		break;			/* SetViewPort, SetClientVersion, SetGamma */
+	case 3: case 5: case 12: case 14:	/* SwitchMode, Lock, */
+		break;			/* SetViewPort, SetClientVersion */
 	default:
 		if (c->nunimpl[VIDMODE_MAJOR & 127]++ == 0)
 			fprintf(stderr, "xshim: VidMode minor %u not implemented\n",
@@ -10567,6 +10653,8 @@ static void client_drop(struct cli *c, int notify)
 		kgrab_win = 0;
 		kgrab_cli = -1;
 	}
+	if (vm_gamma_cli == owner)
+		vm_gamma_set(owner, 10000, 10000, 10000);
 	if (vm_cli == owner)
 		vm_switch(0, -1);
 
