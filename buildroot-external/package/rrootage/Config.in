@@ -1,0 +1,14 @@
+config BR2_PACKAGE_RROOTAGE
+	bool "rrootage"
+	depends on BR2_PACKAGE_HAS_LIBGL
+	depends on BR2_INSTALL_LIBSTDCPP
+	select BR2_PACKAGE_SDL
+	select BR2_PACKAGE_SDL_MIXER
+	select BR2_PACKAGE_LIBGLU
+	help
+	  rRootage 0.23a (Kenta Cho, 2003), an SDL 1.2 + OpenGL 1.x
+	  shooter: the first real GL game of docs/gl-plan-2026-09-25.md
+	  stage 5a. Stock source (Debian's orig tarball, byte-identical to
+	  upstream's), no patches. Run with -lowres (320x240) -window.
+
+	  http://www.asahi-net.or.jp/~cs8k-cyu/windows/rr_e.html

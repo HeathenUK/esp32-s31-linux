@@ -96,7 +96,7 @@ BR2_TARGET_ROOTFS_EXT2_4=y
 # during imaging, and read back again to verify. 512M cost ~9 min of writing
 # zeros for a filesystem using 51M. S01s31-growroot resizes to fill the card on
 # first boot, so the running system is no smaller.
-BR2_TARGET_ROOTFS_EXT2_SIZE="192M"
+BR2_TARGET_ROOTFS_EXT2_SIZE="256M"
 BR2_TARGET_ROOTFS_EXT2_LABEL="s31root"
 # 4 KiB blocks, not mkfs.ext4's small-filesystem default of 1 KiB. Block group
 # size scales with block size (8 blocks/group * blocksize), so 1 KiB blocks give
@@ -444,3 +444,10 @@ BR2_PACKAGE_LIBGLU=y
 BR2_PACKAGE_LIBFREEGLUT=y
 # glxgears, glxinfo, the xdemos and (with freeglut) the GLUT demos.
 BR2_PACKAGE_MESA3D_DEMOS=y
+# Stage 5a: SDL 1.2 built with GL (safe: only SDL_OPENGL modes use it; the
+# 4.2 gate checks prboom/prboom-plus/opentyrian create no GL context).
+BR2_PACKAGE_S31_LIBGL_SDL_OPENGL=y
+# rRootage 0.23a (package/rrootage) is NOT enabled: its stock screen.c copies a
+# 42-character path into char name[32] and crashes on the board (SIGSEGV,
+# 2026-09-26); only a source patch (Debian carries one) fixes it.
+# BR2_PACKAGE_RROOTAGE is not set
