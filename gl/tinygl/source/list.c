@@ -167,6 +167,7 @@ int gl_list_own(GLContext *c, void *block)
 
 void gl_add_op(GLParam *p)
 {
+  S31_RT_ENTER_V(gl_add_op, p);       /* phase 6: every API call's path */
   GLContext *c=gl_get_context();
   int op;
 

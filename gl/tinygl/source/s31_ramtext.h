@@ -34,6 +34,54 @@ struct s31_rt {
 
 extern struct s31_rt s31_rt __attribute__((visibility("hidden")));
 
+/* phase 6: one address per hot function at run time. Once the copy is
+   made, every pointer to a hot function the library holds must be the RAM
+   copy's, or pointer equality (zpf_select's stage matching) breaks and the
+   code runs from XIP. Data words are rewritten by s31_ramtext.c; code does
+   the rest with these (gl/api/ramtext.py's build line counts the cold
+   call sites and address-takes that need them):
+     S31_RT_RAM(f)   an address to store: the copy's when there is one
+     S31_RT_XIP(f)   an address to compare in cold code: the XIP one
+     S31_RT_ENTER(f, args) / S31_RT_ENTER_V(f, args): first statement of a
+                     hot function that cold code calls directly - the XIP
+                     copy re-enters the RAM one (same code) */
+#if !defined(S31GL_NO_RAMTEXT) && defined(__linux__) && ((defined(__riscv) && __riscv_xlen == 32) || defined(__aarch64__))
+#define S31_RT_COPY 1
+#include <stdint.h>
+extern intptr_t s31_rt_d __attribute__((visibility("hidden")));   /* 0: no copy */
+/* the XIP range as data, NOT __s31hot_start: a pc-relative reference to the
+   range's own start from inside the range moves with the copy, so in RAM
+   it would name the RAM range */
+extern uintptr_t s31_rt_lo __attribute__((visibility("hidden")));
+extern uintptr_t s31_rt_len __attribute__((visibility("hidden")));
+#define S31_RT_INXIP(f) ((uintptr_t)(f) - s31_rt_lo < s31_rt_len)
+#define S31_RT_RAM(f) (s31_rt_d && S31_RT_INXIP(f) ? \
+                       (__typeof__(&*(f)))((uintptr_t)(f) + s31_rt_d) : (f))
+#define S31_RT_XIP(f) (s31_rt_d && S31_RT_INXIP((uintptr_t)(f) - s31_rt_d) ? \
+                       (__typeof__(&*(f)))((uintptr_t)(f) - s31_rt_d) : (f))
+/* where this code runs: the pc itself, never &f (a static link or the GOT
+   can hand back either copy's address for f, and a test on that recursed) */
+static inline __attribute__((always_inline)) uintptr_t s31_rt_pc(void)
+{
+  uintptr_t pc;
+#if defined(__riscv)
+  __asm__ volatile ("auipc %0, 0" : "=r"(pc));
+#else
+  __asm__ volatile ("adr %0, ." : "=r"(pc));
+#endif
+  return pc;
+}
+#define S31_RT_ENTER(f, ...) do { if (s31_rt_d && S31_RT_INXIP(s31_rt_pc())) \
+    return S31_RT_RAM(f)(__VA_ARGS__); } while (0)
+#define S31_RT_ENTER_V(f, ...) do { if (s31_rt_d && S31_RT_INXIP(s31_rt_pc())) { \
+    S31_RT_RAM(f)(__VA_ARGS__); return; } } while (0)
+#else
+#define S31_RT_RAM(f) (f)
+#define S31_RT_XIP(f) (f)
+#define S31_RT_ENTER(f, ...) do { } while (0)
+#define S31_RT_ENTER_V(f, ...) do { } while (0)
+#endif
+
 /* once, at the first context creation (s31_ctx.c), before any context
    exists: every GLContext copies what it needs from s31_rt */
 void s31_ramtext_init(void) __attribute__((visibility("hidden")));

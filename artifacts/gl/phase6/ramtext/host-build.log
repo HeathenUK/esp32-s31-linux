@@ -1,0 +1,13 @@
+--- enum values: TinyGL header against Khronos
+enumcmp: 0 mismatches
+--- compiling TinyGL core, the GL ABI layer and GLX (8 jobs)
+--- export surface (mkstubs.py)
+mkstubs: 674 exported GL names: 462 implemented, 212 stubs
+ramtext: 61 sections moved to s31hot_text
+--- linking /src/gl/out-host/libGL.so.1
+ramtext: libGL.so.1: 48146 bytes at 0x61f20-0x6db32, 13 pages in RAM, 389 sites (adrp 213, b/bl 176), 389 table entries; slot 0x91000, displacement +196608; 309 references into the range from outside: 21 data words moved to the copy, 155 cold call sites, 9 cold address-takes, 0 read-only words left
+--- tests (headless_gears, core_test, raster_gate, glx_prims, glx_reopen), in parallel
+-rwxr-xr-x 1 root root 144576 Sep 26 21:56 /src/gl/out-host/core_test
+-rwxr-xr-x 1 root root  72704 Sep 26 21:56 /src/gl/out-host/headless_gears
+-rwxr-xr-x 1 root root 645176 Sep 26 21:56 /src/gl/out-host/libGL.so.1
+-rwxr-xr-x 1 root root  72856 Sep 26 21:56 /src/gl/out-host/raster_gate

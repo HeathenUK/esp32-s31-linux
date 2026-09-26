@@ -56,6 +56,23 @@ S31_LIBGL_OVERRIDE_SRCDIR_RSYNC_EXCLUSIONS = \
 	--exclude=/ref-apps --exclude=/out --exclude=/build
 
 S31_LIBGL_OUT = $(@D)/_br_out
+
+# The board's compiled-in library defaults, as -D flags the library documents
+# for this (tinygl/source/init.c). An S31GL_* environment variable still
+# overrides each one per process.
+# S31GL_TEXFILTER_DEFAULT=0: nearest sampling of level 0 for every filter and
+# no mip levels stored - the owner's plan (docs/gl-plan-2026-09-25.md) is
+# nearest as the library-wide default, filtering behind S31GL_TEXFILTER=1
+# until fast filtered fillers exist. Phase 5 proxy: QuakeSpasm 17.5 M
+# instr/frame nearest against 37.8 M trilinear; board numbers in
+# artifacts/gl/phase5/BOARD.md. The host build (gl/build.sh) keeps 1.
+# S31GL_RAMTEXT_DEFAULT=1 (phase 6, artifacts/gl/phase6/ramtext/): the hot
+# rasteriser (~40 kB, gl/api/ramtext.list from the board's QuakeSpasm
+# profile) is copied into anonymous RAM at the first context and mlock'd,
+# so it runs from PSRAM when libGL is mapped from XIP flash and can never
+# be evicted under GLQuake's paging when it is mapped from the SD card.
+# S31GL_RAMTEXT=0 turns it off per process.
+S31_LIBGL_DEFAULTS = -DS31GL_TEXFILTER_DEFAULT=0 -DS31GL_RAMTEXT_DEFAULT=1
 S31_LIBGL_SO = libGL.so.1.2.0
 
 define S31_LIBGL_BUILD_CMDS
@@ -65,7 +82,7 @@ define S31_LIBGL_BUILD_CMDS
 	mkdir -p $(S31_LIBGL_OUT)
 	cd $(@D) && $(TARGET_MAKE_ENV) \
 		S31GL_CC="$(TARGET_CC)" \
-		S31GL_CFLAGS="$(TARGET_CFLAGS)" \
+		S31GL_CFLAGS="$(TARGET_CFLAGS) $(S31_LIBGL_DEFAULTS)" \
 		S31GL_LDFLAGS="$(TARGET_LDFLAGS)" \
 		S31GL_OUT="$(S31_LIBGL_OUT)" \
 		S31GL_STRIP=0 \
