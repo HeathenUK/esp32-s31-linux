@@ -1,0 +1,15 @@
+ARM afterxip render_scale=0 shmbufs=2 mode=win runs=5 bin=/usr/bin/lvdesk lib=/usr/lib lvenv= glenv= #391 SMP Fri Sep 25 10:24:40 UTC 2026 up 79.81
+RUN 1 fps 45.5 gears 93% lvdesk 81% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+239 frames in 5.0 seconds = 47.571 FPS 191 frames in 5.0 seconds = 38.130 FPS 266 frames in 5.0 seconds = 53.041 FPS 
+RUN 2 fps 49.2 gears 98% lvdesk 83% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+192 frames in 5.0 seconds = 38.309 FPS 232 frames in 5.0 seconds = 46.379 FPS 264 frames in 5.0 seconds = 52.700 FPS 
+RUN 3 fps 44.6 gears 90% lvdesk 78% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+248 frames in 5.0 seconds = 49.435 FPS 223 frames in 5.0 seconds = 44.509 FPS 213 frames in 5.0 seconds = 42.499 FPS 
+RUN 4 fps 44.9 gears 88% lvdesk 77% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+244 frames in 5.0 seconds = 48.698 FPS 181 frames in 5.0 seconds = 36.114 FPS 262 frames in 5.0 seconds = 52.381 FPS 
+RUN 5 fps 45.6 gears 97% lvdesk 82% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+217 frames in 5.1 seconds = 42.874 FPS 196 frames in 5.0 seconds = 39.098 FPS 261 frames in 5.0 seconds = 52.110 FPS 
+lvdesk: fullscreen alias ON
+              total        used        free      shared  buff/cache   available
+Mem:          15336        9864        3116         144        2356        2692
+DONE
