@@ -12,7 +12,10 @@
 N=$1; RS=$2; NB=$3; MODE=$4; RUNS=${5:-6}; BIN=${6:-/root/lvdesk.new}
 GL=${GLLIB:-}
 exec > /root/glarm-$N.txt 2>&1
-echo "ARM $N render_scale=$RS shmbufs=$NB mode=$MODE runs=$RUNS bin=$BIN lib=${GL:-/usr/lib} lvenv=${LVENV:-} glenv=${GLENV:-} $(uname -v) up $(cut -d' ' -f1 /proc/uptime)"
+echo "ARM $N glpre=${GLPRE:-} render_scale=$RS shmbufs=$NB mode=$MODE runs=$RUNS bin=$BIN lib=${GL:-/usr/lib} lvenv=${LVENV:-} glenv=${GLENV:-} $(uname -v) up $(cut -d' ' -f1 /proc/uptime)"
+# GLPRE="cmd": a board-side command run first (e.g. a module parameter for
+# the arm, echo 0 > /sys/module/esp32s31_lcd/parameters/ppa_explore_max)
+[ -n "${GLPRE:-}" ] && eval "$GLPRE"
 killall lvdesk lvdesk.new lvdesk.ceil 2>/dev/null; for p in $(pidof glxgears); do kill -9 $p; done; sleep 1
 [ -r /etc/lvdesk.env ] && . /etc/lvdesk.env
 # LVENV="A=1 B=2": extra desktop environment for an arm (a runtime toggle);

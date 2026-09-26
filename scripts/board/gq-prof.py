@@ -62,7 +62,8 @@ def main():
         if hit is None and pc < 0x80000000:
             for lo, hi, base, b in lmaps:
                 if lo <= pc < hi and b == "lvdesk":
-                    hit = ("lvdesk", h1s.lookup(lnm, pc - base) or "?"); break
+                    # lvdesk is linked non-PIE: its nm addresses are absolute
+                    hit = ("lvdesk", h1s.lookup(lnm, pc - base) or h1s.lookup(lnm, pc) or "?"); break
         if hit is None:
             hit = ("unresolved user", "?")
         top[hit[0]] += 1; sub[hit[0]][hit[1]] += 1

@@ -1,0 +1,74 @@
+drm/esp32s31-lcd: fullscreen present without an atomic commit (PRESENT_MODE_FB),
+no hopeless engine probes, and present_stats readable without debugfs
+
+This patch is cumulative on 0058 (esp32s31-lcd.c) and 0049 (esp32s31_drm.h).
+Copy the files as follows:
+  esp32s31-lcd.c   -> linux-71-port/drivers/gpu/drm/espressif/
+  esp32s31_drm.h   -> linux-71-port/include/uapi/drm/
+It first shipped in kernel #393 (2026-09-26). The lvdesk side is in
+lvdesk/kms.c, `kms_fs_dirty()`.
+
+THE QUESTION. The owner asked about fullscreen frame-rate dips in
+glxgears. The fullscreen present (a VidMode or render-scale client) is a
+DIRTYFB on the mode framebuffer. lvdesk's stage timer (LVDESK_FSGSTAGE=1)
+put that call at 3.0 ms on average and 28.9 ms at worst.
+
+WHAT DIRTYFB SPENT. This comes from the new present_stats timers
+(scripts/board/fs-present-probe.sh, 20 s of fullscreen glxgears at render
+scale with 2 SHM buffers, kernel #392):
+- The ioctl took 2.2 ms per call as lvdesk sees it.
+- pipe_update() was 0.55-0.62 ms of that: copy_one 0.35-0.39 ms (PPA submit
+  plus drain of the previous job) and the flush 0.08 ms.
+- The remaining ~1.6 ms is the atomic commit around it: state duplication,
+  check, commit tail and cleanup, which is DRM core code executing from XIP
+  flash.
+- The worst case, 28-39 ms, was INSIDE copy_one (ppa max = upd max). It came
+  2 or 3 times per 20-30 s, which is exactly one every 512 presents at about
+  50/s. The adaptive engine picker probes the non-preferred engine one op in
+  512 even when that engine is far behind, and a scaled 400x240->800x480
+  frame on the CPU costs 17-37 ms (ppa_table bucket 7: cpu 29 ms against
+  the PPA's 0.35).
+
+THE FIX, three parts:
+1. `DRM_IOCTL_ESP32S31_PRESENT` takes a flags word. `PRESENT_MODE_FB` runs
+   DIRTYFB's damage path for one rectangle: lattice snap, source flush,
+   CPU/PPA copy, cursor repaint and the recorder notify. It holds all the
+   modeset locks the commit would hold, and it does no atomic commit.
+   - The struct grew from 16 to 20 bytes. drm_ioctl() reconciles the sizes
+     in both directions, so an old lvdesk (flags=0) gets the old ioctl.
+   - A new lvdesk on an old kernel is refused with EINVAL and falls back to
+     DIRTYFB.
+   - lvdesk: `LVDESK_NOFSPRESENT=1` forces DIRTYFB.
+2. `ppa_explore_max` (default 8): never probe the other engine while it
+   costs more than 8x the chosen one.
+   - A probe cannot flip a pick that is 50x ahead, because the switch needs
+     the other engine 15% cheaper.
+   - A degrading engine closes the ratio through its own EMA, which is
+     updated on every op it runs, so the probes then resume.
+   - The latency guard is unchanged. 0 restores the old behaviour.
+3. `present_stats`: upd, flush, ppa and fsp timers. Read the parameter for
+   the numbers and write anything to reset them. It is readable on the
+   shipping DIAG=0 kernel, which has no debugfs.
+
+RESULT on one boot, #393, fs-present-probe with 30 s windows of fullscreen
+glxgears:
+
+                        old (DIRTYFB, explore=0)   new (PRESENT_MODE_FB, explore=8)
+  present ioctl < 1 ms      2 of 1,496               1,246 of 1,608
+  present ioctl >= 12 ms    3                        0
+  worst present ioctl       38.0 ms                  2.8 ms  (fsp max 2.07)
+  presents in 30 s          1,495 (49.3/s)           1,607 (52.9/s)
+  gaps 50-100 ms            12                       10
+
+The fresh-boot arms and the GLQuake numbers are in
+artifacts/gl/glquake/README.md.
+
+WHAT IT DOES NOT FIX. The visible dips are 50-100 ms present-to-present
+gaps, about 10 per 30 s. They did NOT line up with the present:
+- lvdesk now logs the preceding present's ioctl time with every long frame
+  (`/dN` in the SIGUSR1 report). The dip clusters carried d1-d6, and the
+  30 ms spikes produced lone 41 ms frames.
+- The dips were unchanged by the fix (12 against 10 per 30 s).
+- They were unchanged by pinning the client to CPU0 or CPU1 (13, 13 and 12
+  per 20 s), and they came with no major faults.
+They are on the client or scheduling side, and they are still open.

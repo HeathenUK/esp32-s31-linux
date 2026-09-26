@@ -1,0 +1,22 @@
+ARM old1 glpre=echo 0 > /sys/module/esp32s31_lcd/parameters/ppa_explore_max render_scale=1 shmbufs=2 mode=fs runs=6 bin=/root/lvdesk.new lib=/usr/lib lvenv=LVDESK_NOFSPRESENT=1 glenv= #393 SMP Sat Sep 26 12:31:02 UTC 2026 up 80.61
+RUN 1 fps 35.7 gears 93% lvdesk 53% | gaps0 <25:93 <50:56 <100:4 <200:0 <400:0 >=400:0 | gaps1 <25:352 <50:224 <100:26 <200:5 <400:0 >=400:0
+188 frames in 5.0 seconds = 37.460 FPS 143 frames in 5.0 seconds = 28.492 FPS 216 frames in 5.0 seconds = 43.101 FPS 
+RUN 2 fps 38.4 gears 98% lvdesk 51% | gaps0 <25:415 <50:304 <100:66 <200:7 <400:0 >=400:1 | gaps1 <25:673 <50:517 <100:78 <200:8 <400:0 >=400:1
+135 frames in 5.0 seconds = 26.981 FPS 183 frames in 5.0 seconds = 36.575 FPS 205 frames in 5.0 seconds = 40.854 FPS 
+RUN 3 fps 39.7 gears 88% lvdesk 64% | gaps0 <25:882 <50:556 <100:102 <200:9 <400:0 >=400:2 | gaps1 <25:1254 <50:660 <100:126 <200:11 <400:0 >=400:2
+222 frames in 5.0 seconds = 44.332 FPS 210 frames in 5.0 seconds = 41.956 FPS 199 frames in 5.0 seconds = 39.771 FPS 
+RUN 4 fps 39.8 gears 88% lvdesk 69% | gaps0 <25:1457 <50:711 <100:142 <200:11 <400:0 >=400:3 | gaps1 <25:1835 <50:812 <100:169 <200:12 <400:0 >=400:3
+221 frames in 5.0 seconds = 44.151 FPS 181 frames in 5.0 seconds = 36.005 FPS 207 frames in 5.0 seconds = 41.333 FPS 
+RUN 5 fps 35.9 gears 99% lvdesk 54% | gaps0 <25:1978 <50:896 <100:185 <200:14 <400:0 >=400:4 | gaps1 <25:2251 <50:1080 <100:211 <200:20 <400:0 >=400:4
+186 frames in 5.0 seconds = 37.011 FPS 147 frames in 5.0 seconds = 29.337 FPS 213 frames in 5.0 seconds = 42.589 FPS 
+RUN 6 fps 42.6 gears 96% lvdesk 68% | gaps0 <25:2379 <50:1125 <100:241 <200:23 <400:0 >=400:5 | gaps1 <25:2786 <50:1230 <100:257 <200:24 <400:0 >=400:5
+180 frames in 5.0 seconds = 35.950 FPS 185 frames in 5.0 seconds = 36.931 FPS 246 frames in 5.0 seconds = 49.012 FPS 
+kms: fullscreen 400x240, fb 42 pitch 800
+lvdesk: fullscreen at panel size, render scale 2x (half-size mode)
+lvdesk: fullscreen alias 0x200002 400x240x16
+kms: fullscreen off
+lvdesk: fs_render_set(1): refresh restored (refreshes during fullscreen so far 0)
+lvdesk: fullscreen off (client gone)
+              total        used        free      shared  buff/cache   available
+Mem:          15336        9276        3684         168        2376        3252
+DONE

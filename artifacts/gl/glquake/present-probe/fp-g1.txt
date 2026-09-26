@@ -1,0 +1,20 @@
+FP g1 client=gears secs=20 prof=0 bin=/usr/bin/lvdesk lvenv= #391 SMP Fri Sep 25 10:24:40 UTC 2026 up 2319.76
+--- before
+lvdesk: frames 216  gaps <25:98 <50:115 <100:2 <200:1 <400:0 >=400:0
+lvdesk: present us last 8338 worst 12276 | expand 0/0 dirty 3244/5003
+lvdesk: dirty ms <1:2 <3:209 <6:5 <12:0 >=12:0
+lvdesk: alias presents 216, established 1, window 0x200002
+lvdesk: long frames (>=30 ms) n=53: f1:46ms/mf0 f8:41ms/mf0 f9:32ms/mf0 f11:35ms/mf0 f20:30ms/mf0 f32:31ms/mf0 f35:30ms/mf0 f36:30ms/mf0 f40:33ms/mf0 f43:30ms/mf0 f44:30ms/mf0 f48:32ms/mf0 f51:32ms/mf0 f60:31ms/mf0 f63:31ms/mf0 f64:31ms/mf0 f68:37ms/mf0 f71:31ms/mf0 f75:44ms/mf0 f78:39ms/mf0 f79:36ms/mf0 f81:37ms/mf0 f82:32ms/mf0 f85:32ms/mf0 f94:32ms/mf0 f97:30ms/mf0 f99:35ms/mf0 f105:35ms/mf0 f113:34ms/mf0 f117:30ms/mf0 f121:34ms/mf0 f124:31ms/mf0 f125:31ms/mf0 f129:33ms/mf0 f137:32ms/mf0 f140:31ms/mf0 f149:31ms/mf0 f157:37ms/mf0 f165:39ms/mf0 f168:30ms/mf0 f173:32ms/mf0 f180:32ms/mf0 f185:34ms/mf0 f188:31ms/mf0 f189:30ms/mf0 f193:32ms/mf0 f196:32ms/mf0 f201:33ms/mf0 f212:39ms/mf0 f213:46ms/mf0 f214:100ms/mf0 f215:79ms/mf0 f216:89ms/mf0
+xshim: 217 MIT-SHM ShmPutImage, 0 identical (no rows changed)
+  9:     749253     345580 ESP32-S31 CLIC local INTC   5 Edge      riscv-timer
+LV0 9 475 CL0 7 720 2338.49
+LV1 9 1642 CL1 7 2672 2358.82
+  9:     753584     349134 ESP32-S31 CLIC local INTC   5 Edge      riscv-timer
+--- after
+lvdesk: frames 1091  gaps <25:584 <50:495 <100:11 <200:1 <400:0 >=400:0
+lvdesk: present us last 4867 worst 34039 | expand 0/0 dirty 4432/33576
+lvdesk: dirty ms <1:4 <3:990 <6:93 <12:2 >=12:2
+lvdesk: alias presents 1091, established 1, window 0x200002
+lvdesk: long frames (>=30 ms) n=96: f1:46ms/mf0 f8:41ms/mf0 f9:32ms/mf0 f11:35ms/mf0 f20:30ms/mf0 f32:31ms/mf0 f35:30ms/mf0 f36:30ms/mf0 f40:33ms/mf0 f43:30ms/mf0 f44:30ms/mf0 f48:32ms/mf0 f51:32ms/mf0 f60:31ms/mf0 f63:31ms/mf0 f64:31ms/mf0 f68:37ms/mf0 f71:31ms/mf0 f75:44ms/mf0 f78:39ms/mf0 f79:36ms/mf0 f81:37ms/mf0 f82:32ms/mf0 f85:32ms/mf0 f94:32ms/mf0 f97:30ms/mf0 f99:35ms/mf0 f105:35ms/mf0 f113:34ms/mf0 f117:30ms/mf0 f121:34ms/mf0 f124:31ms/mf0 f125:31ms/mf0 f129:33ms/mf0 f137:32ms/mf0 f140:31ms/mf0 f149:31ms/mf0 f157:37ms/mf0 f165:39ms/mf0 f168:30ms/mf0 f173:32ms/mf0 f180:32ms/mf0 f185:34ms/mf0 f188:31ms/mf0 f189:30ms/mf0 f193:32ms/mf0 f196:32ms/mf0 f201:33ms/mf0 f212:39ms/mf0 f213:46ms/mf0 f214:100ms/mf0 f215:79ms/mf0 f216:89ms/mf0 f217:60ms/mf0 f219:30ms/mf0 f223:30ms/mf0 f224:46ms/mf0 f226:38ms/mf0 f229:34ms/mf0 f237:31ms/mf0 f242:30ms/mf0 f245:33ms/mf0 f255:37ms/mf0 f257:90ms/mf0 f258:74ms/mf0 f259:48ms/mf0 f260:51ms/mf0 f262:48ms/mf0 f263:48ms/mf0 f265:47ms/mf0 f266:40ms/mf0 f267:41ms/mf0 f268:52ms/mf0 f269:34ms/mf0 f270:34ms/mf0 f291:52ms/mf0 f295:30ms/mf0 f299:33ms/mf0 f303:33ms/mf0 f311:33ms/mf0 f315:31ms/mf0 f319:30ms/mf0 f327:30ms/mf0 f328:35ms/mf0 f330:37ms/mf0 f343:30ms/mf0 f360:34ms/mf0 f363:31ms/mf0 f364:30ms/mf0 f368:33ms/mf0 f371:31ms/mf0 f375:30ms/mf0 f376:33ms/mf0 f388:31ms/mf0 f396:32ms/mf0 f399:31ms/mf0
+xshim: 1093 MIT-SHM ShmPutImage, 0 identical (no rows changed)
+FPDONE

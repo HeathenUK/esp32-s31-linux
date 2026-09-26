@@ -131,3 +131,59 @@ same frames.
 | timer IRQs | riscv-timer runs at about 450/s on CPU0 under the game against 188/s idle: the 100 Hz tick, the LCD vblank hrtimer, the 10 ms SD keepalive while paging, and hrtimer wakeups. The scheduler, tick and IRQ total is 8.3% fullscreen, spread flat with no symbol above 0.5%. |
 | **U8 audio** (open) | `plug` over s31route cannot convert formats: alsa-lib's linear, rate and route plugins need MMAP access on their slave, and s31route offers RW only. So an `AUDIO_U8` open fails ("no configurations available"). Adding `MMAP_INTERLEAVED` fixes the negotiation, but aplay then hangs in playback. That needs work in ioplug's mmap emulation and pointer handling, and it was not shipped. GLQuake needs 12 MB of heap, so it never takes the 8-bit path. |
 | the Sys_Error message is lost (open) | When QuakeSpasm errors out (for example a hunk overflow at 8 MB), the process exits silently after "Shutting down SDL sound", inside Host_Shutdown's video teardown, before it prints the error text. Nothing appears in dmesg. The suspect is xlite's IO-error `_exit(1)` during SDL 1.2's two-connection teardown. |
+
+## 6. The fullscreen present path (the owner's question: is scaling as fast as it can be?)
+
+The instruments:
+- `scripts/board/fs-present-probe.sh` takes a continuous window of a
+  fullscreen client with lvdesk's stage timers.
+- Every long frame now carries the preceding present's ioctl time (`/dN`).
+- The driver's `present_stats` (patches/0071) is readable without debugfs.
+
+Raw data is in `present-probe/` and `present-arms/`.
+
+**What the fullscreen present costs.** Stock glxgears at render scale with
+2 SHM buffers:
+- lvdesk's per-frame work is the ShmPutImage copy (`mitshm_request` was
+  17.4% of CPU0 in the profile, memory-bound, 192 kB a frame) plus DIRTYFB.
+- DIRTYFB took 2.2 ms per call, of which:
+  - `pipe_update` was 0.55-0.62 ms (the copy/scale dispatch 0.35-0.39 ms,
+    flush 0.08 ms);
+  - the atomic commit around it was about 1.6 ms, mostly DRM core running
+    from XIP flash.
+- The PPA scale itself is a 0.35 ms async submit.
+
+**Why DIRTYFB spiked to about 30 ms.** It was not vblank (`prompt_flip`
+is on and there is no vblank wait in the commit tail). It was not the PPA
+sleep (`ppa_spin_us` 5000 changed nothing).
+- It was the adaptive engine picker probing the CPU scaler one op in 512.
+- A CPU scale of 400x240 to 800x480 is 17-37 ms.
+- `present_stats` ppa max equals upd max, and there were 2-3 spikes per
+  20-30 s, which is exactly 512 presents at about 50/s.
+
+**The fix** (kernel #393 plus lvdesk md5 170b1a39, both shipped):
+- `PRESENT_MODE_FB`: DIRTYFB's damage copy without the atomic commit.
+- `ppa_explore_max=8`: no probes of an engine more than 8x behind.
+
+| fullscreen glxgears | old (DIRTYFB, probes) | new |
+|---|---|---|
+| present ioctl, one boot, 30 s | < 1 ms: 2 of 1,496; >= 12 ms: 3; worst 38.0 ms | < 1 ms: 1,246 of 1,608; >= 12 ms: 0; **worst 2.8 ms** |
+| fps, fresh boot per arm, 3 boots x runs 2-6 (gl-arm.sh) | 35.9-42.6, median 38.5 | 35.2-41.5, median 38.7 |
+| lvdesk CPU, the same 15 runs | median 54% | median 50% |
+| gaps >= 100 ms per 50 s | 11 / 8 / 10 | 8 / 8 / 11 |
+| GLQuake fullscreen, fresh boot | 4.5, 4.6 (#391) | 4.7, 4.8 (#393; at 4.5 fps the present is about 1% of a frame, so most of this is boot variance and is not claimed) |
+
+**The dips are not the present.** The 50-100 ms present-to-present gaps
+come about 10 per 30 s in a long window, and more in gl-arm's
+per-run-restarted windows.
+- The dip clusters carry DIRTYFB times of 1-6 ms. The 30 ms spikes made
+  lone 41 ms frames.
+- The dips are unchanged by the fix.
+- They are unchanged by pinning the client to CPU0 or CPU1 (13, 13 and 12
+  per 20 s).
+- They come with no major faults.
+
+So they are on the client or scheduling side, and they are still open.
+Zero copy (P2: a GEM mode buffer that libGL renders into) would remove the
+192 kB copy per frame, which is lvdesk's biggest remaining cost. It needs
+the libGL half (gl/).

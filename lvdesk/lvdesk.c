@@ -3764,6 +3764,7 @@ static void term_raise_and_run(const char *cmd);
 static void win_snap(struct winrec *w, int mode);
 static void win_restore(struct winrec *w);
 
+static void fsg_reset(void);
 static void ctl_line(char *buf)
 {
 	int idx, w, h;
@@ -3962,6 +3963,15 @@ static void ctl_line(char *buf)
 				else
 					win_snap(&wins[idx], w);
 			}
+		} else if (!strncmp(buf, "fsgreset", 8)) {
+			/*
+			 * Zero the frame-gap and present-stage statistics, so a
+			 * probe's SIGUSR1 report covers ITS window only: the
+			 * long-frame log is first-96 and the maxima are since
+			 * start, both dominated by the fullscreen entry
+			 * otherwise (scripts/board/fs-present-probe.sh).
+			 */
+			fsg_reset();
 		} else if (!strncmp(buf, "redraw", 6)) {
 			/*
 			 * Repaint everything once. The screen recorder encodes
@@ -6007,6 +6017,15 @@ static uint32_t fsg_bucket[6];		/* <25 <50 <100 <200 <400 >=400 ms */
 static uint32_t fsg_log_ms[FSG_LOG];
 static uint64_t fsg_log_frame[FSG_LOG];
 static uint64_t fsg_log_majflt[FSG_LOG];
+/*
+ * The previous present's DIRTYFB/PRESENT time, in ms, per long frame
+ * (LVDESK_FSGSTAGE=1 only; 0 otherwise). fsg_note() runs at the START of a
+ * present, so the dirty figure it sees belongs to the present that opened
+ * this gap: a gap caused by the desktop's own commit shows that commit's
+ * time next to it, and a gap with a small one is the client or the
+ * scheduler. It answers "do the DIRTYFB spikes line up with the dips".
+ */
+static uint16_t fsg_log_dirty[FSG_LOG];
 static int fsg_n;
 /*
  * Global major-fault count, read ONLY when a gap is already long. Reading
@@ -6193,6 +6212,15 @@ static uint64_t fsg_wall_ns(void)
 	return fsg_syscall_ns();
 }
 
+static void fsg_reset(void)
+{
+	memset(fsg_bucket, 0, sizeof fsg_bucket);
+	memset(fsg_dirty_bucket, 0, sizeof fsg_dirty_bucket);
+	fsg_present_max_us = fsg_expand_max = fsg_dirty_max = 0;
+	fsg_n = 0;
+	fsg_last = 0;
+}
+
 static void fsg_note(void)
 {
 	uint64_t now;
@@ -6243,6 +6271,7 @@ static void fsg_note(void)
 
 		fsg_log_ms[fsg_n] = ms;
 		fsg_log_frame[fsg_n] = fsg_frames;
+		fsg_log_dirty[fsg_n] = (uint16_t)(fsg_dirty_us / 1000u);
 		fsg_log_majflt[fsg_n] = (mf && fsg_last_majflt &&
 					 mf > fsg_last_majflt) ?
 					mf - fsg_last_majflt : 0;
@@ -6289,9 +6318,10 @@ static void fsg_report(void)
 	       fsrh_skipped);
 	printf("lvdesk: long frames (>=%d ms) n=%d:", FSG_MIN_MS, fsg_n);
 	for (i = 0; i < fsg_n; i++)
-		printf(" f%llu:%ums/mf%llu",
+		printf(" f%llu:%ums/mf%llu/d%u",
 		       (unsigned long long)fsg_log_frame[i], fsg_log_ms[i],
-		       (unsigned long long)fsg_log_majflt[i]);
+		       (unsigned long long)fsg_log_majflt[i],
+		       (unsigned)fsg_log_dirty[i]);
 	printf("\n");
 	fflush(stdout);
 }

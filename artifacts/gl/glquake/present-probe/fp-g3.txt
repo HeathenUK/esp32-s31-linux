@@ -1,0 +1,20 @@
+FP g3 client=gears secs=20 prof=0 bin=/root/lvdesk.new lvenv= #391 SMP Fri Sep 25 10:24:40 UTC 2026 up 2662.98
+--- before
+lvdesk: frames 323  gaps <25:44 <50:5 <100:0 <200:0 <400:0 >=400:0
+lvdesk: present us last 3329 worst 5075 | expand 0/0 dirty 3164/4652
+lvdesk: dirty ms <1:0 <3:28 <6:22 <12:0 >=12:0
+lvdesk: alias presents 324, established 1, window 0x200002
+lvdesk: long frames (>=30 ms) n=1: f322:38ms/mf0/d2
+xshim: 326 MIT-SHM ShmPutImage, 0 identical (no rows changed)
+  9:     803188     399881 ESP32-S31 CLIC local INTC   5 Edge      riscv-timer
+LV0 16 720 CL0 6 802 2682.93
+LV1 16 2144 CL1 6 2772 2703.27
+  9:     808052     402404 ESP32-S31 CLIC local INTC   5 Edge      riscv-timer
+--- after
+lvdesk: frames 1318  gaps <25:852 <50:183 <100:7 <200:2 <400:0 >=400:0
+lvdesk: present us last 3033 worst 30526 | expand 0/0 dirty 2842/30161
+lvdesk: dirty ms <1:0 <3:709 <6:333 <12:1 >=12:2
+lvdesk: alias presents 1319, established 1, window 0x200002
+lvdesk: long frames (>=30 ms) n=54: f322:38ms/mf0/d2 f324:45ms/mf0/d3 f373:93ms/mf0/d1 f374:31ms/mf0/d3 f375:70ms/mf0/d2 f376:39ms/mf0/d1 f377:103ms/mf1/d2 f378:43ms/mf0/d2 f379:33ms/mf0/d6 f380:123ms/mf0/d2 f381:66ms/mf0/d5 f382:56ms/mf0/d3 f383:76ms/mf0/d4 f384:49ms/mf0/d2 f401:31ms/mf0/d1 f409:30ms/mf0/d2 f427:30ms/mf0/d2 f435:30ms/mf0/d1 f454:30ms/mf0/d2 f463:30ms/mf0/d1 f475:30ms/mf0/d2 f484:30ms/mf0/d2 f489:37ms/mf0/d1 f491:32ms/mf0/d4 f688:41ms/mf0/d29 f689:31ms/mf0/d2 f1105:34ms/mf0/d3 f1106:35ms/mf0/d2 f1107:49ms/mf0/d2 f1139:30ms/mf0/d1 f1152:33ms/mf0/d2 f1165:31ms/mf0/d2 f1174:39ms/mf0/d2 f1182:34ms/mf0/d2 f1200:41ms/mf0/d30 f1201:34ms/mf0/d2 f1202:30ms/mf0/d2 f1227:30ms/mf0/d2 f1231:30ms/mf0/d1 f1249:30ms/mf0/d1 f1257:30ms/mf0/d1 f1262:30ms/mf0/d2 f1266:30ms/mf0/d2 f1271:30ms/mf0/d1 f1287:30ms/mf0/d2 f1296:30ms/mf0/d2 f1308:54ms/mf0/d2 f1309:45ms/mf0/d2 f1311:65ms/mf0/d2 f1312:31ms/mf0/d1 f1314:45ms/mf0/d2 f1316:46ms/mf0/d5 f1317:42ms/mf0/d2 f1318:33ms/mf0/d3
+xshim: 1323 MIT-SHM ShmPutImage, 0 identical (no rows changed)
+FPDONE

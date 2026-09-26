@@ -58,6 +58,18 @@ struct drm_esp32s31_scanout {
 struct drm_esp32s31_present {
 	uint32_t x1, y1, x2, y2;	/* x2/y2 exclusive */
 };
+/*
+ * The same ioctl with the 2026-09-26 flags word (patches/0071): the size is
+ * part of the command, and drm_ioctl() reconciles the two sizes in both
+ * directions, so this and the 16-byte form above coexist on any kernel.
+ */
+struct drm_esp32s31_present2 {
+	uint32_t x1, y1, x2, y2, flags;
+};
+#define DRM_ESP32S31_PRESENT_MODE_FB (1u << 0)
+#define DRM_IOCTL_ESP32S31_PRESENT2 \
+	_IOW(DRM_IOCTL_BASE, DRM_COMMAND_BASE + DRM_ESP32S31_PRESENT, \
+	     struct drm_esp32s31_present2)
 #define DRM_IOCTL_ESP32S31_PRESENT \
 	_IOW(DRM_IOCTL_BASE, DRM_COMMAND_BASE + DRM_ESP32S31_PRESENT, \
 	     struct drm_esp32s31_present)
@@ -767,6 +779,52 @@ int kms_fs_dirty(int x1, int y1, int x2, int y2)
 	if (y2 >= (int)kms_fs_h) y2 = kms_fs_h - 1;
 	if (x1 > x2 || y1 > y2)
 		return 0;
+	/*
+	 * FULLSCREEN PRESENT WITHOUT AN ATOMIC COMMIT (plan G15, 2026-09-26).
+	 * DIRTYFB on the mode buffer is a full atomic commit - state
+	 * duplication, check, commit tail, mostly DRM core code running from
+	 * XIP flash - around the one thing it is for: the driver's damage
+	 * copy/scale of this rectangle into the scanout buffer. The driver's
+	 * PRESENT ioctl now does that copy itself when asked with
+	 * PRESENT_MODE_FB, under the same modeset locks. An older kernel
+	 * answers EINVAL (unknown flag: the direct-scanout check fails), and
+	 * so does a CRTC in any state the driver cannot finish alone; either
+	 * way DIRTYFB below does it. LVDESK_NOFSPRESENT=1 forces DIRTYFB so
+	 * the two compare on one binary.
+	 */
+	{
+		static int fsp_ok = -1, fsp_fails;
+
+		if (fsp_ok < 0)
+			fsp_ok = getenv("LVDESK_NOFSPRESENT") == NULL;
+		if (fsp_ok) {
+			struct drm_esp32s31_present2 pr = {
+				(uint32_t)x1, (uint32_t)y1,
+				(uint32_t)x2 + 1, (uint32_t)y2 + 1,
+				DRM_ESP32S31_PRESENT_MODE_FB
+			};
+
+			if (ioctl(kms_fd, DRM_IOCTL_ESP32S31_PRESENT2, &pr) == 0) {
+				static int said;
+
+				fsp_fails = 0;
+				if (!said) {
+					said = 1;
+					printf("kms: fullscreen presents with PRESENT_MODE_FB (no atomic commit)\n");
+					fflush(stdout);
+				}
+				return 0;
+			}
+			/* a kernel without it refuses every call; a transient
+			 * CRTC state refuses a few */
+			if (errno == ENOTTY || ++fsp_fails >= 8) {
+				fsp_ok = 0;
+				printf("kms: PRESENT_MODE_FB refused (%s) - DIRTYFB from now on\n",
+				       strerror(errno));
+				fflush(stdout);
+			}
+		}
+	}
 	clip.x1 = x1; clip.y1 = y1;
 	clip.x2 = x2 + 1; clip.y2 = y2 + 1;
 	memset(&d, 0, sizeof(d));

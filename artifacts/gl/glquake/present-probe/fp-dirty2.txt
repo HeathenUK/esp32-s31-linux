@@ -1,0 +1,26 @@
+FP dirty2 client=gears secs=20 prof=0 bin=/root/lvdesk.new lvenv=LVDESK_NOFSPRESENT=1 #392 SMP Sat Sep 26 12:23:28 UTC 2026 up 169.87
+--- before
+lvdesk: frames 287  gaps <25:26 <50:17 <100:0 <200:0 <400:0 >=400:0
+lvdesk: present us last 2702 worst 2974 | expand 0/0 dirty 2468/2637
+lvdesk: dirty ms <1:0 <3:44 <6:0 <12:0 >=12:0
+lvdesk: alias presents 288, established 1, window 0x200002
+lvdesk: long frames (>=30 ms) n=2: f245:47ms/mf0/d2 f258:31ms/mf0/d2
+xshim: 290 MIT-SHM ShmPutImage, 0 identical (no rows changed)
+  9:      51679      34445 ESP32-S31 CLIC local INTC   5 Edge      riscv-timer
+LV0 16 531 CL0 5 850 189.77
+LV1 16 1680 CL1 5 2866 210.08
+  9:      56592      36802 ESP32-S31 CLIC local INTC   5 Edge      riscv-timer
+--- after
+lvdesk: frames 1200  gaps <25:612 <50:334 <100:10 <200:0 <400:0 >=400:0
+lvdesk: present us last 6673 worst 29799 | expand 0/0 dirty 6179/29651
+lvdesk: dirty ms <1:1 <3:890 <6:61 <12:3 >=12:2
+lvdesk: alias presents 1201, established 1, window 0x200002
+lvdesk: long frames (>=30 ms) n=85: f245:47ms/mf0/d2 f258:31ms/mf0/d2 f288:60ms/mf0/d2 f313:31ms/mf0/d1 f327:30ms/mf0/d1 f330:30ms/mf0/d1 f331:30ms/mf0/d2 f332:32ms/mf0/d2 f333:74ms/mf0/d2 f334:49ms/mf0/d2 f335:89ms/mf0/d7 f336:70ms/mf0/d2 f337:68ms/mf0/d3 f338:45ms/mf0/d1 f339:63ms/mf0/d1 f340:30ms/mf0/d2 f341:66ms/mf0/d1 f342:36ms/mf0/d2 f344:34ms/mf0/d2 f353:31ms/mf0/d1 f357:30ms/mf0/d2 f371:32ms/mf0/d2 f388:30ms/mf0/d1 f392:31ms/mf0/d2 f401:30ms/mf0/d2 f409:35ms/mf0/d1 f413:36ms/mf0/d2 f418:31ms/mf0/d1 f435:31ms/mf0/d1 f469:30ms/mf0/d2 f478:33ms/mf0/d2 f483:30ms/mf0/d1 f539:30ms/mf0/d1 f543:34ms/mf0/d1 f548:39ms/mf0/d29 f550:30ms/mf0/d2 f631:46ms/mf0/d1 f658:32ms/mf0/d2 f671:31ms/mf0/d2 f688:32ms/mf0/d2 f709:30ms/mf0/d2 f718:32ms/mf0/d2 f736:31ms/mf0/d1 f748:31ms/mf0/d1 f757:31ms/mf0/d2 f770:30ms/mf0/d2 f775:30ms/mf0/d2 f778:34ms/mf0/d3 f783:31ms/mf0/d1 f791:47ms/mf0/d2 f808:33ms/mf0/d2 f817:30ms/mf0/d1 f821:30ms/mf0/d2 f838:34ms/mf0/d2 f868:33ms/mf0/d1 f882:30ms/mf0/d2 f894:31ms/mf0/d1 f898:34ms/mf0/d1 f907:30ms/mf0/d1 f911:43ms/mf0/d2 f928:33ms/mf0/d2 f941:30ms/mf0/d2 f958:31ms/mf0/d1 f979:30ms/mf0/d1 f988:32ms/mf0/d1 f997:30ms/mf0/d2 f1006:30ms/mf0/d1 f1018:32ms/mf0/d1 f1035:32ms/mf0/d2 f1040:36ms/mf0/d2 f1048:30ms/mf0/d2 f1056:31ms/mf0/d3 f1058:39ms/mf0/d1 f1060:36ms/mf0/d29 f1070:30ms/mf0/d2 f1078:31ms/mf0/d1 f1157:30ms/mf0/d2 f1161:30ms/mf0/d2 f1175:30ms/mf0/d2 f1183:34ms/mf0/d1 f1195:40ms/mf0/d1 f1197:43ms/mf0/d1 f1198:71ms/mf0/d3 f1199:84ms/mf0/d2 f1200:53ms/mf0/d3
+xshim: 1203 MIT-SHM ShmPutImage, 0 identical (no rows changed)
+--- driver
+upd n=1006 ns=551361008 max=27949104 skipped=0
+flush n=1006 ns=76519015 max=630522 bytes=194304000
+ppa n=1006 ns=347896496 max=27771102
+fsp n=0 refused=0 ns=0 max=0
+path rects=3921 full=10 cpuscale=11 ppa=3869 direct=44
+FPDONE

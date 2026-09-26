@@ -1,0 +1,20 @@
+FP pind2 client=gears secs=20 prof=0 bin=/root/lvdesk.new lvenv= #391 SMP Fri Sep 25 10:24:40 UTC 2026 up 3115.89
+--- before
+lvdesk: frames 270  gaps <25:26 <50:14 <100:0 <200:0 <400:0 >=400:0
+lvdesk: present us last 2821 worst 4094 | expand 0/0 dirty 2607/3657
+lvdesk: dirty ms <1:0 <3:39 <6:2 <12:0 >=12:0
+lvdesk: alias presents 271, established 1, window 0x200002
+lvdesk: long frames (>=30 ms) n=2: f241:30ms/mf0/d2 f270:40ms/mf0/d2
+xshim: 272 MIT-SHM ShmPutImage, 0 identical (no rows changed)
+  9:     892868     467018 ESP32-S31 CLIC local INTC   5 Edge      riscv-timer
+LV0 22 503 CL0 7 810 3135.30
+LV1 22 1773 CL1 7 2800 3155.64
+  9:     896655     470487 ESP32-S31 CLIC local INTC   5 Edge      riscv-timer
+--- after
+lvdesk: frames 1207  gaps <25:671 <50:296 <100:9 <200:1 <400:0 >=400:0
+lvdesk: present us last 3338 worst 28727 | expand 0/0 dirty 3169/28553
+lvdesk: dirty ms <1:2 <3:821 <6:153 <12:1 >=12:1
+lvdesk: alias presents 1208, established 1, window 0x200002
+lvdesk: long frames (>=30 ms) n=64: f241:30ms/mf0/d2 f270:40ms/mf0/d2 f272:30ms/mf0/d1 f283:30ms/mf0/d2 f314:67ms/mf0/d1 f315:116ms/mf0/d2 f316:84ms/mf0/d4 f317:68ms/mf0/d2 f318:66ms/mf0/d1 f319:52ms/mf0/d6 f320:73ms/mf0/d4 f324:30ms/mf0/d1 f333:30ms/mf0/d1 f363:32ms/mf0/d1 f388:34ms/mf0/d2 f389:30ms/mf0/d1 f391:31ms/mf0/d1 f396:30ms/mf0/d1 f404:33ms/mf0/d1 f426:30ms/mf0/d2 f435:31ms/mf0/d2 f444:30ms/mf0/d1 f452:32ms/mf0/d1 f456:30ms/mf0/d1 f469:31ms/mf0/d2 f474:31ms/mf0/d1 f494:34ms/mf0/d1 f512:34ms/mf0/d1 f516:31ms/mf0/d1 f524:32ms/mf0/d1 f533:35ms/mf0/d2 f554:31ms/mf0/d1 f568:33ms/mf0/d1 f598:31ms/mf0/d2 f644:32ms/mf0/d2 f648:30ms/mf0/d3 f656:30ms/mf0/d1 f678:30ms/mf0/d2 f682:30ms/mf0/d1 f729:30ms/mf0/d2 f737:30ms/mf0/d2 f742:36ms/mf0/d28 f750:30ms/mf0/d2 f764:34ms/mf0/d1 f776:30ms/mf0/d1 f779:31ms/mf0/d1 f788:30ms/mf0/d3 f792:30ms/mf0/d2 f809:33ms/mf0/d1 f822:30ms/mf0/d2 f876:30ms/mf0/d2 f878:39ms/mf0/d2 f880:32ms/mf0/d0 f1128:38ms/mf0/d2 f1140:56ms/mf0/d2 f1142:31ms/mf0/d1 f1199:49ms/mf0/d3 f1201:60ms/mf0/d3 f1202:43ms/mf0/d2 f1203:48ms/mf0/d1 f1204:42ms/mf0/d2 f1205:46ms/mf0/d3 f1206:51ms/mf0/d3 f1207:45ms/mf0/d2
+xshim: 1209 MIT-SHM ShmPutImage, 0 identical (no rows changed)
+FPDONE
