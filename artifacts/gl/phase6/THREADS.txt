@@ -241,6 +241,34 @@ full gates), thrchk-pie.log, threads-host.log.
   Before B1: M1 (two-hart memset/memcpy of 2 MB, libc-free workers,
   placement verified) is the cheap check of whether any of this can pay.
 
+6b. RAMTEXT (main 0d381b02, merged last: S31GL_RAMTEXT default on in the
+   board build)
+  ramtext.list names ZB_fillTriangleGeneral[MT]. In mode 0 they still
+  hold the whole hot body (fill_body is inlined there, unbanded), so
+  RAMTEXT is unchanged. In modes 1 / 2 both threads run the banded
+  out-of-line copies ZB_fillBodyGeneral (2,412 B) and ZB_fillBodyGeneralMT
+  (2,832 B), which the list does NOT name, so they run from the mapped
+  library while the stages they call through the pipe (rewritten stage
+  tables, copied into the worker's pipe) run from the RAM copy. Not added
+  to the list here: it would cost every process ~5.2 kB (1-2 pages) of
+  mlocked RAM for a mode that is off by default. If B1 is promising, add
+  "ZB_fillBodyGeneral" / "ZB_fillBodyGeneralMT" to the two ztriangle_gen*
+  lines and re-run B1 - otherwise B1 slightly understates the threaded
+  arm.
+  Identity with RAMTEXT on: threads-host-rt.log (host, p5f2-tf0, modes
+  0 / 1 / 2) and rv32-rt/rv32-threads.log (qemu-user).
+  Two build fixes came with the merge: gl/build.sh links the static
+  *.qemu tests with the library's objects first - raster_gate's 0.6 MB of
+  frame-buffer arrays sat in .bss ahead of the RAM-text slot, which the
+  ~6 kB of phase 6 code (pthread, s31_thr) pushed out of jal range of
+  memcpy / prog, and ramtext.py refused the image; and s31_thr.c parses
+  S31GL_TSPLIT with strtol instead of sscanf (5 kB of scanf per static
+  image). The shipped libGL.so.1 was never affected (its slot is 0x6a000).
+  The full run-3a (section 5) ran on the tree merged with cd0a48c3, before
+  0d381b02; after it the gates in final.log re-ran (host threads, host
+  threads with RAMTEXT, qemu-user threads with and without RAMTEXT, the
+  RV32 trace identity gate, thrchk-pie / memchk-pie).
+
 7. NEXT STEPS (not done in the time box)
   - Tier-1 fillers, lines and points stay single-threaded (glxgears gains
     nothing): the same set-up / body split applies to ztriangle.h.

@@ -1,0 +1,3 @@
+libGL: context 1 created (pid 68, comm qsreplay_host)
+libGL: context 2 created (pid 68, comm qsreplay_host)
+qsreplay_host: 439 frames, 84 full: 84 same as live, 0 differ - bit-exact (vendor s31)

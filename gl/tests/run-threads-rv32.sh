@@ -5,12 +5,14 @@
 # worker, futexes and RV32 atomics concurrently. Every mode's results must
 # equal mode 0's. Run on the Mac after S31GL_IMAGE=/src/gl/out-rv32/libGL.so.1
 # gl/build.sh:  gl/tests/run-threads-rv32.sh [OUT]
+# QTR_ENV: extra library toggles for every run (e.g. S31GL_RAMTEXT=1)
 # s31, MIT.
 set -u
 R=$(cd "$(dirname "$0")/../.." && pwd)
 OUT=${1:-$R/artifacts/gl/phase6}
 mkdir -p "$OUT"
-docker run --rm -v "$R":/src -w /tmp s31-glref-qemu sh -c '
+docker run --rm -v "$R":/src -w /tmp -e QTR_ENV="${QTR_ENV:-}" s31-glref-qemu sh -c '
+for kv in $QTR_ENV; do export "$kv"; done
 Q="qemu-riscv32 -cpu rv32,zba=true,zbb=true,zbc=true,zbs=true"
 for m in 0 1 2; do
   export S31GL_THREADS=$m

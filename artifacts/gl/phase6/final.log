@@ -1,3 +1,6 @@
 run-threads-host rc=0
+run-threads-host RAMTEXT=1 rc=0
 run-threads-rv32 rc=0
+run-threads-rv32 RAMTEXT=1 rc=0
+run-qsr-threads rc=0
 all done

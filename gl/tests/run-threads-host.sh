@@ -10,6 +10,7 @@
 # Run on the Mac after gl/host-build.sh:
 #   gl/tests/run-threads-host.sh [OUT]   (OUT default artifacts/gl/phase6/host)
 # QTR_TRACES: names under gl/bench/qstrace/work (default p5f2 p5f2-tf0 p5a).
+# QTR_ENV: extra library toggles for every arm (e.g. S31GL_RAMTEXT=1).
 # Exit 1 on any difference. s31, MIT.
 set -u
 R=$(cd "$(dirname "$0")/../.." && pwd)
@@ -20,7 +21,8 @@ WORK=$(cd -P "$R/gl/bench/qstrace/work" && pwd)
 bad=0
 # the unit tests, each mode (TCHECK: every PIPE copy is scanned for an
 # unrelocated pointer into the application thread's structures)
-docker run --rm -v "$R":/src -w /src/gl/out-host s31-glref:latest sh -c '
+docker run --rm -v "$R":/src -w /src/gl/out-host -e QTR_ENV="${QTR_ENV:-}" s31-glref:latest sh -c '
+for kv in $QTR_ENV; do export "$kv"; done
 for m in 0 1 2; do
   export S31GL_THREADS=$m S31GL_TCHECK=1
   echo "== S31GL_THREADS=$m"
@@ -51,8 +53,8 @@ for t in $TR; do
 		n=${arm%%:*}; env=${arm#*:}
 		# (the work directory may be a symlink out of the tree: mount it)
 		docker run --rm -v "$R":/src -v "$WORK":/src/gl/bench/qstrace/work -w /src \
-			-e QS_GLENV="$e $env S31GL_TCHECK=1" s31-glref:latest \
-			sh /src/tools/glref/gltrace/replay-host.sh ours "$W" "/src/artifacts/gl/phase6/host/$t-$n" > "$OUT/$t-$n.log" 2>&1 &
+			-e QS_GLENV="$e $env S31GL_TCHECK=1 ${QTR_ENV:-}" s31-glref:latest \
+			sh /src/tools/glref/gltrace/replay-host.sh ours "$W" "/src/${OUT#$R/}/$t-$n" > "$OUT/$t-$n.log" 2>&1 &
 	done
 	wait
 	for n in t1 t1b t2; do

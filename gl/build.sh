@@ -102,9 +102,13 @@ rtfix() { python3 $GL/api/ramtext.py fix "$1" > /dev/null; }
 	rtfix $TEST && $STRIP $TEST ) & pids="$pids $!"
 ( $CC -static $ARCHFLAGS $RT -o $GL/out-rv32/core_test $OBJ/core_test.o $(cat $OBJ/core.list) -lm &&
 	rtfix $GL/out-rv32/core_test && $STRIP $GL/out-rv32/core_test ) & pids="$pids $!"
+# (phase 6: the library's objects first, so its .bss - the RAM-text slot
+# among it - comes before a test's own large arrays: raster_gate's 0.6 MB
+# of frame buffers otherwise put the slot out of jal range of the code it
+# calls, and ramtext.py refused the image)
 for t in headless_gears core_test d2f_test raster_gate zepoch_test filt_test fused_test; do
-	( $CC -static $ARCHFLAGS $RT -o $GL/out-rv32/$t.qemu $OBJ/$t.o $OBJ/qemu_libc.o \
-		$(cat $OBJ/core.list) -lm && rtfix $GL/out-rv32/$t.qemu ) & pids="$pids $!"
+	( $CC -static $ARCHFLAGS $RT -o $GL/out-rv32/$t.qemu $(cat $OBJ/core.list) \
+		$OBJ/$t.o $OBJ/qemu_libc.o -lm && rtfix $GL/out-rv32/$t.qemu ) & pids="$pids $!"
 done
 waitall
 ls -l $TEST $GL/out-rv32/core_test $GL/out-rv32/*.qemu

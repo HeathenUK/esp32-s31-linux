@@ -1,7 +1,7 @@
 # glref run: impl=ours name=replay frame=0 display=:90
 # cmd: /src/artifacts/gl/phase6/host/p5a-t0/bin/qsreplay_host /src/gl/bench/qstrace/work/p5a/qs.gltr /src/artifacts/gl/phase6/host/p5a-t0 --frames
 # libGL.so.1 resolves to:
-#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000f116fde90000)
+#   	libGL.so.1 => /src/gl/out-host/libGL.so.1 (0x0000f0c54eb80000)
 libGL: context 1 created (pid 68, comm qsreplay_host)
 libGL: context 2 created (pid 68, comm qsreplay_host)
 qsreplay_host: 439 frames, 84 full: 0 same as live, 84 differ (vendor s31)

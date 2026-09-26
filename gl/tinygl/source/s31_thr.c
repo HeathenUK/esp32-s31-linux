@@ -148,9 +148,13 @@ static void read_env(void)
 #endif
   if ((e = getenv("S31GL_TBAND")) && atoi(e) > 0) t_band = atoi(e);
   if ((e = getenv("S31GL_TSPLIT"))) {
-    int k = 0, n = 0;
-    if (sscanf(e, "%d/%d", &k, &n) == 2 && n > 0 && k >= 0 && k <= n) {
-      t_sk = k; t_sn = n;
+    /* k/n (no sscanf: it pulls ~5 kB of scanf into every static test
+       image, which pushed raster_gate.qemu's RAM-text slot out of jal
+       range of memcpy - gl/api/ramtext.py) */
+    char *q;
+    long k = strtol(e, &q, 10), n = *q == '/' ? strtol(q + 1, NULL, 10) : 0;
+    if (n > 0 && k >= 0 && k <= n) {
+      t_sk = (int)k; t_sn = (int)n;
     }
   }
   if ((e = getenv("S31GL_TRING")) && atoi(e) >= 16) t_ring_kb = atoi(e);
