@@ -5302,8 +5302,48 @@ static struct xwin {
 	int drawn;		/* has the client ever put pixels in it? */
 	lv_area_t fast_c;	/* image coords at the last client frame ... */
 	int fast_stable;	/* ... and how many frames they have held */
+	lv_area_t fast_drawn;	/* union of what the fast paths wrote ... */
+	int fast_any;		/* ... to the scanout behind LVGL's back */
 } xwins[MAXXWIN];
 static int xwin_n;
+
+/*
+ * The fast present paths write the scanout directly, so LVGL does not know
+ * those pixels are there: after a windowed sdlquake exited, its last frame
+ * stayed on the panel with only an L-shaped part repainted (docs/gl-
+ * performance-campaign-2026-09-27.md). Remember the union they drew and
+ * hand it to LVGL to repaint when the window goes or fullscreen ends.
+ */
+static void xwin_fast_note(int i, const lv_area_t *c)
+{
+	lv_area_t *u = &xwins[i].fast_drawn;
+
+	if (!xwins[i].fast_any) {
+		*u = *c;
+		xwins[i].fast_any = 1;
+		return;
+	}
+	if (c->x1 < u->x1) u->x1 = c->x1;
+	if (c->y1 < u->y1) u->y1 = c->y1;
+	if (c->x2 > u->x2) u->x2 = c->x2;
+	if (c->y2 > u->y2) u->y2 = c->y2;
+}
+
+static void xwin_fast_forget(int i)
+{
+	if (xwins[i].fast_any) {
+		xwins[i].fast_any = 0;
+		lv_obj_invalidate_area(lv_screen_active(), &xwins[i].fast_drawn);
+	}
+}
+
+static void xwin_fast_forget_all(void)
+{
+	int i;
+
+	for (i = 0; i < xwin_n; i++)
+		xwin_fast_forget(i);
+}
 
 /* Is this frame an X client, whose content is a single image? */
 static int win_is_xclient(lv_obj_t *win)
@@ -5740,6 +5780,7 @@ static void xwin_drop(uint32_t id)
 
 	for (i = 0; i < xwin_n; i++)
 		if (xwins[i].id == id) {
+			xwin_fast_forget(i);
 			xwins[i] = xwins[--xwin_n];
 			return;
 		}
@@ -5908,6 +5949,7 @@ static void xwin_on_fsnative(int on)
 			fs_focused = 0;
 			fs_render_set(1);
 			lv_obj_invalidate(lv_screen_active());
+			xwin_fast_forget_all();
 			printf("lvdesk: fullscreen off (panel size)\n");
 			toast_flush_pending();
 			fflush(stdout);
@@ -5983,6 +6025,7 @@ static void xwin_on_mode(int w, int h)
 			fs_focused = 0;
 			fs_render_set(1);
 			lv_obj_invalidate(lv_screen_active());
+			xwin_fast_forget_all();
 			printf("lvdesk: fullscreen off\n");
 			toast_flush_pending();
 			fflush(stdout);
@@ -7129,6 +7172,7 @@ static void xwin_on_close(uint32_t id)
 		fs_focused = 0;
 		fs_render_set(1);
 		lv_obj_invalidate(lv_screen_active());
+		xwin_fast_forget_all();
 		printf("lvdesk: fullscreen off (client gone)\n");
 		toast_flush_pending();
 		fflush(stdout);
@@ -7138,6 +7182,7 @@ static void xwin_on_close(uint32_t id)
 		if (xwins[i].id == id) {
 			struct winrec *w = win_find(xwins[i].win);
 
+			xwin_fast_forget(i);
 			xwins[i] = xwins[--xwin_n];
 			if (w) {
 				w->xid = 0;	/* the client is already gone */
@@ -7320,6 +7365,7 @@ static void xwin_on_window(uint32_t id, int w, int h)
 	x->drawn = 0;
 	x->fast_stable = 0;		/* a reused slot must re-earn the fast path */
 	memset(&x->fast_c, 0, sizeof(x->fast_c));
+	x->fast_any = 0;		/* nothing drawn behind LVGL yet */
 	if (win)
 		lv_obj_add_flag(win, LV_OBJ_FLAG_HIDDEN);
 	x->dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
@@ -8234,6 +8280,7 @@ static int xwin_fast_present(int i, const lv_area_t *a)
 	if (c.x2 < c.x1 || c.y2 < c.y1)
 		return 1;			/* wholly off screen: nothing to show */
 	xwin_blit_direct(&c);
+	xwin_fast_note(i, &c);
 	cursor_stamp(&c);
 	kms_dirty(c.x1, c.y1, c.x2, c.y2);
 	frames_flushed++;
@@ -8285,6 +8332,7 @@ static int xwin_fast_present16(int i, const lv_area_t *a,
 		memcpy(kms_map + (size_t)y * kms_pitch + (size_t)c.x1 * 2,
 		       px + (size_t)(y - img.y1) * w + (c.x1 - img.x1),
 		       (size_t)(c.x2 - c.x1 + 1) * 2);
+	xwin_fast_note(i, &c);
 	cursor_stamp(&c);
 	kms_dirty(c.x1, c.y1, c.x2, c.y2);
 	frames_flushed++;
