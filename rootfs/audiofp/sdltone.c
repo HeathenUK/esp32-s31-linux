@@ -36,6 +36,7 @@ static int lastcpu = -1, tid;
 static double period_s, maxgap, lastwall, cpu_s, sumgap, thr_first, thr_last;
 static float phase, step;
 static int chans;
+static Sint16 tab[256];
 
 static double wall(void)
 {
@@ -83,7 +84,9 @@ static void cb(void *u, Uint8 *stream, int len)
 		cpumask |= 1ul << cpu;
 	}
 	for (i = 0; i < frames; i++) {
-		Sint16 v = (Sint16)(1200.0f * sinf(phase));
+		/* table, not sinf(): musl's sinf evaluates in double, i.e. soft
+		 * double here, and costs ~9 us a sample on its own */
+		Sint16 v = tab[(unsigned)(phase * (256.0f / 6.2831853f)) & 255];
 		unsigned long k, a = sink;
 
 		phase += step;
@@ -137,6 +140,8 @@ int main(int argc, char **argv)
 		return 1;
 	}
 	chans = got.channels;
+	for (int i = 0; i < 256; i++)
+		tab[i] = (Sint16)(1200.0 * sin(i * 6.283185307179586 / 256));
 	step = 6.2831853f * 440.0f / (float)got.freq;
 	period_s = (double)got.samples / got.freq;
 	printf("sdltone: want %d Hz %d ch %d samples; got %d Hz %d ch %d samples (%.1f ms/callback) iters %lu hog %d\n",

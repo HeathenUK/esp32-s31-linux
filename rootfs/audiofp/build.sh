@@ -26,3 +26,7 @@ $CC -o $D/oplbench $W/oplbench.o $W/opl.o $W/lds_play.o -lm
 $CC -O2 -Wall --sysroot=$SYSROOT -I$SYSROOT/usr/include/SDL -o $D/sdltone1 $D/sdltone.c -lSDL -lpthread -lm
 $CC -O2 -Wall --sysroot=$SYSROOT -I$SYSROOT/usr/include/SDL2 -o $D/sdltone2 $D/sdltone.c -lSDL2 -lpthread -lm
 ls -l $D/oplbench $D/sdltone1 $D/sdltone2
+# prototype plugin (options B/C/D knobs), test-only; loaded via /root/.asoundrc
+$CC -O2 -Wall -fPIC -DPIC -shared --sysroot=$SYSROOT $D/s31route-proto.c \
+    -o $D/libasound_module_pcm_s31route.so -lasound
+ls -l $D/libasound_module_pcm_s31route.so

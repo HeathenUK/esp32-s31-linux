@@ -1,0 +1,133 @@
+== uname #393 SMP Sat Sep 26 12:31:02 UTC 2026
+== ARM sdltone1 rate 22050 ch 1 samples 512 hog 2 iters 0
+sdltone: want 22050 Hz 1 ch 1024 samples; got 22050 Hz 1 ch 1024 samples (46.4 ms/callback) iters 0 hog 2
+hw access: MMAP_INTERLEAVED format: S16_LE subformat: STD channels: 2 rate: 44100 (44100/1) period_size: 512 buffer_size: 4096 
+sdltone: thread_cpu 13.56 us/sample, path (thread - callback) 4.50 us/sample = 9.91% of a core
+sdltone: pid 946 tid 948 calls 261 (expect 258) cb_cpu 9.06 us/sample (20.2% of a core) meangap 46.2 ms maxgap 76.5 ms late 1 cpus 0x3 moves 2
+underruns 0
+s31route: hw:0,0 app 22050 Hz ring 2048/512 -> sink 22050 Hz 2048/256 avail_min 512
+== ARM sdltone1 rate 36000 ch 1 samples 512 hog 2 iters 0
+sdltone: want 36000 Hz 1 ch 1024 samples; got 36000 Hz 1 ch 1024 samples (28.4 ms/callback) iters 0 hog 2
+hw access: MMAP_INTERLEAVED format: S16_LE subformat: STD channels: 2 rate: 44100 (44100/1) period_size: 941 buffer_size: 3764 
+sdltone: thread_cpu 11.91 us/sample, path (thread - callback) 2.66 us/sample = 9.56% of a core
+sdltone: pid 958 tid 960 calls 417 (expect 422) cb_cpu 9.25 us/sample (32.9% of a core) meangap 28.9 ms maxgap 62.4 ms late 30 cpus 0x3 moves 8
+underruns 36
+s31route: hw:0,0 app 36000 Hz ring 2048/512 -> sink 36000 Hz 3072/768 avail_min 1536
+ERR ALSA lib pcm.c:8787:(snd_pcm_recover) [error.pcm] underrun
+ERR 
+== ARM sdltone1 rate 44100 ch 1 samples 512 hog 2 iters 0
+sdltone: want 44100 Hz 1 ch 1024 samples; got 44100 Hz 1 ch 1024 samples (23.2 ms/callback) iters 0 hog 2
+hw no setup 
+sdltone: pid 970 tid 0 calls 0 (expect 517) cb_cpu 0.00 us/sample (0.0% of a core) meangap 0.0 ms maxgap 0.0 ms late 0 cpus 0x0 moves 0
+underruns 414
+s31route: hw_params plug:'hw:0,0': Invalid argument
+ERR ALSA lib pcm.c:8787:(snd_pcm_recover) [error.pcm] underrun
+ERR 
+== ARM sdltone1 rate 48000 ch 1 samples 512 hog 2 iters 0
+sdltone: want 48000 Hz 1 ch 1024 samples; got 48000 Hz 1 ch 1024 samples (21.3 ms/callback) iters 0 hog 2
+hw access: MMAP_INTERLEAVED format: S16_LE subformat: STD channels: 2 rate: 48000 (48000/1) period_size: 512 buffer_size: 4096 
+sdltone: thread_cpu 11.22 us/sample, path (thread - callback) 1.63 us/sample = 7.80% of a core
+sdltone: pid 982 tid 984 calls 532 (expect 562) cb_cpu 9.60 us/sample (43.6% of a core) meangap 22.6 ms maxgap 75.6 ms late 92 cpus 0x3 moves 52
+underruns 66
+s31route: hw:0,0 app 48000 Hz ring 2048/512 -> sink 48000 Hz 4096/512 avail_min 2560
+ERR ALSA lib pcm.c:8787:(snd_pcm_recover) [error.pcm] underrun
+ERR 
+== ARM sdltone1 rate 22050 ch 2 samples 512 hog 2 iters 0
+sdltone: want 22050 Hz 2 ch 512 samples; got 22050 Hz 2 ch 512 samples (23.2 ms/callback) iters 0 hog 2
+hw access: MMAP_INTERLEAVED format: S16_LE subformat: STD channels: 2 rate: 44100 (44100/1) period_size: 512 buffer_size: 4096 
+sdltone: thread_cpu 14.16 us/sample, path (thread - callback) 4.31 us/sample = 9.51% of a core
+sdltone: pid 994 tid 996 calls 521 (expect 517) cb_cpu 9.85 us/sample (21.9% of a core) meangap 23.1 ms maxgap 37.7 ms late 1 cpus 0x1 moves 0
+underruns 0
+s31route: hw:0,0 app 22050 Hz ring 2048/512 -> sink 22050 Hz 2048/256 avail_min 512
+== ARM sdltone1 rate 36000 ch 2 samples 512 hog 2 iters 0
+sdltone: want 36000 Hz 2 ch 512 samples; got 36000 Hz 2 ch 512 samples (14.2 ms/callback) iters 0 hog 2
+hw access: MMAP_INTERLEAVED format: S16_LE subformat: STD channels: 2 rate: 44100 (44100/1) period_size: 941 buffer_size: 3764 
+sdltone: thread_cpu 12.59 us/sample, path (thread - callback) 2.91 us/sample = 10.46% of a core
+sdltone: pid 1007 tid 1009 calls 846 (expect 844) cb_cpu 9.69 us/sample (35.0% of a core) meangap 14.2 ms maxgap 44.1 ms late 56 cpus 0x3 moves 6
+underruns 4
+s31route: hw:0,0 app 36000 Hz ring 2048/512 -> sink 36000 Hz 3072/768 avail_min 1536
+ERR ALSA lib pcm.c:8787:(snd_pcm_recover) [error.pcm] underrun
+ERR 
+== ARM sdltone1 rate 44100 ch 2 samples 512 hog 2 iters 0
+sdltone: want 44100 Hz 2 ch 512 samples; got 44100 Hz 2 ch 512 samples (11.6 ms/callback) iters 0 hog 2
+hw no setup 
+sdltone: pid 1019 tid 0 calls 0 (expect 1034) cb_cpu 0.00 us/sample (0.0% of a core) meangap 0.0 ms maxgap 0.0 ms late 0 cpus 0x0 moves 0
+underruns 404
+s31route: hw_params plug:'hw:0,0': Invalid argument
+ERR ALSA lib pcm.c:8787:(snd_pcm_recover) [error.pcm] underrun
+ERR 
+== ARM sdltone1 rate 48000 ch 2 samples 512 hog 2 iters 0
+sdltone: want 48000 Hz 2 ch 512 samples; got 48000 Hz 2 ch 512 samples (10.7 ms/callback) iters 0 hog 2
+hw access: RW_INTERLEAVED format: S16_LE subformat: STD channels: 2 rate: 48000 (48000/1) period_size: 512 buffer_size: 4096 
+sdltone: thread_cpu 13.71 us/sample, path (thread - callback) 3.54 us/sample = 16.97% of a core
+sdltone: pid 1031 tid 1033 calls 921 (expect 1125) cb_cpu 10.17 us/sample (40.0% of a core) meangap 13.1 ms maxgap 49.2 ms late 221 cpus 0x3 moves 43
+underruns 256
+s31route: hw:0,0 app 48000 Hz ring 2048/512 -> sink 48000 Hz 4096/512 avail_min 2560
+ERR ALSA lib pcm.c:8787:(snd_pcm_recover) [error.pcm] underrun
+ERR 
+== ARM sdltone1 rate 22050 ch 1 samples 2048 hog 2 iters 0
+sdltone: want 22050 Hz 1 ch 2048 samples; got 22050 Hz 1 ch 2048 samples (92.9 ms/callback) iters 0 hog 2
+hw access: MMAP_INTERLEAVED format: S16_LE subformat: STD channels: 2 rate: 44100 (44100/1) period_size: 512 buffer_size: 8192 
+sdltone: thread_cpu 11.66 us/sample, path (thread - callback) 2.55 us/sample = 5.63% of a core
+sdltone: pid 1043 tid 1045 calls 131 (expect 129) cb_cpu 9.11 us/sample (20.4% of a core) meangap 92.9 ms maxgap 111.3 ms late 0 cpus 0x3 moves 5
+underruns 0
+s31route: hw:0,0 app 22050 Hz ring 8192/2048 -> sink 22050 Hz 4096/256 avail_min 2048
+== ARM sdltone1 rate 36000 ch 1 samples 2048 hog 2 iters 0
+sdltone: want 36000 Hz 1 ch 2048 samples; got 36000 Hz 1 ch 2048 samples (56.9 ms/callback) iters 0 hog 2
+hw access: MMAP_INTERLEAVED format: S16_LE subformat: STD channels: 2 rate: 44100 (44100/1) period_size: 512 buffer_size: 8192 
+sdltone: thread_cpu 11.26 us/sample, path (thread - callback) 1.86 us/sample = 6.71% of a core
+sdltone: pid 1055 tid 1057 calls 212 (expect 211) cb_cpu 9.40 us/sample (34.0% of a core) meangap 56.9 ms maxgap 105.8 ms late 40 cpus 0x3 moves 30
+underruns 0
+s31route: hw:0,0 app 36000 Hz ring 8192/2048 -> sink 36000 Hz 6687/417 avail_min 2048
+== ARM sdltone1 rate 44100 ch 1 samples 2048 hog 2 iters 0
+sdltone: want 44100 Hz 1 ch 2048 samples; got 44100 Hz 1 ch 2048 samples (46.4 ms/callback) iters 0 hog 2
+hw access: MMAP_INTERLEAVED format: S16_LE subformat: STD channels: 2 rate: 44100 (44100/1) period_size: 512 buffer_size: 8192 
+sdltone: thread_cpu 11.65 us/sample, path (thread - callback) 1.37 us/sample = 6.05% of a core
+sdltone: pid 1067 tid 1071 calls 244 (expect 258) cb_cpu 10.28 us/sample (42.8% of a core) meangap 49.6 ms maxgap 178.8 ms late 23 cpus 0x3 moves 40
+underruns 46
+s31route: hw:0,0 app 44100 Hz ring 8192/2048 -> sink 44100 Hz 8192/512 avail_min 2048
+ERR ALSA lib pcm.c:8787:(snd_pcm_recover) [error.pcm] underrun
+ERR 
+== ARM sdltone1 rate 48000 ch 1 samples 2048 hog 2 iters 0
+sdltone: want 48000 Hz 1 ch 2048 samples; got 48000 Hz 1 ch 2048 samples (42.7 ms/callback) iters 0 hog 2
+hw access: MMAP_INTERLEAVED format: S16_LE subformat: STD channels: 2 rate: 48000 (48000/1) period_size: 512 buffer_size: 8192 
+sdltone: thread_cpu 10.82 us/sample, path (thread - callback) 0.94 us/sample = 4.52% of a core
+sdltone: pid 1088 tid 1090 calls 283 (expect 281) cb_cpu 9.88 us/sample (47.7% of a core) meangap 42.7 ms maxgap 92.3 ms late 7 cpus 0x3 moves 41
+underruns 6
+s31route: hw:0,0 app 48000 Hz ring 8192/2048 -> sink 48000 Hz 8192/512 avail_min 2048
+ERR ALSA lib pcm.c:8787:(snd_pcm_recover) [error.pcm] underrun
+ERR 
+== ARM sdltone1 rate 22050 ch 2 samples 2048 hog 2 iters 0
+sdltone: want 22050 Hz 2 ch 2048 samples; got 22050 Hz 2 ch 2048 samples (92.9 ms/callback) iters 0 hog 2
+hw access: MMAP_INTERLEAVED format: S16_LE subformat: STD channels: 2 rate: 44100 (44100/1) period_size: 512 buffer_size: 8192 
+sdltone: thread_cpu 10.72 us/sample, path (thread - callback) 1.82 us/sample = 4.01% of a core
+sdltone: pid 1100 tid 1102 calls 131 (expect 129) cb_cpu 8.97 us/sample (20.1% of a core) meangap 92.2 ms maxgap 104.2 ms late 0 cpus 0x1 moves 0
+underruns 0
+s31route: hw:0,0 app 22050 Hz ring 8192/2048 -> sink 22050 Hz 4096/256 avail_min 2048
+== ARM sdltone1 rate 36000 ch 2 samples 2048 hog 2 iters 0
+sdltone: want 36000 Hz 2 ch 2048 samples; got 36000 Hz 2 ch 2048 samples (56.9 ms/callback) iters 0 hog 2
+hw access: MMAP_INTERLEAVED format: S16_LE subformat: STD channels: 2 rate: 44100 (44100/1) period_size: 512 buffer_size: 8192 
+sdltone: thread_cpu 11.23 us/sample, path (thread - callback) 1.52 us/sample = 5.48% of a core
+sdltone: pid 1112 tid 1114 calls 212 (expect 211) cb_cpu 9.70 us/sample (35.1% of a core) meangap 56.9 ms maxgap 113.6 ms late 42 cpus 0x3 moves 36
+underruns 2
+s31route: hw:0,0 app 36000 Hz ring 8192/2048 -> sink 36000 Hz 6687/417 avail_min 2048
+ERR ALSA lib pcm.c:8787:(snd_pcm_recover) [error.pcm] underrun
+ERR 
+== ARM sdltone1 rate 44100 ch 2 samples 2048 hog 2 iters 0
+sdltone: want 44100 Hz 2 ch 2048 samples; got 44100 Hz 2 ch 2048 samples (46.4 ms/callback) iters 0 hog 2
+hw access: RW_INTERLEAVED format: S16_LE subformat: STD channels: 2 rate: 44100 (44100/1) period_size: 512 buffer_size: 8192 
+sdltone: thread_cpu 10.88 us/sample, path (thread - callback) 0.72 us/sample = 3.18% of a core
+sdltone: pid 1124 tid 1126 calls 261 (expect 258) cb_cpu 10.16 us/sample (45.3% of a core) meangap 46.2 ms maxgap 70.1 ms late 2 cpus 0x3 moves 49
+underruns 0
+s31route: hw:0,0 app 44100 Hz ring 8192/2048 -> sink 44100 Hz 8192/512 avail_min 2048
+== ARM sdltone1 rate 48000 ch 2 samples 2048 hog 2 iters 0
+sdltone: want 48000 Hz 2 ch 2048 samples; got 48000 Hz 2 ch 2048 samples (42.7 ms/callback) iters 0 hog 2
+hw access: RW_INTERLEAVED format: S16_LE subformat: STD channels: 2 rate: 48000 (48000/1) period_size: 512 buffer_size: 8192 
+sdltone: thread_cpu 10.97 us/sample, path (thread - callback) 0.75 us/sample = 3.58% of a core
+sdltone: pid 1136 tid 1138 calls 283 (expect 281) cb_cpu 10.22 us/sample (49.4% of a core) meangap 42.7 ms maxgap 83.2 ms late 6 cpus 0x3 moves 49
+underruns 4
+s31route: hw:0,0 app 48000 Hz ring 8192/2048 -> sink 48000 Hz 8192/512 avail_min 2048
+ERR ALSA lib pcm.c:8787:(snd_pcm_recover) [error.pcm] underrun
+ERR 
+TONE_DONE
+COLLECT_OK

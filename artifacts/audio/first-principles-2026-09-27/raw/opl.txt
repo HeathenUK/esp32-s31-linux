@@ -1,0 +1,68 @@
+== uname #393 SMP Sat Sep 26 12:31:02 UTC 2026
+== routines libgcc CPU0
+mul general    1312 ns
+floatsidf+mul  813 ns
+floatsidf      46 ns
+mul by 1/16    573 ns
+mul+fixdfsi    748 ns
+gtdf2          82 ns
+adddf3         235 ns
+== routines s31fp CPU0
+s31fp: 0 routine(s) redirected
+s31fp: __muldf3 at 0x6901f276 in ./oplbench -> 0x956e2380
+s31fp: __adddf3 at 0x6901e2ea in ./oplbench -> 0x956e24c8
+s31fp: __subdf3 at 0x6901f7ca in ./oplbench -> 0x956e24c0
+s31fp: __fixdfsi at 0x6901ffde in ./oplbench -> 0x956e26da
+s31fp: __floatsidf at 0x69020120 in ./oplbench -> 0x956e2674
+s31fp: __floatunsidf at 0x69020170 in ./oplbench -> 0x956e26b0
+s31fp: 6 routine(s) redirected
+mul general    222 ns
+floatsidf+mul  300 ns
+floatsidf      66 ns
+mul by 1/16    226 ns
+mul+fixdfsi    308 ns
+gtdf2          108 ns
+adddf3         251 ns
+== routines libgcc CPU1
+mul general    766 ns
+floatsidf+mul  920 ns
+floatsidf      94 ns
+mul by 1/16    745 ns
+mul+fixdfsi    936 ns
+gtdf2          109 ns
+adddf3         316 ns
+== song 36 libgcc CPU0
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel
+36 44100 8 17.013 48.02 0.472 0.00 0 0.00 0.00 0.00 0.00
+== song 36 s31fp CPU0
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel
+36 44100 8 8.481 23.94 0.947 0.00 0 0.00 0.00 0.00 0.00
+== song 0 libgcc CPU0
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel
+0 44100 8 20.283 57.25 0.396 0.00 0 0.00 0.00 0.00 0.00
+== song 0 s31fp CPU0
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel
+0 44100 8 11.271 31.81 0.713 0.00 0 0.00 0.00 0.00 0.00
+== song 9 libgcc CPU0
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel
+9 44100 8 18.816 53.11 0.427 0.00 0 0.00 0.00 0.00 0.00
+== song 9 s31fp CPU0
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel
+9 44100 8 9.597 27.09 0.837 0.00 0 0.00 0.00 0.00 0.00
+== song 5 libgcc CPU0
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel
+5 44100 8 24.944 70.40 0.322 0.00 0 0.00 0.00 0.00 0.00
+== song 5 s31fp CPU0
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel
+5 44100 8 13.150 37.12 0.611 0.00 0 0.00 0.00 0.00 0.00
+== song 36 libgcc CPU1
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel
+36 44100 8 16.821 47.48 0.478 0.00 0 0.00 0.00 0.00 0.00
+== song 36 s31fp CPU1
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel
+36 44100 8 8.449 23.85 0.951 0.00 0 0.00 0.00 0.00 0.00
+== exec cost: 10 x sdltone1 usage-exit (libSDL+libc), plain then preload
+exec10 t0 594.63 plain_end 595.13 preload_end 598.15
+OPL_DONE
+COLLECT_OK
+

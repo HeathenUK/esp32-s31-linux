@@ -1,0 +1,85 @@
+== uname #393 SMP Sat Sep 26 12:31:02 UTC 2026 iters 700
+== ARM fix,S31ROUTE_CPU=1 geom 44100 2 512
+sdltone: want 44100 Hz 2 ch 512 samples; got 44100 Hz 2 ch 512 samples (11.6 ms/callback) iters 700 hog 2
+sdltone: thread_cpu 17.43 us/sample, path (thread - callback) 4.93 us/sample = 21.73% of a core
+sdltone: pid 1767 tid 1768 calls 705 (expect 1034) cb_cpu 12.50 us/sample (37.6% of a core) meangap 17.1 ms maxgap 67.2 ms late 239 cpus 0x1 moves 0
+underruns 408 bounces 26
+s31route: hw:0,0 app 44100 Hz ring 2048/512 -> sink 44100 Hz 3584/512 avail_min 2048
+s31route: xruns 204 transfers 706
+ERR overrun occurred
+ERR overrun occurred
+== ARM fix,S31ROUTE_CPU=1 geom 48000 2 512
+sdltone: want 48000 Hz 2 ch 512 samples; got 48000 Hz 2 ch 512 samples (10.7 ms/callback) iters 700 hog 2
+sdltone: thread_cpu 18.24 us/sample, path (thread - callback) 5.77 us/sample = 27.69% of a core
+sdltone: pid 1779 tid 1780 calls 683 (expect 1125) cb_cpu 12.47 us/sample (36.3% of a core) meangap 17.6 ms maxgap 49.0 ms late 295 cpus 0x1 moves 0
+underruns 484 bounces 6
+s31route: hw:0,0 app 48000 Hz ring 2048/512 -> sink 48000 Hz 4096/512 avail_min 2560
+s31route: xruns 242 transfers 692
+ERR overrun occurred
+ERR overrun occurred
+== ARM fix,S31ROUTE_CPU=1 geom 44100 1 2048
+sdltone: want 44100 Hz 1 ch 2048 samples; got 44100 Hz 1 ch 2048 samples (46.4 ms/callback) iters 700 hog 2
+sdltone: thread_cpu 12.71 us/sample, path (thread - callback) 0.59 us/sample = 2.60% of a core
+sdltone: pid 1791 tid 1792 calls 259 (expect 258) cb_cpu 12.12 us/sample (53.6% of a core) meangap 46.4 ms maxgap 72.9 ms late 3 cpus 0x1 moves 0
+underruns 0 bounces 2
+s31route: hw:0,0 app 44100 Hz ring 8192/2048 -> sink 44100 Hz 8192/512 avail_min 2048
+s31route: xruns 0 transfers 264
+== ARM fix,S31ROUTE_CPU=1 geom 36000 1 512
+sdltone: want 36000 Hz 1 ch 1024 samples; got 36000 Hz 1 ch 1024 samples (28.4 ms/callback) iters 700 hog 2
+sdltone: thread_cpu 14.79 us/sample, path (thread - callback) 2.51 us/sample = 9.03% of a core
+sdltone: pid 1803 tid 1804 calls 405 (expect 422) cb_cpu 12.28 us/sample (42.4% of a core) meangap 29.8 ms maxgap 61.9 ms late 27 cpus 0x1 moves 0
+underruns 70 bounces 3
+s31route: hw:0,0 app 36000 Hz ring 2048/512 -> sink 36000 Hz 3072/768 avail_min 1536
+s31route: xruns 35 transfers 406
+ERR ALSA lib pcm.c:8787:(snd_pcm_recover) [error.pcm
+ERR rate >= 5000 && rate <= 768000
+== ARM fix,S31ROUTE_CPU=1 geom 22050 1 512
+sdltone: want 22050 Hz 1 ch 1024 samples; got 22050 Hz 1 ch 1024 samples (46.4 ms/callback) iters 700 hog 2
+sdltone: thread_cpu 16.31 us/sample, path (thread - callback) 3.97 us/sample = 8.76% of a core
+sdltone: pid 1815 tid 1816 calls 258 (expect 258) cb_cpu 12.35 us/sample (27.2% of a core) meangap 46.5 ms maxgap 60.5 ms late 0 cpus 0x1 moves 0
+underruns 0 bounces 3
+s31route: hw:0,0 app 22050 Hz ring 2048/512 -> sink 22050 Hz 2048/256 avail_min 512
+s31route: xruns 0 transfers 261
+== ARM fix,S31ROUTE_CPU=1,S31ROUTE_RR=10 geom 44100 2 512
+sdltone: want 44100 Hz 2 ch 512 samples; got 44100 Hz 2 ch 512 samples (11.6 ms/callback) iters 700 hog 2
+sdltone: thread_cpu 16.60 us/sample, path (thread - callback) 4.13 us/sample = 18.23% of a core
+sdltone: pid 1832 tid 1833 calls 759 (expect 1034) cb_cpu 12.46 us/sample (40.4% of a core) meangap 15.9 ms maxgap 61.9 ms late 214 cpus 0x1 moves 0
+underruns 324 bounces 4
+s31route: SCHED_RR: Function not implemented
+s31route: xruns 162 transfers 766
+ERR overrun occurred
+ERR overrun occurred
+== ARM fix,S31ROUTE_CPU=1,S31ROUTE_RR=10 geom 48000 2 512
+sdltone: want 48000 Hz 2 ch 512 samples; got 48000 Hz 2 ch 512 samples (10.7 ms/callback) iters 700 hog 2
+sdltone: thread_cpu 20.78 us/sample, path (thread - callback) 8.10 us/sample = 38.89% of a core
+sdltone: pid 1844 tid 1845 calls 567 (expect 1125) cb_cpu 12.68 us/sample (30.7% of a core) meangap 21.4 ms maxgap 62.7 ms late 302 cpus 0x1 moves 0
+underruns 534 bounces 4
+s31route: SCHED_RR: Function not implemented
+s31route: xruns 267 transfers 576
+ERR overrun occurred
+ERR overrun occurred
+== ARM fix,S31ROUTE_CPU=1,S31ROUTE_RR=10 geom 44100 1 2048
+sdltone: want 44100 Hz 1 ch 2048 samples; got 44100 Hz 1 ch 2048 samples (46.4 ms/callback) iters 700 hog 2
+sdltone: thread_cpu 12.83 us/sample, path (thread - callback) 0.68 us/sample = 2.98% of a core
+sdltone: pid 1865 tid 1866 calls 256 (expect 258) cb_cpu 12.16 us/sample (53.1% of a core) meangap 46.9 ms maxgap 71.2 ms late 2 cpus 0x1 moves 0
+underruns 0 bounces 5
+s31route: SCHED_RR: Function not implemented
+s31route: xruns 0 transfers 261
+== ARM fix,S31ROUTE_CPU=1,S31ROUTE_RR=10 geom 36000 1 512
+sdltone: want 36000 Hz 1 ch 1024 samples; got 36000 Hz 1 ch 1024 samples (28.4 ms/callback) iters 700 hog 2
+sdltone: thread_cpu 14.44 us/sample, path (thread - callback) 2.21 us/sample = 7.96% of a core
+sdltone: pid 1877 tid 1878 calls 416 (expect 422) cb_cpu 12.23 us/sample (43.4% of a core) meangap 29.0 ms maxgap 58.9 ms late 16 cpus 0x1 moves 0
+underruns 26 bounces 1
+s31route: SCHED_RR: Function not implemented
+s31route: xruns 13 transfers 419
+ERR ALSA lib pcm.c:8787:(snd_pcm_recover) [error
+ERR Sound protocol is not compatible.pcm
+== ARM fix,S31ROUTE_CPU=1,S31ROUTE_RR=10 geom 22050 1 512
+sdltone: want 22050 Hz 1 ch 1024 samples; got 22050 Hz 1 ch 1024 samples (46.4 ms/callback) iters 700 hog 2
+sdltone: thread_cpu 16.22 us/sample, path (thread - callback) 3.91 us/sample = 8.61% of a core
+sdltone: pid 1889 tid 1890 calls 260 (expect 258) cb_cpu 12.31 us/sample (27.3% of a core) meangap 46.2 ms maxgap 58.5 ms late 0 cpus 0x1 moves 0
+underruns 0 bounces 1
+s31route: SCHED_RR: Function not implemented
+s31route: xruns 0 transfers 261
+ARMS_DONE
+COLLECT_OK

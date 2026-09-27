@@ -1,0 +1,89 @@
+== uname #393 SMP Sat Sep 26 12:31:02 UTC 2026 iters 700
+== ARM fix,S31ROUTE_BATCH=2048 geom 44100 2 512
+sdltone: want 44100 Hz 2 ch 512 samples; got 44100 Hz 2 ch 512 samples (11.6 ms/callback) iters 700 hog 2
+sdltone: thread_cpu 25.55 us/sample, path (thread - callback) 12.76 us/sample = 56.26% of a core
+sdltone: pid 1946 tid 1947 calls 434 (expect 1034) cb_cpu 12.80 us/sample (23.7% of a core) meangap 27.8 ms maxgap 77.6 ms late 355 cpus 0x3 moves 4
+underruns 760 bounces 48
+s31route: hw:0,0 app 44100 Hz ring 2048/512 -> sink 44100 Hz 3584/512 avail_min 2048
+s31route: xruns 380 transfers 818 kernel_writes 381
+ERR overrun occurred
+ERR overrun occurred
+== ARM fix,S31ROUTE_BATCH=2048 geom 48000 2 512
+sdltone: want 48000 Hz 2 ch 512 samples; got 48000 Hz 2 ch 512 samples (10.7 ms/callback) iters 700 hog 2
+sdltone: thread_cpu 23.78 us/sample, path (thread - callback) 11.14 us/sample = 53.47% of a core
+sdltone: pid 1958 tid 1959 calls 508 (expect 1125) cb_cpu 12.64 us/sample (27.4% of a core) meangap 23.7 ms maxgap 59.6 ms late 355 cpus 0x3 moves 6
+underruns 794 bounces 34
+s31route: hw:0,0 app 48000 Hz ring 2048/512 -> sink 48000 Hz 4096/512 avail_min 2560
+s31route: xruns 397 transfers 913 kernel_writes 402
+ERR overrun occurred
+ERR overrun occurred
+== ARM fix,S31ROUTE_BATCH=2048 geom 44100 1 2048
+sdltone: want 44100 Hz 1 ch 2048 samples; got 44100 Hz 1 ch 2048 samples (46.4 ms/callback) iters 700 hog 2
+sdltone: thread_cpu 13.46 us/sample, path (thread - callback) 1.12 us/sample = 4.93% of a core
+sdltone: pid 1971 tid 1972 calls 243 (expect 258) cb_cpu 12.34 us/sample (51.2% of a core) meangap 49.7 ms maxgap 92.0 ms late 26 cpus 0x3 moves 4
+underruns 58 bounces 32
+s31route: hw:0,0 app 44100 Hz ring 8192/2048 -> sink 44100 Hz 8192/512 avail_min 2048
+s31route: xruns 29 transfers 275 kernel_writes 246
+ERR overrun occurred
+ERR overrun occurred
+== ARM fix,S31ROUTE_BATCH=2048 geom 36000 1 512
+sdltone: want 36000 Hz 1 ch 1024 samples; got 36000 Hz 1 ch 1024 samples (28.4 ms/callback) iters 700 hog 2
+sdltone: thread_cpu 18.75 us/sample, path (thread - callback) 6.54 us/sample = 23.55% of a core
+sdltone: pid 1983 tid 1984 calls 341 (expect 422) cb_cpu 12.21 us/sample (35.5% of a core) meangap 35.4 ms maxgap 66.0 ms late 146 cpus 0x3 moves 8
+underruns 524 bounces 31
+s31route: hw:0,0 app 36000 Hz ring 2048/512 -> sink 36000 Hz 3072/768 avail_min 1536
+s31route: xruns 262 transfers 605 kernel_writes 263
+ERR ALSA lib pcm.c:8787:(snd_pcm_recover) [error.pcm
+ERR rate >= 5000 && rate <= 768000
+== ARM fix,S31ROUTE_BATCH=2048 geom 22050 1 512
+sdltone: want 22050 Hz 1 ch 1024 samples; got 22050 Hz 1 ch 1024 samples (46.4 ms/callback) iters 700 hog 2
+sdltone: thread_cpu 16.32 us/sample, path (thread - callback) 3.96 us/sample = 8.73% of a core
+sdltone: pid 1995 tid 1997 calls 258 (expect 258) cb_cpu 12.36 us/sample (27.2% of a core) meangap 46.4 ms maxgap 62.6 ms late 0 cpus 0x1 moves 0
+underruns 0 bounces 21
+s31route: hw:0,0 app 22050 Hz ring 2048/512 -> sink 22050 Hz 2048/256 avail_min 512
+s31route: xruns 0 transfers 261 kernel_writes 261
+== ARM fix,S31ROUTE_BATCH=2048,S31ROUTE_CPU=1 geom 44100 2 512
+sdltone: want 44100 Hz 2 ch 512 samples; got 44100 Hz 2 ch 512 samples (11.6 ms/callback) iters 700 hog 2
+sdltone: thread_cpu 23.38 us/sample, path (thread - callback) 10.80 us/sample = 47.65% of a core
+sdltone: pid 2013 tid 2014 calls 515 (expect 1034) cb_cpu 12.57 us/sample (27.6% of a core) meangap 23.4 ms maxgap 54.9 ms late 340 cpus 0x1 moves 0
+underruns 814 bounces 2
+s31route: hw:0,0 app 44100 Hz ring 2048/512 -> sink 44100 Hz 3584/512 avail_min 2048
+s31route: xruns 407 transfers 931 kernel_writes 411
+ERR overrun occurred
+ERR overrun occurred
+== ARM fix,S31ROUTE_BATCH=2048,S31ROUTE_CPU=1 geom 48000 2 512
+sdltone: want 48000 Hz 2 ch 512 samples; got 48000 Hz 2 ch 512 samples (10.7 ms/callback) iters 700 hog 2
+sdltone: thread_cpu 23.29 us/sample, path (thread - callback) 10.73 us/sample = 51.49% of a core
+sdltone: pid 2025 tid 2026 calls 525 (expect 1125) cb_cpu 12.57 us/sample (28.2% of a core) meangap 23.0 ms maxgap 72.7 ms late 360 cpus 0x1 moves 0
+underruns 812 bounces 4
+s31route: hw:0,0 app 48000 Hz ring 2048/512 -> sink 48000 Hz 4096/512 avail_min 2560
+s31route: xruns 406 transfers 939 kernel_writes 410
+ERR overrun occurred
+ERR overrun occurred
+== ARM fix,S31ROUTE_BATCH=2048,S31ROUTE_CPU=1 geom 44100 1 2048
+sdltone: want 44100 Hz 1 ch 2048 samples; got 44100 Hz 1 ch 2048 samples (46.4 ms/callback) iters 700 hog 2
+sdltone: thread_cpu 12.84 us/sample, path (thread - callback) 0.72 us/sample = 3.16% of a core
+sdltone: pid 2037 tid 2038 calls 256 (expect 258) cb_cpu 12.13 us/sample (53.0% of a core) meangap 46.9 ms maxgap 72.4 ms late 1 cpus 0x1 moves 0
+underruns 4 bounces 4
+s31route: hw:0,0 app 44100 Hz ring 8192/2048 -> sink 44100 Hz 8192/512 avail_min 2048
+s31route: xruns 2 transfers 263 kernel_writes 261
+ERR overrun occurred
+ERR overrun occurred
+== ARM fix,S31ROUTE_BATCH=2048,S31ROUTE_CPU=1 geom 36000 1 512
+sdltone: want 36000 Hz 1 ch 1024 samples; got 36000 Hz 1 ch 1024 samples (28.4 ms/callback) iters 700 hog 2
+sdltone: thread_cpu 19.43 us/sample, path (thread - callback) 7.22 us/sample = 26.00% of a core
+sdltone: pid 2049 tid 2050 calls 309 (expect 422) cb_cpu 12.21 us/sample (32.2% of a core) meangap 38.9 ms maxgap 66.9 ms late 151 cpus 0x1 moves 0
+underruns 514 bounces 3
+s31route: hw:0,0 app 36000 Hz ring 2048/512 -> sink 36000 Hz 3072/768 avail_min 1536
+s31route: xruns 257 transfers 571 kernel_writes 260
+ERR ALSA lib pcm.c:8787:(snd_pcm_recover) [error
+ERR Sound protocol is not compatible.pcm
+== ARM fix,S31ROUTE_BATCH=2048,S31ROUTE_CPU=1 geom 22050 1 512
+sdltone: want 22050 Hz 1 ch 1024 samples; got 22050 Hz 1 ch 1024 samples (46.4 ms/callback) iters 700 hog 2
+sdltone: thread_cpu 16.23 us/sample, path (thread - callback) 4.01 us/sample = 8.84% of a core
+sdltone: pid 2061 tid 2062 calls 259 (expect 258) cb_cpu 12.22 us/sample (27.0% of a core) meangap 46.4 ms maxgap 57.9 ms late 0 cpus 0x1 moves 0
+underruns 0 bounces 3
+s31route: hw:0,0 app 22050 Hz ring 2048/512 -> sink 22050 Hz 2048/256 avail_min 512
+s31route: xruns 0 transfers 261 kernel_writes 261
+ARMS_DONE
+COLLECT_OK

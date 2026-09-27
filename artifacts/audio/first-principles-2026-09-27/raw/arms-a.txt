@@ -1,0 +1,105 @@
+== uname #393 SMP Sat Sep 26 12:31:02 UTC 2026 iters 300
+== ARM ship geom 44100 2 512
+sdltone: want 44100 Hz 2 ch 512 samples; got 44100 Hz 2 ch 512 samples (11.6 ms/callback) iters 300 hog 2
+sdltone: pid 1256 tid 0 calls 0 (expect 1034) cb_cpu 0.00 us/sample (0.0% of a core) meangap 0.0 ms maxgap 0.0 ms late 0 cpus 0x0 moves 0
+underruns 418 bounces 53
+s31route: hw_params plug:'hw:0,0': Invalid argument
+s31route: hw_params plug:'hw:0,0': Invalid argument
+ERR overrun occurred
+ERR Argument list too long
+== ARM ship geom 48000 2 512
+sdltone: want 48000 Hz 2 ch 512 samples; got 48000 Hz 2 ch 512 samples (10.7 ms/callback) iters 300 hog 2
+sdltone: thread_cpu 8.34 us/sample, path (thread - callback) 2.10 us/sample = 10.10% of a core
+sdltone: pid 1268 tid 1269 calls 1126 (expect 1125) cb_cpu 6.24 us/sample (30.0% of a core) meangap 10.7 ms maxgap 21.8 ms late 23 cpus 0x3 moves 30
+underruns 0 bounces 2
+s31route: hw:0,0 app 48000 Hz ring 2048/512 -> sink 48000 Hz 4096/512 avail_min 2560
+== ARM ship geom 44100 1 2048
+sdltone: want 44100 Hz 1 ch 2048 samples; got 44100 Hz 1 ch 2048 samples (46.4 ms/callback) iters 300 hog 2
+sdltone: thread_cpu 6.99 us/sample, path (thread - callback) 1.09 us/sample = 4.82% of a core
+sdltone: pid 1280 tid 1281 calls 258 (expect 258) cb_cpu 5.89 us/sample (25.9% of a core) meangap 46.4 ms maxgap 58.3 ms late 0 cpus 0x3 moves 5
+underruns 0 bounces 4
+s31route: hw:0,0 app 44100 Hz ring 8192/2048 -> sink 44100 Hz 8192/512 avail_min 2048
+== ARM ship geom 36000 1 512
+sdltone: want 36000 Hz 1 ch 1024 samples; got 36000 Hz 1 ch 1024 samples (28.4 ms/callback) iters 300 hog 2
+sdltone: thread_cpu 8.25 us/sample, path (thread - callback) 2.80 us/sample = 10.07% of a core
+sdltone: pid 1292 tid 1293 calls 422 (expect 422) cb_cpu 5.45 us/sample (19.6% of a core) meangap 28.5 ms maxgap 53.9 ms late 29 cpus 0x3 moves 18
+underruns 0 bounces 21
+s31route: hw:0,0 app 36000 Hz ring 2048/512 -> sink 36000 Hz 3072/768 avail_min 1536
+== ARM ship geom 22050 1 512
+sdltone: want 22050 Hz 1 ch 1024 samples; got 22050 Hz 1 ch 1024 samples (46.4 ms/callback) iters 300 hog 2
+sdltone: thread_cpu 10.50 us/sample, path (thread - callback) 5.14 us/sample = 11.34% of a core
+sdltone: pid 1304 tid 1305 calls 260 (expect 258) cb_cpu 5.36 us/sample (11.9% of a core) meangap 46.4 ms maxgap 57.0 ms late 0 cpus 0x3 moves 4
+underruns 0 bounces 11
+s31route: hw:0,0 app 22050 Hz ring 2048/512 -> sink 22050 Hz 2048/256 avail_min 512
+== ARM fix geom 44100 2 512
+sdltone: want 44100 Hz 2 ch 512 samples; got 44100 Hz 2 ch 512 samples (11.6 ms/callback) iters 300 hog 2
+sdltone: thread_cpu 8.42 us/sample, path (thread - callback) 2.11 us/sample = 9.30% of a core
+sdltone: pid 1321 tid 1322 calls 1035 (expect 1034) cb_cpu 6.32 us/sample (27.9% of a core) meangap 11.6 ms maxgap 26.3 ms late 12 cpus 0x3 moves 39
+underruns 0 bounces 3
+s31route: hw:0,0 app 44100 Hz ring 2048/512 -> sink 44100 Hz 3584/512 avail_min 2048
+s31route: xruns 0 transfers 1044
+== ARM fix geom 48000 2 512
+sdltone: want 48000 Hz 2 ch 512 samples; got 48000 Hz 2 ch 512 samples (10.7 ms/callback) iters 300 hog 2
+sdltone: thread_cpu 8.52 us/sample, path (thread - callback) 2.10 us/sample = 10.10% of a core
+sdltone: pid 1333 tid 1334 calls 1135 (expect 1125) cb_cpu 6.42 us/sample (31.1% of a core) meangap 10.7 ms maxgap 22.3 ms late 27 cpus 0x3 moves 37
+underruns 0 bounces 4
+s31route: hw:0,0 app 48000 Hz ring 2048/512 -> sink 48000 Hz 4096/512 avail_min 2560
+s31route: xruns 0 transfers 1144
+== ARM fix geom 44100 1 2048
+sdltone: want 44100 Hz 1 ch 2048 samples; got 44100 Hz 1 ch 2048 samples (46.4 ms/callback) iters 300 hog 2
+sdltone: thread_cpu 6.88 us/sample, path (thread - callback) 1.09 us/sample = 4.80% of a core
+sdltone: pid 1345 tid 1346 calls 258 (expect 258) cb_cpu 5.79 us/sample (25.5% of a core) meangap 46.4 ms maxgap 58.1 ms late 0 cpus 0x3 moves 16
+underruns 0 bounces 1
+s31route: hw:0,0 app 44100 Hz ring 8192/2048 -> sink 44100 Hz 8192/512 avail_min 2048
+s31route: xruns 0 transfers 263
+== ARM fix geom 36000 1 512
+sdltone: want 36000 Hz 1 ch 1024 samples; got 36000 Hz 1 ch 1024 samples (28.4 ms/callback) iters 300 hog 2
+sdltone: thread_cpu 8.23 us/sample, path (thread - callback) 2.81 us/sample = 10.12% of a core
+sdltone: pid 1357 tid 1358 calls 423 (expect 422) cb_cpu 5.42 us/sample (19.6% of a core) meangap 28.5 ms maxgap 53.0 ms late 12 cpus 0x3 moves 6
+underruns 0 bounces 21
+s31route: hw:0,0 app 36000 Hz ring 2048/512 -> sink 36000 Hz 3072/768 avail_min 1536
+s31route: xruns 0 transfers 426
+== ARM fix geom 22050 1 512
+sdltone: want 22050 Hz 1 ch 1024 samples; got 22050 Hz 1 ch 1024 samples (46.4 ms/callback) iters 300 hog 2
+sdltone: thread_cpu 10.64 us/sample, path (thread - callback) 5.28 us/sample = 11.63% of a core
+sdltone: pid 1369 tid 1370 calls 262 (expect 258) cb_cpu 5.37 us/sample (12.0% of a core) meangap 46.4 ms maxgap 58.5 ms late 0 cpus 0x3 moves 3
+underruns 0 bounces 13
+s31route: hw:0,0 app 22050 Hz ring 2048/512 -> sink 22050 Hz 2048/256 avail_min 512
+s31route: xruns 0 transfers 263
+== ARM fix,S31ROUTE_HEADROOM=1 geom 44100 2 512
+sdltone: want 44100 Hz 2 ch 512 samples; got 44100 Hz 2 ch 512 samples (11.6 ms/callback) iters 300 hog 2
+sdltone: thread_cpu 8.01 us/sample, path (thread - callback) 2.01 us/sample = 8.86% of a core
+sdltone: pid 1386 tid 1387 calls 1036 (expect 1034) cb_cpu 6.00 us/sample (26.5% of a core) meangap 11.6 ms maxgap 22.3 ms late 6 cpus 0x3 moves 29
+underruns 0 bounces 3
+s31route: hw:0,0 app 44100 Hz ring 2048/512 -> sink 44100 Hz 3584/512 avail_min 512
+s31route: xruns 0 transfers 1044
+== ARM fix,S31ROUTE_HEADROOM=1 geom 48000 2 512
+sdltone: want 48000 Hz 2 ch 512 samples; got 48000 Hz 2 ch 512 samples (10.7 ms/callback) iters 300 hog 2
+sdltone: thread_cpu 8.23 us/sample, path (thread - callback) 2.04 us/sample = 9.77% of a core
+sdltone: pid 1398 tid 1399 calls 1127 (expect 1125) cb_cpu 6.19 us/sample (29.8% of a core) meangap 10.7 ms maxgap 24.1 ms late 27 cpus 0x3 moves 42
+underruns 0 bounces 2
+s31route: hw:0,0 app 48000 Hz ring 2048/512 -> sink 48000 Hz 4096/512 avail_min 512
+s31route: xruns 0 transfers 1136
+== ARM fix,S31ROUTE_HEADROOM=1 geom 44100 1 2048
+sdltone: want 44100 Hz 1 ch 2048 samples; got 44100 Hz 1 ch 2048 samples (46.4 ms/callback) iters 300 hog 2
+sdltone: thread_cpu 6.90 us/sample, path (thread - callback) 1.08 us/sample = 4.78% of a core
+sdltone: pid 1410 tid 1411 calls 260 (expect 258) cb_cpu 5.82 us/sample (25.8% of a core) meangap 46.6 ms maxgap 59.0 ms late 0 cpus 0x3 moves 7
+underruns 0 bounces 2
+s31route: hw:0,0 app 44100 Hz ring 8192/2048 -> sink 44100 Hz 8192/512 avail_min 2048
+s31route: xruns 0 transfers 265
+== ARM fix,S31ROUTE_HEADROOM=1 geom 36000 1 512
+sdltone: want 36000 Hz 1 ch 1024 samples; got 36000 Hz 1 ch 1024 samples (28.4 ms/callback) iters 300 hog 2
+sdltone: thread_cpu 8.92 us/sample, path (thread - callback) 3.47 us/sample = 12.50% of a core
+sdltone: pid 1422 tid 1423 calls 424 (expect 422) cb_cpu 5.45 us/sample (19.7% of a core) meangap 28.4 ms maxgap 45.0 ms late 12 cpus 0x3 moves 2
+underruns 0 bounces 21
+s31route: hw:0,0 app 36000 Hz ring 2048/512 -> sink 36000 Hz 3072/768 avail_min 512
+s31route: xruns 0 transfers 425
+== ARM fix,S31ROUTE_HEADROOM=1 geom 22050 1 512
+sdltone: want 22050 Hz 1 ch 1024 samples; got 22050 Hz 1 ch 1024 samples (46.4 ms/callback) iters 300 hog 2
+sdltone: thread_cpu 10.44 us/sample, path (thread - callback) 5.07 us/sample = 11.19% of a core
+sdltone: pid 1434 tid 1435 calls 260 (expect 258) cb_cpu 5.36 us/sample (11.9% of a core) meangap 46.5 ms maxgap 57.0 ms late 0 cpus 0x1 moves 0
+underruns 0 bounces 8
+s31route: hw:0,0 app 22050 Hz ring 2048/512 -> sink 22050 Hz 2048/256 avail_min 512
+s31route: xruns 0 transfers 263
+ARMS_DONE
+COLLECT_OK
