@@ -7,3 +7,8 @@ export LOGNAME=root
 export OPENER=s31-open
 # xfiles thumbnails on: it derives its cache from XDG_CACHE_HOME.
 export XDG_CACHE_HOME=/root/.cache
+# s31fp (rootfs/s31fp/v2): bit-exact, faster soft-double arithmetic for every
+# dynamically linked program - libgcc's routines in the program's own text are
+# found by their full bodies and redirected at load. S31FP=0 turns it off for
+# a process; musl starts programs normally if the file is missing.
+[ -r /usr/lib/libs31fp.so ] && export LD_PRELOAD=/usr/lib/libs31fp.so

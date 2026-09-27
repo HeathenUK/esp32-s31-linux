@@ -15600,6 +15600,15 @@ int main(void)
 	 * broken display server rather than a missing environment variable.
 	 */
 	setenv("XFILESEARCHPATH", "/usr/share/X11/app-defaults/%N", 1);
+	/*
+	 * s31fp (rootfs/s31fp/v2): every client lvdesk starts gets the
+	 * bit-exact, faster soft-double routines patched into its own text at
+	 * load. /etc/profile does the same for login shells; this covers what
+	 * lvdesk execs without one. overwrite=0 keeps an explicit choice, and
+	 * S31FP=0 in the environment turns it off per process.
+	 */
+	if (!access("/usr/lib/libs31fp.so", R_OK))
+		setenv("LD_PRELOAD", "/usr/lib/libs31fp.so", 0);
 	xshim_on_title(xwin_on_title);
 	xshim_on_warp(xwin_on_warp);
 	xshim_on_mode(xwin_on_mode);

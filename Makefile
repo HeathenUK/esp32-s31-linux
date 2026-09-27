@@ -958,7 +958,7 @@ XIP_ROOTFS_IMG := $(BUILD_DIR)/rootfs-xip.cramfs
 # S31GL_RAMTEXT build beats the card.
 XIP_ROOTS_GL ?=
 XIP_ROOTS ?= bin/busybox usr/sbin/wpa_supplicant usr/sbin/iw usr/bin/lvdesk \
-	usr/lib/alsa-lib/libasound_module_pcm_s31route.so \
+	usr/lib/alsa-lib/libasound_module_pcm_s31route.so usr/lib/libs31fp.so \
 	usr/bin/s31-coex usr/bin/s31swapon usr/lib/libSDL-1.2.so.0.11.4 \
 	usr/lib/libSDL2-2.0.so.0.3200.10 usr/lib/libSDL2_mixer-2.0.so.0.600.3 \
 	usr/lib/libXrandr.so.2.2.0 usr/lib/libXxf86vm.so.1.0.0 \
