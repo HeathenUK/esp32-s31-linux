@@ -1,0 +1,25 @@
+00010000-000fe000 r-xp 40ab2000 00:1e 856080     /usr/bin/lvdesk
+000fe000-000ff000 r--p 000ed000 00:1e 856080     /usr/bin/lvdesk
+000ff000-00100000 rw-p 000ee000 00:1e 856080     /usr/bin/lvdesk
+00100000-0020e000 rw-p 00000000 00:00 0 
+01ec8000-01ec9000 ---p 00000000 00:00 0          [heap]
+01ec9000-01eca000 rw-p 00000000 00:00 0          [heap]
+953e8000-9540e000 rw-s 00000000 00:07 133        /dev/dri/card0
+95458000-9547e000 rw-s 00000000 00:01 1          /SYSV00000000 (deleted)
+9547e000-954a4000 rw-s 00000000 00:01 0          /SYSV00000000 (deleted)
+954a4000-954ca000 rw-s 00000000 00:01 10         /memfd:xshim-surface (deleted)
+954f0000-954f2000 rw-s 00000000 00:01 7          /memfd:xshim-pixmap (deleted)
+954f6000-954f8000 rw-p 00000000 00:00 0 
+954f8000-95511000 rw-s 00000000 00:01 1027       /memfd:xlite-ring (deleted)
+95511000-9552a000 rw-s 00000000 00:01 1026       /memfd:xlite-ring (deleted)
+9552a000-9552b000 r--s 00000000 b3:00 619        /etc/localtime
+9552b000-955e7000 rw-s 00000000 00:07 133        /dev/dri/card0
+955e7000-956c9000 r-xp 00000000 00:19 438856     /usr/lib/libasound.so.2.0.0
+956c9000-956cd000 r--p 000e2000 00:19 438856     /usr/lib/libasound.so.2.0.0
+956cd000-956ce000 rw-p 000e6000 00:19 438856     /usr/lib/libasound.so.2.0.0
+956ce000-956d2000 r--p 00000000 00:00 0          [vvar]
+956d2000-956d3000 r-xp 00000000 00:00 0          [vdso]
+956d3000-9577b000 r-xp 00000000 00:19 3818028    /usr/lib/libc.so
+9577b000-9577d000 rw-p 000a7000 00:19 3818028    /usr/lib/libc.so
+9577d000-9577e000 rw-p 00000000 00:00 0 
+9d60d000-9d62e000 rw-p 00000000 00:00 0          [stack]
