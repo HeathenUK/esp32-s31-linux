@@ -1,0 +1,55 @@
+TOTAL 1060129930 instr = 12020/sample
+   8926.2/sample  74.3%  __muldf3
+    776.2/sample   6.5%  adlib_getsample
+    437.4/sample   3.6%  <libc/other>
+    421.7/sample   3.5%  __floatsidf
+    344.9/sample   2.9%  operator_decay
+    266.3/sample   2.2%  __fixdfsi
+    264.6/sample   2.2%  __adddf3
+    253.3/sample   2.1%  __gtdf2
+    205.6/sample   1.7%  operator_release
+     76.0/sample   0.6%  operator_attack
+     28.1/sample   0.2%  __ltdf2
+      7.2/sample   0.1%  main
+      1.8/sample   0.0%  __subdf3
+      1.5/sample   0.0%  change_attackrate
+      1.4/sample   0.0%  change_frequency
+      1.3/sample   0.0%  lds_update
+      1.0/sample   0.0%  operator_sustain
+      0.8/sample   0.0%  __divdf3
+      0.8/sample   0.0%  change_decayrate
+      0.8/sample   0.0%  change_releaserate
+      0.6/sample   0.0%  __floatunsidf
+      0.4/sample   0.0%  adlib_write
+      0.4/sample   0.0%  adlib_init
+      0.4/sample   0.0%  operator_off
+      0.3/sample   0.0%  __fixunsdfsi
+
+CALLS per sample by call site (caller, site, callee):
+    5.17  operator_decay           0x1250 -> __gedf2
+    5.17  operator_decay           0x1260 -> __muldf3
+    4.97  adlib_getsample          0x2f88 -> __muldf3
+    4.97  adlib_getsample          0x2f92 -> __floatsidf
+    4.97  adlib_getsample          0x2f9e -> __muldf3
+    4.97  adlib_getsample          0x2faa -> __muldf3
+    4.97  adlib_getsample          0x2fae -> __fixdfsi
+    4.97  adlib_getsample          0x2f64 -> __floatsidf
+    4.97  adlib_getsample          0x2f7c -> __muldf3
+    4.60  adlib_getsample          0x303e -> __floatsidf
+    4.60  adlib_getsample          0x3056 -> __muldf3
+    4.60  adlib_getsample          0x3062 -> __muldf3
+    4.60  adlib_getsample          0x306c -> __floatsidf
+    4.60  adlib_getsample          0x3078 -> __muldf3
+    4.60  adlib_getsample          0x3084 -> __muldf3
+    4.60  adlib_getsample          0x3088 -> __fixdfsi
+    3.32  operator_release         0x117c -> __gedf2
+    3.32  operator_release         0x118c -> __muldf3
+    1.08  operator_release         0x11d2 -> __ltdf2
+    0.97  operator_attack          0x1328 -> __muldf3
+    0.97  operator_attack          0x1330 -> __adddf3
+    0.97  operator_attack          0x1338 -> __muldf3
+    0.97  operator_attack          0x1340 -> __adddf3
+    0.97  operator_attack          0x1348 -> __muldf3
+    0.97  operator_attack          0x1350 -> __adddf3
+    0.53  operator_decay           0x12aa -> __gedf2
+    0.42  operator_attack          0x139e -> __gedf2

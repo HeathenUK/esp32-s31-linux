@@ -1,0 +1,37 @@
+TOTAL 7313 instr/sample
+   3815.2/sample  52.2%  s31v2_muldf3
+   1325.8/sample  18.1%  adlib_getsample
+    859.9/sample  11.8%  operator_decay
+    485.3/sample   6.6%  s31v2_floatsidf
+    334.0/sample   4.6%  s31v2_fixdfsi
+    159.2/sample   2.2%  s31v2_adddf3
+    147.5/sample   2.0%  s31v2_gtdf2
+     82.1/sample   1.1%  operator_release
+     38.6/sample   0.5%  pow
+     36.7/sample   0.5%  operator_sustain
+     10.3/sample   0.1%  main
+      1.7/sample   0.0%  change_frequency
+      1.7/sample   0.0%  s31v2_subdf3
+      1.6/sample   0.0%  change_attackrate
+      1.5/sample   0.0%  memset
+      1.3/sample   0.0%  lds_update
+calls/sample by site:
+   12.39  operator_decay          0x1098e -> s31v2_gedf2
+   12.38  operator_decay          0x1099e -> s31v2_muldf3
+    8.69  adlib_getsample         0x1259a -> s31v2_floatsidf
+    8.69  adlib_getsample         0x124d8 -> s31v2_muldf3
+    8.69  adlib_getsample         0x124e4 -> s31v2_muldf3
+    8.69  adlib_getsample         0x125b2 -> s31v2_muldf3
+    8.69  adlib_getsample         0x124ee -> s31v2_floatsidf
+    8.69  adlib_getsample         0x124fa -> s31v2_muldf3
+    8.69  adlib_getsample         0x125be -> s31v2_muldf3
+    8.69  adlib_getsample         0x12506 -> s31v2_muldf3
+    8.69  adlib_getsample         0x1250a -> s31v2_fixdfsi
+    8.69  adlib_getsample         0x125c8 -> s31v2_floatsidf
+    8.69  adlib_getsample         0x125d4 -> s31v2_muldf3
+    8.69  adlib_getsample         0x125e0 -> s31v2_muldf3
+    8.69  adlib_getsample         0x125e4 -> s31v2_fixdfsi
+    8.69  adlib_getsample         0x124c0 -> s31v2_floatsidf
+    5.43  operator_decay          0x109e8 -> s31v2_gedf2
+    1.30  operator_release        0x108b2 -> s31v2_gedf2
+    1.30  operator_release        0x108c2 -> s31v2_muldf3
