@@ -1,0 +1,21 @@
+boot lvdesk=1 ctl=1 nofs=0 uptime=67.88 kernel=7.1.10 build=#401 mem=4776
+[1]+  Done                       sh /tmp/r.sh 2>&1
+~ # 
+PASS boot
+cdoomfs alive=1 fs=1 mode=320x240 puts=295 keys=4
+[1]+  Done                       sh /tmp/r.sh 2>&1
+~ # 
+PASS cdoomfs-a
+cdoomfs-close idx=0 ctl=1 asked=1 dropped=1 fsoff=1 after8s=0
+[1]+  Done                       sh /tmp/r.sh 2>&1
+~ # 
+PASS cdoomfs-b
+tyrian alive=1 fs=1 mode=320x200 puts=917 motion=22 keys=4
+[1]+  Done                       sh /tmp/r.sh 2>&1
+~ # 
+PASS tyrian-a
+tyrian-close idx=0 ctl=1 asked=1 dropped=0 fsoff=1 after8s=0
+[1]+  Done                       sh /tmp/r.sh 2>&1
+~ # 
+PASS tyrian-b
+gate2 wall=239s artifacts in artifacts/x11-gate2-20260927-111046

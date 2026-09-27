@@ -1,0 +1,7 @@
+=== ARM n1 
+SQ_FIRED
+SQ n1 #401 SMP Sun Sep 27 09:58:01 UTC 2026 up 76.72 env 
+HW access: RW_INTERLEAVED channels: 2 rate: 11025 (11025/1) period_size: 512 
+SDLQUAKE 969 frames  51.6 seconds  18.8 fps after 60s
+s31route: hw:0,0 app 11025 Hz 2 ch ring 2048/512 -> sink 11025 Hz 2 ch 2048/512 avail_min 512 conv none
+=== ARM p1 S31ROUTE_PLUG=1

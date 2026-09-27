@@ -2,8 +2,9 @@ ASoC: native 22050 / 24000 / 32000 Hz on the Korvo-1 codec path (2026-09-27)
 
 Copy es8389.c over linux-71-port/sound/soc/codecs/es8389.c and
 esp32s31-i2s.c over linux-71-port/sound/soc/espressif/esp32s31-i2s.c, then
-`make linux` (no DTS change, so no `make opensbi`). First shipped as kernel #400
-(#393 + this patch; RAM-text function list and order identical to #393).
+`make linux` (no DTS change, so no `make opensbi`). Shipped as kernel #401
+(#393 + this patch; RAM-text function list and order identical to #393). #400
+was the same without the 96000 removal and the divider guard.
 Supersedes the es8389.c / esp32s31-i2s.c copies in 0042 and 0046.
 
 WHY (artifacts/audio/first-principles-2026-09-27, option 2)
@@ -14,6 +15,10 @@ WHY (artifacts/audio/first-principles-2026-09-27, option 2)
     203-206 per 250 expected at 32000 (shipped and fixed plugin alike), i.e.
     32 kHz content played ~19% slow. On #400 it runs natively and the count
     is 188/188.
+  - 96000 REMOVED from ESP32S31_I2S_RATES, and hw_params refuses an MCLK
+    divider below 2: 256 x 96000 needs xtal/1.63, the divider floors at 2,
+    so "96000" ran at 78125 Hz (= the 0.81 callback ratio above). A 96 kHz
+    file through plughw:0,0 now converts to 48000 (checked on #401).
   - 24000 is the vendor's rate between them; es8389_RATES
     (SNDRV_PCM_RATE_8000_96000) predates the SNDRV_PCM_RATE_24000 bit, so it
     is added there too.

@@ -1,0 +1,24 @@
+=== ARM n1 11:32:29
+SQ_FIRED 11:33:47
+host: fired 11:33:48, silent for 100 s
+SQ n1 #401 SMP Sun Sep 27 09:58:01 UTC 2026 up 76.45 env 
+SDLQUAKE 969 frames  45.0 seconds  21.5 fps (read at 90s, alive 1)
+s31route: hw:0,0 app 11025 Hz 2 ch ring 2048/512 -> sink 11025 Hz 2 ch 2048/512 avail_min 512 conv none
+=== ARM o1 11:35:29
+SQ_FIRED 11:36:48
+host: fired 11:36:48, silent for 100 s
+SQ o1 #401 SMP Sun Sep 27 09:58:01 UTC 2026 up 76.29 env 
+SDLQUAKE 969 frames  44.3 seconds  21.9 fps (read at 90s, alive 1)
+s31route: hw:0,0 app 11025 Hz ring 2048/512 -> sink 11025 Hz 2048/512 avail_min 512
+=== ARM n2 11:38:29
+SQ_FIRED 11:39:48
+host: fired 11:39:48, silent for 100 s
+SQ n2 #401 SMP Sun Sep 27 09:58:01 UTC 2026 up 76.08 env 
+SDLQUAKE 969 frames  44.9 seconds  21.6 fps (read at 90s, alive 1)
+s31route: hw:0,0 app 11025 Hz 2 ch ring 2048/512 -> sink 11025 Hz 2 ch 2048/512 avail_min 512 conv none
+=== ARM o2 11:41:31
+SQ_FIRED 11:42:49
+host: fired 11:42:50, silent for 100 s
+SQ o2 #401 SMP Sun Sep 27 09:58:01 UTC 2026 up 76.68 env 
+SDLQUAKE 969 frames  45.1 seconds  21.5 fps (read at 90s, alive 1)
+s31route: hw:0,0 app 11025 Hz ring 2048/512 -> sink 11025 Hz 2048/512 avail_min 512

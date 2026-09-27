@@ -1,5 +1,57 @@
 # Where this work stands
 
+## Audio path: native 22.05/24/32 kHz, s31route converts the rest (2026-09-27, kernel #401) - SHIPPED, NOT YET EAR-CHECKED
+
+Implements options 1-3 of `artifacts/audio/first-principles-2026-09-27/REPORT.md`.
+Full numbers are in `IMPLEMENT.md` beside it. No app was changed, and every app
+still gets exactly the rate it asks for.
+
+- **s31route buffer rounding.** The sink buffer is now rounded down to whole
+  app periods. SDL 1.2 apps at 44.1 kHz with `samples <= 1024` used to get
+  EINVAL and silence (248-252 underrun lines in 4 s, 0 callbacks). They now
+  get sound with 0 xruns.
+- **Native codec rates (`patches/0074`).**
+  - 22050, 24000 and 32000 are in the I2S rate list, with 64x es8389 rows
+    derived from the vendor's band pattern: rate-scaled regs
+    0x16/0x18/0x19, and a divider band split between 24 and 32 kHz.
+  - Checked by hw_params (rate = app rate), callbacks = expected, 0 xruns,
+    and no coefficient-mismatch lines.
+  - **96000 is removed.** The MCLK divider cannot go below 2, so "96000" ran
+    at 78125 Hz. **32 kHz content played 19% slow** until #401, because plug
+    tripled it to "96000" (203-206 of 250 callbacks).
+- **s31route converts** (`rootfs/s31resample.h`).
+  - On the codec sink it opens `hw:0,0` directly: it routes mono to stereo
+    itself, and resamples non-native rates **upward within the same family**
+    (36000 to 48000, 12000 to 16000, 33075 to 44100).
+  - The filter is a float 24-tap polyphase FIR (no double; the build fails
+    on any `__*df*` reference).
+  - **Cost:** 203-218 cycles an output frame mono and 295-302 stereo,
+    against ~590 + 110 for alsa-lib's linear plus route.
+  - **Quality (host sweep):** images and residual -72 to -85 dB up to 0.4 of
+    the input rate, against -6 to -62 dB for linear.
+  - **End to end:** 36 kHz mono 5.8-6.0% of a core (was 9.3-9.4%, and it
+    went DOWN to 32 kHz), 44.1 kHz mono 2.5-2.7% (was 4.1-4.8%), 12 kHz
+    2.3% (was 4.8-5.0%).
+  - The loopback/A2DP sink still uses plug:. `S31ROUTE_PLUG=1` restores the
+    old path for an A/B test.
+- **Ear check is owed.** Run `sh /root/audiocheck.sh` on the board (details
+  in IMPLEMENT.md section 6). Listen for a steady concert A in every case,
+  hiss (the new 22050 and 32000 rows), a metallic edge on the arpeggio
+  (36000, the converter), clicks, and left/right placement.
+- **Regressions on #401:**
+  - x11-compat-gate2 PASS (cdoomfs 295 puts, tyrian 917);
+  - glxgears windowed 49.5-53.7;
+  - prboom fullscreen 44.0;
+  - QuakeSpasm 8.5/8.7;
+  - sdlquake **21.5/21.6** new plugin against 21.9/21.5 old plugin, on quiet
+    fresh boots.
+  - Earlier readings of 16.8 and 18.8 were **my collector polling the board
+    every 1-2 s during the demo**, not #401. Fire it setsid, sleep once, and
+    read afterwards.
+- **Known, pre-existing, not introduced here:** moving `/run/s31-sink` to the
+  loopback mid-stream while nothing reads it stalls the stream, identically
+  with `S31ROUTE_PLUG=1`.
+
 ## SMP / IPI current checkpoint
 
 Validated checkpoint: kernel #291 and matching loader. Hardware doorbells

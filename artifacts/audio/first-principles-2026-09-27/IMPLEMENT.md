@@ -194,11 +194,67 @@ seen 1.5-3.6 s later, depending on the period.
 
 ## 4. Option 4 (the ~1 ms fixed cost per write): not attempted
 
-Out of time box.
+- **Deliberately left.** It changes the pacing model: a sink buffer sized
+  apart from the app ring, and batched kernel writes.
+- The study's naive version underran on every batch.
+- Stacking a second unverified sample-path change on three that are not yet
+  ear-checked would make a bad listening result impossible to attribute.
+- The direct `hw:0,0` open added here is the prerequisite: the sink geometry
+  is now s31route's own.
+- **Do it after the ear check.**
 
 ## 5. Regression checks
 
-(filled in below from `impl/regress/`)
+All on #401 with the new plugin, compared with the ranges recorded in
+`artifacts/gl/dips/README.md` and docs/current-state.md.
+
+**x11-compat-gate2** (`impl/regress/gate2.txt`): **PASS.**
+- boot, cdoomfs-a/b and tyrian-a/b;
+- cdoomfs 295 puts (recorded 229-305), mode 320x240;
+- tyrian 917 puts (recorded 853-1001).
+
+OpenTyrian's 44.1 kHz mono now goes through the direct dup path.
+
+**glxgears windowed** (regress-quick, the gate2 boot): 53.7 / 50.8 / 50.7 /
+49.5 / 50.4 (recorded 49-54).
+
+**sdlquake timedemo.**
+- **The first readings were the harness, not #401.**
+  - 16.8 fps on the gate2 boot, while my collector polled the board every
+    1 s (a runsh `while ! grep; sleep 1` loop) during the demo.
+  - 18.8 fps on a fresh boot, with a 2 s board-side poll from the collector
+    plus sq.sh's own 5 s poll.
+  - The owner watched the run: ~25 fps with dips to an average of ~15. The
+    dips line up with those polling loops (artifacts/gl/dips/README.md:
+    polling loops caused most of the earlier "dips").
+- **The quiet re-run:** `impl/sq.sh` fires the demo setsid, sleeps once for
+  90 s, and nothing on the host or the board touches the console until it is
+  read (`impl/regress/sdlquake-quiet.txt`). Fresh boot per arm, interleaved:
+
+| arm | fps |
+|---|---|
+| #401, new plugin | 21.5, 21.6 |
+| #401, pre-2026-09-27 plugin 6b781685 via /root/.asoundrc | 21.9, 21.5 |
+
+- **No difference between the plugins, and above the recorded band** of
+  19.2-20.1, which was measured under regress-quick's 5 s poll.
+- sdlquake asks 11025 stereo, so on the new plugin it is a direct
+  pass-through and on the old one plug: collapsed to hw. Same codec geometry
+  (2048/512).
+- **Kernel #393 was not swapped in,** because there was nothing left to
+  attribute.
+- The dips themselves are queued for a separate investigation.
+
+**prboom fullscreen timedemo** (`timedemo.sh`, fresh boot, quiet by design):
+**44.0 fps** (recorded 41.0-46.4).
+
+**QuakeSpasm fullscreen timedemo** (`glquake-arm.sh afp401 2`, `-mixspeed
+11025 -zone 384 -heapsize 12288 -width 320 -height 240 -fullscreen`, one
+fresh boot): **8.5** (the warm-up run) and **8.7** (tier-7 band 8.0-9.2,
+~8.8). Results are in `artifacts/gl/glquake/arms/afp401-0927-115035/`.
+
+A2DP was not required and was not run.
+
 
 ## 6. Ear check: REQUIRED, and the owner's to do
 

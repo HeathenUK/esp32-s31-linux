@@ -1,0 +1,8 @@
+REGRESS afp401 #401 SMP Sun Sep 27 09:58:01 UTC 2026 up 774.13 lvdesk e83b9d67   (same boot as gate2.txt, after it)
+RUN 1 fps 53.7 gears 75% lvdesk 96%
+RUN 2 fps 50.8 gears 73% lvdesk 93%
+RUN 3 fps 50.7 gears 77% lvdesk 88%
+RUN 4 fps 49.5 gears 71% lvdesk 92%
+RUN 5 fps 50.4 gears 72% lvdesk 93%
+(all gaps buckets 0)
+SDLQUAKE 969 frames  57.8 seconds  16.8 fps after 65s

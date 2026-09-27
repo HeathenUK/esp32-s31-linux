@@ -1,0 +1,12 @@
+timedemo: afp401 x1 320x200 fullscreen settle=75s  -> artifacts/timedemo/afp401-20260927-114444
+    run 1: 44.0 fps  alarms=0 still_running=0 rx_MB=0  [#401 SMP Sun Sep 27 09:58:01 UTC 2026]
+
+=== afp401: 320x200 fullscreen, fresh boot per run ===
+  median 44.00 fps  range 44.00-44.00  n=1
+logs: artifacts/timedemo/afp401-20260927-114444
+=== GLQUAKE
+FIRED #401 SMP Sun Sep 27 09:58:01 UTC 2026 up 62.20
+poll: ARM_FINISHED
+RESULT 969 frames 113.8 seconds   8.5 fps
+RESULT 969 frames 112.0 seconds   8.7 fps
+artifacts/gl/glquake/arms/afp401-0927-115035
