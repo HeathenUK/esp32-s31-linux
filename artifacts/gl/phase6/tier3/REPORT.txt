@@ -209,3 +209,14 @@ SUMMARY
   Regression: glxgears, Doom and the desktop (xcalc) as usual - the
   changes are on QuakeSpasm's one-unit and alias paths and the general
   filler's vertex conversion, which every general-path app takes.
+
+BOARD RESULT, 2026-09-27 (coordinator). QuakeSpasm timedemo demo1, fullscreen,
+fresh boot per run, arms alternated. Library c91acbb3, loaded from /root/t3.
+  S31GL_ZF8=1 (tier 3):  8.9, 8.4, 8.8, 8.6 fps  (109.0/115.6/110.6/112.8 s, mean 112.0)
+  S31GL_ZF8=4 (tier 2):  9.0, 8.6, 8.8, 9.0 fps  (108.2/113.3/109.6/107.3 s, mean 109.6)
+Tier 3 is NOT faster on the board: about 2% slower in the mean, and behind in
+3 of 4 pairs, despite 4.7% fewer instructions on the proxy. The likely
+cause is the two new lookup tables (zf1_blendt's packed table and
+zf8_sbart's MUL8 byte table). They trade arithmetic for D-cache loads,
+which on PSRAM cost more than the instructions they save. That is
+unverified. Not shipped: the board stays on tier 2 (91771d02).
