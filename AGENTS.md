@@ -1,5 +1,12 @@
 # Working rules
 
+- **Keep executing an authorized active plan.** A completed milestone, a plan,
+  or a promise to continue is not a reason to end the turn. Commit milestones
+  and continue with progress updates. Stop only when the requested work is
+  complete, the user asks to stop, or a concrete blocker genuinely requires user
+  input; identify that blocker explicitly. Never substitute a final promise for
+  the next available action.
+
 - Read `CLAUDE.md` and the newest dated status document in `docs/` before
   board work. Newer recorded state supersedes historical summaries.
 - Use the existing Makefile recipes for builds, through `docker/build.sh`

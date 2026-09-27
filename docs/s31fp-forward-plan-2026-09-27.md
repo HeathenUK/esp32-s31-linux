@@ -11,7 +11,15 @@ acceptance was 47.1 fps; this is not a statistically established improvement.
 Tyrian still underruns. QuakeSpasm 20 fps and the other stretch targets are goals,
 not forecasts. Existing libGL improvements must not be recreated in s31fp.
 
-## Ordered work and decision gates
+## Active execution order (owner correction)
+
+Start with the OPL-focused arithmetic experiment (item 4 below), then continue
+memory operations, selective coverage, placement and wider candidates. The
+inventory already completed is supporting evidence, not a reason to stop.
+An active persistent task now tracks this campaign. Commit milestones and keep
+working; a milestone is not a handoff unless the owner requests one.
+
+## Work and decision gates
 
 1. **Coverage inventory — started.** Inspect actual ELF bodies and dynamic imports
    for prboom, SDLQuake, QuakeSpasm, OpenTyrian and their important application
