@@ -286,3 +286,11 @@ The board holds the script at `/root/audiocheck.sh`, with source in
 - **Clicks, dropouts or stutter.**
 - **Channel placement:** the left-only and right-only sections must come
   from one side.
+
+## 7. Ear check: PASSED (owner, 2026-09-27 ~12:05)
+
+The coordinator played `sh /root/audiocheck.sh` through the normal
+"default" path at DAC 143: all 10 cases at 22050, 32000, 36000, 44100 and
+48000 Hz, mono and stereo. The codec ran natively at 22050, 32000, 44100
+and 48000, and at 48000 for 36000 (s31route's resampler). The owner's
+verdict: "All sound good."
