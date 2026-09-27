@@ -1,0 +1,17 @@
+cachesim h-c: 80 counted frames, per frame: loads 2948758 stores 1290436 refills 29193 (1824.6 kB) writebacks 18253 (1140.8 kB), PSRAM 2965.4 kB
+cachesim h-s1: 80 counted frames, per frame: loads 2948758 stores 1290436 refills 31498 (1968.6 kB) writebacks 18930 (1183.1 kB), PSRAM 3151.7 kB
+cachesim h-s2: 80 counted frames, per frame: loads 2948758 stores 1290436 refills 29247 (1827.9 kB) writebacks 17764 (1110.3 kB), PSRAM 2938.2 kB
+cachesim h-s3: 80 counted frames, per frame: loads 2948758 stores 1290436 refills 28777 (1798.6 kB) writebacks 17984 (1124.0 kB), PSRAM 2922.5 kB
+cachesim h-s4: 80 counted frames, per frame: loads 2948758 stores 1290436 refills 29295 (1831.0 kB) writebacks 18007 (1125.4 kB), PSRAM 2956.4 kB
+cachesim h-s5: 80 counted frames, per frame: loads 2948758 stores 1290436 refills 28855 (1803.4 kB) writebacks 18362 (1147.6 kB), PSRAM 2951.1 kB
+cachesim h-s6: 80 counted frames, per frame: loads 2948758 stores 1290436 refills 30470 (1904.4 kB) writebacks 18968 (1185.5 kB), PSRAM 3089.9 kB
+cachesim h-s7: 80 counted frames, per frame: loads 2948758 stores 1290436 refills 28907 (1806.7 kB) writebacks 18230 (1139.4 kB), PSRAM 2946.1 kB
+cachesim h-s8: 80 counted frames, per frame: loads 2948758 stores 1290436 refills 28463 (1779.0 kB) writebacks 18069 (1129.3 kB), PSRAM 2908.3 kB
+cachesim h-s9: 80 counted frames, per frame: loads 2948758 stores 1290436 refills 28816 (1801.0 kB) writebacks 18106 (1131.6 kB), PSRAM 2932.6 kB
+cachesim h-s10: 80 counted frames, per frame: loads 2948758 stores 1290436 refills 29431 (1839.5 kB) writebacks 18232 (1139.5 kB), PSRAM 2978.9 kB
+cachesim h-s11: 80 counted frames, per frame: loads 2948758 stores 1290436 refills 29046 (1815.4 kB) writebacks 18118 (1132.4 kB), PSRAM 2947.8 kB
+cachesim h-s12: 80 counted frames, per frame: loads 2948758 stores 1290436 refills 30952 (1934.5 kB) writebacks 19002 (1187.6 kB), PSRAM 3122.1 kB
+cachesim h-s13: 80 counted frames, per frame: loads 2948758 stores 1290436 refills 28322 (1770.1 kB) writebacks 17806 (1112.9 kB), PSRAM 2883.0 kB
+cachesim h-s14: 80 counted frames, per frame: loads 2948758 stores 1290436 refills 28451 (1778.2 kB) writebacks 17798 (1112.4 kB), PSRAM 2890.6 kB
+cachesim h-s15: 80 counted frames, per frame: loads 2948758 stores 1290436 refills 28693 (1793.3 kB) writebacks 17945 (1121.6 kB), PSRAM 2914.9 kB
+cachesim h-s16: 80 counted frames, per frame: loads 2948758 stores 1290436 refills 28764 (1797.7 kB) writebacks 17798 (1112.4 kB), PSRAM 2910.1 kB

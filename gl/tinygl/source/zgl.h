@@ -706,9 +706,10 @@ typedef struct GLContext {
   int flat_ok;                  /* phase 6 V5: pipe.flat is flat_vtx's (raster.c
                                    set_flat; per triangle, so at the end) */
   int zf8_on;                   /* S31GL_ZF8 (default 1): phase 6 zf8's world
-                                   filler (0: the loop before it; 2: with the
-                                   next row's prefetches; 3: a call a span,
-                                   not a triangle (tier 2) - the A/B arms) */
+                                   filler a triangle a call; 3: a call a span
+                                   and zf8's texel stage, as before tier 2
+                                   (the A/B arm; 0 and 2 were removed in
+                                   tier 7 and read as 1) */
 } GLContext;
 
 /* GLContext.p4_en */

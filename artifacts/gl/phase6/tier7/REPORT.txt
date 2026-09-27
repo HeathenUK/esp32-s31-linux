@@ -1,0 +1,186 @@
+GL phase 6 - tier 7: code size is time. Host only - 2026-09-27. Nothing
+touched the board; no make / Buildroot. s31, MIT.
+
+BASE: the shipped tier-2 code, NOT tier 3. Main was taken and tier 3's
+source changes removed by restoring the eight tinygl files tier 3 touched
+(raster.c raster_sel.c s31_mtex.c s31_thr.c zgl.h zpipe.h zpipe_fused.c
+zpipe_fused8.h) to 9ecf5f86. (That restore landed in main as part of
+a97b9851, a docs commit made from a parallel session while this work had
+the files staged; HEAD's tinygl now equals tier 2's.) Kept from main: tier
+4's depth placement (gl/glx, S31GL_CCOLOR, default 1, never board-measured)
+and tier 6's tooling (icsim, the hot-order mechanism with no order file,
+so the layout is tier 2's). "base" below = this tree before tier 7.
+Workload: the QuakeSpasm proxy, p5f2-tf0 trace, S31GL_TEXFILTER=0 (the
+shipped nearest config), RV32 qemu, board flags.
+
+VERDICT
+  Three bit-identical changes, one shrink. Instructions fall 1.6% over the
+  whole replay; the executed-code working set is unchanged (790 -> 791
+  lines a frame), the hot range shrinks 5.3 kB, no new tables, D-cache
+  traffic flat. Combined model cost falls; the board A/B is still to run.
+    proxy windows 0/1   15.3397 / 14.0638 -> 14.9939 / 13.9474 M a frame
+                        (-2.25% / -0.83%)
+    whole replay        14.7015 -> 14.4704 M a frame (-1.57%, qsprof)
+    I-cache model       790 -> 791 distinct lines a frame; refills a frame,
+                        48 random placements: mean 11,267 -> 10,524, median
+                        10,012 -> 9,853, p90 19,273 -> 16,659, max 44,379 ->
+                        35,687; contiguous 10,049 -> 5,930. PAIRED BY SEED
+                        22 of 48 better, mean -744 +- 1,162 (se): noise, as
+                        tier 6 found for layout - read it as "no worse".
+    D-cache model       PSRAM kB a frame, 16 random placements: mean 2,965.2
+                        -> 2,965.3, p90 3,079.3 -> 3,122.1 (the .rodata /
+                        .data pages move: noise); contiguous 2,973.7 ->
+                        2,965.4
+  COST MODEL (weights stated, per frame): 1 instruction = 1; an I-refill =
+  78 (0.6 us, tier 5/6's board figure, at ~130 M instructions/s); a PSRAM
+  D-line (refill or write-back) = 40 (~300 ns). Delta = -231 k
+  instructions + 78 x (-744 +- 1,162 refills) + 40 x (~0 lines) = -231 k
+  at the model's refill mean taken as zero, -140 k at its +1 se worst:
+  -1.0% .. -1.6% of the replay. Tier 3, for comparison: -4.7% instructions
+  but +2.7 kB of hot code and two new 256 B tables, and 2% slower on the
+  board.
+
+1. t8_l8_pass (target 2): WHOLE ALPHA BYTES
+  The board profile (prof9) puts every one of t8_l8_pass's 97 samples in
+  the TGL_AM_BITS loop: QuakeSpasm's lightmap blocks are RGBA with alpha 0
+  in the unused area, so the L8 level carries a bit-per-texel alpha plane,
+  and each texel read-modify-wrote its bit's byte (22 instructions a
+  texel). The per-frame glTexSubImage2D of dynamic lightmaps is now: a
+  head up to the next byte boundary as before, then 8 texels a step
+  (unrolled) with the eight alpha bits built in a register
+  (b = b << 1 | v >> 31, texels 7..0) and one byte store, then the tail as
+  before; abad keeps the OR of the sums and is masked once (an OR has bits
+  25-31 clear iff every word does). Same bytes, same alpha bits, same
+  grey/opaque/binary statistics: l8eq.c (this directory) runs both loops
+  on 2,000,000 random rows (width 0-129, any start bit, grey/colour,
+  binary/any/opaque alpha): 0 mismatches.
+    t8_l8_pass  274,683 -> 154,150 instructions a frame (-44%)
+    proxy window 0 15.3397 -> 15.1006 (window 1: 14.0638 -> 14.0618 - its
+    frames re-upload little)
+  It cannot be a memcpy: the client sends RGBA words and the level stores
+  one byte (grey) plus one bit (alpha) per texel; the statistics decide
+  whether the texture stays L8.
+
+2. zf8_wnn_t_p0s1 (target 1): PER-TRIANGLE STEPS HOISTED
+  Board samples in the function (prof9, 1,611): pixels 70.4%, triangle and
+  span set-up 15.1%, the 8-pixel block end (1/z, the steps, the jump-table
+  dispatch) 14.5%. The span-start stalls are visible (49 and 64 samples on
+  the two instructions after the first pixel's depth load and colour
+  store: 7%), the rest is spread over the pixel's instructions at ~2-6
+  samples each, i.e. instruction count. (board-prof9-zf8_wnn_t_p0s1.annot)
+  qemu per instruction (zf8_wnn_t_p0s1-base.annot): 435 triangles, 9,483
+  spans, 20,933 blocks, 93 k passing and 33 k failing pixels a frame; the
+  pixel is 5 walk + 3 depth + 37 (pass) = 45, and every one of the 37 is
+  needed for these bits (2 address calcs of 4-5 + load, the palette's 3
+  byte loads, 3 x mul/sh1add/minu/srli, 2 shifts, 2 ors, 2 stores, the
+  m = l 257, one spill). What was not needed: the span set-up recomputed
+  8.0f x dfz/dsz/dtz/dsz1/dtz1 and reloaded the five steps from the ZSpan
+  on every span. zf8_world_nn_b now takes the steps and their x8 as
+  arguments; the triangle filler computes them once a triangle (the same
+  multiply by a power of two, so the same values; zf8_world_nn_t, the
+  per-span callers, compute them as before).
+    span set-up 72 -> 60 instructions (triangle prologue 34 -> 45)
+    zf8_wnn_t_p0s1 6,409,666 -> 6,299,206 a frame (-1.7%)
+  Considered and not done, with the reason:
+  - a lit palette (r 257 stored, saving m = l 257: 2 a pixel, ~190 k): a
+    second 16-bit palette per P8 texture, i.e. new data in the D-cache and
+    RAM on every world texture - tier 3's lesson.
+  - SWAR products ((r | b << 16) x l is exact) - the per-channel rounding
+    (x 514 + 32894, clamp, >> 19) then costs more than the multiply saved.
+  - more work per span start (touching the next row) - S31GL_ZF8=2 was
+    measured on the board and did not help; that arm is now removed.
+  - 16-pixel perspective blocks - different bits.
+
+3. SHRINK (target 4)
+  - S31GL_ZF8=0 (zf8_world_nn0_t, the loop before phase 6 zf8) and =2
+    (zf8_wnn_rp_p0s1, the next-row touches) removed; both values now read
+    as 1 (s31_mtex.c normalises: only 3 is an arm). =3 stays: it is the
+    zf8 build's per-span call and texel stage, and the per-span runner
+    zf8_wnn_r_p0s1 / zf8_wnn_s_p0s1 is what S31GL_THREADS=2's bands use.
+    gates/zf8-arms.txt: ZF8=0 and =2 replay the default's 14.9939 /
+    13.9474 exactly; =3 15.6965 / 14.7371; all 84 frames = live.
+  - ramtext.list: the functions in the hot range that QuakeSpasm never
+    executes (icsim's dump over the proxy: gl_shade_vertex 3,246 B,
+    zf_alias_00 622, zx8_base_p8 314, zf1_alias 310, gl_draw_triangle_fill
+    122, gl_draw_triangle_fill_pq 96, clip_zmin 96, and the removed
+    zf8_wnn_rp_p0s1) dropped from the list; they stay in .text. So did
+    fill_pq_slow (314 B), which QuakeSpasm DOES run (one line, 7 k
+    instructions a frame): it went with its line of the list, and the
+    icsim numbers above are measured with it in .text. The board's RAMTEXT
+    default is 0, so this only packs the range.
+  - Tier 3's tables and functions: not in this tree (the base is tier 2).
+  Sizes (Buildroot compiler and flags, gl/bench/out-t3/brbuild.sh's
+  method):
+                       tier 2 (91771d02)  base       tier 7
+    .text              288,686            288,910    294,098 (+5,188)
+    .s31hot             57,276             57,276     51,968 (-5,308)
+    .text + .s31hot    345,962            346,186    346,066 (-120)
+    hot range          46,108             46,108     40,800 (-5,308, 12 ->
+     [__s31hot_start, __s31hot_end)                  10 pages)
+    .rodata             34,696             34,768     34,768
+    stripped           443,812            443,816    443,816
+  (base = tier 2 + tier 4's glx: +224 .text, +72 .rodata.)
+
+4. NOT DONE (time box)
+  - Target 3 (ZB_fillTriangleGeneral 735 k, gl_vertex4f 905 k, the alias
+    path): untouched. The I-cache attribution (model/icattr-base.txt) says
+    the per-triangle and per-glBegin code evicting itself is where the
+    refills are (ZB_fillTriangleGeneral 1.39 k refills a frame, glopBegin
+    0.80 k, s31_hook_viewport 0.78 k); moving cold arms of those out
+    (gl_build_pipe, zpf_select, gl_update_raster: 38 + 54 + 28 lines every
+    frame) is the next shrink, and only an icsim distinct-lines drop
+    should justify it.
+  - run-ramtext.sh (RAMTEXT=1 on/off, RV32 and AArch64) was not re-run
+    after the ramtext.list edit. The RV32 and AArch64 builds link with it
+    (run-3a) and the board default is RAMTEXT=0.
+
+5. GATES (gates/)
+  run-3a p6-tier7 (gates/run-3a.txt): identical, line for line apart from
+    whitespace, to tier 3's (which were tier 2's): core_test 292/0,
+    raster_gate 51/0, filt_test 32/0, fused_test 45/0 (both FILT8 modes),
+    headless_gears md5 34a082d3b0f572e9c952557a71ed7ac1, suitecmp 0 apps
+    worse, pixels / raster summaries and prims as before, mtex 4 of 5 PASS
+    and 5 logs 0 differ (as before), prec 99.35%; RV32 qemu-user core_test
+    290/0, raster_gate 51/0, d2f 0 mismatches, filt_test 32/0, fused_test
+    45/0, headless_gears 34a082d3...; bench.sh: all 74 frame hashes
+    identical to tier 3's run (= tier 2's), 62 within limits.txt and the
+    same 6 owner-pending lines over; the counts differ from tier 3's only
+    where tier 3 had gained (feat5 +12.6%, feat1-3 +1%, filt5 +0.5%: back
+    to tier 2).
+  qsr-fused over all 9 traces present (gates/qsr-fused.log): 756 of 756
+    full frames fused = general = the unpacked reference; p5f2-tf0 84 of 84
+    = the live capture. Against tier 2: the same gate on a 9ecf5f86
+    snapshot, every per-frame hash file of 9 traces x 3 arms: 27 of 27
+    identical, 2,268 frames (gates/qsr-hashes-vs-tier2.txt).
+  run-qsr-threads (p5f2, p5f2-tf0, p5a, p5a-tf0): S31GL_THREADS=2 at both
+    band layouts 84 of 84 identical to THREADS=0 on every trace
+    (gates/qsr-threads.log).
+
+6. INSTRUMENTS (new, gl/bench)
+  icsweep.sh OUT LABEL N [JOBS]  icsim.sh over seeds 1..N (random code
+    frames) plus the contiguous run: mean / median / p90 / max refills.
+    Reproduces tier 6's tier-2 row exactly (mean 11,267, p90 19,273).
+  cssweep.sh OUT LABEL N [JOBS]  cachesim.sh over seeds 1..N of random
+    frames for every page, plus the contiguous run: PSRAM kB a frame.
+  Raw: model/icsweep-{base,l8,pr,h}.txt (l8 = the L8 change alone, pr =
+  + the list pruning, h = final), model/cssweep-{base,h}.txt,
+  qemu-counts/prof-{base,final}.txt, *.annot.
+
+7. BOARD A/B TO RUN (coordinator; stock QuakeSpasm 0.96.3 timedemo demo1,
+   320x240 fullscreen, fresh boot per run, interleaved, >= 4 runs per arm,
+   GQ_CC=1 for the I-refills - they decide slow boots, r = -0.98)
+  Library: gl/bench/out-t7/br-final/libGL.so.1 (stripped; this tree with
+  the Buildroot compiler and flags, -DS31GL_TEXFILTER_DEFAULT=0
+  -DS31GL_RAMTEXT_DEFAULT=0)
+    md5    01aa340fe4dcd243166ee3d4104ce034
+    sha256 281db04cad7ee87b588bcb09395f0bd1b1d2daf9da889901fcd7ecea4d553af3
+  No runtime toggle for the tier-7 changes: a toggle would keep both
+  versions of the code in the image, which is the thing being measured.
+    A  shipped tier 2 (SD root, 91771d02)
+    B  LD_LIBRARY_PATH=/root/t7 S31GL_CCOLOR=0   (= tier 2 + tier 7 only)
+    C  LD_LIBRARY_PATH=/root/t7                  (+ tier 4's depth
+       placement, its first board run; optional third arm)
+  Expected: B about 1-2% over A (8.7 -> ~8.8 fps) - under the boot-to-boot
+  spread, so a win needs B's I-refills per frame not above A's and the
+  arms not interleaving. Confirm the library by md5 on the board and by
+  the game's maps naming /root/t7.

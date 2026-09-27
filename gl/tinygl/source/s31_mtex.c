@@ -138,13 +138,13 @@ void gl_mtex_init(GLContext *c)
      one texture unit, as before phase 5 (a board A/B arm: QuakeSpasm then
      takes its no-combiner paths) */
   c->fused_on = knob("S31GL_FUSED", 1);
-  /* S31GL_ZF8=0: QuakeSpasm's world filler as before phase 6 zf8; 2: zf8
-     with next-row prefetches (the board A/B arms; artifacts/gl/phase6/zf8/
-     REPORT.txt); 3: zf8 called a span at a time, as before phase 6 tier 2
-     (1 calls it a triangle at a time; artifacts/gl/phase6/tier2) */
+  /* S31GL_ZF8=3: zf8 called a span at a time, as before phase 6 tier 2
+     (1 calls it a triangle at a time; artifacts/gl/phase6/tier2). 0 (the
+     loop before zf8) and 2 (next-row prefetches) were removed in tier 7
+     and select the default */
   {
     const char *e = getenv("S31GL_ZF8");
-    c->zf8_on = e ? atoi(e) : 1;
+    c->zf8_on = e && atoi(e) == 3 ? 3 : 1;
   }
   c->mtex_adv = knob("S31GL_MTEX", 1);
 }

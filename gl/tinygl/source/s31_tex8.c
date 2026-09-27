@@ -571,16 +571,47 @@ static void t8_l8_pass(T8Scan *s, const GLTexture *t, unsigned char *pix, unsign
       if (t->amode == TGL_AM_BITS) {
         /* (QuakeSpasm's lightmap blocks: opaque texels, and alpha 0 in
            the area no surface has used yet - rows of both) */
-        for (x = 0; x < w; x++) {
+        /* (tier 7: whole alpha bytes - eight texels, bit i the texel at
+           k + i - composed in a register and stored, where each texel
+           read-modify-wrote its byte: 22 -> 11 instructions a texel;
+           abad keeps the sums and is masked once: an OR of words has
+           bits 25-31 clear iff every word has) */
+        x = 0;
+        for (; x < w && ((k0 + x) & 7); x++) {
           unsigned int v = q[x];
           int k = k0 + x;
           gacc |= v ^ (v >> 8);
           aand &= v;
-          abad |= (v + 0x01000000u) & 0xfe000000u;
+          abad |= v + 0x01000000u;
           d[x] = (unsigned char)v;
           if (v >> 31) al[k >> 3] |= (unsigned char)(1u << (k & 7));
           else al[k >> 3] &= (unsigned char)~(1u << (k & 7));
         }
+        for (; x + 8 <= w; x += 8) {
+          unsigned int b = 0;
+          int i;
+#pragma GCC unroll 8
+          for (i = 7; i >= 0; i--) {
+            unsigned int v = q[x + i];
+            gacc |= v ^ (v >> 8);
+            aand &= v;
+            abad |= v + 0x01000000u;
+            d[x + i] = (unsigned char)v;
+            b = b << 1 | v >> 31;
+          }
+          al[(k0 + x) >> 3] = (unsigned char)b;
+        }
+        for (; x < w; x++) {
+          unsigned int v = q[x];
+          int k = k0 + x;
+          gacc |= v ^ (v >> 8);
+          aand &= v;
+          abad |= v + 0x01000000u;
+          d[x] = (unsigned char)v;
+          if (v >> 31) al[k >> 3] |= (unsigned char)(1u << (k & 7));
+          else al[k >> 3] &= (unsigned char)~(1u << (k & 7));
+        }
+        abad &= 0xfe000000u;
       } else {
         for (x = 0; x < w; x++) {
           unsigned int v = q[x];

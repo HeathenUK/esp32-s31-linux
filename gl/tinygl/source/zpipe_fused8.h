@@ -166,7 +166,7 @@ static inline unsigned int zf8_pack(unsigned int r, unsigned int g, unsigned int
    word) and zx8_1_base (unit 1, the L8 lightmap: its grey), N pixels from
    the span's first.
    Phase 6 zf8 (artifacts/gl/phase6/zf8/REPORT.txt): the same bits as the
-   loop it replaced (zf8_world_nn0_t below, S31GL_ZF8=0), fewer
+   loop it replaced (removed in tier 7), fewer
    instructions a pixel and a span:
    - depth walked as z << 2, so the 16-bit depth is one shift (bits 16-31
      of 4z are bits 14-29 of z, and 4(z + dz) = 4z + 4dz mod 2^32), and
@@ -228,7 +228,10 @@ static inline unsigned int zf8_pack(unsigned int r, unsigned int g, unsigned int
 static inline __attribute__((always_inline))
 void zf8_world_nn_b(const ZPipe *p, const ZSpan *s, int n, PIXEL *pp, unsigned short *pz,
                      const unsigned int z0, float cfz, float csz, float ctz, float csz1,
-                     float ctz1, const int K0, const int D, const int SH, const int U)
+                     float ctz1, const float dfz, const float dsz, const float dtz,
+                     const float dsz1, const float dtz1, const float d8fz, const float d8sz,
+                     const float d8tz, const float d8sz1, const float d8tz1,
+                     const int K0, const int D, const int SH, const int U)
 {
   const ZPipeX *x = p->x;
   const ZLevel *L0 = &x->tf[0].lvl[0], *LM = &x->tf[1].lvl[0];
@@ -242,9 +245,9 @@ void zf8_world_nn_b(const ZPipe *p, const ZSpan *s, int n, PIXEL *pp, unsigned s
   unsigned int z4 = z0 << 2;
   const unsigned int dz4 = (unsigned int)s->dzdx << 2;
   /* (cfz ... are the chunk's start values: zp_run_t's s->fz ... as it
-     advances them) */
-  const float dfz = s->dfzdx, dsz = s->dszdx, dtz = s->dtzdx;
-  const float dsz1 = s->dszdx1, dtz1 = s->dtzdx1;
+     advances them; dfz ... the span's s->dfzdx ..., and d8fz ... 8.0f
+     times them - tier 7: arguments, so that the triangle filler computes
+     and loads them once a triangle, not once a span) */
   (void)t0; (void)ix0; (void)pal0; (void)LM;
   /* (no return in here: zf8_wnn_t_p0s1 inlines it in its row loop) */
   if (n > 0) for (;;) {
@@ -293,8 +296,8 @@ void zf8_world_nn_b(const ZPipe *p, const ZSpan *s, int n, PIXEL *pp, unsigned s
           __asm__("" : "+r"(z4), "+r"(pp));
         } while (pz != pbe);
       }
-      fz += 8.0f * dfz; sz += 8.0f * dsz; tz += 8.0f * dtz;
-      sz1 += 8.0f * dsz1; tz1 += 8.0f * dtz1;
+      fz += d8fz; sz += d8sz; tz += d8tz;
+      sz1 += d8sz1; tz1 += d8tz1;
     } while (pz != (U ? pcev : pce));
     n -= cn;
     if (n <= 0) break;
@@ -314,8 +317,11 @@ static inline __attribute__((always_inline))
 void zf8_world_nn_t(const ZPipe *p, const ZSpan *s, int n, const int K0, const int D,
                      const int SH, const int U)
 {
+  const float dfz = s->dfzdx, dsz = s->dszdx, dtz = s->dtzdx;
+  const float dsz1 = s->dszdx1, dtz1 = s->dtzdx1;
   zf8_world_nn_b(p, s, n, s->pp, s->pz, s->z, s->fz, s->sz, s->tz, s->sz1, s->tz1,
-                 K0, D, SH, U);
+                 dfz, dsz, dtz, dsz1, dtz1, 8.0f * dfz, 8.0f * dsz, 8.0f * dtz,
+                 8.0f * dsz1, 8.0f * dtz1, K0, D, SH, U);
 }
 #undef ZF8_NNPIX
 #define ZF8_WNN(N, K0, D)                                                \
@@ -355,6 +361,10 @@ static __attribute__((noinline)) void zf8_wnn_t_p0s1(ZBuffer *zb, const ZTri *T,
   const float Rs = pl[3], gsx = pl[4], gsy = pl[5], Rt = pl[6], gtx = pl[7], gty = pl[8];
   const float Rs1 = pl[9], gs1x = pl[10], gs1y = pl[11];
   const float Rt1 = pl[12], gt1x = pl[13], gt1y = pl[14];
+  const float dfz = sp->dfzdx, dsz = sp->dszdx, dtz = sp->dtzdx;
+  const float dsz1 = sp->dszdx1, dtz1 = sp->dtzdx1;
+  const float d8fz = 8.0f * dfz, d8sz = 8.0f * dsz, d8tz = 8.0f * dtz;
+  const float d8sz1 = 8.0f * dsz1, d8tz1 = 8.0f * dtz1;
   int part;
 
   for (part = 0; part < 2; part++) {
@@ -380,105 +390,16 @@ static __attribute__((noinline)) void zf8_wnn_t_p0s1(ZBuffer *zb, const ZTri *T,
                      Rq + gqx * fx + gqy * fy,
                      Rs + gsx * fx + gsy * fy, Rt + gtx * fx + gty * fy,
                      Rs1 + gs1x * fx + gs1y * fy, Rt1 + gt1x * fx + gt1y * fy,
+                     dfz, dsz, dtz, dsz1, dtz1, d8fz, d8sz, d8tz, d8sz1, d8tz1,
                      KP8, 0, 1, 1);
     }
   }
 }
 
-/* S31GL_ZF8=2 (a board A/B arm, off by default: qemu cannot see memory
-   latency): zf8_wnn_r_p0s1 that first touches the lines the triangle's
-   next span will most likely start in (the same x one row down, in the
-   depth and colour buffers) and the line of this span's last pixel, with
-   loads whose value nothing waits for (rd x0 on RISC-V). The board
-   profile's two hottest PCs are the depth load's neighbours: a miss per
-   span row in each buffer (64-byte lines, 275-316 ns a miss). (Both
-   buffers have ysize rows of the same x: the colour buffer's linesize is
-   its row) */
-#if defined(__riscv)
-#define ZF8_TOUCH(a) __asm__ volatile("lhu x0, 0(%0)" : : "r"(a))
-#else
-#define ZF8_TOUCH(a) __builtin_prefetch(a)
-#endif
-static void zf8_wnn_rp_p0s1(ZBuffer *zb, ZSpan *s)
-{
-  const unsigned short *pz = s->pz + zb->xsize;
-  const PIXEL *pp = (const PIXEL *)((const char *)s->pp + zb->linesize);
-  if (pz < zb->zbuf + zb->xsize * zb->ysize) {
-    ZF8_TOUCH(pz);
-    ZF8_TOUCH(pp);
-  }
-  ZF8_TOUCH(s->pz + s->n - 1);
-  ZF8_TOUCH(s->pp + s->n - 1);
-  zf8_wnn_s_p0s1(zb->pipe, s, s->n);
-}
-#undef ZF8_TOUCH
-
-/* The loop before phase 6 zf8 (S31GL_ZF8=0, the board A/B arm): one
-   chunk a call, from zp_run_mt_direct */
-static inline __attribute__((always_inline))
-void zf8_world_nn0_t(const ZPipe *p, const ZSpan *s, ZFrag *f, const int K0, const int D)
-{
-  const ZPipeX *x = p->x;
-  const ZLevel *L0 = &x->tf[0].lvl[0], *LM = &x->tf[1].lvl[0];
-  const PIXEL *t0 = p->tex;
-  const unsigned char *ix0 = L0->i8, *lm = LM->i8;
-  const unsigned int *pal0 = L0->pal;
-  const int sh = x->cb[1].sh[0];
-  const unsigned int tm0 = p->tmask, sm0 = p->smask;
-  const unsigned int tm1 = x->g1.tmask, sm1 = x->g1.smask;
-  const int fb0 = p->fbits, fb1 = x->g1.fbits;
-  PIXEL *pp = s->pp;
-  unsigned short *pz = s->pz;
-  unsigned int z = s->z, zz;
-  float fz = s->fz, sz = s->sz, tz = s->tz, sz1 = s->sz1, tz1 = s->tz1;
-  const float dfz = s->dfzdx, dsz = s->dszdx, dtz = s->dtzdx;
-  const float dsz1 = s->dszdx1, dtz1 = s->dtzdx1;
-  int i = 0, e, n = f->n, ok;
-  /* (memoising the last texel's product measured worse: 18.13 -> 18.37 M
-     a frame on the TEXFILTER=0 trace - few texels repeat at 320 x 240) */
-  (void)t0; (void)ix0; (void)pal0; (void)LM;
-  while (i < n) {
-    float zinv = 1.0f / fz;
-    /* unit 0: zt_rr's walk (int) for 565, TWALK's (unsigned) for P8: the
-       same values */
-    float ss = sz * zinv, tt = tz * zinv;
-    unsigned int si = (unsigned int)(int)ss, ti = (unsigned int)(int)tt;
-    unsigned int dsi = (unsigned int)(int)((dsz - ss * dfz) * zinv);
-    unsigned int dti = (unsigned int)(int)((dtz - tt * dfz) * zinv);
-    float ss1 = sz1 * zinv, tt1 = tz1 * zinv;
-    unsigned int si1 = (unsigned int)(int)ss1, ti1 = (unsigned int)(int)tt1;
-    unsigned int dsi1 = (unsigned int)(int)((dsz1 - ss1 * dfz) * zinv);
-    unsigned int dti1 = (unsigned int)(int)((dtz1 - tt1 * dfz) * zinv);
-    e = i + 8 < n ? i + 8 : n;
-    for (; i < e; i++) {
-      zz = (z >> ZB_POINT_Z_FRAC_BITS) & 0xffff;
-      ok = D == 2 ? zz > pz[i] : zz >= pz[i];
-      if (ok) {
-        unsigned int a, l;
-        /* (level 0: NEAR8's index is zt_rr's, ((t & tmask) | (s & smask))
-           >> F - the same bits, fewer live constants) */
-        if (K0 == K565)
-          a = zf8_w565(t0[((ti & tm0) | (si & sm0)) >> fb0], 255);
-        else
-          a = pal0[ix0[((ti & tm0) | (si & sm0)) >> fb0]];
-        l = lm[((ti1 & tm1) | (si1 & sm1)) >> fb1];
-        if (D != 1) pz[i] = (unsigned short)zz;
-        {
-          const unsigned int m = ZF8_M(l, sh);
-          pp[i] = WPIX8(a, m);
-        }
-      }
-      z += s->dzdx;
-      si += dsi; ti += dti; si1 += dsi1; ti1 += dti1;
-    }
-    fz += 8.0f * dfz; sz += 8.0f * dsz; tz += 8.0f * dtz;
-    sz1 += 8.0f * dsz1; tz1 += 8.0f * dtz1;
-  }
-}
-/* S31GL_ZF8=0 (the board A/B arm): the loop before phase 6 zf8, for the
-   batch QuakeSpasm's world takes (P8, LEQUAL with the write), run by
-   zp_run_mt_direct as before */
-static void zf8_wnn0_p0(const ZPipe *p, const ZSpan *s, ZFrag *f) { zf8_world_nn0_t(p, s, f, KP8, 0); }
+/* (phase 6 tier 7: S31GL_ZF8=2 - zf8_wnn_rp_p0s1, the next-row touches,
+   measured not to help on the board - and S31GL_ZF8=0 - zf8_world_nn0_t,
+   the loop before phase 6 zf8 - were removed; both now select the default
+   filler. artifacts/gl/phase6/tier7/REPORT.txt) */
 
 /* The filtered world (unit 1 the L8 lightmap, bilinear in level 0; unit 0
    any filter, its kind K0), depth LEQUAL with the write inline: pass 1 the
@@ -1181,9 +1102,7 @@ static ZStageFn zpf8_pick(GLContext *c, int *kind, int *direct,
           { zf8_wnn_r_c0, zf8_wnn_r_c1, zf8_wnn_r_c2 } };
         *direct = 1;
         zpf_count[ZF_WORLD_NN]++;
-        if (!c->zf8_on && k0 == KP8 && d == 0) return zf8_wnn0_p0;
-        *run = k0 == KP8 && d == 0 && x->cb[1].sh[0] == 1 ?
-               (c->zf8_on == 2 ? zf8_wnn_rp_p0s1 : zf8_wnn_r_p0s1) : nr[k0][d];
+        *run = k0 == KP8 && d == 0 && x->cb[1].sh[0] == 1 ? zf8_wnn_r_p0s1 : nr[k0][d];
         /* phase 6 tier 2: its triangles a call each (S31GL_ZF8=3: a span) */
         if (*run == zf8_wnn_r_p0s1 && c->zf8_on == 1) x->run_tri = zf8_wnn_t_p0s1;
         return nn[k0][d];
