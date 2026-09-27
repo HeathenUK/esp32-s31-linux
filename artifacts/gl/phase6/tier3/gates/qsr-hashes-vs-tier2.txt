@@ -1,0 +1,1 @@
+qsr-fused hashes, tier 3 against tier 2 (9ecf5f86), every full frame of 9 traces x 3 arms (fused, general, ref): 27 of 27 hash files identical, 2268 frames

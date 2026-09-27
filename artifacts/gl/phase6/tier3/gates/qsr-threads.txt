@@ -1,0 +1,32 @@
+run-qsr-threads p5f2-tf0: t2 84 of 84 full frames identical to S31GL_THREADS=0
+run-qsr-threads p5f2-tf0 t2 window 0: total 16.30, worker 6.38 (39.1%), main 9.93, max 9.93 M/frame; 1398 tri, 35.9 pipe copies, 580 kB ring /frame
+run-qsr-threads p5f2-tf0 t2 window 1: total 14.78, worker 6.85 (46.4%), main 7.93, max 7.93 M/frame; 689 tri, 33.0 pipe copies, 324 kB ring /frame
+run-qsr-threads p5f2-tf0: t2b 84 of 84 full frames identical to S31GL_THREADS=0
+run-qsr-threads p5f2-tf0 t2b window 0: total 16.44, worker 6.83 (41.6%), main 9.61, max 9.63 M/frame; 1631 tri, 36.5 pipe copies, 664 kB ring /frame
+run-qsr-threads p5f2-tf0 t2b window 1: total 14.87, worker 7.25 (48.7%), main 7.62, max 7.70 M/frame; 781 tri, 33.7 pipe copies, 358 kB ring /frame
+run-qsr-threads p5f2-tf0 window 0: S31GL_THREADS=0 14.5643 Minsn/frame
+run-qsr-threads p5f2-tf0 window 1: S31GL_THREADS=0 13.4431 Minsn/frame
+run-qsr-threads p5a-tf0: t2 84 of 84 full frames identical to S31GL_THREADS=0
+run-qsr-threads p5a-tf0 t2 window 0: total 16.21, worker 6.31 (38.9%), main 9.90, max 9.90 M/frame; 1398 tri, 35.9 pipe copies, 580 kB ring /frame
+run-qsr-threads p5a-tf0 t2 window 1: total 14.71, worker 6.80 (46.2%), main 7.91, max 7.91 M/frame; 689 tri, 33.0 pipe copies, 324 kB ring /frame
+run-qsr-threads p5a-tf0: t2b 84 of 84 full frames identical to S31GL_THREADS=0
+run-qsr-threads p5a-tf0 t2b window 0: total 16.35, worker 6.79 (41.5%), main 9.56, max 9.58 M/frame; 1631 tri, 36.5 pipe copies, 664 kB ring /frame
+run-qsr-threads p5a-tf0 t2b window 1: total 14.80, worker 7.22 (48.8%), main 7.58, max 7.66 M/frame; 781 tri, 33.7 pipe copies, 358 kB ring /frame
+run-qsr-threads p5a-tf0 window 0: S31GL_THREADS=0 14.4691 Minsn/frame
+run-qsr-threads p5a-tf0 window 1: S31GL_THREADS=0 13.3700 Minsn/frame
+run-qsr-threads p5f2: t2 84 of 84 full frames identical to S31GL_THREADS=0
+run-qsr-threads p5f2 t2 window 0: total 38.77, worker 18.33 (47.3%), main 20.44, max 20.77 M/frame; 1398 tri, 35.9 pipe copies, 580 kB ring /frame
+run-qsr-threads p5f2 t2 window 1: total 39.26, worker 19.93 (50.8%), main 19.34, max 19.97 M/frame; 701 tri, 33.6 pipe copies, 329 kB ring /frame
+run-qsr-threads p5f2: t2b 84 of 84 full frames identical to S31GL_THREADS=0
+run-qsr-threads p5f2 t2b window 0: total 38.91, worker 20.27 (52.1%), main 18.64, max 20.57 M/frame; 1631 tri, 36.5 pipe copies, 664 kB ring /frame
+run-qsr-threads p5f2 t2b window 1: total 39.36, worker 21.81 (55.4%), main 17.55, max 21.81 M/frame; 794 tri, 34.2 pipe copies, 364 kB ring /frame
+run-qsr-threads p5f2 window 0: S31GL_THREADS=0 37.4697 Minsn/frame
+run-qsr-threads p5f2 window 1: S31GL_THREADS=0 38.3748 Minsn/frame
+run-qsr-threads p5a: t2 84 of 84 full frames identical to S31GL_THREADS=0
+run-qsr-threads p5a t2 window 0: total 38.39, worker 18.10 (47.1%), main 20.29, max 20.59 M/frame; 1398 tri, 35.9 pipe copies, 580 kB ring /frame
+run-qsr-threads p5a t2 window 1: total 38.73, worker 19.59 (50.6%), main 19.14, max 19.65 M/frame; 701 tri, 33.6 pipe copies, 329 kB ring /frame
+run-qsr-threads p5a: t2b 84 of 84 full frames identical to S31GL_THREADS=0
+run-qsr-threads p5a t2b window 0: total 38.53, worker 20.07 (52.1%), main 18.46, max 20.37 M/frame; 1631 tri, 36.5 pipe copies, 664 kB ring /frame
+run-qsr-threads p5a t2b window 1: total 38.82, worker 21.52 (55.4%), main 17.31, max 21.52 M/frame; 794 tri, 34.2 pipe copies, 364 kB ring /frame
+run-qsr-threads p5a window 0: S31GL_THREADS=0 37.0881 Minsn/frame
+run-qsr-threads p5a window 1: S31GL_THREADS=0 37.8428 Minsn/frame

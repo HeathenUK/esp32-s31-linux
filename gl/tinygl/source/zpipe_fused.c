@@ -619,13 +619,18 @@ static void zf_bil0_ra(const ZPipe *p, const ZSpan *s, ZFrag *f) { zf_bil0_t(p, 
    MUL8(e5(v), 255 - a), [64..127] MUL8(e6(v), a), [128..191]
    MUL8(e6(v), 255 - a), e5 / e6 UNPACK's expansions (cold: at a chunk
    whose alpha differs from the tables'); NULL without memory */
+/* btab (192 B) and, phase 6 tier 3, zf_ftab's tables (256 B) and
+   zf_bt8's MUL8(v, a) of every 8-bit v (256 B, at ZF_BT8) in one block */
+#define ZF_BTAB_BYTES (192 + 256 + 256)
 __attribute__((noinline))
 const unsigned char *zf_btab(ZPipeX *x, int a)
 {
   int v;
   if (x->btab == NULL) {
-    x->btab = gl_malloc(192);
+    x->btab = gl_malloc(ZF_BTAB_BYTES);
     if (x->btab == NULL) return NULL;
+    x->ftab_ok = 0;
+    x->bt8_a = -1;
   } else if (x->btab_a == a) {
     return x->btab;
   }
@@ -643,9 +648,60 @@ const unsigned char *zf_btab(ZPipeX *x, int a)
   return x->btab;
 }
 
+/* phase 6 tier 3: the flat SRC_ALPHA / ONE_MINUS_SRC_ALPHA blend of
+   zf1_blend is, per destination field v, a fixed field of the result:
+   PACK(sr + MUL8(e(dr), 255 - a), ...) is the OR of
+     t[dr]       = ((sr + MUL8(e5(dr), 255 - a)) & 0xf8) << 8
+     t[64 + dg]  = ((sg + MUL8(e6(dg), 255 - a)) & 0xfc) << 3
+     t[32 + db]  =  (sb + MUL8(e5(db), 255 - a)) >> 3
+   (btab's second halves, and PACK's own masks and shifts; no field
+   reaches 256, so none carries into the next). Built for one flat colour
+   and alpha, in the btab block after its 192 bytes; NULL without memory */
+__attribute__((noinline))
+const unsigned short *zf_ftab(ZPipeX *x, int fr, int fg, int fb, int fa)
+{
+  unsigned int k = (unsigned int)fr | (unsigned int)fg << 8 |
+                   (unsigned int)fb << 16 | (unsigned int)fa << 24;
+  unsigned short *t;
+  int v, sr, sg, sb;
+  if (x->btab == NULL) {
+    x->btab = gl_malloc(ZF_BTAB_BYTES);
+    if (x->btab == NULL) return NULL;
+    x->btab_a = x->bt8_a = -1;
+  } else if (x->ftab_ok && x->ftab_k == k) {
+    return (const unsigned short *)(x->btab + 192);
+  }
+  t = (unsigned short *)(x->btab + 192);
+  sr = MUL8(fr, fa); sg = MUL8(fg, fa); sb = MUL8(fb, fa);
+  for (v = 0; v < 32; v++) {
+    int e = (v << 3) | (v >> 2), d = MUL8(e, 255 - fa);
+    t[v] = (unsigned short)(((sr + d) & 0xf8) << 8);
+    t[32 + v] = (unsigned short)((sb + d) >> 3);
+  }
+  for (v = 0; v < 64; v++) {
+    int e = (v << 2) | (v >> 4);
+    t[64 + v] = (unsigned short)(((sg + MUL8(e, 255 - fa)) & 0xfc) << 3);
+  }
+  x->ftab_k = k;
+  x->ftab_ok = 1;
+  return t;
+}
+
+/* phase 6 tier 3: MUL8(v, a) of every 8-bit v at btab + ZF_BT8 (zf8_sbart's
+   source half; its own alpha bt8_a). Called after zf_btab, so the block
+   exists */
+__attribute__((noinline))
+void zf_bt8(ZPipeX *x, int a)
+{
+  int v;
+  for (v = 0; v < 256; v++)
+    x->btab[ZF_BT8 + v] = (unsigned char)MUL8(v, a);
+  x->bt8_a = a;
+}
+
 static inline __attribute__((always_inline))
 void zf_one_t(const ZPipe *p, const ZSpan *s, ZFrag *f, const int COL, const int ENV,
-              const int AT, const int ZW, const int OUT)
+              const int AT, const int ZW, const int OUT, const int FT)
 {
   const ZPipeX *x = p->x;
   PIXEL *pp = s->pp;
@@ -682,6 +738,21 @@ void zf_one_t(const ZPipe *p, const ZSpan *s, ZFrag *f, const int COL, const int
       for (i = 0; i < n; i++)
         if (f->m[i]) pp[i] = tex[idx[i]];
       return;
+    }
+    if (ENV == E_NONE && OUT == O_SAOMSA && FT) {
+      /* phase 6 tier 3: three table fields a pixel (zf_ftab) */
+      const unsigned short *ft = x->ftab_ok && x->ftab_k ==
+          ((unsigned int)fr | (unsigned int)fg << 8 | (unsigned int)fb << 16 |
+           (unsigned int)fa << 24) ? (const unsigned short *)(x->btab + 192)
+                                   : zf_ftab((ZPipeX *)x, fr, fg, fb, fa);
+      if (ft) {
+        for (i = 0; i < n; i++) {
+          unsigned int d = pp[i];
+          if (!f->m[i]) continue;
+          pp[i] = (PIXEL)(ft[d >> 11] | ft[64 + ((d >> 5) & 63)] | ft[32 + (d & 31)]);
+        }
+        return;
+      }
     }
     bt = zf_btab((ZPipeX *)x, fa);
     if (bt) {
@@ -759,7 +830,7 @@ void zf_one_t(const ZPipe *p, const ZSpan *s, ZFrag *f, const int COL, const int
 }
 
 #define ZF_ONE(name, COL, ENV, AT, ZW, OUT) \
-static void name(const ZPipe *p, const ZSpan *s, ZFrag *f) { zf_one_t(p, s, f, COL, ENV, AT, ZW, OUT); }
+static void name(const ZPipe *p, const ZSpan *s, ZFrag *f) { zf_one_t(p, s, f, COL, ENV, AT, ZW, OUT, 0); }
 ZF_ONE(zf1_sbar, C_FLAT, E_REP_RGB, 0, 0, O_SAOMSA)
 ZF_ONE(zf1_blend, C_FLAT, E_NONE, 0, 0, O_SAOMSA)
 ZF_ONE(zf1_pic, C_FLAT, E_REP_RGB, 1, 0, O_STORE)
@@ -774,6 +845,12 @@ ZF_ONE(zf1_water, C_NONE, E_REP_RGB, 0, 0, O_STORE)
 ZF_ONE(zf1_alias, C_SMOOTH, E_COMB_MT, 0, 0, O_STORE)
 ZF_ONE(zf1_part, C_FLAT, E_MOD_RGBA, 0, 0, O_SAOMSA)
 ZF_ONE(zf1_glow, C_FLAT, E_MOD_RGB, 0, 0, O_ONEONE)
+/* phase 6 tier 3: zf1_blend from zf_ftab's packed tables (S31GL_ZF8=3 or
+   4: zf1_blend, the tier 2 code) */
+static void zf1_blendt(const ZPipe *p, const ZSpan *s, ZFrag *f)
+{
+  zf_one_t(p, s, f, C_FLAT, E_NONE, 0, 0, O_SAOMSA, 1);
+}
 
 /* the one-unit signatures: gl_build_pipe's list is
    [colour] [texel] [texenv] [alpha GREATER] [depth write] [blend/store] */
@@ -814,14 +891,16 @@ static ZStageFn zf1_pick(const ZPipe *p, const ZPipeX *x, const ZStageFn *st)
   else if (st[k] == zp_out_fn(GL_DST_COLOR, GL_SRC_COLOR, 0xffff, GL_FUNC_ADD)) out = O_MUL2;
   else return NULL;
   if (st[k + 1]) return NULL;
-  (void)p;
   /* REPLACE of an RGBA texel sets the colour and the alpha: the colour
      stage computes what nothing reads (the list keeps it because the
      alpha is read), so those signatures do not run it */
   if (env == E_REP_RGBA) col = C_NONE;
 #define ZF1(C, E, A, Z, O) (col == (C) && env == (E) && at == (A) && zw == (Z) && out == (O))
   if (ZF1(C_FLAT, E_REP_RGB, 0, 0, O_SAOMSA)) return zf1_sbar;
-  if (ZF1(C_FLAT, E_NONE, 0, 0, O_SAOMSA)) return zf1_blend;
+  if (ZF1(C_FLAT, E_NONE, 0, 0, O_SAOMSA)) {
+    int z8 = ((const GLContext *)p->zctx)->zf8_on;
+    return z8 == 3 || z8 == 4 ? zf1_blend : zf1_blendt;
+  }
   if (ZF1(C_FLAT, E_REP_RGB, 1, 0, O_STORE)) return zf1_pic;
   if (ZF1(C_NONE, E_REP_RGBA, 1, 0, O_STORE)) return zf1_pica;
   if (ZF1(C_NONE, E_REP_RGBA, 1, 1, O_STORE)) return zf1_fence;
@@ -983,7 +1062,7 @@ __attribute__((cold))
 int zpf_is_fused_stage(ZStageFn f)
 {
   f = S31_RT_XIP(f);           /* phase 6 ramtext: compared as XIP addresses */
-  if (f == zf1_sbar || f == zf1_blend || f == zf1_pic || f == zf1_pica ||
+  if (f == zf1_sbar || f == zf1_blend || f == zf1_blendt || f == zf1_pic || f == zf1_pica ||
       f == zf1_fence || f == zf1_con || f == zf1_water || f == zf1_alias ||
       f == zf1_part || f == zf1_glow || f == zf1_lmap || f == zf1_lmap1 ||
       f == zf1_amod || f == zf1_amod2)
@@ -992,5 +1071,5 @@ int zpf_is_fused_stage(ZStageFn f)
          f == zf_alias_00 || f == zf_alias_10 || f == zf_alias_01 ||
          f == zf_alias_11 || f == zf_alias_st ||
          f == zf8_world_11 || f == zf8_world_10 || f == zf8_world_01 ||
-         f == zf8_world_x_p8 || f == zf8_alias_bl || f == zf8_alias_st;
+         f == zf8_world_x_p8 || f == zf8_alias_bl || f == zf8_alias_blo || f == zf8_alias_st;
 }

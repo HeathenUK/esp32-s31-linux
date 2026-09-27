@@ -1,0 +1,611 @@
+diff --git a/gl/tinygl/source/clear.c b/gl/tinygl/source/clear.c
+index 3bed7fe8..c9aa1745 100644
+--- a/gl/tinygl/source/clear.c
++++ b/gl/tinygl/source/clear.c
+@@ -69,6 +69,9 @@ void glopClear(GLContext *c,GLParam *p)
+   full = x0 == 0 && y0 == 0 && x1 == zb->xsize && y1 == zb->ysize;
+   dz = (mask & GL_DEPTH_BUFFER_BIT) && c->depth_mask;
+   dc = (mask & GL_COLOR_BUFFER_BIT) && cm != 0;
++  /* phase 6 tier 3 (s31_zepoch.c lazy clears): a clear that writes a box
++     or through a mask goes on the buffer as it stands */
++  if ((dz || dc) && (!full || (dc && cm != 0xffff))) zlz_flush(c);
+ 
+   {
+     int creset = 0, zreset = 0;
+diff --git a/gl/tinygl/source/s31_ctx.c b/gl/tinygl/source/s31_ctx.c
+index 8db339a9..d22c222f 100644
+--- a/gl/tinygl/source/s31_ctx.c
++++ b/gl/tinygl/source/s31_ctx.c
+@@ -122,6 +122,7 @@ void tgl_ctx_destroy(void *ctx)
+ 
+   if (c == NULL || c == null_ctx) return;
+   s31t_free(c);                  /* phase 6: sync and stop the worker */
++  zlz_flush(c);                  /* phase 6 tier 3 */
+   zb = c->zb;
+   {
+     /* attribute stacks the app left pushed (tgl_bridge.h: next first) */
+@@ -160,6 +161,7 @@ int tgl_ctx_bind(void *ctx, void *pixels, int width, int height, int pitch)
+     return -1;
+   zb = c->zb;
+   S31T_SYNC(c);                  /* phase 6 (s31_thr.h) */
++  zlz_flush(c);                  /* phase 6 tier 3: lazy clears written */
+   c->ready = 0;
+   c->armed = 1;
+   /* phase 3a dirty boxes: another buffer of the same shape (GLX's
+@@ -229,7 +231,10 @@ void tgl_ctx_set_prepare(void *ctx, int (*prepare)(void *user), void *user)
+ 
+ void tgl_ctx_make_current(void *ctx)
+ {
+-  if (gl_ctx) S31T_SYNC(gl_ctx);   /* phase 6: nothing in flight on the old one */
++  if (gl_ctx) {
++    S31T_SYNC(gl_ctx);           /* phase 6: nothing in flight on the old one */
++    zlz_flush(gl_ctx);           /* phase 6 tier 3: nor a lazy clear */
++  }
+   if ((ctx ? (GLContext *)ctx : null_ctx) != gl_ctx) tgl_bind_serial++;
+   gl_ctx = ctx ? (GLContext *)ctx : null_ctx;
+   gl_ctx->ready = 0;
+@@ -253,7 +258,10 @@ void tgl_ctx_arm(void *ctx)
+ void tgl_ctx_sync(void *ctx)
+ {
+   GLContext *c = ctx ? (GLContext *)ctx : gl_ctx;
+-  if (c) S31T_SYNC(c);
++  if (c) {
++    S31T_SYNC(c);
++    zlz_flush(c);                /* phase 6 tier 3: the rows a present reads */
++  }
+ }
+ 
+ void *tgl_ctx_current(void)
+@@ -277,6 +285,7 @@ void tgl_ctx_release_depth(void *ctx)
+   GLContext *c = ctx;
+   if (c == NULL) return;
+   S31T_SYNC(c);                  /* phase 6 (s31_thr.h) */
++  zlz_flush(c);                  /* phase 6 tier 3 */
+   tgl_bind_serial++;
+   zb_drop_depth(c->zb);
+   zb_drop_stencil(c->zb);        /* phase 4 F8: the ancillary buffers go together */
+@@ -346,6 +355,7 @@ int tgl_ctx_bind_depth(void *ctx, void *depth)
+   if (depth != NULL && (zb->xsize <= 0 || zb->ysize <= 0)) return -1;
+   if (depth == zb->zbuf && zb->zbuf_ext == (depth != NULL)) return 0;
+   S31T_SYNC(c);                  /* phase 6 (s31_thr.h) */
++  zlz_flush(c);                  /* phase 6 tier 3 */
+   tgl_bind_serial++;
+   zb_drop_depth(zb);
+   zb->zbuf = depth;
+@@ -362,6 +372,7 @@ void tgl_ctx_set_retained(void *ctx, int on)
+   GLContext *c = ctx;
+   if (c == NULL) return;
+   S31T_SYNC(c);                  /* phase 6 (s31_thr.h) */
++  zlz_flush(c);                  /* phase 6 tier 3 */
+   c->zb->retained = on != 0;
+   zdb_invalidate(c->zb);
+   tgl_bind_serial++;
+diff --git a/gl/tinygl/source/s31_draw.c b/gl/tinygl/source/s31_draw.c
+index b7f01d2f..02cb8865 100644
+--- a/gl/tinygl/source/s31_draw.c
++++ b/gl/tinygl/source/s31_draw.c
+@@ -376,6 +376,7 @@ static unsigned int row_bits(const S31Bits *b, const unsigned char *rp, int x, i
+ void glopBitmap(GLContext *c, GLParam *p)
+ {
+   S31T_SYNC(c);                  /* phase 6 (s31_thr.h) */
++  zlz_flush(c);                  /* phase 6 tier 3: pending rows written */
+   int w = p[1].i, h = p[2].i, canon = p[8].i;
+   float xorig = p[3].f, yorig = p[4].f;
+   const unsigned char *bits = p[7].p;
+@@ -685,6 +686,7 @@ static unsigned int *unpack_depth(GLContext *c, int w, int h, int type,
+ void glopDrawPixels(GLContext *c, GLParam *p)
+ {
+   S31T_SYNC(c);                  /* phase 6 (s31_thr.h) */
++  zlz_flush(c);                  /* phase 6 tier 3: pending rows written */
+   int w = p[1].i, h = p[2].i, format = p[3].i, type = p[4].i, e;
+   const void *pixels = p[5].p;
+   PixPipe *pp;
+@@ -762,6 +764,7 @@ void tgl_draw_pixels(int w, int h, int format, int type, const void *pixels)
+ void glopCopyPixels(GLContext *c, GLParam *p)
+ {
+   S31T_SYNC(c);                  /* phase 6 (s31_thr.h) */
++  zlz_flush(c);                  /* phase 6 tier 3: pending rows written */
+   int x = p[1].i, y = p[2].i, w = p[3].i, h = p[4].i, type = p[5].i;
+   ZBuffer *zb;
+   PixPipe *pp;
+@@ -872,6 +875,7 @@ void tgl_read_pixels(int x, int y, int w, int h, int format, int type, void *pix
+   if (c->in_begin) { gl_set_error(c, GL_INVALID_OPERATION); return; }
+   if (w < 0 || h < 0) { gl_set_error(c, GL_INVALID_VALUE); return; }
+   S31T_SYNC(c);                  /* phase 6 (s31_thr.h) */
++  zlz_flush(c);                  /* phase 6 tier 3: pending rows written */
+   if (format == GL_STENCIL_INDEX) {
+     /* phase 4 F8: from the stencil buffer (none: INVALID_OPERATION) */
+     if (pixels == NULL || w == 0 || h == 0) {
+@@ -1004,6 +1008,7 @@ static void copy_tex(GLContext *c, GLParam *p);
+ void glopCopyTex(GLContext *c, GLParam *p)
+ {
+   S31T_SYNC(c);                  /* phase 6 (s31_thr.h) */
++  zlz_flush(c);                  /* phase 6 tier 3: pending rows written */
+   if (c->active_tex) {
+     tu_swap(c);
+     copy_tex(c, p);
+diff --git a/gl/tinygl/source/s31_zepoch.c b/gl/tinygl/source/s31_zepoch.c
+index b855345c..ffe492e9 100644
+--- a/gl/tinygl/source/s31_zepoch.c
++++ b/gl/tinygl/source/s31_zepoch.c
+@@ -172,22 +172,35 @@ static void box_full(const ZBuffer *zb, int *b)
+ }
+ 
+ /* the fillers' inline check (ztri_rows): the recorded rows, or with x
+-   boxes an empty range, so that every triangle reaches zdb_tri */
++   boxes an empty range, so that every triangle reaches zdb_tri; narrowed
++   to rows with no lazy clear pending (zlz_rows). bact: the check is on */
+ static void zdb_set_chk(GLContext *c)
+ {
+-  if (zdb_on == 2) {
+-    c->pipe.dbc[0] = 0x3fffffff;
+-    c->pipe.dbc[1] = -0x3fffffff;
++  ZPipe *p = &c->pipe;
++  const ZBuffer *zb = c->zb;
++  int lo, hi, lz = zb != NULL && (zb->lzn[0] | zb->lzn[1]) != 0;
++  if (!p->dbrec) {
++    lo = -0x3fffffff; hi = 0x3fffffff;
++  } else if (zdb_on == 2) {
++    lo = 0x3fffffff; hi = -0x3fffffff;
+   } else {
+-    c->pipe.dbc[0] = c->pipe.db[1];
+-    c->pipe.dbc[1] = c->pipe.db[3];
++    lo = p->db[1]; hi = p->db[3];
+   }
++  if (lz) {
++    if (zb->lzok[0] > lo) lo = zb->lzok[0];
++    if (zb->lzok[1] < hi) hi = zb->lzok[1];
++  }
++  p->dbc[0] = lo;
++  p->dbc[1] = hi;
++  p->bact = p->dbrec || lz;
+ }
+ 
++static void zlz_rect(GLContext *c, int x0, int y0, int x1, int y1);
++
+ /* the rasterisers' slow path: the box being drawn grows to take in
+    [x0, x1) x [y0, y1); a full box stops the recording until the next
+-   full clear */
+-void zdb_grow(GLContext *c, int x0, int y0, int x1, int y1)
++   full clear. Pending lazy clears in it are written first (lz 1) */
++static void zdb_grow_(GLContext *c, int x0, int y0, int x1, int y1, int lz)
+ {
+   ZBuffer *zb = c->zb;
+   int *d = c->pipe.db;
+@@ -195,31 +208,52 @@ void zdb_grow(GLContext *c, int x0, int y0, int x1, int y1)
+   if (y0 < 0) y0 = 0;
+   if (x1 > zb->xsize) x1 = zb->xsize;
+   if (y1 > zb->ysize) y1 = zb->ysize;
+-  if (x0 < d[0]) d[0] = x0;
+-  if (y0 < d[1]) d[1] = y0;
+-  if (x1 > d[2]) d[2] = x1;
+-  if (y1 > d[3]) d[3] = y1;
+-  if (d[0] <= 0 && d[1] <= 0 && d[2] >= zb->xsize && d[3] >= zb->ysize)
+-    c->pipe.bact = 0;
++  if (lz && (zb->lzn[0] | zb->lzn[1]) && y1 > y0 && x1 > x0)
++    zlz_rect(c, x0, y0, x1, y1);
++  if (c->pipe.dbrec) {
++    if (x0 < d[0]) d[0] = x0;
++    if (y0 < d[1]) d[1] = y0;
++    if (x1 > d[2]) d[2] = x1;
++    if (y1 > d[3]) d[3] = y1;
++    if (d[0] <= 0 && d[1] <= 0 && d[2] >= zb->xsize && d[3] >= zb->ysize)
++      c->pipe.dbrec = 0;
++  }
+   zdb_set_chk(c);
+ }
+ 
++void zdb_grow(GLContext *c, int x0, int y0, int x1, int y1)
++{
++  zdb_grow_(c, x0, y0, x1, y1, 1);
++}
++
+ /* a triangle, from the fillers (ztri.h ztri_rows) when its rows
+-   [part 0's ya, part 1's yb) are not all recorded yet. Rows only (the
+-   default): it takes whole rows. S31GL_DIRTYBOX=2: every triangle comes
+-   here and adds its x extent too - [floor(min x), floor(max x) + 1) of its
+-   window vertices, which holds every pixel whose centre it covers (an
+-   edge's 16.16 error is under 1/100 px, the bound's slack at least 1/2) */
++   [part 0's ya, part 1's yb) are not all recorded yet, or not all written
++   by a lazy clear. Rows only (the default): it records whole rows.
++   S31GL_DIRTYBOX=2: every triangle comes here and adds its x extent too -
++   [floor(min x), floor(max x) + 1) of its window vertices, which holds
++   every pixel whose centre it covers (an edge's 16.16 error is under
++   1/100 px, the bound's slack at least 1/2). A lazy clear writes the
++   tiles of that extent in its rows (phase 6 tier 3) */
+ void zdb_tri(ZPipe *p, int ya, int yb, float x0, float dx1, float dx2)
+ {
+   GLContext *c = p->zctx;
+-  if (zdb_on == 2) {
++  ZBuffer *zb = c->zb;
++  int lz = (zb->lzn[0] | zb->lzn[1]) != 0, bx0 = 0, bx1 = zb->xsize;
++  if (lz || (zdb_on == 2 && p->dbrec)) {
+     float x1 = x0 + dx1, x2 = x0 + dx2;
+     float lo = fminf(x0, fminf(x1, x2)), hi = fmaxf(x0, fmaxf(x1, x2));
+-    zdb_grow(c, ztri_floor(lo), ya, ztri_floor(hi) + 1, yb);
+-  } else {
+-    zdb_grow(c, 0, ya, c->zb->xsize, yb);
++    bx0 = ztri_floor(lo);
++    bx1 = ztri_floor(hi) + 1;
++    if (lz) {
++      int a = bx0 < 0 ? 0 : bx0, b = bx1 > zb->xsize ? zb->xsize : bx1;
++      int y0 = ya < 0 ? 0 : ya, y1 = yb > zb->ysize ? zb->ysize : yb;
++      if (b > a && y1 > y0) zlz_rect(c, a, y0, b, y1);
++    }
+   }
++  if (zdb_on == 2 && p->dbrec)
++    zdb_grow_(c, bx0, ya, bx1, yb, 0);
++  else
++    zdb_grow_(c, 0, ya, zb->xsize, yb, 0);
+ }
+ 
+ /* nothing drawn yet since this clear. A frame whose box ended (nearly)
+@@ -247,7 +281,7 @@ void zdb_reset(GLContext *c)
+   } else {
+     box_full(zb, d);
+   }
+-  c->pipe.bact = on;
++  c->pipe.dbrec = on;
+   zdb_set_chk(c);
+ }
+ 
+@@ -285,6 +319,231 @@ static struct ZColourSlot *zdb_slot(ZBuffer *zb)
+   return &zb->cs[i];
+ }
+ 
++/* ------------------------------------------------------------ lazy clears */
++
++/*
++ * LAZY CLEARS (phase 6 tier 3). QuakeSpasm clears depth and colour in full
++ * every frame (the depth epochs never fit its near depths, and its world
++ * covers every row, so the dirty boxes stop recording): two 153.6 kB fills
++ * at 320x240 that run at PSRAM write-allocate speed - the lines written by
++ * the clear are evicted long before the world draw fetches them back.
++ * With a retained buffer (the caller reads it only after a sync: GLX
++ * presents after s31gl_frame_end) a full clear of whole rows only MARKS
++ * the rows pending, with the value; the rows are written when something
++ * can first touch them:
++ *  - a triangle: the fillers' ztri_rows sends every triangle whose rows
++ *    [ya, yb) leave dbc to zdb_tri -> zdb_grow, which writes the pending
++ *    rows among them (both buffers) before a pixel is drawn, and dbc is
++ *    narrowed to a range with none pending (lzok), so a triangle inside
++ *    rows already written costs the fillers' two compares, as before;
++ *  - lines, points, pixel rectangles and partial clears: zdb_grow, as for
++ *    the dirty boxes (bact is on while rows are pending);
++ *  - everything that reads the buffers or hands them on - the sync before
++ *    a present (tgl_ctx_sync), a bind, make-current, the depth buffer's
++ *    release or rebinding, glReadPixels / glCopyPixels / glCopyTex*, the
++ *    depth epochs' whole-buffer passes, a masked or partial clear:
++ *    zlz_flush writes every row still pending.
++ * A row is written exactly once with the value the clear would have
++ * written, before anything reads it or draws into it, so every buffer is
++ * the one the clear gives, bit for bit. What changes is when: the clear's
++ * lines are written right before the first span of the row fetches them,
++ * while they are still in the D-cache (64 kB, 2-way), instead of a whole
++ * 300 kB pass evicting them all first. S31GL_LAZYCLR=0: every clear
++ * written at once, as before (the board A/B arm).
++ */
++#ifndef S31GL_LAZYCLR_DEFAULT
++#define S31GL_LAZYCLR_DEFAULT 1
++#endif
++static int zlz_on = -1;
++
++static int zlz_enabled(void)
++{
++  if (zlz_on < 0) {
++    const char *e = getenv("S31GL_LAZYCLR");
++    zlz_on = e ? atoi(e) != 0 : S31GL_LAZYCLR_DEFAULT;
++  }
++  return zlz_on;
++}
++
++/* the first row >= y below n whose bit in rows is set (want) or clear
++   (!want), or n */
++static int lz_next(const unsigned int *rows, int n, int y, int want)
++{
++  int w, nw = (n + 31) >> 5;
++  unsigned int x;
++  if (y >= n) return n;
++  w = y >> 5;
++  x = want ? rows[w] : ~rows[w];
++  x &= ~0u << (y & 31);
++  while (x == 0) {
++    if (++w >= nw) return n;
++    x = want ? rows[w] : ~rows[w];
++  }
++  y = (w << 5) + __builtin_ctz(x);
++  return y < n ? y : n;
++}
++
++/* the last row < y with its bit set, or -1 */
++static int lz_prev(const unsigned int *rows, int y)
++{
++  int w;
++  unsigned int x;
++  if (y <= 0) return -1;
++  y--;
++  w = y >> 5;
++  x = rows[w] & (~0u >> (31 - (y & 31)));
++  while (x == 0) {
++    if (--w < 0) return -1;
++    x = rows[w];
++  }
++  return (w << 5) + 31 - __builtin_clz(x);
++}
++
++/* the layout of ZBuffer.lzb: lzw words of row bits (row y has a tile
++   pending in either buffer), then per row the pending tiles of colour,
++   then of depth. A tile is 1 << lzsh pixels of a row (32 at 320 wide: a
++   64-byte line of either buffer), at most 32 a row */
++#define LZ_ROWS(zb) ((zb)->lzb)
++#define LZ_T(zb, k) ((zb)->lzb + (zb)->lzw + (k) * (zb)->lzrows)
++
++/* write the pending tiles m of row y of buffer k */
++static void lz_tiles(ZBuffer *zb, int k, int y, unsigned int m)
++{
++  unsigned short *row = k ? zb->zbuf + y * zb->xsize
++                          : (unsigned short *)((char *)zb->pbuf + y * zb->linesize);
++  int sh = zb->lzsh;
++  while (m) {
++    int t0 = __builtin_ctz(m), t1 = t0 + __builtin_ctz(~(m >> t0));
++    int x0 = t0 << sh, x1 = t1 << sh;
++    if (x1 > zb->xsize) x1 = zb->xsize;
++    ZB_fill16(row + x0, zb->lzv[k], x1 - x0);
++    m &= t1 >= 32 ? 0 : ~0u << t1;
++  }
++}
++
++/* write what is pending of [x0, x1) x [y0, y1) (inside the buffer) */
++static void lz_rect(ZBuffer *zb, int x0, int y0, int x1, int y1)
++{
++  unsigned int *rows = LZ_ROWS(zb), *tc = LZ_T(zb, 0), *tz = LZ_T(zb, 1);
++  unsigned int t1 = (unsigned int)(x1 - 1) >> zb->lzsh;
++  unsigned int tm = (t1 >= 31 ? ~0u : (2u << t1) - 1) &
++                    (~0u << ((unsigned int)x0 >> zb->lzsh));
++  int n = zb->ysize, y, e;
++  for (y = lz_next(rows, n, y0, 1); y < y1; y = lz_next(rows, n, e, 1)) {
++    e = lz_next(rows, n, y, 0);
++    if (e > y1) e = y1;
++    for (; y < e; y++) {
++      unsigned int mc = tc[y] & tm, mz = tz[y] & tm;
++      if (mc) {
++        lz_tiles(zb, 0, y, mc);
++        if (!(tc[y] &= ~mc)) zb->lzn[0]--;
++      }
++      if (mz) {
++        lz_tiles(zb, 1, y, mz);
++        if (!(tz[y] &= ~mz)) zb->lzn[1]--;
++      }
++      if (!(tc[y] | tz[y])) rows[y >> 5] &= ~(1u << (y & 31));
++    }
++  }
++}
++
++/* zdb_grow / zdb_tri: [x0, x1) x [y0, y1) may be drawn into; the rows
++   are clamped to the buffer, x0 < x1 inside it */
++static void zlz_rect(GLContext *c, int x0, int y0, int x1, int y1)
++{
++  ZBuffer *zb = c->zb;
++  const unsigned int *rows = LZ_ROWS(zb);
++  int lo = zb->lzok[0], hi = zb->lzok[1], n = zb->ysize;
++  lz_rect(zb, x0, y0, x1, y1);
++  /* the widest range of rows with nothing pending around [y0, y1) (joined
++     to the last one when they meet), for the fillers' check; none when a
++     row of [y0, y1) still has tiles pending outside [x0, x1) */
++  if (lz_next(rows, n, y0, 1) < y1) {
++    zb->lzok[0] = zb->lzok[1] = 0;
++    return;
++  }
++  if (y0 <= hi && y1 >= lo && lo < hi) {
++    if (lo < y0) y0 = lo;
++    if (hi > y1) y1 = hi;
++  }
++  zb->lzok[0] = lz_prev(rows, y0) + 1;
++  zb->lzok[1] = lz_next(rows, n, y1, 1);
++}
++
++static unsigned int lz_full(const ZBuffer *zb)
++{
++  int t = ((zb->xsize - 1) >> zb->lzsh) + 1;
++  return t >= 32 ? ~0u : (1u << t) - 1;
++}
++
++void zlz_flush_slow(GLContext *c)
++{
++  ZBuffer *zb = c->zb;
++  unsigned int fm = lz_full(zb);
++  int n = zb->ysize, y, r, k;
++  for (k = 0; k < 2; k++) {
++    unsigned int *t = LZ_T(zb, k);
++    int whole = k || zb->linesize == zb->xsize * PSZB;
++    if (!zb->lzn[k]) continue;
++    for (y = 0; y < n; y++) {
++      if (!t[y]) continue;
++      if (t[y] == fm && whole) {
++        /* a run of whole rows (those a frame never drew into, written at
++           its present): one fill */
++        for (r = y + 1; r < n && t[r] == fm; r++) t[r] = 0;
++        ZB_fill16(k ? zb->zbuf + y * zb->xsize
++                    : (unsigned short *)((char *)zb->pbuf + y * zb->linesize),
++                  zb->lzv[k], (r - y) * zb->xsize);
++        t[y] = 0;
++        y = r - 1;
++      } else {
++        lz_tiles(zb, k, y, t[y]);
++        t[y] = 0;
++      }
++    }
++    zb->lzn[k] = 0;
++  }
++  memset(LZ_ROWS(zb), 0, (size_t)zb->lzw * sizeof(unsigned int));
++  zdb_set_chk(c);
++}
++
++/* a full clear of rows [y0, y1) of buffer k to v: 1 if they are pending
++   now (nothing written), 0 if the caller writes them */
++static int zlz_mark(GLContext *c, int k, int y0, int y1, unsigned int v)
++{
++  ZBuffer *zb = c->zb;
++  unsigned int *t, fm;
++  int y;
++  if (!zb->retained || !zlz_enabled() || zb->ysize <= 0 || zb->xsize <= 0)
++    return 0;
++  if (zb->lzb == NULL || zb->lzrows != zb->ysize || zb->lzx != zb->xsize) {
++    int w = (zb->ysize + 31) >> 5, sh = 5;
++    unsigned int *nb;
++    if (zb->lzn[0] | zb->lzn[1]) zlz_flush_slow(c);
++    while ((((zb->xsize - 1) >> sh) + 1) > 32) sh++;
++    nb = gl_zalloc((w + 2 * zb->ysize) * (int)sizeof(unsigned int));
++    if (nb == NULL) return 0;
++    gl_free(zb->lzb);
++    zb->lzb = nb;
++    zb->lzw = w;
++    zb->lzrows = zb->ysize;
++    zb->lzx = zb->xsize;
++    zb->lzsh = sh;
++  }
++  /* tiles still pending another value: written first */
++  if (zb->lzn[k] && zb->lzv[k] != v) zlz_flush_slow(c);
++  zb->lzv[k] = v;
++  t = LZ_T(zb, k);
++  fm = lz_full(zb);
++  for (y = y0; y < y1; y++) {
++    if (!t[y]) zb->lzn[k]++;
++    t[y] = fm;
++    LZ_ROWS(zb)[y >> 5] |= 1u << (y & 31);
++  }
++  zb->lzok[0] = zb->lzok[1] = 0;   /* no rows known clean: every triangle checks */
++  return 1;
++}
++
+ /* glClear(GL_COLOR_BUFFER_BIT) of the whole buffer to v, all channels */
+ void zdb_clear_colour(GLContext *c, unsigned int v)
+ {
+@@ -296,6 +555,8 @@ void zdb_clear_colour(GLContext *c, unsigned int v)
+   (void)full;
+   if (r[2] <= r[0] || r[3] <= r[1])
+     ;                                          /* nothing was drawn */
++  else if (r[0] == 0 && r[2] == zb->xsize && zlz_mark(c, 0, r[1], r[3], v))
++    ;                                          /* whole rows, pending */
+   else if (r[0] == 0 && r[2] == zb->xsize && zb->linesize == zb->xsize * PSZB)
+     /* whole rows of a contiguous buffer: one pass */
+     ZB_fill16((unsigned short *)((char *)zb->pbuf + r[1] * zb->linesize), v,
+@@ -339,6 +600,8 @@ static void zdb_clear_depth(GLContext *c, unsigned int v)
+   (void)full;
+   if (r[2] <= r[0] || r[3] <= r[1])
+     ;                                          /* nothing was drawn */
++  else if (r[0] == 0 && r[2] == zb->xsize && zlz_mark(c, 1, r[1], r[3], v))
++    ;                                          /* whole rows, pending */
+   else if (r[0] == 0 && r[2] == zb->xsize)
+     ZB_fill16(zb->zbuf + r[1] * zb->xsize, v, (r[3] - r[1]) * zb->xsize);
+   else
+@@ -496,6 +759,7 @@ void zep_materialise(GLContext *c)
+ 
+   if (st == NULL || !st->stale) return;
+   S31T_SYNC(c);                  /* phase 6 (s31_thr.h) */
++  zlz_flush(c);                  /* phase 6 tier 3: it reads every row */
+   b = st->base;
+   b2 = b << 16;
+   q = zb->zbuf;
+@@ -538,6 +802,7 @@ void zep_demote(GLContext *c)
+ 
+   if (st == NULL || st->base == 0) return;
+   S31T_SYNC(c);                  /* phase 6 (s31_thr.h) */
++  zlz_flush(c);                  /* phase 6 tier 3: it reads every row */
+   b = st->base;
+   q = zb->zbuf;
+   n = zb->xsize * zb->ysize;
+@@ -738,7 +1003,9 @@ int zep_clear(GLContext *c, float cd)
+     st->magic = ZEP_MAGIC;
+   if (st != NULL && zep_enabled() && cd == 1.0f && !st->backoff && zep_func_ok(c) &&
+       zep_room(st->zmax, st->base, &B)) {
+-    /* the next epoch: nothing is written */
++    /* the next epoch: nothing is written (rows a lazy clear left pending
++       are written first: the epoch takes the buffer as it stands) */
++    zlz_flush(c);
+     st->base = (unsigned short)B;
+     st->stale = 1;
+     st->serial++;
+diff --git a/gl/tinygl/source/zbuffer.c b/gl/tinygl/source/zbuffer.c
+index ab6e4734..e0a381fe 100644
+--- a/gl/tinygl/source/zbuffer.c
++++ b/gl/tinygl/source/zbuffer.c
+@@ -83,6 +83,11 @@ ZBuffer *ZB_open(int xsize, int ysize, int mode,
+     zb->zguard = 0;
+     zb->ztop = ~0u;
+     zb->cur = -1;
++    zb->retained = 0;
++    /* s31 phase 6 tier 3: no lazy clear pending */
++    zb->lzb = NULL;
++    zb->lzw = zb->lzrows = 0;
++    zb->lzn[0] = zb->lzn[1] = 0;
+ 
+     return zb;
+   error:
+@@ -101,6 +106,7 @@ void ZB_close(ZBuffer * zb)
+ 		gl_free(zb->pbuf);
+ 
+     gl_free(zb->zbuf);
++    gl_free(zb->lzb);             /* s31 phase 6 tier 3 */
+     gl_free(zb);
+ }
+ 
+diff --git a/gl/tinygl/source/zbuffer.h b/gl/tinygl/source/zbuffer.h
+index bde204f0..77f67fcd 100644
+--- a/gl/tinygl/source/zbuffer.h
++++ b/gl/tinygl/source/zbuffer.h
+@@ -156,6 +156,18 @@ typedef struct {
+     unsigned int dzval, dzser;
+     unsigned short *dzbuf;
+ 
++    /* s31 (phase 6 tier 3): lazy clears (s31_zepoch.c "lazy clears"). A
++       full clear of a retained buffer marks its rows pending instead of
++       writing them; the first primitive that can touch a row writes it
++       (zdb_grow, the fillers' ztri_rows), and anything that reads or hands
++       the buffers on writes the rest first (zlz_flush). lzb: two bitmaps
++       of lzw words, colour then depth, bit y = row y pending; lzn the rows
++       pending in each, lzv their values; lzok a range of rows with none
++       pending (the fillers' check), lzrows the rows lzb was made for */
++    unsigned int *lzb;
++    int lzw, lzrows, lzx, lzsh, lzn[2], lzok[2];
++    unsigned int lzv[2];
++
+     /* s31 (phase 4 F8): the 8-bit stencil buffer, xsize * ysize bytes
+        (row y at y * xsize, as zbuf), followed by ZB_STENCIL_TAIL bytes of
+        ZStencilState; NULL when the context has no stencil bits. The
+diff --git a/gl/tinygl/source/zgl.h b/gl/tinygl/source/zgl.h
+index 9238a6a4..5ee3ca1a 100644
+--- a/gl/tinygl/source/zgl.h
++++ b/gl/tinygl/source/zgl.h
+@@ -770,6 +770,15 @@ void zdb_clear_colour(GLContext *c, unsigned int v);
+ void zdb_fold(GLContext *c, int colour_reset, int depth_reset);
+ void zdb_rebind(GLContext *c);
+ void zdb_invalidate(ZBuffer *zb);
++/* phase 6 tier 3 lazy clears (s31_zepoch.c): every pending row written,
++   before anything reads the buffers or hands them on */
++void zlz_flush_slow(GLContext *c);
++static inline void zlz_flush(GLContext *c)
++{
++  ZBuffer *zb = c->zb;
++  if (__builtin_expect(zb != NULL && (zb->lzn[0] | zb->lzn[1]) != 0, 0))
++    zlz_flush_slow(c);
++}
+ /* s31_stencil.c (phase 4 F8-STENCIL) */
+ void zst_attach(ZBuffer *zb, int own);
+ void zst_mark_zero(unsigned char *sbuf, int npix);
+diff --git a/gl/tinygl/source/zpipe.h b/gl/tinygl/source/zpipe.h
+index bfa4c38f..976ad337 100644
+--- a/gl/tinygl/source/zpipe.h
++++ b/gl/tinygl/source/zpipe.h
+@@ -140,7 +140,10 @@ typedef struct ZPipe {
+   /* phase 3a dirty boxes (s31_zepoch.c): what has been drawn into since
+      the last full clear (x0 y0 x1 y1), recorded while bact */
+   int db[4];
+-  int bact;
++  /* bact: a triangle outside dbc goes to zdb_tri - while the box is
++     recorded (dbrec) or rows are pending a lazy clear (ZBuffer.lzn,
++     phase 6 tier 3); zdb_set_chk keeps it */
++  int bact, dbrec;
+   /* the rows a triangle may cover without zdb_tri (ztri_rows): db[1] and
+      db[3] with rows-only boxes; with x boxes (S31GL_DIRTYBOX=2) an empty
+      range, so every triangle takes zdb_tri */

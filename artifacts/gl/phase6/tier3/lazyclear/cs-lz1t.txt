@@ -1,0 +1,1 @@
+cachesim lz1t: 80 counted frames, per frame: loads 3099497 stores 1334718 refills 28222 (1763.9 kB) writebacks 17063 (1066.4 kB), PSRAM 2830.3 kB

@@ -1,0 +1,211 @@
+GL phase 6 - tier 3: tier 2's "Not done" list, host only - 2026-09-27.
+Nothing touched the board; no make / Buildroot. Base: main at 9ecf5f86
+(tier 2; a rebuild of it with the Buildroot compiler and flags,
+gl/bench/out-t3/brbuild.sh = tier 2's, is byte-identical to tier 2's
+br-final: md5 91771d02d972855c1b7498c8ae1425df). Workload: the QuakeSpasm
+proxy on the p5f2-tf0 trace (S31GL_TEXFILTER=0, the shipped nearest
+config), RV32 qemu instruction counter, board flags. Raw data beside this
+file: qemu-counts/ (per-function profiles and calls/frame before and after,
+per-instruction counts of the new functions, the replay lines, the cache
+model), lazyclear/ (the lazy-clear attempt: its patch and numbers), gates/.
+s31, MIT.
+
+SUMMARY
+  Shipped, bit-identical, runtime arm S31GL_ZF8=4 (= tier 2) / =3 (= the
+  zf8 build on the board):
+    zf1_blendt     the flat view-blend filler from packed tables
+    zf8_sbart      the blended status-bar filler, source half from a table
+    zf8_alias_blo  the blended alias filler stores opaque fragments as is
+    to_vg          no vertex-colour conversion when no stage reads it
+  proxy M instructions per counted frame (windows 0 / 1):
+    p5f2-tf0  15.3397 / 14.0638  ->  14.5643 / 13.4431   (-5.1% / -4.4%)
+    p5a-tf0   15.0157 / 13.6529  ->  14.4691 / 13.3700   (-3.6% / -2.1%)
+    p5f2      38.2452 / 38.9972  ->  37.4697 / 38.3748   (-2.0% / -1.6%)
+    p5a       37.6347 / 38.1274  ->  37.0881 / 37.8428   (-1.5% / -0.7%)
+    whole replay (qsprof, p5f2-tf0): 14.7015 -> 14.0034 M a frame (-4.7%)
+  Not shipped: lazy clears (item 1) - measured, they do not pay (section 1).
+  Not done: the triangle-level one-unit fillers and gl_vertex4f (section 5).
+
+1. LAZY PER-ROW CLEARS FOR ZB_fill16 (item 1): BUILT, MEASURED, REJECTED
+  The instrument: gl/bench/qemu/cachesim.c + gl/bench/cachesim.sh (new): a
+  QEMU plugin that runs every load and store of the counted frames through
+  the S31 D-cache geometry (64 kB, 64-byte lines, 2-way, write-back,
+  write-allocate with a fetch on a store miss - ASSUMED, docs/perf-ideas-
+  sweep.md has only the geometry), LRU, and counts line refills and dirty
+  write-backs - PSRAM traffic, 64 B each. One hart, no I-fetch, no other
+  process: an A/B instrument for arms of ONE image, not a board number.
+  (The root .gitignore's "qemu" also matches gl/bench/qemu/: cachesim.c is
+  committed with git add -f; pcprof.c and memclass.c there never were.)
+  Two builds, both bit-identical to the eager clear on all 84 full frames
+  of p5f2-tf0 (hashes = the live capture), each with S31GL_LAZYCLR=0|1 in
+  the same image:
+  a) per row (the brief's design): a full clear of a retained buffer marks
+     rows pending; zdb_grow / zdb_tri (every writer already reports its
+     rows there for the dirty boxes; bact kept on while rows are pending,
+     the fillers' dbc check narrowed to rows with none pending) write the
+     pending rows a primitive can touch; tgl_ctx_sync (before a present),
+     bind, make-current, depth release/bind, read/copy pixels, copy tex,
+     the depth epochs' whole-buffer passes and masked/partial clears write
+     the rest.
+       instructions  15.3398 / 14.0639 -> 15.3609 / 14.0821 (+0.14%)
+       PSRAM traffic 2,920.3 -> 2,880.9 kB a frame (-39 kB, -1.35%)
+  b) per 32-pixel tile (one 64-byte line of either buffer; a bitmap word a
+     row), each triangle writing only the tiles of its x extent:
+       instructions  15.3398 / 14.0639 -> 15.7758 / 14.4029 (+2.8% / +2.4%:
+                     zlz_rect 148 k, lz_tiles 137 k, extra ZB_fill16 calls
+                     43 k a frame - nearly every triangle takes the slow
+                     path, because a row is never whole until late)
+       PSRAM traffic 2,920.3 -> 2,830.3 kB a frame (-90 kB, -3.1%)
+  Why the merge does not happen: the eager clear's 4,800 lines (2 x 153.6
+  kB) are one refill and one write-back each, and the idea was to save the
+  render's second refill of the same line. Per row, QuakeSpasm's first big
+  world triangles span tens of rows: a 50-row triangle writes 64 kB of
+  colour and depth before its first span - the whole cache - so the lines
+  are gone again when its spans reach them. Per tile, the triangle's bbox
+  holds ~2x the pixels it covers, and the neighbouring tiles are evicted
+  before the triangle that covers them comes; of 9,600 line transfers only
+  ~1,400 are saved. At the tier-2 store rate (~95 MB/s) 90 kB is ~0.9 ms of
+  a ~115 ms frame, and (b) costs ~430 k instructions (~3 ms at the board's
+  ~130 M instructions/s): a net loss; (a) nets ~0.2%, unmeasurable. Not
+  shipped; the tile version is kept as lazyclear/lazyclear-tiles.patch
+  (611 lines, against 9ecf5f86) with its numbers.
+  A lead the model turned up instead: the eager arms of two builds that
+  differ only in unrelated code read 2,920 kB (the lazy build, LAZYCLR=0)
+  and 3,261 kB (the base build) of PSRAM traffic a frame for the same loads
+  and stores (+12%) - the heap, and so the colour / depth / texture
+  addresses modulo the 32 kB way, moved. Same-set aliasing in the 2-way
+  cache is worth more than the clears (cf. memory s31-write-combine-
+  streams: offsetting CMA buffers 8-16 kB). On the board the colour
+  buffer is the X server's SHM segment and depth the drawable's, so the
+  replay's addresses say nothing about the board's; the lever would be a
+  deliberate offset of the depth buffer against the colour buffer (a
+  board A/B), not attempted.
+
+2. WHAT CHANGED (bit-identical; S31GL_ZF8=4 restores tier 2 for all four,
+   =3 the zf8 build; 0 and 2 keep their zf8 meanings with tier 3 on)
+  a) zf1_blendt (zpipe_fused.c zf_ftab): zf1_blend is QuakeSpasm's flat
+     view blend (C_FLAT, no texture, SRC_ALPHA / ONE_MINUS_SRC_ALPHA; 1,089
+     chunks, 31,680 pixels a frame). Per destination field the result is a
+     fixed field of PACK: t[dr] | t[64 + dg] | t[32 + db], each entry
+     exactly PACK's own mask and shift of sr + MUL8(e(d), 255 - a) - the
+     same btab expansions, so the same bits. 256 B built per flat colour
+     and alpha (0.4 builds a frame), after btab's 192 B in the same block.
+       per pixel 26.9 -> 19.0 instructions (mask test 3, three lookups,
+       two ors, store, loop); per chunk 833.5 -> 579.7; frame 907,632 ->
+       631,330 (-276,302); proxy 15.3397 / 14.0638 -> 14.9905 / 13.8368
+  b) zf8_sbart (zpipe_fused8.h): the P8 status-bar blend (C_FLAT, texel,
+     SRC_ALPHA / ONE_MINUS_SRC_ALPHA; 528 chunks, 15,360 pixels): the
+     source half MUL8(t_c, fa) of each channel from a 256-byte MUL8(v, a)
+     table (zf_bt8, its own alpha key bt8_a) instead of the multiply and
+     div255 rounding.
+       per pixel 48.9 -> 41.9; per chunk 1,465.5 -> 1,265.8; frame 773,760 ->
+       668,352 (-105,408); proxy -> 14.8836 / 13.7299
+  c) to_vg (raster.c): the general filler's vertex conversion computed the
+     8.16 colours of every vertex; they are read only by the colour planes
+     (ZP_N_RGBA) and the perspective-colour choice (ZPX_PC, which
+     raster_sel.c sets only with them). gl_build_pipe records
+     GLContext.vg_col; without it the four conversions are skipped.
+       per vertex 58.0 -> 34.3 (5,247 a frame); frame 304,385 -> 179,980
+       (-124,405); proxy -> 14.6926 / 13.6760 (after the bt8 key; the
+       step measured 14.6910 / 13.6744 with bt8 in btab's rebuild)
+  d) zf8_alias_blo (zpipe_fused8.h): the blended alias filler (the view
+     model; 720 chunks, 4,300 pixels a frame, 105 instructions a pixel)
+     stores a fragment of alpha 255 as PACK(r, g, b): MUL8(v, 255) is v and
+     MUL8(d, 0) is 0 under both MUL8 definitions, so it is the blend's own
+     result; any other alpha blends as before.
+       every one of the frame's 4,300 blended alias pixels is opaque here:
+       per pixel 105 -> 68; per chunk 836.1 -> 585.4; frame 602,345 ->
+       421,732 (-180,613);
+       proxy -> 14.5643 / 13.4431
+  Total at the functions: -686,728 a frame; proxy -775,400 / -620,700 (the
+  rest: fewer instructions of spill and call around them).
+  The arms: S31GL_ZF8=4 reads 15.3690 / 14.0775 (tier 2 + 29 k, +0.19%:
+  to_vg's vg_col test and the picks) with every hash identical; =3 reads
+  15.9649 / 14.7529 (zf8 + 29 k).
+  PSRAM traffic (the model, same image): T3 2,887.5 kB a frame, ZF8=4
+  2,890.8 kB - the 512 B of tables cost nothing measurable.
+  ramtext.list: NOT extended. Adding zf1_blendt / zf8_sbart / zf8_alias_blo
+  makes the host (aarch64) link fail in ramtext.py ("site +0x52bc (adrp to
+  s31_rt_len) does not reach its target"); the board build takes them
+  (74 sections) but the host gate would not build. The board runs with
+  S31GL_RAMTEXT_DEFAULT=0, so nothing changes by default; with
+  S31GL_RAMTEXT=1 the tier-2 functions of the A/B arms are in RAM and the
+  new ones are not (the arms would favour the old code).
+
+3. CODE SIZE (Buildroot compiler and flags, gl/bench/out-t3/brbuild.sh)
+  .text 288,686 -> 291,390 (+2,704), .s31hot 57,276 -> 57,416 (+140),
+  .rodata unchanged, .bss unchanged; stripped 443,812 -> 447,908 (+4,096:
+  a page). New functions: zf1_blendt 602 B, zf8_sbart 644 B,
+  zf8_alias_blo 1,040 B, zf_ftab 310 B, zf_bt8 46 B.
+
+4. GATES (gates/)
+  run-3a p6-tier3 (gates/run-3a.txt): core_test 292/0, raster_gate 51/0,
+    filt_test 32/0, fused_test 45/0 (both FILT8 modes; also 45/0 with
+    S31GL_ZF8=4, =3 and =0: gates/fused-zf8-arms.txt), headless_gears md5
+    34a082d3b0f572e9c952557a71ed7ac1 (unchanged); suitecmp 0 apps worse and
+    line for line tier 2's; pixels, raster, prec (99.35%) summaries
+    identical to tier 2's gates, mtex identical but for the directory in
+    the paths, prims PASS; fused_test's status-bar, view-blend and blended
+    alias signatures are the ones changed. RV32 qemu-user (gates/rv32.log):
+    core_test 290/0, raster_gate 51/0, d2f 0 mismatches, filt_test 32/0,
+    fused_test 45/0, headless_gears md5 34a082d3... (unchanged).
+  qsr-fused over all 9 traces present (gates/qsr-fused.log): 756 of 756
+    full frames fused = general and = the unpacked reference (p5f2-tf0 84
+    of 84 = the live board capture). And against tier 2: the same gate run
+    on 9ecf5f86, every per-frame hash file of 9 traces x 3 arms compared -
+    27 of 27 identical, 2,268 frames (gates/qsr-hashes-vs-tier2.txt).
+  run-qsr-threads (p5f2-tf0, p5a-tf0, p5f2, p5a): S31GL_THREADS=2 at both
+    band layouts 84 of 84 identical to THREADS=0 on every trace
+    (gates/qsr-threads.txt; the worker keeps its own zf_ftab / zf_bt8
+    tables in its w_btab block, as it keeps btab).
+  qsr p5f2-tf0: 84 of 84 full frames = the live capture in the default,
+    ZF8=4 and ZF8=3 arms (qemu-counts/qsr-p5f2-tf0.txt).
+  bench.sh (gates/bench.log): all 74 frame hashes identical to tier 2's;
+    counts: feat5 gears -11.2% (flat shading on the general path: to_vg's
+    colours skipped), feat1-3 gears -0.9 to -1.1%, filt5 -0.5%; the smooth
+    general-path cases (p4v1-p4v5, prim5) +0.1% (the vg_col test, ~5 k a
+    frame); 62 within limits.txt, the same 6 owner-pending lines over.
+
+5. NOT DONE, AND WHY
+  - The triangle-level treatment for the one-unit fillers (item 2 as
+    written): their batches are small triangles - 2,680 spans in 1,205
+    triangles a frame, 2.2 spans each - so the per-span overhead the tier-2
+    trick removes (zp_run's 60.7 a span, 163 k a frame, and the row loop's
+    share of ZB_fillTriangleGeneral) is ~200-250 k a frame at most, while their cost was per pixel: the four changes above take
+    ~690 k out of the same fillers' pixels instead. ZB_fillTriangleGeneral
+    stays 610 instructions a triangle (~300 of set-up: the ST planes, the
+    ZSpan initialisation, 12 saved registers); skipping the ZSpan fields no
+    stage reads would save ~25 a triangle (~40 k) against the risk of a
+    stage that does read one - not taken.
+  - gl_vertex4f (905 k, 195 a vertex, flat): unchanged. Annotated per
+    instruction (107 instructions on every vertex, 58 of viewport mapping
+    on 79% of them) it is straight-line transform, clip code, viewport and
+    copies; nothing left to fuse without restructuring glVertex.
+  - The world filler (zf8_wnn_t_p0s1, 6.41 M, 44%): untouched here.
+  - zx8_base_p8r (18 a texel) still writes idx[i] = i for its consumers;
+    an identity index nobody writes would save 2-3 a texel (~50 k) but
+    changes the ZFrag contract for every stage.
+
+6. BOARD A/B TO RUN (coordinator; stock QuakeSpasm 0.96.3 timedemo demo1,
+   320x240 fullscreen, fresh boot per run, interleaved arms, >= 4 runs per
+   arm)
+  Library: gl/bench/out-t3/br-final/libGL.so.1 (stripped, this tree with
+  the Buildroot compiler and flags, -DS31GL_TEXFILTER_DEFAULT=0
+  -DS31GL_RAMTEXT_DEFAULT=0; the method reproduces tier 2's md5).
+    md5 c91acbb3e1b3e21a4133f3e3f23cacdf
+    sha256 3cfa1873a394b077595c0543c3f751896ecf153a1535484b15f638a4f49ce034
+  Load it as the tier-2 arms did (e.g. /root/t3; confirm by md5 on the
+  board and by the game's maps naming it).
+    T3 (new, default):   LD_LIBRARY_PATH=/root/t3
+    T2 (= tier 2):       LD_LIBRARY_PATH=/root/t3 S31GL_ZF8=4
+    T1 (= shipped zf8):  LD_LIBRARY_PATH=/root/t3 S31GL_ZF8=3
+  Prediction: -5.1% / -4.4% of the proxy frame against T2, all of it
+  arithmetic in blend loops and vertex conversion (no fetch removed or
+  added: the model's PSRAM traffic is unchanged), so ~+3-4% fps over T2 if
+  the frame stays CPU-bound - inside one arm's spread; the repeats decide.
+  A profile of T3 should show zf1_blendt ~0.7x zf1_blend's samples,
+  zf8_sbart ~0.86x zf8_sbar's, zf8_alias_blo ~0.7x zf8_alias_bl's, to_vg
+  ~0.6x.
+  Regression: glxgears, Doom and the desktop (xcalc) as usual - the
+  changes are on QuakeSpasm's one-unit and alias paths and the general
+  filler's vertex conversion, which every general-path app takes.

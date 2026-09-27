@@ -1,0 +1,12 @@
+qsr base window 0 frames 100-139: 15.3397 Minsn/frame min 9.4079 max 21.3609 (frame 125), 0 dcalls/frame, hashes 40/40 same as live, tex 3249509 B heap 39824 B at start
+qsr base window 1 frames 400-439: 14.0638 Minsn/frame min 11.1595 max 17.9043 (frame 412), 0 dcalls/frame, hashes 40/40 same as live, tex 3216837 B heap 42448 B at start
+qsr base done: 439 frames, 84 full: 84 same as live, 0 differ
+qsr t3 window 0 frames 100-139: 14.5643 Minsn/frame min 9.1793 max 19.9966 (frame 125), 0 dcalls/frame, hashes 40/40 same as live, tex 3249509 B heap 40368 B at start
+qsr t3 window 1 frames 400-439: 13.4431 Minsn/frame min 10.7835 max 16.7908 (frame 412), 0 dcalls/frame, hashes 40/40 same as live, tex 3216837 B heap 42992 B at start
+qsr t3 done: 439 frames, 84 full: 84 same as live, 0 differ
+qsr t3z4 window 0 frames 100-139: 15.3690 Minsn/frame min 9.4128 max 21.4223 (frame 125), 0 dcalls/frame, hashes 40/40 same as live, tex 3249509 B heap 40368 B at start
+qsr t3z4 window 1 frames 400-439: 14.0775 Minsn/frame min 11.1691 max 17.9243 (frame 412), 0 dcalls/frame, hashes 40/40 same as live, tex 3216837 B heap 42992 B at start
+qsr t3z4 done: 439 frames, 84 full: 84 same as live, 0 differ
+qsr t3z3 window 0 frames 100-139: 15.9649 Minsn/frame min 9.9196 max 22.0875 (frame 124), 0 dcalls/frame, hashes 40/40 same as live, tex 3249509 B heap 40368 B at start
+qsr t3z3 window 1 frames 400-439: 14.7529 Minsn/frame min 11.7506 max 18.7362 (frame 412), 0 dcalls/frame, hashes 40/40 same as live, tex 3216837 B heap 42992 B at start
+qsr t3z3 done: 439 frames, 84 full: 84 same as live, 0 differ

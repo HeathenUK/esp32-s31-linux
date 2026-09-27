@@ -1,0 +1,3 @@
+S31GL_ZF8=4: fused_test: 45 passed, 0 failed
+S31GL_ZF8=3: fused_test: 45 passed, 0 failed
+S31GL_ZF8=0: fused_test: 45 passed, 0 failed

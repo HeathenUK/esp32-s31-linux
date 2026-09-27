@@ -1,0 +1,1 @@
+cachesim lz0: 80 counted frames, per frame: loads 3007901 stores 1296614 refills 28784 (1799.0 kB) writebacks 17941 (1121.3 kB), PSRAM 2920.3 kB

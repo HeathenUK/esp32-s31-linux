@@ -1,0 +1,40 @@
+--- enum values: TinyGL header against Khronos
+enumcmp: 0 mismatches
+--- compiling TinyGL core, the GL ABI layer and GLX (8 jobs)
+--- export surface (mkstubs.py)
+mkstubs: 674 exported GL names: 462 implemented, 212 stubs
+ramtext: 72 sections moved to s31hot_text
+--- linking /src/gl/out-rv32/libGL.so.1
+ramtext: libGL.so.1: 45424 bytes at 0x54bc0-0x5fd30, 12 pages in RAM, 525 sites (auipc 338, jal 187), 863 table entries; slot 0x6c000, displacement +95296; 293 references into the range from outside: 22 data words moved to the copy, 155 cold call sites, 13 cold address-takes, 0 read-only words left
+-rwxr-xr-x 1 builder builder 435916 Sep 27 03:48 /src/gl/out-rv32/libGL.so.1
+--- headless_gears, core_test (static: the core objects of libGL.so.1, no X)
+    and their qemu-user variants (scalar mem*/str*: qemu has no ESP PIE), in parallel
+-rwxr-xr-x 1 builder builder  481148 Sep 27 03:48 /src/gl/out-rv32/core_test
+-rwxr-xr-x 1 builder builder 2079528 Sep 27 03:48 /src/gl/out-rv32/core_test.qemu
+-rwxr-xr-x 1 builder builder 1815324 Sep 27 03:48 /src/gl/out-rv32/d2f_test.qemu
+-rwxr-xr-x 1 builder builder 2168128 Sep 27 03:48 /src/gl/out-rv32/filt_test.qemu
+-rwxr-xr-x 1 builder builder 1846212 Sep 27 03:48 /src/gl/out-rv32/fused_test.qemu
+-rwxr-xr-x 1 builder builder  436188 Sep 27 03:48 /src/gl/out-rv32/headless_gears
+-rwxr-xr-x 1 builder builder 2263360 Sep 27 03:48 /src/gl/out-rv32/headless_gears.qemu
+-rwxr-xr-x 1 builder builder 1826916 Sep 27 03:48 /src/gl/out-rv32/raster_gate.qemu
+-rwxr-xr-x 1 builder builder 1843636 Sep 27 03:48 /src/gl/out-rv32/zepoch_test.qemu
+--- core_test (RV32 qemu-user)
+PASS destroying the current context releases it
+PASS no current context: glGetString = NULL, draws ignored
+core_test: 290 passed, 0 failed
+--- raster_gate (RV32 qemu-user)
+ok   texel phase general RGB REPLACE + alpha test: 2x magnified wrong: 0 (want 0)
+ok   texel phase general RGB REPLACE + alpha test: negative texcoords wrong: 0 (want 0)
+raster_gate: 51 passed, 0 failed
+--- d2f_test (RV32 qemu-user)
+d2f: 49987811 tested, 0 mismatches
+--- filt_test (RV32 qemu-user)
+PASS S31GL_MIPMAPS=0: NEAREST_MIPMAP_NEAREST samples level 0 (f800)
+PASS S31GL_TEXFILTER=0: LINEAR_MIPMAP_LINEAR is nearest in level 0 (f800)
+filt_test: 32 passed, 0 failed
+--- fused_test (RV32 qemu-user)
+PASS alias, no blend [565 + L8]: 216 variants x 1 seeds: 0 colour and 0 depth values differ (of 4147200), 0 and 0 against the unpacked reference; fused batches: world 0 (inline nearest 0, filtered 0), alias 427, alias-store 429, one-unit 0; general 0 (the general contexts: 0, 0 fused)
+PASS world, filtered, sampled inline (every unit 0 filter) [565 + L8]: 96 variants x 2 seeds: 0 colour and 0 depth values differ (of 3686400), 0 and 0 against the unpacked reference; fused batches: world 751 (inline nearest 0, filtered 751), alias 0, alias-store 0, one-unit 0; general 0 (the general contexts: 0, 0 fused)
+fused_test: 45 passed, 0 failed
+--- headless_gears (RV32 qemu-user)
+34a082d3b0f572e9c952557a71ed7ac1  /tmp/hg.ppm

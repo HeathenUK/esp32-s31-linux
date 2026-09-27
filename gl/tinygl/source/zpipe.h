@@ -340,6 +340,14 @@ typedef struct ZPipeX {
      with no per-triangle choice (the 1:1 sampler may replace it) */
   unsigned char *btab;
   int btab_a;
+  /* phase 6 tier 3 (zpipe_fused.c zf_ftab): after btab's 192 bytes, the
+     flat blend's packed result per destination field - 32 red, 32 blue,
+     64 green halfwords - for the flat colour and alpha ftab_k (ftab_ok:
+     built) */
+  int ftab_ok;
+  unsigned int ftab_k;
+#define ZF_BT8 448                     /* btab + ZF_BT8: MUL8(v, bt8_a), v < 256 */
+  int bt8_a;
   /* fix 2 (zpipe.c zo_sa_omsa): MUL8(v, satab_a) of every 8-bit v, 256 B,
      allocated at the first chunk of one alpha */
   unsigned char *satab;
