@@ -1,0 +1,7 @@
+libgcc!=hw mul rm4 a=be6231fa83e9c7b8 b=be7cdb003ff1f1ce libgcc=3cf06841623f4dc7/1d hw=3cf06841623f4dc8/1d
+libgcc!=hw mul rm4 a=46e3da0da7f2b511 b=4613da0da7f2b511 libgcc=4d08a17c230cab9b/01 hw=4d08a17c230cab9c/01
+libgcc!=hw mul rm4 a=469415671ab52f43 b=c69415671ab52f42 libgcc=cd39359e640379cb/15 hw=cd39359e640379cc/15
+libgcc!=hw mul rm4 a=3feb1e4d7180bbb0 b=c8fb7d41a823ef02 libgcc=c8f74bb75a52d60b/1b hw=c8f74bb75a52d60c/1b
+libgcc!=hw mul rm4 a=c14cec9b7eecf000 b=be0cec9b7eecf000 libgcc=3f6a24e596a26262/11 hw=3f6a24e596a26263/11
+libgcc!=hw mul rm4 a=c1e00003b37f9e19 b=c1d599d2f0547eae libgcc=43c599d7ef813e09/19 hw=43c599d7ef813e0a/19
+RESULT mul: 1000000 operand sets (+249873 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 20371 libgcc-vs-hw differences; RNE fast-path share 74.0%; libgcc non-canonical NaN results 0

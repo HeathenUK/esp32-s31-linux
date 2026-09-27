@@ -249,11 +249,9 @@ s31v2_muldf3:
 	sub	t2, a4, t1		/* pe0 - eb */
 	slli	t2, t2, 20
 	add	a1, a3, t2
-	srli	t2, t6, 31
-	slli	t2, t2, 31
-	lui	t3, 0x80000
-	and	t3, a3, t3
-	xor	t2, t2, t3		/* = sign(x) */
+	xor	t2, t6, a3		/* recover x's bits from (x xor y) xor y */
+	srli	t2, t2, 31
+	slli	t2, t2, 31		/* sign(x), two fewer instructions */
 	xor	a1, a1, t2
 	ret
 .Lm_pow2b:				/* y = +-2^k */

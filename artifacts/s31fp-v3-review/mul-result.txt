@@ -1,0 +1,123 @@
+sh /tmp/r.sh 2>&1 & __rp=$!; ( trap 'kill "$__rs_sleep" 2>/dev/null; wait "$
+__rs_sleep" 2>/dev/null; exit' TERM INT; sleep 27 & __rs_sleep=$!; wait "$__rs_s
+leep"; kill -0 $__rp 2>/dev/null && { echo RS_TIME"K"ILL; kill -9 $__rp 2>/dev/n
+ull; } ) & __rw=$!; wait $__rp 2>/dev/null; __rc=$?; kill $__rw 2>/dev/null; wai
+t $__rw 2>/dev/null; printf "RS_EXIT:%s\n" "$__rc"; echo RS_DONE
+d59b210e4910750c3b211a8f24d476c6  /root/afp2/candidate/libs31fp.so
+d538cddf480cc7adc98b2b70d1e42b72  /root/afp2/mul-review/libs31fp.so
+s31fp: scanned main text, patched 0x00000000
+s31fp: of which copied in place 0x00000000
+s31fp: pages given their original frame colour 0x00000000
+s31fp: scanned main text, patched 0x0000001c
+s31fp: of which copied in place 0x0000001a
+s31fp: pages given their original frame colour 0x00000006
+RESULT mul: 100000 operand sets (+25014 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE fast-path share 100.0%; libgcc non-canonical NaN results 0
+s31fp: cache hit, patched 0x00000000
+s31fp: of which copied in place 0x00000000
+s31fp: pages given their original frame colour 0x00000000
+s31fp: cache hit, patched 0x0000001c
+s31fp: of which copied in place 0x0000001a
+s31fp: pages given their original frame colour 0x00000006
+RESULT mul: 100000 operand sets (+25014 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE fast-path share 100.0%; libgcc non-canonical NaN results 0
+ARITHMETIC round=0 song=36 arm=old
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel hash
+36 44100 2 2.651 29.42 0.771 0.00 0 0.00 0.00 0.00 0.00 9979b782
+EXIT=0
+ARITHMETIC round=0 song=36 arm=new
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel hash
+36 44100 2 2.650 29.40 0.771 0.00 0 0.00 0.00 0.00 0.00 9979b782
+EXIT=0
+ARITHMETIC round=0 song=5 arm=old
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel hash
+5 44100 2 2.562 28.43 0.798 0.00 0 0.00 0.00 0.00 0.00 23d6ac74
+EXIT=0
+ARITHMETIC round=0 song=5 arm=new
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel hash
+5 44100 2 2.509 27.84 0.814 0.00 0 0.00 0.00 0.00 0.00 23d6ac74
+EXIT=0
+ARITHMETIC round=1 song=36 arm=new
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel hash
+36 44100 2 2.649 29.40 0.771 0.00 0 0.00 0.00 0.00 0.00 9979b782
+EXIT=0
+ARITHMETIC round=1 song=36 arm=old
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel hash
+36 44100 2 2.669 29.62 0.765 0.00 0 0.00 0.00 0.00 0.00 9979b782
+EXIT=0
+ARITHMETIC round=1 song=5 arm=new
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel hash
+5 44100 2 2.544 28.23 0.803 0.00 0 0.00 0.00 0.00 0.00 23d6ac74
+EXIT=0
+ARITHMETIC round=1 song=5 arm=old
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel hash
+5 44100 2 2.583 28.66 0.791 0.00 0 0.00 0.00 0.00 0.00 23d6ac74
+EXIT=0
+ARITHMETIC round=2 song=36 arm=old
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel hash
+36 44100 2 1.785 19.81 1.145 0.00 0 0.00 0.00 0.00 0.00 9979b782
+EXIT=0
+ARITHMETIC round=2 song=36 arm=new
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel hash
+36 44100 2 1.803 20.01 1.133 0.00 0 0.00 0.00 0.00 0.00 9979b782
+EXIT=0
+ARITHMETIC round=2 song=5 arm=old
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel hash
+5 44100 2 2.565 28.46 0.797 0.00 0 0.00 0.00 0.00 0.00 23d6ac74
+EXIT=0
+ARITHMETIC round=2 song=5 arm=new
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel hash
+5 44100 2 2.565 28.47 0.796 0.00 0 0.00 0.00 0.00 0.00 23d6ac74
+EXIT=0
+ARITHMETIC round=3 song=36 arm=new
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel hash
+36 44100 2 1.798 19.96 1.136 0.00 0 0.00 0.00 0.00 0.00 9979b782
+EXIT=0
+ARITHMETIC round=3 song=36 arm=old
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel hash
+36 44100 2 1.916 21.27 1.066 0.00 0 0.00 0.00 0.00 0.00 9979b782
+EXIT=0
+ARITHMETIC round=3 song=5 arm=new
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel hash
+5 44100 2 2.541 28.19 0.804 0.00 0 0.00 0.00 0.00 0.00 23d6ac74
+EXIT=0
+ARITHMETIC round=3 song=5 arm=old
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel hash
+5 44100 2 2.560 28.41 0.798 0.00 0 0.00 0.00 0.00 0.00 23d6ac74
+EXIT=0
+ARITHMETIC round=4 song=36 arm=old
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel hash
+36 44100 2 1.783 19.79 1.146 0.00 0 0.00 0.00 0.00 0.00 9979b782
+EXIT=0
+ARITHMETIC round=4 song=36 arm=new
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel hash
+36 44100 2 1.804 20.02 1.133 0.00 0 0.00 0.00 0.00 0.00 9979b782
+EXIT=0
+ARITHMETIC round=4 song=5 arm=old
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel hash
+5 44100 2 2.585 28.69 0.790 0.00 0 0.00 0.00 0.00 0.00 23d6ac74
+EXIT=0
+ARITHMETIC round=4 song=5 arm=new
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel hash
+5 44100 2 2.580 28.64 0.792 0.00 0 0.00 0.00 0.00 0.00 23d6ac74
+EXIT=0
+ARITHMETIC round=5 song=36 arm=new
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel hash
+36 44100 2 1.794 19.90 1.139 0.00 0 0.00 0.00 0.00 0.00 9979b782
+EXIT=0
+ARITHMETIC round=5 song=36 arm=old
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel hash
+36 44100 2 1.821 20.21 1.122 0.00 0 0.00 0.00 0.00 0.00 9979b782
+EXIT=0
+ARITHMETIC round=5 song=5 arm=new
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel hash
+5 44100 2 2.535 28.13 0.806 0.00 0 0.00 0.00 0.00 0.00 23d6ac74
+EXIT=0
+ARITHMETIC round=5 song=5 arm=old
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel hash
+5 44100 2 2.589 28.73 0.789 0.00 0 0.00 0.00 0.00 0.00 23d6ac74
+EXIT=0
+ARITHMETIC_DONE
+RS_EXIT:0
+RS_DONE
+[2]+  Done(143)                  (trap "kill \"\$__rs_sleep\" 2>/dev/null; wait \"\$__rs_sleep\" 2>/dev/null; exit" TERM INT; sleep 27; ; wait "${__rs_sleep}"; kill -0 ${__rp} 2>/dev/null && echo RS_TIME"K"ILL; kill -9 ${__rp} 2>/dev/null)
+[1]+  Done                       sh /tmp/r.sh 2>&1
+~ # 

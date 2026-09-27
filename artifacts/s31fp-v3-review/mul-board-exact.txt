@@ -1,0 +1,27 @@
+sh /tmp/r.sh 2>&1 & __rp=$!; ( trap 'kill "$__rs_sleep" 2>/dev/null; wait "$
+__rs_sleep" 2>/dev/null; exit' TERM INT; sleep 27 & __rs_sleep=$!; wait "$__rs_s
+leep"; kill -0 $__rp 2>/dev/null && { echo RS_TIME"K"ILL; kill -9 $__rp 2>/dev/n
+ull; } ) & __rw=$!; wait $__rp 2>/dev/null; __rc=$?; kill $__rw 2>/dev/null; wai
+t $__rw 2>/dev/null; printf "RS_EXIT:%s\n" "$__rc"; echo RS_DONE
+d59b210e4910750c3b211a8f24d476c6  /root/afp2/candidate/libs31fp.so
+d538cddf480cc7adc98b2b70d1e42b72  /root/afp2/mul-review/libs31fp.so
+s31fp: cache hit, patched 0x00000000
+s31fp: of which copied in place 0x00000000
+s31fp: pages given their original frame colour 0x00000000
+s31fp: cache hit, patched 0x0000001c
+s31fp: of which copied in place 0x0000001a
+s31fp: pages given their original frame colour 0x00000006
+ARITHMETIC_EXACT mask=1
+s31fp: cache hit, patched 0x00000000
+s31fp: of which copied in place 0x00000000
+s31fp: pages given their original frame colour 0x00000000
+s31fp: cache hit, patched 0x0000001c
+s31fp: of which copied in place 0x0000001a
+s31fp: pages given their original frame colour 0x00000006
+ARITHMETIC_EXACT mask=2
+ARITHMETIC_EXACT_DONE
+RS_EXIT:0
+RS_DONE
+[2]+  Done(143)                  (trap "kill \"\$__rs_sleep\" 2>/dev/null; wait \"\$__rs_sleep\" 2>/dev/null; exit" TERM INT; sleep 27; ; wait "${__rs_sleep}"; kill -0 ${__rp} 2>/dev/null && echo RS_TIME"K"ILL; kill -9 ${__rp} 2>/dev/null)
+[1]+  Done                       sh /tmp/r.sh 2>&1
+~ # 

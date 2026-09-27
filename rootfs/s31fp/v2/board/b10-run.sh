@@ -3,6 +3,41 @@ cat > /root/afp2/b10-inner.sh <<'IN'
 cd /root/afp2
 DONE=$2
 [ -z "$DONE" ] || trap 'printf "\n%s\n" "$DONE" > /dev/console' EXIT
+if [ "$1" = arithmetic ] || [ "$1" = arithmetic-exact ]; then
+  unset LD_PRELOAD S31FP_DEBUG
+  C=/root/afp2/oncpu; M=/root/afp2/music.mus
+  OLD=/root/afp2/candidate/libs31fp.so
+  NEW=/root/afp2/mul-review/libs31fp.so
+  md5sum "$OLD" "$NEW"
+  # Compare separate disabled/enabled processes: body matching can also
+  # patch the checker's renamed libgcc reference, so an in-process oracle
+  # alone is insufficient for preload/copy validation.
+  for mask in 1 2; do
+    for enabled in 0 1; do
+      env S31FP=$enabled S31FP_COPY=1 S31FP_DEBUG=1 LD_PRELOAD="$NEW" \
+        "$C" "$mask" ./ptest-dyn dump mul 100 173 > "/root/afp2/mul-review/dump-$enabled" || exit 1
+    done
+    cmp /root/afp2/mul-review/dump-0 /root/afp2/mul-review/dump-1 || exit 1
+    echo "ARITHMETIC_EXACT mask=$mask"
+  done
+  rm /root/afp2/mul-review/dump-0 /root/afp2/mul-review/dump-1
+  [ "$1" != arithmetic-exact ] || { echo ARITHMETIC_EXACT_DONE; exit; }
+  for r in 0 1 2 3 4 5; do
+    arms="old new"; [ $((r % 2)) = 0 ] || arms="new old"
+    for song in 36 5; do
+      for arm in $arms; do
+        P=$OLD; [ "$arm" != new ] || P=$NEW
+        echo "ARITHMETIC round=$r song=$song arm=$arm"
+        env S31FP=1 S31FP_COPY=1 S31FP_COLOUR=1 \
+          S31FP_CACHE=/root/afp2/arithmetic-cache LD_PRELOAD="$P" \
+          "$C" 1 ./oplbench-dyn "$M" "$song" 2
+        rc=$?; echo "EXIT=$rc"; [ "$rc" = 0 ] || exit 1
+      done
+    done
+  done
+  echo ARITHMETIC_DONE
+  exit
+fi
 if [ "$1" = placement ]; then
   unset LD_PRELOAD S31FP_DEBUG
   X=/usr/lib/libs31fp.so; S=/root/afp2/placement-shipped.so
