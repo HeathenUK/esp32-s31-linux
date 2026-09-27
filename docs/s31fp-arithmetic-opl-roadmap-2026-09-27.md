@@ -1,4 +1,10 @@
-# s31fp evolution: design and roadmap (2026-09-27)
+# s31fp arithmetic and OPL roadmap (2026-09-27)
+
+> **Scope, stated plainly.** This is the NARROW result: soft-double arithmetic,
+> the OPL synth, libm floor/ceil/trunc, placement and the patch engine. It is
+> not the requested wide survey of S31-hostile code across executables,
+> libraries and syscalls that could be replaced the way soft-double, the fast
+> clock and the string routines were. That survey is a separate document.
 
 **Audience:** the project owner and future agents.
 **Status:** design only. No board was attached. Every timing figure is quoted from repo measurements, and every new number is a QEMU result: correctness and instruction counts only, with no timing model and no esp.* execution.
