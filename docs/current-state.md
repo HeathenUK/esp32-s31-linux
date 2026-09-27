@@ -1,5 +1,15 @@
 # Where this work stands
 
+## Latest s31fp release (2026-09-27)
+
+Kernel #402 adds the real RV32 time64 vDSO (patch 0075). The SD-installed
+s31fp v3 enables tested copy, string and kernel-backed clock paths. Board clock
+validation passed; hot calls cost 0.43–0.59 us versus 2.51–3.05 us syscalls.
+See [the current handoff](s31fp-handoff-2026-09-27.md) for hashes, application
+acceptance status, placement limitations and rollback. Original #401 and XIP
+userspace are preserved. This supersedes older s31fp deployment descriptions.
+
+
 ## Audio path: native 22.05/24/32 kHz, s31route converts the rest (2026-09-27, kernel #401) - SHIPPED, NOT YET EAR-CHECKED
 
 Implements options 1-3 of `artifacts/audio/first-principles-2026-09-27/REPORT.md`.

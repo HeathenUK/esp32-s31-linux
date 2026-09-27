@@ -1,6 +1,7 @@
 > **Latest release:** kernel #402 and s31fp v3 fast clock are deployed and
 > boot-verified. The real kernel time64 vDSO passed the full board diagnostic;
-> hot clock queries are about 5x faster. Quiet application acceptance is pending.
+> hot clock queries are about 5x faster. Quiet application acceptance passed:
+> prboom 47.1 fps, Tyrian/gears completed; Tyrian audio underruns remain.
 > See [the handoff](s31fp-handoff-2026-09-27.md) for hashes and evidence.
 
 # Status and to-do, 2026-09-27 (~15:10)

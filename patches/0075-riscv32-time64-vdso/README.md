@@ -63,3 +63,17 @@ Initial clock-board.txt records a harness failure (`taskset` absent), not a
 clock failure. The corrected reusable runner requires the existing oncpu helper.
 BusyBox taskset/CPU-list support is configured and build-verified but not yet
 installed on the board; gate and post-build now enforce this dependency.
+
+Final quiet application acceptance (`apps-result.txt`): Tyrian 60 seconds and
+gears 17 seconds completed; prboom 5026 gametics in 3731 realtics = 47.1 fps,
+expected rc255, failures=0. Prior clock-disabled acceptance was 46.6 fps; a
+single run each does not establish a speedup. Tyrian underruns 558 versus 567
+previously: unresolved audio issue. Desktop PID 249 remains active and the
+installed library hash/configuration were verified after completion. Only the
+passive serial completion listener was active during the application run.
+
+Commits: 737faaac ships copy/strings, 52e28a7c adds taskset prerequisites,
+7a0da638 ships the kernel-backed clock and board tests. Original kernel and
+pre-clock SD library/configuration remain available for rollback. BusyBox's
+new taskset/timeout build is not installed; continue using the checked oncpu
+helper on this board. No further application or test is running at handoff.

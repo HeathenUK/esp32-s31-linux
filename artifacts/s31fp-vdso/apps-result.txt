@@ -1,0 +1,69 @@
+[runsh] launch transcript (not workload completion):
+sh /tmp/r.sh 2>&1 & __rp=$!; ( trap 'kill "$__rs_sleep" 2>/dev/null; wait "$
+__rs_sleep" 2>/dev/null; exit' TERM INT; sleep 27 & __rs_sleep=$!; wait "$__rs_s
+leep"; kill -0 $__rp 2>/dev/null && { echo RS_TIME"K"ILL; kill -9 $__rp 2>/dev/n
+ull; } ) & __rw=$!; wait $__rp 2>/dev/null; __rc=$?; kill $__rw 2>/dev/null; wai
+t $__rw 2>/dev/null; printf "RS_EXIT:%s\n" "$__rc"; echo RS_DONE
+BOARD Linux esp32-s31 7.1.10 #402 SMP Sun Sep 27 18:24:47 UTC 2026 riscv32 GNU/Linux
+9767181c1c32d35d8eabc09108f87eff  /opt/s31/libs31fp.so
+9aa9beaa1eb595c6a85a520fc96f7c90  /root/doom/prboom
+QUIET=1
+WARMUP tyrian rc=137 expected=137
+WARMUP gears rc=137 expected=137
+WARMUP_FINISHED
+START 1 copycol
+Timed 5026 gametics in 3731 realtics = 47.1 frames per second
+Timed 5026 gametics in 3731 realtics = 47.1 frames per second
+END 1 copycol rc=255 pass=1
+PB_DONE runs=1 failures=0
+TYRIAN_UNDERRUN_REPORTS 558
+ACTIVE_DESKTOP 249
+9767181c1c32d35d8eabc09108f87eff  /opt/s31/libs31fp.so
+# SD-backed s31fp; copied arithmetic executes in application RAM.
+# Common clocks use the kernel time64 vDSO; S31CLK=0 restores libc.
+if [ -r /opt/s31/libs31fp.so ]; then
+    export LD_PRELOAD=/opt/s31/libs31fp.so
+    export S31FP_COPY=${S31FP_COPY:-1}
+    export S31STR=${S31STR:-1}
+    export S31CLK=${S31CLK:-1}
+fi
+S31_VDSO_RELEASE_PASS
+RS_EXIT:0
+RS_DONE
+[2]+  Done(143)                  (trap "kill \"\$__rs_sleep\" 2>/dev/null; wait \"\$__rs_sleep\" 2>/dev/null; exit" TERM INT; sleep 27; ; wait "${__rs_sleep}"; kill -0 ${__rp} 2>/dev/null && echo RS_TIME"K"ILL; kill -9 ${__rp} 2>/dev/null)
+[1]+  Done                       sh /tmp/r.sh 2>&1
+~ # 
+sh /tmp/r.sh 2>&1 & __rp=$!; ( trap 'kill "$__rs_sleep" 2>/dev/null; wait "$
+__rs_sleep" 2>/dev/null; exit' TERM INT; sleep 27 & __rs_sleep=$!; wait "$__rs_s
+leep"; kill -0 $__rp 2>/dev/null && { echo RS_TIME"K"ILL; kill -9 $__rp 2>/dev/n
+ull; } ) & __rw=$!; wait $__rp 2>/dev/null; __rc=$?; kill $__rw 2>/dev/null; wai
+t $__rw 2>/dev/null; printf "RS_EXIT:%s\n" "$__rc"; echo RS_DONE
+BOARD Linux esp32-s31 7.1.10 #402 SMP Sun Sep 27 18:24:47 UTC 2026 riscv32 GNU/Linux
+9767181c1c32d35d8eabc09108f87eff  /opt/s31/libs31fp.so
+9aa9beaa1eb595c6a85a520fc96f7c90  /root/doom/prboom
+QUIET=1
+WARMUP tyrian rc=137 expected=137
+WARMUP gears rc=137 expected=137
+WARMUP_FINISHED
+START 1 copycol
+Timed 5026 gametics in 3731 realtics = 47.1 frames per second
+Timed 5026 gametics in 3731 realtics = 47.1 frames per second
+END 1 copycol rc=255 pass=1
+PB_DONE runs=1 failures=0
+TYRIAN_UNDERRUN_REPORTS 558
+ACTIVE_DESKTOP 249
+9767181c1c32d35d8eabc09108f87eff  /opt/s31/libs31fp.so
+# SD-backed s31fp; copied arithmetic executes in application RAM.
+# Common clocks use the kernel time64 vDSO; S31CLK=0 restores libc.
+if [ -r /opt/s31/libs31fp.so ]; then
+    export LD_PRELOAD=/opt/s31/libs31fp.so
+    export S31FP_COPY=${S31FP_COPY:-1}
+    export S31STR=${S31STR:-1}
+    export S31CLK=${S31CLK:-1}
+fi
+S31_VDSO_RELEASE_PASS
+RS_EXIT:0
+RS_DONE
+[2]+  Done(143)                  (trap "kill \"\$__rs_sleep\" 2>/dev/null; wait \"\$__rs_sleep\" 2>/dev/null; exit" TERM INT; sleep 27; ; wait "${__rs_sleep}"; kill -0 ${__rp} 2>/dev/null && echo RS_TIME"K"ILL; kill -9 ${__rp} 2>/dev/null)
+[1]+  Done                       sh /tmp/r.sh 2>&1
+~ # 
