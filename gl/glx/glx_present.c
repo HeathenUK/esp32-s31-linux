@@ -397,8 +397,8 @@ void glxi_surf_free_buffers(struct glxi_surf *s)
 	if (s->rscale && s->dpy)
 		rscale_ask(s->dpy, s->win, 0, 0);
 	s->rscale = 0;
-	free(s->depth);
-	s->depth = NULL;
+	free(s->depth_mem);
+	s->depth = s->depth_mem = NULL;
 	free(s->stencil);
 	s->stencil = NULL;
 	s->nbuf = s->cur = 0;
@@ -880,6 +880,82 @@ static int want_bufs(size_t seg_bytes)
 }
 
 /*
+ * S31GL_CCOLOR=0|1 (default 1): where the depth buffer sits against the
+ * colour buffers inside a 4 kB page. The S31's 64 kB 2-way D-cache is
+ * indexed by the PHYSICAL address with 32 kB ways, so set bits 12-14 come
+ * from whatever page frames Linux handed out and only an address's offset
+ * in its page is ours to choose. Colour pixel p and depth pixel p are
+ * touched together; when (depth - colour) mod 4096 is under a line, their
+ * lines have the same in-page index and share a set whenever the two
+ * pages' frames agree in bits 12-14 (1 in 8 page pairs), and a third
+ * stream - texture, a table, the stack - then evicts one of them. That is
+ * the default placement here: SHM and zero-copy segments start on a page,
+ * and musl returns a 150 kB calloc a header's width (16 B) into its own
+ * mmap (not checked on the board: the rule does not depend on it). With it on,
+ * the depth buffer starts at the offset (within 4 kB past calloc's
+ * pointer) farthest, in the page, from every colour buffer of the
+ * drawable - 2 kB for page-aligned segments - so the two never share an
+ * in-page line index. Costs 4 kB of address space, at most one resident
+ * page (calloc's mmap pages are touched only as the buffer is), and no
+ * instructions past the allocation; the pixels are the same.
+ * MEASURED 2026-09-27, cache model (gl/bench/qemu/cachesim.c pages=1:
+ * random frames, colour contiguous), QuakeSpasm p5f2-tf0, 80 frames:
+ * artifacts/gl/phase6/tier4/REPORT.txt.
+ */
+static int ccolor(void)
+{
+	static int v = -1;
+
+	if (v < 0) {
+		const char *e = getenv("S31GL_CCOLOR");
+
+		v = !(e && strcmp(e, "0") == 0);
+	}
+	return v;
+}
+
+static void *depth_alloc(struct glxi_surf *s)
+{
+	size_t bytes = (size_t)s->bw * s->bh * 2 + S31GL_DEPTH_TAIL;
+	unsigned char *raw;
+	unsigned off, best = 0, bestd = 0;
+	int i;
+
+	if (!ccolor()) {
+		s->depth_mem = calloc(bytes, 1);
+		return s->depth_mem;
+	}
+	raw = calloc(bytes + 4096, 1);
+	s->depth_mem = raw;
+	if (!raw)
+		return NULL;
+	for (off = 0; off < 4096; off += 16) {
+		unsigned dmin = 4096;
+
+		for (i = 0; i < s->nbuf; i++) {
+			unsigned d;
+
+			if (!s->buf[i].pixels)
+				continue;
+			d = (unsigned)((uintptr_t)raw + off -
+				       (uintptr_t)s->buf[i].pixels) & 4095;
+			if (d > 2048)
+				d = 4096 - d;
+			if (d < dmin)
+				dmin = d;
+		}
+		if (dmin > bestd) {
+			bestd = dmin;
+			best = off;
+		}
+	}
+	if (glxi_trace())
+		fprintf(stderr, "libGL: depth at colour + %u in the page "
+			"(S31GL_CCOLOR)\n", bestd);
+	return raw + best;
+}
+
+/*
  * Allocate the colour buffer(s) at the window's current size. Called lazily
  * from the first draw, never from MakeCurrent: a context that is made current
  * and never draws (SDL2's extension probe does exactly that) costs no pixels.
@@ -958,7 +1034,7 @@ have_colour:
 	 * and S31GL_DEPTH_TAIL zero bytes after it hold the core's depth
 	 * epoch state (s31gl.h). A failure is not fatal: the core then
 	 * allocates a private one. */
-	s->depth = calloc((size_t)s->bw * s->bh * 2 + S31GL_DEPTH_TAIL, 1);
+	s->depth = depth_alloc(s);
 	s->last_w = s->w;
 	s->last_h = s->h;
 	s->last_nbuf = s->nbuf;

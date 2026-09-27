@@ -109,6 +109,9 @@ struct glxi_surf {
 	 * colour buffer: GL's ancillary buffers belong to the drawable, so
 	 * every context current on this window renders into the same one */
 	void *depth;
+	/* what calloc returned for it: with S31GL_CCOLOR (glx_present.c
+	 * depth_alloc) the depth buffer starts up to 4 kB inside it */
+	void *depth_mem;
 	/* phase 4 F8: the drawable's stencil buffer, bw * bh bytes (+ the
 	 * core's S31GL_STENCIL_TAIL), made when a context with stencil bits
 	 * first binds the drawable's buffers, shared like depth */

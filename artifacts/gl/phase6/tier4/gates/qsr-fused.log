@@ -1,0 +1,33 @@
+run-qsr-fused: p5a-nmn: no trace, skipped
+run-qsr-fused: p5a-nml: no trace, skipped
+run-qsr-fused: p5a-lmn: no trace, skipped
+run-qsr-fused: p5a-lin: no trace, skipped
+run-qsr-fused: p5a-near: no trace, skipped
+run-qsr-fused: p5wide: no trace, skipped
+run-qsr-fused p5a window 0: general 65.3331, fused 37.0881 Minsn/frame (-43.2%)
+run-qsr-fused p5a window 1: general 67.3021, fused 37.8428 Minsn/frame (-43.8%)
+run-qsr-fused p5a: 84 of 84 full frames identical, fused vs general; 84 of 84, fused vs the unpacked reference; fused vs live: 0 same as live, 84 differ
+run-qsr-fused p5a-tf0 window 0: general 34.1646, fused 14.4691 Minsn/frame (-57.6%)
+run-qsr-fused p5a-tf0 window 1: general 34.1407, fused 13.3700 Minsn/frame (-60.8%)
+run-qsr-fused p5a-tf0: 84 of 84 full frames identical, fused vs general; 84 of 84, fused vs the unpacked reference; fused vs live: 0 same as live, 84 differ
+run-qsr-fused p4final window 0: general 64.4918, fused 46.8434 Minsn/frame (-27.4%)
+run-qsr-fused p4final window 1: general 67.5868, fused 47.6140 Minsn/frame (-29.6%)
+run-qsr-fused p4final: 84 of 84 full frames identical, fused vs general; 84 of 84, fused vs the unpacked reference; fused vs live: 0 same as live, 84 differ
+run-qsr-fused p4final-tf0 window 0: general 28.9994, fused 25.4026 Minsn/frame (-12.4%)
+run-qsr-fused p4final-tf0 window 1: general 29.1255, fused 25.7139 Minsn/frame (-11.7%)
+run-qsr-fused p4final-tf0: 84 of 84 full frames identical, fused vs general; 84 of 84, fused vs the unpacked reference; fused vs live: 0 same as live, 84 differ
+run-qsr-fused p5f2 window 0: general 66.3367, fused 37.4697 Minsn/frame (-43.5%)
+run-qsr-fused p5f2 window 1: general 68.4650, fused 38.3748 Minsn/frame (-43.9%)
+run-qsr-fused p5f2: 84 of 84 full frames identical, fused vs general; 84 of 84, fused vs the unpacked reference; fused vs live: 56 same as live, 28 differ
+run-qsr-fused p5f2-tf0 window 0: general 34.1255, fused 14.5643 Minsn/frame (-57.3%)
+run-qsr-fused p5f2-tf0 window 1: general 34.1333, fused 13.4431 Minsn/frame (-60.6%)
+run-qsr-fused p5f2-tf0: 84 of 84 full frames identical, fused vs general; 84 of 84, fused vs the unpacked reference; fused vs live: 84 same as live, 0 differ
+run-qsr-fused p4final-b window 0: general 64.4918, fused 46.8434 Minsn/frame (-27.4%)
+run-qsr-fused p4final-b window 1: general 67.5868, fused 47.6140 Minsn/frame (-29.6%)
+run-qsr-fused p4final-b: 84 of 84 full frames identical, fused vs general; 84 of 84, fused vs the unpacked reference; fused vs live: 0 same as live, 84 differ
+run-qsr-fused p5mtex window 0: general 65.3331, fused 37.0881 Minsn/frame (-43.2%)
+run-qsr-fused p5mtex window 1: general 67.3021, fused 37.8428 Minsn/frame (-43.8%)
+run-qsr-fused p5mtex: 84 of 84 full frames identical, fused vs general; 84 of 84, fused vs the unpacked reference; fused vs live: 0 same as live, 84 differ
+run-qsr-fused p5mtex-tf0 window 0: general 34.1646, fused 14.4691 Minsn/frame (-57.6%)
+run-qsr-fused p5mtex-tf0 window 1: general 34.1407, fused 13.3700 Minsn/frame (-60.8%)
+run-qsr-fused p5mtex-tf0: 84 of 84 full frames identical, fused vs general; 84 of 84, fused vs the unpacked reference; fused vs live: 0 same as live, 84 differ

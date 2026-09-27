@@ -35,6 +35,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <malloc.h>
+#include <stdint.h>
 #include "replay.h"
 #include "s31gl.h"
 
@@ -94,6 +96,14 @@ void *__wrap_malloc(size_t n)
 		if (lim > 0 && !h->cls && (long)n >= lim)
 			printf("qsr alloc %u B from %p in frame %u\n", (unsigned)n,
 			       __builtin_return_address(0), (unsigned)cur_frame);
+		/* QR_MAP=1 (phase 6 tier 4, gl/bench/csmap.sh): every block of
+		   256 B or more, its class and address, for the cache model's
+		   region map */
+		static int map = -1;
+		if (map < 0) map = getenv("QR_MAP") != NULL;
+		if (map && n >= 256)
+			printf("qsr map %s %p %u %u\n", h->cls ? "tex" : "heap", (void *)(h + 1),
+			       (unsigned)n, (unsigned)cur_frame);
 	}
 	return h + 1;
 }
@@ -109,6 +119,12 @@ void __wrap_free(void *p)
 		return;
 	}
 	h->magic = 0;
+	{
+		static int map = -1;
+		if (map < 0) map = getenv("QR_MAP") != NULL;
+		if (map && h->size >= 256)
+			printf("qsr map free %p %u\n", p, (unsigned)cur_frame);
+	}
 	acct(-(long)h->size, h->cls);
 	__real_free(h);
 }
@@ -198,13 +214,36 @@ static void on_ctx(const uint32_t *a)
 	if (!drw[d].w) {
 		drw[d].w = w;
 		drw[d].h = h;
-		drw[d].fb[0] = __real_calloc((size_t)w * h, 2);
-		drw[d].fb[1] = __real_calloc((size_t)w * h, 2);
-		drw[d].z = __real_calloc((size_t)w * h * 2 + S31GL_DEPTH_TAIL + 64, 1);
+		/* phase 6 tier 4, placement knobs for the cache model
+		   (gl/bench/ccolor.sh): QR_CALIGN=1 puts each colour buffer on
+		   its own page, as SHM / zero-copy segments are on the board;
+		   QR_DZ=N puts the depth buffer at (Z - fb0) mod 32768 = N */
+		const char *ca = getenv("QR_CALIGN"), *dz = getenv("QR_DZ");
+		size_t zb = (size_t)w * h * 2 + S31GL_DEPTH_TAIL + 64;
+		if (ca && *ca == '1') {
+			for (int i = 0; i < 2; i++) {
+				drw[d].fb[i] = memalign(4096, (size_t)w * h * 2);
+				memset(drw[d].fb[i], 0, (size_t)w * h * 2);
+			}
+		} else {
+			drw[d].fb[0] = __real_calloc((size_t)w * h, 2);
+			drw[d].fb[1] = __real_calloc((size_t)w * h, 2);
+		}
+		if (dz && w * h >= 4096) {
+			char *raw = __real_calloc(zb + 32768 + 64, 1);
+			uintptr_t want = (uintptr_t)strtoul(dz, NULL, 0) & 32767 & ~(uintptr_t)15;
+			uintptr_t at = ((uintptr_t)raw - (uintptr_t)drw[d].fb[0]) & 32767;
+			drw[d].z = raw + ((want - at) & 32767);
+		} else {
+			drw[d].z = __real_calloc(zb, 1);
+		}
 		if (stencil) {
 			drw[d].st = __real_calloc((size_t)w * h + S31GL_STENCIL_TAIL, 1);
 			s31gl_stencil_zeroed(drw[d].st, (int)w, (int)h);
 		}
+		if (getenv("QR_MAP"))
+			printf("qsr map drawable %u %ux%u fb0 %p fb1 %p z %p\n", (unsigned)d, (unsigned)w,
+			       (unsigned)h, (void *)drw[d].fb[0], (void *)drw[d].fb[1], drw[d].z);
 	}
 	s31gl_make_current(ctx[c]);
 	cur_c = (int)c;

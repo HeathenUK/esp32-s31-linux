@@ -1,0 +1,287 @@
+qsr map heap 0x83f11cd0 7908 0
+qsr map heap 0x83f13bd0 2624 0
+qsr map heap 0x83f14628 4096 0
+qsr map heap 0x83f15640 1024 0
+qsr map heap 0x83f15b38 2048 0
+qsr map heap 0x83f16350 512 0
+qsr map heap 0x83f16568 512 0
+qsr map heap 0x83f16780 512 0
+qsr map heap 0x83f16b60 7908 0
+qsr map heap 0x83f18a58 2624 0
+qsr map heap 0x83f194b0 4096 0
+qsr map heap 0x83f1a4c8 1024 0
+qsr map heap 0x83f1a9c8 2048 0
+qsr map heap 0x83f1b1e0 512 0
+qsr map heap 0x83f1b3f8 512 0
+qsr map heap 0x83f1b610 512 0
+qsr map drawable 1 32x32 fb0 0x83f1c000 fb1 0x83f1e000 z 0x83f1c808
+qsr map free 0x83f194b0 0
+qsr map free 0x83f1a4c8 0
+qsr map free 0x83f18a58 0
+qsr map free 0x83f1a9c8 0
+qsr map free 0x83f1b1e0 0
+qsr map free 0x83f1b3f8 0
+qsr map free 0x83f1b610 0
+qsr map free 0x83f16b60 0
+qsr map heap 0x83f16b60 7908 0
+qsr map heap 0x83f18a58 2624 0
+qsr map heap 0x83f194b0 4096 0
+qsr map heap 0x83f1a4c8 1024 0
+qsr map heap 0x83f1a9c8 2048 0
+qsr map heap 0x83f1b1e0 512 0
+qsr map heap 0x83f1b3f8 512 0
+qsr map heap 0x83f1b610 512 0
+qsr map drawable 2 320x240 fb0 0x83f1f000 fb1 0x83f46000 z 0x83f6f800
+qsr map tex 0x83f99188 65648 0
+qsr map tex 0x83fa9210 65648 0
+qsr map tex 0x83fb9298 49152 0
+qsr map tex 0x83f44818 4208 0
+qsr map tex 0x83fc52b0 8192 0
+qsr map tex 0x83fc72c8 8192 0
+qsr map tex 0x83fc92e0 16784 0
+qsr map tex 0x83fcd488 16784 0
+qsr map tex 0x83fd1630 16640 0
+qsr map tex 0x83fd5748 131376 0
+qsr map tex 0x83ff5890 196608 0
+qsr map free 0x83f99188 0
+qsr map tex 0x83f99188 4352 13
+qsr map tex 0x83f9a2a0 4544 13
+qsr map tex 0x83f9b478 4304 13
+qsr map tex 0x83f9c560 4352 13
+qsr map tex 0x83f9d678 4400 13
+qsr map tex 0x83f9e7c0 4400 13
+qsr map tex 0x83f9f908 16880 13
+qsr map tex 0x83fa3b10 4352 13
+qsr map tex 0x83fa4c28 4304 13
+qsr map tex 0x83fa5d10 4448 13
+qsr map tex 0x83fa6e88 4352 13
+qsr map tex 0x83fa7fa0 4400 13
+qsr map tex 0x840258a8 4448 13
+qsr map tex 0x84026a20 4448 13
+qsr map tex 0x84027b98 4352 13
+qsr map tex 0x84028cb0 32768 13
+qsr map tex 0x84030cc8 9072 13
+qsr map tex 0x84033050 4496 13
+qsr map tex 0x840341f8 4304 13
+qsr map tex 0x840352e0 4352 13
+qsr map tex 0x840363f8 16544 13
+qsr map tex 0x8403a4b0 17024 13
+qsr map tex 0x8403e748 131072 13
+qsr map tex 0x8405e760 4544 13
+qsr map tex 0x83f45d50 256 13
+qsr map tex 0x8405f938 4400 13
+qsr map tex 0x84060a80 4256 13
+qsr map tex 0x84061b38 32768 13
+qsr map tex 0x84069b50 4736 13
+qsr map tex 0x8406aeb0 4544 13
+qsr map tex 0x8406c150 1376 13
+qsr map tex 0x8406c790 4448 13
+qsr map tex 0x8406d9d0 65536 13
+qsr map tex 0x8407dab0 368 13
+qsr map tex 0x8407dd00 4352 13
+qsr map tex 0x8407eee0 8192 13
+qsr map tex 0x84080fc0 4256 13
+qsr map tex 0x84082140 65536 13
+qsr map tex 0x84092220 4352 13
+qsr map tex 0x84093400 4496 13
+qsr map tex 0x84094670 8736 13
+qsr map tex 0x84096970 8192 13
+qsr map tex 0x84098a50 1328 13
+qsr map tex 0x84099060 1136 13
+qsr map tex 0x840995b0 8192 13
+qsr map tex 0x8409b690 8192 13
+qsr map tex 0x8409d770 8192 13
+qsr map tex 0x8409f850 8192 13
+qsr map tex 0x840a1930 4496 13
+qsr map tex 0x840a2ba0 4496 13
+qsr map tex 0x840a3e10 4496 13
+qsr map tex 0x840a5080 4496 13
+qsr map tex 0x840a62f0 8192 13
+qsr map tex 0x840a83d0 8192 13
+qsr map tex 0x840aa4b0 8192 13
+qsr map tex 0x840ac590 8192 13
+qsr map tex 0x840ae670 131808 13
+qsr map tex 0x840cea30 131328 13
+qsr map tex 0x840eec10 8544 13
+qsr map tex 0x840f0e50 33312 13
+qsr map tex 0x840f9150 16832 13
+qsr map tex 0x840fd3f0 33312 13
+qsr map tex 0x841056f0 33216 13
+qsr map tex 0x8410d990 416 13
+qsr map tex 0x8410dc10 368 13
+qsr map tex 0x8410de60 4928 13
+qsr map tex 0x8410f280 5168 13
+qsr map tex 0x84110790 5408 13
+qsr map tex 0x84111d90 4928 13
+qsr map tex 0x841131b0 4640 13
+qsr map tex 0x841144b0 4448 13
+qsr map tex 0x841156f0 131664 13
+qsr map tex 0x84135a20 65888 13
+qsr map tex 0x84145c60 65744 13
+qsr map tex 0x84155e10 131472 13
+qsr map tex 0x84176080 131280 13
+qsr map tex 0x84196230 131472 13
+qsr map tex 0x841b64a0 131280 13
+qsr map tex 0x841d6650 131328 13
+qsr map tex 0x841f6830 131280 13
+qsr map tex 0x842169e0 131280 13
+qsr map tex 0x84236b90 131280 13
+qsr map tex 0x84256d40 131424 13
+qsr map tex 0x84276f80 131328 13
+qsr map tex 0x84297160 32768 13
+qsr map tex 0x8429f240 32880 13
+qsr map tex 0x842a7390 32880 13
+qsr map tex 0x842af4e0 32880 13
+qsr map tex 0x842b7630 32880 13
+qsr map tex 0x842bf780 32880 13
+qsr map tex 0x842c78d0 16384 13
+qsr map tex 0x842cb9b0 16544 13
+qsr map tex 0x842cfb30 131376 13
+qsr map tex 0x842efd40 131280 13
+qsr map tex 0x8430fef0 4304 13
+qsr map tex 0x843110a0 4208 13
+qsr map tex 0x843121f0 4352 13
+qsr map tex 0x843133d0 4256 13
+qsr map tex 0x84314550 33216 13
+qsr map tex 0x8431c7f0 16640 13
+qsr map tex 0x843209d0 131328 13
+qsr map tex 0x84340bb0 131184 13
+qsr map tex 0x84360d00 131280 13
+qsr map tex 0x84380eb0 131328 13
+qsr map tex 0x843a1090 131616 13
+qsr map tex 0x843c1390 131328 13
+qsr map tex 0x843e1570 66032 13
+qsr map tex 0x843f1840 8640 13
+qsr map tex 0x843f3ae0 8496 13
+qsr map tex 0x843f5cf0 131760 13
+qsr map tex 0x84416080 33360 13
+qsr map tex 0x8441e3b0 66080 13
+qsr map tex 0x8442e6b0 33456 13
+qsr map tex 0x84436a40 32928 13
+qsr map tex 0x8443ebc0 131712 13
+qsr map tex 0x8445ef20 66176 13
+qsr map tex 0x8446f280 65888 13
+qsr map tex 0x8447f4c0 1280 13
+qsr map tex 0x8447faa0 1136 13
+qsr map tex 0x8447fff0 1184 13
+qsr map tex 0x84480570 1136 13
+qsr map tex 0x84480ac0 368 13
+qsr map tex 0x84480d10 720 13
+qsr map tex 0x844810c0 624 13
+qsr map tex 0x84481410 1376 13
+qsr map tex 0x84481a50 1184 13
+qsr map tex 0x84481fd0 720 13
+qsr map tex 0x84482380 624 13
+qsr map tex 0x844826d0 1376 13
+qsr map tex 0x84482d10 1184 13
+qsr map tex 0x84483290 1376 13
+qsr map tex 0x844838d0 1184 13
+qsr map tex 0x84483e50 1376 13
+qsr map tex 0x84484490 1184 13
+qsr map tex 0x84484a10 720 13
+qsr map tex 0x84484dc0 624 13
+qsr map tex 0x84485110 1280 13
+qsr map tex 0x844856f0 1136 13
+qsr map tex 0x84485c40 65792 13
+qsr map tex 0x84495e20 1280 13
+qsr map tex 0x84496400 1184 13
+qsr map tex 0x84496980 368 13
+qsr map tex 0x84496bd0 720 13
+qsr map tex 0x84496f80 368 13
+qsr map tex 0x844971d0 1328 13
+qsr map tex 0x844977e0 1136 13
+qsr map tex 0x84497d30 1232 13
+qsr map tex 0x844982e0 1136 13
+qsr map tex 0x84498830 368 13
+qsr map tex 0x84498a80 33120 13
+qsr map tex 0x844a0cc0 33072 13
+qsr map tex 0x844a8ed0 33072 13
+qsr map tex 0x844b10e0 1280 13
+qsr map tex 0x844b16c0 1184 13
+qsr map tex 0x844b1c40 368 13
+qsr map tex 0x844b1e90 720 13
+qsr map tex 0x844b2240 368 13
+qsr map tex 0x844b2490 65888 13
+qsr map tex 0x844c26d0 8400 13
+qsr map free 0x8443ebc0 13
+qsr map free 0x844a8ed0 13
+qsr map free 0x844a0cc0 13
+qsr map free 0x84498a80 13
+qsr map free 0x84485c40 13
+qsr map free 0x842bf780 13
+qsr map free 0x842b7630 13
+qsr map free 0x8431c7f0 13
+qsr map free 0x840f0e50 13
+qsr map free 0x841056f0 13
+qsr map free 0x840fd3f0 13
+qsr map free 0x840f9150 13
+qsr map free 0x840eec10 13
+qsr map free 0x840cea30 13
+qsr map free 0x840ae670 13
+qsr map tex 0x840ae670 73728 13
+qsr map tex 0x840c0750 73728 13
+qsr map tex 0x840d2830 73728 13
+qsr map tex 0x840e4910 73728 13
+qsr map free 0x842cb9b0 13
+qsr map free 0x842c78d0 13
+qsr map free 0x844c26d0 13
+qsr map free 0x8445ef20 13
+qsr map free 0x844b2490 13
+qsr map free 0x8446f280 13
+qsr map free 0x84436a40 13
+qsr map free 0x8442e6b0 13
+qsr map free 0x84416080 13
+qsr map free 0x841156f0 13
+qsr map free 0x84176080 13
+qsr map free 0x84155e10 13
+qsr map free 0x84145c60 13
+qsr map free 0x84135a20 13
+qsr map free 0x841b64a0 13
+qsr map free 0x84196230 13
+qsr map free 0x841f6830 13
+qsr map free 0x841d6650 13
+qsr map free 0x84236b90 13
+qsr map free 0x842169e0 13
+qsr map free 0x8429f240 13
+qsr map free 0x84297160 13
+qsr map free 0x84276f80 13
+qsr map free 0x84256d40 13
+qsr map free 0x842efd40 13
+qsr map free 0x842cfb30 13
+qsr map tex 0x84115628 131808 13
+qsr map tex 0x84135920 131328 13
+qsr map free 0x84314550 13
+qsr map free 0x84340bb0 13
+qsr map free 0x843209d0 13
+qsr map free 0x84135920 13
+qsr map free 0x84115628 13
+qsr map tex 0x84115628 131952 13
+qsr map tex 0x840f69f0 65888 13
+qsr map tex 0x841359b0 65888 13
+qsr map tex 0x84145b28 65744 13
+qsr map tex 0x84155c10 33120 61
+qsr map tex 0x8415dd88 33072 61
+qsr map tex 0x84165ed0 33072 61
+qsr map tex 0x8416e018 131472 62
+qsr map tex 0x8418e1c0 131280 62
+qsr map tex 0x841071a8 16832 86
+qsr map tex 0x841ae2a8 33312 86
+qsr map tex 0x841b64e0 33216 86
+qsr map tex 0x841be6b8 65888 92
+qsr map heap 0x8410b5d8 704 98
+qsr map tex 0x841ce830 16640 111
+qsr map tex 0x841d2948 33216 136
+qsr map free 0x8418e1c0 273
+qsr map free 0x8416e018 273
+qsr map free 0x841ce830 273
+qsr map free 0x841be6b8 273
+qsr map tex 0x8416e018 131472 273
+qsr map tex 0x8418e1c0 131280 273
+qsr map heap 0x8410bb08 5248 398
+qsr map free 0x83f18a58 398
+qsr map2 window 0 frames 100-139: 14.5645 Minsn/frame min 9.1793 max 19.9966 (frame 125), 0 dcalls/frame, hashes 40/40 same as live, tex 3249509 B heap 40368 B at start
+qsr map2 window 1 frames 400-439: 13.4431 Minsn/frame min 10.7835 max 16.7908 (frame 412), 0 dcalls/frame, hashes 40/40 same as live, tex 3216837 B heap 42992 B at start
+qsr map2 load: 307.56 Minsn before frame 98 (355 state-only frames in all: 405.01 Minsn), warm-up 54.91 Minsn
+qsr map2 heap: texture 3249509 B, other 40368 B after the load phase; at the end texture 3216837 B, other 43008 B; peak 5465749 B, 438 allocations
+qsr map2 peak: texture 5426085 B, other 39664 B, in frame 13
+qsr map2 done: 439 frames, 84 full: 84 same as live, 0 differ

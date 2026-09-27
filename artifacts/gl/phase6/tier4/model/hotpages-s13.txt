@@ -1,0 +1,12 @@
+cachesim page 0x83f16 refills 167263 colour 0
+cachesim page 0x8ffff refills 165172 colour 0
+cachesim page 0x80058 refills 120667 colour 0
+cachesim page 0x83f99 refills 26194 colour 1
+cachesim page 0x83f84 refills 25689 colour 0
+cachesim page 0x83f90 refills 24874 colour 0
+cachesim page 0x83f18 refills 24087 colour 6
+cachesim page 0x83f93 refills 23113 colour 0
+cachesim page 0x83f85 refills 22710 colour 6
+cachesim page 0x83f94 refills 22046 colour 0
+cachesim page 0x83f7b refills 21602 colour 1
+cachesim page 0x83f8a refills 20554 colour 6

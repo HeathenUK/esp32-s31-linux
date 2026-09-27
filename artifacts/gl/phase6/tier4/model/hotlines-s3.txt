@@ -1,0 +1,30 @@
+cachesim page 0x8ffff refills 353040 colour 6
+cachesim lines 0x8ffff: a80:109360 b40:41271 b80:31187 c00:29301 c40:29215 cc0:32600 d00:11089 d40:11642 d80:17659 e00:10381
+cachesim page 0x83f16 refills 346793 colour 6
+cachesim lines 0x83f16: a80:107930 b40:45546 b80:30635 c00:29491 c40:29662 cc0:33120 d00:10109 d40:12677 d80:18028 e00:8040
+cachesim page 0x8410b refills 229773 colour 6
+cachesim lines 0x8410b: b40:42770 b80:30544 c00:32163 c40:33769 cc0:33900 d00:9144 d40:11056 d80:14708 e00:7321
+cachesim page 0x80058 refills 120578 colour 6
+cachesim lines 0x80058: a40:2548 a80:104814
+cachesim page 0x83f8c refills 26379 colour 6
+cachesim lines 0x83f8c: 540:599 780:530 7c0:608 a00:638 a40:1008 a80:545 b00:548 c80:985 cc0:949 d40:570 d80:677
+cachesim page 0x83f91 refills 24884 colour 6
+cachesim lines 0x83f91: 540:752 780:529 7c0:527 a00:637 a40:1039 a80:688 c80:798 cc0:889 d00:575
+cachesim page 0x83f18 refills 24547 colour 1
+cachesim lines 0x83f18: 080:616 2c0:743 340:661 3c0:632 600:636 680:753 700:675 740:807 7c0:624 800:731 840:1454 880:804 8c0:671 900:625 940:725 9c0:1086 a00:1667 a40:1468 b80:535 bc0:710
+cachesim page 0x83f8d refills 24157 colour 1
+cachesim lines 0x83f8d: 1c0:657 400:735 440:655 680:692 6c0:665 b80:496 bc0:672 e00:604 e40:584
+cachesim page 0x83f99 refills 24083 colour 7
+cachesim lines 0x83f99: a40:771 dc0:951 e00:902 e40:1027 e80:816 fc0:1684
+cachesim page 0x83f8f refills 23989 colour 6
+cachesim lines 0x83f8f: 480:495 4c0:489 700:504 980:515 9c0:604 c00:943 c40:985 c80:491
+cachesim page 0x83f92 refills 23671 colour 1
+cachesim lines 0x83f92: 1c0:628 400:944 440:768 680:736 6c0:689 b80:480 bc0:640 e00:720 e40:704
+cachesim page 0x83f94 refills 20850 colour 1
+cachesim lines 0x83f94: 200:710 240:649 480:503 700:506 9c0:556 a00:452 c00:649 c40:613 e80:460
+cachesim page 0x83f82 refills 20714 colour 1
+cachesim page 0x83f88 refills 20704 colour 7
+cachesim page 0x83f80 refills 20218 colour 1
+cachesim page 0x83f8b refills 19933 colour 3
+cachesim page 0x83f7e refills 19849 colour 6
+cachesim page 0x83f81 refills 19768 colour 7

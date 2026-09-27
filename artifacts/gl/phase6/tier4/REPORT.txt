@@ -1,0 +1,213 @@
+GL phase 6 - tier 4: cache colouring of libGL's buffers, host only -
+2026-09-27. Nothing touched the board; no make / Buildroot. Base: main at
+79c9a043 (tier 3). Workload: the QuakeSpasm proxy on the p5f2-tf0 trace
+(S31GL_TEXFILTER=0), all 80 counted frames of both windows, through the
+D-cache model (gl/bench/qemu/cachesim.c: 64 kB, 64 B lines, 2-way LRU,
+write-back, write-allocate with a fetch - tier 3's). Raw data beside this
+file: model/ (every arm's line, the arm lists, the hot-page and hot-line
+dumps, the replay's buffer map), gates/. s31, MIT.
+
+SUMMARY
+  The cache is indexed by the PHYSICAL address and a way is 32 kB, so set
+  bits 12-14 come from the page frames Linux hands out; only the offset
+  inside a 4 kB page is the library's to choose. Tier 3's "12% from heap
+  placement" was measured with physical = virtual (bare-metal qemu) and
+  does not carry to the board as such. With the board's placement
+  modelled (random frames for every heap / stack / data page, colour
+  buffers contiguous as the zero-copy CMA pixmaps are):
+  - Shipped, S31GL_CCOLOR=1 (default): the GLX layer puts the depth
+    buffer at the in-page offset farthest from every colour buffer
+    (2 kB for page-aligned SHM / zero-copy segments; today it sits a chunk
+    header (16 B, musl's mmap'd calloc - not checked on the board) into
+    its page, the same in-page line as the colour pixel).
+      PSRAM traffic, 26 random placements: 2,905.5 -> 2,848.7 kB/frame
+      mean (-1.94%), better in 26 of 26 (-0.7% .. -3.4%).
+      physical = virtual model, the 8 page-granular depth positions:
+      mean 2,713.9 -> 2,669.7 (-1.6%), worst 2,937 -> 2,726 (-7.2%).
+    0 instructions in the core (the pixels and every hash are the same by
+    construction; the placement is decided once per drawable allocation),
+    4 kB of address space and at most one resident page per drawable.
+  - Found, NOT implementable by address choice: the per-launch lottery is
+    the hot small pages - the rasteriser's stack page, the GLContext's
+    three pages, the GOT / .data page, two .rodata table pages - landing
+    on the same page colour (frame bits 12-14) with overlapping hot
+    in-page lines. Across 26 placements traffic is 2,708 .. 4,095 kB a
+    frame (sd 272, +51% at the worst); an oracle arm that only forces
+    those 8 pages onto distinct colours reads 2,652 .. 2,830 (sd 41,
+    mean -3.7%, the worst -33%). Userspace cannot pick its frames by
+    virtual address; section 3 has what could.
+
+1. THE INSTRUMENT (gl/bench/qemu/cachesim.c, cachesim.sh, ccsweep.sh)
+  cachesim.c gained a board placement mode:
+    pages=1,seed=S[,col=ADDR:LEN ...][,fix=VPAGE:C ...][,pagestat=1|2|3]
+  Every 4 kB virtual page gets a random physical frame on first touch
+  (without replacement, a 128 MB pool shuffled by the seed); each col=
+  range stays physically contiguous from a random page of its own (the
+  zero-copy colour buffers are dumb buffers from the lcd_reserved CMA
+  pool - lvdesk/xshim.c win8_gem_alloc; MIT-SHM segments would be paged,
+  pages=1 without col=). fix= forces a page's colour (the oracle arm);
+  pagestat= prints the pages (and lines) with the most refills, or with
+  =3 the most accesses. Without pages= it is tier 3's model, unchanged
+  (the reference run on this image: 2,879.5 kB/frame).
+  q_replay.c gained placement knobs for the model (qr.env, via QSR_ENV):
+    QR_CALIGN=1  each colour buffer on its own page (as SHM / zero-copy)
+    QR_DZ=N      depth at (Z - fb0) mod 32768 = N
+    QR_MAP=1     prints the drawables' buffers and every block >= 256 B
+  ccsweep.sh OUT LIST [JOBS] runs a list of arms in parallel (~10 s an
+  arm, 10 at a time). A first attempt that streamed every access to a
+  file for offline replay was dropped: 2.85 M line-runs a frame, 0.9 GB.
+  Geometry of the replay: 320x240, fb0 0x83f1f000, fb1 0x83f46000 (39
+  pages apart: (C1 - C0) mod 32K = 28,672), depth 153,620 B.
+
+2. DEPTH AGAINST COLOUR
+  a) physical = virtual (tier 3's model; model/contig-dz-sweep.txt),
+     QR_CALIGN=1, depth swept over (Z - C0) mod 32K in 1 kB steps:
+       0      2,937.1    8,192  2,667.1   16,384  2,649.5   24,576  2,602.7
+       1,024  2,755.3    9,216  2,591.5   17,408  2,680.2   25,600  2,671.2
+       2,048  2,615.4   10,240  2,716.6   18,432  2,725.7   26,624  2,621.8
+       3,072  2,666.5   11,264  2,664.5   19,456  2,599.8   27,648  2,761.0
+       4,096  2,596.5   12,288  2,642.2   20,480  2,678.8   28,672  2,937.4
+       5,120  2,758.1   13,312  2,689.8   21,504  2,633.5   29,696  2,609.8
+       6,144  2,700.5   14,336  2,593.3   22,528  2,713.0   30,720  2,671.5
+       7,168  2,621.6   15,360  2,693.0   23,552  2,760.8   31,744  2,612.2
+     (kB of PSRAM traffic a frame.) The two disasters are depth congruent
+     to either colour buffer (0 and 28,672 = C1 - C0): +11-13%. The rest
+     is a ~6% ripple with no band to aim at - the textures and tables
+     move with everything else. The replay's own heap placement: 2,866.9;
+     page-aligned colour, heap depth: 2,709.9.
+     Board-like placements - depth page-aligned + 16 B at each of the 8
+     page positions of the 32 kB way, against the same +2 kB:
+       +16 B (k x 4 kB):  2,937 2,597 2,667 2,642 2,650 2,679 2,603 2,937  mean 2,713.9
+       +2 kB:             2,615 2,701 2,717 2,593 2,726 2,713 2,622 2,672  mean 2,669.7
+     (the 0 kB arm stands for +16 B: 16 B is inside the same line.)
+  b) the board's placement (pages=1 with the colour buffers contiguous;
+     model/pages-dz-sweep.txt): only (Z - C0) mod 4096 can matter, since
+     depth's pages are scattered. Swept 0 .. 3,840 in 256 B steps on 6
+     placements: every offset >= 256 B reads the same within +-1% (the
+     noise of re-drawing the frames), 0 is worse on all 6. Paired, 26
+     placements (model/pages-dz16.txt vs pages-dz2048-*.txt):
+       seed    dz=16  dz=2048            seed    dz=16  dz=2048
+        1    2,938.4  2,854.7  -2.8%      17   2,812.2  2,731.4  -2.9%
+        2    2,825.0  2,798.4  -0.9%      18   2,775.6  2,710.1  -2.4%
+        3    4,182.1  4,095.4  -2.1%      19   2,736.6  2,711.9  -0.9%
+        4    2,788.9  2,754.4  -1.2%      20   2,900.2  2,860.2  -1.4%
+        5    2,819.6  2,785.6  -1.2%      21   2,779.3  2,736.7  -1.5%
+        6    2,788.8  2,708.3  -2.9%      22   2,788.7  2,757.1  -1.1%
+       11    2,791.3  2,710.2  -2.9%      23   2,743.6  2,724.5  -0.7%
+       12    2,841.4  2,751.1  -3.2%      24   2,920.9  2,871.9  -1.7%
+       13    3,312.1  3,227.1  -2.6%      25   3,036.8  3,005.3  -1.0%
+       14    2,871.6  2,810.8  -2.1%      26   2,808.8  2,733.1  -2.7%
+       15    2,953.4  2,865.6  -3.0%      27   2,779.7  2,747.2  -1.2%
+       16    2,835.9  2,738.5  -3.4%      28   2,915.2  2,861.8  -1.8%
+                                          29   2,819.6  2,788.9  -1.1%
+                                          30   2,776.1  2,725.6  -1.8%
+       mean 2,905.5 -> 2,848.7 (-1.94%), median -1.83%, 26 of 26 better.
+     Why: with the same in-page offset a colour line and the depth line of
+     the same pixels share a set whenever the two frames agree in bits
+     12-14 - one page pair in eight - and any third line (texel, table,
+     stack) then evicts one of them. 2 kB apart they are never in one set.
+  The rule shipped (gl/glx/glx_present.c depth_alloc, S31GL_CCOLOR=0|1,
+  default 1): calloc 4 kB more than the depth buffer needs and start it at
+  the 16 B step, within that 4 kB, whose in-page distance to the nearest
+  colour buffer of the drawable (1 MIT-SHM segment, 2, or 2-3 zero-copy
+  pixmaps, or a plain malloc'd buffer) is largest; computed from the
+  addresses shmat / the zero-copy mmap / malloc actually returned, once
+  per allocation. For page-aligned segments and a 16 B-aligned calloc the
+  distance is 2,032 .. 2,048 B, whatever the header's size. S31GL_CCOLOR=0 is the old calloc exactly.
+  The replay's QR_DZ=2048 is the same placement (a 16 B difference inside
+  a line). RAM: +4,096 B of address space per drawable; calloc of a
+  mmapped chunk touches nothing, and the buffer's pages are touched as it
+  is, so resident cost is at most one page (the span grows by < 4 kB).
+  Instructions: none in the core; GLX adds a 256 x nbuf-step loop at
+  allocation (~5 k instructions once per drawable).
+
+3. THE LOTTERY: HOT SMALL PAGES (model/hotpages-*, hotlines-s3.txt,
+   hot-accesses.txt, pages-oracle.txt)
+  pagestat=3 (accesses, physical = virtual): the stack's top page
+  (0x8ffff, 1.81 M accesses a frame over ~22 lines, 0x640-0xe00 in the
+  page), the GLContext block and its companions (0x83f16/17/18, 0.93 M),
+  two texture pages (0.26 M, 0.19 M on one line), .rodata tables
+  (0x80055/56, 81 k) and the GOT (.data 0x80058, 20 k) and .bss (0x8007f,
+  16 k). On the board each of those is an arbitrary frame; P(at least two
+  of 8 pages on one of 8 colours) = 1 - 8!/8^8 ~ 99.8%, and it costs
+  when their hot in-page lines overlap: seed 3 has the stack, the
+  context's first page, a texture page and the GOT page all on colour 6,
+  their hot lines all at 0xa80-0xe00 - 4,095 kB a frame, +51% over the
+  floor. Per placement (dz=2048 throughout):
+     random  2,855 2,798 4,095 2,754 2,786 2,708 2,710 2,751 3,227 2,811
+             2,866 2,739 2,731 2,710 2,712 2,860 2,737 2,757 2,725 2,872
+             3,005 2,733 2,747 2,862 2,789 2,726    mean 2,848.7 sd 272.5
+     oracle  2,692 2,764 2,736 2,724 2,751 2,697 2,727 2,707 2,830 2,652
+             2,710 2,705 2,807 2,716 2,727 2,719 2,703 2,766 2,734 2,792
+             2,741 2,770 2,791 2,801 2,782 2,772    mean 2,742.8 sd 41.4
+  (oracle: fix= the stack, the three context pages, .data, the two
+  .rodata pages and .bss onto colours 0-7.) That is a -3.7% mean and the
+  whole tail - a candidate mechanism for memory note
+  s31-canary-per-boot-bimodal (~17% between boots, ~1% within one) - but
+  not a lever the library's address choices reach: the context's hot
+  lines already span almost every in-page offset across its three pages,
+  the stack's depth is the application's, and the GOT's offset is fixed
+  by the link. What could, not attempted (time box):
+    - pick frames: allocate a few spare pages, read their PFNs from
+      /proc/self/pagemap (root; needs CONFIG_PROC_PAGE_MONITOR, not
+      checked on the board kernel) and keep the ones of free colours for
+      the hot state; or a CMA / dumb-buffer allocation (physically
+      contiguous: its pages have consecutive colours) for the context's
+      hot fields and tables;
+    - compact the hot per-span state into one page, with its lines at
+      offsets away from the stack's hot window measured at run time.
+
+4. GATES (gates/)
+  The core library is untouched (the change is the GLX layer's depth
+  allocation and bench tooling), so every pixel gate is expected to match
+  tier 3 exactly, and does:
+  run-3a p6-tier4 (gates/run-3a.txt): core_test 292/0, raster_gate 51/0,
+    filt_test 32/0, fused_test 45/0 (both FILT8 modes), headless_gears
+    md5 34a082d3b0f572e9c952557a71ed7ac1 (unchanged); suitecmp 0 apps
+    worse and identical to tier 3's; pixels, raster, mtex summaries
+    identical to tier 3's gates line for line (run-3a's "DIFFER" is
+    against the old f7 / f3f6 baselines, as in tier 3), prec 99.35%, prims
+    PASS. The 22-app suite runs through GLX on MIT-SHM, so it exercises
+    depth_alloc with S31GL_CCOLOR=1. RV32 qemu-user (gates/rv32.log):
+    core_test 290/0, raster_gate 51/0, d2f 0 mismatches, filt_test 32/0,
+    fused_test 45/0, headless_gears md5 34a082d3... bench.sh
+    (gates/bench.log): byte-identical to tier 3's (every hash and count;
+    62 within limits.txt, the same 6 owner-pending lines over).
+  qsr-fused over all 9 traces (gates/qsr-fused.log): 756 of 756 full
+    frames fused = general = the unpacked reference, p5f2-tf0 84 of 84 =
+    the live board capture; all 27 result lines (Minsn and frame counts)
+    identical to tier 3's - the proxy stays 14.5643 / 13.4431 M a frame
+    (p5f2-tf0), so q_replay.c's new knobs cost nothing when unset.
+  run-qsr-threads (p5f2-tf0, p5a-tf0, p5f2, p5a; gates/qsr-threads.txt):
+    S31GL_THREADS=2 at both band layouts 84 of 84 identical to THREADS=0
+    on every trace; every line identical to tier 3's.
+
+5. BOARD-IDENTICAL BUILD (gl/bench/out-t4/brbuild.sh = tier 3's, run with
+   ./docker/build.sh; stripped with the Buildroot strip - that method on
+   tier 3's br-final reproduces its md5 c91acbb3... exactly)
+  gl/bench/out-t4/br-final/libGL.so.1 (stripped, 447,912 B, +4 vs tier 3)
+    md5    d61de88fde5f91ba9067d4065cd55e64
+    sha256 15e4de16800bde240f72738515a3fd73122d6c987019f3c6b78ef61cdb5fb877
+  .text 291,390 -> 291,614 (+224: depth_alloc), .rodata +72 (the trace
+  string), .data +4, .s31hot / .bss unchanged. 0 warnings.
+
+6. BOARD A/B TO RUN (coordinator; not run - this task never touches the
+   board). Stock QuakeSpasm 0.96.3 timedemo demo1, 320x240 fullscreen as
+   tier 3's arms, fresh boot per run, arms interleaved, 4 each:
+     C1 (new, default):  LD_LIBRARY_PATH=/root/t4
+     C0 (= tier 3):      LD_LIBRARY_PATH=/root/t4 S31GL_CCOLOR=0
+  Confirm the library by md5 on the board; S31GL_TRACE=1 (glxi_trace)
+  prints "libGL: depth at colour + N in the page (S31GL_CCOLOR)" in C1
+  (N ~2,032-2,048 for SHM / zero-copy segments).
+  Prediction: -1.9% PSRAM traffic (-57 kB a frame); at tier 3's
+  ~10 kB/ms that is ~0.6 ms of a ~115 ms frame, +0.5% fps - below what 4
+  boots an arm can resolve, because the same model predicts a per-launch
+  spread of sd ~9% of traffic from the page-colour lottery (section 3),
+  i.e. a few % of fps between boots in EITHER arm. Expect the fps arms to
+  read as a null; the decisive board check is the D-side refill counter
+  (scripts/board/cachecnt-quake.sh, DBUS nxtlvl_rd of the Quake hart) per
+  frame, C0 vs C1, where the model says -2%, and the boot-to-boot spread
+  of the same counter, where it says ~9% sd. If the counter spread is
+  that large, section 3 is the next lever, not this one.
+  Regression: nothing but the depth buffer's address changes; windowed
+  glxgears (MIT-SHM, 2 segments) and Doom / xcalc as usual.
