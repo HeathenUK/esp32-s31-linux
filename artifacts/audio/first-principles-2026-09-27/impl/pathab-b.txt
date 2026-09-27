@@ -1,0 +1,25 @@
+== uname #400 SMP Sun Sep 27 09:38:51 UTC 2026 so /root/afp/s31route-rs.so
+ARM new geom 36000 1 1024 rep 1|xr 0|1.61us 5.80% of a core|calls 286 (expect 281)|RW_INTERLEAVED channels: 2 rate: 48000  period_size: 683|conv s31rs
+ARM plug geom 36000 1 1024 rep 1|xr 0|2.59us 9.33% of a core|calls 285 (expect 281)|MMAP_INTERLEAVED channels: 2 rate: 32000  period_size: 331|conv none
+ARM new geom 36000 2 1024 rep 1|xr 0|2.13us 7.67% of a core|calls 285 (expect 281)|RW_INTERLEAVED channels: 2 rate: 48000  period_size: 683|conv s31rs
+ARM plug geom 36000 2 1024 rep 1|xr 0|2.02us 7.27% of a core|calls 283 (expect 281)|MMAP_INTERLEAVED channels: 2 rate: 32000  period_size: 331|conv none
+ARM new geom 22050 1 1024 rep 1|xr 0|0.92us 2.03% of a core|calls 173 (expect 172)|RW_INTERLEAVED channels: 2 rate: 22050  period_size: 512|conv dup
+ARM plug geom 22050 1 1024 rep 1|xr 0|1.76us 3.89% of a core|calls 173 (expect 172)|MMAP_INTERLEAVED channels: 2 rate: 22050  period_size: 512|conv none
+ARM new geom 44100 1 2048 rep 1|xr 0|0.57us 2.50% of a core|calls 173 (expect 172)|RW_INTERLEAVED channels: 2 rate: 44100  period_size: 683|conv dup
+ARM plug geom 44100 1 2048 rep 1|xr 0|1.09us 4.83% of a core|calls 173 (expect 172)|MMAP_INTERLEAVED channels: 2 rate: 44100  period_size: 512|conv none
+ARM new geom 12000 1 512 rep 1|xr 0|1.88us 2.26% of a core|calls 94 (expect 94)|RW_INTERLEAVED channels: 2 rate: 16000  period_size: 682|conv s31rs
+ARM plug geom 12000 1 512 rep 1|xr 0|3.97us 4.76% of a core|calls 94 (expect 94)|MMAP_INTERLEAVED channels: 2 rate: 24000 (24000/1) period_size: 512|conv none
+ARM new geom 48000 2 2048 rep 1|xr 0|0.57us 2.73% of a core|calls 189 (expect 188)|RW_INTERLEAVED channels: 2 rate: 48000  period_size: 683|conv none
+ARM plug geom 48000 2 2048 rep 1|xr 0|0.72us 3.45% of a core|calls 188 (expect 188)|RW_INTERLEAVED channels: 2 rate: 48000  period_size: 512|conv none
+ARM new geom 36000 1 1024 rep 2|xr 0|1.65us 5.96% of a core|calls 286 (expect 281)|RW_INTERLEAVED channels: 2 rate: 48000  period_size: 683|conv s31rs
+ARM plug geom 36000 1 1024 rep 2|xr 0|2.61us 9.40% of a core|calls 281 (expect 281)|MMAP_INTERLEAVED channels: 2 rate: 32000  period_size: 331|conv none
+ARM new geom 36000 2 1024 rep 2|xr 0|2.08us 7.49% of a core|calls 286 (expect 281)|RW_INTERLEAVED channels: 2 rate: 48000  period_size: 683|conv s31rs
+ARM plug geom 36000 2 1024 rep 2|xr 0|2.08us 7.49% of a core|calls 282 (expect 281)|MMAP_INTERLEAVED channels: 2 rate: 32000  period_size: 331|conv none
+ARM new geom 22050 1 1024 rep 2|xr 0|1.39us 3.06% of a core|calls 173 (expect 172)|RW_INTERLEAVED channels: 2 rate: 22050  period_size: 512|conv dup
+ARM plug geom 22050 1 1024 rep 2|xr 0|1.69us 3.74% of a core|calls 173 (expect 172)|MMAP_INTERLEAVED channels: 2 rate: 22050  period_size: 512|conv none
+ARM new geom 44100 1 2048 rep 2|xr 0|0.62us 2.74% of a core|calls 174 (expect 172)|RW_INTERLEAVED channels: 2 rate: 44100  period_size: 683|conv dup
+ARM plug geom 44100 1 2048 rep 2|xr 0|0.92us 4.06% of a core|calls 173 (expect 172)|MMAP_INTERLEAVED channels: 2 rate: 44100  period_size: 512|conv none
+ARM new geom 12000 1 512 rep 2|xr 0|1.92us 2.31% of a core|calls 94 (expect 94)|RW_INTERLEAVED channels: 2 rate: 16000  period_size: 682|conv s31rs
+ARM plug geom 12000 1 512 rep 2|xr 0|4.16us 5.00% of a core|calls 96 (expect 94)|MMAP_INTERLEAVED channels: 2 rate: 24000 (24000/1) period_size: 512|conv none
+ARM new geom 48000 2 2048 rep 2|xr 0|0.67us 3.23% of a core|calls 189 (expect 188)|RW_INTERLEAVED channels: 2 rate: 48000  period_size: 683|conv none
+ARM plug geom 48000 2 2048 rep 2|xr 0|0.59us 2.82% of a core|calls 188 (expect 188)|RW_INTERLEAVED channels: 2 rate: 48000  period_size: 512|conv none

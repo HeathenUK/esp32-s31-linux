@@ -30,3 +30,6 @@ ls -l $D/oplbench $D/sdltone1 $D/sdltone2
 $CC -O2 -Wall -fPIC -DPIC -shared --sysroot=$SYSROOT $D/s31route-proto.c \
     -o $D/libasound_module_pcm_s31route.so -lasound
 ls -l $D/libasound_module_pcm_s31route.so
+# converter benchmark (the same s31resample.h the plugin compiles)
+$CC -O2 -Wall -Wdouble-promotion -fsingle-precision-constant -I/src/rootfs -o $D/rsbench $D/rsbench.c
+ls -l $D/rsbench

@@ -54,6 +54,8 @@
 #include <sys/resource.h>
 #include <sys/syscall.h>
 
+#include "s31resample.h"
+
 #define SINK_FILE	"/run/s31-sink"
 #define SINK_DEFAULT	"hw:0,0"
 
@@ -65,6 +67,16 @@ struct route {
 	int pfd;		/* what the application polls; see the header */
 	unsigned follow_ctr;	/* throttle the /run/s31-sink stat() */
 	snd_pcm_uframes_t transferred;
+	/*
+	 * What transfer() does to the application's frames before the sink
+	 * sees them. CONV_PASS: nothing (the sink is plug:, or the codec at
+	 * the app's own rate and channel count). CONV_DUP: mono to stereo.
+	 * CONV_RESAMPLE: s31resample.h, to a codec rate of the same family.
+	 */
+	enum { CONV_PASS, CONV_DUP, CONV_RESAMPLE } conv;
+	struct s31rs rs;
+	int16_t *obuf;		/* converted frames, stereo */
+	unsigned ocap;		/* obuf capacity, frames */
 };
 
 static void sink_read(struct route *r, char *out, size_t n)
@@ -95,33 +107,16 @@ static void slave_close(struct route *r)
 	}
 }
 
-static int slave_open(struct route *r)
+/*
+ * Negotiate the sink: `rate` and `channels` are what it should run at (the
+ * sink's side of any conversion), `exact` says whether the rate may move.
+ */
+static int sink_params(struct route *r, snd_pcm_t *pcm, unsigned rate,
+		       unsigned channels, int exact, int conv,
+		       const char **step)
 {
-	char name[80];
-	snd_pcm_t *old = r->slave, *pcm = NULL;
-	const char *step = "open";
 	int err;
 
-	/*
-	 * Open the new sink BEFORE closing the old one. A switch to a sink
-	 * that will not open (busy, unplugged, asking for what it cannot do)
-	 * then leaves the stream where it was instead of returning -ENODEV
-	 * to an application that treats that as the end of sound.
-	 */
-	/*
-	 * Through "plug", so the sink is free to want a different rate or
-	 * format from the one the application negotiated with us. The
-	 * loopback in particular is fixed at whatever s31-bt opened.
-	 */
-	/*
-	 * Quoted. Unquoted, ALSA splits "plug:hw:0,0" on the comma and reads
-	 * the trailing 0 as a second argument to plug, which fails with
-	 * "Unknown parameter 1" and leaves the sink unopenable.
-	 */
-	snprintf(name, sizeof(name), "plug:'%s'", r->sink);
-	err = snd_pcm_open(&pcm, name, SND_PCM_STREAM_PLAYBACK, 0);
-	if (err < 0)
-		goto done;
 	/*
 	 * Negotiate explicitly, with the *_near variants, which CLAMP to what
 	 * the sink can do instead of failing.
@@ -149,16 +144,14 @@ static int slave_open(struct route *r)
 	{
 		snd_pcm_hw_params_t *hw;
 		snd_pcm_sw_params_t *sw;
-		unsigned rate = r->io.rate;
 		snd_pcm_uframes_t buf, per, want_buf, want_per, amin;
 		int dir = 0;
 		struct pollfd pfd;
 
-		if (!rate || !r->io.buffer_size || !r->io.period_size) {
-			err = -EINVAL;
-			goto done;
-		}
-		step = "hw_params";
+		if (!rate || !r->io.rate || !r->io.buffer_size ||
+		    !r->io.period_size)
+			return -EINVAL;
+		*step = "hw_params";
 		snd_pcm_hw_params_alloca(&hw);
 		if ((err = snd_pcm_hw_params_any(pcm, hw)) < 0 ||
 		    (err = snd_pcm_hw_params_set_access(pcm, hw,
@@ -166,10 +159,12 @@ static int slave_open(struct route *r)
 		    (err = snd_pcm_hw_params_set_format(pcm, hw,
 				r->io.format)) < 0 ||
 		    (err = snd_pcm_hw_params_set_channels(pcm, hw,
-				r->io.channels)) < 0 ||
-		    (err = snd_pcm_hw_params_set_rate_near(pcm, hw,
+				channels)) < 0 ||
+		    (err = exact ?
+			snd_pcm_hw_params_set_rate(pcm, hw, rate, 0) :
+			snd_pcm_hw_params_set_rate_near(pcm, hw,
 				&rate, &dir)) < 0)
-			goto done;
+			return err;
 		/*
 		 * Mirror the application's ring, in the sink's rate. The
 		 * application can never be more than its own ring ahead of what
@@ -195,17 +190,61 @@ static int slave_open(struct route *r)
 		 * clamps to what the hardware holds (32 KiB of SRAM ring).
 		 */
 		buf = (snd_pcm_uframes_t)((uint64_t)4096 * rate / 48000);
+		/*
+		 * A WHOLE NUMBER OF THE APPLICATION'S PERIODS (2026-09-27).
+		 *
+		 * The codec's buffer must be an integer number of periods of
+		 * 128..1023 frames. At 48000 the value above is 4096, which
+		 * divides; at 44100 it is 3763 = 53 x 71, which no period in
+		 * that range divides, so hw_params failed with EINVAL and
+		 * every 44.1 kHz application whose ring was under 3763 frames
+		 * (SDL 1.2 with samples <= 1024, ring = 2 x samples) got no
+		 * sound at all: 404-418 underrun messages in 12 s, zero
+		 * callbacks, silence. 32000 gives 2730 and was exposed the
+		 * same way. Rounding down to the application's period makes
+		 * the division exact at every rate; measured with the
+		 * prototype (artifacts/audio/first-principles-2026-09-27):
+		 * 418 underrun messages -> 0, and sound.
+		 */
+		if (want_per)
+			buf -= buf % want_per;
 		if (buf < want_buf)
 			buf = want_buf;
+		per = want_per;
+		if (exact) {
+			/*
+			 * The codec itself, not plug: - so nothing rounds for
+			 * us. Its period tops out at 1023 frames and its
+			 * buffer at the SRAM ring (8192), and the buffer must
+			 * be a whole number of periods. A converted stream's period in
+			 * codec frames can exceed that (36 kHz x 1024 is 1365
+			 * at 48 kHz), so split it into equal parts that fit,
+			 * then take the largest whole number of them the
+			 * buffer holds.
+			 */
+			snd_pcm_uframes_t pmax = 0, bmax = 0;
+			unsigned k = 1;
+
+			if (snd_pcm_hw_params_get_period_size_max(hw, &pmax,
+								  &dir) < 0 ||
+			    snd_pcm_hw_params_get_buffer_size_max(hw, &bmax) < 0)
+				return -EINVAL;
+			while (per > pmax) {
+				k++;
+				per = (want_per + k - 1) / k;
+			}
+			if (buf > bmax)
+				buf = bmax;
+			buf -= buf % per;
+		}
 		if ((err = snd_pcm_hw_params_set_buffer_size_near(pcm, hw,
 				&buf)) < 0)
-			goto done;
-		per = want_per;
+			return err;
 		dir = 0;
 		if ((err = snd_pcm_hw_params_set_period_size_near(pcm, hw,
 				&per, &dir)) < 0 ||
 		    (err = snd_pcm_hw_params(pcm, hw)) < 0)
-			goto done;
+			return err;
 		/*
 		 * Wake the application only when its OWN ring has a period free.
 		 * If the sink holds more than the ring (it clamped upwards, or
@@ -244,7 +283,7 @@ static int slave_open(struct route *r)
 			amin = buf - want_buf + want_per;
 		if (amin > buf)
 			amin = buf;
-		step = "sw_params";
+		*step = "sw_params";
 		snd_pcm_sw_params_alloca(&sw);
 		if ((err = snd_pcm_sw_params_current(pcm, sw)) < 0 ||
 		    (err = snd_pcm_sw_params_set_start_threshold(pcm, sw,
@@ -252,22 +291,155 @@ static int slave_open(struct route *r)
 		    (err = snd_pcm_sw_params_set_avail_min(pcm, sw,
 				amin)) < 0 ||
 		    (err = snd_pcm_sw_params(pcm, sw)) < 0)
-			goto done;
+			return err;
 		/* Put the sink's descriptor behind the number the app polls. */
-		step = "dup2";
+		*step = "dup2";
 		if (snd_pcm_poll_descriptors(pcm, &pfd, 1) == 1 &&
 		    dup2(pfd.fd, r->pfd) < 0) {
 			err = -errno;
-			goto done;
+			return err;
 		}
 		if (getenv("S31ROUTE_DEBUG"))
-			fprintf(stderr, "s31route: %s app %u Hz ring %lu/%lu -> sink %u Hz %lu/%lu avail_min %lu\n",
-				r->sink, r->io.rate,
+			fprintf(stderr, "s31route: %s app %u Hz %u ch ring %lu/%lu -> sink %u Hz %u ch %lu/%lu avail_min %lu conv %s\n",
+				r->sink, r->io.rate, r->io.channels,
 				(unsigned long)r->io.buffer_size,
 				(unsigned long)r->io.period_size, rate,
-				(unsigned long)buf, (unsigned long)per,
-				(unsigned long)amin);
+				channels, (unsigned long)buf, (unsigned long)per,
+				(unsigned long)amin,
+				conv == CONV_RESAMPLE ? "s31rs" :
+				conv == CONV_DUP ? "dup" : "none");
 	}
+	return 0;
+}
+
+/*
+ * The codec's own rate for an application rate, or 0 to leave it to plug:.
+ *
+ * Native when the codec has the rate. Otherwise the smallest codec rate at
+ * or above it IN THE SAME FAMILY - multiples of 11025 go to the 44.1 kHz
+ * family, everything else to the 8/48 kHz one - so 44.1 kHz content is never
+ * resampled to 48 kHz or the other way round, and conversion is always
+ * upward (36000 -> 48000, 4:3; 12000 -> 16000; 33075 -> 44100).
+ * alsa-lib's plug: chose the NEAREST rate instead, which once the codec
+ * learned 32000 sent 36000 DOWN to it, band-limiting it to 16 kHz.
+ */
+static unsigned codec_rate(snd_pcm_t *pcm, unsigned in)
+{
+	static const unsigned f44[] = { 11025, 22050, 44100, 0 };
+	static const unsigned f48[] = { 8000, 16000, 24000, 32000, 48000, 0 };
+	const unsigned *fam[2];
+	snd_pcm_hw_params_t *hw;
+	int f, i;
+
+	snd_pcm_hw_params_alloca(&hw);
+	if (snd_pcm_hw_params_any(pcm, hw) < 0)
+		return 0;
+	if (!snd_pcm_hw_params_test_rate(pcm, hw, in, 0))
+		return in;
+	fam[0] = in % 11025 ? f48 : f44;
+	fam[1] = in % 11025 ? f44 : f48;
+	for (f = 0; f < 2; f++)
+		for (i = 0; fam[f][i]; i++)
+			if (fam[f][i] >= in &&
+			    !snd_pcm_hw_params_test_rate(pcm, hw, fam[f][i], 0))
+				return fam[f][i];
+	return 0;
+}
+
+static int sink_is_codec(const char *sink)
+{
+	return !strcmp(sink, "hw:0,0") || !strcmp(sink, "hw:0");
+}
+
+/*
+ * The codec, opened as itself, with s31route doing any rate conversion and
+ * the mono -> stereo route (option 3 of the 2026-09-27 audio study). Any
+ * failure returns an error and the caller falls back to plug:, which is what
+ * every stream got before.
+ */
+static int open_direct(struct route *r, snd_pcm_t **pcmp, struct s31rs *rs,
+		       int *conv, const char **step)
+{
+	snd_pcm_t *pcm = NULL;
+	unsigned in = r->io.rate, out;
+	int err;
+
+	memset(rs, 0, sizeof(*rs));
+
+	*step = "open direct";
+	err = snd_pcm_open(&pcm, r->sink, SND_PCM_STREAM_PLAYBACK, 0);
+	if (err < 0)
+		return err;
+	*step = "codec rate";
+	out = codec_rate(pcm, in);
+	err = -EINVAL;
+	if (!out)
+		goto fail;
+	if (out != in) {
+		*step = "s31rs_init";
+		if (s31rs_init(rs, in, out, r->io.channels) < 0)
+			goto fail;
+		*conv = CONV_RESAMPLE;
+	} else {
+		*conv = r->io.channels == 1 ? CONV_DUP : CONV_PASS;
+	}
+	err = sink_params(r, pcm, out, 2, 1, *conv, step);
+	if (err < 0)
+		goto fail;
+	*pcmp = pcm;
+	return 0;
+fail:
+	s31rs_free(rs);
+	snd_pcm_close(pcm);
+	return err;
+}
+
+static int slave_open(struct route *r)
+{
+	char name[80];
+	snd_pcm_t *old = r->slave, *pcm = NULL;
+	const char *step = "open";
+	struct s31rs rs;
+	int err, conv = CONV_PASS;
+
+	/*
+	 * Open the new sink BEFORE closing the old one. A switch to a sink
+	 * that will not open (busy, unplugged, asking for what it cannot do)
+	 * then leaves the stream where it was instead of returning -ENODEV
+	 * to an application that treats that as the end of sound.
+	 */
+	/*
+	 * The codec directly, converting here (open_direct above), unless
+	 * S31ROUTE_PLUG=1 asks for the old path for an A/B.
+	 */
+	if (sink_is_codec(r->sink) && !getenv("S31ROUTE_PLUG")) {
+		snprintf(name, sizeof(name), "%s", r->sink);
+		err = open_direct(r, &pcm, &rs, &conv, &step);
+		if (!err)
+			goto done;
+		if (getenv("S31ROUTE_DEBUG"))
+			fprintf(stderr, "s31route: %s %s: %s - falling back to plug\n",
+				step, name, snd_strerror(err));
+		pcm = NULL;
+		step = "open";
+	}
+	conv = CONV_PASS;
+	memset(&rs, 0, sizeof(rs));
+	/*
+	 * Otherwise through "plug", so the sink is free to want a different
+	 * rate or format from the one the application negotiated with us.
+	 * The loopback in particular is fixed at whatever s31-bt opened.
+	 */
+	/*
+	 * Quoted. Unquoted, ALSA splits "plug:hw:0,0" on the comma and reads
+	 * the trailing 0 as a second argument to plug, which fails with
+	 * "Unknown parameter 1" and leaves the sink unopenable.
+	 */
+	snprintf(name, sizeof(name), "plug:'%s'", r->sink);
+	err = snd_pcm_open(&pcm, name, SND_PCM_STREAM_PLAYBACK, 0);
+	if (err < 0)
+		goto done;
+	err = sink_params(r, pcm, r->io.rate, r->io.channels, 0, conv, &step);
 done:
 	if (err < 0) {
 		if (getenv("S31ROUTE_DEBUG"))
@@ -275,9 +447,14 @@ done:
 				snd_strerror(err));
 		if (pcm)
 			snd_pcm_close(pcm);
+		s31rs_free(&rs);
 		return err;
 	}
+	/* commit: the new sink and the conversion that goes with it */
 	r->slave = pcm;
+	s31rs_free(&r->rs);
+	r->rs = rs;
+	r->conv = conv;
 	if (old)
 		snd_pcm_close(old);
 	return 0;
@@ -356,6 +533,8 @@ static int route_prepare(snd_pcm_ioplug_t *io)
 
 	r->transferred = 0;
 	sink_follow(r);
+	if (r->conv == CONV_RESAMPLE)
+		s31rs_reset(&r->rs);	/* a restart is a new signal */
 	if (r->slave)
 		snd_pcm_prepare(r->slave);
 	return 0;
@@ -420,6 +599,62 @@ static snd_pcm_sframes_t route_pointer(snd_pcm_ioplug_t *io)
 				   % io->buffer_size);
 }
 
+/*
+ * Convert the application's frames for the codec and hand them on. The
+ * write blocks exactly as the pass-through one does, so pacing is unchanged;
+ * the application is told all of its frames were taken.
+ */
+static snd_pcm_sframes_t transfer_converted(struct route *r,
+					    const int16_t *in,
+					    snd_pcm_uframes_t size)
+{
+	unsigned need = r->conv == CONV_RESAMPLE ?
+			s31rs_max_out(&r->rs, (unsigned)size) : (unsigned)size;
+	snd_pcm_uframes_t off = 0;
+	int m;
+
+	if (need > r->ocap) {
+		int16_t *o = realloc(r->obuf, (size_t)need * 4);
+
+		if (!o)
+			return -ENOMEM;
+		r->obuf = o;
+		r->ocap = need;
+	}
+	if (r->conv == CONV_RESAMPLE) {
+		m = s31rs_run(&r->rs, in, (unsigned)size, r->obuf);
+		if (m < 0)
+			return -ENOMEM;
+	} else {
+		s31rs_dup(in, (unsigned)size, r->obuf);
+		m = (int)size;
+	}
+	while (off < (snd_pcm_uframes_t)m) {
+		snd_pcm_sframes_t n = snd_pcm_writei(r->slave, r->obuf + 2 * off,
+						     (snd_pcm_uframes_t)m - off);
+
+		if (n == -EPIPE)
+			return xrun(r);
+		if (n == -ENODEV || n == -EIO) {
+			/*
+			 * The sink went away mid-stream. Pick it up again and
+			 * drop this chunk: the frames were converted for the
+			 * old sink, and a reopen may have chosen another.
+			 */
+			slave_close(r);
+			sink_follow(r);
+			if (!r->slave)
+				return -ENODEV;
+			break;
+		}
+		if (n < 0)
+			return n;
+		off += (snd_pcm_uframes_t)n;
+	}
+	r->transferred += size;
+	return (snd_pcm_sframes_t)size;
+}
+
 static snd_pcm_sframes_t route_transfer(snd_pcm_ioplug_t *io,
 					const snd_pcm_channel_area_t *areas,
 					snd_pcm_uframes_t offset,
@@ -467,6 +702,8 @@ static snd_pcm_sframes_t route_transfer(snd_pcm_ioplug_t *io,
 	if (!r->slave)
 		return -ENODEV;
 	buf = (const char *)areas->addr + (areas->first + areas->step * offset) / 8;
+	if (r->conv != CONV_PASS)
+		return transfer_converted(r, (const int16_t *)buf, size);
 	n = snd_pcm_writei(r->slave, buf, size);
 	if (n == -EPIPE)
 		return xrun(r);
@@ -491,6 +728,8 @@ static int route_close(snd_pcm_ioplug_t *io)
 	slave_close(r);
 	if (r->pfd >= 0)
 		close(r->pfd);
+	s31rs_free(&r->rs);
+	free(r->obuf);
 	free(r);
 	return 0;
 }

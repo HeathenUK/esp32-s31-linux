@@ -1,0 +1,42 @@
+ASoC: native 22050 / 24000 / 32000 Hz on the Korvo-1 codec path (2026-09-27)
+
+Copy es8389.c over linux-71-port/sound/soc/codecs/es8389.c and
+esp32s31-i2s.c over linux-71-port/sound/soc/espressif/esp32s31-i2s.c, then
+`make linux` (no DTS change, so no `make opensbi`). First shipped as kernel #400
+(#393 + this patch; RAM-text function list and order identical to #393).
+Supersedes the es8389.c / esp32s31-i2s.c copies in 0042 and 0046.
+
+WHY (artifacts/audio/first-principles-2026-09-27, option 2)
+  - 22050 was missing only from ESP32S31_I2S_RATES, so alsa-lib's plug:
+    doubled it to 44100 through its linear converter (~590 cycles an output
+    frame, images ~-23 dB).
+  - 32000 was converted x3 to 96000. Measured on #393: SDL callbacks at
+    203-206 per 250 expected at 32000 (shipped and fixed plugin alike), i.e.
+    32 kHz content played ~19% slow. On #400 it runs natively and the count
+    is 188/188.
+  - 24000 is the vendor's rate between them; es8389_RATES
+    (SNDRV_PCM_RATE_8000_96000) predates the SNDRV_PCM_RATE_24000 bit, so it
+    is added there too.
+
+THE ROWS (not vendor rows; derived from the vendor's pattern)
+  The last three bytes (regs 0x16/0x18/0x19) scale with the rate: 8k
+  09/19/07, 16k 12/31/0E, 24k 1A/49/14, 32k 23/61/1B, 44.1k and 48k 35/91/28.
+  At a fixed post-divider ratio the rest of a row is identical within a band:
+  the vendor's 24000/800 row equals 16000/1200 and 32000/600 equals 48000/400
+  byte for byte except the pre-divider and that triple. The band splits
+  between 24 and 32 kHz (dividers 0x45/24/C0/01/D1/90 at 64 fs and 0x41=FF
+  below, 0x51/04/C0/10/C1/80 and 0x41=7F above). So:
+    24000 @64 = 16000 @64 row + the vendor 24k triple
+    32000 @64 = 48000 @64 row + the vendor 32k triple
+    22050 @64 = the 24000 row (as 44100 shares 48000's) - this REPLACES the
+                0042 22050@64 row, a 44100 clone that never played because
+                22050 was not offered by the I2S DAI.
+  11025 is unchanged (in daily use by Doom).
+  MCLK = 256 x rate divides the 40 MHz xtal exactly at all three rates
+  (7+38/441, 6+49/96, 4+113/128).
+
+VERIFIED (machine checks, #400, sdltone through "default", 6 s each)
+  hw_params rate == app rate for 22050/24000/32000 stereo (RW_INTERLEAVED,
+  i.e. plug collapsed), callbacks == expected (129/129, 141/141, 188/188),
+  0 xruns, 0 "Clock coefficients do not match" lines in dmesg.
+  NOT yet verified by ear - see IMPLEMENT.txt for the listening script.
