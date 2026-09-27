@@ -9489,7 +9489,14 @@ static void menu_select(int sel)
  * follows, and it works the same with a finger as with a mouse.
  */
 #define MENU_CONF	"/etc/lvdesk/menu.conf"
-#define MENU_MAX	96
+/*
+ * 512 entries: the owner's launch-variant menu (every size x mode x rate per
+ * app, artifacts/menu/VARIANTS.md) is 225. mitems is bss, 248 bytes an
+ * entry, and only the entries a load fills (memset below) become resident:
+ * ~56 kB for that menu; 127 kB of address space if all 512 were used.
+ * Anything past a limit is reported in the log, never dropped silently.
+ */
+#define MENU_MAX	512
 
 struct mitem {
 	char label[40];
@@ -9511,16 +9518,27 @@ static void appmenu_load(void)
 {
 	FILE *f = fopen(MENU_CONF, "r");
 	char line[300];
-	int stack[16], depth, i;
+	int stack[16], depth, i, lineno = 0, dropped = 0;
 
 	mitem_n = 0;
 	if (!f)
 		return;
 	for (i = 0; i < 16; i++)
 		stack[i] = -1;
-	while (fgets(line, sizeof(line), f) && mitem_n < MENU_MAX) {
+	while (fgets(line, sizeof(line), f)) {
 		char *p = line, *eq, *e;
 		struct mitem *m;
+
+		lineno++;
+		if (!strchr(line, '\n') && !feof(f)) {
+			int ch;
+
+			/* the tail used to come back as a line of its own */
+			while ((ch = fgetc(f)) != EOF && ch != '\n')
+				;
+			printf("lvdesk: menu: line %d over %d chars, truncated\n",
+			       lineno, (int)sizeof(line) - 1);
+		}
 
 		depth = 0;
 		while (*p == ' ' || *p == '\t') {
@@ -9535,6 +9553,10 @@ static void appmenu_load(void)
 			*--e = 0;
 		if (!*p || *p == '#')
 			continue;
+		if (mitem_n >= MENU_MAX) {
+			dropped++;
+			continue;
+		}
 		m = &mitems[mitem_n];
 		memset(m, 0, sizeof(*m));
 		m->depth = depth;
@@ -9544,14 +9566,21 @@ static void appmenu_load(void)
 			e = eq;
 			while (e > p && (e[-1] == ' ' || e[-1] == '\t'))
 				e--;
-			snprintf(m->label, sizeof(m->label), "%.*s",
-				 (int)(e - p), p);
+			if (snprintf(m->label, sizeof(m->label), "%.*s",
+				     (int)(e - p), p) >= (int)sizeof(m->label))
+				printf("lvdesk: menu: line %d label over %d chars, truncated\n",
+				       lineno, (int)sizeof(m->label) - 1);
 			eq++;
 			while (*eq == ' ' || *eq == '\t')
 				eq++;
-			snprintf(m->cmd, sizeof(m->cmd), "%s", eq);
-		} else {
-			snprintf(m->label, sizeof(m->label), "%s", p);
+			if (snprintf(m->cmd, sizeof(m->cmd), "%s", eq) >=
+			    (int)sizeof(m->cmd))
+				printf("lvdesk: menu: line %d command over %d chars, truncated\n",
+				       lineno, (int)sizeof(m->cmd) - 1);
+		} else if (snprintf(m->label, sizeof(m->label), "%s", p) >=
+			   (int)sizeof(m->label)) {
+			printf("lvdesk: menu: line %d label over %d chars, truncated\n",
+			       lineno, (int)sizeof(m->label) - 1);
 		}
 		stack[depth] = mitem_n;
 		for (i = depth + 1; i < 16; i++)
@@ -9559,6 +9588,10 @@ static void appmenu_load(void)
 		mitem_n++;
 	}
 	fclose(f);
+	if (dropped)
+		printf("lvdesk: menu: %d entries past MENU_MAX %d dropped\n",
+		       dropped, MENU_MAX);
+	fflush(stdout);
 }
 
 static int mitem_has_children(int idx)
