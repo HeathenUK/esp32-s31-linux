@@ -4,8 +4,7 @@
  * call (raw syscall, never interposed).
  *
  *   clktest hz MS              estimate the rdtime rate against the syscall
- *                              (prints the Hz; the QEMU run feeds it to
- *                              S31CLK_HZ)
+ *                              (diagnostic only; no calibration is used)
  *   clktest mono SECS [thr]    monotonicity: thr threads (default 3) hammer
  *                              MONOTONIC, RAW and (if served) REALTIME; each
  *                              value must be >= every value any thread had
@@ -31,6 +30,9 @@
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
+#include <errno.h>
+#include <signal.h>
+#include <sys/wait.h>
 
 static inline uint64_t rdtime64(void)
 {
@@ -117,9 +119,109 @@ static void *flipper(void *p)
 	return 0;
 }
 
+/* Exact syscall brackets, including coarse clocks and syscall-only CPU clocks.
+ * No tolerance hides a stale anchor or a conversion error. */
+static int abi_checks(void)
+{
+    const int clocks[] = { CLOCK_REALTIME, CLOCK_MONOTONIC,
+        CLOCK_MONOTONIC_RAW, CLOCK_REALTIME_COARSE, CLOCK_MONOTONIC_COARSE,
+        CLOCK_BOOTTIME, CLOCK_PROCESS_CPUTIME_ID, CLOCK_THREAD_CPUTIME_ID };
+    int bad = 0;
+    for (unsigned j = 0; j < sizeof(clocks)/sizeof(clocks[0]); j++) {
+        struct timespec a, b, p, r, kr;
+        int id = clocks[j];
+        for (int i = 0; i < 1000; i++) {
+            if (syscall(SYS_clock_gettime64, id, &a) || clock_gettime(id, &p) ||
+                syscall(SYS_clock_gettime64, id, &b) || p.tv_nsec < 0 ||
+                p.tv_nsec >= 1000000000L || ns_of(&p) < ns_of(&a) ||
+                ns_of(&p) > ns_of(&b)) bad++;
+        }
+        if (clock_getres(id, &r) || syscall(SYS_clock_getres_time64, id, &kr) ||
+            ns_of(&r) != ns_of(&kr) || clock_getres(id, NULL)) bad++;
+    }
+    struct timespec a, b, p;
+    struct timeval tv;
+    errno = 0;
+    if (clock_gettime(-12345, &p) != -1 || errno != EINVAL) bad++;
+    errno = 0;
+    if (clock_getres(-12345, &p) != -1 || errno != EINVAL) bad++;
+    for (int i = 0; i < 1000; i++) {
+        syscall(SYS_clock_gettime64, CLOCK_REALTIME, &a);
+        if (gettimeofday(&tv, NULL)) bad++;
+        syscall(SYS_clock_gettime64, CLOCK_REALTIME, &b);
+        int64_t us = (int64_t)tv.tv_sec * 1000000 + tv.tv_usec;
+        if (us < ns_of(&a)/1000 || us > ns_of(&b)/1000) bad++;
+        syscall(SYS_clock_gettime64, CLOCK_REALTIME, &a);
+        time_t stored, t = time(&stored);
+        syscall(SYS_clock_gettime64, CLOCK_REALTIME, &b);
+        if (stored != t || t < a.tv_sec || t > b.tv_sec) bad++;
+    }
+    return bad;
+}
+/* Root-only diagnostic. Move wall time forward, validate immediate propagation,
+ * then restore the original time plus elapsed MONOTONIC time even on failure. */
+static int step_test(void)
+{
+    struct timespec rt, mono, now, changed;
+    if (syscall(SYS_clock_gettime64, CLOCK_REALTIME, &rt) ||
+        syscall(SYS_clock_gettime64, CLOCK_MONOTONIC, &mono)) return 1;
+    changed = rt;
+    changed.tv_sec += 2;
+    if (syscall(SYS_clock_settime64, CLOCK_REALTIME, &changed)) {
+        perror("clock_settime64"); return 1;
+    }
+    int bad = abi_checks();
+    syscall(SYS_clock_gettime64, CLOCK_MONOTONIC, &now);
+    int64_t restore = ns_of(&rt) + ns_of(&now) - ns_of(&mono);
+    changed.tv_sec = restore / 1000000000LL;
+    changed.tv_nsec = restore % 1000000000LL;
+    if (syscall(SYS_clock_settime64, CLOCK_REALTIME, &changed)) {
+        perror("restore clock_settime64"); return 1;
+    }
+    bad += abi_checks();
+    printf("RESULT realtime step and restore: failures %d\n", bad);
+    return !!bad;
+}
+static volatile sig_atomic_t signal_bad, signal_calls;
+static void clock_signal(int sig)
+{
+    int saved = errno;
+    struct timespec t;
+    (void)sig;
+    if (clock_gettime(CLOCK_MONOTONIC, &t) || t.tv_nsec < 0 ||
+        t.tv_nsec >= 1000000000L) signal_bad++;
+    signal_calls++;
+    errno = saved;
+}
+static int abi_test(void)
+{
+    int bad = abi_checks(), status;
+    pid_t child = fork();
+    if (!child) _exit(abi_checks() ? 1 : 0);
+    if (child < 0 || waitpid(child, &status, 0) != child ||
+        !WIFEXITED(status) || WEXITSTATUS(status)) bad++;
+    struct sigaction sa = { .sa_handler = clock_signal };
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGALRM, &sa, NULL);
+    struct itimerval tick = {{0, 1000}, {0, 1000}}, stop = {{0,0},{0,0}};
+    setitimer(ITIMER_REAL, &tick, NULL);
+    int64_t end = ksys(CLOCK_MONOTONIC) + 1000000000LL;
+    while (ksys(CLOCK_MONOTONIC) < end) {
+        struct timespec t;
+        if (clock_gettime(CLOCK_MONOTONIC, &t)) bad++;
+    }
+    setitimer(ITIMER_REAL, &stop, NULL);
+    bad += signal_bad + !signal_calls;
+    printf("RESULT ABI brackets/resolutions/errno/fork/signals: failures %d signals %d\n",
+        bad, (int)signal_calls);
+    return !!bad;
+}
+
 int main(int argc, char **argv)
 {
 	const char *mode = argc > 1 ? argv[1] : "mono";
+	if (!strcmp(mode, "abi")) return abi_test();
+	if (!strcmp(mode, "step")) return step_test();
 	if (!strcmp(mode, "rdtime")) {
 		printf("RESULT rdtime %llu on cpu %d\n", (unsigned long long)rdtime64(), sched_getcpu());
 		return 0;
@@ -190,7 +292,6 @@ int main(int argc, char **argv)
 	{
 		int secs = argc > 2 ? atoi(argv[2]) : 10, nt = argc > 3 ? atoi(argv[3]) : 3;
 		pthread_t t[8], fl;
-		if (getenv("S31CLK") && getenv("S31CLK")[0] == '1') g_nclk = 2;	/* REALTIME not served */
 		if (nt < 1 || nt > 8 || secs < 1) return 2;
 		for (int i = 0; i < nt; i++) {
 			if (pthread_create(&t[i], 0, mono_thr, 0)) {

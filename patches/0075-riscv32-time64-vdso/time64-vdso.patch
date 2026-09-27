@@ -1,0 +1,153 @@
+--- a/arch/riscv/Kconfig
++++ b/arch/riscv/Kconfig
+@@ -109,7 +109,7 @@
+ 	select GENERIC_CPU_VULNERABILITIES
+ 	select GENERIC_EARLY_IOREMAP
+ 	select GENERIC_ENTRY
+-	select GENERIC_GETTIMEOFDAY if HAVE_GENERIC_VDSO && 64BIT
++	select GENERIC_GETTIMEOFDAY if HAVE_GENERIC_VDSO
+ 	select GENERIC_IDLE_POLL_SETUP
+ 	select GENERIC_IOREMAP if MMU
+ 	select HAVE_IOREMAP_PROT if MMU
+--- a/arch/riscv/kernel/vdso/Makefile
++++ b/arch/riscv/kernel/vdso/Makefile
+@@ -5,9 +5,7 @@
+ include $(srctree)/lib/vdso/Makefile.include
+ # Symbols present in the vdso
+ vdso-syms  = rt_sigreturn
+-ifdef CONFIG_64BIT
+ vdso-syms += vgettimeofday
+-endif
+ vdso-syms += getcpu
+ vdso-syms += flush_icache
+ vdso-syms += hwprobe
+@@ -42,7 +40,8 @@
+ asflags-y += $(CFI_FULL)
+ 
+ ifneq ($(c-gettimeofday-y),)
+-  CFLAGS_vgettimeofday.o += -fPIC -include $(c-gettimeofday-y)
++  # RV32 must inline 64-bit shifts and register saves: no libgcc in vDSO.
++  CFLAGS_vgettimeofday.o += -O2 -mno-save-restore -fPIC -include $(c-gettimeofday-y)
+ endif
+ 
+ ifneq ($(c-getrandom-y),)
+--- a/arch/riscv/kernel/vdso/vgettimeofday.c
++++ b/arch/riscv/kernel/vdso/vgettimeofday.c
+@@ -10,6 +10,7 @@
+ #include <linux/types.h>
+ #include <vdso/gettime.h>
+ 
++#ifdef CONFIG_64BIT
+ int __vdso_clock_gettime(clockid_t clock, struct __kernel_timespec *ts)
+ {
+ 	return __cvdso_clock_gettime(clock, ts);
+@@ -24,3 +25,15 @@
+ {
+ 	return __cvdso_clock_getres(clock_id, res);
+ }
++
++#else
++/* RV32 Linux and musl use the time64 ABI; export no legacy time32 entry. */
++int __vdso_clock_gettime64(clockid_t clock, struct __kernel_timespec *ts)
++{
++    return __cvdso_clock_gettime(clock, ts);
++}
++int __vdso_clock_getres_time64(clockid_t clock, struct __kernel_timespec *res)
++{
++    return __cvdso_clock_getres(clock, res);
++}
++#endif
+--- a/arch/riscv/kernel/vdso/vdso.lds.S
++++ b/arch/riscv/kernel/vdso/vdso.lds.S
+@@ -71,9 +71,14 @@
+ 	global:
+ 		__vdso_rt_sigreturn;
+ #ifdef HAS_VGETTIMEOFDAY
++#ifdef CONFIG_64BIT
+ 		__vdso_gettimeofday;
+ 		__vdso_clock_gettime;
+ 		__vdso_clock_getres;
++#else
++		__vdso_clock_gettime64;
++		__vdso_clock_getres_time64;
++#endif
+ #endif
+ 		__vdso_getcpu;
+ 		__vdso_flush_icache;
+--- a/arch/riscv/include/asm/vdso/gettimeofday.h
++++ b/arch/riscv/include/asm/vdso/gettimeofday.h
+@@ -7,11 +7,11 @@
+ #include <asm/barrier.h>
+ #include <asm/unistd.h>
+ #include <asm/csr.h>
++#include <linux/errno.h>
+ #include <uapi/linux/time.h>
+ 
+ /*
+- * 32-bit land is lacking generic time vsyscalls as well as the legacy 32-bit
+- * time syscalls like gettimeofday. Skip these definitions since on 32-bit.
++ * RV32 exposes the time64 clock ABI; legacy gettimeofday remains RV64-only.
+  */
+ #ifdef CONFIG_GENERIC_TIME_VSYSCALL
+ 
+@@ -21,6 +21,7 @@
+ int gettimeofday_fallback(struct __kernel_old_timeval *_tv,
+ 			  struct timezone *_tz)
+ {
++#ifdef CONFIG_64BIT
+ 	register struct __kernel_old_timeval *tv asm("a0") = _tv;
+ 	register struct timezone *tz asm("a1") = _tz;
+ 	register long ret asm("a0");
+@@ -32,6 +33,10 @@
+ 		      : "memory");
+ 
+ 	return ret;
++#else
++	/* RV32 exports only time64 clock functions, never this legacy ABI. */
++	return -ENOSYS;
++#endif
+ }
+ 
+ static __always_inline
+@@ -40,7 +45,11 @@
+ 	register clockid_t clkid asm("a0") = _clkid;
+ 	register struct __kernel_timespec *ts asm("a1") = _ts;
+ 	register long ret asm("a0");
++#ifdef CONFIG_64BIT
+ 	register long nr asm("a7") = __NR_clock_gettime;
++#else
++	register long nr asm("a7") = __NR_clock_gettime64;
++#endif
+ 
+ 	asm volatile ("ecall\n"
+ 		      : "=r" (ret)
+@@ -56,7 +65,11 @@
+ 	register clockid_t clkid asm("a0") = _clkid;
+ 	register struct __kernel_timespec *ts asm("a1") = _ts;
+ 	register long ret asm("a0");
++#ifdef CONFIG_64BIT
+ 	register long nr asm("a7") = __NR_clock_getres;
++#else
++	register long nr asm("a7") = __NR_clock_getres_time64;
++#endif
+ 
+ 	asm volatile ("ecall\n"
+ 		      : "=r" (ret)
+@@ -76,7 +89,17 @@
+ 	 * M-mode to obtain the value of CSR_TIME. Hence, unlike other
+ 	 * architecture, no fence instructions surround the csr_read()
+ 	 */
++#ifdef CONFIG_64BIT
+ 	return csr_read(CSR_TIME);
++#else
++	u32 hi, lo, again;
++	do {
++		hi = csr_read(CSR_TIMEH);
++		lo = csr_read(CSR_TIME);
++		again = csr_read(CSR_TIMEH);
++	} while (hi != again);
++	return ((u64)hi << 32) | lo;
++#endif
+ }
+ 
+ #endif /* !__ASSEMBLER__ */

@@ -29,7 +29,7 @@ $T-readelf -lW $B/libs31fp.so | grep -E "TLS|LOAD" || true
 # no TLS segment: one changes musl's thread stack alignment (s31str.c)
 ! $T-readelf -lW $B/libs31fp.so | grep -q " TLS " || { echo "libs31fp.so has a TLS segment"; exit 1; }
 # nothing from libgcc may be needed (the library links no libgcc)
-U=$($T-nm -D -u $B/libs31fp.so | awk '{print $2}' | grep -v -E '^(environ|dlsym|malloc|free|_pthread_cleanup_push|_pthread_cleanup_pop|pthread_key_create|pthread_getspecific|pthread_setspecific)$' || true)
+U=$($T-nm -D -u $B/libs31fp.so | awk '{print $2}' | grep -v -E '^(environ|getauxval|dlsym|malloc|free|_pthread_cleanup_push|_pthread_cleanup_pop|pthread_key_create|pthread_getspecific|pthread_setspecific)$' || true)
 [ -z "$U" ] || { echo "UNEXPECTED IMPORTS: $U"; exit 1; }
 ls -l $B/libs31fp.so; md5sum $B/libs31fp.so
 # tests (dynamic, against the target musl)

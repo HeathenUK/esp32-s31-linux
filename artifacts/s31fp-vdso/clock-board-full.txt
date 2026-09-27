@@ -1,0 +1,41 @@
+sh /tmp/r.sh 2>&1 & __rp=$!; ( trap 'kill "$__rs_sleep" 2>/dev/null; wait "$
+__rs_sleep" 2>/dev/null; exit' TERM INT; sleep 97 & __rs_sleep=$!; wait "$__rs_s
+leep"; kill -0 $__rp 2>/dev/null && { echo RS_TIME"K"ILL; kill -9 $__rp 2>/dev/n
+ull; } ) & __rw=$!; wait $__rp 2>/dev/null; __rc=$?; kill $__rw 2>/dev/null; wai
+t $__rw 2>/dev/null; printf "RS_EXIT:%s\n" "$__rc"; echo RS_DONE
+Linux esp32-s31 7.1.10 #402 SMP Sun Sep 27 18:24:47 UTC 2026 riscv32 GNU/Linux
+9767181c1c32d35d8eabc09108f87eff  /root/s31vdso/libs31fp.so
+a1f0cadc8d9eb11f7953e56a158fede9  /root/s31vdso/clktest
+s31clk: kernel time64 vDSO active
+RESULT ABI brackets/resolutions/errno/fork/signals: failures 0 signals 993
+s31str: on=0 eligible->libc(PIE cpu)=0 eligible->scalar=0 rseq_reg=0 rseq_fail=0
+CLOCK_CPU_MASK=1
+RESULT ABI brackets/resolutions/errno/fork/signals: failures 0 signals 999
+COST clock_gettime(MONOTONIC) 456.1 ns/call
+COST clock_gettime(MONOTONIC_RAW) 471.2 ns/call
+COST clock_gettime(REALTIME) 429.3 ns/call
+COST gettimeofday 470.3 ns/call
+COST syscall clock_gettime64 2514.4 ns/call
+COST rdtime 45.3 ns/call
+CLOCK_CPU_MASK=2
+RESULT ABI brackets/resolutions/errno/fork/signals: failures 0 signals 988
+COST clock_gettime(MONOTONIC) 563.7 ns/call
+COST clock_gettime(MONOTONIC_RAW) 592.6 ns/call
+COST clock_gettime(REALTIME) 559.4 ns/call
+COST gettimeofday 557.6 ns/call
+COST syscall clock_gettime64 3048.9 ns/call
+COST rdtime 47.4 ns/call
+RESULT mono: 6555804 calls, violations mono 0 raw 0 realtime 0 (threads 3)
+RESULT drift clock 1: 244 samples, max|err| 3622 ns, mean 1544 ns, first 0 last 397
+RESULT drift clock 4: 244 samples, max|err| 2958 ns, mean 1947 ns, first 2845 last 2650
+RESULT drift clock 0: 244 samples, max|err| 7804 ns, mean 5161 ns, first 5082 last 6940
+RESULT gettimeofday max|err| 190 us, time() out of range 0, wide brackets skipped 34
+RESULT realtime step and restore: failures 0
+RESULT ABI brackets/resolutions/errno/fork/signals: failures 0 signals 992
+RESULT ABI brackets/resolutions/errno/fork/signals: failures 0 signals 996
+CLOCK_BOARD_PASS
+RS_EXIT:0
+RS_DONE
+[2]+  Done(143)                  (trap "kill \"\$__rs_sleep\" 2>/dev/null; wait \"\$__rs_sleep\" 2>/dev/null; exit" TERM INT; sleep 97; ; wait "${__rs_sleep}"; kill -0 ${__rp} 2>/dev/null && echo RS_TIME"K"ILL; kill -9 ${__rp} 2>/dev/null)
+[1]+  Done                       sh /tmp/r.sh 2>&1
+~ # 

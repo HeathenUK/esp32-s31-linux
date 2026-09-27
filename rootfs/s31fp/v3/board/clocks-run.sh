@@ -1,39 +1,24 @@
-# Diagnostic clock evaluation only. Existing candidate is NOT approved for apps.
-# Launch with runsh --done S31_CLOCK_REVIEW_FINISHED --done-timeout 240.
-D=/root/afp2/mul-review
-P=/root/afp3/libs31fp.so
-[ -x "$D/clktest" ] && [ -r "$P" ] || exit 1
-cat > "$D/clocks-inner.sh" <<'IN'
-D=/root/afp2/mul-review; P=/root/afp3/libs31fp.so; C=/root/afp2/oncpu
-trap 'printf "\nS31_CLOCK_REVIEW_FINISHED\n" >/dev/console' EXIT
-exec > "$D/clocks.txt" 2>&1
-unset LD_PRELOAD S31FP_DEBUG
-ulimit -c 0
+# Kernel time64 vDSO diagnostic. Run through runsh.py with a 100s deadline.
+# Stop applications first; no other board observer may run concurrently.
+set -eu
+D=${V3_DIR:-/root/s31vdso}
+C=${V3_ONCPU:-/root/afp2/oncpu}
+[ -x "$D/clktest" ] && [ -r "$D/libs31fp.so" ] && [ -x "$C" ]
 uname -a
-md5sum "$D/clktest" "$P"
-run() {
-  echo "CLOCK_CASE $*"
-  "$@" & child=$!
-  ( trap 'kill "$sleeper" 2>/dev/null; wait "$sleeper" 2>/dev/null; exit' TERM INT
-    sleep 45 & sleeper=$!; wait "$sleeper"
-    echo CLOCK_WATCHDOG; kill -9 "$child" 2>/dev/null
-  ) & guard=$!
-  wait "$child"; rc=$?
-  kill "$guard" 2>/dev/null; wait "$guard" 2>/dev/null
-  echo "CLOCK_EXIT=$rc"
-}
+md5sum $D/libs31fp.so $D/clktest
+# Isolated diagnostic: no application workload running alongside it.
+killall lvdesk 2>/dev/null || true
+export LD_PRELOAD=$D/libs31fp.so S31FP=0 S31STR=0 S31CLK=1
+S31FP_DEBUG=1 $D/clktest abi
 for mask in 1 2; do
-  run "$C" "$mask" "$D/clktest" rdtime
-  run "$C" "$mask" "$D/clktest" hz 500
-  for mode in 0 1; do
-    run env LD_PRELOAD="$P" S31FP=0 S31STR=0 S31CLK=$mode "$C" "$mask" "$D/clktest" cost 10000
-  done
+    echo "CLOCK_CPU_MASK=$mask"
+    "$C" "$mask" $D/clktest abi
+    "$C" "$mask" $D/clktest cost 200000
 done
-for mode in 0 1; do
-  run env LD_PRELOAD="$P" S31FP=0 S31STR=0 S31CLK=$mode "$D/clktest" mono 10 3
-  run env LD_PRELOAD="$P" S31FP=0 S31STR=0 S31CLK=$mode "$D/clktest" drift 5
-done
-echo CLOCK_REVIEW_DONE
-IN
-setsid sh "$D/clocks-inner.sh" </dev/null >/dev/null 2>&1 &
-echo CLOCK_REVIEW_SUBMITTED
+$D/clktest mono 35 3
+$D/clktest drift 5
+$D/clktest step
+S31CLK=0 $D/clktest abi
+# Also exercise new clock with the shipping copy and string policy.
+S31FP=1 S31STR=1 S31FP_COPY=1 $D/clktest abi
+echo CLOCK_BOARD_PASS

@@ -1,0 +1,17 @@
+
+There are no relocations in this file.
+
+Symbol table '.dynsym' contains 9 entries:
+   Num:    Value  Size Type    Bind   Vis      Ndx Name
+     0: 00000000     0 NOTYPE  LOCAL  DEFAULT  UND 
+     1: 00000338     0 SECTION LOCAL  DEFAULT    8 .rodata
+     2: 0000042a   470 FUNC    GLOBAL DEFAULT   12 __vdso_clock_gettime64@@LINUX_4.15
+     3: 00000000     0 OBJECT  GLOBAL DEFAULT  ABS LINUX_4.15
+     4: 00000672   310 FUNC    GLOBAL DEFAULT   12 __vdso_riscv_hwprobe@@LINUX_4.15
+     5: 00000420     8 FUNC    GLOBAL DEFAULT   12 __vdso_rt_sigreturn@@LINUX_4.15
+     6: 00000668    10 FUNC    GLOBAL DEFAULT   12 __vdso_flush_icache@@LINUX_4.15
+     7: 00000600    90 FUNC    GLOBAL DEFAULT   12 __vdso_clock_getres_time64@@LINUX_4.15
+     8: 0000065c    10 FUNC    GLOBAL DEFAULT   12 __vdso_getcpu@@LINUX_4.15
+c0802000 D vdso_start
+c0803000 D vdso_end
+7685a9d76275a511d701bb70a3bbab2f  /src/images/s31-vdso-xipImage

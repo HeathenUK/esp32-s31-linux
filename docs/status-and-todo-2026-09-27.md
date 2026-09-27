@@ -1,6 +1,6 @@
-> **Latest s31fp release:** tested copy/string v3 is deployed on SD and boot-verified.
-> Fast clock is being replaced with a kernel-backed time64 vDSO; not yet shipped.
-> Final quiet prboom acceptance: 46.6 fps; Tyrian underruns remain.
+> **Latest release:** kernel #402 and s31fp v3 fast clock are deployed and
+> boot-verified. The real kernel time64 vDSO passed the full board diagnostic;
+> hot clock queries are about 5x faster. Quiet application acceptance is pending.
 > See [the handoff](s31fp-handoff-2026-09-27.md) for hashes and evidence.
 
 # Status and to-do, 2026-09-27 (~15:10)
@@ -13,13 +13,13 @@ line.
 
 | Component | Version | Notes |
 |---|---|---|
-| Kernel | **#401** | #393 + patches/0074 (native 22050/24000/32000 codec rates; 96000 removed, since it actually ran at 78125). `images/ship-401-xipImage`. **The build volume's `build/xipImage` is a rejected test kernel: never run a bare `make sync-images`.** |
+| Kernel | **#402** | #401 + patches/0075 RV32 time64 vDSO. `images/s31-vdso-xipImage`; original #401 retained for rollback. Build variant isolated; do not bare sync-images. |
 | XIP image 1 | fa39f3b2 | lvdesk 4b06dbec, s31route b651fa15, libs31fp 077a697a |
 | XIP image 2 | 6e5bb094 | unchanged |
 | libGL | 01aa340f (tier 7) | on the SD root `/usr/lib`, not in XIP |
 | Memory settings | swappiness 60, min_free_kbytes 512 | 99-s31-memory.conf |
 | Menu | 225 entries (card md5 fbcf23fe) | full size x mode x rate variants per app; lvdesk MENU_MAX 512 |
-| s31fp v2 | system-wide LD_PRELOAD | via /etc/profile and lvdesk. Trampoline by default; copy-in-place opt-in (`S31FP_COPY=1`); kill switch `S31FP=0` |
+| s31fp v3 | SD /opt/s31/libs31fp.so | copy, strings and kernel-backed fast clock enabled via /etc/s31fp.env; S31CLK=0 restores libc clocks |
 
 ## Results so far (fresh boots, quiet runs)
 

@@ -1,0 +1,53 @@
+[runsh] launch transcript (not workload completion):
+sh /tmp/r.sh 2>&1 & __rp=$!; ( trap 'kill "$__rs_sleep" 2>/dev/null; wait "$
+__rs_sleep" 2>/dev/null; exit' TERM INT; sleep 27 & __rs_sleep=$!; wait "$__rs_s
+leep"; kill -0 $__rp 2>/dev/null && { echo RS_TIME"K"ILL; kill -9 $__rp 2>/dev/n
+ull; } ) & __rw=$!; wait $__rp 2>/dev/null; __rc=$?; kill $__rw 2>/dev/null; wai
+t $__rw 2>/dev/null; printf "RS_EXIT:%s\n" "$__rc"; echo RS_DONE
+s31fp: cache hit, patched 0x00000003
+s31fp: of which copied in place 0x00000002
+s31fp: pages given their original frame colour 0x00000002
+s31clk: kernel time64 vDSO active
+RESULT ABI brackets/resolutions/errno/fork/signals: failures 0 signals 996
+s31str: on=1 eligible->libc(PIE cpu)=0 eligible->scalar=0 rseq_reg=0 rseq_fail=0
+9767181c1c32d35d8eabc09108f87eff  /opt/s31/libs31fp.so
+# SD-backed s31fp; copied arithmetic executes in application RAM.
+# Common clocks use the kernel time64 vDSO; S31CLK=0 restores libc.
+if [ -r /opt/s31/libs31fp.so ]; then
+    export LD_PRELOAD=/opt/s31/libs31fp.so
+    export S31FP_COPY=${S31FP_COPY:-1}
+    export S31STR=${S31STR:-1}
+    export S31CLK=${S31CLK:-1}
+fi
+FAST_CLOCK_INSTALLED
+RS_EXIT:0
+RS_DONE
+[2]+  Done(143)                  (trap "kill \"\$__rs_sleep\" 2>/dev/null; wait \"\$__rs_sleep\" 2>/dev/null; exit" TERM INT; sleep 27; ; wait "${__rs_sleep}"; kill -0 ${__rp} 2>/dev/null && echo RS_TIME"K"ILL; kill -9 ${__rp} 2>/dev/null)
+[1]+  Done                       sh /tmp/r.sh 2>&1
+~ # 
+sh /tmp/r.sh 2>&1 & __rp=$!; ( trap 'kill "$__rs_sleep" 2>/dev/null; wait "$
+__rs_sleep" 2>/dev/null; exit' TERM INT; sleep 27 & __rs_sleep=$!; wait "$__rs_s
+leep"; kill -0 $__rp 2>/dev/null && { echo RS_TIME"K"ILL; kill -9 $__rp 2>/dev/n
+ull; } ) & __rw=$!; wait $__rp 2>/dev/null; __rc=$?; kill $__rw 2>/dev/null; wai
+t $__rw 2>/dev/null; printf "RS_EXIT:%s\n" "$__rc"; echo RS_DONE
+s31fp: cache hit, patched 0x00000003
+s31fp: of which copied in place 0x00000002
+s31fp: pages given their original frame colour 0x00000002
+s31clk: kernel time64 vDSO active
+RESULT ABI brackets/resolutions/errno/fork/signals: failures 0 signals 996
+s31str: on=1 eligible->libc(PIE cpu)=0 eligible->scalar=0 rseq_reg=0 rseq_fail=0
+9767181c1c32d35d8eabc09108f87eff  /opt/s31/libs31fp.so
+# SD-backed s31fp; copied arithmetic executes in application RAM.
+# Common clocks use the kernel time64 vDSO; S31CLK=0 restores libc.
+if [ -r /opt/s31/libs31fp.so ]; then
+    export LD_PRELOAD=/opt/s31/libs31fp.so
+    export S31FP_COPY=${S31FP_COPY:-1}
+    export S31STR=${S31STR:-1}
+    export S31CLK=${S31CLK:-1}
+fi
+FAST_CLOCK_INSTALLED
+RS_EXIT:0
+RS_DONE
+[2]+  Done(143)                  (trap "kill \"\$__rs_sleep\" 2>/dev/null; wait \"\$__rs_sleep\" 2>/dev/null; exit" TERM INT; sleep 27; ; wait "${__rs_sleep}"; kill -0 ${__rp} 2>/dev/null && echo RS_TIME"K"ILL; kill -9 ${__rp} 2>/dev/null)
+[1]+  Done                       sh /tmp/r.sh 2>&1
+~ # 

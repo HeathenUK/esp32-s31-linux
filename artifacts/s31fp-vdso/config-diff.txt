@@ -1,0 +1,22 @@
+--- /src/build/linux/.config	2026-09-27 09:57:55.807189355 +0000
++++ /src/build/linux-s31-vdso/.config	2026-09-27 18:24:31.464472851 +0000
+@@ -67,6 +67,7 @@
+ # end of IRQ subsystem
+ 
+ CONFIG_GENERIC_IRQ_MULTI_HANDLER=y
++CONFIG_GENERIC_TIME_VSYSCALL=y
+ CONFIG_GENERIC_CLOCKEVENTS=y
+ CONFIG_ARCH_HAS_TICK_BROADCAST=y
+ CONFIG_GENERIC_CLOCKEVENTS_BROADCAST=y
+@@ -4007,6 +4008,7 @@
+ CONFIG_LIBFDT=y
+ CONFIG_OID_REGISTRY=y
+ CONFIG_HAVE_GENERIC_VDSO=y
++CONFIG_GENERIC_GETTIMEOFDAY=y
+ CONFIG_FONT_SUPPORT=y
+ # CONFIG_FONTS is not set
+ CONFIG_FONT_8x8=y
+87:#if defined(__NEED_suseconds_t) && !defined(__DEFINED_suseconds_t)
+88:typedef _Int64 suseconds_t;
+89:#define __DEFINED_suseconds_t
+222:struct timeval { time_t tv_sec; suseconds_t tv_usec; };
