@@ -161,6 +161,22 @@ pulled the average down to about 15 fps.
   If the new audio path (kernel #401 and s31route) lowered it, that
   regression is fixed before anything else.
 
+## Queued after s31fp v2 (owner request, 2026-09-27)
+
+**Bluetooth sink-switch stall.** The audio implementation found this: switching
+`/run/s31-sink` to the Bluetooth loopback in the middle of a stream, while
+nothing reads the loopback (no A2DP transport consuming it), stalls the app's
+stream. The old path behaves identically, so this predates today's work.
+- **Fix in s31route:** it must never block the app on a sink that no one
+  drains. Options: detect that the loopback has no reader and fall back to
+  the codec, or drop and pace frames at the app's rate until a reader
+  appears.
+- **Coordinate with s31-bt:** transport acquisition and release, and the
+  switch semantics.
+- **Test:** switch mid-stream with and without a connected A2DP sink, and
+  back again. The app must never stall or underrun-storm. Check the result
+  by ear at DAC 143.
+
 ## Git note
 
 Commit a97b9851 (this document's first version) also carries the revert of
