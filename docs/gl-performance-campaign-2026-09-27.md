@@ -152,6 +152,11 @@ pulled the average down to about 15 fps.
   dips work, adapted to sdlquake's SDL path: swapstamp-style per-frame
   timestamps, placement and PIE-bounce counts, paging counters, and the
   cache counters.
+- **Step zero, at the owner's instruction:** rule out our own tooling.
+  During the glxgears work the harness itself made most of the dips:
+  busybox shell loops bouncing off the lent CPU, cpushare.sh, and runsh
+  polls. So measure with a quiet run first (timedemo fired setsid, no
+  polling until it ends), and line dips up against harness activity.
 - **First check:** the recorded sdlquake timedemo band was 19.2-20.1 fps.
   If the new audio path (kernel #401 and s31route) lowered it, that
   regression is fixed before anything else.
