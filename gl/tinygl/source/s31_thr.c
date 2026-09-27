@@ -73,9 +73,6 @@ typedef struct S31Thr {
   ZPipeX wx;
   unsigned char *w_wtab, *w_btab, *w_satab;
   int w_wtab_sh, w_btab_a, w_satab_a;
-  int w_ftab_ok;                     /* phase 6 tier 3: zf_ftab's, in w_btab */
-  unsigned int w_ftab_k;
-  int w_bt8_a;
   int started;
   unsigned long long winsn;
   unsigned int st[8];
@@ -255,7 +252,6 @@ static void load_pipe(S31Thr *t, const RecPipe *r)
     t->w_wtab_sh = x->wtab_sh;
   }
   x->btab = t->w_btab; x->btab_a = t->w_btab_a;
-  x->ftab_ok = t->w_ftab_ok; x->ftab_k = t->w_ftab_k; x->bt8_a = t->w_bt8_a;
   x->satab = t->w_satab; x->satab_a = t->w_satab_a;
   x->stab = NULL;                    /* stencil batches are not threaded */
   if (__builtin_expect(t_check, 0)) check_reloc(t, r);
@@ -275,7 +271,6 @@ static void run_tri(S31Thr *t, const RecTri *r)
     ZB_fillBodyGeneral(&t->wzb, &r->T, &r->v[0], &r->v[1], &r->v[2], t->own, 1);
   /* the stages keep the blend tables in the worker's ZPipeX */
   t->w_btab_a = t->wx.btab_a;
-  t->w_ftab_ok = t->wx.ftab_ok; t->w_ftab_k = t->wx.ftab_k; t->w_bt8_a = t->wx.bt8_a;
   t->w_satab_a = t->wx.satab_a;
 }
 
@@ -482,14 +477,14 @@ static S31Thr *thr_new(GLContext *c)
   while (t->rsize < (unsigned int)t_ring_kb * 1024u) t->rsize <<= 1;
   t->ring = gl_malloc(t->rsize);
   t->w_wtab = gl_malloc(1024 + 4096);
-  t->w_btab = gl_malloc(192 + 256 + 256);  /* zpipe_fused.c ZF_BTAB_BYTES */
+  t->w_btab = gl_malloc(192);
   t->w_satab = gl_malloc(256);
   if (!t->ring || !t->w_wtab || !t->w_btab || !t->w_satab) {
     gl_free(t->ring); gl_free(t->w_wtab); gl_free(t->w_btab); gl_free(t->w_satab);
     gl_free(t);
     return NULL;
   }
-  t->w_wtab_sh = t->w_btab_a = t->w_satab_a = t->w_bt8_a = -1;
+  t->w_wtab_sh = t->w_btab_a = t->w_satab_a = -1;
   t->hot.own = t->own;
   t->hot.wcnt = t->wcnt;
   t->rows = -1;

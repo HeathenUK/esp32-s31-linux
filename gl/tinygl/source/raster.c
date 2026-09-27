@@ -49,13 +49,10 @@ static void to_vg(GLContext *c, ZVtxG *g, const GLVertex *v)
   g->x = v->zp.fx;
   g->y = v->zp.fy;
   g->z = v->zp.z;
-  if (c->vg_col) {
-    /* (phase 6 tier 3: only when the batch reads them, gl_build_pipe) */
-    g->r = (float)c816(v->zp.r, ZB_POINT_RED_MIN, KR);
-    g->g = (float)c816(v->zp.g, ZB_POINT_GREEN_MIN, KG);
-    g->b = (float)c816(v->zp.b, ZB_POINT_BLUE_MIN, KB);
-    g->a = (float)f816(v->color.v[3]);
-  }
+  g->r = (float)c816(v->zp.r, ZB_POINT_RED_MIN, KR);
+  g->g = (float)c816(v->zp.g, ZB_POINT_GREEN_MIN, KG);
+  g->b = (float)c816(v->zp.b, ZB_POINT_BLUE_MIN, KB);
+  g->a = (float)f816(v->color.v[3]);
   g->q = winv;
   g->f = c->raster_fog ? v->fog * 255.0f * winv : 0.0f;
   /* the filler forms s/w, t/w from these as tier 1 does */

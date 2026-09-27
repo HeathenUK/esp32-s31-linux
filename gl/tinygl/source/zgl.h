@@ -708,10 +708,7 @@ typedef struct GLContext {
   int zf8_on;                   /* S31GL_ZF8 (default 1): phase 6 zf8's world
                                    filler (0: the loop before it; 2: with the
                                    next row's prefetches; 3: a call a span,
-                                   not a triangle (tier 2); 4: tier 2 without
-                                   phase 6 tier 3 - the A/B arms) */
-  int vg_col;                   /* phase 6 tier 3 (raster.c to_vg): the general
-                                   filler reads vertex colours (gl_build_pipe) */
+                                   not a triangle (tier 2) - the A/B arms) */
 } GLContext;
 
 /* GLContext.p4_en */

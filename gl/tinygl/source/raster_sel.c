@@ -958,10 +958,6 @@ void gl_build_pipe(GLContext *c)
             (c->raster_sepspec && !flat ? ZP_N_SPEC : 0) |
             (t1 ? ZP_N_ST1 | ZP_N_Q : 0);
   x->need0 = p->need;
-  /* phase 6 tier 3: the vertex colours to_vg converts are read only by
-     the colour planes (ZP_N_RGBA) and the perspective-colour choice
-     (ZPX_PC, set only with them) - S31GL_ZF8=3 and 4 convert them always */
-  c->vg_col = (p->need & ZP_N_RGBA) || c->zf8_on == 3 || c->zf8_on == 4;
   x->slot_col = islotc >= 0 ? &p->st[islotc] : NULL;
   u0->slot = islot0 >= 0 ? &p->st[islot0] : NULL;
   u1->slot = islot1 >= 0 ? &p->st[islot1] : NULL;

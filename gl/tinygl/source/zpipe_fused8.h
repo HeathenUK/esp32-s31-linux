@@ -762,7 +762,7 @@ static void zf8_world_xs(const ZPipe *p, const ZSpan *s, ZFrag *f)
    texel stages, then each unit's texels as words (a 565 unit's UNPACK, its
    A8 plane or 255), then the loop of zf_alias_t on words */
 static inline __attribute__((always_inline))
-void zf8_alias_t(const ZPipe *p, const ZSpan *s, ZFrag *f, const int BL, const int OP)
+void zf8_alias_t(const ZPipe *p, const ZSpan *s, ZFrag *f, const int BL)
 {
   const ZPipeX *x = p->x;
   PIXEL *pp = s->pp;
@@ -804,11 +804,7 @@ void zf8_alias_t(const ZPipe *p, const ZSpan *s, ZFrag *f, const int BL, const i
     g = clamp255(g + (int)((t1 >> 8) & 255));
     b = clamp255(b + (int)((t1 >> 16) & 255));
     if (a1on) a = clamp255(MUL8(a, (int)(t1 >> 24)));
-    if (BL && OP && a == 255) {
-      /* phase 6 tier 3: MUL8(v, 255) is v and MUL8(d, 0) is 0 (both
-         definitions of MUL8), so an opaque fragment blends to itself */
-      pp[i] = PACK(r, g, b);
-    } else if (BL) {
+    if (BL) {
       int dr, dg, db;
       UNPACK(pp[i], dr, dg, db);
       pp[i] = PACK(MUL8(r, a) + MUL8(dr, 255 - a), MUL8(g, a) + MUL8(dg, 255 - a),
@@ -818,11 +814,8 @@ void zf8_alias_t(const ZPipe *p, const ZSpan *s, ZFrag *f, const int BL, const i
     }
   }
 }
-static void zf8_alias_bl(const ZPipe *p, const ZSpan *s, ZFrag *f) { zf8_alias_t(p, s, f, 1, 0); }
-static void zf8_alias_st(const ZPipe *p, const ZSpan *s, ZFrag *f) { zf8_alias_t(p, s, f, 0, 0); }
-/* phase 6 tier 3: zf8_alias_bl storing opaque fragments as they are
-   (S31GL_ZF8=3 or 4: zf8_alias_bl) */
-static void zf8_alias_blo(const ZPipe *p, const ZSpan *s, ZFrag *f) { zf8_alias_t(p, s, f, 1, 1); }
+static void zf8_alias_bl(const ZPipe *p, const ZSpan *s, ZFrag *f) { zf8_alias_t(p, s, f, 1); }
+static void zf8_alias_st(const ZPipe *p, const ZSpan *s, ZFrag *f) { zf8_alias_t(p, s, f, 0); }
 
 /* ------------------------------------------------------------ one unit */
 
@@ -936,7 +929,7 @@ static inline void zf8_bil0(const ZPipe *p, const ZSpan *s, ZFrag *f)
    signatures, the texenv8 stages' arithmetic */
 static inline __attribute__((always_inline))
 void zf8_one_t(const ZPipe *p, const ZSpan *s, ZFrag *f, const int COL, const int ENV,
-               const int AT, const int ZW, const int OUT, const int FT)
+               const int AT, const int ZW, const int OUT)
 {
   const ZPipeX *x = p->x;
   PIXEL *pp = s->pp;
@@ -971,18 +964,6 @@ void zf8_one_t(const ZPipe *p, const ZSpan *s, ZFrag *f, const int COL, const in
           if (!f->m[i]) continue;
           pp[i] = PACK(sr + bt[32 + (d >> 11)], sg + bt[128 + ((d >> 5) & 63)],
                        sb + bt[32 + (d & 31)]);
-        }
-      } else if (FT) {
-        /* phase 6 tier 3: the source half from a MUL8 table too */
-        const unsigned char *b8 = bt + ZF_BT8;
-        if (x->bt8_a != fa) zf_bt8((ZPipeX *)x, fa);
-        for (i = 0; i < n; i++) {
-          unsigned int d = pp[i], t;
-          if (!f->m[i]) continue;
-          t = tw[idx[i]];
-          pp[i] = PACK(b8[t & 255] + bt[32 + (d >> 11)],
-                       b8[(t >> 8) & 255] + bt[128 + ((d >> 5) & 63)],
-                       b8[(t >> 16) & 255] + bt[32 + (d & 31)]);
         }
       } else {
         for (i = 0; i < n; i++) {
@@ -1049,7 +1030,7 @@ void zf8_one_t(const ZPipe *p, const ZSpan *s, ZFrag *f, const int COL, const in
 }
 
 #define ZF8_ONE(name, COL, ENV, AT, ZW, OUT) \
-static void name(const ZPipe *p, const ZSpan *s, ZFrag *f) { zf8_one_t(p, s, f, COL, ENV, AT, ZW, OUT, 0); }
+static void name(const ZPipe *p, const ZSpan *s, ZFrag *f) { zf8_one_t(p, s, f, COL, ENV, AT, ZW, OUT); }
 ZF8_ONE(zf8_sbar, C_FLAT, E_REP_RGB, 0, 0, O_SAOMSA)
 ZF8_ONE(zf8_pic, C_FLAT, E_REP_RGB, 1, 0, O_STORE)
 ZF8_ONE(zf8_pica, C_NONE, E_REP_RGBA, 1, 0, O_STORE)
@@ -1063,17 +1044,11 @@ ZF8_ONE(zf8_water, C_NONE, E_REP_RGB, 0, 0, O_STORE)
 ZF8_ONE(zf8_alias1, C_SMOOTH, E_COMB_MT, 0, 0, O_STORE)
 ZF8_ONE(zf8_part, C_FLAT, E_MOD_RGBA, 0, 0, O_SAOMSA)
 ZF8_ONE(zf8_glow, C_FLAT, E_MOD_RGB, 0, 0, O_ONEONE)
-/* phase 6 tier 3: zf8_sbar with the source half from a table (S31GL_ZF8=3
-   or 4: zf8_sbar, the tier 2 code) */
-static void zf8_sbart(const ZPipe *p, const ZSpan *s, ZFrag *f)
-{
-  zf8_one_t(p, s, f, C_FLAT, E_REP_RGB, 0, 0, O_SAOMSA, 1);
-}
 
 /* zf1_pick's signatures on the texenv8 stages (a view blend has no
    texture: it is zf1_pick's own) */
 __attribute__((cold))
-static ZStageFn zf1_pick8(const ZPipeX *x, const ZStageFn *st, int z8)
+static ZStageFn zf1_pick8(const ZPipeX *x, const ZStageFn *st)
 {
   int k = 0, col = C_NONE, env = E_NONE, at = 0, zw = 0, out;
   ZStageFn e;
@@ -1110,8 +1085,7 @@ static ZStageFn zf1_pick8(const ZPipeX *x, const ZStageFn *st, int z8)
   if (st[k + 1]) return NULL;
   if (env == E_REP_RGBA) col = C_NONE;
 #define ZF1(C, E, A, Z, O) (col == (C) && env == (E) && at == (A) && zw == (Z) && out == (O))
-  if (ZF1(C_FLAT, E_REP_RGB, 0, 0, O_SAOMSA))
-    return z8 == 3 || z8 == 4 ? zf8_sbar : zf8_sbart;
+  if (ZF1(C_FLAT, E_REP_RGB, 0, 0, O_SAOMSA)) return zf8_sbar;
   if (ZF1(C_FLAT, E_REP_RGB, 1, 0, O_STORE)) return zf8_pic;
   if (ZF1(C_NONE, E_REP_RGBA, 1, 0, O_STORE)) return zf8_pica;
   if (ZF1(C_NONE, E_REP_RGBA, 1, 1, O_STORE)) return zf8_fence;
@@ -1154,7 +1128,7 @@ static ZStageFn zpf8_pick(GLContext *c, int *kind, int *direct,
   *run = zp_run_mt_direct;
   for (n = 0; st[n]; n++) ;
   if (!c->tu1_on) {
-    ZStageFn fn = zf1_pick8(x, st, c->zf8_on);
+    ZStageFn fn = zf1_pick8(x, st);
     if (fn == NULL) return NULL;
     *kind = ZF_ONE;
     /* the level-0 REPEAT bilinear stage, placed once for the batch: its
@@ -1211,8 +1185,7 @@ static ZStageFn zpf8_pick(GLContext *c, int *kind, int *direct,
         *run = k0 == KP8 && d == 0 && x->cb[1].sh[0] == 1 ?
                (c->zf8_on == 2 ? zf8_wnn_rp_p0s1 : zf8_wnn_r_p0s1) : nr[k0][d];
         /* phase 6 tier 2: its triangles a call each (S31GL_ZF8=3: a span) */
-        if (*run == zf8_wnn_r_p0s1 && (c->zf8_on == 1 || c->zf8_on == 4))
-          x->run_tri = zf8_wnn_t_p0s1;
+        if (*run == zf8_wnn_r_p0s1 && c->zf8_on == 1) x->run_tri = zf8_wnn_t_p0s1;
         return nn[k0][d];
       }
     }
@@ -1256,7 +1229,7 @@ static ZStageFn zpf8_pick(GLContext *c, int *kind, int *direct,
                 (prog(c1, 1, ZCF_MODULATE, ZCS_PREVIOUS, ZCO_ALPHA, ZCS_TEXTURE, ZCO_ALPHA) &&
                  c1->sh[1] == 0))) {
       *kind = ZF_ALIAS;
-      return c->zf8_on == 3 || c->zf8_on == 4 ? zf8_alias_bl : zf8_alias_blo;
+      return zf8_alias_bl;
     }
   }
   return NULL;
