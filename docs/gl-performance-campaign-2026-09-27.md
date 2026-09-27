@@ -202,6 +202,26 @@ in-memory-patching preloads; musl itself stays untouched.
   fused soft-double operator_output for OpenTyrian's OPL that unpacks once
   and rounds each step exactly. These are held until ruled on.
 
+## Queued: lvdesk leaves a dead client frame on screen (found 2026-09-27 12:35)
+
+After a windowed sdlquake timedemo exited (22.5 fps), its last frame stayed
+on the panel. Only an L-shaped part of the area was repainted with the
+desktop. The log shows `fullscreen off`, then both X clients gone with no
+errors.
+
+- **Suspect:** the 16-bit fast present (xwin_fast_present16, f0c2e1f) and
+  the indexed fast path write straight into the scanout, bypassing LVGL. On
+  lv_obj_delete(win), LVGL repaints only what it believes it drew. The
+  fullscreen-off/restore geometry may also make the invalidated area smaller
+  than the area the fast path actually drew.
+- **Likely fix:** track per window the union of rectangles the fast paths
+  drew, and on window close/unmap, and on leaving fullscreen, invalidate
+  that union on the screen, so LVGL repaints the desktop there.
+- **Test:** start and close windowed and fullscreen X clients
+  (glxgears, sdlquake, xcalc), and confirm by screenshot that no residue
+  is left.
+- **Screenshot:** scratchpad now.jpg, sent to the owner.
+
 ## Git note
 
 Commit a97b9851 (this document's first version) also carries the revert of
