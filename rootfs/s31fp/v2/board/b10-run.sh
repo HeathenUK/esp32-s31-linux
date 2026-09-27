@@ -1,6 +1,35 @@
 # leaner colouring: CPU0 and CPU1 distributions, exec cost, exactness. /root/afp2/b10.txt (~5 min)
 cat > /root/afp2/b10-inner.sh <<'IN'
-cd /root/afp2; M=/root/afp2/music.mus; C=/root/afp2/oncpu; P=/root/afp2/libs31fp.so; PD=/root/afp2/libs31fp-colour.so
+cd /root/afp2
+DONE=$2
+[ -z "$DONE" ] || trap 'printf "\n%s\n" "$DONE" > /dev/console' EXIT
+if [ "$1" = placement ]; then
+  unset LD_PRELOAD S31FP_DEBUG
+  X=/usr/lib/libs31fp.so; S=/root/afp2/placement-shipped.so
+  N=/root/afp2/candidate/libs31fp.so
+  cp "$X" "$S" || exit 1
+  echo PLACEMENT_IDENTICAL_INPUTS; md5sum "$X" "$S" "$N"
+  cmp "$X" "$S" || exit 1
+  M=/root/afp2/music.mus; C=/root/afp2/oncpu
+  for r in 1 2 3; do
+    # Reverse paired placement order on alternate rounds.
+    arms="xip-tramp sd-tramp xip-copy sd-copy xip-nocol sd-nocol candidate-copy"
+    [ "$r" = 2 ] && arms="sd-tramp xip-tramp sd-copy xip-copy sd-nocol xip-nocol candidate-copy"
+    for arm in $arms; do
+      P=$X; copy=1; colour=1
+      case $arm in sd-*) P=$S;; candidate-*) P=$N;; esac
+      case $arm in *tramp) copy=0;; *nocol) colour=0;; esac
+      echo "PLACEMENT round=$r arm=$arm"
+      env S31FP=1 S31FP_COPY=$copy S31FP_COLOUR=$colour \
+        S31FP_CACHE=/root/afp2/placement-cache LD_PRELOAD="$P" \
+        "$C" 1 ./oplbench-dyn "$M" 36 2
+      rc=$?; echo "EXIT=$rc"; [ "$rc" = 0 ] || exit 1
+    done
+  done
+  echo PLACEMENT_DONE
+  exit
+fi
+M=/root/afp2/music.mus; C=/root/afp2/oncpu; P=/root/afp2/libs31fp.so; PD=/root/afp2/libs31fp-colour.so
 K=/root/afp2/cache10; rm -rf $K
 OPS="mul add sub div ge le eq unord fltsi fltun fixsi fixun ext trunc"
 echo "== uname $(uname -v)  md5 $(md5sum $P | cut -c1-8)"
@@ -31,5 +60,5 @@ for r in 1 2; do for A in "./oplbench-dyn" "./sdltone1" "/usr/bin/amixer -v"; do
 done; done
 echo B10_DONE
 IN
-setsid sh /root/afp2/b10-inner.sh </dev/null >/root/afp2/b10.txt 2>&1 &
+setsid sh /root/afp2/b10-inner.sh "${B10_MODE:-legacy}" "${B10_DONE_TOKEN:-}" </dev/null >"${B10_OUT:-/root/afp2/b10.txt}" 2>&1 &
 echo B10_STARTED

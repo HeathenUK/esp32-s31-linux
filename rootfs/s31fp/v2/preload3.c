@@ -50,9 +50,22 @@ extern char **environ;
 /* ---- raw syscalls (riscv32 Linux) ---- */
 static long sc(long n, long a, long b, long c, long d, long e)
 {
+#ifdef S31FP_TEST_REMAP_FAIL
+	/* Test-only: Linux MREMAP_FIXED may remove the destination before an
+	 * allocation fails. Reproduce that destructive failure, not a harmless
+	 * early error. Never enabled in a shipping build. */
+	if (n == 216) { sc(215, e, c, 0, 0, 0); return -12; }
+#endif
+#ifdef S31FP_TEST_RX_FAIL
+	if (n == 226 && c == 5) return -12;
+#endif
+#ifdef S31FP_TEST_RW_FAIL
+	if (n == 226 && c == 3) return -12;
+#endif
 	register long a7 __asm__("a7") = n, a0 __asm__("a0") = a, a1 __asm__("a1") = b,
-		a2 __asm__("a2") = c, a3 __asm__("a3") = d, a4 __asm__("a4") = e;
-	__asm__ volatile("ecall" : "+r"(a0) : "r"(a7), "r"(a1), "r"(a2), "r"(a3), "r"(a4) : "memory");
+		a2 __asm__("a2") = c, a3 __asm__("a3") = d, a4 __asm__("a4") = e,
+		a5 __asm__("a5") = 0; /* mmap2's sixth argument: page offset, not garbage */
+	__asm__ volatile("ecall" : "+r"(a0) : "r"(a7), "r"(a1), "r"(a2), "r"(a3), "r"(a4), "r"(a5) : "memory");
 	return a0;
 }
 #define NR_openat 56
@@ -80,6 +93,17 @@ static long sc(long n, long a, long b, long c, long d, long e)
 #define PG 4096u
 
 static int dbg;
+/* Once a fixed remap has begun, a failed syscall may have removed executable
+ * pages. Never enter the application with missing/NX/partially patched text.
+ * This is unconditional, unlike debug diagnostics, and uses no libc. */
+__attribute__((noreturn)) static void fatal(const char *s)
+{
+	size_t n = 0;
+	while (s[n]) n++;
+	sc(NR_write, 2, (long)s, n, 0, 0);
+	sc(94 /* exit_group */, 125, 0, 0, 0, 0);
+	for (;;) {}
+}
 static void say(const char *s) { size_t n = 0; if (!dbg) return; while (s[n]) n++; sc(NR_write, 2, (long)s, n, 0, 0); }
 static void sayx(const char *s, unsigned long v)
 {
@@ -167,7 +191,7 @@ static void scan(const unsigned char *b, unsigned len)
 }
 
 /*
- * Copy-in-place (default; S31FP_COPY=0 keeps the trampoline everywhere):
+ * Copy-in-place (opt-in with S31FP_COPY=1):
  * where the v2 routine fits inside libgcc's body, the routine itself is
  * copied over it, so the program calls our code directly - no auipc/jalr
  * hop, and the hot code sits in the program's own (COW) pages rather than in
@@ -253,8 +277,10 @@ static void colours(uintptr_t lo, uintptr_t hi, const char *tag)
  * moved over the text page with mremap BEFORE anything is written: the page
  * arrives RW and not executable, holding the original bytes; the patch
  * writes follow, then the single RX mprotect does the cache maintenance
- * exactly as without colouring. Any failure leaves that page to the normal
- * COW: correct, only uncoloured. (The same technique as RAMTEXT tier 6,
+ * exactly as without colouring. Pool/pagemap failures leave normal COW.
+ * A failed MREMAP_FIXED is different: Linux may already have unmapped the
+ * destination. Stop explicitly rather than run damaged executable text.
+ * (The same placement technique as RAMTEXT tier 6,
  * gl/bench/t6src/tinygl/source/s31_ramtext.c rc_place.)
  */
 #define POOL 16
@@ -264,11 +290,20 @@ static unsigned ncoloured, ncoltried;
 /* colours of n consecutive pages from va, in ONE pread (-1 = unknown) */
 static void frame_colours(long fd, uintptr_t va, unsigned n, int *col)
 {
+#ifdef S31FP_TEST_REMAP_FAIL
+	/* Exercise the move in QEMU too, where real PFNs are not available. */
+	for (unsigned i = 0; i < n; i++) col[i] = 0;
+	return;
+#endif
 	uint64_t e[POOL];
 	long r = sc(NR_pread64, fd, (long)e, 8 * n, (long)((va / PG) * 8), 0);
+	if (r != (long)(8 * n)) {
+		for (unsigned i = 0; i < n; i++) col[i] = -1;
+		return;
+	}
 	for (unsigned i = 0; i < n; i++) {
 		uint64_t pfn = e[i] & ((1ULL << 55) - 1);
-		col[i] = (r == (long)(8 * n) && (e[i] >> 63) && pfn) ? (int)(pfn & 3) : -1;
+		col[i] = ((e[i] >> 63) && pfn) ? (int)(pfn & 3) : -1;
 	}
 }
 
@@ -306,10 +341,11 @@ static void colour_pages(uintptr_t lo, uintptr_t hi)
 				const uint32_t *src = (const uint32_t *)(lo + k * PG);
 				uint32_t *dst = (uint32_t *)((uintptr_t)m + i * PG);
 				for (unsigned w = 0; w < PG / 4; w++) dst[w] = src[w];
+				if (sc(NR_mremap, (long)dst, PG, PG, 3 /* MAYMOVE|FIXED */, (long)(lo + k * PG)) != (long)(lo + k * PG))
+					fatal("s31fp: fatal: fixed remap failed; executable may be unmapped (exit 125)\n");
 				used[nch] |= 1u << i;
 				done |= 1u << k;
-				if (sc(NR_mremap, (long)dst, PG, PG, 3 /* MAYMOVE|FIXED */, (long)(lo + k * PG)) == (long)(lo + k * PG))
-					ncoloured++;
+				ncoloured++;
 				break;
 			}
 		}
@@ -338,9 +374,16 @@ static unsigned patch(unsigned char *b)
 #ifdef S31FP_COLOURDBG
 	colours(lo, hi, "before");
 #endif
+	/* Acquire write permissions before colouring changes any mapping. On a
+	 * failure, restore RX in case mprotect processed only part of the range. */
+	if (sc(NR_mprotect, lo, hi - lo, PROT_R | PROT_W, 0, 0)) {
+		if (sc(NR_mprotect, lo, hi - lo, PROT_R | PROT_X, 0, 0))
+			fatal("s31fp: fatal: could not restore executable permissions (exit 125)\n");
+		say("s31fp: mprotect RW failed, nothing patched\n");
+		return 0;
+	}
 	if (colour_on && ncopied_planned(clen))
 		colour_pages(lo, hi);
-	if (sc(NR_mprotect, lo, hi - lo, PROT_R | PROT_W, 0, 0)) { say("s31fp: mprotect RW failed, nothing patched\n"); return 0; }
 	for (i = 0; i < nsite; i++) {
 		uint32_t *at = (uint32_t *)(b + soff[i]);
 		if (clen[i]) {
@@ -358,11 +401,10 @@ static unsigned patch(unsigned char *b)
 		hw[2] = (uint16_t)i1; hw[3] = (uint16_t)(i1 >> 16);
 	}
 	/* RX: the exec-PTE hook writes the D-cache back and invalidates the I-cache */
-	if (sc(NR_mprotect, lo, hi - lo, PROT_R | PROT_X, 0, 0)) {
-		say("s31fp: mprotect RX failed\n");
-		sc(NR_mprotect, lo, hi - lo, PROT_R | PROT_X, 0, 0);
-	}
-	sc(NR_riscv_flush_icache, lo, hi, 0, 0, 0);
+	if (sc(NR_mprotect, lo, hi - lo, PROT_R | PROT_X, 0, 0))
+		fatal("s31fp: fatal: patched text could not become executable (exit 125)\n");
+	if (sc(NR_riscv_flush_icache, lo, hi, 0, 0, 0))
+		fatal("s31fp: fatal: instruction-cache flush failed (exit 125)\n");
 	__asm__ volatile("fence.i" ::: "memory");
 #ifdef S31FP_COLOURDBG
 	colours(lo, hi, "after");

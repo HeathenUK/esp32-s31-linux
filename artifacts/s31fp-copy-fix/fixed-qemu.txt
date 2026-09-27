@@ -1,0 +1,104 @@
+s31fp: scanned main text, patched 0x0000000e
+s31fp: of which copied in place 0x0000000d
+s31fp: pages given their original frame colour 0x00000000
+libgcc!=hw mul rm4 a=504fffffffffffff b=7feb4b41aa145b10 libgcc=7fefffffffffffff/05 hw=7ff0000000000000/05
+libgcc!=hw mul rm4 a=4039644e23dd1ae8 b=4039644e23dd1ae8 libgcc=408425f481286ef0/01 hw=408425f481286ef1/01
+libgcc!=hw mul rm4 a=3298b65fb3ef9a6f b=42591d219fffffff libgcc=350364fa02f0d1dc/01 hw=350364fa02f0d1dd/01
+libgcc!=hw mul rm4 a=c0b501bd412c799d b=c6db429b0fffffff libgcc=47a1e531104184a6/01 hw=47a1e531104184a7/01
+libgcc!=hw mul rm4 a=c19934e800000000 b=ffc54aabd65bda32 libgcc=7fefffffffffffff/05 hw=7ff0000000000000/05
+libgcc!=hw mul rm4 a=33888fd5afe173ff b=b3888fd5afe173fd libgcc=a722da470b390e29/01 hw=a722da470b390e2a/01
+RESULT mul: 1000000 operand sets (+250171 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 20443 libgcc-vs-hw differences; RNE fast-path share 100.0%; libgcc non-canonical NaN results 0
+s31fp: scanned main text, patched 0x0000000e
+s31fp: of which copied in place 0x0000000d
+s31fp: pages given their original frame colour 0x00000000
+libgcc!=hw add rm4 a=9f80000000000000 b=41d3d464c2800000 libgcc=41d3d464c27fffff/01 hw=41d3d464c2800000/01
+libgcc!=hw add rm4 a=0032994b9233976b b=0032994b9233976a libgcc=0042994b9233976a/13 hw=0042994b9233976b/13
+libgcc!=hw add rm4 a=bed4000000000000 b=bed4000000000001 libgcc=bee4000000000000/01 hw=bee4000000000001/01
+libgcc!=hw add rm4 a=b288b092d9453ca1 b=00000a5dbe97a787 libgcc=b288b092d9453ca0/01 hw=b288b092d9453ca1/01
+libgcc!=hw add rm4 a=2ea2326c3d610d02 b=cac0000000000000 libgcc=cabfffffffffffff/03 hw=cac0000000000000/03
+libgcc!=hw add rm4 a=c47ffa2550000000 b=329555d11abcb5d7 libgcc=c47ffa254fffffff/01 hw=c47ffa2550000000/01
+RESULT add: 1000000 operand sets (+250171 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 17651 libgcc-vs-hw differences; RNE fast-path share 100.0%; libgcc non-canonical NaN results 0
+s31fp: scanned main text, patched 0x0000000e
+s31fp: of which copied in place 0x0000000d
+s31fp: pages given their original frame colour 0x00000000
+libgcc!=hw sub rm4 a=504fffffffffffff b=7feb4b41aa145b10 libgcc=ffeb4b41aa145b0f/01 hw=ffeb4b41aa145b10/01
+libgcc!=hw sub rm4 a=c8680c366459d5d7 b=9140000000000000 libgcc=c8680c366459d5d6/0b hw=c8680c366459d5d7/0b
+libgcc!=hw sub rm4 a=3298b65fb3ef9a6f b=42591d219fffffff libgcc=c2591d219ffffffe/01 hw=c2591d219fffffff/01
+libgcc!=hw sub rm4 a=c0b501bd412c799d b=c6db429b0fffffff libgcc=46db429b0ffffffe/01 hw=46db429b0fffffff/01
+libgcc!=hw sub rm4 a=c01a7bace8d3ab90 b=88e0000000000000 libgcc=c01a7bace8d3ab8f/05 hw=c01a7bace8d3ab90/05
+libgcc!=hw sub rm4 a=c19934e800000000 b=ffc54aabd65bda32 libgcc=7fc54aabd65bda31/01 hw=7fc54aabd65bda32/01
+RESULT sub: 1000000 operand sets (+250171 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 18433 libgcc-vs-hw differences; RNE fast-path share 100.0%; libgcc non-canonical NaN results 0
+s31fp: scanned main text, patched 0x0000000e
+s31fp: of which copied in place 0x0000000d
+s31fp: pages given their original frame colour 0x00000000
+libgcc!=hw div rm4 a=504fffffffffffff b=7feb4b41aa145b10 libgcc=1052c23b95778a8c/01 hw=1052c23b95778a8d/01
+libgcc!=hw div rm4 a=c1d03830c2c00000 b=c7a61b4b7fffffff libgcc=3a177a6bbe8d1c28/17 hw=3a177a6bbe8d1c29/17
+libgcc!=hw div rm4 a=0032994b9233976b b=0032994b9233976a libgcc=3ff0000000000000/13 hw=3ff0000000000001/13
+libgcc!=hw div rm4 a=7fc30d1484401262 b=7fc30d1484401260 libgcc=3ff0000000000001/01 hw=3ff0000000000002/01
+libgcc!=hw div rm4 a=41e0310f23f91002 b=c20d690000000000 libgcc=bfc19e122c8350b1/0d hw=bfc19e122c8350b2/0d
+libgcc!=hw div rm4 a=41e00000a06f9667 b=40f7e40000000000 libgcc=40d56e56e5f66802/05 hw=40d56e56e5f66803/05
+RESULT div: 1000000 operand sets (+249947 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 17475 libgcc-vs-hw differences; RNE fast-path share 100.0%; libgcc non-canonical NaN results 0
+s31fp: scanned main text, patched 0x0000000e
+s31fp: of which copied in place 0x0000000d
+s31fp: pages given their original frame colour 0x00000000
+RESULT ge: 1000000 operand sets (+250171 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE fast-path share 100.0%; libgcc non-canonical NaN results 0
+s31fp: scanned main text, patched 0x0000000e
+s31fp: of which copied in place 0x0000000d
+s31fp: pages given their original frame colour 0x00000000
+RESULT le: 1000000 operand sets (+250171 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE fast-path share 100.0%; libgcc non-canonical NaN results 0
+s31fp: scanned main text, patched 0x0000000e
+s31fp: of which copied in place 0x0000000d
+s31fp: pages given their original frame colour 0x00000000
+RESULT eq: 1000000 operand sets (+250171 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE fast-path share 100.0%; libgcc non-canonical NaN results 0
+s31fp: scanned main text, patched 0x0000000e
+s31fp: of which copied in place 0x0000000d
+s31fp: pages given their original frame colour 0x00000000
+RESULT unord: 1000000 operand sets (+250171 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE fast-path share 100.0%; libgcc non-canonical NaN results 0
+s31fp: scanned main text, patched 0x0000000e
+s31fp: of which copied in place 0x0000000d
+s31fp: pages given their original frame colour 0x00000000
+RESULT fltsi: 1000000 operand sets (+249752 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE fast-path share 100.0%; libgcc non-canonical NaN results 0
+s31fp: scanned main text, patched 0x0000000e
+s31fp: of which copied in place 0x0000000d
+s31fp: pages given their original frame colour 0x00000000
+RESULT fltun: 1000000 operand sets (+249752 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE fast-path share 100.0%; libgcc non-canonical NaN results 0
+s31fp: scanned main text, patched 0x0000000e
+s31fp: of which copied in place 0x0000000d
+s31fp: pages given their original frame colour 0x00000000
+libgcc!=hw fixsi rm0 a=fff8000000000000 b=0000000000000000 libgcc=0000000080000000/13 hw=000000007fffffff/13
+libgcc!=hw fixsi rm0 a=fffc3a51e2da83a4 b=0000000000000000 libgcc=0000000080000000/10 hw=000000007fffffff/10
+libgcc!=hw fixsi rm0 a=fff8000000000000 b=0000000000000000 libgcc=0000000080000000/10 hw=000000007fffffff/10
+libgcc!=hw fixsi rm0 a=fff8000000000000 b=0000000000000000 libgcc=0000000080000000/10 hw=000000007fffffff/10
+libgcc!=hw fixsi rm0 a=fffdece90934e74d b=0000000000000000 libgcc=0000000080000000/1a hw=000000007fffffff/1a
+libgcc!=hw fixsi rm0 a=fffd836ac7fb6286 b=0000000000000000 libgcc=0000000080000000/16 hw=000000007fffffff/16
+RESULT fixsi: 1000000 operand sets (+249408 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 31518 libgcc-vs-hw differences; RNE fast-path share 100.0%; libgcc non-canonical NaN results 0
+s31fp: scanned main text, patched 0x0000000e
+s31fp: of which copied in place 0x0000000d
+s31fp: pages given their original frame colour 0x00000000
+libgcc!=hw fixun rm0 a=fff8000000000000 b=0000000000000000 libgcc=0000000000000000/13 hw=00000000ffffffff/13
+libgcc!=hw fixun rm0 a=fffc3a51e2da83a4 b=0000000000000000 libgcc=0000000000000000/10 hw=00000000ffffffff/10
+libgcc!=hw fixun rm0 a=fff8000000000000 b=0000000000000000 libgcc=0000000000000000/10 hw=00000000ffffffff/10
+libgcc!=hw fixun rm0 a=fff8000000000000 b=0000000000000000 libgcc=0000000000000000/10 hw=00000000ffffffff/10
+libgcc!=hw fixun rm0 a=fffdece90934e74d b=0000000000000000 libgcc=0000000000000000/1a hw=00000000ffffffff/1a
+libgcc!=hw fixun rm0 a=fffd836ac7fb6286 b=0000000000000000 libgcc=0000000000000000/16 hw=00000000ffffffff/16
+RESULT fixun: 1000000 operand sets (+249408 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 31518 libgcc-vs-hw differences; RNE fast-path share 100.0%; libgcc non-canonical NaN results 0
+s31fp: scanned main text, patched 0x0000000e
+s31fp: of which copied in place 0x0000000d
+s31fp: pages given their original frame colour 0x00000000
+libgcc!=hw ext rm0 a=00000000ffeacd58 b=0000000000000000 libgcc=fffd59ab00000000/00 hw=7ff8000000000000/00
+libgcc!=hw ext rm0 a=00000000fffb240a b=0000000000000000 libgcc=ffff648140000000/00 hw=7ff8000000000000/00
+libgcc!=hw ext rm0 a=000000007fd876ef b=0000000000000000 libgcc=7ffb0edde0000000/00 hw=7ff8000000000000/00
+libgcc!=hw ext rm0 a=000000007fc5cfef b=0000000000000000 libgcc=7ff8b9fde0000000/12 hw=7ff8000000000000/12
+libgcc!=hw ext rm0 a=000000007fdacfcd b=0000000000000000 libgcc=7ffb59f9a0000000/15 hw=7ff8000000000000/15
+libgcc!=hw ext rm0 a=000000007fcbf8e1 b=0000000000000000 libgcc=7ff97f1c20000000/03 hw=7ff8000000000000/03
+RESULT ext: 1000000 operand sets (+250037 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 275162 libgcc-vs-hw differences; RNE fast-path share 100.0%; libgcc non-canonical NaN results 0
+s31fp: scanned main text, patched 0x0000000e
+s31fp: of which copied in place 0x0000000d
+s31fp: pages given their original frame colour 0x00000000
+libgcc!=hw trunc rm4 a=c14ba31530800000 b=0000000000000000 libgcc=00000000ca5d18a9/1b hw=00000000ca5d18aa/1b
+libgcc!=hw trunc rm4 a=3719dd89d8176192 b=0000000000000000 libgcc=00000000000000ce/07 hw=00000000000000cf/07
+libgcc!=hw trunc rm4 a=41a6687ad1325acb b=0000000000000000 libgcc=000000004d3343d6/01 hw=000000004d3343d7/01
+libgcc!=hw trunc rm4 a=ffc54aabd65bda32 b=0000000000000000 libgcc=00000000ff7fffff/05 hw=00000000ff800000/05
+libgcc!=hw trunc rm4 a=7420000000000000 b=0000000000000000 libgcc=000000007f7fffff/0d hw=000000007f800000/0d
+libgcc!=hw trunc rm4 a=c65ee5f2f0abc849 b=0000000000000000 libgcc=00000000f2f72f97/01 hw=00000000f2f72f98/01
+RESULT trunc: 1000000 operand sets (+249608 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 23759 libgcc-vs-hw differences; RNE fast-path share 100.0%; libgcc non-canonical NaN results 0

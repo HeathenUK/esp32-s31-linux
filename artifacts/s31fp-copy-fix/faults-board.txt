@@ -1,0 +1,126 @@
+sh /tmp/r.sh 2>&1 & __rp=$!; ( trap 'kill "$__rs_sleep" 2>/dev/null; wait "$
+__rs_sleep" 2>/dev/null; exit' TERM INT; sleep 27 & __rs_sleep=$!; wait "$__rs_s
+leep"; kill -0 $__rp 2>/dev/null && { echo RS_TIME"K"ILL; kill -9 $__rp 2>/dev/n
+ull; } ) & __rw=$!; wait $__rp 2>/dev/null; kill $__rw 2>/dev/null; wait $__rw 2
+>/dev/null; echo RS_DONE
+Linux esp32-s31 7.1.10 #401 SMP Sun Sep 27 09:58:01 UTC 2026 riscv32 GNU/Linux
+CASE before REMAP
+s31fp: mprotect RW failed, nothing patched
+s31fp: scanned main text, patched 0x00000000
+s31fp: of which copied in place 0x00000000
+s31fp: pages given their original frame colour 0x00000000
+SEGVTRAP holding fault handlers
+SEGVTRAP sig 0000000b code 00000001 addr 690f30b0 pc 690f30b0 ra 690f127e sp 9d6dc8b0
+690f0000-690f3000 r-xp 00000000 b3:00 3767       /root/afp2/ptest-dyn
+690f9000-690fa000 r-xp 00009000 b3:00 3767       /root/afp2/ptest-dyn
+690fa000-690fb000 r--p 0000a000 b3:00 3767       /root/afp2/ptest-dyn
+690fb000-690fc000 rw-p 0000b000 b3:00 3767       /root/afp2/ptest-dyn
+690fc000-6910c000 rw-p 00000000 00:00 0 
+69926000-69927000 ---p 00000000 00:00 0          [heap]
+69927000-69928000 rw-p 00000000 00:00 0          [heap]
+95695000-95699000 rw-p 00000000 00:00 0 
+95699000-9569a000 r-xp 00000000 b3:00 3884       /root/afp2/segvtrap-copy.so
+9569a000-9569b000 r--p 00000000 b3:00 3884       /root/afp2/segvtrap-copy.so
+9569b000-9569c000 rw-p 00001000 b3:00 3884       /root/afp2/segvtrap-copy.so
+9569c000-956a0000 rw-p 00000000 00:00 0 
+956a0000-956a7000 r-xp 00000000 b3:00 3909       /root/afp2/candidate/before-REMAP.so
+956a7000-956a8000 r--p 00006000 b3:00 3909       /root/afp2/candidate/before-REMAP.so
+956a8000-956a9000 rw-p 00007000 b3:00 3909       /root/afp2/candidate/before-REMAP.so
+956a9000-956ad000 r--p 00000000 00:00 0          [vvar]
+956ad000-956ae000 r-xp 00000000 00:00 0          [vdso]
+956ae000-95756000 r-xp 00000000 00:19 3830316    /usr/lib/libc.so
+95756000-95758000 rw-p 000a7000 00:19 3830316    /usr/lib/libc.so
+95758000-95759000 rw-p 00000000 00:00 0 
+9d6bc000-9d6dd000 rw-p 00000000 00:00 0          [stack]
+SEGVTRAP end
+Segmentation fault
+EXIT=139 BYTES=0
+CASE after REMAP
+s31fp: fatal: fixed remap failed; executable may be unmapped (exit 125)
+EXIT=125 BYTES=0
+CASE before RX
+s31fp: mprotect RX failed
+s31fp: scanned main text, patched 0x0000001c
+s31fp: of which copied in place 0x0000001a
+s31fp: pages given their original frame colour 0x00000006
+SEGVTRAP holding fault handlers
+SEGVTRAP sig 0000000b code 00000002 addr 6906d0b0 pc 6906d0b0 ra 6906b27e sp 9d0461e0
+6906a000-6906d000 r-xp 00000000 b3:00 3767       /root/afp2/ptest-dyn
+6906d000-6906e000 rw-p 00000000 00:00 0 
+6906e000-6906f000 rw-p 00000000 00:00 0 
+6906f000-69071000 rw-p 00000000 00:00 0 
+69071000-69072000 rw-p 00000000 00:00 0 
+69072000-69073000 rw-p 00000000 00:00 0 
+69073000-69074000 r-xp 00009000 b3:00 3767       /root/afp2/ptest-dyn
+69074000-69075000 r--p 0000a000 b3:00 3767       /root/afp2/ptest-dyn
+69075000-69076000 rw-p 0000b000 b3:00 3767       /root/afp2/ptest-dyn
+69076000-69086000 rw-p 00000000 00:00 0 
+6a0ef000-6a0f0000 ---p 00000000 00:00 0          [heap]
+6a0f0000-6a0f1000 rw-p 00000000 00:00 0          [heap]
+956d4000-956d5000 r-xp 00000000 b3:00 3884       /root/afp2/segvtrap-copy.so
+956d5000-956d6000 r--p 00000000 b3:00 3884       /root/afp2/segvtrap-copy.so
+956d6000-956d7000 rw-p 00001000 b3:00 3884       /root/afp2/segvtrap-copy.so
+956d7000-956db000 rw-p 00000000 00:00 0 
+956db000-956e2000 r-xp 00000000 b3:00 3910       /root/afp2/candidate/before-RX.so
+956e2000-956e3000 r--p 00006000 b3:00 3910       /root/afp2/candidate/before-RX.so
+956e3000-956e4000 rw-p 00007000 b3:00 3910       /root/afp2/candidate/before-RX.so
+956e4000-956e8000 r--p 00000000 00:00 0          [vvar]
+956e8000-956e9000 r-xp 00000000 00:00 0          [vdso]
+956e9000-95791000 r-xp 00000000 00:19 3830316    /usr/lib/libc.so
+95791000-95793000 rw-p 000a7000 00:19 3830316    /usr/lib/libc.so
+95793000-95794000 rw-p 00000000 00:00 0 
+9d026000-9d047000 rw-p 00000000 00:00 0          [stack]
+SEGVTRAP end
+Segmentation fault
+EXIT=139 BYTES=0
+CASE after RX
+s31fp: fatal: patched text could not become executable (exit 125)
+EXIT=125 BYTES=0
+CASE before RW
+s31fp: mprotect RW failed, nothing patched
+s31fp: scanned main text, patched 0x00000000
+s31fp: of which copied in place 0x00000000
+s31fp: pages given their original frame colour 0x00000006
+SEGVTRAP holding fault handlers
+SEGVTRAP sig 0000000b code 00000002 addr 690c70b0 pc 690c70b0 ra 690c527e sp 9d6d6db0
+690c4000-690c7000 r-xp 00000000 b3:00 3767       /root/afp2/ptest-dyn
+690c7000-690c8000 rw-p 00000000 00:00 0 
+690c8000-690c9000 rw-p 00000000 00:00 0 
+690c9000-690ca000 rw-p 00000000 00:00 0 
+690ca000-690cb000 rw-p 00000000 00:00 0 
+690cb000-690cc000 rw-p 00000000 00:00 0 
+690cc000-690cd000 rw-p 00000000 00:00 0 
+690cd000-690ce000 r-xp 00009000 b3:00 3767       /root/afp2/ptest-dyn
+690ce000-690cf000 r--p 0000a000 b3:00 3767       /root/afp2/ptest-dyn
+690cf000-690d0000 rw-p 0000b000 b3:00 3767       /root/afp2/ptest-dyn
+690d0000-690e0000 rw-p 00000000 00:00 0 
+69ab0000-69ab1000 ---p 00000000 00:00 0          [heap]
+69ab1000-69ab2000 rw-p 00000000 00:00 0          [heap]
+95702000-95703000 r-xp 00000000 b3:00 3884       /root/afp2/segvtrap-copy.so
+95703000-95704000 r--p 00000000 b3:00 3884       /root/afp2/segvtrap-copy.so
+95704000-95705000 rw-p 00001000 b3:00 3884       /root/afp2/segvtrap-copy.so
+95705000-95709000 rw-p 00000000 00:00 0 
+95709000-95710000 r-xp 00000000 b3:00 3911       /root/afp2/candidate/before-RW.so
+95710000-95711000 r--p 00006000 b3:00 3911       /root/afp2/candidate/before-RW.so
+95711000-95712000 rw-p 00007000 b3:00 3911       /root/afp2/candidate/before-RW.so
+95712000-95716000 r--p 00000000 00:00 0          [vvar]
+95716000-95717000 r-xp 00000000 00:00 0          [vdso]
+95717000-957bf000 r-xp 00000000 00:19 3830316    /usr/lib/libc.so
+957bf000-957c1000 rw-p 000a7000 00:19 3830316    /usr/lib/libc.so
+957c1000-957c2000 rw-p 00000000 00:00 0 
+9d6b7000-9d6d8000 rw-p 00000000 00:00 0          [stack]
+SEGVTRAP end
+Segmentation fault
+EXIT=139 BYTES=0
+CASE after RW
+s31fp: mprotect RW failed, nothing patched
+s31fp: scanned main text, patched 0x00000000
+s31fp: of which copied in place 0x00000000
+s31fp: pages given their original frame colour 0x00000000
+SEGVTRAP holding fault handlers
+EXIT=0 BYTES=12000
+FAULTS_DONE
+RS_DONE
+[2]+  Done(143)                  (trap "kill \"\$__rs_sleep\" 2>/dev/null; wait \"\$__rs_sleep\" 2>/dev/null; exit" TERM INT; sleep 27; ; wait "${__rs_sleep}"; kill -0 ${__rp} 2>/dev/null && echo RS_TIME"K"ILL; kill -9 ${__rp} 2>/dev/null)
+[1]+  Done                       sh /tmp/r.sh 2>&1
+~ # 

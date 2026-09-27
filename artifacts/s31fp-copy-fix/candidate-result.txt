@@ -1,0 +1,33 @@
+sh /tmp/r.sh 2>&1 & __rp=$!; ( trap 'kill "$__rs_sleep" 2>/dev/null; wait "$
+__rs_sleep" 2>/dev/null; exit' TERM INT; sleep 27 & __rs_sleep=$!; wait "$__rs_s
+leep"; kill -0 $__rp 2>/dev/null && { echo RS_TIME"K"ILL; kill -9 $__rp 2>/dev/n
+ull; } ) & __rw=$!; wait $__rp 2>/dev/null; kill $__rw 2>/dev/null; wait $__rw 2
+>/dev/null; echo RS_DONE
+BOARD Linux esp32-s31 7.1.10 #401 SMP Sun Sep 27 09:58:01 UTC 2026 riscv32 GNU/Linux
+d59b210e4910750c3b211a8f24d476c6  /root/afp2/candidate/libs31fp.so
+55b434acd84d57ab83cd132b71c17a36  /root/afp2/segvtrap-copy.so
+9aa9beaa1eb595c6a85a520fc96f7c90  /root/doom/prboom
+WARMUP tyrian rc=137 expected=137
+WARMUP gears rc=137 expected=137
+WARMUP_FINISHED
+START 1 copycol
+s31fp: scanned main text, patched 0x00000006
+s31fp: of which copied in place 0x00000005
+s31fp: pages given their original frame colour 0x00000002
+SEGVTRAP holding fault handlers
+Timed 5026 gametics in 3638 realtics = 48.4 frames per second
+Timed 5026 gametics in 3638 realtics = 48.4 frames per second
+END 1 copycol rc=255 pass=1
+START 2 copycol
+s31fp: cache hit, patched 0x00000006
+s31fp: of which copied in place 0x00000005
+s31fp: pages given their original frame colour 0x00000002
+SEGVTRAP holding fault handlers
+Timed 5026 gametics in 3684 realtics = 47.7 frames per second
+Timed 5026 gametics in 3684 realtics = 47.7 frames per second
+END 2 copycol rc=255 pass=1
+PB_DONE runs=2 failures=0
+RS_DONE
+[2]+  Done(143)                  (trap "kill \"\$__rs_sleep\" 2>/dev/null; wait \"\$__rs_sleep\" 2>/dev/null; exit" TERM INT; sleep 27; ; wait "${__rs_sleep}"; kill -0 ${__rp} 2>/dev/null && echo RS_TIME"K"ILL; kill -9 ${__rp} 2>/dev/null)
+[1]+  Done                       sh /tmp/r.sh 2>&1
+~ # 

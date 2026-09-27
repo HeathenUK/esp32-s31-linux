@@ -1,0 +1,31 @@
+sh /tmp/r.sh 2>&1 & __rp=$!; ( trap 'kill "$__rs_sleep" 2>/dev/null; wait "$
+__rs_sleep" 2>/dev/null; exit' TERM INT; sleep 27 & __rs_sleep=$!; wait "$__rs_s
+leep"; kill -0 $__rp 2>/dev/null && { echo RS_TIME"K"ILL; kill -9 $__rp 2>/dev/n
+ull; } ) & __rw=$!; wait $__rp 2>/dev/null; kill $__rw 2>/dev/null; wait $__rw 2
+>/dev/null; echo RS_DONE
+== uname #401 SMP Sun Sep 27 09:58:01 UTC 2026  md5 d59b210e
+s31fp: scanned main text, patched 0x0000001c
+s31fp: of which copied in place 0x0000001a
+s31fp: pages given their original frame colour 0x00000006
+== 1. two-process exactness: unpatched vs copy-in-place vs trampoline (md5 of 100k results+flags)
+mul 5be0c995a946 5be0c995a946 5be0c995a946 SAME
+add ec405613ba19 ec405613ba19 ec405613ba19 SAME
+sub 3d142a03685b 3d142a03685b 3d142a03685b SAME
+div 70d096f01547 70d096f01547 70d096f01547 SAME
+ge e3a988a04c65 e3a988a04c65 e3a988a04c65 SAME
+le 511f57cb8932 511f57cb8932 511f57cb8932 SAME
+eq 6437eaa1db1a 6437eaa1db1a 6437eaa1db1a SAME
+unord 6577ef89c71e 6577ef89c71e 6577ef89c71e SAME
+fltsi 77830f50e9b1 77830f50e9b1 77830f50e9b1 SAME
+fltun a1666b1af3a0 a1666b1af3a0 a1666b1af3a0 SAME
+fixsi 1a34122d66cf 1a34122d66cf 1a34122d66cf SAME
+fixun 81b69b5e60d9 81b69b5e60d9 81b69b5e60d9 SAME
+ext 70500ef7b6a2 70500ef7b6a2 70500ef7b6a2 SAME
+trunc 3c2bb0af13ba 3c2bb0af13ba 3c2bb0af13ba SAME
+== 2. hammer: 280 fresh copy-in-place processes, CPU0/CPU1/either, scan and cache alternating
+hammer ok=280 bad=0
+B5_DONE
+RS_DONE
+[2]+  Done(143)                  (trap "kill \"\$__rs_sleep\" 2>/dev/null; wait \"\$__rs_sleep\" 2>/dev/null; exit" TERM INT; sleep 27; ; wait "${__rs_sleep}"; kill -0 ${__rp} 2>/dev/null && echo RS_TIME"K"ILL; kill -9 ${__rp} 2>/dev/null)
+[1]+  Done                       sh /tmp/r.sh 2>&1
+~ # 

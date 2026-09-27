@@ -4,6 +4,13 @@ set -eu
 
 target_dir="$1"
 
+# A detached harness previously claimed STARTED while timeout did not exist.
+# Fail image preparation if BusyBox's configured applet was not installed.
+[ -L "${target_dir}/usr/bin/timeout" ] || {
+    echo "Missing /usr/bin/timeout: require CONFIG_TIMEOUT=y in busybox.fragment" >&2
+    exit 1
+}
+
 chmod 0755 "${target_dir}/init"
 
 # The cross-toolchain includes G++, but this compact image has no C++ target

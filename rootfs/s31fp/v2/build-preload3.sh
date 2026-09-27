@@ -1,16 +1,17 @@
 #!/bin/sh
-# ./docker/build.sh 'cd /src && sh rootfs/s31fp/v2/build-preload3.sh'
+# Invoked by: ./docker/build.sh '$S31_MAKE s31fp-v2'
 # libs31fp.so v2 CANDIDATE (not installed) + its QEMU and board tests.
 set -e
 T=/src/toolchain/riscv32-esp-linux-musl/bin/riscv32-esp-linux-musl
 CC=$(ls /src/build/buildroot/host/bin/*-linux-musl-gcc | head -1)
 V=/src/rootfs/s31fp/v2
 B=${B:-$V/out}
+PF=${S31FP_TEST_CFLAGS:-} # fault-injection test builds only; empty in production
 cd $V
 python3 mksig3.py $T-objdump $T-objcopy $T-ar "$($T-gcc -print-libgcc-file-name)" > sigs3.h
 M="-march=rv32imafc_zicsr_zifencei_zba_zbb_zbc_zbs -mabi=ilp32"
 # no libc: raw syscalls, one import (environ)
-$CC $M -O2 -fPIC -fno-builtin -ffreestanding -fno-stack-protector -Wall -fvisibility=hidden -c -o /tmp/p3.o preload3.c
+$CC $M $PF -O2 -fPIC -fno-builtin -ffreestanding -fno-stack-protector -Wall -fvisibility=hidden -c -o /tmp/p3.o preload3.c
 $CC $M -O2 -fPIC -DS31V2_FENV=1 -c -o /tmp/p3v2.o v2.S
 # copy-in-place precondition: the only relocations in v2's .text are the
 # TAILREF pairs (PCREL_HI20 + PCREL_LO12_I, one pair per s31fix entry)
@@ -30,14 +31,14 @@ $CC $M -O2 -fPIC -fno-builtin -fno-stack-protector -fvisibility=hidden -DS31V2_F
 $CC $M -shared -nostdlib -Wl,-z,now -Wl,--hash-style=gnu -o $B/libs31fp.so /tmp/p3.o /tmp/p3v2.o /tmp/p3div.o $B/lgref.o
 $T-strip $B/libs31fp.so
 # diagnostic twin: prints the physical colour (PFN & 3) of each patched page
-$CC $M -O2 -fPIC -fno-builtin -ffreestanding -fno-stack-protector -Wall -fvisibility=hidden -DS31FP_COLOURDBG -c -o /tmp/p3c.o preload3.c
+$CC $M $PF -O2 -fPIC -fno-builtin -ffreestanding -fno-stack-protector -Wall -fvisibility=hidden -DS31FP_COLOURDBG -c -o /tmp/p3c.o preload3.c
 $CC $M -shared -nostdlib -Wl,-z,now -Wl,--hash-style=gnu -o $B/libs31fp-colour.so /tmp/p3c.o /tmp/p3v2.o /tmp/p3div.o $B/lgref.o
 echo "dynamic symbols (exports/imports):"; $T-nm -D $B/libs31fp.so | grep -v " [tTrRdDbB] s31\| A " | head
 echo "relocations: $($T-readelf -r $B/libs31fp.so | grep -c R_RISCV)"
 ls -l $B/libs31fp.so
 # static QEMU test: the constructor patches THIS program's own libgcc copies,
 # then the checker compares those (patched) entry points with the references
-$CC $M -O2 -fno-builtin -Wall -c -o /tmp/p3s.o preload3.c
+$CC $M $PF -O2 -fno-builtin -Wall -c -o /tmp/p3s.o preload3.c
 $CC $M -O2 -Wall -DPATCHED -c -o /tmp/pt.o v2test.c
 $CC $M -O2 -c -o /tmp/p3sv2.o v2.S
 $CC $M -O2 -c -o /tmp/p3sdiv.o v2div.c

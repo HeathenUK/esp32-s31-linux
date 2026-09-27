@@ -538,3 +538,38 @@ One quiet fresh-boot regression in the shipped state (board-shipped.txt):
                            IWAD - with S31FP=0 too, a harness error). There
                            is no same-mode baseline today; the 48.4-48.9 fps
                            earlier are windowed 320x200.
+
+
+11. COPY HARDENING CHECKPOINT (2026-09-27, CANDIDATE NOT SHIPPED)
+----------------------------------------------------------------
+The earlier prboom SIGSEGV has not been reproduced or attributed. Bounded
+validation found and fixed real unsafe syscall-error handling instead:
+MREMAP_FIXED can remove its destination before returning an error; failed
+RX mprotect was ignored; and the old RW failure path could follow colour
+remaps that had already made pages NX. The candidate requests RW first,
+restores RX on early failure, and explicitly exits 125 after destructive
+remap, final RX or icache-flush failure. It never knowingly enters damaged
+application code. mmap2's sixth argument is now initialized and pagemap
+short reads are handled. Arithmetic assembly is unchanged.
+
+Real #401 board: injected old REMAP/RX/RW cases all SIGSEGV; candidate
+REMAP/RX exit 125 before main, RW runs original code successfully. Candidate
+exactness: all 14 x 100k result/flag dumps match unpatched and trampoline;
+280 fresh copy processes pass across both CPU affinities and scan/cache.
+After a fresh boot, OpenTyrian + glxgears followed by two full windowed
+prboom timedemos passed (5026 gametics, five copied helpers, two coloured
+pages each, no captured fault). Earlier three quiet shipped-copy fullscreen
+runs also passed. This does not establish the historical crash's cause.
+
+Placement was compared with IDENTICAL shipped library bytes (077a697a):
+three interleaved OPL title runs per arm, same audio hash throughout.
+Median us/sample: XIP trampoline 21.54, SD trampoline 21.13; XIP coloured
+copy 19.66, SD coloured copy 19.84. Uncoloured copy had large outliers on
+both (up to 29.32 XIP / 24.20 SD). Candidate SD coloured copy 19.65.
+Colouring matters; SD does not replace it, and no dedicated RAM text is
+justified for these helpers by this workload. Library-resident functions
+and other applications still require their own placement measurements.
+
+Evidence and detailed limits: artifacts/s31fp-copy-fix/NOTES.md and linked
+logs. Builds: make s31fp-v2 / segvtrap via docker/build.sh. Default shipping
+mode and library have NOT changed at this checkpoint.

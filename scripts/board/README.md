@@ -417,3 +417,19 @@ The GAP column is the millisecond delta by the SERVER's clock, which separates
 two different faults: bursty loss shows normal gaps with keys simply absent, a
 stall shows one huge gap. It also warns on unmatched press/release, since a
 lost release is what makes a key repeat for ever.
+
+### Quiet detached completion (2026-09-27)
+
+`runsh.py job.sh 30 --done UNIQUE_FINISHED_TOKEN --done-timeout 600`
+launches as usual, then passively reads the same console connection until an
+exact token line arrives. The detached job emits that line to `/dev/console`
+**after** its workload exits (including failure cleanup). No probes, reads of
+`/proc`, screenshots, or observer processes run on the board. Keeping one
+connection avoids losing a fast completion between launch and a new reader.
+
+The token means finished, not passed: collect the result file and check exit
+status and application completion evidence. A missing notification returns
+CLI status 4 and `COMPLETION_NOT_RECEIVED`; do not start another workload or
+assume the board is idle from a host-side timeout. Existing callers without
+`--done` are unchanged. `b10-run.sh` placement mode and v3 `strings-run.sh`
+support this with their `*_DONE_TOKEN` variables.

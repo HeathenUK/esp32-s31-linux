@@ -1,0 +1,98 @@
+sh /tmp/r.sh 2>&1 & __rp=$!; ( trap 'kill "$__rs_sleep" 2>/dev/null; wait "$
+__rs_sleep" 2>/dev/null; exit' TERM INT; sleep 27 & __rs_sleep=$!; wait "$__rs_s
+leep"; kill -0 $__rp 2>/dev/null && { echo RS_TIME"K"ILL; kill -9 $__rp 2>/dev/n
+ull; } ) & __rw=$!; wait $__rp 2>/dev/null; kill $__rw 2>/dev/null; wait $__rw 2
+>/dev/null; echo RS_DONE
+PLACEMENT_IDENTICAL_INPUTS
+077a697aa6a08bea6f0a0dbe9e75ffcd  /usr/lib/libs31fp.so
+077a697aa6a08bea6f0a0dbe9e75ffcd  /root/afp2/placement-shipped.so
+d59b210e4910750c3b211a8f24d476c6  /root/afp2/candidate/libs31fp.so
+PLACEMENT round=1 arm=xip-tramp
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel hash
+36 44100 2 1.941 21.54 1.053 0.00 0 0.00 0.00 0.00 0.00 9979b782
+EXIT=0
+PLACEMENT round=1 arm=sd-tramp
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel hash
+36 44100 2 1.908 21.17 1.071 0.00 0 0.00 0.00 0.00 0.00 9979b782
+EXIT=0
+PLACEMENT round=1 arm=xip-copy
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel hash
+36 44100 2 1.766 19.60 1.157 0.00 0 0.00 0.00 0.00 0.00 9979b782
+EXIT=0
+PLACEMENT round=1 arm=sd-copy
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel hash
+36 44100 2 1.788 19.84 1.143 0.00 0 0.00 0.00 0.00 0.00 9979b782
+EXIT=0
+PLACEMENT round=1 arm=xip-nocol
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel hash
+36 44100 2 2.642 29.32 0.773 0.00 0 0.00 0.00 0.00 0.00 9979b782
+EXIT=0
+PLACEMENT round=1 arm=sd-nocol
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel hash
+36 44100 2 1.782 19.78 1.147 0.00 0 0.00 0.00 0.00 0.00 9979b782
+EXIT=0
+PLACEMENT round=1 arm=candidate-copy
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel hash
+36 44100 2 1.783 19.79 1.146 0.00 0 0.00 0.00 0.00 0.00 9979b782
+EXIT=0
+PLACEMENT round=2 arm=sd-tramp
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel hash
+36 44100 2 1.890 20.97 1.081 0.00 0 0.00 0.00 0.00 0.00 9979b782
+EXIT=0
+PLACEMENT round=2 arm=xip-tramp
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel hash
+36 44100 2 1.908 21.18 1.071 0.00 0 0.00 0.00 0.00 0.00 9979b782
+EXIT=0
+PLACEMENT round=2 arm=sd-copy
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel hash
+36 44100 2 1.762 19.55 1.160 0.00 0 0.00 0.00 0.00 0.00 9979b782
+EXIT=0
+PLACEMENT round=2 arm=xip-copy
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel hash
+36 44100 2 1.771 19.66 1.154 0.00 0 0.00 0.00 0.00 0.00 9979b782
+EXIT=0
+PLACEMENT round=2 arm=sd-nocol
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel hash
+36 44100 2 2.181 24.20 0.937 0.00 0 0.00 0.00 0.00 0.00 9979b782
+EXIT=0
+PLACEMENT round=2 arm=xip-nocol
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel hash
+36 44100 2 1.816 20.16 1.125 0.00 0 0.00 0.00 0.00 0.00 9979b782
+EXIT=0
+PLACEMENT round=2 arm=candidate-copy
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel hash
+36 44100 2 1.762 19.56 1.159 0.00 0 0.00 0.00 0.00 0.00 9979b782
+EXIT=0
+PLACEMENT round=3 arm=xip-tramp
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel hash
+36 44100 2 1.976 21.93 1.034 0.00 0 0.00 0.00 0.00 0.00 9979b782
+EXIT=0
+PLACEMENT round=3 arm=sd-tramp
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel hash
+36 44100 2 1.904 21.13 1.073 0.00 0 0.00 0.00 0.00 0.00 9979b782
+EXIT=0
+PLACEMENT round=3 arm=xip-copy
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel hash
+36 44100 2 1.779 19.74 1.148 0.00 0 0.00 0.00 0.00 0.00 9979b782
+EXIT=0
+PLACEMENT round=3 arm=sd-copy
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel hash
+36 44100 2 1.789 19.85 1.142 0.00 0 0.00 0.00 0.00 0.00 9979b782
+EXIT=0
+PLACEMENT round=3 arm=xip-nocol
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel hash
+36 44100 2 1.853 20.57 1.103 0.00 0 0.00 0.00 0.00 0.00 9979b782
+EXIT=0
+PLACEMENT round=3 arm=sd-nocol
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel hash
+36 44100 2 1.770 19.64 1.155 0.00 0 0.00 0.00 0.00 0.00 9979b782
+EXIT=0
+PLACEMENT round=3 arm=candidate-copy
+# song rate secs cpu_s us_per_sample realtime_x ops_avg ops_max att dec sus rel hash
+36 44100 2 1.771 19.65 1.154 0.00 0 0.00 0.00 0.00 0.00 9979b782
+EXIT=0
+PLACEMENT_DONE
+RS_DONE
+[2]+  Done(143)                  (trap "kill \"\$__rs_sleep\" 2>/dev/null; wait \"\$__rs_sleep\" 2>/dev/null; exit" TERM INT; sleep 27; ; wait "${__rs_sleep}"; kill -0 ${__rp} 2>/dev/null && echo RS_TIME"K"ILL; kill -9 ${__rp} 2>/dev/null)
+[1]+  Done                       sh /tmp/r.sh 2>&1
+~ # 

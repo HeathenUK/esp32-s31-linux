@@ -20,6 +20,21 @@ context reset - it records what is true now and what has already failed.
 
 ## Never hand-roll the tooling
 
+**Build through the existing Makefile recipes.** Inspect their inputs first;
+standalone historical build scripts are not the current build contract.
+
+**A launcher is not a result.** `PB_STARTED`/`setsid` only acknowledges a
+launch attempt. Never say an application is running or passed from that alone.
+Require its completion log and exit status, collected AFTER the bounded run.
+Do not probe during a run to compensate for a missing launch check.
+
+**`timeout` was absent from the shipped #401 userspace.** The BusyBox fragment
+now requests `CONFIG_TIMEOUT=y`; that does not prove a given board has received
+it. Preflight `command -v timeout` before depending on it. `make gate` checks
+the prerequisite. BusyBox timeout uses the child's exit status, not GNU's 124.
+Until installed, use runsh's existing watchdog/sleep-reap pattern. Missing
+commands are harness failures, not hardware failures.
+
 **The scripts already exist, in `scripts/board/`. Use them.** Every one of them
 has been re-written from scratch mid-task at least twice, badly, while the
 original sat a directory away:

@@ -65,6 +65,15 @@ CONTRACT = r'''
 ok() { echo "CHK|$1|PASS|$2"; }
 no() { echo "CHK|$1|FAIL|$2"; }
 nf() { echo "CHK|$1|INFO|$2"; }
+# Prerequisite check only: do not start another watchdog during a timed run.
+# BusyBox timeout returns the child's status (not GNU timeout's 124).
+if command -v timeout >/dev/null 2>&1; then
+    timeout -s KILL 2 true
+    rc=$?
+    [ "$rc" = 0 ] && ok timeout 'available, normal exit works' || no timeout "normal exit=$rc"
+else
+    no timeout 'missing: harness dependency, not board failure; rebuild BusyBox with CONFIG_TIMEOUT=y'
+fi
 echo "CHK|uname|INFO|$(uname -r) $(uname -v)"
 echo "CHK|cmdline|INFO|$(cat /proc/cmdline)"
 echo "CHK|hid|INFO|attach=$(cat /sys/kernel/esp32s31-hid/attach 2>/dev/null) reports=$(cat /sys/kernel/esp32s31-hid/reports 2>/dev/null) dwc2=$([ -d /sys/module/dwc2 ] && echo y || echo n)"

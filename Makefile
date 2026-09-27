@@ -1510,6 +1510,28 @@ erase:
 	esptool -p /dev/ttyUSB0 -b 2000000 erase-flash
 
 # --- regression gates (scripts/board/gate.py, acceptance.sh) -------------
+# Isolated diagnostics: never stage an overlay or repack a shipping image.
+# The v2 scripts are the existing exactness/copy-relocation build, in order:
+# build-v2 produces lgref.o and the reference objects consumed by preload3.
+S31FP_TEST_OUT ?= $(BUILD_DIR)/s31fp-v2
+S31FP_TEST_CFLAGS ?=
+.PHONY: s31fp-v2 s31fp-v3 segvtrap
+s31fp-v2:
+	B=$(S31FP_TEST_OUT) sh rootfs/s31fp/v2/build-v2.sh
+	B=$(S31FP_TEST_OUT) S31FP_TEST_CFLAGS='$(S31FP_TEST_CFLAGS)' sh rootfs/s31fp/v2/build-preload3.sh
+
+S31FP_V3_OUT ?= $(BUILD_DIR)/s31fp-v3
+s31fp-v3: s31fp-v2
+	B=$(S31FP_V3_OUT) V2_BUILD=$(S31FP_TEST_OUT) sh rootfs/s31fp/v3/build-v3.sh
+
+segvtrap: $(BUILD_DIR)/diagnostics/segvtrap.so $(BUILD_DIR)/diagnostics/segvtrap-test
+$(BUILD_DIR)/diagnostics/segvtrap.so: rootfs/segvtrap.c
+	mkdir -p $(@D)
+	$(CC) $(S31_USER_FLAGS) -Os -shared -fPIC -Wall -Wextra -o $@ $< -ldl
+$(BUILD_DIR)/diagnostics/segvtrap-test: rootfs/segvtrap-test.c
+	mkdir -p $(@D)
+	$(CC) $(S31_USER_FLAGS) -Os -Wall -Wextra -o $@ $<
+
 # `make gate` is the fast one (~2.5 min: on-board config contract, desktop
 # smoke, two sdlbench canaries against scripts/board/gate-baseline.json).
 # `make gate-quick` skips the canaries (~80 s). `make acceptance` resets the

@@ -28,7 +28,8 @@ import console
 PORT, BAUD = '/dev/cu.usbserial-130', 1000000
 
 
-def run(path, timeout=240, boot_wait=0, shell_wait=75.0):
+def run(path, timeout=240, boot_wait=0, shell_wait=75.0,
+        done_token=None, done_timeout=600):
     # boot_wait is a MINIMUM BOARD UPTIME in seconds, not a sleep. It used to
     # be time.sleep(boot_wait) before the port was even opened, so the timedemo
     # harness's `240 170` slept 170 s after every reset although getty is up
@@ -129,6 +130,17 @@ def run(path, timeout=240, boot_wait=0, shell_wait=75.0):
              'wait $__rp 2>/dev/null; kill $__rw 2>/dev/null; wait $__rw 2>/dev/null; '
              'echo RS_DONE\n' % guard).encode())
     o, _ = until(lambda b: 'RS_DONE' in b.split('echo RS_DONE')[-1], timeout)
+    # Optional detached-work completion: read ONLY, no probes/commands, and
+    # keep the same port open so a fast job's notification cannot be lost
+    # between launch and a second reader. Workload emits token after exit.
+    if done_token and 'RS_TIMEKILL' not in o:
+        def completed(buf):
+            return done_token in (line.strip() for line in buf.splitlines())
+        if not completed(o):
+            more, got = until(completed, done_timeout)
+            o += more
+            if not got:
+                o += '\n[runsh] COMPLETION_NOT_RECEIVED: %s (no workload result claimed)\n' % done_token
     p.close()
     if 'RS_TIMEKILL' in o:
         # Say it out loud. A script the board had to kill has half-applied
@@ -144,9 +156,19 @@ def run(path, timeout=240, boot_wait=0, shell_wait=75.0):
 
 if __name__ == '__main__':
   try:
-    print(run(sys.argv[1],
-              int(sys.argv[2]) if len(sys.argv) > 2 else 240,
-              int(sys.argv[3]) if len(sys.argv) > 3 else 0))
+    import argparse
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument('script')
+    ap.add_argument('timeout', type=int, nargs='?', default=240)
+    ap.add_argument('boot_wait', type=int, nargs='?', default=0)
+    ap.add_argument('--done', help='exact console line emitted after detached work exits; passive read only')
+    ap.add_argument('--done-timeout', type=float, default=600)
+    args = ap.parse_args()
+    result = run(args.script, args.timeout, args.boot_wait,
+                 done_token=args.done, done_timeout=args.done_timeout)
+    print(result)
+    if 'COMPLETION_NOT_RECEIVED:' in result:
+        sys.exit(4)
   except console.PortBusy as e:
     # Expected condition, not a crash - a traceback here buries the one line
     # that says what to do, and its noise is what callers end up grepping.

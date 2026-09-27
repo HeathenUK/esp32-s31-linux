@@ -1,5 +1,5 @@
 #!/bin/sh
-# ./docker/build.sh 'cd /src && sh rootfs/s31fp/v3/build-v3.sh'
+# ./docker/build.sh '$S31_MAKE s31fp-v3'
 # libs31fp.so v3 CANDIDATE = v2 (soft-double, unchanged sources in ../v2)
 # + A1 s31str.c + A2 s31clk.c; and its QEMU/board test programs.
 set -e
@@ -8,7 +8,8 @@ CC=$(ls /src/build/buildroot/host/bin/*-linux-musl-gcc | head -1)
 V2=/src/rootfs/s31fp/v2
 V=/src/rootfs/s31fp/v3
 B=${B:-$V/out}
-W=/tmp/s31v3
+V2_BUILD=${V2_BUILD:-/src/build/s31fp-v2}
+W=$B/obj
 mkdir -p $W $B
 M="-march=rv32imafc_zicsr_zifencei_zba_zbb_zbc_zbs -mabi=ilp32"
 # v2, exactly as v2/build-preload3.sh compiles it (sigs3.h as committed)
@@ -20,7 +21,7 @@ F="$M -O2 -fPIC -fno-builtin -ffreestanding -fno-stack-protector -fno-strict-ali
 $CC $F -c -o $W/s31str.o $V/s31str.c
 $CC $F -c -o $W/s31clk.o $V/s31clk.c
 $CC $M -shared -nostdlib -Wl,-z,now -Wl,--hash-style=gnu -o $B/libs31fp.so \
-	$W/p3.o $W/p3v2.o $W/p3div.o $V2/out/lgref.o $W/s31str.o $W/s31clk.o
+	$W/p3.o $W/p3v2.o $W/p3div.o $V2_BUILD/lgref.o $W/s31str.o $W/s31clk.o
 $T-strip $B/libs31fp.so
 echo "imports:"; $T-nm -D -u $B/libs31fp.so | tr '\n' ' '; echo
 echo "exports:"; $T-nm -D --defined-only $B/libs31fp.so | awk '{print $3}' | tr '\n' ' '; echo

@@ -1,0 +1,28 @@
+sh /tmp/r.sh 2>&1 & __rp=$!; ( trap 'kill "$__rs_sleep" 2>/dev/null; wait "$
+__rs_sleep" 2>/dev/null; exit' TERM INT; sleep 27 & __rs_sleep=$!; wait "$__rs_s
+leep"; kill -0 $__rp 2>/dev/null && { echo RS_TIME"K"ILL; kill -9 $__rp 2>/dev/n
+ull; } ) & __rw=$!; wait $__rp 2>/dev/null; kill $__rw 2>/dev/null; wait $__rw 2
+>/dev/null; echo RS_DONE
+CONTROL_EXIT=99
+HELD_EXIT=139
+SEGVTRAP holding fault handlers
+SEGVTRAP sig 0000000b code 00000001 addr 00000000 pc 000103be ra 000103be sp 9d55d240
+00010000-00011000 r-xp 00000000 b3:00 3885       /root/afp2/segvtrap-test
+00011000-00012000 r--p 00000000 b3:00 3885       /root/afp2/segvtrap-test
+00012000-00013000 rw-p 00001000 b3:00 3885       /root/afp2/segvtrap-test
+008c9000-008ca000 ---p 00000000 00:00 0          [heap]
+008ca000-008cb000 rw-p 00000000 00:00 0          [heap]
+95678000-95679000 r-xp 00000000 b3:00 3884       /root/afp2/segvtrap-copy.so
+95679000-9567a000 r--p 00000000 b3:00 3884       /root/afp2/segvtrap-copy.so
+9567a000-9567b000 rw-p 00001000 b3:00 3884       /root/afp2/segvtrap-copy.so
+9567b000-9567f000 rw-p 00000000 00:00 0 
+9567f000-95683000 r--p 00000000 00:00 0          [vvar]
+95683000-95684000 r-xp 00000000 00:00 0          [vdso]
+95684000-9572c000 r-xp 00000000 00:19 3830316    /usr/lib/libc.so
+9572c000-9572e000 rw-p 000a7000 00:19 3830316    /usr/lib/libc.so
+9572e000-9572f000 rw-p 00000000 00:00 0 
+9d53d000-9d55e000 rw-p 00000000 00:00 0          [stack]
+SEGVTRAP end
+Segmentation fault
+RS_DONE
+[2]+  Done(143)                  (trap "kill \"\$__rs_s

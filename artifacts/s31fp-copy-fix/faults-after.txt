@@ -1,0 +1,19 @@
+CASE=REMAP
+s31fp: fatal: fixed remap failed; executable may be unmapped (exit 125)
+EXIT=125
+CASE=RX
+s31fp: fatal: patched text could not become executable (exit 125)
+EXIT=125
+CASE=RW
+s31fp: mprotect RW failed, nothing patched
+s31fp: scanned main text, patched 0x00000000
+s31fp: of which copied in place 0x00000000
+s31fp: pages given their original frame colour 0x00000000
+libgcc!=hw mul rm4 a=c7c79cbf28902558 b=47c79cbf2890255b libgcc=cfa16c5296909f88/1d hw=cfa16c5296909f89/1d
+libgcc!=hw mul rm4 a=62b0000000000000 b=e2b0000000000001 libgcc=ffefffffffffffff/1f hw=fff0000000000000/1f
+libgcc!=hw mul rm4 a=7fefffffffffffff b=c2e97c110fffffff libgcc=ffefffffffffffff/0d hw=fff0000000000000/0d
+libgcc!=hw mul rm4 a=4634db9e7fd44cae b=c634db9e7fd44cac libgcc=cc7b30d2c8a03401/01 hw=cc7b30d2c8a03402/01
+libgcc!=hw mul rm4 a=b4838108e4506138 b=b4838108e4506138 libgcc=2917c685bda5680e/01 hw=2917c685bda5680f/01
+libgcc!=hw mul rm4 a=3ffd0fd900000000 b=3ffd0fd900000003 libgcc=400a64c1292f8802/01 hw=400a64c1292f8803/01
+RESULT mul: 1000 operand sets (+273 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 12 libgcc-vs-hw differences; RNE fast-path share 100.0%; libgcc non-canonical NaN results 0
+EXIT=0

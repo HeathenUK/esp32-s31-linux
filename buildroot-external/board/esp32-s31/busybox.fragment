@@ -1,6 +1,10 @@
 CONFIG_FEATURE_WGET_HTTPS=y
 # CONFIG_SSL_SERVER is not set
 
+# Board harnesses use bounded commands. Keep this in the image rather than
+# repeatedly discovering "timeout: not found" after a detached launch.
+CONFIG_TIMEOUT=y
+
 # NTP client. This board has no RTC - no battery-backed chip on the Korvo-1
 # (an I2C scan finds only the codec at 0x10 and touch at 0x14), and the SoC's
 # RTC domain is not backed either - so every cold boot starts at the epoch
