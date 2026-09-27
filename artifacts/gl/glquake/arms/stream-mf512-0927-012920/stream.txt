@@ -1,0 +1,9 @@
+STREAM mf512 #393 SMP Sat Sep 26 12:31:02 UTC 2026 up 61.52 512 10
+IDLE Iterations/Sec   : 1049.317943
+LOAD Iterations/Sec   : 557.413601
+DD 1 3.73 s 8.58 MB/s
+DD 2 3.71 s 8.63 MB/s
+DD 3 3.68 s 8.70 MB/s
+pgsteal_kswapd 32548 pgsteal_direct 697 allocstall_normal 11 
+ALLOCFAIL 0
+STREAMDONE

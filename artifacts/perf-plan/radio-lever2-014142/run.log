@@ -1,0 +1,14 @@
+sh /tmp/r.sh 2>&1 & __rp=$!; ( trap 'kill "$__rs_sleep" 2>/dev/null; wait "$
+__rs_sleep" 2>/dev/null; exit' TERM INT; sleep 117 & __rs_sleep=$!; wait "$__rs_
+sleep"; kill -0 $__rp 2>/dev/null && { echo RS_TIME"K"ILL; kill -9 $__rp 2>/dev/
+null; } ) & __rw=$!; wait $__rp 2>/dev/null; kill $__rw 2>/dev/null; wait $__rw 
+2>/dev/null; echo RS_DONE
+LINK  signal: -53 dBm 
+WGET bytes=2097152 secs=5.10 kBps=402
+PING 30 packets transmitted, 30 packets received, 0% packet loss round-trip min/avg/max = 6.232/29.355/185.857 ms 
+BT 0 devices in a 10 s scan; powered_before=yes powered_now=yes
+RC_DONE
+RS_DONE
+[2]+  Done(143)                  (trap "kill \"\$__rs_sleep\" 2>/dev/null; wait \"\$__rs_sleep\" 2>/dev/null; exit" TERM INT; sleep 117; ; wait "${__rs_sleep}"; kill -0 ${__rp} 2>/dev/null && echo RS_TIME"K"ILL; kill -9 ${__rp} 2>/dev/null)
+[1]+  Done                       sh /tmp/r.sh 2>&1
+~ # 

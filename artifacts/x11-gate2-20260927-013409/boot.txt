@@ -1,0 +1,3 @@
+boot lvdesk=1 ctl=1 nofs=0 uptime=67.88 kernel=7.1.10 build=#393 mem=4804
+[1]+  Done                       sh /tmp/r.sh 2>&1
+~ # 

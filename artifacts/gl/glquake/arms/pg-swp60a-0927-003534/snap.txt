@@ -1,0 +1,14 @@
+vm.swappiness = 60
+Filename				Type		Size		Used		Priority
+/swapfile                               file		65532		108		-1
+vm.swappiness = 60
+vm.page-cluster = 2
+vm.min_free_kbytes = 1024
+vm.watermark_scale_factor = 10
+SNAPBEGIN
+== t=120
+MemFree: 1628 kB MemAvailable: 556 kB Cached: 908 kB SwapCached: 4160 kB Active: 3164 kB Inactive: 2860 kB Active(anon): 2620 kB Inactive(anon): 2480 kB Active(file): 544 kB Inactive(file): 380 kB SwapFree: 45532 kB AnonPages: 4936 kB Mapped: 924 kB Shmem: 336 kB Slab: 4240 kB SUnreclaim: 4240 kB KernelStack: 656 kB PageTables: 532 kB SecPageTables: 0 kB CmaFree: 324 kB GPUActive: 0 kB 
+ZRAM mm_stat        0        0        0        0        0        0        0        0        0 | io_stat        0        0 0        0
+/swapfile                               file		65532		20012		-1
+nr_free_pages=533 workingset_refault_anon=5430 workingset_refault_file=9516 nr_anon_pages=1097 nr_mapped=269 nr_file_pages=1275 nr_shmem=82 pgsteal_kswapd=25272 pgsteal_direct=1372 pgscan_kswapd=58551 pgscan_direct=1890 pswpin=4561 pswpout=6020 allocstall_normal=26 pgmajfault=3727 
+SNAPEND

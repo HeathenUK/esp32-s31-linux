@@ -65,6 +65,45 @@ low run of the kind #393 also showed once (44.3 on its gate2 boot), so it is
 not counted against it - but nothing here is a win, and a kernel that does not
 ship gets no regression pass. Board and images/xipImage are back on #393.
 
+## GLQuake paging (lever #2): swappiness 60 + min_free_kbytes 512 SHIPPED (2026-09-27, #393)
+
+QuakeSpasm fullscreen timedemo, stock and with fixed options (`glquake-arm.sh
+... -zone 384 -heapsize 12288 -fullscreen`). Every arm is a fresh boot, with
+the knobs set at runtime by `/root/gq/pre.sh` just before the game starts.
+
+**Census** (t=75 s into the timedemo, `pg-census-*`): the game holds 4.3 MB
+RSS and 15.5 MB of swap. Its 12 MB heap is 1.7 MB resident and 10.6 MB
+swapped. Every daemon is already swapped down to almost nothing: bluetoothd
+4 kB, udevd 4, dbus 0, wpa_supplicant 84. The only other RAM holders are
+lvdesk (424 kB, 324 of it the SHM buffers it shares with the game) and s31-bt
+(204 kB, mlocked for A2DP). **No RAM can be freed from daemons.** The kernel
+side is 4.2 MB slab (not a lever), 650 kB of stacks and 530 kB of page
+tables. The file cache is ~0.7 MB, and at swappiness 10 file refaults ran 6:1
+against anon: libGL and the game's text are on the SD now, and the kernel kept
+evicting them first. min_free 1024 kept 1.3-2.4 MB free behind a thrashing
+game.
+
+| arm (fresh boots) | fps | game majflt | wall s |
+|---|---|---|---|
+| base: swappiness 10, min_free 1024 | 7.3 / 7.4 (band 7.3-7.5) | 6.2-7.4k | 227-228 |
+| swappiness 60 | 7.6 / 7.6 | 3.5-4.0k | 217 |
+| swappiness 100 | 7.6 / 7.5 | 3.8-3.9k | 215-217 |
+| swappiness 60 + page-cluster 4 | 7.7 / 7.4 | - | - |
+| **swappiness 60 + min_free 512** | **8.0 / 8.1** | 2.2k | 205 |
+| swappiness 60 + zram 4M lzo-rle | 5.4 | - | - |
+
+zram, the fifth time: the data compresses 15x (2,331 -> 157 kB), yet
+zsmalloc held 1.1 MB of RAM for it (max 1.43 MB). min_free 512 was
+checked against the reason it was raised
+to 1024: a 32 MB streaming read under CoreMark gives 8.72-8.91 MB/s / 563 at
+1024, 8.58-8.70 / 557 at 512 and 8.00-8.16 / 533 at 256, so 512 keeps the
+effect and 256 loses it. The gate boot with both values set passed:
+x11-compat-gate2 PASS, glxgears windowed 53.1-54.4, fullscreen 48.0 / 41.7,
+prboom fullscreen 43.8, sdlquake 19.9, Wi-Fi wget 402 KB/s with 0% ping loss,
+no page allocation failures and no OOM. The numbers are also recorded in the
+`99-s31-memory.conf` and `s31-swap.conf` comments. The card's copies match the
+repo.
+
 ## GLQuake tick/timer/scheduler churn (lever #6): attributed, nothing ships (2026-09-26, #393)
 
 **Question.** Under QuakeSpasm fullscreen (7.5 fps) the h1s profile puts the

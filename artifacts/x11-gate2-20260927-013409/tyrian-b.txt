@@ -1,0 +1,3 @@
+tyrian-close idx=0 ctl=1 asked=1 dropped=0 fsoff=1 after8s=0
+[1]+  Done                       sh /tmp/r.sh 2>&1
+~ # 

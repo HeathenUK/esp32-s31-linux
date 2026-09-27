@@ -1,0 +1,119 @@
+Filename				Type		Size		Used		Priority
+/swapfile                               file		65532		96		-1
+vm.swappiness = 10
+vm.page-cluster = 2
+vm.min_free_kbytes = 1024
+vm.watermark_scale_factor = 10
+SNAPBEGIN
+== t=75
+MemFree: 2384 kB MemAvailable: 1308 kB Cached: 880 kB SwapCached: 3268 kB Active: 2760 kB Inactive: 2620 kB Active(anon): 2184 kB Inactive(anon): 2276 kB Active(file): 576 kB Inactive(file): 344 kB SwapFree: 45828 kB AnonPages: 4248 kB Mapped: 844 kB Shmem: 328 kB Slab: 4200 kB SUnreclaim: 4200 kB KernelStack: 648 kB PageTables: 524 kB SecPageTables: 0 kB CmaFree: 1224 kB GPUActive: 0 kB 
+ZRAM mm_stat        0        0        0        0        0        0        0        0        0 | io_stat        0        0 0        0
+/swapfile                               file		65532		19756		-1
+nr_free_pages=701 workingset_refault_anon=4299 workingset_refault_file=24857 nr_anon_pages=1028 nr_mapped=192 nr_file_pages=1053 nr_shmem=81 pgsteal_kswapd=39940 pgsteal_direct=1012 pgscan_kswapd=89931 pgscan_direct=2531 pswpin=3497 pswpout=5413 allocstall_normal=22 pgmajfault=4951 
+== procs (kB): name pid rss anon file shmem swap
+busybox 1 0 0 0 0 20
+syslogd 197 0 0 0 0 24
+klogd 203 0 0 0 0 16
+udevd 212 4 0 4 0 180
+lvdesk 251 424 96 4 324 52
+dbus-daemon 280 0 0 0 0 96
+bluetoothd 318 4 0 4 0 180
+s31-bt 322 204 200 4 0 16
+crond 331 0 0 0 0 24
+sh 334 4 0 4 0 252
+getty 335 0 0 0 0 24
+wpa_supplicant 349 84 84 0 0 20
+udhcpc 411 0 0 0 0 24
+busybox 427 28 20 8 0 12
+sh 437 4 0 4 0 32
+sh 443 44 36 8 0 0
+sh 444 48 36 12 0 8
+sh 462 36 28 8 0 4
+sh 463 0 0 0 0 252
+sleep 465 0 0 0 0 12
+quakespasm 472 4272 3452 492 328 15484
+awk: /proc/516/status: No such file or directory
+== quakespasm 472 smaps (Size Rss Pss ShCl ShDi PrCl PrDi Swap perm name), rss+swap>=16
+620 260 260 0 0 260 0 0 r-xp /root/quake/quakespasm
+3980 284 284 0 0 72 212 500 rw-p 
+964 248 248 0 0 36 212 504 rw-p 
+96 16 16 0 0 12 4 76 rw-p 
+1588 24 24 0 0 20 4 1504 rw-p 
+72 0 0 0 0 0 0 72 rw-p 
+268 4 4 0 0 0 4 264 rw-p 
+884 252 252 0 0 20 232 632 rw-p 
+1244 420 420 0 0 328 92 824 rw-p 
+16 12 12 0 0 0 12 4 r--p /usr/lib/libasound.so.2.0.0
+152 152 152 0 0 0 152 0 rw-p 
+152 152 76 0 152 0 0 0 rw-s /SYSV00000000
+152 152 76 0 152 0 0 0 rw-s /SYSV00000000
+356 100 100 0 0 88 12 256 rw-p 
+80 28 28 0 0 0 28 52 rw-p 
+24 0 0 0 0 0 0 24 rw-p 
+100 20 10 0 20 0 0 16 rw-s /memfd:xlite-ring
+28 12 12 0 0 4 8 16 rw-p 
+120 40 40 0 0 36 4 76 rw-p 
+12292 1708 1708 0 0 524 1184 10584 rw-p 
+152 12 12 0 0 0 12 4 rw-p 
+400 232 232 0 0 232 0 0 r-xp /usr/lib/libGL.so.1.2.0
+36 16 16 0 0 0 16 0 rw-p 
+296 20 20 0 0 0 20 72 rw-p [stack]
+== lvdesk 251 smaps rss+swap>=32
+1080 68 12 rw-p 
+152 152 0 rw-s /SYSV00000000
+152 152 0 rw-s /SYSV00000000
+152 0 152 rw-s /memfd:xshim-surface
+100 20 16 rw-s /memfd:xlite-ring
+== meminfo
+MemTotal:          15336 kB
+MemFree:            2652 kB
+MemAvailable:       1464 kB
+Buffers:             216 kB
+Cached:              804 kB
+SwapCached:         3208 kB
+Active:             2628 kB
+Inactive:           2364 kB
+Active(anon):       2132 kB
+Inactive(anon):     2168 kB
+Active(file):        496 kB
+Inactive(file):      196 kB
+Unevictable:         200 kB
+Mlocked:             200 kB
+SwapTotal:         65532 kB
+SwapFree:          45664 kB
+Dirty:                 0 kB
+Writeback:             8 kB
+AnonPages:          4036 kB
+Mapped:              796 kB
+Shmem:               328 kB
+KReclaimable:          0 kB
+Slab:               4248 kB
+SReclaimable:          0 kB
+SUnreclaim:         4248 kB
+KernelStack:         648 kB
+PageTables:          532 kB
+SecPageTables:         0 kB
+NFS_Unstable:          0 kB
+Bounce:                0 kB
+WritebackTmp:          0 kB
+CommitLimit:       73200 kB
+Committed_AS:      29264 kB
+VmallocTotal:     524288 kB
+VmallocUsed:         400 kB
+VmallocChunk:          0 kB
+Percpu:              112 kB
+CmaTotal:           3072 kB
+CmaFree:            1328 kB
+Balloon:               0 kB
+GPUActive:             0 kB
+GPUReclaim:            0 kB
+== sysvipc shm
+       key      shmid perms       size  cpid  lpid nattch   uid   gid  cuid  cgid      atime      dtime      ctime        rss       swap
+         0          0  1600     153604   472   251      2     0     0     0     0 1790465491          0 1790465491     155648          0
+         0          1  1600     153604   472   251      2     0     0     0     0 1790465491          0 1790465491     155648          0
+== t=120
+MemFree: 1560 kB MemAvailable: 288 kB Cached: 612 kB SwapCached: 4508 kB Active: 3068 kB Inactive: 3080 kB Active(anon): 2792 kB Inactive(anon): 2832 kB Active(file): 276 kB Inactive(file): 248 kB SwapFree: 45628 kB AnonPages: 5364 kB Mapped: 620 kB Shmem: 340 kB Slab: 4200 kB SUnreclaim: 4200 kB KernelStack: 664 kB PageTables: 564 kB SecPageTables: 0 kB CmaFree: 60 kB GPUActive: 0 kB 
+ZRAM mm_stat        0        0        0        0        0        0        0        0        0 | io_stat        0        0 0        0
+/swapfile                               file		65532		19904		-1
+nr_free_pages=407 workingset_refault_anon=5512 workingset_refault_file=26450 nr_anon_pages=1318 nr_mapped=204 nr_file_pages=1371 nr_shmem=85 pgsteal_kswapd=42487 pgsteal_direct=1049 pgscan_kswapd=101498 pgscan_direct=2640 pswpin=4581 pswpout=5878 allocstall_normal=23 pgmajfault=7099 
+SNAPEND

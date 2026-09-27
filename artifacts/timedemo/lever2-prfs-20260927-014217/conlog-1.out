@@ -1,0 +1,3 @@
+conlog: recording /dev/cu.usbserial-130 to artifacts/timedemo/lever2-prfs-20260927-014217/console-1.log for 250s
+QUIET no console output for 20s
+conlog: done

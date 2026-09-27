@@ -1,0 +1,17 @@
+vm.swappiness = 60
+s31swapon: /dev/zram0 at priority 100
+Filename				Type		Size		Used		Priority
+/swapfile                               file		65532		44		-1
+/dev/zram0                              partition	4092		0		100
+vm.swappiness = 60
+vm.page-cluster = 2
+vm.min_free_kbytes = 1024
+vm.watermark_scale_factor = 10
+SNAPBEGIN
+== t=120
+MemFree: 2384 kB MemAvailable: 1468 kB Cached: 1216 kB SwapCached: 2236 kB Active: 1984 kB Inactive: 2164 kB Active(anon): 1076 kB Inactive(anon): 1832 kB Active(file): 908 kB Inactive(file): 332 kB SwapFree: 49288 kB AnonPages: 2704 kB Mapped: 1052 kB Shmem: 316 kB Slab: 4404 kB SUnreclaim: 4404 kB KernelStack: 656 kB PageTables: 540 kB SecPageTables: 0 kB CmaFree: 1100 kB GPUActive: 0 kB 
+ZRAM mm_stat  2330624   156861  1097728        0  1433600      258        7        1       31 | io_stat        0        0 0      863
+/swapfile                               file		65532		16252		-1
+/dev/zram0                              partition	4092		4084		100
+nr_free_pages=653 workingset_refault_anon=17327 workingset_refault_file=19017 nr_anon_pages=650 nr_mapped=229 nr_file_pages=868 nr_shmem=80 pgsteal_kswapd=47454 pgsteal_direct=965 pgscan_kswapd=127403 pgscan_direct=2240 pswpin=15950 pswpout=11440 allocstall_normal=16 pgmajfault=13863 
+SNAPEND
