@@ -1,0 +1,13 @@
+== control (bad memcmp)
+MISMATCH memcmp n=187 align 28/7 (thread 0)
+RESULT exported-vs-reference: 2000 cases, 26000 calls, 215 mismatches (threads 1 hammer 0)
+== A1 on, 1 thread
+RESULT exported-vs-reference: 200000 cases, 2600000 calls, 0 mismatches (threads 1 hammer 0)
+s31str: on=1 eligible->libc(PIE cpu)=0 eligible->scalar=967681 rseq_reg=0 rseq_fail=1
+== A1 scalar, 1 thread
+RESULT exported-vs-reference: 100000 cases, 1300000 calls, 0 mismatches (threads 1 hammer 0)
+s31str: on=2 eligible->libc(PIE cpu)=0 eligible->scalar=482164 rseq_reg=0 rseq_fail=0
+== A1 on, 4 threads + detached/exit/cancel
+s31fp: pages given their original frame colour 0x00000000
+RESULT exported-vs-reference: 150001 cases, 1950013 calls, 0 mismatches (threads 4 hammer 0)
+s31str: on=1 eligible->libc(PIE cpu)=0 eligible->scalar=719526 rseq_reg=0 rseq_fail=9

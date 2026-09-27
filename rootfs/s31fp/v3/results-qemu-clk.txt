@@ -1,0 +1,25 @@
+(QEMU linux-user: rdtime counts host CLOCK_MONOTONIC ns, so the true rate is 1e9; this Docker VM slews MONOTONIC vs RAW by 0.35-0.6%, beyond the loop clamp, so RAW hits the 2 ms guard here by construction - on the board rdtime is the raw counter)
+== S31CLK=2 HZ=1000000000 (timebase error 0 ppm) drift 20s
+RESULT drift clock 1: 732 samples, max|err| 8986 ns, mean 1682 ns, first 0 last 1222
+s31clk: mode=2 | mono syncs=94 steps=0 last_err_ns=225 bracket_ticks=2919 dead=0 rt_off_change_ns=16 | raw syncs=4 steps=0 last_err_ns=-1530226 bracket_ticks=1631 dead=1
+RESULT drift clock 4: 732 samples, max|err| 2043808 ns, mean 36884 ns, first 8444 last 730
+RESULT drift clock 0: 732 samples, max|err| 6754 ns, mean 417 ns, first 0 last 680
+RESULT gettimeofday max|err| 69 us, time() out of range 0, wide brackets skipped 122
+== S31CLK=2 HZ=1000300000 (timebase error 300 ppm) drift 20s
+RESULT drift clock 1: 725 samples, max|err| 62656 ns, mean -3031 ns, first 0 last 469
+s31clk: mode=2 | mono syncs=94 steps=0 last_err_ns=24 bracket_ticks=3505 dead=0 rt_off_change_ns=-51239 | raw syncs=8 steps=0 last_err_ns=-15215 bracket_ticks=1686 dead=1
+RESULT drift clock 4: 725 samples, max|err| 1989494 ns, mean 14428 ns, first 0 last 230
+RESULT drift clock 0: 725 samples, max|err| 101859544 ns, mean 185477 ns, first 0 last 51503
+RESULT gettimeofday max|err| 101859 us, time() out of range 0, wide brackets skipped 115
+== S31CLK=2 HZ=999500000 (timebase error -500 ppm) drift 20s
+RESULT drift clock 1: 734 samples, max|err| 107493 ns, mean 10049 ns, first 0 last 2430
+s31clk: mode=2 | mono syncs=95 steps=0 last_err_ns=-1926 bracket_ticks=921 dead=0 rt_off_change_ns=316 | raw syncs=55 steps=0 last_err_ns=-608129 bracket_ticks=1559 dead=1
+RESULT drift clock 4: 734 samples, max|err| 2251058 ns, mean 735709 ns, first 0 last 250
+RESULT drift clock 0: 734 samples, max|err| 100235162 ns, mean 965155 ns, first 0 last 61
+RESULT gettimeofday max|err| 100237 us, time() out of range 0, wide brackets skipped 118
+== S31CLK=2 mono 8s
+RESULT mono: 31116606 calls, violations mono 0 raw 910 realtime 0 (threads 3)
+s31clk: mode=2 | mono syncs=42 steps=0 last_err_ns=-192 bracket_ticks=877 dead=0 rt_off_change_ns=-89 | raw syncs=5 steps=0 last_err_ns=-1940933 bracket_ticks=586 dead=1
+== S31CLK=1 mono 5s
+RESULT mono: 19675904 calls, violations mono 0 raw 0 realtime 0 (threads 3)
+s31clk: mode=1 | mono syncs=26 steps=0 last_err_ns=-42 bracket_ticks=500 dead=0 rt_off_change_ns=0 | raw syncs=26 steps=0 last_err_ns=-198955 bracket_ticks=543 dead=0
