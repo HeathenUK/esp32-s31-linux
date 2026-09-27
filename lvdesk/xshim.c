@@ -7180,10 +7180,20 @@ static int zc_on(void)
 {
 	static int v = -1;
 
+	/*
+	 * OFF by default, opt in with LVDESK_ZC=1. Measured 2026-09-26
+	 * (artifacts/gl/phase6/ZEROCOPY.txt): glxgears fullscreen 42.0/41.7 fps
+	 * against 47.9/46.9 on the copy path - the same-mode SETCRTC flip is a
+	 * ~2 ms synchronous commit inside the client's request, dearer than the
+	 * 192 kB copy it replaces. It stays built for the commit-free flip that
+	 * would make it pay. LVDESK_NOZC=1 still forces it off.
+	 */
 	if (v < 0) {
-		v = getenv("LVDESK_NOZC") == NULL;
+		const char *e = getenv("LVDESK_ZC");
+
+		v = e && !strcmp(e, "1") && getenv("LVDESK_NOZC") == NULL;
 		fprintf(stderr, "xshim: zero-copy fullscreen GL %s\n",
-			v ? "ON" : "OFF (LVDESK_NOZC=1)");
+			v ? "ON (LVDESK_ZC=1)" : "OFF (default; LVDESK_ZC=1 enables)");
 	}
 	return v && rscale_on();
 }
