@@ -1,0 +1,11 @@
+#!/bin/sh
+# Compile for QEMU: the shipping toolchain with no xesp* extensions, linked
+# against the QEMU-only sysroot (tools/cloud/setup.sh explains why). The ABI,
+# headers and float behaviour are the board's; the resulting binary is for
+# QEMU, not for the board. Use `$S31_CC` (no wrapper) for board binaries.
+#   s31-cc [-static] -O2 -o prog prog.c
+R=$(cd "$(dirname "$0")/../.." && pwd)
+SR=$R/build/cloud/sysroot/lib
+exec "$R/toolchain/riscv32-esp-linux-musl/bin/riscv32-esp-linux-musl-gcc" \
+	-march=rv32imafc_zicsr_zifencei_zaamo_zalrsc_zba_zbb_zbc_zbs -mabi=ilp32 \
+	-B"$SR/" -L"$SR" "$@"

@@ -38,9 +38,12 @@ OBJS="v2test.o noesp.o v2.o v2div.o lgref.o hw.o oldc.o oldmul.o oldadd.o oldcon
 $CC $MARCH -mabi=ilp32 -O2 -c -o wrap.o $D/wrap.c
 WR=$(for s in muldf3 adddf3 subdf3 divdf3 gedf2 ledf2 eqdf2 unorddf2 fixdfsi fixunsdfsi extendsfdf2 truncdfsf2 floatsidf floatunsidf; do printf -- "-Wl,--wrap=s31lg_$s "; done)
 # v2check: fall-backs counted through --wrap; v2test: clean, for instruction counts
-$CC $MARCH -mabi=ilp32 -static -o v2check$FENV $OBJS wrap.o $WR
+# QLD: QEMU-only link flags (tools/cloud/env.sh sets -L to its no-xesp sysroot
+# when the toolchain's libgcc/libc carry esp.* code). Never on -board builds.
+QLD=${S31_QEMU_LDFLAGS:-}
+$CC $MARCH -mabi=ilp32 -static $QLD -o v2check$FENV $OBJS wrap.o $WR
 printf 'volatile unsigned long v2_refcalls;\n' > nowrap.c && $CC $MARCH -mabi=ilp32 -c -o nowrap.o nowrap.c
-$CC $MARCH -mabi=ilp32 -static -o v2test$FENV $OBJS nowrap.o
+$CC $MARCH -mabi=ilp32 -static $QLD -o v2test$FENV $OBJS nowrap.o
 ls -l $B/v2test$FENV $B/v2check$FENV
 # board build: no D oracle (the board has no D), libgcc copies are the reference
 if [ "$FENV" = 1 ]; then

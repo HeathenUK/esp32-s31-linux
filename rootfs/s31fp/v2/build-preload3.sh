@@ -3,7 +3,8 @@
 # libs31fp.so v2 CANDIDATE (not installed) + its QEMU and board tests.
 set -e
 T=/src/toolchain/riscv32-esp-linux-musl/bin/riscv32-esp-linux-musl
-CC=$(ls /src/build/buildroot/host/bin/*-linux-musl-gcc | head -1)
+# S31_CC: the bare toolchain gcc on hosts without a Buildroot tree (tools/cloud)
+CC=${S31_CC:-$(ls /src/build/buildroot/host/bin/*-linux-musl-gcc | head -1)}
 V=/src/rootfs/s31fp/v2
 B=${B:-$V/out}
 PF=${S31FP_TEST_CFLAGS:-} # fault-injection test builds only; empty in production

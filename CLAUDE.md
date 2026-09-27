@@ -166,6 +166,15 @@ whole afternoons:
 - **Timeouts**: size them to the work (flash ~40 s, `make linux` ~200 s, a board
   script ~60 s). A long default looks like progress while nothing happens.
 
+- **No board attached** (a cloud session, any x86_64 Ubuntu host): use
+  `tools/cloud/` - `make cloud-setup`, `make cloud-check`, `make cloud-test`.
+  It builds a plugin QEMU and a QEMU-only sysroot, because the release
+  toolchain's libgcc/musl contain `esp.*` instructions QEMU cannot execute.
+  Correctness and instruction counts only, never timing. **The release
+  toolchain did not build the board's userspace** (the board's libs say
+  `crosstool-NG UNKNOWN`, no `xesploop`), so icounts of our own C are not the
+  board build's - see `tools/cloud/README.md`.
+
 Pick the **narrowest** build target that reaches the goal. `make linux` alone
 for kernel work; the rootfs only needs rebuilding when userspace changes.
 

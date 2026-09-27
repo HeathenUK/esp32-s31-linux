@@ -4,7 +4,8 @@
 # + A1 s31str.c + A2 s31clk.c; and its QEMU/board test programs.
 set -e
 T=/src/toolchain/riscv32-esp-linux-musl/bin/riscv32-esp-linux-musl
-CC=$(ls /src/build/buildroot/host/bin/*-linux-musl-gcc | head -1)
+# S31_CC: the bare toolchain gcc on hosts without a Buildroot tree (tools/cloud)
+CC=${S31_CC:-$(ls /src/build/buildroot/host/bin/*-linux-musl-gcc | head -1)}
 V2=/src/rootfs/s31fp/v2
 V=/src/rootfs/s31fp/v3
 B=${B:-$V/out}
@@ -39,7 +40,8 @@ $CC $M -O2 -Wall -o $B/v3spawn $V/v3spawn.c
 $CC $M -O2 -o $B/v3nop $V/v3nop.c
 $CC $M -O2 -Wall -o $B/v3work $V/v3work.c
 # the QEMU run needs the target's dynamic loader and libc
-S=/src/build/buildroot/host/riscv32-buildroot-linux-musl/sysroot
+# S31_TARGET_SYSROOT: tools/cloud/env.sh points it at the QEMU-only sysroot
+S=${S31_TARGET_SYSROOT:-/src/build/buildroot/host/riscv32-buildroot-linux-musl/sysroot}
 mkdir -p $B/qroot/lib
 cp -L $S/lib/ld-musl-riscv32-sf.so.1 $B/qroot/lib/
 ls -l $B/strtest $B/clktest $B/v3spawn $B/v3nop $B/v3work

@@ -1,0 +1,19 @@
+#!/bin/sh
+# Run an rv32 Linux binary under QEMU user-mode, with the QEMU-only sysroot
+# as the dynamic-library root.
+#
+#   s31-qemu ./prog args...
+#   S31_QEMU_CPU=max s31-qemu ./v2test      # oracle builds that need D
+#   s31-qemu -plugin /plugins/libinsn.so -d plugin ./prog   # icount
+#
+# The default CPU is the board's ISA: no D, so a double that reached the FPU
+# is SIGILL here instead of a silent pass. QEMU has no timing model - it
+# answers correctness and instruction counts, never speed.
+R=$(cd "$(dirname "$0")/../.." && pwd)
+Q=$R/build/cloud/qemu/bin/qemu-riscv32
+BOARD=rv32,i=true,m=true,a=true,f=true,d=false,c=true,v=false,zicsr=true,zifencei=true,zba=true,zbb=true,zbc=true,zbs=true,zicntr=true
+case ${S31_QEMU_CPU:-board} in
+board) CPU=$BOARD ;;
+*) CPU=$S31_QEMU_CPU ;;
+esac
+exec "$Q" -cpu "$CPU" -L "$R/build/cloud/sysroot" "$@"

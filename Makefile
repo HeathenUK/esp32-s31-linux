@@ -1509,6 +1509,16 @@ flash-all: flash-opensbi flash-linux flash-rootfs flash-bootloader
 erase:
 	esptool -p /dev/ttyUSB0 -b 2000000 erase-flash
 
+# --- board-less host: toolchain + plugin QEMU + QEMU-only sysroot ---------
+# tools/cloud/README.md. Nothing here touches images/, the overlay or a board.
+.PHONY: cloud-setup cloud-check cloud-test
+cloud-setup:
+	sh tools/cloud/setup.sh
+cloud-check:
+	sh tools/cloud/check.sh
+cloud-test:
+	sh tools/cloud/test.sh
+
 # --- regression gates (scripts/board/gate.py, acceptance.sh) -------------
 # Isolated diagnostics: never stage an overlay or repack a shipping image.
 # The v2 scripts are the existing exactness/copy-relocation build, in order:
