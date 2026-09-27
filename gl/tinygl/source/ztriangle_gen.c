@@ -181,6 +181,17 @@ void fill_body(ZBuffer *zb, const ZTri *T, const ZVtxG *a, const ZVtxG *b,
     sp.sz1 = sp.tz1 = 0.0f;
   }
 
+  /* phase 6 tier 2: a filler that walks the triangle's rows itself (the
+     same edges, span values and statements as the loop below, so the same
+     bits) - one call a triangle instead of one a span */
+  if (mt && !band && p->x->run_tri != NULL && sp.run == p->x->run_mt &&
+      (need & (ZP_N_Q | ZP_N_ST | ZP_N_ST1)) == (ZP_N_Q | ZP_N_ST | ZP_N_ST1)) {
+    const float pl[15] = { Rq, gqx, gqy, Rs, gsx, gsy, Rt, gtx, gty,
+                           Rs1, gs1x, gs1y, Rt1, gt1x, gt1y };
+    p->x->run_tri(zb, T, &sp, pl);
+    return;
+  }
+
   for (part = 0; part < 2; part++) {
     y = T->part[part].ya; ye = T->part[part].yb;
     if (y >= ye) continue;

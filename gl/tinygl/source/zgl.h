@@ -707,7 +707,8 @@ typedef struct GLContext {
                                    set_flat; per triangle, so at the end) */
   int zf8_on;                   /* S31GL_ZF8 (default 1): phase 6 zf8's world
                                    filler (0: the loop before it; 2: with the
-                                   next row's prefetches - the A/B arms) */
+                                   next row's prefetches; 3: a call a span,
+                                   not a triangle (tier 2) - the A/B arms) */
 } GLContext;
 
 /* GLContext.p4_en */

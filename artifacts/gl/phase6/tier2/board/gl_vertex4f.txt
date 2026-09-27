@@ -1,0 +1,795 @@
+    4   1.5%  5a97e  auipc	a5, 0x22
+    1   0.4%  5a982  lw	a5, -0x162(a5)
+    1   0.4%  5a986  fmv.w.x	fa5, a3
+    2   0.8%  5a98a  fmv.w.x	fa2, a1
+    0   0.0%  5a98e  fmv.w.x	fa4, a2
+    1   0.4%  5a992  beqz	a5, 0x5a9ae <glVertexAttribPointer+0x49e8>
+    0   0.0%  5a994  auipc	a3, 0x0
+    0   0.0%  5a998  auipc	a2, 0x22
+    0   0.0%  5a99c  lw	a2, -0x180(a2)
+    0   0.0%  5a9a0  auipc	a1, 0x22
+    0   0.0%  5a9a4  lw	a1, -0x18c(a1)
+    0   0.0%  5a9a8  sub	a3, a3, a2
+    0   0.0%  5a9aa  bltu	a3, a1, 0x5ae2e <glVertexAttribPointer+0x4e68>
+    0   0.0%  5a9ae  lw	a5, 0x2a8(a4)
+    0   0.0%  5a9b2  beqz	a5, 0x5ae4e <glVertexAttribPointer+0x4e88>
+    1   0.4%  5a9b6  lw	a3, 0x2ac(a4)
+    0   0.0%  5a9ba  lui	a5, 0x8
+    5   1.9%  5a9bc  addi	a5, a5, -0x1
+    0   0.0%  5a9be  beq	a3, a5, 0x5ae4e <glVertexAttribPointer+0x4e88>
+    0   0.0%  5a9c2  lw	a5, 0x2b4(a4)
+    0   0.0%  5a9c6  addi	sp, sp, -0x30
+    0   0.0%  5a9c8  fmv.w.x	fa3, a0
+    1   0.4%  5a9cc  lw	a6, 0x2b0(a4)
+    2   0.8%  5a9d0  lw	a0, 0x2b8(a4)
+    1   0.4%  5a9d4  sw	s0, 0x28(sp)
+    0   0.0%  5a9d6  sw	s1, 0x24(sp)
+    0   0.0%  5a9d8  sw	s2, 0x20(sp)
+    0   0.0%  5a9da  sw	ra, 0x2c(sp)
+    1   0.4%  5a9dc  mv	s2, a5
+    0   0.0%  5a9de  addi	a5, a5, 0x1
+    0   0.0%  5a9e0  sw	a5, 0x2b4(a4)
+    2   0.8%  5a9e4  mv	s0, a4
+    0   0.0%  5a9e6  mv	s1, a5
+    2   0.8%  5a9e8  bge	a6, a0, 0x5ae6c <glVertexAttribPointer+0x4ea6>
+    2   0.8%  5a9ec  sh2add	a2, a6, a6
+    0   0.0%  5a9f0  lw	a4, 0x2bc(a4)
+    0   0.0%  5a9f4  sh3add	a2, a2, a6
+    1   0.4%  5a9f8  slli	a2, a2, 0x2
+    0   0.0%  5a9fa  lw	a3, 0x1c(s0)
+   19   7.3%  5a9fc  auipc	a5, 0xa
+    0   0.0%  5aa00  flw	fa0, -0x1f8(a5)
+    1   0.4%  5aa04  add	a1, a4, a2
+    0   0.0%  5aa08  fsw	fa3, 0x10(a1)
+    0   0.0%  5aa0a  fsw	fa2, 0x14(a1)
+    2   0.8%  5aa0c  fsw	fa4, 0x18(a1)
+    1   0.4%  5aa0e  fsw	fa5, 0x1c(a1)
+    0   0.0%  5aa10  feq.s	a5, fa5, fa0
+    0   0.0%  5aa14  addi	a6, a6, 0x1
+    1   0.4%  5aa16  beqz	a3, 0x5ad96 <glVertexAttribPointer+0x4dd0>
+    0   0.0%  5aa1a  beqz	a5, 0x5b244 <glVertexAttribPointer+0x527e>
+    0   0.0%  5aa1e  lw	a5, 0x110(s0)
+    0   0.0%  5aa22  lw	a4, 0x68c(s0)
+    0   0.0%  5aa26  flw	ft1, 0x4(a5)
+    0   0.0%  5aa2a  flw	ft0, 0x14(a5)
+    0   0.0%  5aa2e  flw	fa1, 0x24(a5)
+    0   0.0%  5aa30  fmul.s	ft1, fa2, ft1
+    0   0.0%  5aa34  fmul.s	ft0, fa2, ft0
+    0   0.0%  5aa38  fmul.s	fa1, fa2, fa1
+    0   0.0%  5aa3c  flw	ft4, 0x0(a5)
+    0   0.0%  5aa40  flw	ft3, 0x10(a5)
+    0   0.0%  5aa44  flw	ft2, 0x20(a5)
+    0   0.0%  5aa48  fmadd.s	ft4, fa3, ft4, ft1
+    0   0.0%  5aa4c  fmadd.s	ft3, fa3, ft3, ft0
+    0   0.0%  5aa50  fmadd.s	ft2, fa3, ft2, fa1
+    0   0.0%  5aa54  flw	ft1, 0x8(a5)
+    0   0.0%  5aa58  flw	ft0, 0x18(a5)
+    0   0.0%  5aa5c  flw	fa1, 0x28(a5)
+    0   0.0%  5aa5e  fmadd.s	ft1, fa4, ft1, ft4
+    0   0.0%  5aa62  fmadd.s	ft0, fa4, ft0, ft3
+    0   0.0%  5aa66  fmadd.s	fa1, fa4, fa1, ft2
+    0   0.0%  5aa6a  flw	ft4, 0xc(a5)
+    0   0.0%  5aa6e  flw	ft3, 0x1c(a5)
+    0   0.0%  5aa72  flw	ft2, 0x2c(a5)
+    0   0.0%  5aa76  fadd.s	ft1, ft1, ft4
+    0   0.0%  5aa7a  fadd.s	ft0, ft0, ft3
+    0   0.0%  5aa7e  fadd.s	fa1, fa1, ft2
+    0   0.0%  5aa82  bnez	a4, 0x5aaa2 <glVertexAttribPointer+0x4adc>
+    0   0.0%  5aa84  flw	ft3, 0x34(a5)
+    0   0.0%  5aa88  flw	ft2, 0x30(a5)
+    0   0.0%  5aa8c  flw	fa5, 0x38(a5)
+    0   0.0%  5aa8e  fmul.s	fa2, fa2, ft3
+    0   0.0%  5aa92  flw	ft3, 0x3c(a5)
+    0   0.0%  5aa96  fmadd.s	fa3, fa3, ft2, fa2
+    0   0.0%  5aa9a  fmadd.s	fa5, fa4, fa5, fa3
+    0   0.0%  5aa9e  fadd.s	fa5, fa5, ft3
+    0   0.0%  5aaa2  lw	a4, 0x334(s0)
+    0   0.0%  5aaa6  fsw	ft1, 0x44(a1)
+    0   0.0%  5aaaa  fsw	ft0, 0x48(a1)
+    0   0.0%  5aaae  fsw	fa1, 0x4c(a1)
+    0   0.0%  5aab0  fsw	fa5, 0x50(a1)
+    0   0.0%  5aab2  flw	fa4, 0x0(a4)
+    0   0.0%  5aab4  lw	a5, 0x688(s0)
+    0   0.0%  5aab8  li	a3, 0x1
+    0   0.0%  5aaba  fmul.s	fa4, ft1, fa4
+    0   0.0%  5aabe  beq	a5, a3, 0x5af7c <glVertexAttribPointer+0x4fb6>
+    0   0.0%  5aac2  li	a3, 0x2
+    0   0.0%  5aac4  flw	fa3, 0xc(a4)
+    0   0.0%  5aac6  beq	a5, a3, 0x5b212 <glVertexAttribPointer+0x524c>
+    0   0.0%  5aaca  flw	ft2, 0x4(a4)
+    0   0.0%  5aace  flw	fa2, 0x8(a4)
+    0   0.0%  5aad0  fmadd.s	fa4, ft0, ft2, fa4
+    0   0.0%  5aad4  fmadd.s	fa4, fa1, fa2, fa4
+    0   0.0%  5aad8  fmadd.s	fa3, fa5, fa3, fa4
+    0   0.0%  5aadc  fsw	fa3, 0x54(a1)
+    0   0.0%  5aade  flw	ft2, 0x14(a4)
+    0   0.0%  5aae2  flw	fa2, 0x10(a4)
+    0   0.0%  5aae4  flw	fa3, 0x18(a4)
+    0   0.0%  5aae6  fmul.s	ft2, ft0, ft2
+    0   0.0%  5aaea  flw	fa4, 0x1c(a4)
+    0   0.0%  5aaec  fmadd.s	fa2, ft1, fa2, ft2
+    0   0.0%  5aaf0  fmadd.s	fa3, fa1, fa3, fa2
+    0   0.0%  5aaf4  fmadd.s	fa4, fa5, fa4, fa3
+    0   0.0%  5aaf8  fsw	fa4, 0x58(a1)
+    0   0.0%  5aafa  flw	ft2, 0x24(a4)
+    0   0.0%  5aafe  flw	fa2, 0x20(a4)
+    0   0.0%  5ab00  flw	fa3, 0x28(a4)
+    0   0.0%  5ab02  fmul.s	ft2, ft0, ft2
+    0   0.0%  5ab06  flw	fa4, 0x2c(a4)
+    0   0.0%  5ab08  fmadd.s	fa2, ft1, fa2, ft2
+    0   0.0%  5ab0c  fmadd.s	fa3, fa1, fa3, fa2
+    0   0.0%  5ab10  fmadd.s	fa4, fa5, fa4, fa3
+    0   0.0%  5ab14  fsw	fa4, 0x5c(a1)
+    0   0.0%  5ab16  flw	fa2, 0x34(a4)
+    0   0.0%  5ab18  flw	fa3, 0x30(a4)
+    0   0.0%  5ab1a  flw	fa4, 0x38(a4)
+    0   0.0%  5ab1c  fmul.s	fa2, ft0, fa2
+    0   0.0%  5ab20  flw	ft0, 0x3c(a4)
+    0   0.0%  5ab24  fmadd.s	fa3, ft1, fa3, fa2
+    0   0.0%  5ab28  fmadd.s	fa4, fa1, fa4, fa3
+    0   0.0%  5ab2c  fmadd.s	fa5, fa5, ft0, fa4
+    0   0.0%  5ab30  fsw	fa5, 0x60(a1)
+    0   0.0%  5ab32  flw	fa3, 0x288(s0)
+    0   0.0%  5ab36  flw	fa1, 0x134(s0)
+    0   0.0%  5ab3a  flw	fa4, 0x284(s0)
+    0   0.0%  5ab3e  flw	fa2, 0x130(s0)
+    0   0.0%  5ab42  fmul.s	fa1, fa3, fa1
+    0   0.0%  5ab46  flw	fa5, 0x28c(s0)
+    0   0.0%  5ab4a  flw	ft0, 0x138(s0)
+    0   0.0%  5ab4e  lw	a5, 0x228(s0)
+    0   0.0%  5ab52  fmadd.s	fa2, fa4, fa2, fa1
+    0   0.0%  5ab56  fmadd.s	ft0, fa5, ft0, fa2
+    0   0.0%  5ab5a  fsw	ft0, 0x4(a1)
+    0   0.0%  5ab5e  flw	ft1, 0x144(s0)
+    0   0.0%  5ab62  flw	fa1, 0x140(s0)
+    0   0.0%  5ab66  flw	fa2, 0x148(s0)
+    0   0.0%  5ab6a  fmul.s	ft1, fa3, ft1
+    0   0.0%  5ab6e  fmadd.s	fa1, fa4, fa1, ft1
+    0   0.0%  5ab72  fmadd.s	fa2, fa5, fa2, fa1
+    0   0.0%  5ab76  fsw	fa2, 0x8(a1)
+    0   0.0%  5ab78  flw	ft2, 0x154(s0)
+    0   0.0%  5ab7c  flw	ft1, 0x150(s0)
+    0   0.0%  5ab80  flw	fa1, 0x158(s0)
+    0   0.0%  5ab84  fmul.s	fa3, fa3, ft2
+    0   0.0%  5ab88  fmadd.s	fa4, fa4, ft1, fa3
+    0   0.0%  5ab8c  fmadd.s	fa4, fa5, fa1, fa4
+    0   0.0%  5ab90  fsw	fa4, 0xc(a1)
+    0   0.0%  5ab92  bnez	a5, 0x5af2a <glVertexAttribPointer+0x4f64>
+    0   0.0%  5ab96  lw	a5, 0x4ec(s0)
+    0   0.0%  5ab9a  bnez	a5, 0x5aefe <glVertexAttribPointer+0x4f38>
+    0   0.0%  5ab9e  flw	fa1, 0x5c(a1)
+    0   0.0%  5aba0  flw	fa5, 0x60(a1)
+    0   0.0%  5aba2  flw	ft1, 0x58(a1)
+    0   0.0%  5aba6  flw	ft2, 0x54(a1)
+    2   0.8%  5abaa  auipc	a5, 0xa
+    2   0.8%  5abae  flw	fa4, -0x35e(a5)
+    3   1.1%  5abb2  fmul.s	fa5, fa5, fa4
+    0   0.0%  5abb6  fneg.s	fa4, fa5
+    3   1.1%  5abba  flt.s	a5, fa5, ft2
+    1   0.4%  5abbe  flt.s	a0, fa5, ft1
+    0   0.0%  5abc2  flt.s	a4, ft2, fa4
+    0   0.0%  5abc6  flt.s	a2, fa5, fa1
+    0   0.0%  5abca  flt.s	a3, ft1, fa4
+    0   0.0%  5abce  slli	a5, a5, 0x1
+    1   0.4%  5abd0  or	a5, a5, a4
+    0   0.0%  5abd2  slli	a0, a0, 0x3
+    0   0.0%  5abd4  flt.s	a4, fa1, fa4
+    0   0.0%  5abd8  or	a5, a5, a0
+    1   0.4%  5abda  slli	a2, a2, 0x5
+    0   0.0%  5abdc  or	a5, a5, a2
+    1   0.4%  5abde  slli	a3, a3, 0x2
+    0   0.0%  5abe0  or	a5, a5, a3
+    0   0.0%  5abe2  slli	a4, a4, 0x4
+    1   0.4%  5abe4  or	a5, a5, a4
+    0   0.0%  5abe6  sw	a5, 0x64(a1)
+    2   0.8%  5abe8  lw	a5, 0xd4(s0)
+    2   0.8%  5abec  beqz	a5, 0x5ac0e <glVertexAttribPointer+0x4c48>
+    0   0.0%  5abee  lw	a5, 0x1b8(s0)
+    1   0.4%  5abf2  bnez	a5, 0x5af68 <glVertexAttribPointer+0x4fa2>
+    0   0.0%  5abf6  lw	a5, 0x29c(s0)
+    4   1.5%  5abfa  lw	a3, 0x294(s0)
+    1   0.4%  5abfe  lw	a4, 0x298(s0)
+    1   0.4%  5ac02  sw	a5, 0x28(a1)
+    2   0.8%  5ac04  sw	a3, 0x20(a1)
+    0   0.0%  5ac06  sw	a4, 0x24(a1)
+    0   0.0%  5ac08  lw	a5, 0x2a0(s0)
+    1   0.4%  5ac0c  sw	a5, 0x2c(a1)
+    1   0.4%  5ac0e  lw	a5, 0x694(s0)
+    1   0.4%  5ac12  beqz	a5, 0x5ac38 <glVertexAttribPointer+0x4c72>
+    0   0.0%  5ac14  li	a4, 0x4
+    0   0.0%  5ac16  bne	a5, a4, 0x5ac26 <glVertexAttribPointer+0x4c60>
+    1   0.4%  5ac1a  lui	a5, 0x2
+    2   0.8%  5ac1c  add	a5, a5, s0
+    1   0.4%  5ac1e  lw	a4, -0x164(a5)
+    7   2.7%  5ac22  beqz	a4, 0x5aff4 <glVertexAttribPointer+0x502e>
+    0   0.0%  5ac26  mv	a0, s0
+    0   0.0%  5ac28  fsw	fa0, 0xc(sp)
+    0   0.0%  5ac2a  sw	a6, 0x8(sp)
+    0   0.0%  5ac2c  sw	a1, 0x4(sp)
+    0   0.0%  5ac2e  jal	0x5a46e <glVertexAttribPointer+0x44a8>
+    0   0.0%  5ac32  flw	fa0, 0xc(sp)
+    0   0.0%  5ac34  lw	a6, 0x8(sp)
+    0   0.0%  5ac36  lw	a1, 0x4(sp)
+    0   0.0%  5ac38  lw	a5, 0x1c(s0)
+    5   1.9%  5ac3a  bnez	a5, 0x5aed6 <glVertexAttribPointer+0x4f10>
+    0   0.0%  5ac3e  lw	a5, 0x270(s0)
+    0   0.0%  5ac42  lw	a3, 0x268(s0)
+    0   0.0%  5ac46  lw	a4, 0x26c(s0)
+    1   0.4%  5ac4a  sw	a5, 0x38(a1)
+    1   0.4%  5ac4c  sw	a3, 0x30(a1)
+    1   0.4%  5ac4e  sw	a4, 0x34(a1)
+    0   0.0%  5ac50  lw	a5, 0x274(s0)
+    2   0.8%  5ac54  sw	a5, 0x3c(a1)
+    0   0.0%  5ac56  lw	a5, 0x64(a1)
+    2   0.8%  5ac58  bnez	a5, 0x5ad74 <glVertexAttribPointer+0x4dae>
+    0   0.0%  5ac5c  flw	fa5, 0x60(a1)
+    0   0.0%  5ac5e  flw	fa3, 0x54(a1)
+    1   0.4%  5ac60  flw	fa4, 0x58(a1)
+    0   0.0%  5ac62  fdiv.s	fa5, fa0, fa5
+    7   2.7%  5ac66  flw	ft0, 0x5c(a1)
+    3   1.1%  5ac6a  fmul.s	fa3, fa5, fa3
+    0   0.0%  5ac6e  fsw	fa5, 0x90(a1)
+    1   0.4%  5ac72  flw	fa2, 0x204(s0)
+    0   0.0%  5ac76  flw	fa1, 0x200(s0)
+    0   0.0%  5ac7a  fmul.s	fa4, fa5, fa4
+    0   0.0%  5ac7e  fmul.s	fa5, fa5, ft0
+    0   0.0%  5ac82  fmadd.s	fa3, fa3, fa1, fa2
+    0   0.0%  5ac86  fcvt.w.s	a5, fa3, rdn
+    0   0.0%  5ac8a  fsw	fa3, 0x88(a1)
+    1   0.4%  5ac8e  flw	fa3, 0x20c(s0)
+    0   0.0%  5ac92  flw	fa2, 0x208(s0)
+    0   0.0%  5ac96  sw	a5, 0x68(a1)
+    0   0.0%  5ac98  fmadd.s	fa4, fa4, fa2, fa3
+    2   0.8%  5ac9c  fcvt.w.s	a5, fa4, rdn
+    0   0.0%  5aca0  sw	a5, 0x6c(a1)
+    0   0.0%  5aca2  fsw	fa4, 0x8c(a1)
+    0   0.0%  5aca6  flw	fa3, 0x1d4(s0)
+    0   0.0%  5acaa  flw	fa4, 0x1e0(s0)
+    1   0.4%  5acae  fmadd.s	fa5, fa5, fa3, fa4
+    2   0.8%  5acb2  fcvt.w.s	a5, fa5, rtz
+    0   0.0%  5acb6  sw	a5, 0x70(a1)
+    1   0.4%  5acb8  lw	a5, 0x1c(s0)
+   12   4.6%  5acba  beqz	a5, 0x5aeea <glVertexAttribPointer+0x4f24>
+    0   0.0%  5acbe  auipc	a5, 0xa
+    0   0.0%  5acc2  flw	fa1, -0x496(a5)
+    0   0.0%  5acc6  auipc	a5, 0xa
+    0   0.0%  5acca  flw	fa2, -0x49a(a5)
+    0   0.0%  5acce  flw	fa3, 0x30(a1)
+    0   0.0%  5acd0  flw	fa4, 0x34(a1)
+    0   0.0%  5acd2  flw	fa5, 0x38(a1)
+    0   0.0%  5acd4  fmadd.s	fa3, fa3, fa1, fa2
+    0   0.0%  5acd8  fmadd.s	fa4, fa4, fa1, fa2
+    0   0.0%  5acdc  fmadd.s	fa5, fa5, fa1, fa2
+    0   0.0%  5ace0  fcvt.w.s	a3, fa3, rtz
+    0   0.0%  5ace4  fcvt.w.s	a4, fa4, rtz
+    0   0.0%  5ace8  fcvt.w.s	a5, fa5, rtz
+    0   0.0%  5acec  sw	a3, 0x7c(a1)
+    0   0.0%  5acee  sw	a4, 0x80(a1)
+    0   0.0%  5acf2  sw	a5, 0x84(a1)
+    0   0.0%  5acf6  lw	a5, 0xd4(s0)
+    3   1.1%  5acfa  beqz	a5, 0x5ad74 <glVertexAttribPointer+0x4dae>
+    0   0.0%  5acfc  flw	fa5, 0x2c(a1)
+    4   1.5%  5acfe  flw	fa3, 0x20(a1)
+    1   0.4%  5ad00  flw	fa1, 0x538(s0)
+    0   0.0%  5ad04  flw	fa4, 0x24(a1)
+    0   0.0%  5ad06  flw	fa2, 0x53c(s0)
+    1   0.4%  5ad0a  feq.s	a5, fa5, fa0
+    1   0.4%  5ad0e  fmul.s	fa3, fa3, fa1
+    0   0.0%  5ad12  fmul.s	fa4, fa4, fa2
+    0   0.0%  5ad16  bnez	a5, 0x5ad48 <glVertexAttribPointer+0x4d82>
+    0   0.0%  5ad18  auipc	a5, 0xa
+    0   0.0%  5ad1c  flw	fa2, -0x4dc(a5)
+    0   0.0%  5ad20  flt.s	a5, fa2, fa5
+    0   0.0%  5ad24  bnez	a5, 0x5b23e <glVertexAttribPointer+0x5278>
+    0   0.0%  5ad28  auipc	a5, 0xa
+    0   0.0%  5ad2c  flw	fa2, -0x4e8(a5)
+    0   0.0%  5ad30  flt.s	a5, fa5, fa2
+    0   0.0%  5ad34  bnez	a5, 0x5b23e <glVertexAttribPointer+0x5278>
+    0   0.0%  5ad38  auipc	a5, 0xa
+    0   0.0%  5ad3c  flw	fa5, -0x500(a5)
+    0   0.0%  5ad40  fmul.s	fa3, fa3, fa5
+    0   0.0%  5ad44  fmul.s	fa4, fa4, fa5
+    0   0.0%  5ad48  auipc	a5, 0xa
+    1   0.4%  5ad4c  flw	fa2, -0x504(a5)
+    0   0.0%  5ad50  auipc	a5, 0xa
+    1   0.4%  5ad54  flw	fa5, -0x508(a5)
+    0   0.0%  5ad58  fmax.s	fa3, fa3, fa2
+    1   0.4%  5ad5c  fmax.s	fa4, fa4, fa2
+    0   0.0%  5ad60  fmin.s	fa3, fa3, fa5
+    1   0.4%  5ad64  fmin.s	fa4, fa4, fa5
+    1   0.4%  5ad68  fcvt.w.s	a4, fa3, rtz
+    0   0.0%  5ad6c  fcvt.w.s	a5, fa4, rtz
+    0   0.0%  5ad70  sw	a4, 0x74(a1)
+    1   0.4%  5ad72  sw	a5, 0x78(a1)
+    1   0.4%  5ad74  lw	a4, 0x2a4(s0)
+    1   0.4%  5ad78  li	a5, 0x9
+    1   0.4%  5ad7a  sw	a4, 0x0(a1)
+    1   0.4%  5ad7c  lw	a4, 0x2ac(s0)
+    0   0.0%  5ad80  bltu	a5, a4, 0x5ae5a <glVertexAttribPointer+0x4e94>
+    0   0.0%  5ad84  auipc	a3, 0x5
+    0   0.0%  5ad88  addi	a3, a3, 0x5b4
+    0   0.0%  5ad8c  sh2add	a4, a4, a3
+    3   1.1%  5ad90  lw	a5, 0x0(a4)
+    0   0.0%  5ad92  add	a5, a5, a3
+    3   1.1%  5ad94  jr	a5
+    1   0.4%  5ad96  beqz	a5, 0x5b258 <glVertexAttribPointer+0x5292>
+    3   1.1%  5ad9a  flw	fa1, 0x174(s0)
+    0   0.0%  5ad9e  flw	fa5, 0x170(s0)
+    2   0.8%  5ada2  flw	ft2, 0x178(s0)
+    1   0.4%  5ada6  fmul.s	fa1, fa2, fa1
+    1   0.4%  5adaa  flw	ft0, 0x17c(s0)
+    0   0.0%  5adae  lw	a5, 0x1b4(s0)
+    1   0.4%  5adb2  fmadd.s	fa5, fa3, fa5, fa1
+    1   0.4%  5adb6  fmadd.s	ft2, fa4, ft2, fa5
+    0   0.0%  5adba  fadd.s	ft2, ft2, ft0
+    1   0.4%  5adbe  fsw	ft2, 0x54(a1)
+    1   0.4%  5adc2  flw	fa1, 0x184(s0)
+    0   0.0%  5adc6  flw	fa5, 0x180(s0)
+    0   0.0%  5adca  flw	ft1, 0x188(s0)
+    2   0.8%  5adce  fmul.s	fa1, fa2, fa1
+    2   0.8%  5add2  flw	ft0, 0x18c(s0)
+    1   0.4%  5add6  fmadd.s	fa5, fa3, fa5, fa1
+    4   1.5%  5adda  fmadd.s	ft1, fa4, ft1, fa5
+    0   0.0%  5adde  fadd.s	ft1, ft1, ft0
+    0   0.0%  5ade2  fsw	ft1, 0x58(a1)
+    0   0.0%  5ade6  flw	ft0, 0x194(s0)
+    2   0.8%  5adea  flw	fa5, 0x190(s0)
+    0   0.0%  5adee  flw	fa1, 0x198(s0)
+    1   0.4%  5adf2  fmul.s	ft0, fa2, ft0
+    0   0.0%  5adf6  flw	ft3, 0x19c(s0)
+    5   1.9%  5adfa  fmadd.s	fa5, fa3, fa5, ft0
+    1   0.4%  5adfe  fmadd.s	fa1, fa4, fa1, fa5
+    0   0.0%  5ae02  fadd.s	fa1, fa1, ft3
+    0   0.0%  5ae06  fsw	fa1, 0x5c(a1)
+    0   0.0%  5ae08  flw	fa5, 0x1ac(s0)
+    0   0.0%  5ae0c  bnez	a5, 0x5ae2a <glVertexAttribPointer+0x4e64>
+    0   0.0%  5ae0e  flw	ft4, 0x1a4(s0)
+    0   0.0%  5ae12  flw	ft3, 0x1a0(s0)
+    0   0.0%  5ae16  flw	ft0, 0x1a8(s0)
+    1   0.4%  5ae1a  fmul.s	fa2, fa2, ft4
+    4   1.5%  5ae1e  fmadd.s	fa3, fa3, ft3, fa2
+    0   0.0%  5ae22  fmadd.s	fa4, fa4, ft0, fa3
+    0   0.0%  5ae26  fadd.s	fa5, fa5, fa4
+    0   0.0%  5ae2a  fsw	fa5, 0x60(a1)
+    8   3.1%  5ae2c  j	0x5abaa <glVertexAttribPointer+0x4be4>
+    0   0.0%  5ae2e  auipc	a6, 0x0
+    0   0.0%  5ae32  addi	a6, a6, -0x4b0
+    0   0.0%  5ae36  sub	a2, a6, a2
+    0   0.0%  5ae3a  bgeu	a2, a1, 0x5ae40 <glVertexAttribPointer+0x4e7a>
+    0   0.0%  5ae3e  add	a6, a6, a5
+    0   0.0%  5ae40  fmv.x.w	a3, fa5
+    0   0.0%  5ae44  fmv.x.w	a2, fa4
+    0   0.0%  5ae48  fmv.x.w	a1, fa2
+    0   0.0%  5ae4c  jr	a6
+    0   0.0%  5ae4e  ret
+    0   0.0%  5ae50  lw	a1, 0x2bc(s0)
+    0   0.0%  5ae54  mv	a0, s0
+    0   0.0%  5ae56  jal	0x17962 <s31gl_get_proc+0x2fde>
+    0   0.0%  5ae5a  li	a6, 0x0
+    0   0.0%  5ae5c  sw	a6, 0x2b0(s0)
+    0   0.0%  5ae60  lw	ra, 0x2c(sp)
+    0   0.0%  5ae62  lw	s0, 0x28(sp)
+    0   0.0%  5ae64  lw	s1, 0x24(sp)
+    0   0.0%  5ae66  lw	s2, 0x20(sp)
+    0   0.0%  5ae68  addi	sp, sp, 0x30
+    2   0.8%  5ae6a  ret
+    0   0.0%  5ae6c  slli	a4, a0, 0x1
+    0   0.0%  5ae70  sh3add	a0, a0, a4
+    0   0.0%  5ae74  sh3add	a0, a0, a4
+    0   0.0%  5ae78  slli	a0, a0, 0x2
+    0   0.0%  5ae7a  sw	a4, 0x2b8(s0)
+    0   0.0%  5ae7e  fsw	fa4, 0x14(sp)
+    0   0.0%  5ae80  fsw	fa2, 0x10(sp)
+    0   0.0%  5ae82  fsw	fa3, 0xc(sp)
+    0   0.0%  5ae84  fsw	fa5, 0x8(sp)
+    0   0.0%  5ae86  sw	a6, 0x4(sp)
+    0   0.0%  5ae88  jal	0x1a8e8 <s31gl_get_proc+0x5f64>
+    0   0.0%  5ae8c  lw	a6, 0x4(sp)
+    0   0.0%  5ae8e  flw	fa5, 0x8(sp)
+    0   0.0%  5ae90  flw	fa3, 0xc(sp)
+    0   0.0%  5ae92  flw	fa2, 0x10(sp)
+    0   0.0%  5ae94  flw	fa4, 0x14(sp)
+    0   0.0%  5ae96  beqz	a0, 0x5b1f0 <glVertexAttribPointer+0x522a>
+    0   0.0%  5ae9a  sh2add	a2, a6, a6
+    0   0.0%  5ae9e  lw	a1, 0x2bc(s0)
+    0   0.0%  5aea2  sh3add	a2, a2, a6
+    0   0.0%  5aea6  slli	a2, a2, 0x2
+    0   0.0%  5aea8  fsw	fa4, 0x1c(sp)
+    0   0.0%  5aeaa  fsw	fa2, 0x18(sp)
+    0   0.0%  5aeac  fsw	fa3, 0x14(sp)
+    0   0.0%  5aeae  fsw	fa5, 0x10(sp)
+    0   0.0%  5aeb0  sw	a6, 0x8(sp)
+    0   0.0%  5aeb2  sw	a2, 0x4(sp)
+    0   0.0%  5aeb4  sw	a0, 0xc(sp)
+    0   0.0%  5aeb6  jal	0xd2c0 <.plt+0x3a0>
+    0   0.0%  5aeba  lw	a0, 0x2bc(s0)
+    0   0.0%  5aebe  jal	0x1a8e4 <s31gl_get_proc+0x5f60>
+    0   0.0%  5aec2  lw	a4, 0xc(sp)
+    0   0.0%  5aec4  flw	fa4, 0x1c(sp)
+    0   0.0%  5aec6  flw	fa2, 0x18(sp)
+    0   0.0%  5aec8  flw	fa3, 0x14(sp)
+    0   0.0%  5aeca  flw	fa5, 0x10(sp)
+    0   0.0%  5aecc  lw	a6, 0x8(sp)
+    0   0.0%  5aece  lw	a2, 0x4(sp)
+    0   0.0%  5aed0  sw	a4, 0x2bc(s0)
+    0   0.0%  5aed4  j	0x5a9fa <glVertexAttribPointer+0x4a34>
+    0   0.0%  5aed6  mv	a0, s0
+    0   0.0%  5aed8  fsw	fa0, 0xc(sp)
+    0   0.0%  5aeda  sw	a6, 0x8(sp)
+    0   0.0%  5aedc  sw	a1, 0x4(sp)
+    0   0.0%  5aede  jal	0x56b8e <glVertexAttribPointer+0xbc8>
+    0   0.0%  5aee2  lw	a1, 0x4(sp)
+    0   0.0%  5aee4  lw	a6, 0x8(sp)
+    0   0.0%  5aee6  flw	fa0, 0xc(sp)
+    0   0.0%  5aee8  j	0x5ac56 <glVertexAttribPointer+0x4c90>
+    1   0.4%  5aeea  lw	a5, 0x278(s0)
+    0   0.0%  5aeee  sw	a5, 0x7c(a1)
+    0   0.0%  5aef0  lw	a5, 0x27c(s0)
+    0   0.0%  5aef4  sw	a5, 0x80(a1)
+    0   0.0%  5aef8  lw	a5, 0x280(s0)
+    6   2.3%  5aefc  j	0x5acf2 <glVertexAttribPointer+0x4d2c>
+    0   0.0%  5aefe  flw	fa3, 0x4f8(s0)
+    0   0.0%  5af02  flw	fa1, 0x5c(a1)
+    0   0.0%  5af04  flw	fa5, 0x60(a1)
+    0   0.0%  5af06  fmul.s	fa3, fa3, ft0
+    0   0.0%  5af0a  flw	ft1, 0x58(a1)
+    0   0.0%  5af0e  flw	ft2, 0x54(a1)
+    0   0.0%  5af12  fsw	fa3, 0x4(a1)
+    0   0.0%  5af14  flw	fa3, 0x4f8(s0)
+    0   0.0%  5af18  fmul.s	fa3, fa3, fa2
+    0   0.0%  5af1c  fsw	fa3, 0x8(a1)
+    0   0.0%  5af1e  flw	fa3, 0x4f8(s0)
+    0   0.0%  5af22  fmul.s	fa4, fa3, fa4
+    0   0.0%  5af26  fsw	fa4, 0xc(a1)
+    0   0.0%  5af28  j	0x5abaa <glVertexAttribPointer+0x4be4>
+    0   0.0%  5af2a  fmul.s	fa3, fa2, fa2
+    0   0.0%  5af2e  fmv.w.x	ft3, zero
+    0   0.0%  5af32  flw	ft2, 0x54(a1)
+    0   0.0%  5af36  flw	ft1, 0x58(a1)
+    0   0.0%  5af3a  flw	fa1, 0x5c(a1)
+    0   0.0%  5af3c  fmadd.s	fa3, ft0, ft0, fa3
+    0   0.0%  5af40  flw	fa5, 0x60(a1)
+    0   0.0%  5af42  fmadd.s	fa3, fa4, fa4, fa3
+    0   0.0%  5af46  fsqrt.s	fa3, fa3
+    0   0.0%  5af4a  feq.s	a5, fa3, ft3
+    0   0.0%  5af4e  bnez	a5, 0x5abaa <glVertexAttribPointer+0x4be4>
+    0   0.0%  5af52  fdiv.s	ft0, ft0, fa3
+    0   0.0%  5af56  fdiv.s	fa2, fa2, fa3
+    0   0.0%  5af5a  fsw	ft0, 0x4(a1)
+    0   0.0%  5af5e  fdiv.s	fa4, fa4, fa3
+    0   0.0%  5af62  fsw	fa2, 0x8(a1)
+    0   0.0%  5af64  fsw	fa4, 0xc(a1)
+    0   0.0%  5af66  j	0x5abaa <glVertexAttribPointer+0x4be4>
+    0   0.0%  5af68  mv	a0, s0
+    0   0.0%  5af6a  fsw	fa0, 0xc(sp)
+    0   0.0%  5af6c  sw	a6, 0x8(sp)
+    0   0.0%  5af6e  sw	a1, 0x4(sp)
+    0   0.0%  5af70  jal	0x32e72 <s31gl_get_proc+0x1e4ee>
+    0   0.0%  5af74  lw	a1, 0x4(sp)
+    0   0.0%  5af76  lw	a6, 0x8(sp)
+    0   0.0%  5af78  flw	fa0, 0xc(sp)
+    0   0.0%  5af7a  j	0x5ac0e <glVertexAttribPointer+0x4c48>
+    0   0.0%  5af7c  flw	fa3, 0x8(a4)
+    0   0.0%  5af7e  fmadd.s	fa4, fa1, fa3, fa4
+    0   0.0%  5af82  fsw	fa4, 0x54(a1)
+    0   0.0%  5af84  flw	fa3, 0x14(a4)
+    0   0.0%  5af86  flw	fa4, 0x18(a4)
+    0   0.0%  5af88  fmul.s	fa3, ft0, fa3
+    0   0.0%  5af8c  fmadd.s	fa4, fa1, fa4, fa3
+    0   0.0%  5af90  fsw	fa4, 0x58(a1)
+    0   0.0%  5af92  flw	fa3, 0x28(a4)
+    0   0.0%  5af94  flw	fa4, 0x2c(a4)
+    0   0.0%  5af96  fmul.s	fa3, fa1, fa3
+    0   0.0%  5af9a  fmadd.s	fa5, fa5, fa4, fa3
+    0   0.0%  5af9e  fsw	fa5, 0x5c(a1)
+    0   0.0%  5afa0  flw	fa5, 0x38(a4)
+    0   0.0%  5afa2  fmul.s	fa5, fa5, fa1
+    0   0.0%  5afa6  fsw	fa5, 0x60(a1)
+    0   0.0%  5afa8  j	0x5ab32 <glVertexAttribPointer+0x4b6c>
+    0   0.0%  5afaa  li	a5, 0x2
+    0   0.0%  5afac  beq	s1, a5, 0x5b278 <glVertexAttribPointer+0x52b2>
+    0   0.0%  5afb0  li	a4, 0x3
+    0   0.0%  5afb2  beq	a6, a4, 0x5b338 <glVertexAttribPointer+0x5372>
+    0   0.0%  5afb6  bge	a5, s1, 0x5ae5c <glVertexAttribPointer+0x4e96>
+    0   0.0%  5afba  lw	a1, 0x2bc(s0)
+    0   0.0%  5afbe  lw	a3, 0x21c(s0)
+    0   0.0%  5afc2  lui	a4, 0x2
+    0   0.0%  5afc4  addi	a4, a4, -0x2ff
+    0   0.0%  5afc8  addi	a2, a1, 0xa4
+    0   0.0%  5afcc  beq	a3, a4, 0x5afe4 <glVertexAttribPointer+0x501e>
+    0   0.0%  5afd0  mv	a1, a2
+    0   0.0%  5afd2  mv	a0, s0
+    0   0.0%  5afd4  sw	a6, 0x4(sp)
+    0   0.0%  5afd6  jal	0x56b22 <glVertexAttribPointer+0xb5c>
+    0   0.0%  5afda  lw	a1, 0x2bc(s0)
+    0   0.0%  5afde  lw	a6, 0x4(sp)
+    0   0.0%  5afe0  addi	a2, a1, 0xa4
+    0   0.0%  5afe4  addi	a1, a1, 0x148
+    0   0.0%  5afe8  mv	a0, s0
+    0   0.0%  5afea  sw	a6, 0x4(sp)
+    0   0.0%  5afec  jal	0x17a02 <s31gl_get_proc+0x307e>
+    0   0.0%  5aff0  lw	a6, 0x4(sp)
+    0   0.0%  5aff2  j	0x5ae5c <glVertexAttribPointer+0x4e96>
+    1   0.4%  5aff4  lw	a2, -0x19c(a5)
+    0   0.0%  5aff8  lw	a3, -0x198(a5)
+    1   0.4%  5affc  lw	a4, -0x194(a5)
+    0   0.0%  5b000  sw	a2, 0x94(a1)
+    0   0.0%  5b004  sw	a3, 0x98(a1)
+    5   1.9%  5b008  sw	a4, 0x9c(a1)
+    0   0.0%  5b00c  lw	a5, -0x190(a5)
+    0   0.0%  5b010  sw	a5, 0xa0(a1)
+    1   0.4%  5b014  j	0x5ac38 <glVertexAttribPointer+0x4c72>
+    0   0.0%  5b016  li	a5, 0x2
+    0   0.0%  5b018  bne	a6, a5, 0x5ae5c <glVertexAttribPointer+0x4e96>
+    0   0.0%  5b01c  lw	a1, 0x2bc(s0)
+    0   0.0%  5b020  lw	a4, 0x21c(s0)
+    0   0.0%  5b024  lui	a5, 0x2
+    0   0.0%  5b026  addi	a5, a5, -0x2ff
+    0   0.0%  5b02a  addi	a2, a1, 0xa4
+    0   0.0%  5b02e  beq	a4, a5, 0x5b042 <glVertexAttribPointer+0x507c>
+    0   0.0%  5b032  mv	a1, a2
+    0   0.0%  5b034  mv	a0, s0
+    0   0.0%  5b036  jal	0x56b22 <glVertexAttribPointer+0xb5c>
+    0   0.0%  5b03a  lw	a1, 0x2bc(s0)
+    0   0.0%  5b03e  addi	a2, a1, 0xa4
+    0   0.0%  5b042  mv	a0, s0
+    0   0.0%  5b044  jal	0x17a02 <s31gl_get_proc+0x307e>
+    0   0.0%  5b048  li	a6, 0x0
+    0   0.0%  5b04a  j	0x5ae5c <glVertexAttribPointer+0x4e96>
+    0   0.0%  5b04c  li	a5, 0x4
+    0   0.0%  5b04e  beq	a6, a5, 0x5b2e2 <glVertexAttribPointer+0x531c>
+    0   0.0%  5b052  addi	a5, a6, -0x2
+    0   0.0%  5b056  bnez	a5, 0x5ae5c <glVertexAttribPointer+0x4e96>
+    0   0.0%  5b05a  slti	a5, s1, 0x4
+    0   0.0%  5b05e  bnez	a5, 0x5ae5c <glVertexAttribPointer+0x4e96>
+    0   0.0%  5b062  lw	a4, 0x21c(s0)
+    0   0.0%  5b066  lui	a5, 0x2
+    0   0.0%  5b068  addi	a5, a5, -0x2ff
+    0   0.0%  5b06c  lw	a3, 0x2bc(s0)
+    0   0.0%  5b070  beq	a4, a5, 0x5b082 <glVertexAttribPointer+0x50bc>
+    0   0.0%  5b074  addi	a1, a3, 0xa4
+    0   0.0%  5b078  mv	a0, s0
+    0   0.0%  5b07a  jal	0x56b22 <glVertexAttribPointer+0xb5c>
+    0   0.0%  5b07e  lw	a3, 0x2bc(s0)
+    0   0.0%  5b082  addi	a2, a3, 0x1ec
+    0   0.0%  5b086  addi	a1, a3, 0x148
+    0   0.0%  5b08a  mv	a0, s0
+    0   0.0%  5b08c  jal	0x56a3e <glVertexAttribPointer+0xa78>
+    0   0.0%  5b090  lw	a3, 0x2bc(s0)
+    0   0.0%  5b094  mv	a0, s0
+    0   0.0%  5b096  addi	a2, a3, 0xa4
+    0   0.0%  5b09a  addi	a1, a3, 0x1ec
+    0   0.0%  5b09e  jal	0x56a3e <glVertexAttribPointer+0xa78>
+    0   0.0%  5b0a2  li	a6, 0x2
+    0   0.0%  5b0a4  j	0x5ae5c <glVertexAttribPointer+0x4e96>
+    0   0.0%  5b0a6  li	a5, 0x4
+    0   0.0%  5b0a8  bne	a6, a5, 0x5ae5c <glVertexAttribPointer+0x4e96>
+    0   0.0%  5b0ac  lw	a4, 0x21c(s0)
+    0   0.0%  5b0b0  lui	a5, 0x2
+    0   0.0%  5b0b2  addi	a5, a5, -0x2ff
+    0   0.0%  5b0b6  lw	a1, 0x2bc(s0)
+    1   0.4%  5b0ba  beq	a4, a5, 0x5b0cc <glVertexAttribPointer+0x5106>
+    0   0.0%  5b0be  addi	a1, a1, 0x1ec
+    0   0.0%  5b0c2  mv	a0, s0
+    0   0.0%  5b0c4  jal	0x56b22 <glVertexAttribPointer+0xb5c>
+    0   0.0%  5b0c8  lw	a1, 0x2bc(s0)
+    0   0.0%  5b0cc  addi	a3, a1, 0x148
+    0   0.0%  5b0d0  addi	a2, a1, 0xa4
+    0   0.0%  5b0d4  sw	zero, 0x148(a1)
+    0   0.0%  5b0d8  mv	a0, s0
+    3   1.1%  5b0da  jal	0x56a3e <glVertexAttribPointer+0xa78>
+    0   0.0%  5b0de  lw	a1, 0x2bc(s0)
+    0   0.0%  5b0e2  li	a5, 0x1
+    0   0.0%  5b0e4  mv	a0, s0
+    0   0.0%  5b0e6  sw	a5, 0x148(a1)
+    0   0.0%  5b0ea  sw	zero, 0x0(a1)
+    0   0.0%  5b0ee  addi	a3, a1, 0x1ec
+    0   0.0%  5b0f2  addi	a2, a1, 0x148
+    1   0.4%  5b0f6  jal	0x56a3e <glVertexAttribPointer+0xa78>
+    0   0.0%  5b0fa  li	a6, 0x0
+    0   0.0%  5b0fc  j	0x5ae5c <glVertexAttribPointer+0x4e96>
+    1   0.4%  5b0fe  li	a5, 0x3
+    1   0.4%  5b100  beq	a6, a5, 0x5b2ae <glVertexAttribPointer+0x52e8>
+    0   0.0%  5b104  li	a5, 0x2
+    1   0.4%  5b106  bge	a5, s1, 0x5ae5c <glVertexAttribPointer+0x4e96>
+    0   0.0%  5b10a  lw	a1, 0x2bc(s0)
+    0   0.0%  5b10e  lw	a4, 0x21c(s0)
+    0   0.0%  5b112  lui	a5, 0x2
+    0   0.0%  5b114  addi	a5, a5, -0x2ff
+    0   0.0%  5b118  addi	a3, a1, 0xa4
+    0   0.0%  5b11c  beq	a4, a5, 0x5b134 <glVertexAttribPointer+0x516e>
+    0   0.0%  5b120  mv	a1, a3
+    0   0.0%  5b122  mv	a0, s0
+    0   0.0%  5b124  sw	a6, 0x4(sp)
+    0   0.0%  5b126  jal	0x56b22 <glVertexAttribPointer+0xb5c>
+    0   0.0%  5b12a  lw	a1, 0x2bc(s0)
+    0   0.0%  5b12e  lw	a6, 0x4(sp)
+    0   0.0%  5b130  addi	a3, a1, 0xa4
+    1   0.4%  5b134  addi	a2, a1, 0x148
+    1   0.4%  5b138  mv	a0, s0
+    0   0.0%  5b13a  sw	a6, 0x4(sp)
+    5   1.9%  5b13c  jal	0x56a3e <glVertexAttribPointer+0xa78>
+    0   0.0%  5b140  lw	a6, 0x4(sp)
+    0   0.0%  5b142  j	0x5ae5c <glVertexAttribPointer+0x4e96>
+    0   0.0%  5b144  li	a5, 0x2
+    0   0.0%  5b146  bge	a5, s1, 0x5ae5c <glVertexAttribPointer+0x4e96>
+    0   0.0%  5b14a  li	a5, 0x3
+    0   0.0%  5b14c  bne	a6, a5, 0x5b152 <glVertexAttribPointer+0x518c>
+    1   0.4%  5b150  li	a6, 0x0
+    0   0.0%  5b152  lw	a3, 0x21c(s0)
+    0   0.0%  5b156  lui	a5, 0x2
+    0   0.0%  5b158  addi	a5, a5, -0x2ff
+    0   0.0%  5b15c  lw	a4, 0x2bc(s0)
+    0   0.0%  5b160  beq	a3, a5, 0x5b198 <glVertexAttribPointer+0x51d2>
+    0   0.0%  5b164  lui	a5, 0x55555
+    0   0.0%  5b168  addi	a5, a5, 0x556
+    0   0.0%  5b16c  mulh	a5, s2, a5
+    0   0.0%  5b170  srai	a3, s2, 0x1f
+    0   0.0%  5b174  mv	a0, s0
+    0   0.0%  5b176  sw	a6, 0x4(sp)
+    0   0.0%  5b178  sub	a5, a5, a3
+    0   0.0%  5b17a  sh1add	a5, a5, a5
+    0   0.0%  5b17e  sub	a5, s2, a5
+    0   0.0%  5b182  sh2add	a1, a5, a5
+    0   0.0%  5b186  sh3add	a1, a1, a5
+    1   0.4%  5b18a  sh2add	a1, a1, a4
+    0   0.0%  5b18e  jal	0x56b22 <glVertexAttribPointer+0xb5c>
+    0   0.0%  5b192  lw	a4, 0x2bc(s0)
+    0   0.0%  5b196  lw	a6, 0x4(sp)
+    0   0.0%  5b198  andi	a5, s1, 0x1
+    0   0.0%  5b19c  sw	a6, 0x4(sp)
+    0   0.0%  5b19e  addi	a1, a4, 0x148
+    0   0.0%  5b1a2  addi	a2, a4, 0xa4
+    3   1.1%  5b1a6  bnez	a5, 0x5b32a <glVertexAttribPointer+0x5364>
+    0   0.0%  5b1aa  mv	a3, a4
+    0   0.0%  5b1ac  mv	a0, s0
+    3   1.1%  5b1ae  jal	0x56a3e <glVertexAttribPointer+0xa78>
+    0   0.0%  5b1b2  lw	a6, 0x4(sp)
+    0   0.0%  5b1b4  j	0x5ae5c <glVertexAttribPointer+0x4e96>
+    0   0.0%  5b1b6  li	a5, 0x3
+    0   0.0%  5b1b8  bne	a6, a5, 0x5ae5c <glVertexAttribPointer+0x4e96>
+    0   0.0%  5b1bc  lw	a1, 0x2bc(s0)
+    0   0.0%  5b1c0  lw	a4, 0x21c(s0)
+    0   0.0%  5b1c4  lui	a5, 0x2
+    0   0.0%  5b1c6  addi	a5, a5, -0x2ff
+    0   0.0%  5b1ca  addi	a3, a1, 0x148
+    0   0.0%  5b1ce  beq	a4, a5, 0x5b1e2 <glVertexAttribPointer+0x521c>
+    0   0.0%  5b1d2  mv	a1, a3
+    0   0.0%  5b1d4  mv	a0, s0
+    0   0.0%  5b1d6  jal	0x56b22 <glVertexAttribPointer+0xb5c>
+    0   0.0%  5b1da  lw	a1, 0x2bc(s0)
+    0   0.0%  5b1de  addi	a3, a1, 0x148
+    0   0.0%  5b1e2  addi	a2, a1, 0xa4
+    0   0.0%  5b1e6  mv	a0, s0
+    0   0.0%  5b1e8  jal	0x56a3e <glVertexAttribPointer+0xa78>
+    0   0.0%  5b1ec  li	a6, 0x0
+    0   0.0%  5b1ee  j	0x5ae5c <glVertexAttribPointer+0x4e96>
+    0   0.0%  5b1f0  lw	a5, 0x2b8(s0)
+    0   0.0%  5b1f4  lw	a4, 0x314(s0)
+    0   0.0%  5b1f8  srai	a5, a5, 0x1
+    0   0.0%  5b1fa  sw	a5, 0x2b8(s0)
+    0   0.0%  5b1fe  bnez	a4, 0x5b208 <glVertexAttribPointer+0x5242>
+    0   0.0%  5b200  li	a5, 0x505
+    0   0.0%  5b204  sw	a5, 0x314(s0)
+    0   0.0%  5b208  lui	a5, 0x8
+    0   0.0%  5b20a  addi	a5, a5, -0x1
+    0   0.0%  5b20c  sw	a5, 0x2ac(s0)
+    0   0.0%  5b210  j	0x5ae60 <glVertexAttribPointer+0x4e9a>
+    0   0.0%  5b212  fmadd.s	fa3, fa5, fa3, fa4
+    0   0.0%  5b216  fsw	fa3, 0x54(a1)
+    0   0.0%  5b218  flw	fa3, 0x14(a4)
+    0   0.0%  5b21a  flw	fa4, 0x1c(a4)
+    0   0.0%  5b21c  fmul.s	fa3, ft0, fa3
+    0   0.0%  5b220  fmadd.s	fa4, fa5, fa4, fa3
+    0   0.0%  5b224  fsw	fa4, 0x58(a1)
+    0   0.0%  5b226  flw	fa3, 0x28(a4)
+    0   0.0%  5b228  flw	fa4, 0x2c(a4)
+    0   0.0%  5b22a  fmul.s	fa3, fa1, fa3
+    0   0.0%  5b22e  fmadd.s	fa4, fa5, fa4, fa3
+    0   0.0%  5b232  fsw	fa4, 0x5c(a1)
+    0   0.0%  5b234  flw	fa4, 0x3c(a4)
+    0   0.0%  5b236  fmul.s	fa5, fa4, fa5
+    0   0.0%  5b23a  fsw	fa5, 0x60(a1)
+    0   0.0%  5b23c  j	0x5ab32 <glVertexAttribPointer+0x4b6c>
+    0   0.0%  5b23e  fdiv.s	fa5, fa0, fa5
+    0   0.0%  5b242  j	0x5ad40 <glVertexAttribPointer+0x4d7a>
+    0   0.0%  5b244  mv	a0, s0
+    0   0.0%  5b246  fsw	fa0, 0xc(sp)
+    0   0.0%  5b248  sw	a6, 0x8(sp)
+    0   0.0%  5b24a  sw	a1, 0x4(sp)
+    0   0.0%  5b24c  jal	0x355b8 <s31gl_get_proc+0x20c34>
+    0   0.0%  5b250  lw	a1, 0x4(sp)
+    0   0.0%  5b252  lw	a6, 0x8(sp)
+    0   0.0%  5b254  flw	fa0, 0xc(sp)
+    0   0.0%  5b256  j	0x5ab32 <glVertexAttribPointer+0x4b6c>
+    0   0.0%  5b258  mv	a0, s0
+    0   0.0%  5b25a  fsw	fa0, 0xc(sp)
+    0   0.0%  5b25c  sw	a6, 0x8(sp)
+    0   0.0%  5b25e  sw	a1, 0x4(sp)
+    0   0.0%  5b260  jal	0x355b8 <s31gl_get_proc+0x20c34>
+    0   0.0%  5b264  lw	a1, 0x4(sp)
+    0   0.0%  5b266  lw	a6, 0x8(sp)
+    0   0.0%  5b268  flw	fa0, 0xc(sp)
+    0   0.0%  5b26a  flw	fa1, 0x5c(a1)
+    0   0.0%  5b26c  flw	fa5, 0x60(a1)
+    0   0.0%  5b26e  flw	ft1, 0x58(a1)
+    0   0.0%  5b272  flw	ft2, 0x54(a1)
+    0   0.0%  5b276  j	0x5abaa <glVertexAttribPointer+0x4be4>
+    0   0.0%  5b278  lw	a1, 0x2bc(s0)
+    0   0.0%  5b27c  lw	a4, 0x21c(s0)
+    0   0.0%  5b280  lui	a5, 0x2
+    0   0.0%  5b282  addi	a5, a5, -0x2ff
+    0   0.0%  5b286  addi	a2, a1, 0xa4
+    0   0.0%  5b28a  beq	a4, a5, 0x5b2a2 <glVertexAttribPointer+0x52dc>
+    0   0.0%  5b28e  mv	a1, a2
+    0   0.0%  5b290  mv	a0, s0
+    0   0.0%  5b292  sw	a6, 0x4(sp)
+    0   0.0%  5b294  jal	0x56b22 <glVertexAttribPointer+0xb5c>
+    0   0.0%  5b298  lw	a1, 0x2bc(s0)
+    0   0.0%  5b29c  lw	a6, 0x4(sp)
+    0   0.0%  5b29e  addi	a2, a1, 0xa4
+    0   0.0%  5b2a2  mv	a0, s0
+    0   0.0%  5b2a4  sw	a6, 0x4(sp)
+    0   0.0%  5b2a6  jal	0x17a02 <s31gl_get_proc+0x307e>
+    0   0.0%  5b2aa  lw	a6, 0x4(sp)
+    0   0.0%  5b2ac  j	0x5ae5c <glVertexAttribPointer+0x4e96>
+    0   0.0%  5b2ae  lw	a1, 0x2bc(s0)
+    0   0.0%  5b2b2  lw	a4, 0x21c(s0)
+    0   0.0%  5b2b6  lui	a5, 0x2
+    0   0.0%  5b2b8  addi	a5, a5, -0x2ff
+    2   0.8%  5b2bc  addi	a3, a1, 0x148
+    0   0.0%  5b2c0  beq	a4, a5, 0x5b2d4 <glVertexAttribPointer+0x530e>
+    0   0.0%  5b2c4  mv	a1, a3
+    0   0.0%  5b2c6  mv	a0, s0
+    0   0.0%  5b2c8  jal	0x56b22 <glVertexAttribPointer+0xb5c>
+    0   0.0%  5b2cc  lw	a1, 0x2bc(s0)
+    0   0.0%  5b2d0  addi	a3, a1, 0x148
+    0   0.0%  5b2d4  addi	a2, a1, 0xa4
+    0   0.0%  5b2d8  mv	a0, s0
+    9   3.4%  5b2da  jal	0x56a3e <glVertexAttribPointer+0xa78>
+    0   0.0%  5b2de  li	a6, 0x1
+    0   0.0%  5b2e0  j	0x5ae5c <glVertexAttribPointer+0x4e96>
+    0   0.0%  5b2e2  lw	a4, 0x21c(s0)
+    0   0.0%  5b2e6  lui	a5, 0x2
+    0   0.0%  5b2e8  addi	a5, a5, -0x2ff
+    0   0.0%  5b2ec  lw	a1, 0x2bc(s0)
+    0   0.0%  5b2f0  beq	a4, a5, 0x5b302 <glVertexAttribPointer+0x533c>
+    0   0.0%  5b2f4  addi	a1, a1, 0x1ec
+    0   0.0%  5b2f8  mv	a0, s0
+    0   0.0%  5b2fa  jal	0x56b22 <glVertexAttribPointer+0xb5c>
+    0   0.0%  5b2fe  lw	a1, 0x2bc(s0)
+    0   0.0%  5b302  addi	a3, a1, 0x148
+    0   0.0%  5b306  addi	a2, a1, 0xa4
+    0   0.0%  5b30a  mv	a0, s0
+    0   0.0%  5b30c  jal	0x56a3e <glVertexAttribPointer+0xa78>
+    0   0.0%  5b310  lw	a1, 0x2bc(s0)
+    0   0.0%  5b314  mv	a0, s0
+    0   0.0%  5b316  addi	a3, a1, 0x148
+    0   0.0%  5b31a  addi	a2, a1, 0x1ec
+    0   0.0%  5b31e  addi	a1, a1, 0xa4
+    0   0.0%  5b322  jal	0x56a3e <glVertexAttribPointer+0xa78>
+    0   0.0%  5b326  li	a6, 0x0
+    0   0.0%  5b328  j	0x5ae5c <glVertexAttribPointer+0x4e96>
+    0   0.0%  5b32a  mv	a3, a1
+    0   0.0%  5b32c  mv	a0, s0
+    0   0.0%  5b32e  mv	a1, a4
+    4   1.5%  5b330  jal	0x56a3e <glVertexAttribPointer+0xa78>
+    0   0.0%  5b334  lw	a6, 0x4(sp)
+    1   0.4%  5b336  j	0x5ae5c <glVertexAttribPointer+0x4e96>
+    0   0.0%  5b338  lw	a1, 0x2bc(s0)
+    0   0.0%  5b33c  lw	a3, 0x21c(s0)
+    0   0.0%  5b340  lui	a4, 0x2
+    0   0.0%  5b342  addi	a4, a4, -0x2ff
+    0   0.0%  5b346  addi	a2, a1, 0x148
+    0   0.0%  5b34a  beq	a3, a4, 0x5b35e <glVertexAttribPointer+0x5398>
+    0   0.0%  5b34e  mv	a1, a2
+    0   0.0%  5b350  mv	a0, s0
+    0   0.0%  5b352  jal	0x56b22 <glVertexAttribPointer+0xb5c>
+    0   0.0%  5b356  lw	a1, 0x2bc(s0)
+    0   0.0%  5b35a  addi	a2, a1, 0x148
+    0   0.0%  5b35e  addi	a1, a1, 0xa4
+    0   0.0%  5b362  mv	a0, s0
+    0   0.0%  5b364  jal	0x17a02 <s31gl_get_proc+0x307e>
+    0   0.0%  5b368  li	a6, 0x1
+    0   0.0%  5b36a  j	0x5ae5c <glVertexAttribPointer+0x4e96>
+# gl_vertex4f: 261 samples at [0x5a97e, 0x5b36c) (load base 0x95645000)

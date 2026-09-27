@@ -43,6 +43,7 @@
 #include "s31_ramtext.h"
 #include "zpipe.h"
 #include "zpipe_int.h"
+#include "ztri.h"            /* phase 6 tier 2: ZTri, ZTRI_SPAN */
 
 static inline int clampi(int v, int hi)
 {

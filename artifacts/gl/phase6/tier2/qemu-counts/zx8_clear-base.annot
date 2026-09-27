@@ -1,0 +1,528 @@
+          
+          gl/bench/out-t2/base/qsr/qsr.elf:     file format elf32-littleriscv
+          
+          
+          Disassembly of section s31hot_text:
+          
+          8004c236 <zx8_base_p8>:
+     2180 8004c236:	addi	sp,sp,-48
+     2180 8004c238:	sw	s5,24(sp)
+     2180 8004c23a:	lw	s5,0(a2)
+     2180 8004c23e:	blez	s5,8004c36a <zx8_base_p8+0x134>
+     2180 8004c242:	auipc	a5,0x8
+     2180 8004c246:	flw	ft3,1334(a5) # 80054778 <dn.0+0x1b4>
+     2180 8004c24a:	flw	ft2,104(a1)
+     2180 8004c24e:	flw	ft7,92(a1)
+     2180 8004c252:	flw	ft6,96(a1)
+     2180 8004c256:	sw	s6,20(sp)
+     2180 8004c258:	lw	s6,244(a0)
+     2180 8004c25c:	fmul.s	ft5,ft2,ft3
+     2180 8004c260:	fmul.s	ft4,ft7,ft3
+     2180 8004c264:	fmul.s	ft3,ft6,ft3
+     2180 8004c268:	lw	t2,84(s6)
+     2180 8004c26c:	lw	t6,608(s6)
+     2180 8004c270:	lw	t0,88(s6)
+     2180 8004c274:	lw	t5,612(s6)
+     2180 8004c278:	flw	fa0,88(a1)
+     2180 8004c27a:	flw	fa1,76(a1)
+     2180 8004c27c:	flw	fa2,80(a1)
+     2180 8004c27e:	auipc	a5,0x8
+     2180 8004c282:	flw	fa6,926(a5) # 8005461c <dn.0+0x58>
+     2180 8004c286:	sw	s0,44(sp)
+     2180 8004c288:	sw	s1,40(sp)
+     2180 8004c28a:	lw	s0,76(s6)
+     2180 8004c28e:	lw	s1,72(s6)
+     2180 8004c292:	sw	s2,36(sp)
+     2180 8004c294:	sw	s3,32(sp)
+     2180 8004c296:	lw	s2,96(s6)
+     2180 8004c29a:	lw	s3,92(s6)
+     2180 8004c29e:	sw	s4,28(sp)
+     2180 8004c2a0:	sw	s7,16(sp)
+     2180 8004c2a2:	lw	s4,80(s6)
+     2180 8004c2a6:	addi	s7,a2,228
+     2180 8004c2aa:	sw	s8,12(sp)
+     2180 8004c2ac:	sw	s9,8(sp)
+     2180 8004c2ae:	orn	t6,t2,t6
+     2180 8004c2b2:	orn	t5,t0,t5
+     2180 8004c2b6:	addi	s6,s6,732
+     2180 8004c2ba:	li	a2,0
+     2047 8004c2bc:	addi	t1,a2,8
+     2047 8004c2c0:	min	t1,t1,s5
+     2047 8004c2c4:	bge	a2,t1,8004c348 <zx8_base_p8+0x112>
+     4228 8004c2c8:	fdiv.s	fa5,fa6,fa0
+     4228 8004c2cc:	sh2add	a7,a2,s6
+     4228 8004c2d0:	sh2add	a6,a2,s7
+     4228 8004c2d4:	fmul.s	ft1,fa5,fa1
+     4228 8004c2d8:	fmul.s	ft0,fa5,fa2
+     4228 8004c2dc:	fnmsub.s	fa3,ft2,ft1,ft7
+     4228 8004c2e0:	fnmsub.s	fa4,ft2,ft0,ft6
+     4228 8004c2e4:	fcvt.w.s	a0,ft1,rtz
+     4228 8004c2e8:	fcvt.w.s	a1,ft0,rtz
+     4228 8004c2ec:	fmul.s	fa3,fa3,fa5
+     4228 8004c2f0:	fmul.s	fa5,fa4,fa5
+     4228 8004c2f4:	fcvt.w.s	t4,fa3,rtz
+     4228 8004c2f8:	fcvt.w.s	t3,fa5,rtz
+    22044 8004c2fc:	sra	a4,a1,s0
+    22044 8004c300:	sra	a5,a0,s1
+    22044 8004c304:	and	a4,a4,t5
+    22044 8004c308:	and	a5,a5,t6
+    22044 8004c30c:	min	s9,t0,a4
+    22044 8004c310:	min	s8,t2,a5
+    22044 8004c314:	li	a3,0
+    22044 8004c316:	bltz	a4,8004c31e <zx8_base_p8+0xe8>
+    26272 8004c31a:	sll	a3,s9,s4
+    26272 8004c31e:	bltz	a5,8004c326 <zx8_base_p8+0xf0>
+    26272 8004c322:	or	a3,a3,s8
+    26272 8004c326:	add	a3,a3,s3
+    26272 8004c328:	lbu	a5,0(a3)
+    26272 8004c32c:	add	a0,a0,t4
+    26272 8004c32e:	add	a1,a1,t3
+    26272 8004c330:	sh2add	a5,a5,s2
+    26272 8004c334:	lw	a5,0(a5)
+    26272 8004c336:	addi	a7,a7,4
+    26272 8004c338:	addi	a6,a6,4
+    26272 8004c33a:	sw	a5,-4(a7)
+    26272 8004c33e:	sw	a2,-4(a6)
+    26272 8004c342:	addi	a2,a2,1
+    26272 8004c344:	bne	t1,a2,8004c2fc <zx8_base_p8+0xc6>
+     4228 8004c348:	fadd.s	fa0,fa0,ft5
+     4228 8004c34c:	fadd.s	fa1,fa1,ft4
+     4228 8004c350:	fadd.s	fa2,fa2,ft3
+     4228 8004c354:	blt	a2,s5,8004c2bc <zx8_base_p8+0x86>
+     2180 8004c358:	lw	s0,44(sp)
+     2180 8004c35a:	lw	s1,40(sp)
+     2180 8004c35c:	lw	s2,36(sp)
+     2180 8004c35e:	lw	s3,32(sp)
+     2180 8004c360:	lw	s4,28(sp)
+     2180 8004c362:	lw	s6,20(sp)
+     2180 8004c364:	lw	s7,16(sp)
+     2180 8004c366:	lw	s8,12(sp)
+     2180 8004c368:	lw	s9,8(sp)
+     2180 8004c36a:	lw	s5,24(sp)
+     2180 8004c36c:	addi	sp,sp,48
+     2180 8004c36e:	ret
+          
+          gl/bench/out-t2/base/qsr/qsr.elf:     file format elf32-littleriscv
+          
+          
+          Disassembly of section .text:
+          
+          80003a4a <glopClear>:
+        1 80003a4a:	lw	a5,1640(a0)
+        1 80003a4e:	addi	sp,sp,-96
+        1 80003a50:	sw	s0,88(sp)
+        1 80003a52:	sw	s2,80(sp)
+        1 80003a54:	sw	ra,92(sp)
+        1 80003a56:	lw	s2,4(a1)
+        1 80003a5a:	mv	s0,a0
+        1 80003a5c:	bnez	a5,80003cda <glopClear+0x290>
+        1 80003a60:	lw	a5,800(s0)
+        1 80003a64:	flw	fa5,600(s0)
+        1 80003a68:	flw	fa4,604(s0)
+        1 80003a6c:	flw	fa3,608(s0)
+        1 80003a70:	beqz	a5,80003c20 <glopClear+0x1d6>
+        1 80003a74:	auipc	a5,0x51
+        1 80003a78:	flw	fa1,-1072(a5) # 80054644 <dn.0+0x80>
+        1 80003a7c:	auipc	a5,0x51
+        1 80003a80:	flw	fa2,-1092(a5) # 80054638 <dn.0+0x74>
+        1 80003a84:	lw	t1,884(s0)
+        1 80003a88:	sw	s4,72(sp)
+        1 80003a8a:	fmadd.s	fa5,fa5,fa1,fa2
+        1 80003a8e:	fmadd.s	fa4,fa4,fa1,fa2
+        1 80003a92:	fmadd.s	fa3,fa3,fa1,fa2
+        1 80003a96:	sw	s1,84(sp)
+        1 80003a98:	sw	s3,76(sp)
+        1 80003a9a:	fcvt.w.s	t4,fa5,rtz
+        1 80003a9e:	fcvt.w.s	t3,fa4,rtz
+        1 80003aa2:	fcvt.w.s	t5,fa3,rtz
+        1 80003aa6:	sw	s5,68(sp)
+        1 80003aa8:	sw	s6,64(sp)
+        1 80003aaa:	sw	s7,60(sp)
+        1 80003aac:	sw	s8,56(sp)
+        1 80003aae:	lw	s4,0(s0)
+        1 80003ab2:	slli	t4,t4,0x8
+        1 80003ab4:	slli	t3,t3,0x8
+        1 80003ab6:	slli	t5,t5,0x8
+        1 80003ab8:	beqz	t1,80003ac2 <glopClear+0x78>
+        1 80003abc:	lui	t1,0x10
+        1 80003abe:	addi	t1,t1,-2048 # f800 <_start_qemu-0x7fff0800>
+        1 80003ac2:	lw	a5,888(s0)
+        1 80003ac6:	beqz	a5,80003acc <glopClear+0x82>
+        1 80003ac8:	ori	t1,t1,2016
+        1 80003acc:	lw	a5,892(s0)
+        1 80003ad0:	beqz	a5,80003ad6 <glopClear+0x8c>
+        1 80003ad2:	ori	t1,t1,31
+        1 80003ad6:	lw	a5,1256(s0)
+        1 80003ada:	lw	a1,0(s4)
+        1 80003ade:	lw	a2,4(s4)
+        1 80003ae2:	bnez	a5,80003b6c <glopClear+0x122>
+        1 80003ae4:	li	s5,1
+        1 80003ae6:	mv	s7,a2
+        1 80003ae8:	mv	s8,a1
+        1 80003aea:	li	s1,0
+        1 80003aec:	li	s3,0
+        1 80003aee:	bexti	a5,s2,0xe
+        1 80003af2:	snez	t6,t1
+        1 80003af6:	and	t6,t6,a5
+        1 80003afa:	andi	a5,s2,256
+        1 80003afe:	beqz	a5,80003bc0 <glopClear+0x176>
+        1 80003b00:	lw	a5,840(s0)
+        1 80003b04:	beqz	a5,80003bc0 <glopClear+0x176>
+        1 80003b06:	sw	t6,44(sp)
+        1 80003b08:	sw	t5,40(sp)
+        1 80003b0a:	sw	t3,36(sp)
+        1 80003b0c:	sw	t4,32(sp)
+        1 80003b0e:	sw	t1,28(sp)
+        1 80003b10:	lw	a1,596(s0)
+        1 80003b14:	mv	a0,s0
+        1 80003b16:	beqz	s5,80003c40 <glopClear+0x1f6>
+        1 80003b1a:	jal	8001cf9a <zep_clear>
+        1 80003b1e:	lw	t6,44(sp)
+        1 80003b20:	lw	t1,28(sp)
+        1 80003b22:	lw	t4,32(sp)
+        1 80003b24:	lw	t3,36(sp)
+        1 80003b26:	lw	t5,40(sp)
+        1 80003b28:	mv	s6,a0
+        1 80003b2a:	bnez	t6,80003bc6 <glopClear+0x17c>
+        0 80003b2e:	li	a1,0
+        0 80003b30:	mv	a2,s6
+        0 80003b32:	mv	a0,s0
+        0 80003b34:	andi	s2,s2,1024
+        0 80003b38:	jal	8001c9c2 <zdb_fold>
+        0 80003b3c:	beqz	s2,80003c08 <glopClear+0x1be>
+        0 80003b40:	lw	a5,216(s4)
+        0 80003b44:	beqz	a5,80003c08 <glopClear+0x1be>
+        0 80003b46:	mv	a0,s0
+        0 80003b48:	lw	s0,88(sp)
+        0 80003b4a:	lw	s4,72(sp)
+        0 80003b4c:	lw	s6,64(sp)
+        0 80003b4e:	lw	ra,92(sp)
+        0 80003b50:	lw	s2,80(sp)
+        0 80003b52:	mv	a5,s5
+        0 80003b54:	mv	a4,s7
+        0 80003b56:	lw	s5,68(sp)
+        0 80003b58:	lw	s7,60(sp)
+        0 80003b5a:	mv	a3,s8
+        0 80003b5c:	mv	a2,s1
+        0 80003b5e:	lw	s8,56(sp)
+        0 80003b60:	lw	s1,84(sp)
+        0 80003b62:	mv	a1,s3
+        0 80003b64:	lw	s3,76(sp)
+        0 80003b66:	addi	sp,sp,96
+        0 80003b68:	j	8000e0c6 <zst_clear>
+        0 80003b6c:	lw	a3,828(s0)
+        0 80003b70:	lw	a4,904(s0)
+        0 80003b74:	lw	s1,912(s0)
+        0 80003b78:	lw	s3,900(s0)
+        0 80003b7c:	lw	a5,908(s0)
+        0 80003b80:	sll	a0,a2,a3
+        0 80003b84:	add	s1,s1,a4
+        0 80003b86:	sub	s1,a0,s1
+        0 80003b8a:	add	a5,a5,s3
+        0 80003b8c:	bnez	a3,80003cba <glopClear+0x270>
+        0 80003b90:	sub	a4,a0,a4
+        0 80003b94:	max	s3,s3,zero
+        0 80003b98:	max	s1,s1,zero
+        0 80003b9c:	or	s5,s1,s3
+        0 80003ba0:	min	s8,a5,a1
+        0 80003ba4:	min	s7,a4,a2
+        0 80003ba8:	bnez	s5,80003cb6 <glopClear+0x26c>
+        0 80003bac:	li	s1,0
+        0 80003bae:	li	s3,0
+        0 80003bb0:	blt	a5,a1,80003aee <glopClear+0xa4>
+        0 80003bb4:	slt	a4,a4,a2
+        0 80003bb8:	seqz	s5,a4
+        0 80003bbc:	mv	a2,s7
+        0 80003bbe:	j	80003ae6 <glopClear+0x9c>
+        0 80003bc0:	li	s6,0
+        0 80003bc2:	beqz	t6,80003b2e <glopClear+0xe4>
+        1 80003bc6:	lui	a5,0xffff0
+        1 80003bc8:	addi	a5,a5,1 # ffff0001 <__stack_top+0x6fff0001>
+        1 80003bca:	add	a5,a5,t1
+        1 80003bcc:	bnez	a5,80003c70 <glopClear+0x226>
+        1 80003bce:	andi	a5,s5,1
+        1 80003bd2:	beqz	a5,80003c70 <glopClear+0x226>
+        1 80003bd4:	lui	a5,0x10
+        1 80003bd6:	addi	a5,a5,-2048 # f800 <_start_qemu-0x7fff0800>
+        1 80003bda:	srai	a1,t5,0xb
+        1 80003bde:	and	a5,t4,a5
+        1 80003be2:	srai	t3,t3,0x5
+        1 80003be6:	andi	t3,t3,2016
+        1 80003bea:	or	a1,a1,a5
+        1 80003bec:	or	a1,a1,t3
+        1 80003bf0:	mv	a0,s0
+        1 80003bf2:	jal	8001c872 <zdb_clear_colour>
+        1 80003bf6:	li	a1,1
+        1 80003bf8:	mv	a2,s6
+        1 80003bfa:	mv	a0,s0
+        1 80003bfc:	andi	s2,s2,1024
+        1 80003c00:	jal	8001c9c2 <zdb_fold>
+        1 80003c04:	bnez	s2,80003b40 <glopClear+0xf6>
+        1 80003c08:	lw	ra,92(sp)
+        1 80003c0a:	lw	s0,88(sp)
+        1 80003c0c:	lw	s1,84(sp)
+        1 80003c0e:	lw	s3,76(sp)
+        1 80003c10:	lw	s4,72(sp)
+        1 80003c12:	lw	s5,68(sp)
+        1 80003c14:	lw	s6,64(sp)
+        1 80003c16:	lw	s7,60(sp)
+        1 80003c18:	lw	s8,56(sp)
+        1 80003c1a:	lw	s2,80(sp)
+        1 80003c1c:	addi	sp,sp,96
+        1 80003c1e:	ret
+        1 80003c20:	mv	a0,s0
+        1 80003c22:	fsw	fa3,36(sp)
+        1 80003c24:	fsw	fa4,32(sp)
+        1 80003c26:	fsw	fa5,28(sp)
+        1 80003c28:	jal	80009ade <gl_prepare_slow>
+        1 80003c2c:	flw	fa5,28(sp)
+        1 80003c2e:	flw	fa4,32(sp)
+        1 80003c30:	flw	fa3,36(sp)
+        1 80003c32:	bnez	a0,80003a74 <glopClear+0x2a>
+        0 80003c36:	lw	ra,92(sp)
+        0 80003c38:	lw	s0,88(sp)
+        0 80003c3a:	lw	s2,80(sp)
+        0 80003c3c:	addi	sp,sp,96
+        0 80003c3e:	ret
+        0 80003c40:	jal	8001cef4 <zep_clear_rect_value>
+        0 80003c44:	lui	a5,0x10
+        0 80003c46:	addi	a5,a5,-1 # ffff <_start_qemu-0x7fff0001>
+        0 80003c48:	sw	a5,4(sp)
+        0 80003c4a:	mv	a6,a0
+        0 80003c4c:	sw	zero,0(sp)
+        0 80003c4e:	mv	a4,s7
+        0 80003c50:	mv	a3,s8
+        0 80003c52:	mv	a2,s1
+        0 80003c54:	mv	a1,s3
+        0 80003c56:	mv	a0,s4
+        0 80003c58:	li	a7,0
+        0 80003c5a:	li	a5,1
+        0 80003c5c:	jal	800203ae <ZB_clear_rect>
+        0 80003c60:	lw	t6,44(sp)
+        0 80003c62:	lw	t1,28(sp)
+        0 80003c64:	lw	t4,32(sp)
+        0 80003c66:	lw	t3,36(sp)
+        0 80003c68:	lw	t5,40(sp)
+        0 80003c6a:	li	s6,0
+        0 80003c6c:	beqz	t6,80003ca6 <glopClear+0x25c>
+        0 80003c70:	lui	a5,0x10
+        0 80003c72:	addi	a5,a5,-2048 # f800 <_start_qemu-0x7fff0800>
+        0 80003c76:	and	t4,t4,a5
+        0 80003c7a:	srai	t5,t5,0xb
+        0 80003c7e:	srai	t3,t3,0x5
+        0 80003c82:	or	t4,t4,t5
+        0 80003c86:	andi	t3,t3,2016
+        0 80003c8a:	or	t4,t4,t3
+        0 80003c8e:	sw	t1,4(sp)
+        0 80003c90:	sw	t4,0(sp)
+        0 80003c92:	li	a7,1
+        0 80003c94:	li	a6,0
+        0 80003c96:	li	a5,0
+        0 80003c98:	mv	a4,s7
+        0 80003c9a:	mv	a3,s8
+        0 80003c9c:	mv	a2,s1
+        0 80003c9e:	mv	a1,s3
+        0 80003ca0:	mv	a0,s4
+        0 80003ca2:	jal	800203ae <ZB_clear_rect>
+        0 80003ca6:	mv	a4,s7
+        0 80003ca8:	mv	a3,s8
+        0 80003caa:	mv	a2,s1
+        0 80003cac:	mv	a1,s3
+        0 80003cae:	mv	a0,s0
+        0 80003cb0:	jal	8001c6ba <zdb_grow>
+        0 80003cb4:	j	80003b2e <glopClear+0xe4>
+        0 80003cb6:	li	s5,0
+        0 80003cb8:	j	80003aee <glopClear+0xa4>
+        0 80003cba:	neg	a5,a5
+        0 80003cbe:	sub	a4,a4,a0
+        0 80003cc0:	sra	a5,a5,a3
+        0 80003cc4:	sra	a4,a4,a3
+        0 80003cc8:	neg	a5,a5
+        0 80003ccc:	neg	a4,a4
+        0 80003cd0:	sra	s3,s3,a3
+        0 80003cd4:	sra	s1,s1,a3
+        0 80003cd8:	j	80003b94 <glopClear+0x14a>
+        0 80003cda:	lw	a5,4(a5)
+        0 80003cdc:	beqz	a5,80003a60 <glopClear+0x16>
+        0 80003ce0:	jal	8001b4fa <s31t_drain>
+        0 80003ce4:	j	80003a60 <glopClear+0x16>
+          
+          gl/bench/out-t2/base/qsr/qsr.elf:     file format elf32-littleriscv
+          
+          
+          Disassembly of section .text:
+          
+          8001cf9a <zep_clear>:
+        1 8001cf9a:	lw	a5,0(a0)
+        1 8001cf9c:	addi	sp,sp,-80
+        1 8001cf9e:	sw	s1,68(sp)
+        1 8001cfa0:	lw	s1,80(a5)
+        1 8001cfa2:	sw	s2,64(sp)
+        1 8001cfa4:	sw	ra,76(sp)
+        1 8001cfa6:	sw	s0,72(sp)
+        1 8001cfa8:	sw	s3,60(sp)
+        1 8001cfaa:	sw	s4,56(sp)
+        1 8001cfac:	sw	s5,52(sp)
+        1 8001cfae:	sw	a1,28(sp)
+        1 8001cfb0:	mv	s2,a0
+        1 8001cfb2:	beqz	s1,8001d072 <zep_clear+0xd8>
+        1 8001cfb4:	lhu	a5,8(s1)
+        1 8001cfb8:	beqz	a5,8001cfcc <zep_clear+0x32>
+        0 8001cfba:	lbu	a5,10(s1)
+        0 8001cfbe:	beqz	a5,8001cfcc <zep_clear+0x32>
+        0 8001cfc0:	lbu	a5,12(s1)
+        0 8001cfc4:	beqz	a5,8001cfcc <zep_clear+0x32>
+        0 8001cfc6:	lui	a5,0x7a3e5
+        0 8001cfca:	sw	a5,12(s1)
+        1 8001cfcc:	lw	a0,-1252(gp) # 80056e64 <zep_on>
+        1 8001cfd0:	bgez	a0,8001cfd8 <zep_clear+0x3e>
+        0 8001cfd4:	jal	8001c600 <zep_read_env>
+        1 8001cfd8:	lbu	a5,11(s1)
+        1 8001cfdc:	lw	a4,0(s1)
+        1 8001cfde:	beqz	a0,8001d10a <zep_clear+0x170>
+        1 8001cfe2:	auipc	a3,0x37
+        1 8001cfe6:	flw	fa5,1594(a3) # 8005461c <dn.0+0x58>
+        1 8001cfea:	flw	fa4,28(sp)
+        1 8001cfec:	feq.s	a3,fa4,fa5
+        1 8001cff0:	beqz	a3,8001d10a <zep_clear+0x170>
+        1 8001cff4:	bnez	a5,8001d10c <zep_clear+0x172>
+        1 8001cff8:	lw	a5,784(s2)
+        1 8001cffc:	bnez	a5,8001d04a <zep_clear+0xb0>
+        1 8001cffe:	lw	a5,4(s1)
+        1 8001d000:	lhu	a3,8(s1)
+        1 8001d004:	srli	a5,a5,0xe
+        1 8001d006:	sub	a2,a5,a3
+        1 8001d00a:	bgeu	a5,a3,8001d010 <zep_clear+0x76>
+        0 8001d00e:	li	a2,0
+        1 8001d010:	addi	a3,a5,18 # 7a3e5012 <_start_qemu-0x5c1afee>
+        1 8001d014:	add	a3,a3,a2
+        1 8001d016:	srli	a2,a2,0x3
+        1 8001d018:	add	a3,a3,a2
+        1 8001d01a:	lui	a2,0x10
+        1 8001d01c:	bgeu	a3,a2,8001d060 <zep_clear+0xc6>
+        0 8001d020:	addi	a5,a5,2
+        0 8001d022:	addi	a4,a4,1
+        0 8001d024:	sh	a5,8(s1)
+        0 8001d028:	li	a5,1
+        0 8001d02a:	mv	a0,s2
+        0 8001d02c:	sb	a5,10(s1)
+        0 8001d030:	sw	a4,0(s1)
+        0 8001d032:	jal	8001cb72 <zep_sync>
+        0 8001d036:	li	a0,0
+        1 8001d038:	lw	ra,76(sp)
+        1 8001d03a:	lw	s0,72(sp)
+        1 8001d03c:	lw	s1,68(sp)
+        1 8001d03e:	lw	s2,64(sp)
+        1 8001d040:	lw	s3,60(sp)
+        1 8001d042:	lw	s4,56(sp)
+        1 8001d044:	lw	s5,52(sp)
+        1 8001d046:	addi	sp,sp,80
+        1 8001d048:	ret
+        0 8001d04a:	lw	a5,836(s2)
+        0 8001d04e:	li	a3,514
+        0 8001d052:	beq	a5,a3,8001d060 <zep_clear+0xc6>
+        0 8001d056:	addi	a5,a5,-517
+        0 8001d05a:	li	a3,1
+        0 8001d05c:	bltu	a3,a5,8001cffe <zep_clear+0x64>
+        1 8001d060:	addi	a4,a4,1
+        1 8001d062:	sh	zero,8(s1)
+        1 8001d066:	sb	zero,10(s1)
+        1 8001d06a:	sw	a4,0(s1)
+        1 8001d06c:	mv	a0,s2
+        1 8001d06e:	jal	8001cb72 <zep_sync>
+        1 8001d072:	lw	a1,28(sp)
+        1 8001d074:	mv	a0,s2
+        1 8001d076:	auipc	s4,0x3a
+        1 8001d07a:	lw	s4,94(s4) # 800570d4 <_GLOBAL_OFFSET_TABLE_+0x94>
+        1 8001d07e:	jal	8001cec4 <zep_clear_value>
+        1 8001d082:	lw	s0,0(s2)
+        1 8001d086:	mv	s3,a0
+        1 8001d088:	lw	a4,212(s0)
+        1 8001d08c:	lw	a5,16(s0)
+        1 8001d08e:	beq	a4,a5,8001d114 <zep_clear+0x17a>
+        0 8001d092:	lw	a3,0(s0)
+        0 8001d094:	lw	a4,4(s0)
+        0 8001d096:	li	a2,0
+        0 8001d098:	li	a1,0
+        1 8001d09a:	bge	a1,a3,8001d0c0 <zep_clear+0x126>
+        1 8001d09e:	bge	a2,a4,8001d0c0 <zep_clear+0x126>
+        1 8001d0a2:	bnez	a1,8001d170 <zep_clear+0x1d6>
+        1 8001d0a4:	lw	a5,0(s0)
+        1 8001d0a6:	bne	a5,a3,8001d170 <zep_clear+0x1d6>
+        1 8001d0aa:	mul	a0,a2,a3
+        1 8001d0ae:	sub	a4,a4,a2
+        1 8001d0b0:	lw	a5,16(s0)
+        1 8001d0b2:	mv	a1,s3
+        1 8001d0b4:	mul	a2,a4,a3
+        1 8001d0b8:	sh1add	a0,a0,a5
+        1 8001d0bc:	jal	8004dd50 <ZB_fill16>
+        1 8001d0c0:	lui	a5,0x40000
+        1 8001d0c4:	addi	a5,a5,-1 # 3fffffff <_start_qemu-0x40000001>
+        1 8001d0c6:	sw	a5,188(s0)
+        1 8001d0ca:	sw	a5,184(s0)
+        1 8001d0ce:	lui	a5,0xc0000
+        1 8001d0d2:	addi	a5,a5,1 # c0000001 <__stack_top+0x30000001>
+        1 8001d0d4:	sw	a5,196(s0)
+        1 8001d0d8:	sw	a5,192(s0)
+        1 8001d0dc:	lw	a5,108(s0)
+        1 8001d0de:	sw	s3,204(s0)
+        1 8001d0e2:	sw	a5,200(s0)
+        1 8001d0e6:	lw	a5,16(s0)
+        1 8001d0e8:	sw	a5,212(s0)
+        1 8001d0ec:	lw	a5,0(s4)
+        1 8001d0f0:	sw	a5,208(s0)
+        1 8001d0f4:	beqz	s1,8001d100 <zep_clear+0x166>
+        1 8001d0f6:	slli	s3,s3,0xe
+        1 8001d0f8:	lui	a5,0x2
+        1 8001d0fa:	add	s3,s3,a5
+        1 8001d0fc:	sw	s3,4(s1)
+        1 8001d100:	mv	a0,s2
+        1 8001d102:	jal	8001c628 <zep_set_chk>
+        1 8001d106:	li	a0,1
+        1 8001d108:	j	8001d038 <zep_clear+0x9e>
+        0 8001d10a:	beqz	a5,8001d060 <zep_clear+0xc6>
+        0 8001d10c:	addi	a5,a5,-1 # 1fff <_start_qemu-0x7fffe001>
+        0 8001d10e:	sb	a5,11(s1)
+        0 8001d112:	j	8001d060 <zep_clear+0xc6>
+        1 8001d114:	lw	a4,208(s0)
+        1 8001d118:	lw	a5,0(s4)
+        1 8001d11c:	bne	a4,a5,8001d092 <zep_clear+0xf8>
+        1 8001d120:	lw	a5,200(s0)
+        1 8001d124:	beqz	a5,8001d092 <zep_clear+0xf8>
+        1 8001d126:	lw	a5,204(s0)
+        1 8001d12a:	bne	a5,a0,8001d092 <zep_clear+0xf8>
+        1 8001d12e:	jal	8001c5c6 <zdb_enabled>
+        1 8001d132:	beqz	a0,8001d092 <zep_clear+0xf8>
+        1 8001d134:	addi	a5,s0,128
+        1 8001d138:	lw	a2,60(a5)
+        1 8001d13a:	lw	a3,64(a5)
+        1 8001d13c:	lw	a4,68(a5)
+        1 8001d13e:	lw	a5,56(a5)
+        1 8001d140:	addi	a1,s2,1552
+        1 8001d144:	addi	a0,sp,32
+        1 8001d146:	sw	a5,32(sp)
+        1 8001d148:	sw	a2,36(sp)
+        1 8001d14a:	sw	a3,40(sp)
+        1 8001d14c:	sw	a4,44(sp)
+        1 8001d14e:	jal	8001c51c <box_union>
+        1 8001d152:	lw	a5,40(sp)
+        1 8001d154:	lw	a3,0(s0)
+        1 8001d156:	lw	a1,32(sp)
+        1 8001d158:	lw	a2,36(sp)
+        1 8001d15a:	lw	a4,4(s0)
+        1 8001d15c:	min	a3,a3,a5
+        1 8001d160:	lw	a5,44(sp)
+        1 8001d162:	max	a1,a1,zero
+        1 8001d166:	max	a2,a2,zero
+        1 8001d16a:	min	a4,a4,a5
+        1 8001d16e:	j	8001d09a <zep_clear+0x100>
+        0 8001d170:	lui	a5,0x10
+        0 8001d172:	addi	a5,a5,-1 # ffff <_start_qemu-0x7fff0001>
+        0 8001d174:	sw	a5,4(sp)
+        0 8001d176:	sw	zero,0(sp)
+        0 8001d178:	li	a7,0
+        0 8001d17a:	mv	a6,s3
+        0 8001d17c:	li	a5,1
+        0 8001d17e:	mv	a0,s0
+        0 8001d180:	jal	800203ae <ZB_clear_rect>
+        0 8001d184:	j	8001d0c0 <zep_clear+0x126>

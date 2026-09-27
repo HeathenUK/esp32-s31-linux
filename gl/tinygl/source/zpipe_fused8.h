@@ -226,8 +226,9 @@ static inline unsigned int zf8_pack(unsigned int r, unsigned int g, unsigned int
    end): no pointer steps, no end test and no walk step after the last
    pixel. SH >= 0: the scale a constant */
 static inline __attribute__((always_inline))
-void zf8_world_nn_t(const ZPipe *p, const ZSpan *s, int n, const int K0, const int D,
-                     const int SH, const int U)
+void zf8_world_nn_b(const ZPipe *p, const ZSpan *s, int n, PIXEL *pp, unsigned short *pz,
+                     const unsigned int z0, float cfz, float csz, float ctz, float csz1,
+                     float ctz1, const int K0, const int D, const int SH, const int U)
 {
   const ZPipeX *x = p->x;
   const ZLevel *L0 = &x->tf[0].lvl[0], *LM = &x->tf[1].lvl[0];
@@ -238,17 +239,15 @@ void zf8_world_nn_t(const ZPipe *p, const ZSpan *s, int n, const int K0, const i
   const unsigned int tm0 = p->tmask, sm0 = p->smask;
   const unsigned int tm1 = x->g1.tmask, sm1 = x->g1.smask;
   const int fb0 = p->fbits, fb1 = x->g1.fbits;
-  PIXEL *pp = s->pp;
-  unsigned short *pz = s->pz;
-  unsigned int z4 = s->z << 2;
+  unsigned int z4 = z0 << 2;
   const unsigned int dz4 = (unsigned int)s->dzdx << 2;
-  /* the chunk's start values (zp_run_t's s->fz ... as it advances them) */
-  float cfz = s->fz, csz = s->sz, ctz = s->tz, csz1 = s->sz1, ctz1 = s->tz1;
+  /* (cfz ... are the chunk's start values: zp_run_t's s->fz ... as it
+     advances them) */
   const float dfz = s->dfzdx, dsz = s->dszdx, dtz = s->dtzdx;
   const float dsz1 = s->dszdx1, dtz1 = s->dtzdx1;
   (void)t0; (void)ix0; (void)pal0; (void)LM;
-  if (n <= 0) return;
-  for (;;) {
+  /* (no return in here: zf8_wnn_t_p0s1 inlines it in its row loop) */
+  if (n > 0) for (;;) {
     const int cn = n < ZP_CHUNK ? n : ZP_CHUNK;
     /* (U: the chunk's end in memory - read twice a block - so that it
        takes no register from the pixels: one spill a pixel fewer) */
@@ -298,9 +297,9 @@ void zf8_world_nn_t(const ZPipe *p, const ZSpan *s, int n, const int K0, const i
       sz1 += 8.0f * dsz1; tz1 += 8.0f * dtz1;
     } while (pz != (U ? pcev : pce));
     n -= cn;
-    if (n <= 0) return;
+    if (n <= 0) break;
     /* zp_run_t between two chunks (pp and pz have moved on) */
-    if (!(p->need & ZP_N_Z)) z4 = s->z << 2;
+    if (!(p->need & ZP_N_Z)) z4 = z0 << 2;
     if (p->need & ZP_N_ST) {
       csz += (float)cn * dsz; ctz += (float)cn * dtz;
     }
@@ -309,6 +308,14 @@ void zf8_world_nn_t(const ZPipe *p, const ZSpan *s, int n, const int K0, const i
       csz1 += (float)cn * dsz1; ctz1 += (float)cn * dtz1;
     }
   }
+}
+/* the span's values from the span (the per-span callers) */
+static inline __attribute__((always_inline))
+void zf8_world_nn_t(const ZPipe *p, const ZSpan *s, int n, const int K0, const int D,
+                     const int SH, const int U)
+{
+  zf8_world_nn_b(p, s, n, s->pp, s->pz, s->z, s->fz, s->sz, s->tz, s->sz1, s->tz1,
+                 K0, D, SH, U);
 }
 #undef ZF8_NNPIX
 #define ZF8_WNN(N, K0, D)                                                \
@@ -330,6 +337,53 @@ static __attribute__((noinline)) void zf8_wnn_s_##N(const ZPipe *p, const ZSpan 
 static void zf8_wnn_r_##N(ZBuffer *zb, ZSpan *s) { zf8_wnn_s_##N(zb->pipe, s, s->n); }
 ZF8_WNNS(p0s1, 1)
 #undef ZF8_WNNS
+
+/* Phase 6 tier 2 (artifacts/gl/phase6/tier2/REPORT.txt): QuakeSpasm's
+   world batch a triangle per call (ZPipeX.run_tri, S31GL_ZF8=1; 3 keeps
+   zf8's call a span). ztriangle_gen.c's row loop for its unbanded MT
+   filler, with that loop's statements (the edges, ZTRI_SPAN, the depth,
+   and each span value as Rv + gx fx + gy fy - the same expression, so
+   the same contraction and rounding), each span then running
+   zf8_wnn_s_p0s1's body inline: the 74-instruction prologue and epilogue,
+   the runner and the row loop's reloads of the planes go from every span
+   to every triangle */
+static __attribute__((noinline)) void zf8_wnn_t_p0s1(ZBuffer *zb, const ZTri *T, ZSpan *sp,
+                                                     const float *pl)
+{
+  const ZPipe *p = zb->pipe;
+  const float Rq = pl[0], gqx = pl[1], gqy = pl[2];
+  const float Rs = pl[3], gsx = pl[4], gsy = pl[5], Rt = pl[6], gtx = pl[7], gty = pl[8];
+  const float Rs1 = pl[9], gs1x = pl[10], gs1y = pl[11];
+  const float Rt1 = pl[12], gt1x = pl[13], gt1y = pl[14];
+  int part;
+
+  for (part = 0; part < 2; part++) {
+    int y = T->part[part].ya;
+    const int ye = T->part[part].yb;
+    int xl, dxl, xr, dxr;
+    unsigned int zy;
+    if (y >= ye) continue;
+    xl = T->part[part].xl; dxl = T->part[part].dxl;
+    xr = T->part[part].xr; dxr = T->part[part].dxr;
+    zy = T->zc + (unsigned int)T->dzdy * (unsigned int)y;
+    for (; y < ye; y++, xl += dxl, xr += dxr, zy += (unsigned int)T->dzdy) {
+      int x0, x1;
+      float fx, fy;
+      ZTRI_SPAN(xl, xr, x0, x1);
+      if (x1 <= x0) continue;
+      fx = (float)(x0 - T->px);
+      fy = (float)(y - T->py);
+      zf8_world_nn_b(p, sp, x1 - x0,
+                     (PIXEL *)((char *)zb->pbuf + y * zb->linesize) + x0,
+                     zb->zbuf + y * zb->xsize + x0,
+                     zy + (unsigned int)T->dzdx * (unsigned int)x0,
+                     Rq + gqx * fx + gqy * fy,
+                     Rs + gsx * fx + gsy * fy, Rt + gtx * fx + gty * fy,
+                     Rs1 + gs1x * fx + gs1y * fy, Rt1 + gt1x * fx + gt1y * fy,
+                     KP8, 0, 1, 1);
+    }
+  }
+}
 
 /* S31GL_ZF8=2 (a board A/B arm, off by default: qemu cannot see memory
    latency): zf8_wnn_r_p0s1 that first touches the lines the triangle's
@@ -1130,6 +1184,8 @@ static ZStageFn zpf8_pick(GLContext *c, int *kind, int *direct,
         if (!c->zf8_on && k0 == KP8 && d == 0) return zf8_wnn0_p0;
         *run = k0 == KP8 && d == 0 && x->cb[1].sh[0] == 1 ?
                (c->zf8_on == 2 ? zf8_wnn_rp_p0s1 : zf8_wnn_r_p0s1) : nr[k0][d];
+        /* phase 6 tier 2: its triangles a call each (S31GL_ZF8=3: a span) */
+        if (*run == zf8_wnn_r_p0s1 && c->zf8_on == 1) x->run_tri = zf8_wnn_t_p0s1;
         return nn[k0][d];
       }
     }

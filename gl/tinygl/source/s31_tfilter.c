@@ -333,6 +333,24 @@ static void zx8_base_p8(const ZPipe *p, const ZSpan *s, ZFrag *f)
   TWALK(, ft[i] = pal[i8[NEAR_IDX(L0, WR_G)]];
           f->idx[i] = (unsigned int)i;)
 }
+/* phase 6 tier 2: the same for a texture that repeats in s and t (the
+   batch's rep_s = rep_t = -1): WR_G's clamp of v & m to [0, m] is then
+   the identity, so the wrap is the mask alone (5 instructions a texel
+   fewer, the same index) */
+#define WR_R(v, m, am) ((v) & (m))
+static void zx8_base_p8r(const ZPipe *p, const ZSpan *s, ZFrag *f)
+{
+  ZPipeX *x = p->x;
+  ZTexF *u = &x->tf[0];
+  const ZLevel *L0 = &u->lvl[0];
+  const unsigned char *i8 = L0->i8;
+  const unsigned int *pal = L0->pal;
+  unsigned int *ft = u->ftex32;
+  LEVEL_VARS(L0)
+  TWALK(, ft[i] = pal[i8[NEAR_IDX(L0, WR_R)]];
+          f->idx[i] = (unsigned int)i;)
+}
+#undef WR_R
 ZX8_NEAR(zx8_near, 0, )
 ZX8_NEAR(zx8_1_near, 1, 1)
 ZX8_BIL(zx8_bil, 0, )
@@ -363,16 +381,18 @@ ZStageFn zpx_stage8_u(int unit, int kind)
 
 /* the nearest-in-level-0 stage for a unit whose level 0 is L (set up by
    zpx_level0) */
-ZStageFn zpx_base8(const ZLevel *L, int unit)
+ZStageFn zpx_base8(const ZLevel *L, int unit, int rep)
 {
-  return S31_RT_RAM(unit == 0 && L->k8 == TGL_ST_P8 ? zx8_base_p8 : zx8_tab[unit != 0][0]);
+  return S31_RT_RAM(unit == 0 && L->k8 == TGL_ST_P8 ? (rep ? zx8_base_p8r : zx8_base_p8) :
+                    zx8_tab[unit != 0][0]);
 }
 
 /* whether f is one of zpx_base8's stages for the unit */
 int zpx_is_base8(ZStageFn f, int unit)
 {
   f = S31_RT_XIP(f);           /* phase 6 ramtext: compared as XIP addresses */
-  return f == S31_RT_XIP(zx8_tab[unit != 0][0]) || (unit == 0 && f == zx8_base_p8);
+  return f == S31_RT_XIP(zx8_tab[unit != 0][0]) ||
+         (unit == 0 && (f == zx8_base_p8 || f == zx8_base_p8r));
 }
 
 /* a stored level of t as the texel stages read it: its planes */
@@ -423,7 +443,7 @@ int zpx_is_tex_stage(ZStageFn f)
     if (S31_RT_XIP(t[i]) == f) return 1;
   for (i = 0; i < 10; i++)
     if (S31_RT_XIP((&zx8_tab[0][0])[i]) == f) return 1;
-  return f == zx8_base_p8;
+  return f == zx8_base_p8 || f == zx8_base_p8r;
 }
 
 /* ------------------------------------------------------------ perspective colour */

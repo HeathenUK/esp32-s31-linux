@@ -96,6 +96,7 @@ typedef struct ZFrag {
 } ZFrag;
 
 struct ZPipe;
+struct ZTri;
 typedef int (*ZDepthFn)(const ZSpan *s, ZFrag *f);         /* returns alive */
 typedef void (*ZStageFn)(const struct ZPipe *p, const ZSpan *s, ZFrag *f);
 
@@ -350,6 +351,13 @@ typedef struct ZPipeX {
   void (*run_mt)(ZBuffer *zb, struct ZSpan *s);
   void (*run_lod_mt)(ZBuffer *zb, struct ZSpan *s);
   ZStageFn chunk;
+  /* phase 6 tier 2 (artifacts/gl/phase6/tier2/REPORT.txt): a whole
+     triangle's spans in one call - the filler walks the rows itself from
+     the planes pl (1/w, s/w, t/w, s1/w, t1/w: each value, x and y step, as
+     ztriangle_gen.c forms them) and s's x steps. NULL: per span. Called
+     only by the unbanded general MT filler for a triangle whose runner is
+     run_mt */
+  void (*run_tri)(ZBuffer *zb, const struct ZTri *T, struct ZSpan *s, const float *pl);
 } ZPipeX;
 
 /* phase 4: the spread of the bit patterns of three q = 1/w (> 0). The
@@ -546,7 +554,7 @@ ZStageFn zpx_stage_u(int unit, int kind, int repeat, int alpha);  /* phase 5 */
 /* phase 5: the texel stages of a unit whose texture has 8-bit texels
    (TF_NEAREST0: nearest in level 0; the others as zpx_stage_u), any wrap */
 ZStageFn zpx_stage8_u(int unit, int kind);
-ZStageFn zpx_base8(const ZLevel *L, int unit);
+ZStageFn zpx_base8(const ZLevel *L, int unit, int rep);   /* rep: REPEAT in s and t */
 int zpx_is_base8(ZStageFn f, int unit);
 /* phase 5: level 0 of t as the texel stages read it (ZTexF.lvl[0]), and
    the planes alone of any stored level (zpx_prepare sets the geometry) */

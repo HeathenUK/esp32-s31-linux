@@ -1,0 +1,84 @@
+          
+          gl/bench/out-t2/new/qsr/qsr.elf:     file format elf32-littleriscv
+          
+          
+          Disassembly of section s31hot_text:
+          
+          8004c3d0 <zx8_base_p8r>:
+     2180 8004c3d0:	addi	sp,sp,-32
+     2180 8004c3d2:	sw	s2,20(sp)
+     2180 8004c3d4:	lw	s2,0(a2)
+     2180 8004c3d8:	blez	s2,8004c4cc <zx8_base_p8r+0xfc>
+     2180 8004c3dc:	auipc	a5,0x9
+     2180 8004c3e0:	flw	ft3,-492(a5) # 800551f0 <dn.0+0x1b4>
+     2180 8004c3e4:	flw	ft2,104(a1)
+     2180 8004c3e8:	flw	ft7,92(a1)
+     2180 8004c3ec:	flw	ft6,96(a1)
+     2180 8004c3f0:	fmul.s	ft5,ft2,ft3
+     2180 8004c3f4:	fmul.s	ft4,ft7,ft3
+     2180 8004c3f8:	fmul.s	ft3,ft6,ft3
+     2180 8004c3fc:	sw	s3,16(sp)
+     2180 8004c3fe:	lw	s3,244(a0)
+     2180 8004c402:	flw	fa0,88(a1)
+     2180 8004c404:	flw	fa1,76(a1)
+     2180 8004c406:	flw	fa2,80(a1)
+     2180 8004c408:	auipc	a5,0x9
+     2180 8004c40c:	flw	fa6,-884(a5) # 80055094 <dn.0+0x58>
+     2180 8004c410:	lw	t2,72(s3)
+     2180 8004c414:	lw	t0,76(s3)
+     2180 8004c418:	lw	t6,80(s3)
+     2180 8004c41c:	lw	t5,84(s3)
+     2180 8004c420:	lw	t4,88(s3)
+     2180 8004c424:	sw	s0,28(sp)
+     2180 8004c426:	sw	s1,24(sp)
+     2180 8004c428:	lw	s0,96(s3)
+     2180 8004c42c:	lw	s1,92(s3)
+     2180 8004c430:	sw	s4,12(sp)
+     2180 8004c432:	addi	s3,s3,732
+     2180 8004c436:	addi	s4,a2,228
+     2180 8004c43a:	li	a4,0
+     2047 8004c43c:	addi	a7,a4,8
+     2047 8004c440:	min	a7,a7,s2
+     2047 8004c444:	bge	a4,a7,8004c4b4 <zx8_base_p8r+0xe4>
+     4228 8004c448:	fdiv.s	fa5,fa6,fa0
+     4228 8004c44c:	sh2add	a6,a4,s3
+     4228 8004c450:	sh2add	a0,a4,s4
+     4228 8004c454:	fmul.s	ft1,fa5,fa1
+     4228 8004c458:	fmul.s	ft0,fa5,fa2
+     4228 8004c45c:	fnmsub.s	fa3,ft2,ft1,ft7
+     4228 8004c460:	fnmsub.s	fa4,ft2,ft0,ft6
+     4228 8004c464:	fcvt.w.s	a1,ft1,rtz
+     4228 8004c468:	fcvt.w.s	a2,ft0,rtz
+     4228 8004c46c:	fmul.s	fa3,fa3,fa5
+     4228 8004c470:	fmul.s	fa5,fa4,fa5
+     4228 8004c474:	fcvt.w.s	t3,fa3,rtz
+     4228 8004c478:	fcvt.w.s	t1,fa5,rtz
+    22044 8004c47c:	sra	a5,a2,t0
+    22044 8004c480:	sra	a3,a1,t2
+    22044 8004c484:	and	a5,a5,t4
+    22044 8004c488:	sll	a5,a5,t6
+    22044 8004c48c:	and	a3,a3,t5
+    22044 8004c490:	or	a5,a5,a3
+    22044 8004c492:	add	a5,a5,s1
+    22044 8004c494:	lbu	a5,0(a5)
+    22044 8004c498:	add	a2,a2,t1
+    22044 8004c49a:	add	a1,a1,t3
+    22044 8004c49c:	sh2add	a5,a5,s0
+    22044 8004c4a0:	lw	a5,0(a5)
+    22044 8004c4a2:	addi	a6,a6,4
+    22044 8004c4a4:	addi	a0,a0,4
+    22044 8004c4a6:	sw	a5,-4(a6)
+    22044 8004c4aa:	sw	a4,-4(a0)
+    22044 8004c4ae:	addi	a4,a4,1
+    22044 8004c4b0:	bne	a7,a4,8004c47c <zx8_base_p8r+0xac>
+     4228 8004c4b4:	fadd.s	fa0,fa0,ft5
+     4228 8004c4b8:	fadd.s	fa1,fa1,ft4
+     4228 8004c4bc:	fadd.s	fa2,fa2,ft3
+     4228 8004c4c0:	blt	a4,s2,8004c43c <zx8_base_p8r+0x6c>
+     2180 8004c4c4:	lw	s0,28(sp)
+     2180 8004c4c6:	lw	s1,24(sp)
+     2180 8004c4c8:	lw	s3,16(sp)
+     2180 8004c4ca:	lw	s4,12(sp)
+     2180 8004c4cc:	lw	s2,20(sp)
+     2180 8004c4ce:	addi	sp,sp,32
+     2180 8004c4d0:	ret

@@ -140,7 +140,8 @@ void gl_mtex_init(GLContext *c)
   c->fused_on = knob("S31GL_FUSED", 1);
   /* S31GL_ZF8=0: QuakeSpasm's world filler as before phase 6 zf8; 2: zf8
      with next-row prefetches (the board A/B arms; artifacts/gl/phase6/zf8/
-     REPORT.txt) */
+     REPORT.txt); 3: zf8 called a span at a time, as before phase 6 tier 2
+     (1 calls it a triangle at a time; artifacts/gl/phase6/tier2) */
   {
     const char *e = getenv("S31GL_ZF8");
     c->zf8_on = e ? atoi(e) : 1;

@@ -893,7 +893,7 @@ void gl_build_pipe(GLContext *c)
       zpx_level0(t, &u0->lvl[0]);
       u0->rep_s = p->clamp_s ? 0 : -1;
       u0->rep_t = p->clamp_t ? 0 : -1;
-      u0->tex_base = zpx_base8(&u0->lvl[0], 0);
+      u0->tex_base = zpx_base8(&u0->lvl[0], 0, !p->clamp_s && !p->clamp_t && c->zf8_on != 3);
       p->st[i++] = u0->tex_base;
       p->st[i++] = comb0 ? zp_comb_fn(0) : zp_texenv8_fn(texenv_op_t(c->texenv_mode, t));
     } else {
@@ -1033,6 +1033,7 @@ void gl_build_pipe(GLContext *c)
   x->fused = 0;
   x->run_mt = zp_run_mt;
   x->run_lod_mt = zp_run_lod_mt;
+  x->run_tri = NULL;
   if (c->fused_on) zpf_select(c);
   /* phase 6 (s31_thr.h): whether this batch's triangles are threaded */
   if (s31t_mode) s31t_pipe_built(c);

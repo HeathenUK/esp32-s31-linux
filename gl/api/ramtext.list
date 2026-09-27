@@ -13,13 +13,13 @@ clip          gl_transform_to_viewport gl_draw_triangle gl_draw_triangle_fill gl
 list          glopCallList gl_add_op
 # fill_pq_slow: reached from gl_draw_triangle_fill_pq by glxgears' smooth
 # triangles every frame (review 4 R4-hot)
-s31_tfilter   gl_draw_triangle_fill_pq fill_pq_slow zx8_base_p8 zx8_1_base zpx_level0 zc_smooth_pc
+s31_tfilter   gl_draw_triangle_fill_pq fill_pq_slow zx8_base_p8 zx8_base_p8r zx8_1_base zpx_level0 zc_smooth_pc
 # phase 6: QuakeSpasm's phase 5 path (board profile, share of libGL samples)
 ztriangle_genmt ZB_fillTriangleGeneralMT
 ztriangle_gen ZB_fillTriangleGeneral
 zbuffer       ZB_fill16
 zpipe         zp_run_mt_direct zp_run zp_run_mt zp_out_fn zp_depth_fn zt_rr zdw_lequal zc_smooth
-zpipe_fused   zpf_select zf8_wnn_p0 zf8_wnn_c0 zf8_wnn_s_p0s1 zf8_wnn_r_p0s1 zf8_wnn_rp_p0s1 zf8_wnn_s_c0 zf8_wnn_r_c0 zf8_alias_bl zf1_sbar zf1_blend zf1_pica zf_alias_00 zf1_alias
+zpipe_fused   zpf_select zf8_wnn_p0 zf8_wnn_c0 zf8_wnn_s_p0s1 zf8_wnn_t_p0s1 zf8_wnn_r_p0s1 zf8_wnn_rp_p0s1 zf8_wnn_s_c0 zf8_wnn_r_c0 zf8_alias_bl zf1_sbar zf1_blend zf1_pica zf_alias_00 zf1_alias
 raster_sel    gl_build_pipe gl_update_raster comb_prog tu1_update
 raster        to_vg set_flat gl_draw_triangle_mt gl_draw_triangle_general
 s31_mtex      tgl_multi_tex_coord tu_swap

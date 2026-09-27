@@ -1,0 +1,186 @@
+GL phase 6 - tier 2: the libGL items after the world filler, host only -
+2026-09-27. Nothing touched the board; no make / Buildroot. Base: main at
+50beb954 (gl/ as 77dc8f92: the zf8 library the board shipped - a rebuild
+of it with the Buildroot compiler and flags is byte-identical to the
+shipped f9310c2d). Workload: the QuakeSpasm proxy on the p5f2-tf0 trace
+(S31GL_TEXFILTER=0, the shipped nearest config), RV32 qemu instruction
+counter, board flags. Raw data beside this file: board/ (prof8-r1 samples
+per instruction, gl/bench/h1sann.py), qemu-counts/ (per-function profiles
+and per-instruction counts before / after, the replays), gates/. s31, MIT.
+
+1. WHERE THE BOARD TIME WAS (prof8-r1, 8000 hart-1 samples; the profiled
+   bytes checked against a rebuild of the base: ZB_fill16 identical,
+   zx8_base_p8 identical but for two pc-relative constant offsets,
+   ZB_fillTriangleGeneralMT the same code but for field / call offsets
+   and 9 instructions, gl_vertex4f 27 of 794 words, all offsets)
+  ZB_fillTriangleGeneralMT  403 samples (5.0%). Flat: no instruction
+    above 3.7%, the float set-up and the row loop's stack reloads - an
+    instruction-count function. In qemu it was 1,142,584 instructions a
+    frame: 544 triangles x ~200 of set-up, and 64 a row for 10,496 rows
+    (the span values from the planes, 15 of them reloaded from the stack),
+    then an indirect call per span into the world filler's runner and its
+    74-instruction prologue / epilogue: ~141 instructions a span of
+    overhead around an 11-pixel span.
+  zx8_base_p8  266 samples (3.3%). The P8 texel stage of the one-unit and
+    alias batches (status bar, pictures, alias skins, particles: 2,180
+    chunks, ~22,000 texels a frame). 42 samples (16%) on the instruction
+    after the index-plane load (a texture miss), the rest at ~7 a texel
+    instruction: instruction count, 23 a texel, 5 of them WR_G's clamp,
+    which a REPEAT texture never needs.
+  gl_vertex4f  261 samples (3.3%). Flat (the top instruction 7%): 195
+    instructions a vertex, straight-line transform, clip code, viewport,
+    two texture units' copies and the primitive dispatch. Nothing
+    structural to take in the time box; not changed.
+  ZB_fill16  227 samples (2.8%): see section 4. Not changed.
+
+2. WHAT CHANGED (bit-identical; runtime toggle S31GL_ZF8=3 restores both)
+  a) The world batch a triangle per call (zpipe_fused8.h zf8_wnn_t_p0s1,
+     ZPipeX.run_tri, ztriangle_gen.c). For QuakeSpasm's world batch (P8,
+     LEQUAL + write, sh 1: the one zf8_wnn_r_p0s1 already served) the
+     unbanded MT filler hands the whole triangle to the filler, which
+     walks the rows itself with the filler's own statements: the edges,
+     ZTRI_SPAN, the depth zy + dzdx x0, and every span value as
+     Rv + gx fx + gy fy - the same expression, so the same contraction
+     (fmadd(gy, fy, fmadd(gx, fx, Rv))) and the same bits - and runs
+     zf8_wnn_s_p0s1's body inline per span (zf8_world_nn_b: the span body
+     with its start values as arguments; no return in it any more). The
+     banded copy (S31GL_THREADS), triangles whose level is chosen per
+     block and every other batch keep the call a span.
+  b) zx8_base_p8r (s31_tfilter.c): zx8_base_p8 for a texture that repeats
+     in s and t (chosen at pipe build, zpx_base8's new rep argument): the
+     wrap is the mask alone, since clampi(v & m, m) is v & m. Recognised
+     wherever zx8_base_p8 is (zpx_is_base8, zpx_is_tex_stage).
+  S31GL_ZF8=3 (s31_mtex.c): zf8 a span at a time and the clamping P8
+    stage - byte-for-byte the shipped f9310c2d behaviour (15.9356 /
+    14.7391 M a frame against its 15.9356 / 14.7389: the +2 k is the one
+    extra test a triangle). 0 and 2 keep their zf8 meanings (and a span
+    per call).
+  ramtext.list: zf8_wnn_t_p0s1 and zx8_base_p8r added.
+
+3. NUMBERS (RV32 qemu, p5f2-tf0, 80 counted frames; qemu-counts/)
+  a) the triangle-level world filler
+    per pixel (pass 45 / fail 8 / block 33): unchanged - the pixel and
+      block instruction histograms of the new function are the old one's,
+      count for count
+    per span (9,483 a frame): 74 in the filler (the span values from the
+      planes, the batch constants reloaded - all 27 registers are the
+      pixels') + 20 a row (the edges, kept on the stack) + 96 a
+      triangle-part, against 64 a row + 3 (runner) + 74 (prologue /
+      epilogue) before: 766 -> 716 instructions a span, all in
+    frame: zf8_wnn_s_p0s1 + zf8_wnn_r_p0s1 + ZB_fillTriangleGeneralMT
+      6,094,885 + 28,449 + 1,142,584 = 7,265,918  ->
+      zf8_wnn_t_p0s1 + ZB_fillTriangleGeneralMT 6,409,666 + 381,727 =
+      6,791,393   (-474,525 a frame)
+    proxy M/frame (windows 0 / 1): 15.9356 / 14.7389 -> 15.4753 / 14.2506
+      (-2.9% / -3.3%)
+  b) zx8_base_p8r
+    per texel 23 -> 18; per chunk (2,180 a frame, all REPEAT here):
+      368.9 -> 294.7; frame 804,354 -> 642,472 (-161,882)
+    proxy M/frame: 15.4753 / 14.2506 -> 15.3397 / 14.0638
+  both, M instructions per counted frame (windows 0 / 1):
+    p5f2-tf0  15.9356 / 14.7389  ->  15.3397 / 14.0638  (-3.7% / -4.6%)
+    p5a-tf0   15.4888 / 14.2022  ->  15.0157 / 13.6529  (-3.1% / -3.9%)
+    p5f2, p5a (filtered, the default texture mode): unchanged to within
+      0.0005 M (they take neither path)
+    whole replay, qsprof: 15.3370 -> 14.7015 M a frame
+  Code size, Buildroot flags (gl/bench/out-t2/brbuild.sh, the zf8 one):
+    .text 288,594 -> 288,686 (+92 B), .s31hot 54,632 -> 57,276 (+2,644 B:
+    zf8_wnn_t_p0s1 2,088 B, zx8_base_p8r 258 B, the filler's hook ~200 B),
+    .rodata unchanged; stripped 439,716 -> 443,812 (+4,096: a page).
+
+4. ZB_fill16 - THE CLEARS (report only)
+  Two calls a frame, 43,216 instructions each: QuakeSpasm's one glClear
+  of depth and colour (glopClear -> zep_clear -> ZB_fill16, and
+  zdb_clear_colour -> ZB_fill16), 153,600 B each at 320x240.
+  - Depth: the epoch trick is tried every frame and never fits. zep_clear
+    needs the last epoch's range plus an eighth above zmax + 2 to stay
+    under 2^16; Quake stores near depths (the view model at glDepthRange
+    0..0.3 is s >= 45,875 of 65,535), so the test at zep_clear+0x82 takes
+    the real clear on every counted frame. No 16-bit epoch scheme can
+    avoid it without giving up depth bits (the ping-pong the file rejects).
+  - Colour: the game asks for it (gl_clear), and a fused "skip the clear
+    where the frame will overwrite" needs to know that before the frame
+    is drawn; steering the game's config is off the table.
+  - Why it costs 2.8%: 193 of its 227 board samples are two store
+    instructions of the 16-store loop (sw +0x8: 100, sw +0x18: 93) - the
+    loop runs at PSRAM write-allocate speed: ~300 kB in ~3.2 ms of a
+    ~115 ms frame, ~95 MB/s. It is already 18 instructions a 64-byte line;
+    only fewer bytes or no CPU would help.
+  - A PPA fill instead: NOT worth the driver work. Ceiling 2.8% of CPU0
+    (~+0.25 fps at 8.7), and it gives most of that back: (1) the colour
+    and depth buffers are user memory (libGL's heap, or the colour buffer
+    in the client's shared-memory segment), virtually contiguous only -
+    the PPA/GDMA would need a descriptor per 4 kB page or the buffers
+    moved into driver-allocated CMA and mapped into the client, a new
+    interface in our driver and in the library's buffer management;
+    (2) the D-cache must be written back / invalidated over the 300 kB
+    before the DMA and nothing may be dirty in it afterwards (the cache
+    maintenance that measured expensive here, s31-cache-maint-stays-in-
+    flash); (3) the world draw starts right after glClear, so the CPU
+    waits for the fill unless it is issued at the previous swap, and the
+    DMA competes for the same PSRAM bandwidth the first spans need; (4)
+    the render still misses on every line afterwards, as now. Realistic
+    gain ~1% against a kernel + library change; the memory note "offload
+    is not purchasable below ~128 kB" sits right at 150 kB. If the clears
+    ever need to go, the cheaper lever is a lazy per-row clear (a row
+    cleared by the first span that touches it, the rest at swap), which
+    merges the clear's line fetch with the render's - a filler-wide
+    change, not attempted.
+
+5. NOT DONE, AND WHY
+  - The rest of ZB_fillTriangleGeneralMT: ~200 instructions of set-up a
+    triangle (the planes, ztri_setup's edges) and the 64-a-row loop of
+    the non-world MT batches (1,013 rows a frame): 0.38 M a frame left,
+    flat on the board. A plane set-up shared with the tri path would save
+    tens a triangle; not in the time box.
+  - The last 74 a span in the tri filler: the ten fmadds are the span
+    values (kept exact, so not stepped per row); the rest are the batch's
+    constants reloaded because the pixels hold every register. Stepping
+    the span values per row would round differently: not bit-identical.
+  - gl_vertex4f (0.9 M, 195 a vertex): straight-line and flat on the
+    board; see 1.
+  - The other one-unit fillers (zf1_blend 0.91 M, zf8_sbar 0.77 M,
+    ZB_fillTriangleGeneral 0.74 M, zf8_alias_bl 0.60 M) still pay a call
+    a span; the same tri-level treatment applies to each, one at a time.
+
+6. GATES (gates/)
+  run-3a p6-tier2: core_test 292/0, raster_gate 51/0, filt_test 32/0,
+  fused_test 45/0 (both FILT8 modes; also 45/0 with S31GL_ZF8=3 and =0),
+  headless_gears md5 unchanged; suitecmp 0 apps worse and identical to
+  the zf8 gates; pixels and raster summaries identical to the zf8 gates
+  (the "DIFFER" run-3a prints is against the phase-2 bases, as before);
+  prims PASS; mtex 4 of 5 PASS, 5 logs 0 differ (as before); prec 99.35%.
+  qsr-fused over all 9 traces present: 756 of 756 full frames fused =
+  general and = the unpacked reference, every line identical to the zf8
+  gate's (p5f2-tf0 84 of 84 identical to the live board capture, in the
+  S31GL_ZF8=1 and =3 arms).
+  run-qsr-threads (p5f2-tf0, p5a-tf0): S31GL_THREADS=2 at both band
+  layouts 84 of 84 identical to THREADS=0 (the banded copy keeps the
+  call a span, the unbanded one takes the triangle path: same bits).
+  RV32 qemu-user: core_test 290/0, raster_gate 51/0, d2f 0 mismatches,
+  filt_test 32/0, fused_test 45/0, headless_gears md5 34a082d3...
+  (unchanged; every line as the zf8 gate's).
+  bench.sh: every hash identical to the zf8 gate's; two counts +0.0001 M
+  (feat5 gears, pix2: the hook's test a triangle); 62 within limits.txt,
+  the same 6 owner-pending lines over.
+
+7. BOARD A/B TO RUN (coordinator; stock QuakeSpasm 0.96.3 timedemo demo1,
+   320x240 fullscreen, fresh boot per run, interleaved arms, >= 4 runs per
+   arm - the zf8 arms spread 8.5-8.9)
+  Library: gl/bench/out-t2/br-final/libGL.so.1 (stripped, this tree with
+  the Buildroot compiler and flags, -DS31GL_TEXFILTER_DEFAULT=0
+  -DS31GL_RAMTEXT_DEFAULT=0; md5 91771d02d972855c1b7498c8ae1425df,
+  sha256 8861e8b8e447dc7359014ec577c10ca71834328ce38a49994982e33776896591).
+  Load it as the zf8 arms did (/root/zf8 -> e.g. /root/t2, confirm by md5
+  on the board and by the game's maps naming it).
+    T1 (new, default):   LD_LIBRARY_PATH=/root/t2
+    T3 (= shipped zf8):  LD_LIBRARY_PATH=/root/t2 S31GL_ZF8=3
+  Prediction: the removed instructions are per-span overhead and texel
+  arithmetic (not the misses), ~3.7-4.6% of the proxy frame and ~4% of
+  libGL's instruction share: 8.7 -> ~9.0 fps if the frame stays
+  CPU-bound - inside one arm's spread, so the repeats decide it. A
+  profile of T1 should show zf8_wnn_t_p0s1 in place of zf8_wnn_s_p0s1,
+  ZB_fillTriangleGeneralMT near 1.7% (from 5.0%) and zx8_base_p8r near
+  2.8%.
+  Regression: glxgears, Doom and the desktop (xcalc) as usual - the
+  REPEAT P8 stage is on every P8 one-unit / alias path, so re-check them.
