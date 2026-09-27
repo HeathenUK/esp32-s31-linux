@@ -1,0 +1,16 @@
+# probe: sqrt_rmm_eq_rtz
+# date: 2026-09-27T21:05:08Z
+# cwd: /home/user/esp32-s31-linux/build/cloud/probes/arith
+# cmd: env S31_QEMU_CPU=max s31-qemu ./rmm
+# qemu: qemu-riscv32 version 10.0.6
+# S31_QEMU_CPU=board
+# md5 5b5bdcfa148a321be4534d2f904da1c8  rmm.c
+# md5 d9db88c65c67d3ffbdf012875ede2953  rmm
+# ---- stdout/stderr ----
+frm=0 1+1.5ulp/2=3ff0000000000001  -1-1.5ulp/2=bff0000000000001
+frm=1 1+1.5ulp/2=3ff0000000000001  -1-1.5ulp/2=bff0000000000001
+frm=2 1+1.5ulp/2=3ff0000000000001  -1-1.5ulp/2=bff0000000000001
+frm=3 1+1.5ulp/2=3ff0000000000001  -1-1.5ulp/2=bff0000000000001
+frm=4 1+1.5ulp/2=3ff0000000000001  -1-1.5ulp/2=bff0000000000001
+musl sqrt RMM==RTZ 1000000/1000000, RMM==RNE 499148/1000000
+# rc=0 elapsed=0s

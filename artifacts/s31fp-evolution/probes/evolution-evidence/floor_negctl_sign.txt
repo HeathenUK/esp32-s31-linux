@@ -1,0 +1,23 @@
+# probe: floor_negctl_sign
+# date: 2026-09-27T21:05:07Z
+# cwd: /home/user/esp32-s31-linux/build/cloud/probes/arith
+# cmd: s31-qemu ./flneg2 0 20000
+# qemu: qemu-riscv32 version 10.0.6
+# S31_QEMU_CPU=board
+# md5 d99df1a6dafe49450d0cb35825c352ff  flneg2.c
+# md5 cbb42caab22f393e89aef2e69b866d52  flneg2
+# ---- stdout/stderr ----
+MISMATCH floor x=8000000000000001 frm=0 musl=bff0000000000000/1 int=0000000000000000/1
+MISMATCH floor x=8000000000000001 frm=1 musl=bff0000000000000/1 int=0000000000000000/1
+MISMATCH floor x=8000000000000001 frm=2 musl=bff0000000000000/1 int=0000000000000000/1
+MISMATCH floor x=8000000000000001 frm=3 musl=bff0000000000000/1 int=0000000000000000/1
+MISMATCH floor x=8000000000000001 frm=4 musl=bff0000000000000/1 int=0000000000000000/1
+MISMATCH floor x=bfe0000000000000 frm=0 musl=bff0000000000000/1 int=0000000000000000/1
+MISMATCH floor x=bfe0000000000000 frm=1 musl=bff0000000000000/1 int=0000000000000000/1
+MISMATCH floor x=bfe0000000000000 frm=2 musl=bff0000000000000/1 int=0000000000000000/1
+MISMATCH floor x=bfe0000000000000 frm=3 musl=bff0000000000000/1 int=0000000000000000/1
+MISMATCH floor x=bfe0000000000000 frm=4 musl=bff0000000000000/1 int=0000000000000000/1
+MISMATCH floor x=bdfd5e2cd52318a8 frm=0 musl=bff0000000000000/1 int=0000000000000000/1
+MISMATCH floor x=bdfd5e2cd52318a8 frm=1 musl=bff0000000000000/1 int=0000000000000000/1
+cases(x*frm*fn)=200000 floor_mismatch=20580 ceil_mismatch=0 musl_mode_dependent=0 snan_raised_NV=0
+# rc=0 elapsed=1s

@@ -1,0 +1,17 @@
+# probe: libm_negctl_floor_vs_ceil
+# date: 2026-09-27T21:06:19Z
+# cwd: /home/user/esp32-s31-linux/build/cloud/probes/coverage/v
+# cmd: s31-qemu ./mt /home/user/esp32-s31-linux/toolchain/riscv32-esp-linux-musl/riscv32-esp-linux-musl/sysroot/usr/lib/libc.so floor 2be6c 100000
+# qemu: qemu-riscv32 version 10.0.6
+# md5 86742be3eb050d2dbdd424e30215bfb1  mt.c
+# md5 fc79540dab0638f0322d92526cb585ba  mt
+# md5 6041b2cd71cfb8fa6ba0f97531dffa50  /home/user/esp32-s31-linux/toolchain/riscv32-esp-linux-musl/riscv32-esp-linux-musl/sysroot/usr/lib/libc.so
+# ---- stdout/stderr ----
+  MISMATCH floor rm=2 pre=0 x=c01e2120826571de y=411981e8c1fa7be4 xf=40c22613 img=c01c000000000000/0000000000000000 fl=1 ref=c020000000000000/0000000000000000 fl=1
+  MISMATCH floor rm=1 pre=0 x=3fd78fb373ffbff6 y=3fc69ba126cd29b3 xf=3f671443 img=3ff0000000000000/0000000000000000 fl=1 ref=0000000000000000/0000000000000000 fl=1
+  MISMATCH floor rm=2 pre=0 x=c145837da840d9ec y=409a582ee0200000 xf=4eb30026 img=c145837d80000000/0000000000000000 fl=1 ref=c145837e00000000/0000000000000000 fl=1
+  MISMATCH floor rm=3 pre=0 x=904bc2dda0ebc917 y=3fcae6d82ef0bb45 xf=7f800000 img=8000000000000000/0000000000000000 fl=1 ref=bff0000000000000/0000000000000000 fl=1
+  MISMATCH floor rm=2 pre=0 x=3fcabc7287dc4e1c y=400921fb54442d18 xf=3e1aac39 img=3ff0000000000000/0000000000000000 fl=1 ref=0000000000000000/0000000000000000 fl=1
+  MISMATCH floor rm=1 pre=0 x=c02917a81f000000 y=7ff4000000000001 xf=c3fecd4d img=c028000000000000/0000000000000000 fl=1 ref=c02a000000000000/0000000000000000 fl=1
+floor    n=100000 bitmismatch=72546 flagmismatch=0
+# rc=0 elapsed=0s

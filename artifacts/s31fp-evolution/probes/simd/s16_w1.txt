@@ -1,0 +1,5 @@
+s16 v=129 s=[-32768,32768) pairs=4294967296 mismatches=0
+s16 v=200 s=[-32768,32768) pairs=4294967296 mismatches=0
+s16 v=255 s=[-32768,32768) pairs=4294967296 mismatches=0
+s16 v=-1 s=[-32768,32768) pairs=4294967296 mismatches=0
+s16 v=-128 s=[-32768,32768) pairs=4294967296 mismatches=0

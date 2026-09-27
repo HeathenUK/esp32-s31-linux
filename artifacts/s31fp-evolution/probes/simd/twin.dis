@@ -1,0 +1,94 @@
+00010718 <twin_mix>:
+   10718:	ce81                	beqz	a3,10730 <twin_mix+0x18>
+   1071a:	67a1                	lui	a5,0x8
+   1071c:	07c1                	addi	a5,a5,16 # 8010 <exit-0x80c4>
+   1071e:	00f70a63          	beq	a4,a5,10732 <twin_mix+0x1a>
+   10722:	67a1                	lui	a5,0x8
+   10724:	07a1                	addi	a5,a5,8 # 8008 <exit-0x80cc>
+   10726:	0cf70663          	beq	a4,a5,107f2 <twin_mix+0xda>
+   1072a:	47a1                	li	a5,8
+   1072c:	04f70863          	beq	a4,a5,1077c <twin_mix+0x64>
+   10730:	8082                	ret
+   10732:	9a79                	andi	a2,a2,-2
+   10734:	08000793          	li	a5,128
+   10738:	962a                	add	a2,a2,a0
+   1073a:	08f68763          	beq	a3,a5,107c8 <twin_mix+0xb0>
+   1073e:	68a1                	lui	a7,0x8
+   10740:	18fd                	addi	a7,a7,-1 # 7fff <exit-0x80d5>
+   10742:	7361                	lui	t1,0xffff8
+   10744:	0ec57863          	bgeu	a0,a2,10834 <twin_mix+0x11c>
+   10748:	00059703          	lh	a4,0(a1)
+   1074c:	00051803          	lh	a6,0(a0)
+   10750:	0509                	addi	a0,a0,2
+   10752:	02d70733          	mul	a4,a4,a3
+   10756:	0589                	addi	a1,a1,2
+   10758:	41f75793          	srai	a5,a4,0x1f
+   1075c:	07f7f793          	andi	a5,a5,127
+   10760:	97ba                	add	a5,a5,a4
+   10762:	879d                	srai	a5,a5,0x7
+   10764:	60579793          	sext.h	a5,a5
+   10768:	97c2                	add	a5,a5,a6
+   1076a:	0b17c7b3          	min	a5,a5,a7
+   1076e:	0a67e7b3          	max	a5,a5,t1
+   10772:	fef51f23          	sh	a5,-2(a0)
+   10776:	fcc569e3          	bltu	a0,a2,10748 <twin_mix+0x30>
+   1077a:	8082                	ret
+   1077c:	962a                	add	a2,a2,a0
+   1077e:	fac579e3          	bgeu	a0,a2,10730 <twin_mix+0x18>
+   10782:	0fe00313          	li	t1,254
+   10786:	0005c703          	lbu	a4,0(a1)
+   1078a:	00054883          	lbu	a7,0(a0)
+   1078e:	4801                	li	a6,0
+   10790:	f8070713          	addi	a4,a4,-128
+   10794:	02d70733          	mul	a4,a4,a3
+   10798:	0505                	addi	a0,a0,1
+   1079a:	0585                	addi	a1,a1,1
+   1079c:	41f75793          	srai	a5,a4,0x1f
+   107a0:	07f7f793          	andi	a5,a5,127
+   107a4:	97ba                	add	a5,a5,a4
+   107a6:	879d                	srai	a5,a5,0x7
+   107a8:	f8078793          	addi	a5,a5,-128
+   107ac:	0ff7f793          	zext.b	a5,a5
+   107b0:	97c6                	add	a5,a5,a7
+   107b2:	f8078793          	addi	a5,a5,-128
+   107b6:	0a67c7b3          	min	a5,a5,t1
+   107ba:	0b07e7b3          	max	a5,a5,a6
+   107be:	fef50fa3          	sb	a5,-1(a0)
+   107c2:	fca612e3          	bne	a2,a0,10786 <twin_mix+0x6e>
+   107c6:	8082                	ret
+   107c8:	f6c574e3          	bgeu	a0,a2,10730 <twin_mix+0x18>
+   107cc:	66a1                	lui	a3,0x8
+   107ce:	16fd                	addi	a3,a3,-1 # 7fff <exit-0x80d5>
+   107d0:	7861                	lui	a6,0xffff8
+   107d2:	00051783          	lh	a5,0(a0)
+   107d6:	00059703          	lh	a4,0(a1)
+   107da:	0509                	addi	a0,a0,2
+   107dc:	0589                	addi	a1,a1,2
+   107de:	97ba                	add	a5,a5,a4
+   107e0:	0ad7c7b3          	min	a5,a5,a3
+   107e4:	0b07e7b3          	max	a5,a5,a6
+   107e8:	fef51f23          	sh	a5,-2(a0)
+   107ec:	fec563e3          	bltu	a0,a2,107d2 <twin_mix+0xba>
+   107f0:	8082                	ret
+   107f2:	962a                	add	a2,a2,a0
+   107f4:	f2c57ee3          	bgeu	a0,a2,10730 <twin_mix+0x18>
+   107f8:	07f00313          	li	t1,127
+   107fc:	f8000893          	li	a7,-128
+   10800:	00058703          	lb	a4,0(a1)
+   10804:	00050803          	lb	a6,0(a0)
+   10808:	0505                	addi	a0,a0,1
+   1080a:	02d70733          	mul	a4,a4,a3
+   1080e:	0585                	addi	a1,a1,1
+   10810:	41f75793          	srai	a5,a4,0x1f
+   10814:	07f7f793          	andi	a5,a5,127
+   10818:	97ba                	add	a5,a5,a4
+   1081a:	879d                	srai	a5,a5,0x7
+   1081c:	60479793          	sext.b	a5,a5
+   10820:	97c2                	add	a5,a5,a6
+   10822:	0a67c7b3          	min	a5,a5,t1
+   10826:	0b17e7b3          	max	a5,a5,a7
+   1082a:	fef50fa3          	sb	a5,-1(a0)
+   1082e:	fca619e3          	bne	a2,a0,10800 <twin_mix+0xe8>
+   10832:	8082                	ret
+   10834:	8082                	ret
+

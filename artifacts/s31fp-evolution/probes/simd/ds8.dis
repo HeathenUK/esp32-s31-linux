@@ -1,0 +1,205 @@
+rootfs/tiopex-quake.dbg:     file format elf32-littleriscv
+Disassembly of section .text:
+000168d2 <D_DrawSpans8>:
+   168d2:	7139                	addi	sp,sp,-64
+   168d4:	d25a                	sw	s6,36(sp)
+   168d6:	d05e                	sw	s7,32(sp)
+   168d8:	ce62                	sw	s8,28(sp)
+   168da:	00050b97          	auipc	s7,0x50
+   168de:	48abab83          	lw	s7,1162(s7) # 66d64 <_GLOBAL_OFFSET_TABLE_+0x2b0>
+   168e2:	00050c17          	auipc	s8,0x50
+   168e6:	296c2c03          	lw	s8,662(s8) # 66b78 <_GLOBAL_OFFSET_TABLE_+0xc4>
+   168ea:	00050b17          	auipc	s6,0x50
+   168ee:	39eb2b03          	lw	s6,926(s6) # 66c88 <_GLOBAL_OFFSET_TABLE_+0x1d4>
+   168f2:	0003c797          	auipc	a5,0x3c
+   168f6:	7167a107          	flw	ft2,1814(a5) # 53008 <__ashldi3+0x7258>
+   168fa:	000c2587          	flw	fa1,0(s8)
+   168fe:	000ba607          	flw	fa2,0(s7)
+   16902:	000b2787          	flw	fa5,0(s6)
+   16906:	1025f253          	fmul.s	ft4,fa1,ft2
+   1690a:	102671d3          	fmul.s	ft3,fa2,ft2
+   1690e:	1027f153          	fmul.s	ft2,fa5,ft2
+   16912:	00050797          	auipc	a5,0x50
+   16916:	6d27a783          	lw	a5,1746(a5) # 66fe4 <_GLOBAL_OFFSET_TABLE_+0x530>
+   1691a:	0007ae83          	lw	t4,0(a5)
+   1691e:	0003c797          	auipc	a5,0x3c
+   16922:	70e7a007          	flw	ft0,1806(a5) # 5302c <__ashldi3+0x727c>
+   16926:	dc26                	sw	s1,56(sp)
+   16928:	da4a                	sw	s2,52(sp)
+   1692a:	d84e                	sw	s3,48(sp)
+   1692c:	d652                	sw	s4,44(sp)
+   1692e:	d456                	sw	s5,40(sp)
+   16930:	cc66                	sw	s9,24(sp)
+   16932:	ca6a                	sw	s10,20(sp)
+   16934:	de22                	sw	s0,60(sp)
+   16936:	c86e                	sw	s11,16(sp)
+   16938:	872a                	mv	a4,a0
+   1693a:	4881                	li	a7,0
+   1693c:	4801                	li	a6,0
+   1693e:	00050d17          	auipc	s10,0x50
+   16942:	3ead2d03          	lw	s10,1002(s10) # 66d28 <_GLOBAL_OFFSET_TABLE_+0x274>
+   16946:	00050a97          	auipc	s5,0x50
+   1694a:	236aaa83          	lw	s5,566(s5) # 66b7c <_GLOBAL_OFFSET_TABLE_+0xc8>
+   1694e:	00050a17          	auipc	s4,0x50
+   16952:	196a2a03          	lw	s4,406(s4) # 66ae4 <_GLOBAL_OFFSET_TABLE_+0x30>
+   16956:	00050997          	auipc	s3,0x50
+   1695a:	3769a983          	lw	s3,886(s3) # 66ccc <_GLOBAL_OFFSET_TABLE_+0x218>
+   1695e:	00050917          	auipc	s2,0x50
+   16962:	16292903          	lw	s2,354(s2) # 66ac0 <_GLOBAL_OFFSET_TABLE_+0xc>
+   16966:	00050e17          	auipc	t3,0x50
+   1696a:	2a6e2e03          	lw	t3,678(t3) # 66c0c <_GLOBAL_OFFSET_TABLE_+0x158>
+   1696e:	44a1                	li	s1,8
+   16970:	4c85                	li	s9,1
+   16972:	435c                	lw	a5,4(a4)
+   16974:	00050697          	auipc	a3,0x50
+   16978:	30c6a683          	lw	a3,780(a3) # 66c80 <_GLOBAL_OFFSET_TABLE_+0x1cc>
+   1697c:	6298                	flw	fa4,0(a3)
+   1697e:	00050697          	auipc	a3,0x50
+   16982:	62a6a683          	lw	a3,1578(a3) # 66fa8 <_GLOBAL_OFFSET_TABLE_+0x4f4>
+   16986:	d007f2d3          	fcvt.s.w	ft5,a5
+   1698a:	6294                	flw	fa3,0(a3)
+   1698c:	4310                	lw	a2,0(a4)
+   1698e:	00050697          	auipc	a3,0x50
+   16992:	1c26a683          	lw	a3,450(a3) # 66b50 <_GLOBAL_OFFSET_TABLE_+0x9c>
+   16996:	68577743          	fmadd.s	fa4,fa4,ft5,fa3
+   1699a:	d00676d3          	fcvt.s.w	fa3,a2
+   1699e:	6288                	flw	fa0,0(a3)
+   169a0:	00050697          	auipc	a3,0x50
+   169a4:	1346a683          	lw	a3,308(a3) # 66ad4 <_GLOBAL_OFFSET_TABLE_+0x20>
+   169a8:	0006a307          	flw	ft6,0(a3)
+   169ac:	70f6f7c3          	fmadd.s	fa5,fa3,fa5,fa4
+   169b0:	00050697          	auipc	a3,0x50
+   169b4:	4606a683          	lw	a3,1120(a3) # 66e10 <_GLOBAL_OFFSET_TABLE_+0x35c>
+   169b8:	30557743          	fmadd.s	fa4,fa0,ft5,ft6
+   169bc:	4294                	lw	a3,0(a3)
+   169be:	00050597          	auipc	a1,0x50
+   169c2:	3c65a583          	lw	a1,966(a1) # 66d84 <_GLOBAL_OFFSET_TABLE_+0x2d0>
+   169c6:	18f07553          	fdiv.s	fa0,ft0,fa5
+   169ca:	02d786b3          	mul	a3,a5,a3
+   169ce:	00050797          	auipc	a5,0x50
+   169d2:	57e7a783          	lw	a5,1406(a5) # 66f4c <_GLOBAL_OFFSET_TABLE_+0x498>
+   169d6:	0007a307          	flw	ft6,0(a5)
+   169da:	0005a087          	flw	ft1,0(a1)
+   169de:	70b6f5c3          	fmadd.s	fa1,fa3,fa1,fa4
+   169e2:	000d2f83          	lw	t6,0(s10)
+   169e6:	3050f0c3          	fmadd.s	ft1,ft1,ft5,ft6
+   169ea:	000aa783          	lw	a5,0(s5)
+   169ee:	000a2503          	lw	a0,0(s4)
+   169f2:	00872283          	lw	t0,8(a4)
+   169f6:	96b2                	add	a3,a3,a2
+   169f8:	08c6f743          	fmadd.s	fa4,fa3,fa2,ft1
+   169fc:	9fb6                	add	t6,t6,a3
+   169fe:	862a                	mv	a2,a0
+   16a00:	10a5f6d3          	fmul.s	fa3,fa1,fa0
+   16a04:	c00696d3          	fcvt.w.s	a3,fa3,rtz
+   16a08:	96be                	add	a3,a3,a5
+   16a0a:	00d54463          	blt	a0,a3,16a12 <D_DrawSpans8+0x140>
+   16a0e:	0a06e633          	max	a2,a3,zero
+   16a12:	10a77553          	fmul.s	fa0,fa4,fa0
+   16a16:	0009a583          	lw	a1,0(s3)
+   16a1a:	00092f03          	lw	t5,0(s2)
+   16a1e:	8dba                	mv	s11,a4
+   16a20:	c0051353          	fcvt.w.s	t1,fa0,rtz
+   16a24:	86fa                	mv	a3,t5
+   16a26:	932e                	add	t1,t1,a1
+   16a28:	006f4463          	blt	t5,t1,16a30 <D_DrawSpans8+0x15e>
+   16a2c:	0a0366b3          	max	a3,t1,zero
+   16a30:	0a92c333          	min	t1,t0,s1
+   16a34:	40628433          	sub	s0,t0,t1
+   16a38:	0a628863          	beq	t0,t1,16ae8 <D_DrawSpans8+0x216>
+   16a3c:	0027f7d3          	fadd.s	fa5,fa5,ft2
+   16a40:	0045f5d3          	fadd.s	fa1,fa1,ft4
+   16a44:	00377753          	fadd.s	fa4,fa4,ft3
+   16a48:	18f076d3          	fdiv.s	fa3,ft0,fa5
+   16a4c:	10d5f653          	fmul.s	fa2,fa1,fa3
+   16a50:	c0061753          	fcvt.w.s	a4,fa2,rtz
+   16a54:	97ba                	add	a5,a5,a4
+   16a56:	00f54463          	blt	a0,a5,16a5e <D_DrawSpans8+0x18c>
+   16a5a:	0a97e533          	max	a0,a5,s1
+   16a5e:	10d776d3          	fmul.s	fa3,fa4,fa3
+   16a62:	c00697d3          	fcvt.w.s	a5,fa3,rtz
+   16a66:	97ae                	add	a5,a5,a1
+   16a68:	00ff4463          	blt	t5,a5,16a70 <D_DrawSpans8+0x19e>
+   16a6c:	0a97ef33          	max	t5,a5,s1
+   16a70:	40c50833          	sub	a6,a0,a2
+   16a74:	40df08b3          	sub	a7,t5,a3
+   16a78:	40385813          	srai	a6,a6,0x3
+   16a7c:	4038d893          	srai	a7,a7,0x3
+   16a80:	877e                	mv	a4,t6
+   16a82:	006f83b3          	add	t2,t6,t1
+   16a86:	c616                	sw	t0,12(sp)
+   16a88:	000e2783          	lw	a5,0(t3)
+   16a8c:	4106d593          	srai	a1,a3,0x10
+   16a90:	41065293          	srai	t0,a2,0x10
+   16a94:	02f587b3          	mul	a5,a1,a5
+   16a98:	0705                	addi	a4,a4,1
+   16a9a:	40e385b3          	sub	a1,t2,a4
+   16a9e:	96c6                	add	a3,a3,a7
+   16aa0:	9642                	add	a2,a2,a6
+   16aa2:	97f6                	add	a5,a5,t4
+   16aa4:	9796                	add	a5,a5,t0
+   16aa6:	0007c783          	lbu	a5,0(a5)
+   16aaa:	fef70fa3          	sb	a5,-1(a4)
+   16aae:	fcb04de3          	bgtz	a1,16a88 <D_DrawSpans8+0x1b6>
+   16ab2:	42b2                	lw	t0,12(sp)
+   16ab4:	08805963          	blez	s0,16b46 <D_DrawSpans8+0x274>
+   16ab8:	4781                	li	a5,0
+   16aba:	00505463          	blez	t0,16ac2 <D_DrawSpans8+0x1f0>
+   16abe:	fff30793          	addi	a5,t1,-1
+   16ac2:	82a2                	mv	t0,s0
+   16ac4:	0f85                	addi	t6,t6,1
+   16ac6:	0a92c333          	min	t1,t0,s1
+   16aca:	9fbe                	add	t6,t6,a5
+   16acc:	86fa                	mv	a3,t5
+   16ace:	862a                	mv	a2,a0
+   16ad0:	000aa783          	lw	a5,0(s5)
+   16ad4:	000a2503          	lw	a0,0(s4)
+   16ad8:	0009a583          	lw	a1,0(s3)
+   16adc:	00092f03          	lw	t5,0(s2)
+   16ae0:	40628433          	sub	s0,t0,t1
+   16ae4:	f4629ce3          	bne	t0,t1,16a3c <D_DrawSpans8+0x16a>
+   16ae8:	fff30713          	addi	a4,t1,-1
+   16aec:	d00776d3          	fcvt.s.w	fa3,a4
+   16af0:	000b2087          	flw	ft1,0(s6)
+   16af4:	000ba607          	flw	fa2,0(s7)
+   16af8:	000c2507          	flw	fa0,0(s8)
+   16afc:	78d0f7c3          	fmadd.s	fa5,ft1,fa3,fa5
+   16b00:	70d67743          	fmadd.s	fa4,fa2,fa3,fa4
+   16b04:	58d575c3          	fmadd.s	fa1,fa0,fa3,fa1
+   16b08:	18f076d3          	fdiv.s	fa3,ft0,fa5
+   16b0c:	10d5f653          	fmul.s	fa2,fa1,fa3
+   16b10:	c00613d3          	fcvt.w.s	t2,fa2,rtz
+   16b14:	979e                	add	a5,a5,t2
+   16b16:	00f54463          	blt	a0,a5,16b1e <D_DrawSpans8+0x24c>
+   16b1a:	0a97e533          	max	a0,a5,s1
+   16b1e:	10d776d3          	fmul.s	fa3,fa4,fa3
+   16b22:	c00697d3          	fcvt.w.s	a5,fa3,rtz
+   16b26:	97ae                	add	a5,a5,a1
+   16b28:	00ff4463          	blt	t5,a5,16b30 <D_DrawSpans8+0x25e>
+   16b2c:	0a97ef33          	max	t5,a5,s1
+   16b30:	f45cd8e3          	bge	s9,t0,16a80 <D_DrawSpans8+0x1ae>
+   16b34:	40c50833          	sub	a6,a0,a2
+   16b38:	40df08b3          	sub	a7,t5,a3
+   16b3c:	02e84833          	div	a6,a6,a4
+   16b40:	02e8c8b3          	div	a7,a7,a4
+   16b44:	bf35                	j	16a80 <D_DrawSpans8+0x1ae>
+   16b46:	00cda703          	lw	a4,12(s11)
+   16b4a:	cb01                	beqz	a4,16b5a <D_DrawSpans8+0x288>
+   16b4c:	000c2587          	flw	fa1,0(s8)
+   16b50:	000ba607          	flw	fa2,0(s7)
+   16b54:	000b2787          	flw	fa5,0(s6)
+   16b58:	bd29                	j	16972 <D_DrawSpans8+0xa0>
+   16b5a:	5472                	lw	s0,60(sp)
+   16b5c:	54e2                	lw	s1,56(sp)
+   16b5e:	5952                	lw	s2,52(sp)
+   16b60:	59c2                	lw	s3,48(sp)
+   16b62:	5a32                	lw	s4,44(sp)
+   16b64:	5aa2                	lw	s5,40(sp)
+   16b66:	5b12                	lw	s6,36(sp)
+   16b68:	5b82                	lw	s7,32(sp)
+   16b6a:	4c72                	lw	s8,28(sp)
+   16b6c:	4ce2                	lw	s9,24(sp)
+   16b6e:	4d52                	lw	s10,20(sp)
+   16b70:	4dc2                	lw	s11,16(sp)
+   16b72:	6121                	addi	sp,sp,64
+   16b74:	8082                	ret

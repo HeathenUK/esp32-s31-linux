@@ -1,0 +1,11 @@
+# cmd: s31-qemu -plugin /plugins/libinsn.so -d plugin ./ic /home/user/esp32-s31-linux/toolchain/riscv32-esp-linux-musl/riscv32-esp-linux-musl/sysroot/usr/lib/libc.so <mode> <n>; modes: 0 loop,1 floor,2 ceil,3 trunc,4 sqrt (libc image); 11-14 s31 replacements
+# md5 48cc360cde421cc8a70ad930d2e26ec7  ic.c 4ed62e63eb20421acfa30dac150dd8b9  ic cc43441f04b5227352d0ff4416de92ac  rep.c 6041b2cd71cfb8fa6ba0f97531dffa50  /home/user/esp32-s31-linux/toolchain/riscv32-esp-linux-musl/riscv32-esp-linux-musl/sysroot/usr/lib/libc.so 
+mode 0 n100k=1068997 n200k=2068997 per_iter=10.0
+mode 1 n100k=43747253 n200k=87425253 per_iter=436.78
+mode 2 n100k=43706458 n200k=87344003 per_iter=436.37545
+mode 3 n100k=15081779 n200k=30094003 per_iter=150.12224
+mode 4 n100k=24012771 n200k=47956503 per_iter=239.43732
+mode 11 n100k=4881619 n200k=9694011 per_iter=48.12392
+mode 12 n100k=4954866 n200k=9840886 per_iter=48.8602
+mode 13 n100k=4431515 n200k=8794011 per_iter=43.62496
+mode 14 n100k=16961217 n200k=33853386 per_iter=168.92169

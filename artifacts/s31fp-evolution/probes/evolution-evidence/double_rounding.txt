@@ -1,0 +1,43 @@
+# probe: double_rounding
+# date: 2026-09-27T21:05:11Z
+# cwd: /home/user/esp32-s31-linux/build/cloud/probes/rewriter/claims
+# cmd: s31-qemu ./dround 2000000
+# qemu: qemu-riscv32 version 10.0.6
+# S31_QEMU_CPU=board
+# md5 b45f0560fd0d204c84d8674a9baf01d2  dround.c
+# md5 100415b9cdd60c1ed09e848d2cb86459  dround
+# ---- stdout/stderr ----
+add RNE n=2000000 mismatches=0 (value 0, flags 0)  hw-flag counts UF=999864 OF=1004779 NX=1637423 NV=1049593
+add RTZ n=2000000 mismatches=0 (value 0, flags 0)  hw-flag counts UF=1000612 OF=1003565 NX=1637282 NV=1048931
+add RDN n=2000000 mismatches=0 (value 0, flags 0)  hw-flag counts UF=999051 OF=1003648 NX=1638003 NV=1049911
+add RUP n=2000000 mismatches=0 (value 0, flags 0)  hw-flag counts UF=1000029 OF=1008693 NX=1637516 NV=1049312
+  MISMATCH add RMM a=bd80fb33 b=1ce2b6fc pre=0a chain=bd80fb32/0b hw=bd80fb33/0b
+  MISMATCH add RMM a=b903ff2f b=0fe8a643 pre=08 chain=b903ff2e/09 hw=b903ff2f/09
+  MISMATCH add RMM a=a975662c b=b3809381 pre=03 chain=b3809388/03 hw=b3809389/03
+add RMM n=2000000 mismatches=708325 (value 708325, flags 15)  hw-flag counts UF=998261 OF=1004276 NX=1637841 NV=1049467
+sub RNE n=2000000 mismatches=0 (value 0, flags 0)  hw-flag counts UF=1000771 OF=1003894 NX=1636254 NV=1049984
+sub RTZ n=2000000 mismatches=0 (value 0, flags 0)  hw-flag counts UF=999992 OF=1005372 NX=1637068 NV=1049990
+sub RDN n=2000000 mismatches=0 (value 0, flags 0)  hw-flag counts UF=1000817 OF=1007762 NX=1636742 NV=1049663
+sub RUP n=2000000 mismatches=0 (value 0, flags 0)  hw-flag counts UF=1000696 OF=1007144 NX=1637654 NV=1050349
+  MISMATCH sub RMM a=73abf00f b=2ca7f96d pre=0c chain=73abf00e/0d hw=73abf00f/0d
+  MISMATCH sub RMM a=a68f888a b=ff323cd0 pre=19 chain=7f323ccf/19 hw=7f323cd0/19
+  MISMATCH sub RMM a=07a9a254 b=81c7587a pre=18 chain=07a9aec9/19 hw=07a9aeca/19
+sub RMM n=2000000 mismatches=707621 (value 707621, flags 9)  hw-flag counts UF=999494 OF=1005240 NX=1637238 NV=1049274
+mul RNE n=2000000 mismatches=0 (value 0, flags 0)  hw-flag counts UF=1364648 OF=1040419 NX=1829913 NV=1049159
+mul RTZ n=2000000 mismatches=0 (value 0, flags 0)  hw-flag counts UF=1364572 OF=1040193 NX=1830265 NV=1048709
+mul RDN n=2000000 mismatches=0 (value 0, flags 0)  hw-flag counts UF=1365834 OF=1040815 NX=1830699 NV=1048624
+mul RUP n=2000000 mismatches=0 (value 0, flags 0)  hw-flag counts UF=1366019 OF=1041879 NX=1830195 NV=1050304
+  MISMATCH mul RMM a=edd8831c b=7e8cac98 pre=06 chain=ff7fffff/07 hw=ff800000/07
+  MISMATCH mul RMM a=541483e6 b=027886b3 pre=07 chain=17102deb/07 hw=17102dec/07
+  MISMATCH mul RMM a=033bf3ed b=5723fbf7 pre=09 chain=1af0ca9a/09 hw=1af0ca9b/09
+mul RMM n=2000000 mismatches=636485 (value 636485, flags 117)  hw-flag counts UF=1365313 OF=1041991 NX=1829876 NV=1049102
+div RNE n=2000000 mismatches=0 (value 0, flags 0)  hw-flag counts UF=1095553 OF=1095053 NX=1834366 NV=1049238
+div RTZ n=2000000 mismatches=0 (value 0, flags 0)  hw-flag counts UF=1096851 OF=1094004 NX=1834414 NV=1048963
+div RDN n=2000000 mismatches=0 (value 0, flags 0)  hw-flag counts UF=1098508 OF=1095870 NX=1834504 NV=1047966
+div RUP n=2000000 mismatches=0 (value 0, flags 0)  hw-flag counts UF=1098426 OF=1095362 NX=1834101 NV=1050105
+  MISMATCH div RMM a=a47135e8 b=e70855d4 pre=1d chain=0000e276/1f hw=0000e277/1f
+  MISMATCH div RMM a=ff7721c9 b=57866ce0 pre=1f chain=e76b51ca/1f hw=e76b51cb/1f
+  MISMATCH div RMM a=88087b97 b=435c3e59 pre=0e chain=841ea404/0f hw=841ea405/0f
+div RMM n=2000000 mismatches=867628 (value 867628, flags 0)  hw-flag counts UF=1098872 OF=1094287 NX=1834622 NV=1048647
+total mismatches excluding RMM: 0
+# rc=0 elapsed=23s

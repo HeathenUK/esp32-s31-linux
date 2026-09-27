@@ -1,0 +1,23 @@
+23712 set_tid_address(0x2b357864) = 23712
+23712 brk(NULL) = 0x0001b000
+23712 brk(0x0001d000) = 0x0001d000
+23712 mmap2(0x0001b000,4096,PROT_NONE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED,-1,0) = 0x0001b000
+23712 mprotect(0x00019000,4096,PROT_READ) = 0
+23712 write(2,0x18024,11)--ENGINE--
+ = 11
+23712 mmap2(NULL,24576,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_POPULATE,-1,0) = 0x2b35a000
+23712 mprotect(0x2b35a000,24576,PROT_EXEC|PROT_READ) = 0
+23712 mremap(724934656,24576,24576,3,73728,724212784) = 73728
+23712 write(2,0x18030,8)--END--
+ = 8
+23712 ioctl(1,TIOCGWINSZ,0x2b2a99b8) = -1 errno=25 (Inappropriate ioctl for device)
+23712 writev(1,0x2b2a9980,0x2)f0: before 6 after 47 want 47 OK
+ = 33
+23712 writev(1,0x2b2a9c50,0x2)f1: before 16 after 147 want 147 OK
+f2: before 26 after 247 want 247 OK
+f3: before 36 after 347 want 347 OK
+f4: before 46 after 447 want 447 OK
+f5: before 56 after 547 want 547 OK
+np=6 err=0 mode=bulk
+ = 201
+23712 exit_group(0)

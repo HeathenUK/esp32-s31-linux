@@ -1,0 +1,11 @@
+# probe: double_rounding_tiny
+# date: 2026-09-27T21:05:34Z
+# cwd: /home/user/esp32-s31-linux/build/cloud/probes/rewriter/claims
+# cmd: s31-qemu ./tiny 400000
+# qemu: qemu-riscv32 version 10.0.6
+# S31_QEMU_CPU=board
+# md5 bd308b54c2af3663fa1d20c515330582  tiny.c
+# md5 d62e59ba177902a311c6c16dea25abf4  tiny
+# ---- stdout/stderr ----
+cases=2663272 mismatches=0 UF-raised(near 2^-126)=470121 OF-edge UF=0 results==+-MIN_NORMAL inexact=115654
+# rc=0 elapsed=1s

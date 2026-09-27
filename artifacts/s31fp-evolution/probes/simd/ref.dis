@@ -1,0 +1,90 @@
+00010604 <ref_mix>:
+   10604:	c2e9                	beqz	a3,106c6 <ref_mix+0xc2>
+   10606:	67a1                	lui	a5,0x8
+   10608:	07a1                	addi	a5,a5,8 # 8008 <exit-0x80cc>
+   1060a:	0cf70063          	beq	a4,a5,106ca <ref_mix+0xc6>
+   1060e:	67a1                	lui	a5,0x8
+   10610:	07c1                	addi	a5,a5,16 # 8010 <exit-0x80c4>
+   10612:	04f70863          	beq	a4,a5,10662 <ref_mix+0x5e>
+   10616:	47a1                	li	a5,8
+   10618:	0af71863          	bne	a4,a5,106c8 <ref_mix+0xc4>
+   1061c:	c64d                	beqz	a2,106c6 <ref_mix+0xc2>
+   1061e:	68e5                	lui	a7,0x19
+   10620:	962a                	add	a2,a2,a0
+   10622:	46c88893          	addi	a7,a7,1132 # 1946c <mix8>
+   10626:	0005c703          	lbu	a4,0(a1)
+   1062a:	00054783          	lbu	a5,0(a0)
+   1062e:	0505                	addi	a0,a0,1
+   10630:	f8070713          	addi	a4,a4,-128
+   10634:	02d70733          	mul	a4,a4,a3
+   10638:	00f88833          	add	a6,a7,a5
+   1063c:	0585                	addi	a1,a1,1
+   1063e:	41f75793          	srai	a5,a4,0x1f
+   10642:	07f7f793          	andi	a5,a5,127
+   10646:	97ba                	add	a5,a5,a4
+   10648:	879d                	srai	a5,a5,0x7
+   1064a:	f8078793          	addi	a5,a5,-128
+   1064e:	0ff7f793          	zext.b	a5,a5
+   10652:	97c2                	add	a5,a5,a6
+   10654:	0007c783          	lbu	a5,0(a5)
+   10658:	fef50fa3          	sb	a5,-1(a0)
+   1065c:	fca615e3          	bne	a2,a0,10626 <ref_mix+0x22>
+   10660:	8082                	ret
+   10662:	8205                	srli	a2,a2,0x1
+   10664:	c22d                	beqz	a2,106c6 <ref_mix+0xc2>
+   10666:	68a1                	lui	a7,0x8
+   10668:	20a62633          	sh1add	a2,a2,a0
+   1066c:	18fd                	addi	a7,a7,-1 # 7fff <exit-0x80d5>
+   1066e:	7361                	lui	t1,0xffff8
+   10670:	0015c703          	lbu	a4,1(a1)
+   10674:	0005c803          	lbu	a6,0(a1)
+   10678:	00154783          	lbu	a5,1(a0)
+   1067c:	0722                	slli	a4,a4,0x8
+   1067e:	01076733          	or	a4,a4,a6
+   10682:	60571713          	sext.h	a4,a4
+   10686:	02d70733          	mul	a4,a4,a3
+   1068a:	00054803          	lbu	a6,0(a0)
+   1068e:	07a2                	slli	a5,a5,0x8
+   10690:	0509                	addi	a0,a0,2
+   10692:	0107e7b3          	or	a5,a5,a6
+   10696:	60579793          	sext.h	a5,a5
+   1069a:	0589                	addi	a1,a1,2
+   1069c:	41f75813          	srai	a6,a4,0x1f
+   106a0:	07f87813          	andi	a6,a6,127
+   106a4:	9742                	add	a4,a4,a6
+   106a6:	871d                	srai	a4,a4,0x7
+   106a8:	60571713          	sext.h	a4,a4
+   106ac:	97ba                	add	a5,a5,a4
+   106ae:	0a67e7b3          	max	a5,a5,t1
+   106b2:	0b17c7b3          	min	a5,a5,a7
+   106b6:	4087d713          	srai	a4,a5,0x8
+   106ba:	fef50f23          	sb	a5,-2(a0)
+   106be:	fee50fa3          	sb	a4,-1(a0)
+   106c2:	faa617e3          	bne	a2,a0,10670 <ref_mix+0x6c>
+   106c6:	8082                	ret
+   106c8:	8082                	ret
+   106ca:	00c50333          	add	t1,a0,a2
+   106ce:	07f00893          	li	a7,127
+   106d2:	f8000e13          	li	t3,-128
+   106d6:	c221                	beqz	a2,10716 <ref_mix+0x112>
+   106d8:	00058703          	lb	a4,0(a1)
+   106dc:	07f00813          	li	a6,127
+   106e0:	00050603          	lb	a2,0(a0)
+   106e4:	02d70733          	mul	a4,a4,a3
+   106e8:	0585                	addi	a1,a1,1
+   106ea:	41f75793          	srai	a5,a4,0x1f
+   106ee:	0107f7b3          	and	a5,a5,a6
+   106f2:	97ba                	add	a5,a5,a4
+   106f4:	879d                	srai	a5,a5,0x7
+   106f6:	60479793          	sext.b	a5,a5
+   106fa:	97b2                	add	a5,a5,a2
+   106fc:	00f8c763          	blt	a7,a5,1070a <ref_mix+0x106>
+   10700:	f8000813          	li	a6,-128
+   10704:	01c7c363          	blt	a5,t3,1070a <ref_mix+0x106>
+   10708:	883e                	mv	a6,a5
+   1070a:	01050023          	sb	a6,0(a0)
+   1070e:	0505                	addi	a0,a0,1
+   10710:	fca314e3          	bne	t1,a0,106d8 <ref_mix+0xd4>
+   10714:	8082                	ret
+   10716:	8082                	ret
+

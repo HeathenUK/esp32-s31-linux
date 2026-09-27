@@ -1,0 +1,13 @@
+__cos.o
+__cosdf.o
+__rem_pio2.o
+__rem_pio2_large.o
+__rem_pio2f.o
+__sin.o
+__sindf.o
+cos.o
+cosf.o
+sin.o
+sincos.o
+sincosf.o
+sinf.o

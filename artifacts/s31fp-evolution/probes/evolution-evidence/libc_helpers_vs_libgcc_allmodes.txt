@@ -1,0 +1,25 @@
+# probe: libc_helpers_vs_libgcc_allmodes
+# date: 2026-09-27T21:06:19Z
+# cwd: /home/user/esp32-s31-linux/build/cloud/probes/safety-arith
+# cmd: s31-qemu ./rm /home/user/esp32-s31-linux/toolchain/riscv32-esp-linux-musl/riscv32-esp-linux-musl/sysroot/usr/lib/libc.so 200000
+# qemu: qemu-riscv32 version 10.0.6
+# md5 e01ffa9ae50a25380716b9dbfafb3ed6  rm.c
+# md5 0d08280ef8ed305f3e4067d5cfe7bedf  rm
+# md5 6041b2cd71cfb8fa6ba0f97531dffa50  /home/user/esp32-s31-linux/toolchain/riscv32-esp-linux-musl/riscv32-esp-linux-musl/sysroot/usr/lib/libc.so
+# ---- stdout/stderr ----
+mul frm=0 value_mismatch=0 fcsr_mismatch=0 of 200000
+mul frm=1 value_mismatch=0 fcsr_mismatch=0 of 200000
+mul frm=2 value_mismatch=0 fcsr_mismatch=0 of 200000
+mul frm=3 value_mismatch=0 fcsr_mismatch=0 of 200000
+mul frm=4 value_mismatch=0 fcsr_mismatch=0 of 200000
+add frm=0 value_mismatch=0 fcsr_mismatch=0 of 200000
+add frm=1 value_mismatch=0 fcsr_mismatch=0 of 200000
+add frm=2 value_mismatch=0 fcsr_mismatch=0 of 200000
+add frm=3 value_mismatch=0 fcsr_mismatch=0 of 200000
+add frm=4 value_mismatch=0 fcsr_mismatch=0 of 200000
+div frm=0 value_mismatch=0 fcsr_mismatch=0 of 200000
+div frm=1 value_mismatch=0 fcsr_mismatch=0 of 200000
+div frm=2 value_mismatch=0 fcsr_mismatch=0 of 200000
+div frm=3 value_mismatch=0 fcsr_mismatch=0 of 200000
+div frm=4 value_mismatch=0 fcsr_mismatch=0 of 200000
+# rc=0 elapsed=1s

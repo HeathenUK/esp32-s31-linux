@@ -1,0 +1,11 @@
+# probe: libm_rebuild_vs_libc_exp
+# date: 2026-09-27T21:05:53Z
+# cwd: /home/user/esp32-s31-linux/build/cloud/probes/coverage/v
+# cmd: s31-qemu ./mt /home/user/esp32-s31-linux/toolchain/riscv32-esp-linux-musl/riscv32-esp-linux-musl/sysroot/usr/lib/libc.so exp 2d96c 500000
+# qemu: qemu-riscv32 version 10.0.6
+# md5 86742be3eb050d2dbdd424e30215bfb1  mt.c
+# md5 fc79540dab0638f0322d92526cb585ba  mt
+# md5 6041b2cd71cfb8fa6ba0f97531dffa50  /home/user/esp32-s31-linux/toolchain/riscv32-esp-linux-musl/riscv32-esp-linux-musl/sysroot/usr/lib/libc.so
+# ---- stdout/stderr ----
+exp      n=500000 bitmismatch=0 flagmismatch=0
+# rc=0 elapsed=1s

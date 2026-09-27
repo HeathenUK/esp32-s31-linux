@@ -1,0 +1,9 @@
+Evidence for "s31fp evolution: design and roadmap (2026-09-27)".
+Re-run by run.sh / run2.sh (QEMU 10.0.6 via tools/cloud/env.sh, board ISA unless S31_QEMU_CPU=max).
+Each *.txt holds the command, cwd, md5 of inputs and full stdout. Probe sources stay in
+build/cloud/probes/{arith,coverage,rewriter,safety,safety-arith,placement,simd}.
+strace/ holds the qemu -strace captures from safety/sc (today's preload3 constructor) and
+safety/eng (prototype engine: s_p per-page, s_b bulk, s_r rollback) - whole-process traces.
+Promotion on adoption (build/ is gitignored, .gitignore:3):
+  mkdir -p artifacts/s31fp-evolution && cp -r build/cloud/probes/evolution-evidence/* artifacts/s31fp-evolution/
+note: ctor_order_* stderr 'wrong ELF class' lines come from the host loader seeing LD_PRELOAD; harmless.

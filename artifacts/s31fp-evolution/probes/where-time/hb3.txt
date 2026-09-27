@@ -1,0 +1,1 @@
+qemu-riscv32: Could not load plugin /home/user/esp32-s31-linux/build/cloud/qemu/plugins/libhotblocks.so: qemu_plugin_install returned error code -1

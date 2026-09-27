@@ -1,0 +1,11 @@
+# probe: udivdi3_exact
+# date: 2026-09-27T21:05:08Z
+# cwd: /home/user/esp32-s31-linux/build/cloud/probes/arith
+# cmd: s31-qemu ./ud 0 5000000
+# qemu: qemu-riscv32 version 10.0.6
+# S31_QEMU_CPU=board
+# md5 6962a86d5e4d1ba1996b25460666e54a  ud.c
+# md5 381c2f841dc615ae71e299d3b3cc4af1  ud
+# ---- stdout/stderr ----
+cases=5000000 bad=0
+# rc=0 elapsed=1s

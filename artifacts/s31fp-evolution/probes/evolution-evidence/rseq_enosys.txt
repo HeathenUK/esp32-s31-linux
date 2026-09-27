@@ -1,0 +1,12 @@
+# probe: rseq_enosys
+# date: 2026-09-27T21:05:35Z
+# cwd: /home/user/esp32-s31-linux/build/cloud/probes/simd
+# cmd: s31-qemu ./rseq
+# qemu: qemu-riscv32 version 10.0.6
+# S31_QEMU_CPU=board
+# md5 c41602f84e8f0843c37475a4f59b74ae  rseq.c
+# md5 dcd1185cefda0a6450169791c09cbc22  rseq
+# ---- stdout/stderr ----
+rseq rc=-1 errno=38 cpu_id=-1 cpu_id_start=0
+rseq(len=20) rc=-1 errno=38
+# rc=0 elapsed=0s

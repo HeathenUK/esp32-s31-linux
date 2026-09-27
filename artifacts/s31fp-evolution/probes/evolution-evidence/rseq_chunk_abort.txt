@@ -1,0 +1,12 @@
+# probe: rseq_chunk_abort
+# date: 2026-09-27T21:05:35Z
+# cwd: /home/user/esp32-s31-linux/build/cloud/probes/simd
+# cmd: s31-qemu ./chunk
+# qemu: qemu-riscv32 version 10.0.6
+# S31_QEMU_CPU=board
+# md5 1651c83c2f4428d87881180d6983d5de  chunk.c
+# md5 b696477ef1c7188c432b4d16ae19dca4  chunk
+# ---- stdout/stderr ----
+cases=21675 (every abort section k incl. none) memcpy_mismatch=0 memchr_mismatch=0
+fwd memmove d=s-g mismatches: g=1:15623 g=16:15380 g=512:7324 g=1023:0 g=1024:0
+# rc=0 elapsed=11s

@@ -1,0 +1,22 @@
+# probe: cave_sizes
+# date: 2026-09-27T21:05:11Z
+# cwd: /home/user/esp32-s31-linux/build/cloud/probes/rewriter/claims
+# cmd: python3 cave.py /home/user/esp32-s31-linux/rootfs/tiopex-quake.dbg /home/user/esp32-s31-linux/rootfs/audiofp/oplbench
+# qemu: qemu-riscv32 version 10.0.6
+# S31_QEMU_CPU=board
+# md5 5c7c0ef738d9d705d2a36af6b284a2f4  cave.py
+# md5 2ddd74b3aa7df8ffb5c7f54c897963c7  /home/user/esp32-s31-linux/rootfs/s31fp/v2/sigs3.h
+# md5 3b14204da0341b2d6ab4f11f95a8d66e  /home/user/esp32-s31-linux/rootfs/tiopex-quake.dbg
+# md5 3b0c9870b779849f04e65676e56955a2  /home/user/esp32-s31-linux/rootfs/audiofp/oplbench
+# ---- stdout/stderr ----
+/home/user/esp32-s31-linux/rootfs/tiopex-quake.dbg text=411976
+ mode=copy sites=11 dead_total=6258 largest=1554 pages_cowed=5
+   adddf3@47b82:1494 divdf3@48384:1554 eqdf2@4899e:60 gedf2@48a36:120 ledf2@48aee:120 muldf3@48ba6:836 subdf3@490fa:1504 fixdfsi@4990e:70 floatsidf@499c4:24 extendsfdf2@4b756:90 truncdfsf2@4b8f4:386
+ mode=tramp sites=11 dead_total=8422 largest=2060 pages_cowed=5
+   adddf3@47b82:2042 divdf3@48384:1554 eqdf2@4899e:144 gedf2@48a36:176 ledf2@48aee:176 muldf3@48ba6:1356 subdf3@490fa:2060 fixdfsi@4990e:174 floatsidf@499c4:72 extendsfdf2@4b756:150 truncdfsf2@4b8f4:518
+/home/user/esp32-s31-linux/rootfs/audiofp/oplbench text=33848
+ mode=copy sites=10 dead_total=5766 largest=1554 pages_cowed=3
+   adddf3@52ea:1494 divdf3@5aec:1554 gedf2@6106:120 ledf2@61be:120 muldf3@6276:836 subdf3@67ca:1504 fixdfsi@6fde:70 fixunsdfsi@7094:20 floatsidf@7120:24 floatunsidf@7170:24
+ mode=tramp sites=10 dead_total=7794 largest=2060 pages_cowed=3
+   adddf3@52ea:2042 divdf3@5aec:1554 gedf2@6106:176 ledf2@61be:176 muldf3@6276:1356 subdf3@67ca:2060 fixdfsi@6fde:174 fixunsdfsi@7094:132 floatsidf@7120:72 floatunsidf@7170:52
+# rc=0 elapsed=0s

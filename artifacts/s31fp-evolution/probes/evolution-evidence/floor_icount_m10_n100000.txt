@@ -1,0 +1,12 @@
+# probe: floor_icount_m10_n100000
+# date: 2026-09-27T21:05:09Z
+# cwd: /home/user/esp32-s31-linux/build/cloud/probes/arith
+# cmd: s31-qemu -plugin /plugins/libinsn.so -d plugin ./fl 10 100000
+# qemu: qemu-riscv32 version 10.0.6
+# S31_QEMU_CPU=board
+# md5 42c7bd0f3e5d8c21428e397fa854540a  fl.c
+# md5 bfd54018fe45f433fd50f08587d89bbe  fl
+# ---- stdout/stderr ----
+cpu 0 insns: 920987
+total insns: 920987
+# rc=0 elapsed=0s

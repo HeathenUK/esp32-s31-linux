@@ -1,0 +1,56 @@
+# probe: ctor_order_two_preloads
+# date: 2026-09-27T21:05:11Z
+# cwd: /home/user/esp32-s31-linux/build/cloud/probes/safety/order
+# cmd: env LD_PRELOAD=./libB.so:./libpre.so LD_LIBRARY_PATH=. s31-qemu ./app
+# qemu: qemu-riscv32 version 10.0.6
+# S31_QEMU_CPU=board
+# md5 b721864b241d16a4b789e01313ef1050  app.c
+# md5 6e9504859f974d53a2c874ad6f0d15ae  pre.c
+# ---- stdout/stderr ----
+ERROR: ld.so: object './libB.so' from LD_PRELOAD cannot be preloaded (wrong ELF class: ELFCLASS32): ignored.
+ERROR: ld.so: object './libpre.so' from LD_PRELOAD cannot be preloaded (wrong ELF class: ELFCLASS32): ignored.
+ERROR: ld.so: object './libB.so' from LD_PRELOAD cannot be preloaded (wrong ELF class: ELFCLASS32): ignored.
+ERROR: ld.so: object './libpre.so' from LD_PRELOAD cannot be preloaded (wrong ELF class: ELFCLASS32): ignored.
+ERROR: ld.so: object './libB.so' from LD_PRELOAD cannot be preloaded (wrong ELF class: ELFCLASS32): ignored.
+ERROR: ld.so: object './libpre.so' from LD_PRELOAD cannot be preloaded (wrong ELF class: ELFCLASS32): ignored.
+CTOR libB
+CTOR pre
+  [pre] obj '/home/user/esp32-s31-linux/build/cloud/probes/safety/order/app' adds=0 subs=0
+  [pre] obj './libB.so' adds=0 subs=0
+  [pre] obj './libpre.so' adds=0 subs=0
+  [pre] obj './libA.so' adds=0 subs=0
+  [pre] obj './libC.so' adds=0 subs=0
+  [pre] obj '/lib/ld-musl-riscv32-sf.so.1' adds=0 subs=0
+  [pre] obj '' adds=0 subs=0
+CTOR libA
+CTOR libC
+main fA+fC=2
+    obj '/home/user/esp32-s31-linux/build/cloud/probes/safety/order/app' adds=0
+    obj './libB.so' adds=0
+    obj './libpre.so' adds=0
+    obj './libA.so' adds=0
+    obj './libC.so' adds=0
+    obj '/lib/ld-musl-riscv32-sf.so.1' adds=0
+    obj '' adds=0
+start                              adds=0 nobj=7
+CTOR libE
+CTOR libF
+CTOR libD
+    obj '/home/user/esp32-s31-linux/build/cloud/probes/safety/order/app' adds=1
+    obj './libB.so' adds=1
+    obj './libpre.so' adds=1
+    obj './libA.so' adds=1
+    obj './libC.so' adds=1
+    obj '/lib/ld-musl-riscv32-sf.so.1' adds=1
+    obj '' adds=1
+    obj './libD.so' adds=1
+    obj './libE.so' adds=1
+    obj './libF.so' adds=1
+dlopen libD (new, +deps E,F)       adds=1 nobj=10
+dlopen libD again (already loaded) adds=2 nobj=10
+dlopen libA (DT_NEEDED, loaded)    adds=3 nobj=10
+dlopen libD RTLD_NOLOAD            adds=4 nobj=10
+dlopen nonexistent (fails)         adds=4 nobj=10
+dlopen(NULL)                       adds=4 nobj=10
+dlclose libD                       adds=4 nobj=10
+# rc=0 elapsed=0s

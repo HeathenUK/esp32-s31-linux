@@ -1,0 +1,17 @@
+# md5 338cc3fe6a175d48cdb597b412162ece  /home/user/esp32-s31-linux/toolchain/riscv32-esp-linux-musl/riscv32-esp-linux-musl/sysroot/usr/lib/libc.a
+# cmd: riscv32-esp-linux-musl-size <members extracted by ar x>
+   text	   data	    bss	    dec	    hex	filename
+    546	      0	      0	    546	    222	__cos.o
+    310	      0	      0	    310	    136	__cosdf.o
+   2408	      0	      0	   2408	    968	__rem_pio2.o
+   5174	      0	      0	   5174	   1436	__rem_pio2_large.o
+    628	      0	      0	    628	    274	__rem_pio2f.o
+    586	      0	      0	    586	    24a	__sin.o
+    302	      0	      0	    302	    12e	__sindf.o
+    216	      0	      0	    216	     d8	cos.o
+    530	      0	      0	    530	    212	cosf.o
+    270	      0	      0	    270	    10e	sin.o
+    418	      0	      0	    418	    1a2	sincos.o
+    846	      0	      0	    846	    34e	sincosf.o
+    622	      0	      0	    622	    26e	sinf.o
+total text+data 12856
