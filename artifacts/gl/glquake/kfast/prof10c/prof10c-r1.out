@@ -1,0 +1,34 @@
+Command line: /root/quake/quakespasm -basedir /root/quake/td -condebug -mixspeed 11025 -zone 384 -heapsize 12288 -width 320 -height 240 -fullscreen
+xlite: UNIMPLEMENTED XSetExtensionErrorHandler() - returning 0 and carrying on
+xlite: UNIMPLEMENTED XOpenIM() - returning 0 and carrying on
+libGL: context 1 created (pid 491, comm quakespasm)
+xlite: UNIMPLEMENTED XReparentWindow() - returning 0 and carrying on
+Found SDL version 1.2.15
+Terminal input not available.
+Detected 2 CPUs.
+Initializing QuakeSpasm v0.96.3
+Host_Init
+Playing shareware version.
+Console initialized.
+UDP Initialized
+Server using protocol 666 (FitzQuake)
+Exe: 08:27:00 Sep 26 2026
+12.0 megabyte heap
+Video mode 320x240x16 60Hz (16-bit z-buffer, 0x FSAA) initialized
+GL_VENDOR: s31
+GL_RENDERER: Software Rasterizer
+GL_VERSION: 1.1 s31-tinygl
+Warning: OpenGL version < 1.5, skipping ARB_vertex_buffer_object check
+FOUND: ARB_multitexture
+GL_MAX_TEXTURE_UNITS: 2
+FOUND: ARB_texture_env_combine
+FOUND: ARB_texture_env_add
+Warning: vertical sync not supported (swap_control doesn't match vid_vsync)
+Warning: texture_filter_anisotropic not supported
+Warning: texture_non_power_of_two not supported
+Warning: OpenGL version < 2, GLSL not available
+Warning: GLSL gamma not available, using hardware gamma
+Warning: GLSL alias model rendering not available, using Fitz renderer
+Warning: glGenerateMipmap not available, liquids won't have mipmaps
+
+Sound Initialization

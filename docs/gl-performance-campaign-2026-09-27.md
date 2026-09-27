@@ -65,6 +65,7 @@ shipped state is:
 | Tier 3: lookup tables in place of arithmetic in the blend fillers | About 2% slower, despite 4.7% fewer instructions | The new tables are D-cache loads from PSRAM, and there is 2.7 kB more hot code |
 | Tier 5: page-colouring libGL's hot data | D-refills flat to ±3% across boots | The lever isn't real on the board |
 | Tier 6: ordering hot code, colour-controlled RAM text | 8.50 against 8.58, and 8.38 | libGL's page colours don't explain the slow boots |
+| Kernel: GLQuake's remaining flash-resident kernel code into RAM text (patches/0073, 97 functions, 8.2 kB listed, RAM +7 kB, #398) | 8.3/8.6/8.8/8.9/8.7 (median 8.70) against #393 8.7/9.0/8.9/8.8/8.2 (8.80), interleaved fresh boots | Only 9.1% of hart-1 samples are in flash text and most of that cannot move (assembly entry, WFI idle, memcpy/memset, cache maintenance); the movable 2.7% did not lower hart-1 I-refills (47.7 vs 45.4 k/frame), so the game's working set is unchanged |
 
 ## What we learned about this machine
 

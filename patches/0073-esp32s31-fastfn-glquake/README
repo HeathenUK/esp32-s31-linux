@@ -1,0 +1,48 @@
+0073 - RAM text for GLQuake's flash-resident kernel code: MEASURED, REJECTED (2026-09-27)
+====================================================================================
+
+NOT SHIPPED. The Makefile default stays the 0069 list; the board runs #393.
+
+Question: GLQuake (QuakeSpasm timedemo, fullscreen 320x240) spends 9.1% of
+hart-1 PC samples in kernel code that still executes from XIP flash, and fps
+tracks hart-1 I-refills (memory s31-icache-geometry). Does moving the densest
+of that code into RAM text help?
+
+Samples: 4 x 8,000 h1s captures on #393 (artifacts/gl/glquake/prof9, and
+kfast/prof10a-c: glquake-run.sh GQ_PROF=60 GQ_PROFN=2, 8.6/8.9/8.6 fps),
+resolved against `nm -nS vmlinux` of #397 - the #393 source rebuilt, every
+symbol at the same address as ship-393-System.map (the port tree's 0072
+pie-log diagnostic shifts 29,430 symbols, so it was swapped out for the
+build) - and a regenerated function index (kfast/fn-index-397.txt,
+kfast/mk-fn-index.sh). 2,909 of 32,000 samples in flash text; the largest
+flash items cannot move (handle_exception/ret_from_exception/call_on_irq_stack
+and __fstate_* are assembly, arch_cpu_idle is WFI, memcpy/memset and
+esp32s31_cache_* implement the copy or maintain the caches,
+fallback_scalar_usercopy_sum_enabled is uaccess.S).
+
+List: gq-pick.list = fastfn-pick.py at an 8 kB budget with the 0069 list
+excluded (91 functions, 8,126 B, 851 samples = 2.7% of all; 4 kB would
+cover 2.1%, 12 kB 3.0%, 16 kB 3.1%) minus arch_dma_cache_wback and
+esp32s31_lcd_flush_range (cache maintenance stays in flash; the picker now
+forbids them) = 89 functions, 7,914 B; plus gq-extra.list, 8 static
+duplicates the picker skips as ambiguous, resolved to their object by their
+flash neighbours (rcu_qs, the CLIC's mmiowb_set_pending, kernel/irq/chip.o's
+__raw_spin_unlock/mmiowb_spin_unlock/irqd_set, div64.o and build_policy.o's
+div_u64_rem, fs/file.o's files_lookup_fd_raw: ~143 samples). Top by
+samples: __snd_pcm_lib_xfer, switch_mm, account_user_time, snd_pcm_ioctl,
+__accumulate_pelt_segments, esp32s31_ahb_irq, riscv_sched_clock.
+agg-hot-swap-gq.list/.lds.h = 0069 + extras + pick. Kernel #398: RAM text
++7,024 B, flash _etext -3,328 B; fastfn-verify: all moved except the
+__sched functions (schedule_timeout family, down_read, mutex_lock/unlock)
+and tick_check_broadcast_expired. Boots clean.
+
+A/B (fresh boot per run, one timedemo each, GQ_CC=1, interleaved B A A B B A A B B A):
+  #393  8.7 9.0 8.9 8.8 8.2   median 8.80 mean 8.72   hart-1 I-refills 40.2-55.0 k/frame (mean 45.4)
+  #398  8.3 8.6 8.8 8.9 8.7   median 8.70 mean 8.66   hart-1 I-refills 42.2-52.8 k/frame (mean 47.7)
+No gain: the arms overlap completely and #398's hart-1 I-refills are not
+lower - moving 2.7% of samples' worth of code does not shrink the working
+set the game and libGL compete for. The cold control (agg-cold-swap-gq,
+#399: 73 zero-sample functions, 8,204 B, RAM +7,888 B) was built but not
+run - the hot result was not ambiguous in its favour.
+Raw: artifacts/gl/glquake/kfast/ (ab.log, ab-summary.txt) and
+artifacts/gl/glquake/arms/kf-*.

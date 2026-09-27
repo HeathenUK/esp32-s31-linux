@@ -1,0 +1,56 @@
+=== arm 1 B images/kf-398-xipImage 09:11:21
+FIRED #398 SMP Sun Sep 27 08:07:36 UTC 2026 up 61.89
+poll: ARM_FINISHED
+RESULT 969 frames 116.1 seconds   8.3 fps
+artifacts/gl/glquake/arms/kf-B1-0927-091121
+[1A[2KHash of data verified.
+=== arm 2 A images/ship-393-xipImage 09:15:49
+FIRED #393 SMP Sat Sep 26 12:31:02 UTC 2026 up 62.19
+poll: ARM_FINISHED
+RESULT 969 frames 111.4 seconds   8.7 fps
+artifacts/gl/glquake/arms/kf-A2-0927-091549
+=== arm 3 A images/ship-393-xipImage 09:19:28
+FIRED #393 SMP Sat Sep 26 12:31:02 UTC 2026 up 61.39
+poll: ARM_FINISHED
+RESULT 969 frames 107.8 seconds   9.0 fps
+artifacts/gl/glquake/arms/kf-A3-0927-091928
+[1A[2KHash of data verified.
+=== arm 4 B images/kf-398-xipImage 09:23:54
+FIRED #398 SMP Sun Sep 27 08:07:36 UTC 2026 up 61.76
+poll: ARM_FINISHED
+RESULT 969 frames 112.4 seconds   8.6 fps
+artifacts/gl/glquake/arms/kf-B4-0927-092354
+=== arm 5 B images/kf-398-xipImage 09:27:33
+FIRED #398 SMP Sun Sep 27 08:07:36 UTC 2026 up 62.18
+poll: ARM_FINISHED
+RESULT 969 frames 110.0 seconds   8.8 fps
+artifacts/gl/glquake/arms/kf-B5-0927-092733
+[1A[2KHash of data verified.
+=== arm 6 A images/ship-393-xipImage 09:32:01
+FIRED #393 SMP Sat Sep 26 12:31:02 UTC 2026 up 62.25
+poll: ARM_FINISHED
+RESULT 969 frames 109.2 seconds   8.9 fps
+artifacts/gl/glquake/arms/kf-A6-0927-093201
+=== arm 7 A images/ship-393-xipImage 09:35:39
+FIRED #393 SMP Sat Sep 26 12:31:02 UTC 2026 up 61.95
+poll: ARM_FINISHED
+RESULT 969 frames 110.2 seconds   8.8 fps
+artifacts/gl/glquake/arms/kf-A7-0927-093539
+[1A[2KHash of data verified.
+=== arm 8 B images/kf-398-xipImage 09:40:07
+FIRED #398 SMP Sun Sep 27 08:07:36 UTC 2026 up 62.22
+poll: ARM_FINISHED
+RESULT 969 frames 109.3 seconds   8.9 fps
+artifacts/gl/glquake/arms/kf-B8-0927-094007
+=== arm 9 B images/kf-398-xipImage 09:43:46
+FIRED #398 SMP Sun Sep 27 08:07:36 UTC 2026 up 62.13
+poll: ARM_FINISHED
+RESULT 969 frames 111.8 seconds   8.7 fps
+artifacts/gl/glquake/arms/kf-B9-0927-094346
+[1A[2KHash of data verified.
+=== arm 10 A images/ship-393-xipImage 09:48:15
+FIRED #393 SMP Sat Sep 26 12:31:02 UTC 2026 up 62.00
+poll: ARM_FINISHED
+RESULT 969 frames 118.5 seconds   8.2 fps
+artifacts/gl/glquake/arms/kf-A10-0927-094815
+ABDONE

@@ -1,0 +1,32 @@
+           CPU0       CPU1       
+  9:      57208      26439 ESP32-S31 CLIC local INTC   5 Edge      riscv-timer
+ 11:          0          0 ESP32S31-CLIC  33 Level     20348000.dma-controller
+ 12:          0          0 ESP32S31-CLIC  36 Level     20348000.dma-controller
+ 13:          0          0 ESP32S31-CLIC  34 Level     20348000.dma-controller
+ 14:          0          0 ESP32S31-CLIC  37 Level     20348000.dma-controller
+ 15:          0          0 ESP32S31-CLIC  35 Level     20348000.dma-controller
+ 16:          0          0 ESP32S31-CLIC  38 Level     20348000.dma-controller
+ 17:          0          0 ESP32S31-CLIC  22 Level     20343000.dma-controller
+ 18:          0          0 ESP32S31-CLIC  27 Level     20343000.dma-controller
+ 19:          0          0 ESP32S31-CLIC  23 Level     20343000.dma-controller
+ 20:          0          0 ESP32S31-CLIC  28 Level     20343000.dma-controller
+ 21:          0          0 ESP32S31-CLIC  24 Level     20343000.dma-controller
+ 22:          0          0 ESP32S31-CLIC  29 Level     20343000.dma-controller
+ 23:          0          0 ESP32S31-CLIC  25 Level     20343000.dma-controller
+ 24:       3330          0 ESP32S31-CLIC  30 Level     20343000.dma-controller
+ 25:         24          0 ESP32S31-CLIC  26 Level     20343000.dma-controller
+ 26:       2244          0 ESP32S31-CLIC  31 Level     20343000.dma-controller
+ 27:          0          0 ESP32S31-CLIC  43 Level     esp32s31-jpeg
+ 28:        593          0 ESP32S31-CLIC  32 Level     20345000.pixel-accelerator
+ 29:        480          0 ESP32S31-CLIC  40 Edge      2f06af80.wireless
+ 30:       6068          0 ESP32S31-CLIC  21 Level     20386000.i2c
+ 31:       6952          0 ESP32S31-CLIC  42 Level     esp32s31-lcd
+ 32:      24477          0 ESP32S31-CLIC  16 Level     dw-mci
+IPI0:       366        266  Rescheduling interrupts
+IPI1:     14813      12001  Function call interrupts
+IPI2:         0          0  CPU stop interrupts
+IPI3:         0          0  CPU stop (for crash dump) interrupts
+IPI4:        52          1  IRQ work interrupts
+IPI5:         0          0  Timer broadcast interrupts
+IPI6:         0          0  CPU backtrace interrupts
+IPI7:         0          0  KGDB roundup interrupts

@@ -1,0 +1,84 @@
+GQ kf-A6-r1 args: -mixspeed 11025 -zone 384 -heapsize 12288 -width 320 -height 240 -fullscreen | #393 SMP Sat Sep 26 12:31:02 UTC 2026 up 62.52
+MEM0 MemFree: 1952 kB MemAvailable: 4724 kB SwapFree: 65236 kB CmaFree: 464 kB 
+VM0 pswpin=56 pswpout=115 pgmajfault=193 
+LV0 lvdesk: frames 0  gaps <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 xshim: 0 MIT-SHM ShmPutImage, 0 identical (no rows changed) 
+CCSTATE ctrl=0x00000000
+CC 0 0x00000F69 0x00000E43 0x00002BD2 0x00002048 0x000070B5 0x0000C79B
+CC 10 0x0011E1EF 0x0008E1A4 0x004BBC62 0x002B1FFD 0x00258B1B 0x00392CC9
+S 10 VmRSS:4904 VmSwap:14392  majflt=249 sdrd=62590 pswpin=374 pswpout=2978 pgmajfault=513 
+CC 20 0x00248BBD 0x00127458 0x00800761 0x00486B96 0x004901F5 0x007A38C8
+S 20 VmRSS:5912 VmSwap:13756  majflt=1253 sdrd=86350 pswpin=2086 pswpout=4511 pgmajfault=1579 
+CC 30 0x00358CBA 0x001ACDAA 0x00B4F756 0x006409B9 0x00624EA8 0x00BBA190
+S 30 VmRSS:5468 VmSwap:14300  majflt=1442 sdrd=90966 pswpin=2460 pswpout=4781 pgmajfault=1801 
+CC 40 0x0045BC33 0x00231C6C 0x00F18762 0x0085EC37 0x0075BE42 0x00F1CF84
+S 40 VmRSS:5864 VmSwap:13992  majflt=1600 sdrd=93382 pswpin=2617 pswpout=4817 pgmajfault=1933 
+CC 50 0x0058F569 0x002D9F3A 0x012BB02B 0x00A91640 0x008A6C9D 0x0124C312
+S 50 VmRSS:5752 VmSwap:14048  majflt=1787 sdrd=96894 pswpin=2880 pswpout=4983 pgmajfault=2128 
+CC 60 0x006AD85C 0x003708A4 0x0165FC44 0x00CA86D5 0x009FE29F 0x01588594
+S 60 VmRSS:5768 VmSwap:14144  majflt=1886 sdrd=98686 pswpin=3012 pswpout=5007 pgmajfault=2244 
+M 620 364 0 364 /root/quake/quakespasm
+M 3980 292 492 784 
+M 964 308 444 752 
+M 1588 228 1300 1528 
+M 268 4 264 268 
+M 884 472 412 884 
+M 1244 492 752 1244 
+M 356 108 248 356 
+M 12292 2492 9800 12292 
+M 428 256 0 256 /usr/lib/libGL.so.1.2.0
+CC 70 0x007DEE3F 0x0040703F 0x01A184B4 0x00EA272B 0x00BAA293 0x01978417
+S 70 VmRSS:5792 VmSwap:13980  majflt=2194 sdrd=103638 pswpin=3432 pswpout=5229 pgmajfault=2551 
+CC 80 0x008E88A5 0x00483DE2 0x01E0BFC3 0x010CA586 0x00CEA065 0x01CC6D5F
+S 80 VmRSS:5656 VmSwap:14144  majflt=2282 sdrd=105222 pswpin=3556 pswpout=5292 pgmajfault=2644 
+CC 90 0x009FDBE7 0x0050A636 0x021F8DB8 0x012F03FA 0x00E2A55C 0x01FE7E25
+S 90 VmRSS:5692 VmSwap:14108  majflt=2307 sdrd=105606 pswpin=3584 pswpout=5306 pgmajfault=2670 
+CC 100 0x00AFCE17 0x0058B555 0x025EC9C7 0x01534196 0x00F43C86 0x022D22B9
+S 100 VmRSS:5804 VmSwap:13996  majflt=2342 sdrd=106110 pswpin=3642 pswpout=5316 pgmajfault=2712 
+CC 110 0x00C244C9 0x0061838F 0x029AFD64 0x0173F5DF 0x010BDF78 0x02623A41
+S 110 VmRSS:6188 VmSwap:13756  majflt=2567 sdrd=110822 pswpin=3904 pswpout=5454 pgmajfault=2945 
+CC 120 0x00DA8551 0x006E2119 0x02C01F7E 0x0186DD75 0x011E54D2 0x0286764C
+S 120 VmRSS:6156 VmSwap:13724  majflt=2609 sdrd=111798 pswpin=3987 pswpout=5485 pgmajfault=2998 
+CC end 0x00DC5FD3 0x006F1927 0x02C22D72 0x0187E18A 0x0120A560 0x028B0EB6
+WALL 65.82 200.77
+RESULT 969 frames 109.2 seconds   8.9 fps
+VM1 pswpin=3991 pswpout=5490 pgmajfault=3000 
+LV1 lvdesk: frames 1015  gaps <25:0 <50:3 <100:452 <200:477 <400:73 >=400:10 xshim: 1172 MIT-SHM ShmPutImage, 156 identical (no rows changed) 
+MEM1 MemFree: 888 kB MemAvailable: 636 kB SwapFree: 45888 kB CmaFree: 192 kB 
+FINAL VmHWM:6748 VmRSS:5576 VmData:22436 VmSwap:14112  majflt=2609 cpu=12709
+--- log
+12.0 megabyte heap
+Video mode 320x240x16 60Hz (16-bit z-buffer, 0x FSAA) initialized
+GL_VENDOR: s31
+GL_RENDERER: Software Rasterizer
+GL_VERSION: 1.1 s31-tinygl
+Warning: OpenGL version < 1.5, skipping ARB_vertex_buffer_object check
+FOUND: ARB_multitexture
+GL_MAX_TEXTURE_UNITS: 2
+FOUND: ARB_texture_env_combine
+FOUND: ARB_texture_env_add
+Warning: vertical sync not supported (swap_control doesn't match vid_vsync)
+Warning: texture_filter_anisotropic not supported
+Warning: texture_non_power_of_two not supported
+Warning: OpenGL version < 2, GLSL not available
+Warning: GLSL gamma not available, using hardware gamma
+Warning: GLSL alias model rendering not available, using Fitz renderer
+Warning: glGenerateMipmap not available, liquids won't have mipmaps
+Sound Initialization
+969 frames 109.2 seconds   8.9 fps
+--- out
+GL_VERSION: 1.1 s31-tinygl
+Warning: OpenGL version < 1.5, skipping ARB_vertex_buffer_object check
+FOUND: ARB_multitexture
+GL_MAX_TEXTURE_UNITS: 2
+FOUND: ARB_texture_env_combine
+FOUND: ARB_texture_env_add
+Warning: vertical sync not supported (swap_control doesn't match vid_vsync)
+Warning: texture_filter_anisotropic not supported
+Warning: texture_non_power_of_two not supported
+Warning: OpenGL version < 2, GLSL not available
+Warning: GLSL gamma not available, using hardware gamma
+Warning: GLSL alias model rendering not available, using Fitz renderer
+Warning: glGenerateMipmap not available, liquids won't have mipmaps
+
+Sound Initialization
+GQDONE

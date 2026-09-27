@@ -24,6 +24,32 @@ be measured. See `docs/smp-plan.md` for the next steps. User also reported a
 Quake crash (deferred) and an uncaptured SD interrupt-latency boot hang; neither
 is claimed fixed by the vblank change.
 
+## GLQuake flash-resident kernel code into RAM text: measured, rejected (2026-09-27, #398 vs #393)
+
+The FASTFN mechanism (patches/0062, 0069) aimed at GLQuake. Four 8,000-sample
+h1s captures on #393 (prof9, kfast/prof10a-c) put **9.1%** of hart-1 samples in
+flash text, but the biggest items cannot move: handle_exception,
+ret_from_exception, call_on_irq_stack, __fstate_* (assembly), arch_cpu_idle
+(WFI), memcpy/memset (the XIP copy itself), esp32s31_cache_* and
+fallback_scalar_usercopy_sum_enabled (uaccess.S). fastfn-pick.py at 8 kB
+(--exclude the 0069 list) covered 2.7% of all samples (4 kB 2.1%, 12 kB 3.0%,
+16 kB 3.1%); two cache-maintenance picks were removed by hand and are now
+forbidden in the picker; 8 static duplicates were resolved to their objects by
+their flash neighbours. Kernel #398 = 0069 + 97 functions, RAM text +7,024 B.
+
+| kernel | timedemo fps (fresh boots, interleaved) | median | hart-1 I-refills k/frame |
+|---|---|---|---|
+| #393 | 8.7 9.0 8.9 8.8 8.2 | 8.80 | 40.2-55.0 (mean 45.4) |
+| #398 | 8.3 8.6 8.8 8.9 8.7 | 8.70 | 42.2-52.8 (mean 47.7) |
+
+No gain, and the refills are not lower, so the cold control (#399, built) was
+not run. Two method notes worth keeping: the port tree carries the 0072
+pie-log diagnostic, which moves 29,430 symbols relative to #393 - to resolve
+#393 samples, rebuild with 0056's esp32s31-ext.c (gives #397, address-identical
+to #393) and take `nm -nS` from that; and the function index must come from
+leaf objects only (kfast/mk-fn-index.sh). Full account:
+patches/0073-esp32s31-fastfn-glquake/README. Board and images/xipImage on #393.
+
 ## CONFIG_SCHED_MC: measured, rejected (2026-09-26, #395 vs #393)
 
 **Question.** Fullscreen GL clients run at ~47 fps on CPU0 (hart 1) and ~40

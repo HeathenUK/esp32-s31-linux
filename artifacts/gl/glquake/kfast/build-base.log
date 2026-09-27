@@ -1,0 +1,10 @@
+/src/linux-71-port/arch/riscv/kernel/signal.c:37:13: warning: 'save_esp32s31_ext_state' defined but not used [-Wunused-function]
+/src/linux-71-port/drivers/dma/esp32s31-axi-gdma.c:217:5: warning: no previous prototype for 'esp32s31_axi_gdma_retarget_cyclic' [-Wmissing-prototypes]
+/src/linux-71-port/drivers/dma/esp32s31-axi-gdma.c:260:6: warning: no previous prototype for 'esp32s31_axi_gdma_set_may_sleep' [-Wmissing-prototypes]
+/src/linux-71-port/drivers/gpu/drm/espressif/esp32s31-lcd.c:4275:33: warning: variable 'old_plane_state' set but not used [-Wunused-but-set-variable]
+/src/linux-71-port/drivers/gpu/drm/espressif/esp32s31-lcd.c:4717:39: warning: unused variable 'conn' [-Wunused-variable]
+/src/linux-71-port/drivers/gpu/drm/espressif/esp32s31-ppa.c:1216:23: warning: unused variable 'deadline' [-Wunused-variable]
+/src/linux-71-port/drivers/gpu/drm/espressif/esp32s31-ppa.c:1506:23: warning: unused variable 'deadline' [-Wunused-variable]
+/src/linux-71-port/drivers/mmc/host/dw_mmc.c:422:36: warning: 'dw_mci_ns_worst' defined but not used [-Wunused-variable]
+/src/linux-71-port/drivers/mmc/host/dw_mmc.c:422:19: warning: 'dw_mci_ns_total' defined but not used [-Wunused-variable]
+xipImage 5164669 bytes, 995715 bytes free in the linux partition

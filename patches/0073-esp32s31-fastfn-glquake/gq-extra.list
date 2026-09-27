@@ -1,0 +1,8 @@
+kernel/rcu/tree.o rcu_qs
+drivers/irqchip/irq-esp32s31-clic.o mmiowb_set_pending
+kernel/irq/chip.o __raw_spin_unlock
+lib/math/div64.o div_u64_rem
+kernel/sched/build_policy.o div_u64_rem
+kernel/irq/chip.o mmiowb_spin_unlock
+fs/file.o files_lookup_fd_raw
+kernel/irq/chip.o irqd_set.isra.0

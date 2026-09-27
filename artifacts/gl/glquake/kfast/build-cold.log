@@ -1,0 +1,4 @@
+/src/linux-71-port/drivers/gpu/drm/espressif/esp32s31-ppa.c:1216:23: warning: unused variable 'deadline' [-Wunused-variable]
+/src/linux-71-port/drivers/gpu/drm/espressif/esp32s31-ppa.c:1506:23: warning: unused variable 'deadline' [-Wunused-variable]
+xipImage 5160565 bytes, 999819 bytes free in the linux partition
+#define UTS_VERSION "#399 SMP Sun Sep 27 08:12:00 UTC 2026"

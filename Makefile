@@ -561,6 +561,9 @@ endif
 # control moved the same bytes for -14% / no Quake gain.
 # Default: the shipped list (patches/0062). FASTFN= (empty) builds without it.
 # 2026-09-25: 0062 + the swap-in fault path (patches/0069): faults 1.19-1.26 -> 0.90-1.04 ms p50.
+# 2026-09-27: + GLQuake's flash residue (patches/0073, 97 functions, RAM +7 kB,
+# kernel #398) MEASURED NO GAIN: timedemo 8.3-8.9 (median 8.70) vs #393 8.2-9.0
+# (8.80), 5 fresh boots each, hart-1 I-refills not lower. Not the default.
 FASTFN ?= patches/0069-esp32s31-fastfn-swap-path/agg-hot-swap.list
 # HOTFN=<list> packs the listed functions hot-first at the head of FLASH .text
 # (they stay in flash). C39's flash half; empty until measured.

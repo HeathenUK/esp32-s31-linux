@@ -39,7 +39,9 @@ samples = args[4:]
 FORBID_PREFIX = ("memcpy", "memset", "memmove", "arch_sync_dma", "esp32s31_cache",
                  "setup_vm", "_start", "relocate", "__riscv_save", "__riscv_restore",
                  "riscv_fill_hwcap", "sbi_", "clear_bss", "early_", "kernel_init",
-                 "esp32s31_flush", "esp32s31_dcache", "esp32s31_icache")
+                 "esp32s31_flush", "esp32s31_dcache", "esp32s31_icache",
+                 # cache maintenance stays in flash (memory s31-cache-maint-stays-in-flash)
+                 "arch_dma_cache", "esp32s31_lcd_flush")
 FORBID_OBJ_PREFIX = ("arch/riscv/mm/init.o", "arch/riscv/kernel/head.o",
                      "drivers/cache/", "arch/riscv/lib/", "init/",
                      # assembly has no per-function sections to rename

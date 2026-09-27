@@ -1,0 +1,15 @@
+unattributed flash samples (gaps, unsized): 0
+hot list: 91 functions, 8126 bytes, 851 of 32000 samples (2.7% of all, 29.3% of flash text)
+       2 B     8 smp  esp32s31_intc_clic_irq_eoi       drivers/irqchip/irq-esp32s31-clic.o
+      12 B    27 smp  riscv_sched_clock                drivers/clocksource/timer-riscv.o
+      16 B    18 smp  raw_notifier_call_chain          kernel/notifier.o
+      20 B    17 smp  rcu_segcblist_ready_cbs          kernel/rcu/rcu_segcblist.o
+      60 B    38 smp  __accumulate_pelt_segments       kernel/sched/build_policy.o
+      68 B    42 smp  account_user_time                kernel/sched/build_policy.o
+      42 B    20 smp  topology_scale_freq_tick         drivers/base/arch_topology.o
+      22 B     9 smp  ntp_tick_length                  kernel/time/ntp.o
+      42 B    17 smp  account_group_user_time          kernel/sched/build_policy.o
+      10 B     4 smp  rcu_segcblist_is_offloaded       kernel/rcu/tree.o
+      52 B    20 smp  task_group_account_field.isra.0  kernel/sched/build_policy.o
+      42 B    15 smp  snd_pcm_period_elapsed           sound/core/pcm_lib.o
+list: patches/0073-esp32s31-fastfn-glquake/gq-pick.list   fragment: patches/0073-esp32s31-fastfn-glquake/gq-pick.lds.h

@@ -1,0 +1,12 @@
+A2  #393  8.70 fps  D0  15.4 D1  49.0 I0  19.6 I1  45.7 k/frame
+A3  #393  9.00 fps  D0  15.8 D1  48.0 I0  19.7 I1  40.2 k/frame
+A6  #393  8.90 fps  D0  14.9 D1  47.7 I0  19.5 I1  44.0 k/frame
+A7  #393  8.80 fps  D0  15.8 D1  48.1 I0  19.4 I1  42.3 k/frame
+A10 #393  8.20 fps  D0  16.2 D1  51.5 I0  20.9 I1  55.0 k/frame
+  A: n=5 fps median 8.80 mean 8.72 range 8.2-9.0 | I1 k/frame mean 45.4 range 40.2-55.0
+B1  #398  8.30 fps  D0  15.6 D1  51.1 I0  20.0 I1  45.2 k/frame
+B4  #398  8.60 fps  D0  14.1 D1  48.5 I0  22.2 I1  52.8 k/frame
+B5  #398  8.80 fps  D0  14.7 D1  50.5 I0  22.3 I1  46.6 k/frame
+B8  #398  8.90 fps  D0  16.8 D1  47.2 I0  20.8 I1  42.2 k/frame
+B9  #398  8.70 fps  D0  14.0 D1  47.2 I0  19.9 I1  51.8 k/frame
+  B: n=5 fps median 8.70 mean 8.66 range 8.3-8.9 | I1 k/frame mean 47.7 range 42.2-52.8
