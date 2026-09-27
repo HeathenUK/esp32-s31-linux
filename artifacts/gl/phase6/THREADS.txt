@@ -307,3 +307,11 @@ cannot shorten that.
 
 Verdict: kept behind S31GL_THREADS, default 0. Revisit once paging (lever
 #2) is fixed.
+
+RE-TEST AFTER LEVER #2 (swappiness 60, min_free 512), 2026-09-27 ~01:00.
+The same library, fresh boot per run, interleaved:
+  THREADS=1: 7.9, 8.3, 7.7, 8.2 fps   (mean 8.03)
+  THREADS=0: 7.8, 8.1, 7.4 fps        (mean 7.77; the shipped library read 8.0 and 8.1)
+The means are about 3% apart, but the ranges overlap (7.4-8.3 against 7.7-8.3).
+Not a clear win, so the default stays 0. The worker has little to take over
+while the main thread still waits on about 2.2k major faults per run.
