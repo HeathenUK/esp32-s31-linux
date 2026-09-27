@@ -1,0 +1,38 @@
+sh /tmp/r.sh 2>&1 & __rp=$!; ( trap 'kill "$__rs_sleep" 2>/dev/null; wait "$
+__rs_sleep" 2>/dev/null; exit' TERM INT; sleep 27 & __rs_sleep=$!; wait "$__rs_s
+leep"; kill -0 $__rp 2>/dev/null && { echo RS_TIME"K"ILL; kill -9 $__rp 2>/dev/n
+ull; } ) & __rw=$!; wait $__rp 2>/dev/null; kill $__rw 2>/dev/null; wait $__rw 2
+>/dev/null; echo RS_DONE
+tar: unrecognized option: z
+BusyBox v1.38.0 (2026-09-02 10:52:28 UTC) multi-call binary.
+
+Usage: tar c|x|t [-ahvokO] [-f TARFILE] [-C DIR] [-T FILE] [-X FILE] [LONGOPT]... [FILE]...
+
+Create, extract, or list files from a tar file
+
+	c	Create
+	x	Extract
+	t	List
+	-f FILE	Name of TARFILE ('-' for stdin/out)
+	-C DIR	Change to DIR before operation
+	-v	Verbose
+	-O	Extract to stdout
+	-o	Don't restore user:group
+	-k	Don't replace existing files
+	-a	(De)compress based on extension
+	-h	Follow symlinks
+	-T FILE	File with names to include
+	-X FILE	File with glob patterns to exclude
+	--exclude PATTERN	Glob pattern to exclude
+	--overwrite		Replace existing files
+	--strip-components NUM	NUM of leading components to strip
+	--no-recursion		Don't descend in directories
+	--numeric-owner		Use numeric user:group
+	--no-same-permissions	Don't restore access permissions
+	--to-command COMMAND	Pipe files to COMMAND
+RS_DONE
+[2]+  Done(143)                  (trap "kill \"\$__rs_sleep\" 2>/dev/null; wait \"\$__rs_sleep\" 2>/dev/null; exit" TERM INT; sleep 27; ; wait "${__rs_sleep}"; kill -0 ${__rp} 2>/dev/null && echo RS_TIME"K"ILL; kill -9 ${__rp} 2>/dev/null)
+[1]+  Done(1)                    sh /tmp/r.sh 2>&1
+~ # 
+[runsh] COMPLETION_NOT_RECEIVED: S31_MUL_REVIEW_FINISHED (no workload result claimed)
+

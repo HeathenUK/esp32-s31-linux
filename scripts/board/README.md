@@ -433,3 +433,22 @@ CLI status 4 and `COMPLETION_NOT_RECEIVED`; do not start another workload or
 assume the board is idle from a host-side timeout. Existing callers without
 `--done` are unchanged. `b10-run.sh` placement mode and v3 `strings-run.sh`
 support this with their `*_DONE_TOKEN` variables.
+
+For an application's existing console completion line, use the mutually
+exclusive `--done-regex 'REGEX'`; matching covers a complete stripped line.
+For example, `glquake-run.sh` with `GQ_QUIET=1` routes native console output
+without a board observer, and the host can wait for
+`([0-9]+ frames .* fps|GQ_QUIET_EXIT_LABEL)`. The FPS line completes the
+measurement, **not the game process**: stop the known game afterwards and
+collect its result/exit log. The exit alternative also catches early failure;
+it is not a pass without the expected frame count. Default glquake-run mode
+still samples the board and is diagnostic, not quiet performance evidence.
+
+The launcher exit status is now mandatory (`RS_EXIT:N`). Nonzero or missing
+status returns `LAUNCH_FAILED` (CLI exit 5) immediately, without waiting for a
+completion token from an unlaunched job. This catches setup errors such as the
+shipped BusyBox tar rejecting `-z`; use separately checked `gzip -dc` then
+`tar xf` on this image. Completion-mode CLI calls stream the launch transcript
+and subsequently received serial bytes to stderr as they arrive, while stdout
+retains the complete result. Streaming adds no board activity. Launch status
+zero still only means submission; require workload completion/results.

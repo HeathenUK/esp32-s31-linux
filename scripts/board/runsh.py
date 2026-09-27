@@ -29,7 +29,7 @@ PORT, BAUD = '/dev/cu.usbserial-130', 1000000
 
 
 def run(path, timeout=240, boot_wait=0, shell_wait=75.0,
-        done_token=None, done_timeout=600):
+        done_token=None, done_timeout=600, done_regex=None, live=False):
     # boot_wait is a MINIMUM BOARD UPTIME in seconds, not a sleep. It used to
     # be time.sleep(boot_wait) before the port was even opened, so the timedemo
     # harness's `240 170` slept 170 s after every reset although getty is up
@@ -38,14 +38,19 @@ def run(path, timeout=240, boot_wait=0, shell_wait=75.0,
     # the wait happens after the shell is reached, only for the part of it the
     # board has not already been up for: settle time for a fresh boot, zero
     # for a running board.
+    import re
+    completion_pattern = re.compile(done_regex) if done_regex else None
     p = console.open_port(timeout=0.05, what='runsh.py')
 
-    def until(pred, limit, prod=None, every=2.0):
+    def until(pred, limit, prod=None, every=2.0, emit=False):
         """Read until pred(buffer) holds. `prod` pokes a board that is silent
         because it is idle at a prompt, not because it is broken."""
         t, last, o = time.time(), 0.0, ''
         while time.time() - t < limit:
-            o += p.read(8192).decode('utf-8', 'replace')
+            chunk = p.read(8192).decode('utf-8', 'replace')
+            o += chunk
+            if emit and chunk:
+                print(chunk, end='', file=sys.stderr, flush=True)
             if pred(o):
                 return o, True
             if prod and time.time() - last > every:
@@ -127,30 +132,38 @@ def run(path, timeout=240, boot_wait=0, shell_wait=75.0,
              "( trap 'kill \"$__rs_sleep\" 2>/dev/null; wait \"$__rs_sleep\" 2>/dev/null; exit' TERM INT; "
              'sleep %d & __rs_sleep=$!; wait "$__rs_sleep"; kill -0 $__rp 2>/dev/null && '
              '{ echo RS_TIME"K"ILL; kill -9 $__rp 2>/dev/null; } ) & __rw=$!; '
-             'wait $__rp 2>/dev/null; kill $__rw 2>/dev/null; wait $__rw 2>/dev/null; '
+             'wait $__rp 2>/dev/null; __rc=$?; kill $__rw 2>/dev/null; wait $__rw 2>/dev/null; '
+             'printf "RS_EXIT:%%s\\n" "$__rc"; '
              'echo RS_DONE\n' % guard).encode())
     o, _ = until(lambda b: 'RS_DONE' in b.split('echo RS_DONE')[-1], timeout)
+    if 'RS_TIMEKILL' in o:
+        p.close()
+        return o + ('\n[runsh] THE BOARD KILLED THIS SCRIPT at %d s.\n'
+                    'Its effects are HALF-APPLIED; this is a harness timeout,\n'
+                    'not evidence of a dead board. No completion wait.\n' % guard)
+    status = re.search(r'^RS_EXIT:(\d+)\s*$', o, re.MULTILINE)
+    if not status or int(status.group(1)) != 0:
+        p.close()
+        reason = 'missing launcher exit status' if not status else 'launcher exit ' + status.group(1)
+        return o + '\n[runsh] LAUNCH_FAILED: ' + reason + '; not waiting for detached completion\n'
     # Optional detached-work completion: read ONLY, no probes/commands, and
     # keep the same port open so a fast job's notification cannot be lost
     # between launch and a second reader. Workload emits token after exit.
-    if done_token and 'RS_TIMEKILL' not in o:
+    if (done_token or done_regex) and 'RS_TIMEKILL' not in o:
+        # Expose evidence while waiting instead of buffering the entire job.
+        # Host output only: no extra board command, process or serial write.
+        if live:
+            print('[runsh] launch transcript (not workload completion):\n' + o,
+                  file=sys.stderr, flush=True)
         def completed(buf):
-            return done_token in (line.strip() for line in buf.splitlines())
+            return any((line.strip() == done_token if done_token else
+                        completion_pattern.fullmatch(line.strip())) for line in buf.splitlines())
         if not completed(o):
-            more, got = until(completed, done_timeout)
+            more, got = until(completed, done_timeout, emit=live)
             o += more
             if not got:
-                o += '\n[runsh] COMPLETION_NOT_RECEIVED: %s (no workload result claimed)\n' % done_token
+                o += '\n[runsh] COMPLETION_NOT_RECEIVED: %s (no workload result claimed)\n' % (done_token or done_regex)
     p.close()
-    if 'RS_TIMEKILL' in o:
-        # Say it out loud. A script the board had to kill has half-applied
-        # whatever it was doing, and the caller must not treat the output as a
-        # complete result - nor go looking for a hardware fault.
-        o += ('\n[runsh] THE BOARD KILLED THIS SCRIPT at %d s - it outran its\n'
-              '        window. The board is FINE; the script was too slow.\n'
-              '        Its effects are HALF-APPLIED. Split it up, or move the\n'
-              '        slow part to setsid with output to a file on the card.\n'
-              % guard)
     return o
 
 
@@ -161,14 +174,20 @@ if __name__ == '__main__':
     ap.add_argument('script')
     ap.add_argument('timeout', type=int, nargs='?', default=240)
     ap.add_argument('boot_wait', type=int, nargs='?', default=0)
-    ap.add_argument('--done', help='exact console line emitted after detached work exits; passive read only')
+    completion = ap.add_mutually_exclusive_group()
+    completion.add_argument('--done', help='exact console line emitted after detached work exits; passive read only')
+    completion.add_argument('--done-regex', help='full console-line regex, for an application native completion message')
     ap.add_argument('--done-timeout', type=float, default=600)
     args = ap.parse_args()
     result = run(args.script, args.timeout, args.boot_wait,
-                 done_token=args.done, done_timeout=args.done_timeout)
+                 done_token=args.done, done_timeout=args.done_timeout, done_regex=args.done_regex,
+                 live=bool(args.done or args.done_regex))
     print(result)
     if 'COMPLETION_NOT_RECEIVED:' in result:
         sys.exit(4)
+    if ('LAUNCH_FAILED:' in result or 'RS_TIMEKILL' in result or
+            result.startswith(('NO_SHELL (', 'UPLOAD_STALLED ', 'UPLOAD_FAILED'))):
+        sys.exit(5)
   except console.PortBusy as e:
     # Expected condition, not a crash - a traceback here buries the one line
     # that says what to do, and its noise is what callers end up grepping.

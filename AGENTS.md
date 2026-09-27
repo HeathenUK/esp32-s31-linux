@@ -14,6 +14,11 @@
   and a completion line emitted only after workload exit. This is passive
   serial reading, not board polling; collect and validate results afterwards.
   A missing token is not proof the workload stopped.
+- Completion waits require a successful launcher (`RS_EXIT:0`). `runsh`
+  rejects setup failures immediately; never describe a pending host wait as
+  proof of board execution. CLI completion mode streams passive evidence to
+  stderr. The shipped BusyBox `tar` lacks `-z`: use checked `gzip -dc`, then
+  `tar xf`, instead of assuming desktop command options exist on the board.
 - **A detached launcher saying STARTED is not proof the application ran.**
   Report attempted launch, verified execution and completed result separately.
   Require the application's completion evidence and exit status for a pass.

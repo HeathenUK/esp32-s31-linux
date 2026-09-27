@@ -1,7 +1,11 @@
 # glquake-run.sh - one QuakeSpasm (GLQuake, SDL 1.2) run ON the board:
 #   setsid sh glquake-run.sh <label> <max_secs> [quakespasm args...] &
 # Runs /root/quake/quakespasm from SD (-basedir /root/quake -condebug plus the
-# given args), then waits QUIETLY: one sleep per 10 s, one awk per sample, no
+# given args). Set GQ_QUIET=1 for performance comparisons: native console FPS
+# is the completion event, passively received by runsh --done-regex. Stop the
+# game after receiving that line, then collect this harness's exit/result log.
+# The timedemo finishes before the process exits; a watchdog is only a backstop.
+# Default legacy mode is DIAGNOSTIC, not quiet: one sleep per 10 s, one awk per sample, no
 # fork storm (memory s31-harness-lies: a poll loop is a memory-pressure
 # workload of its own on this board). Every 10 s it records the game's
 # VmRSS/VmSwap/majflt and the system's pswpin/pswpout/pgmajfault, so paging
@@ -46,6 +50,25 @@ lvrep() { kill -USR1 $(pidof lvdesk lvdesk.new) 2>/dev/null; sleep 1; grep -a 'l
 echo "LV0 $(lvrep)"
 amixer -q sset DACL 110 2>/dev/null; amixer -q sset DACR 110 2>/dev/null
 cd $B	# qconsole.log is written to the working directory
+# Quiet application-completion route. Native console output goes directly to
+# the serial console; runsh --done-regex listens for the game's own FPS line.
+# No board observer samples memory, counters, files or process state.
+if [ "${GQ_QUIET:-0}" = 1 ]; then
+  DISPLAY=:0 HOME=${GQ_HOME:-/root/quake} setsid $GQ_WRAP "$BIN" -basedir "$B" -condebug "$@" >/dev/console 2>&1 </dev/null &
+  P=$!; echo "$P" > "/root/gq/$L.pid"
+  ( trap 'kill "$sleeper" 2>/dev/null; wait "$sleeper" 2>/dev/null; exit' TERM INT
+    sleep "$MAX" & sleeper=$!; wait "$sleeper"
+    echo WATCHDOG; kill -9 "$P" 2>/dev/null
+  ) & guard=$!
+  wait "$P"; rc=$?
+  kill "$guard" 2>/dev/null; wait "$guard" 2>/dev/null
+  echo "EXIT=$rc"
+  echo "RESULT $(grep -aE '^ *[0-9]+ frames' "$QL" | head -1)"
+  amixer -q sset DACL 143 2>/dev/null; amixer -q sset DACR 143 2>/dev/null
+  echo GQDONE
+  printf '\nGQ_QUIET_EXIT_%s\n' "$L" > /dev/console
+  exit
+fi
 cc() { [ -n "$GQ_CC" ] && echo "CC $1 $(devmem 0x2C0001d0 32) $(devmem 0x2C0001d4 32) $(devmem 0x2C0001e4 32) $(devmem 0x2C0001e8 32) $(devmem 0x2C000190 32) $(devmem 0x2C0001a0 32)"; }
 [ -n "$GQ_CC" ] && { echo "CCSTATE ctrl=$(devmem 0x2C000180 32)"; devmem 0x2C000180 32 0x00330033; devmem 0x2C000180 32 0x00000033; }
 cc 0
