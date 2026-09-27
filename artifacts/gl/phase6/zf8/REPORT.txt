@@ -176,3 +176,12 @@ profiles, the replays), gates/. s31, MIT.
   zf8_wnn0_p0 together.
   Regression: glxgears, Doom and the desktop (xcalc) as usual - they do
   not take this filler, so they must be unchanged.
+
+BOARD RESULT, 2026-09-27 03:10-03:40 (coordinator). QuakeSpasm timedemo demo1,
+fullscreen, fresh boot per run, arms alternated. Library
+gl/bench/out-zf8/br-final/libGL.so.1 (md5 f9310c2d), loaded from /root/zf8;
+swappiness 60, min_free 512, kernel #393.
+  S31GL_ZF8=1 (new):  8.9, 8.7, 8.5 fps   (109.4 / 111.2 / 113.5 s)
+  S31GL_ZF8=0 (old):  8.1, 8.1, 8.0 fps   (119.9 / 118.9 / 120.8 s)
++8% on the mean, and the two ranges do not overlap. The prediction was 8.3.
+Shipped: f9310c2d is now /usr/lib/libGL.so.1.2.0 on the SD root.
