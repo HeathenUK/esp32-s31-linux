@@ -1,0 +1,34 @@
+TOTAL 3427 instr/sample, CSR 16.5/sample, FPU ops 66.8/sample
+    891.6/sample  26.0%  s31v2_muldf3
+    688.3/sample  20.1%  s31opl_out
+    453.7/sample  13.2%  adlib_getsample
+    359.7/sample  10.5%  s31v2_adddf3
+    344.9/sample  10.1%  operator_decay
+    239.1/sample   7.0%  operator_output.part.0
+    220.9/sample   6.4%  operator_release
+     75.7/sample   2.2%  s31v2_gtdf2
+     75.4/sample   2.2%  operator_attack
+     28.3/sample   0.8%  pow
+     10.3/sample   0.3%  main
+      8.7/sample   0.3%  s31v2_ltdf2
+      6.4/sample   0.2%  s31v2_floatsidf
+      5.4/sample   0.2%  chain_ref
+      3.2/sample   0.1%  s31v2_fixdfsi
+      1.5/sample   0.0%  memset
+calls/sample by site:
+    9.56  operator_output.part.0  0x10afe -> s31opl_out
+    5.17  operator_decay          0x10920 -> s31v2_gedf2
+    5.17  operator_decay          0x10930 -> s31v2_muldf3
+    4.97  adlib_getsample         0x1232a -> operator_output.part.0
+    4.60  adlib_getsample         0x12392 -> operator_output.part.0
+    3.32  operator_release        0x10844 -> s31v2_gedf2
+    3.32  operator_release        0x10854 -> s31v2_muldf3
+    1.08  operator_release        0x108a0 -> s31v2_ledf2
+    0.97  operator_attack         0x109fa -> s31v2_muldf3
+    0.97  operator_attack         0x10a02 -> s31v2_adddf3
+    0.97  operator_attack         0x10a0a -> s31v2_muldf3
+    0.97  operator_attack         0x10a12 -> s31v2_adddf3
+    0.97  operator_attack         0x10a1a -> s31v2_muldf3
+    0.97  operator_attack         0x10a22 -> s31v2_adddf3
+    0.53  operator_decay          0x1097a -> s31v2_gedf2
+    0.42  operator_attack         0x10a64 -> s31v2_gedf2

@@ -1,0 +1,12 @@
+TOTAL 3327 instr/sample, CSR 26.0/sample, FPU ops 1.0/sample
+    891.5/sample  26.8%  s31v2_muldf3
+    589.1/sample  17.7%  s31opl_out
+    453.7/sample  13.6%  adlib_getsample
+    359.7/sample  10.8%  s31v2_adddf3
+    344.9/sample  10.4%  operator_decay
+    239.1/sample   7.2%  operator_output.part.0
+    220.9/sample   6.6%  operator_release
+     75.7/sample   2.3%  s31v2_gtdf2
+     75.4/sample   2.3%  operator_attack
+     28.3/sample   0.9%  pow
+     10.3/sample   0.3%  main

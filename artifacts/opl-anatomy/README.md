@@ -61,51 +61,119 @@ from two places.
 The loop itself (`adlib_getsample` minus helpers, which also builds the
 vib/trem tables) is about 450-700 instructions per sample. It is app code.
 
-## The fused kernel (`fused.c`): exact and measured
+## Combined result: every idea, measured together
 
-`fused.c` is a drop-in, exact replacement for line 355:
+Per output sample, 2 s per song. "CSR" counts executed CSR instructions.
+QEMU has no timing model, so the CSR column is the silicon-only lever: each
+access costs 25-30 ns on the board (V2-REPORT §5), about 8-10 cycles at
+320 MHz.
 
-- **P is memoised** on the bits of both inputs, in 64 direct-mapped
-  entries. About 10 operators interleave, so a single entry never hits.
-  That was measured: 4,654 instructions per sample with one entry, against
-  4,047 with 64.
-- **`× w` and `× trem` are 53×16-bit integer products**, each rounded
-  round-to-nearest-even exactly as a double multiply would round.
-- **Power-of-two tremolo and the `/16` become exponent adjustments.**
-- **Truncation to int is a shift.**
-- **NX is accrued as the helper chain would accrue it.** A non-RNE rounding
-  mode, a zero or subnormal P, or an out-of-range value falls back to the
-  original chain.
+| Build | Title (36) instr / CSR | Heavy (5) instr / CSR |
+|---|---:|---:|
+| A: shipped v2 | 5,105 / 66.8 | 7,314 / 103.9 |
+| B: v2 `S31V2_LATEFRM=1 S31V2_LAZYLO=1` | 4,963 / 42.0 | 7,060 / 50.1 |
+| C: v2 + `s31opl_out` (frcsr) | 3,362 / 29.6 | 4,492 / 39.1 |
+| **D: B + `s31opl_out` (frcsr)** | **3,327 / 26.0 (-34.8% / -61%)** | **4,442 / 31.2 (-39.3% / -70%)** |
+| E: B + `s31opl_out -DOPL_FPROBE` | 3,427 / 16.5, +66.8 FPU ops | 4,841 / 13.9, +106.9 FPU ops |
 
-Exactness:
+For reference, libgcc without s31fp is 12,049 (title) and 18,502 (heavy).
 
-- **Differential test** (`test.c`): 4,094,400 cases, covering every int16
-  waveform value for sampled P and both tremolo regimes, with 0 value and 0
-  fflags mismatches against the helper chain. A perturbed negative control
-  gives 4 mismatches, as expected.
-- **End-to-end:** swapping it into `opl.c` leaves the audio hashes of all
-  42 songs identical.
+**Every build reproduces all 42 songs' audio hashes bit-for-bit** against A,
+and A matches the board.
 
-## What else would help, ranked
+**D is the recommendation.** E trades ~10-17 CSR reads per sample for
+100-400 more instructions per sample. At 8-10 cycles per CSR access it
+probably loses on the heavy song and roughly breaks even on the title song,
+so it is a board A/B, not a default.
 
-1. **Hand-written assembly kernel.** The C kernel is ~136 instructions per
-   call, because generic 64-bit shifts and rounding are expensive on rv32.
-   The operand shapes are fixed (53-bit × 15-bit, then × 16-bit or a power
-   of two), so assembly with fixed shift counts should be roughly half that.
-   INFERRED: title to ~3,400 instructions per sample.
-2. **One fcsr read per operator per sample instead of seven.** QEMU counts
-   do not show this at all. On silicon a CSR access costs 25-30 ns and v2
-   removing CSR traffic was worth 2 µs/sample (V2-REPORT §9). If the patch
-   covers the whole block loop, a further step is one read per 512-sample
-   block. These are the largest silicon-only gains and need the board.
-3. **Fused envelope step.** `amp > level ? amp *= mul : amp` in one exact
-   call saves one call and one CSR read per decaying or releasing operator
-   per sample (~8.5 per sample on the title song). The multiplicative
-   sequence itself must stay.
-4. **Not worth it.** Double-to-float substitution (not exact), skipping
-   envelope samples (changes output), and SIMD. PIE gives no double
-   arithmetic, and ~10 operators with dependent chains do not vectorise
-   exactly.
+`operator_output.part.0` (239 instr/sample) is an artefact of swapping the
+kernel in at the source level: the harness keeps a non-inlined wrapper. A
+patch of the installed binary would call the kernel from the inlined site
+directly.
+
+### 1. `s31opl_out` (`opl_out.S`): exact fused `operator_output`, hand-written RV32
+
+- **The algorithm is not a double-rounding emulation.**
+  - With NX already set and frm = RNE, the chain can change no flag.
+  - So compute `V = P*|w|*trem/16` exactly: `k = |w|*trem < 2^32`, then one
+    84-bit product `m*k` (3 `mul`/`mulhu`) and a shift.
+  - The two roundings move V by at most 2^-51 relative, which is under
+    2^-20 absolute for |V| < 2^31.
+  - So `trunc(exact) == trunc(chain)` unless V lies within 2^-20 above an
+    integer n >= 1, or within 2^-20 below the next integer. Those cases run
+    the original chain.
+- **Other cases that also run the original chain:** NX clear, frm not RNE,
+  P not normal or negative, `trem <= 0`, and |V| possibly >= 2^20.
+- **Short cuts:** `w == 0` returns 0, and V < 1/2 returns 0 (NX is already
+  set).
+- **P = step_amp*vol** is memoised in 64 × 32-byte direct-mapped entries,
+  keyed on all four input words. The hit rate is > 97%. A miss calls the
+  exact v2 multiply.
+- **Cost:** a 62-instruction fast path, frame-free. The arguments stay
+  intact until every fallback decision is made.
+- **Exactness:**
+  - `test2.c`: 4,094,400 cases, 0 value and 0 flag mismatches.
+    2,352,756 of them took the fast path (NX preset on 3/4 of calls).
+    The negative control gives 4 mismatches.
+  - `edge.c`: 909,351 directed cases within ±3 ulp of an integer V (all
+    correctly routed to the chain) and at 2^-19..2^-12 off an integer
+    (632,592 on the fast path). 0 value and 0 flag mismatches.
+  - `test-rounding-modes.c`: RUP, RDN and RTZ, 0 mismatches.
+- **`fused.c` and `fused2.c`** are the C forms. `fused.c` emulates each
+  rounding step and costs ~136 instructions per call; `fused2.c` is the
+  algorithm above and costs ~73. Both are exact.
+
+### 2. `S31V2_LATEFRM` and `S31V2_LAZYLO` in `rootfs/s31fp/v2/v2.S`
+
+Both are opt-in. The default build's `.text` is byte-identical to the
+shipped v2.
+
+- **LATEFRM** reads fcsr only on the multiply paths that can round. Zero,
+  power-of-two and 21×21-bit (`both0`) products are exact in every mode and
+  raise nothing. That removes one CSR read from ~49% of OPL's multiplies
+  (A→B: title CSR 66.8 → 42.0 per sample).
+- **LAZYLO** computes the general path's `L00` only when the bits of w1
+  below the round bit are zero. It is worth ~1 instruction. `H00` cannot be
+  deferred: it lands in w1, the round word, and can move it by up to a full
+  word. This is smaller than first estimated.
+- **Exactness:** the full v2 suite passes with both flags (mul 3,000,000 +
+  749,391 directed-mode sets, and all 13 other ops), with 0 bits+fflags
+  mismatches. A deliberately broken LAZYLO (L00 never computed) is caught
+  with **26,328 mismatches**, so the suite exercises the ties that matter.
+
+### 3. CSR-free rounding-mode probe (`OPL_FPROBE`, `probe.c`)
+
+- **How it works.** `fadd.s` with dynamic rounding on 1+2^-24 and 1+3·2^-24.
+  The two results differ by exactly 2 only under RNE; RTZ, RDN, RUP and RMM
+  give 1.
+- **Verified in `probe.c`** under all five modes, including RMM via `fsrm`.
+  The probe raises only NX.
+- **When it is used.** Only where the chain is provably inexact (nonzero
+  fraction), so the NX it sets is the chain's own.
+- **`w == 0` needs care.** The chain's `sa*vol` may be inexact even when
+  `w == 0`, and a first version got this wrong (18 flag mismatches). The
+  memo entry now records whether `sa*vol` was exact, from the mantissas'
+  trailing zeros; unknown cases take the chain.
+- **Board questions:**
+  - whether 2 FPU adds and 4 moves are cheaper than one CSR read;
+  - whether S31 silicon rounds `fadd.s` as QEMU does (IEEE-specified, but
+    unverified);
+  - reserved frm values trap on `fadd.s` rather than being read. That is
+    only reachable by a program writing invalid frm itself.
+
+## Hazards before any of this ships
+
+- **App-specific.** Delivery means matching the installed opentyrian's
+  inlined `operator_output` sequence and redirecting it. That is the item on
+  owner hold (`status-and-todo` lines 167-171).
+- **Registers.** A patch of an inlined site adds a call where none existed.
+  Every caller-saved register live across it must be saved or proven dead,
+  including the F registers for `OPL_FPROBE`.
+- **Threads.** The memo is one table per process. Entries are written value
+  first, then keys, which is not safe against a concurrent reader. OPL runs
+  only in SDL's audio thread, but a general delivery needs a per-thread
+  table or a sequence check.
+- **Instruction counts are not board timings.** Measure on the board.
 
 ## How it would ship
 

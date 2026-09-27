@@ -9,7 +9,7 @@ for l in open(dis):
     m=re.match(r'\s+([0-9a-f]+):\s+(\S+)\s*(.*)',l)
     if m: a=int(m.group(1),16); ins[a]=(m.group(2),m.group(3)); order.append(a)
 idx={a:i for i,a in enumerate(order)}
-perfn=collections.Counter(); calls=collections.Counter()
+perfn=collections.Counter(); calls=collections.Counter(); csr=0; fpu=0
 for l in open(bb):
     pc,n,c=l.split(); o=int(pc,16); n=int(n); c=int(c)
     if o not in idx: perfn['<other>']+=n*c; continue
@@ -17,11 +17,13 @@ for l in open(bb):
     for k in range(n):
         a=order[i+k]; perfn[fn(a)]+=c
         op,args=ins[a]
+        if op.startswith(('csr','frcsr','fscsr','frrm','fsrm','frflags','fsflags')): csr+=c
+        elif op.startswith(('fadd','fmv','fsub','fmul','flw','fsw')): fpu+=c
         if op in('jal','call','jalr'):
             m=re.search(r'<([^>+]+)',args)
             if m: calls[(fn(a),hex(a),m.group(1))]+=c
 tot=sum(perfn.values())
-print(f"TOTAL {tot/NS:.0f} instr/sample")
+print(f"TOTAL {tot/NS:.0f} instr/sample, CSR {csr/NS:.1f}/sample, FPU ops {fpu/NS:.1f}/sample")
 for f,v in perfn.most_common(16): print(f"{v/NS:9.1f}/sample {100*v/tot:5.1f}%  {f}")
 print("calls/sample by site:")
 for (f,a,t),v in sorted(calls.items(),key=lambda x:-x[1]):

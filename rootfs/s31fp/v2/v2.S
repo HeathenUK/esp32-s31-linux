@@ -25,6 +25,21 @@
 #ifndef S31V2_FENV
 #define S31V2_FENV 1
 #endif
+/* S31V2_LATEFRM=1: read fcsr only on the multiply paths that can round.
+ * A zero or power-of-two operand, and two 21-bit mantissas (both0), give an
+ * exact product in every rounding mode and raise no flag, so they need no
+ * frm test; that is ~49% of OpenTyrian's OPL multiplies (24.5 + 1.3 of 53
+ * per sample), each saving one 25-30 ns CSR read. Candidate, not default.
+ * S31V2_LAZYLO=1: the general path's lowest partial product (L00) is only a
+ * sticky bit, needed only when the bits of w1 below the round bit are zero.
+ * Worth ~1 instruction; H00 cannot be deferred (it lands in w1, the round
+ * word). Candidate, not default. */
+#ifndef S31V2_LATEFRM
+#define S31V2_LATEFRM 0
+#endif
+#ifndef S31V2_LAZYLO
+#define S31V2_LAZYLO 0
+#endif
 /* S31V2_FFLAGS=0 with FENV=1: frm honoured (non-RNE -> libgcc), but the fast
  * paths do not raise NX - a stated deviation, measured as its own arm */
 #ifndef S31V2_FFLAGS
@@ -109,7 +124,9 @@
  */
 FUNC s31v2_muldf3
 s31v2_muldf3:
+#if !S31V2_LATEFRM
 	RNE_OR	.Lm_ref
+#endif
 	srli	t0, a1, 20
 	srli	t1, a3, 20
 	andi	t0, t0, 0x7ff		/* ea */
@@ -124,12 +141,15 @@ s31v2_muldf3:
 	addi	t2, a4, -1
 	li	t3, 0x7fc
 	bgeu	t2, t3, .Lm_ref
-#if S31V2_FENV
+#if S31V2_FENV && !S31V2_LATEFRM
 	mv	t3, t6			/* fcsr, for NX_IF (t3 is free from here on) */
 #endif
 	xor	t6, a1, a3		/* sign in bit 31 */
 	beqz	a0, .Lm_a0z
 	beqz	a2, .Lm_b0z
+#if S31V2_LATEFRM
+	RNE_OR	.Lm_ref, t3
+#endif
 	/* general: A = a1:a0 (53 bits), B = a3:a2 << 11 (64 bits) */
 	slli	a1, a1, 12
 	srli	a1, a1, 12
@@ -140,7 +160,9 @@ s31v2_muldf3:
 	or	a3, a3, t5
 	bseti	a3, a3, 31
 	slli	a2, a2, 11
+#if !S31V2_LAZYLO
 	mul	t4, a0, a2		/* L00 */
+#endif
 	mulhu	t5, a0, a2		/* H00 */
 	mul	t0, a0, a3		/* L01 */
 	mulhu	a5, a0, a3		/* H01 */
@@ -162,13 +184,27 @@ s31v2_muldf3:
 	sltu	t0, a5, t0
 	add	a7, a7, t0
 	add	a1, a1, a7		/* w3 */
+#if S31V2_LAZYLO
+	/* w0 matters only as sticky, and only when the bits of w1 below the
+	 * round bit (bit 31, or 30 after the normalise shift) are all zero */
+	slli	t2, t5, 2
+	bnez	t2, 1f
+	mul	t4, a0, a2		/* L00 */
+	snez	t4, t4
+	or	t5, t5, t4
+1:
+#else
 	snez	t4, t4			/* w0 only matters as sticky */
 	or	t5, t5, t4
+#endif
 	j	.Lm_norm
 .Lm_a0z:
 	slli	t2, a1, 12
 	beqz	t2, .Lm_pow2a
 	beqz	a2, .Lm_both0
+#if S31V2_LATEFRM
+	RNE_OR	.Lm_ref, t3
+#endif
 	/* A = a1:0 -> w1 = L10, w2 = H10 + L11, w3 = H11 */
 	slli	a1, a1, 12
 	srli	a1, a1, 12
@@ -203,6 +239,9 @@ s31v2_muldf3:
 .Lm_b0z:				/* a0 != 0, B = b1':0 -> w1 = L01, w2 = H01 + L11, w3 = H11 */
 	slli	t2, a3, 12
 	beqz	t2, .Lm_pow2b
+#if S31V2_LATEFRM
+	RNE_OR	.Lm_ref, t3
+#endif
 	slli	a1, a1, 12
 	srli	a1, a1, 12
 	bseti	a1, a1, 20

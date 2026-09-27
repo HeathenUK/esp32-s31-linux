@@ -1,0 +1,27 @@
+TOTAL 4442 instr/sample, CSR 31.2/sample, FPU ops 1.0/sample
+    993.5/sample  22.4%  s31opl_out
+    940.6/sample  21.2%  s31v2_muldf3
+    859.9/sample  19.4%  operator_decay
+    708.9/sample  16.0%  adlib_getsample
+    434.4/sample   9.8%  operator_output.part.0
+    159.2/sample   3.6%  s31v2_adddf3
+    147.5/sample   3.3%  s31v2_gtdf2
+     83.4/sample   1.9%  operator_release
+     38.6/sample   0.9%  pow
+     36.7/sample   0.8%  operator_sustain
+     10.3/sample   0.2%  main
+      5.2/sample   0.1%  s31v2_floatsidf
+      3.4/sample   0.1%  chain_ref
+      2.4/sample   0.1%  s31v2_fixdfsi
+      1.7/sample   0.0%  change_frequency
+      1.7/sample   0.0%  s31v2_subdf3
+calls/sample by site:
+   17.38  operator_output.part.0  0x10afe -> s31opl_out
+   12.39  operator_decay          0x10920 -> s31v2_gedf2
+   12.38  operator_decay          0x10930 -> s31v2_muldf3
+    8.69  adlib_getsample         0x12392 -> operator_output.part.0
+    8.69  adlib_getsample         0x1232a -> operator_output.part.0
+    5.43  operator_decay          0x1097a -> s31v2_gedf2
+    1.30  operator_release        0x10854 -> s31v2_muldf3
+    1.30  operator_release        0x10844 -> s31v2_gedf2
+    1.00  s31opl_out              0x12ed2 -> s31v2_muldf3
