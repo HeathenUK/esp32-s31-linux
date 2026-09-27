@@ -452,3 +452,13 @@ shipped BusyBox tar rejecting `-z`; use separately checked `gzip -dc` then
 and subsequently received serial bytes to stderr as they arrive, while stdout
 retains the complete result. Streaming adds no board activity. Launch status
 zero still only means submission; require workload completion/results.
+
+### Affinity prerequisite (2026-09-27)
+
+Older board images have neither `taskset` nor `timeout`. Check the actual board
+before launching a workload; missing commands are harness failures. BusyBox now
+requests TASKSET and FEATURE_TASKSET_FANCY, and image preparation and `gate`
+check the dependency. Until an updated BusyBox is deployed, use the existing
+`/root/afp2/oncpu` only after checking it is executable: masks 1/2 select CPUs 0/1.
+The clock diagnostic does that preflight and uses this helper. Do not substitute
+`taskset -c` without checking its presence and CPU-list support first.

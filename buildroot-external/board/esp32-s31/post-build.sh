@@ -11,6 +11,11 @@ target_dir="$1"
     exit 1
 }
 
+[ -L "${target_dir}/usr/bin/taskset" ] || {
+    echo "Missing /usr/bin/taskset: require CONFIG_TASKSET=y in busybox.fragment" >&2
+    exit 1
+}
+
 chmod 0755 "${target_dir}/init"
 
 # The cross-toolchain includes G++, but this compact image has no C++ target

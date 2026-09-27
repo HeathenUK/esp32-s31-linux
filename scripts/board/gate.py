@@ -74,6 +74,13 @@ if command -v timeout >/dev/null 2>&1; then
 else
     no timeout 'missing: harness dependency, not board failure; rebuild BusyBox with CONFIG_TIMEOUT=y'
 fi
+if command -v taskset >/dev/null 2>&1; then
+    taskset -c 0 true
+    rc=$?
+    [ "$rc" = 0 ] && ok taskset 'CPU-list execution works' || no taskset "CPU-list execution=$rc"
+else
+    no taskset 'missing: use checked oncpu helper; rebuild BusyBox with CONFIG_TASKSET=y and CONFIG_FEATURE_TASKSET_FANCY=y'
+fi
 echo "CHK|uname|INFO|$(uname -r) $(uname -v)"
 echo "CHK|cmdline|INFO|$(cat /proc/cmdline)"
 echo "CHK|hid|INFO|attach=$(cat /sys/kernel/esp32s31-hid/attach 2>/dev/null) reports=$(cat /sys/kernel/esp32s31-hid/reports 2>/dev/null) dwc2=$([ -d /sys/module/dwc2 ] && echo y || echo n)"

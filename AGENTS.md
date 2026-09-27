@@ -28,9 +28,17 @@
   syntax (`timeout -s KILL SECONDS COMMAND`); do not assume GNU exit codes.
   If absent, use `runsh.py`'s existing watchdog or its sleep/reap pattern for
   detached work. A missing command is a harness failure, never board failure.
-- The build volume held a rejected test kernel at the 2026-09-27 checkpoint.
-  Do not run bare `make sync-images`; verify the latest status and copy only
-  intended artifacts. Do not overwrite the known-good #401 kernel.
+- **Older board images also lack `taskset`.** Before any affinity workload,
+  require `command -v taskset` and CPU-list support, or check executable
+  `/root/afp2/oncpu` and use its hexadecimal mask argument (1=CPU0, 2=CPU1).
+  Do not assume a config edit installed an applet. BusyBox now requests
+  CONFIG_TASKSET=y and CONFIG_FEATURE_TASKSET_FANCY=y; post-build and gate check
+  installation/support. Preflight dependencies before launching any workload.
+- Keep kernel variants isolated. The 2026-09-27 fast-clock work verified the
+  default build image against known-good #401 and built its candidate in
+  `build/linux-s31-vdso`. Never use bare `make sync-images` to ship a variant:
+  verify hashes, copy the intended artifact explicitly and pass its path to
+  `make flash-linux XIP_IMAGE=...`. Preserve `images/ship-401-xipImage` for rollback.
 
 For details, see `scripts/board/README.md` and
 `docs/status-and-todo-2026-09-27.md`.

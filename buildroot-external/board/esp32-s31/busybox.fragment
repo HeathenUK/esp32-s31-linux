@@ -4,6 +4,9 @@ CONFIG_FEATURE_WGET_HTTPS=y
 # Board harnesses use bounded commands. Keep this in the image rather than
 # repeatedly discovering "timeout: not found" after a detached launch.
 CONFIG_TIMEOUT=y
+# Affinity harnesses need CPU-list syntax (-c), not just hexadecimal masks.
+CONFIG_TASKSET=y
+CONFIG_FEATURE_TASKSET_FANCY=y
 
 # NTP client. This board has no RTC - no battery-backed chip on the Korvo-1
 # (an I2C scan finds only the codec at 0x10 and touch at 0x14), and the SoC's
