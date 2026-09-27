@@ -1,0 +1,65 @@
+GL phase 6 - tier 5: does the boot-to-boot fps spread track D-cache
+refills? Board, 2026-09-27. Kernel #393, shipped libGL (SD root, tier 2,
+md5 91771d02), swappiness 60 / min_free 512. s31, MIT.
+
+VERDICT: NO. The D-side hot-page lever from tier4/REPORT.txt section 3 is
+not what moves fps on the board. Per the brief, steps 2-3 (colouring the
+hot state, the A/B, shipping) were stopped. Nothing shipped, and the board
+is unchanged apart from the harness.
+
+INSTRUMENT
+  scripts/board/glquake-run.sh gained GQ_CC=1: at launch it clears and
+  enables the L1 cache counters (cachecnt.sh's registers, memory note
+  s31-cache-counters), then with each 10 s sample reads the next-level
+  reads/writes of DBUS0 DBUS1 (the shared D-cache, per hart) and the
+  next-level reads of IBUS0 IBUS1. That is 6 devmem reads per 10 s,
+  nothing else. Rates below are taken over t = 30 s .. the last sample,
+  which is the timedemo in steady state, and divided by the run's fps.
+  Four fresh boots, the shipped config:
+    glquake-arm.sh ccvN 1 GQ_BASE=/root/quake/td GQ_CC=1 -- -mixspeed 11025
+      -zone 384 -heapsize 12288 -width 320 -height 240 -fullscreen
+  Raw data: artifacts/gl/glquake/arms/ccv{1..4}-*/r1.txt (CC lines).
+
+RESULTS (per frame; hart1 = Linux CPU0, where Quake runs)
+  boot  fps   D1 rd   D1 wr   D0 rd   I1 rd   I0 rd | D rd/s  I1 rd/s
+  ccv1  8.5  45,728  25,128  14,630  44,331  16,765 | 513 k   377 k
+  ccv2  8.7  42,856  23,845  14,249  40,669  16,657 | 497 k   354 k
+  ccv3  8.9  43,795  24,258  13,862  38,718  17,552 | 513 k   345 k
+  ccv4  7.5  45,082  24,928  14,793  69,291  20,655 | 449 k   520 k
+  - D-side refills per frame are flat: D1 rd 42.9-45.7 k (+-3%), total
+    D rd 57.1-60.4 k. The slow boot (7.5 fps, -15%) sits inside the fast
+    boots' range (45.1 k against 43.8 k on the 8.9 boot). The model
+    predicted a launch-to-launch sd of ~9% of traffic; the board shows
+    ~3% and no fps relationship.
+  - The I-side is what moves. Hart1's I refills per frame ranked by fps:
+    38.7 k (8.9) < 40.7 k (8.7) < 44.3 k (8.5) << 69.3 k (7.5). That is
+    +79% on the slow boot, whose hart1 I refill rate also rose 345 ->
+    520 k/s. Quake's CPU time: 14,662 ticks against 12,626-12,859 on the
+    other boots. Paging was the same on all four (pswpin 3,638-3,972).
+  - The L1 I-cache is 16 kB per hart (IDF v6.1 esp32s31
+    Kconfig.cache: CACHE_L1_ICACHE_SIZE 0x4000, 64 B lines; the number
+    of ways is not in the Kconfig), against libGL's 46 kB .s31hot alone.
+
+WHAT IT POINTS AT (not measured here)
+  The ~15% slow boot, the same size as memory note s31-canary-per-boot-
+  bimodal and as the "forced placement costs 15%" finding, comes with a
+  hart1 I-cache refill blow-up, not a D-cache one. Candidates:
+  (a) placement: what else runs on CPU0 and shares its 16 kB I-cache
+      (lvdesk and the kernel's XIP paths). Record /proc/PID/stat field 39
+      for Quake and lvdesk per sample, next to the CC lines.
+  (b) I-side page colours of the SD-resident text (libGL and QuakeSpasm
+      live in page-cache frames). This only matters if a 16 kB way spans
+      more than one 4 kB page, i.e. the I-cache has fewer than 4 ways.
+      Check the TRM before building anything for it.
+  The D-side colouring mechanism was written but never run. It
+  would transfer to (b): copy a page into a frame of a chosen colour
+  (found through /proc/self/pagemap, readable as root on #393), mremap
+  it over the old page, then mlock it.
+    pcolor-src/s31_pcolor.[ch], pcolor-core.patch (against 1bc1d995):
+      S31GL_PCOLOR=1 puts GLContext + vertex array + ZBuffer in a 4-page
+      arena on colours 0-3. At frame 3 it recolours the stack pages
+      around the deepest glBegin and libGL's resident writable pages
+      (least-loaded colour; the stack pass runs on a private stack with
+      signals blocked). Built on tier 2 with the Buildroot flags, 0
+      warnings, stripped md5 in pcolor-lib.md5. NOT tested on the host or
+      the board, and not in the tree.

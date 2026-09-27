@@ -1,0 +1,122 @@
+diff --git a/gl/api/build-lib.sh b/gl/api/build-lib.sh
+index 0c9a6492..d9fcbb8e 100644
+--- a/gl/api/build-lib.sh
++++ b/gl/api/build-lib.sh
+@@ -88,7 +88,7 @@ echo "--- compiling TinyGL core, the GL ABI layer and GLX ($JOBS jobs)"
+ # S31GL_TGLCOLD (set, even empty) replaces the list: gl/bench/build_q.sh
+ # compiles a pre-F3 baseline tree with it empty, as that tree's own
+ # build script built every TinyGL file -O2 (review P5b)
+-TGLCOLD=${S31GL_TGLCOLD-" raster_sel texture s31_pixels s31_state get s31_rpos s31_draw s31_zepoch s31_stencil s31_ramtext s31_tex8 "}
++TGLCOLD=${S31GL_TGLCOLD-" raster_sel texture s31_pixels s31_state get s31_rpos s31_draw s31_zepoch s31_stencil s31_ramtext s31_tex8 s31_pcolor "}
+ for f in "$GL"/tinygl/source/*.c; do
+ 	b=$(basename "$f" .c)
+ 	case $b in glu|ostinygl) continue ;; esac
+diff --git a/gl/tinygl/source/init.c b/gl/tinygl/source/init.c
+index 4bc5b922..2f13158e 100644
+--- a/gl/tinygl/source/init.c
++++ b/gl/tinygl/source/init.c
+@@ -1,5 +1,6 @@
+ #include <stdlib.h>
+ #include "zgl.h"
++#include "s31_pcolor.h"
+ #include "s31_tex8.h"
+ #include "s31_ramtext.h"
+ 
+@@ -60,14 +61,17 @@ void glInit(void *zbuffer1)
+   GLViewport *v;
+   int i;
+ 
+-  c=gl_zalloc(sizeof(GLContext));
++  /* phase 6 tier 5: S31GL_PCOLOR puts the context in the colour arena */
++  c=s31pc_zalloc(sizeof(GLContext));
++  if (c == NULL) c=gl_zalloc(sizeof(GLContext));
+   gl_ctx=c;
+ 
+   c->zb=zbuffer;
+ 
+   /* allocate GLVertex array */
+   c->vertex_max = POLYGON_MAX_VERTEX;
+-  c->vertex = gl_malloc(POLYGON_MAX_VERTEX*sizeof(GLVertex));
++  c->vertex = s31pc_zalloc(POLYGON_MAX_VERTEX*sizeof(GLVertex));
++  if (c->vertex == NULL) c->vertex = gl_malloc(POLYGON_MAX_VERTEX*sizeof(GLVertex));
+   
+   /* viewport */
+   v=&c->viewport;
+diff --git a/gl/tinygl/source/memory.c b/gl/tinygl/source/memory.c
+index e1dc3cbb..b8575f55 100644
+--- a/gl/tinygl/source/memory.c
++++ b/gl/tinygl/source/memory.c
+@@ -2,11 +2,13 @@
+  * Memory allocator for TinyGL
+  */
+ #include "zgl.h"
++#include "s31_pcolor.h"
+ 
+ /* modify these functions so that they suit your needs */
+ 
+ void gl_free(void *p)
+ {
++    if (S31PC_OWNS(p)) return;     /* phase 6 tier 5: the colour arena */
+     free(p);
+ }
+ 
+diff --git a/gl/tinygl/source/raster_sel.c b/gl/tinygl/source/raster_sel.c
+index 644db155..c141ab29 100644
+--- a/gl/tinygl/source/raster_sel.c
++++ b/gl/tinygl/source/raster_sel.c
+@@ -9,6 +9,7 @@
+ #include "zgl.h"
+ #include "zpipe.h"
+ #include "raster_int.h"
++#include "s31_pcolor.h"
+ #include "s31_ramtext.h"
+ 
+ /* texenv op for (mode, stored format class), GL 1.3 table 3.22 */
+@@ -359,6 +360,7 @@ void gl_update_raster(GLContext *c)
+ 
+   c->raster_dirty = 0;
+   zb->pipe = p;
++  s31pc_probe();                /* phase 6 tier 5: glBegin's stack depth */
+ 
+   /* ---- texture (GL 1.3 3.8.10: an incomplete texture disables it) */
+   tex = c->texture_2d_enabled && t != NULL && gl_texture_complete(t);
+diff --git a/gl/tinygl/source/s31_ctx.c b/gl/tinygl/source/s31_ctx.c
+index 8db339a9..852c7533 100644
+--- a/gl/tinygl/source/s31_ctx.c
++++ b/gl/tinygl/source/s31_ctx.c
+@@ -15,6 +15,7 @@
+  */
+ #include "zgl.h"
+ #include "s31_ramtext.h"
++#include "s31_pcolor.h"
+ 
+ static GLContext *null_ctx;     /* current when nothing is */
+ 
+@@ -25,7 +26,8 @@ unsigned int tgl_bind_serial;
+ 
+ static ZBuffer *zb_new(void)
+ {
+-  ZBuffer *zb = gl_zalloc(sizeof(ZBuffer));
++  ZBuffer *zb = s31pc_zalloc(sizeof(ZBuffer));   /* phase 6 tier 5 */
++  if (zb == NULL) zb = gl_zalloc(sizeof(ZBuffer));
+   if (zb == NULL) return NULL;
+   zb->mode = ZB_MODE_5R6G5B;
+   zb->ztop = ~0u;               /* no depth epoch yet (s31_zepoch.c) */
+@@ -107,7 +109,9 @@ void *tgl_ctx_create(void *share)
+   /* phase 4 L1: before the first context exists (s31_ramtext.h) */
+   s31_ramtext_init();
+   if (null_ctx == NULL) {
++    s31pc_hold = 1;             /* phase 6 tier 5: not in the colour arena */
+     null_ctx = ctx_new(NULL);
++    s31pc_hold = 0;
+     if (null_ctx == NULL) return NULL;
+     if (gl_ctx == NULL) gl_ctx = null_ctx;
+   }
+@@ -246,6 +250,7 @@ void tgl_ctx_arm(void *ctx)
+   if (c == NULL) return;
+   c->ready = 0;
+   c->armed = 1;
++  s31pc_frame();                /* phase 6 tier 5: S31GL_PCOLOR, once */
+ }
+ 
+ /* phase 6: glFlush / glFinish / glXSwapBuffers - every queued triangle

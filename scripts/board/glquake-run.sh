@@ -20,6 +20,11 @@
 # Ends when qconsole.log has the timedemo "N frames" line, on "Error"/exit,
 # or at max_secs. Output: /root/gq/<label>.txt (collect it afterwards).
 # Sound stays on at the codec's quiet level (DAC 110, restored to 143).
+# GQ_CC=1 also samples the L1 cache counters (memory s31-cache-counters;
+# cachecnt.sh's registers) with each 10 s sample: CC <t> then the raw
+# next-level reads/writes of DBUS0 DBUS1 (the shared D-cache, both harts)
+# and IBUS0 IBUS1 - 6 devmem reads per 10 s, cleared and enabled at launch,
+# disabled at the end. nxtlvl counts do not wrap inside a 10 s window.
 L=$1; MAX=$2; shift 2
 mkdir -p /root/gq; O=/root/gq/$L.txt
 exec >$O 2>&1
@@ -37,6 +42,9 @@ lvrep() { kill -USR1 $(pidof lvdesk lvdesk.new) 2>/dev/null; sleep 1; grep -a 'l
 echo "LV0 $(lvrep)"
 amixer -q sset DACL 110 2>/dev/null; amixer -q sset DACR 110 2>/dev/null
 cd $B	# qconsole.log is written to the working directory
+cc() { [ -n "$GQ_CC" ] && echo "CC $1 $(devmem 0x2C0001d0 32) $(devmem 0x2C0001d4 32) $(devmem 0x2C0001e4 32) $(devmem 0x2C0001e8 32) $(devmem 0x2C000190 32) $(devmem 0x2C0001a0 32)"; }
+[ -n "$GQ_CC" ] && { echo "CCSTATE ctrl=$(devmem 0x2C000180 32)"; devmem 0x2C000180 32 0x00330033; devmem 0x2C000180 32 0x00000033; }
+cc 0
 T0=$(cut -d' ' -f1 /proc/uptime)
 DISPLAY=:0 HOME=${GQ_HOME:-/root/quake} setsid $GQ_WRAP $BIN -basedir $B -condebug "$@" >/root/gq/$L.out 2>&1 </dev/null &
 P=$!
@@ -44,6 +52,7 @@ t=0
 while [ $t -lt $MAX ]; do
 	sleep 10; t=$((t+10))
 	[ -d /proc/$P ] || { echo "EXITED at ${t}s"; break; }
+	cc $t
 	echo "S $t $(awk '/^(VmRSS|VmSwap)/{printf "%s%s ",$1,$2}' /proc/$P/status) majflt=$(awk '{print $12}' /proc/$P/stat) sdrd=$(awk '{print $3}' /sys/block/mmcblk0/stat) $(vm)"
 	# once, mid-run: every mapping with more than 256 kB resident or swapped
 	[ $t -eq ${GQ_SMAPS:-60} ] && awk '/^[0-9a-f]+-/{if(n>=256)print "M",sz,r,sw,n,nm; nm=$6; r=0;sw=0;n=0} /^Size:/{sz=$2} /^Rss:/{r=$2;n+=$2} /^Swap:/{sw=$2;n+=$2} END{if(n>=256)print "M",sz,r,sw,n,nm}' /proc/$P/smaps
@@ -66,6 +75,8 @@ while [ $t -lt $MAX ]; do
 	fi
 	grep -aqE '^ *[0-9]+ frames' $QL 2>/dev/null && break
 done
+cc end
+[ -n "$GQ_CC" ] && devmem 0x2C000180 32 0x00000000
 T1=$(cut -d' ' -f1 /proc/uptime)
 echo "WALL $T0 $T1"
 echo "RESULT $(grep -aE '^ *[0-9]+ frames' $QL | head -1)"
