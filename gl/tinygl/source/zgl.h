@@ -705,6 +705,9 @@ typedef struct GLContext {
   int mtex_adv;                 /* S31GL_MTEX (default 1): advertise 2 units */
   int flat_ok;                  /* phase 6 V5: pipe.flat is flat_vtx's (raster.c
                                    set_flat; per triangle, so at the end) */
+  int zf8_on;                   /* S31GL_ZF8 (default 1): phase 6 zf8's world
+                                   filler (0: the loop before it; 2: with the
+                                   next row's prefetches - the A/B arms) */
 } GLContext;
 
 /* GLContext.p4_en */

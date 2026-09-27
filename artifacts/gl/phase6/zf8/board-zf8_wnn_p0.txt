@@ -1,0 +1,181 @@
+    2   0.1%  5cc26  lw	t4, 0x0(a2)
+    1   0.1%  5cc2a  blez	t4, 0x5ce56 <glVertexAttribPointer+0x6e90>
+    4   0.2%  5cc2e  auipc	a5, 0x8
+    3   0.2%  5cc32  flw	fa7, -0x2ce(a5)
+    4   0.2%  5cc36  lw	a5, 0xf4(a0)
+    4   0.2%  5cc3a  addi	sp, sp, -0x60
+    3   0.2%  5cc3c  sw	s4, 0x4c(sp)
+    1   0.1%  5cc3e  lw	a3, 0x60(a5)
+    3   0.2%  5cc40  sw	s5, 0x48(sp)
+    2   0.1%  5cc42  sw	s6, 0x44(sp)
+    0   0.0%  5cc44  sw	s7, 0x40(sp)
+    2   0.1%  5cc46  sw	s8, 0x3c(sp)
+    0   0.0%  5cc48  sw	s9, 0x38(sp)
+    1   0.1%  5cc4a  sw	s10, 0x34(sp)
+    4   0.2%  5cc4c  sw	s11, 0x30(sp)
+    2   0.1%  5cc4e  sw	s0, 0x5c(sp)
+    3   0.2%  5cc50  sw	s1, 0x58(sp)
+    2   0.1%  5cc52  sw	s2, 0x54(sp)
+    2   0.1%  5cc54  sw	s3, 0x50(sp)
+    2   0.1%  5cc56  sw	a3, 0xc(sp)
+    3   0.2%  5cc58  lbu	a3, 0x750(a5)
+    1   0.1%  5cc5c  flw	fa4, 0x68(a1)
+    2   0.1%  5cc5e  flw	fs3, 0x5c(a1)
+    1   0.1%  5cc62  flw	fs2, 0x60(a1)
+    0   0.0%  5cc66  flw	fs1, 0xd8(a1)
+    4   0.2%  5cc6a  flw	fs0, 0xdc(a1)
+    3   0.2%  5cc6e  sw	a3, 0x10(sp)
+    0   0.0%  5cc70  lw	s10, 0x5c(a5)
+    3   0.2%  5cc74  lw	s9, 0x3ac(a5)
+    1   0.1%  5cc78  lw	s8, 0x710(a5)
+    0   0.0%  5cc7c  lw	s7, 0x70c(a5)
+    1   0.1%  5cc80  lw	s6, 0x708(a5)
+    1   0.1%  5cc84  lw	s5, 0x5c(a0)
+    3   0.2%  5cc88  lw	s4, 0x58(a0)
+    3   0.2%  5cc8c  lw	s11, 0x54(a0)
+    2   0.1%  5cc90  lw	a5, 0x0(a1)
+    3   0.2%  5cc92  fmul.s	ft11, fa4, fa7
+    2   0.1%  5cc96  fmul.s	ft10, fs3, fa7
+    2   0.1%  5cc9a  sw	a5, 0x24(sp)
+    0   0.0%  5cc9c  lw	a5, 0x4(a1)
+    2   0.1%  5cc9e  fmul.s	ft9, fs2, fa7
+    0   0.0%  5cca2  fmul.s	ft8, fs1, fa7
+    3   0.2%  5cca6  fmul.s	fa7, fs0, fa7
+    1   0.1%  5ccaa  sw	a5, 0x28(sp)
+    2   0.1%  5ccac  flw	ft4, 0x58(a1)
+    0   0.0%  5ccb0  lw	a5, 0xc(a1)
+    1   0.1%  5ccb2  flw	ft3, 0x4c(a1)
+    3   0.2%  5ccb6  flw	ft2, 0x50(a1)
+    1   0.1%  5ccba  flw	ft1, 0xd0(a1)
+    1   0.1%  5ccbe  flw	ft0, 0xd4(a1)
+    3   0.2%  5ccc2  auipc	a3, 0x8
+    0   0.0%  5ccc6  flw	fs4, -0x4be(a3)
+    2   0.1%  5ccca  lui	t0, 0x8
+    3   0.2%  5cccc  addi	t0, t0, 0x7e
+    1   0.1%  5ccd0  li	t5, 0x0
+    2   0.1%  5ccd2  sw	a1, 0x2c(sp)
+    1   0.1%  5ccd4  mv	a4, t4
+    2   0.1%  5ccd6  addi	a3, t5, 0x8
+    1   0.1%  5ccda  min	t3, a3, a4
+    2   0.1%  5ccde  bge	t5, t3, 0x5ce22 <glVertexAttribPointer+0x6e5c>
+    2   0.1%  5cce2  fdiv.s	fa5, fs4, ft4
+    6   0.3%  5cce6  lw	a2, 0x28(sp)
+    3   0.2%  5cce8  lw	a3, 0x2c(sp)
+    3   0.2%  5ccea  lw	a1, 0x24(sp)
+    3   0.2%  5ccec  sh1add	s3, t3, a2
+    3   0.2%  5ccf0  lw	t6, 0x10(a3)
+    6   0.3%  5ccf4  sh1add	t1, t5, a1
+    4   0.2%  5ccf8  sh1add	a3, t5, a2
+    3   0.2%  5ccfc  mv	a7, a5
+    3   0.2%  5ccfe  sw	a4, 0x14(sp)
+    7   0.4%  5cd00  sw	t3, 0x18(sp)
+    2   0.1%  5cd02  sw	t5, 0x1c(sp)
+   24   1.3%  5cd04  sw	a5, 0x20(sp)
+    4   0.2%  5cd06  fmul.s	fa6, fa5, ft3
+    2   0.1%  5cd0a  fmul.s	ft7, fa5, ft2
+    3   0.2%  5cd0e  fmul.s	ft6, fa5, ft1
+    2   0.1%  5cd12  fmul.s	ft5, fa5, ft0
+    2   0.1%  5cd16  fnmsub.s	fa0, fa4, fa6, fs3
+    5   0.3%  5cd1a  fnmsub.s	fa1, fa4, ft7, fs2
+    2   0.1%  5cd1e  fnmsub.s	fa2, fa4, ft6, fs1
+    3   0.2%  5cd22  fnmsub.s	fa3, fa4, ft5, fs0
+    5   0.3%  5cd26  fcvt.w.s	a6, fa6, rtz
+    1   0.1%  5cd2a  fmul.s	fa0, fa0, fa5
+    1   0.1%  5cd2e  fmul.s	fa1, fa1, fa5
+    7   0.4%  5cd32  fmul.s	fa2, fa2, fa5
+    3   0.2%  5cd36  fmul.s	fa5, fa3, fa5
+    6   0.3%  5cd3a  fcvt.w.s	a0, ft7, rtz
+    3   0.2%  5cd3e  fcvt.w.s	s2, fa0, rtz
+    4   0.2%  5cd42  fcvt.w.s	s1, fa1, rtz
+    4   0.2%  5cd46  fcvt.w.s	s0, fa2, rtz
+    5   0.3%  5cd4a  fcvt.w.s	t2, fa5, rtz
+    2   0.1%  5cd4e  fcvt.w.s	a1, ft6, rtz
+    3   0.2%  5cd52  fcvt.w.s	a2, ft5, rtz
+   22   1.2%  5cd56  and	a5, s4, a6
+   26   1.4%  5cd5a  and	a4, s5, a0
+   23   1.2%  5cd5e  or	a4, a4, a5
+   24   1.3%  5cd60  and	t3, s7, a1
+  162   8.6%  5cd64  and	a5, s8, a2
+   22   1.2%  5cd68  lhu	t4, 0x0(a3)
+   17   0.9%  5cd6c  or	a5, a5, t3
+   30   1.6%  5cd70  srli	t3, a7, 0xe
+   15   0.8%  5cd74  srl	a4, a4, s11
+   22   1.2%  5cd78  srl	a5, a5, s6
+   24   1.3%  5cd7c  zext.h	t5, t3
+   18   1.0%  5cd80  add	a4, a4, s10
+  202  10.8%  5cd82  add	a5, a5, s9
+   27   1.4%  5cd84  bltu	t5, t4, 0x5cdf6 <glVertexAttribPointer+0x6e30>
+   57   3.0%  5cd88  lbu	t4, 0x0(a4)
+   40   2.1%  5cd8c  lbu	a4, 0x0(a5)
+   18   1.0%  5cd90  lw	a5, 0xc(sp)
+   22   1.2%  5cd92  li	t5, 0x1f
+   26   1.4%  5cd94  sh2add	t4, t4, a5
+    8   0.4%  5cd98  lw	a5, 0x0(t4)
+   13   0.7%  5cd9c  sh	t3, 0x0(a3)
+   25   1.3%  5cda0  lw	t3, 0x10(sp)
+   15   0.8%  5cda2  sll	a4, a4, t3
+   20   1.1%  5cda6  slli	t4, a4, 0x8
+   17   0.9%  5cdaa  add	t4, t4, a4
+   16   0.9%  5cdac  andi	t3, a5, 0xff
+   19   1.0%  5cdb0  srli	a4, a5, 0x10
+   17   0.9%  5cdb4  mul	t3, t3, t4
+   17   0.9%  5cdb8  andi	a4, a4, 0xff
+   21   1.1%  5cdbc  srli	a5, a5, 0x8
+   19   1.0%  5cdbe  andi	a5, a5, 0xff
+   25   1.3%  5cdc2  mul	a4, a4, t4
+   15   0.8%  5cdc6  add	t3, t3, t0
+   15   0.8%  5cdc8  srli	t3, t3, 0x13
+   15   0.8%  5cdcc  minu	t3, t3, t5
+   22   1.2%  5cdd0  slli	t3, t3, 0xb
+   15   0.8%  5cdd2  mul	a5, a5, t4
+   19   1.0%  5cdd6  add	a4, a4, t0
+   20   1.1%  5cdd8  srli	a4, a4, 0x13
+   17   0.9%  5cdda  minu	a4, a4, t5
+   21   1.1%  5cdde  or	a4, t3, a4
+   19   1.0%  5cde2  li	t3, 0x3f
+   14   0.7%  5cde6  add	a5, a5, t0
+   14   0.7%  5cde8  srli	a5, a5, 0x12
+   22   1.2%  5cdea  minu	a5, a5, t3
+   19   1.0%  5cdee  slli	a5, a5, 0x5
+   29   1.5%  5cdf0  or	a4, a4, a5
+   14   0.7%  5cdf2  sh	a4, 0x0(t1)
+   21   1.1%  5cdf6  addi	a3, a3, 0x2
+   24   1.3%  5cdf8  add	a7, a7, t6
+   26   1.4%  5cdfa  add	a6, a6, s2
+   30   1.6%  5cdfc  add	a0, a0, s1
+   26   1.4%  5cdfe  add	a1, a1, s0
+   25   1.3%  5ce00  add	a2, a2, t2
+   18   1.0%  5ce02  addi	t1, t1, 0x2
+   55   2.9%  5ce04  bne	a3, s3, 0x5cd56 <glVertexAttribPointer+0x6d90>
+    4   0.2%  5ce08  lw	t3, 0x18(sp)
+    6   0.3%  5ce0a  lw	t5, 0x1c(sp)
+    3   0.2%  5ce0c  lw	a5, 0x20(sp)
+    5   0.3%  5ce0e  lw	a4, 0x14(sp)
+    4   0.2%  5ce10  sub	a3, t3, t5
+    3   0.2%  5ce14  addi	a3, a3, -0x1
+    8   0.4%  5ce16  mul	a3, a3, t6
+    4   0.2%  5ce1a  add	t6, t6, a5
+    1   0.1%  5ce1c  mv	t5, t3
+    3   0.2%  5ce1e  add	a5, a3, t6
+    0   0.0%  5ce22  fadd.s	ft4, ft4, ft11
+    3   0.2%  5ce26  fadd.s	ft3, ft3, ft10
+    2   0.1%  5ce2a  fadd.s	ft2, ft2, ft9
+    2   0.1%  5ce2e  fadd.s	ft1, ft1, ft8
+    0   0.0%  5ce32  fadd.s	ft0, ft0, fa7
+   10   0.5%  5ce36  blt	t5, a4, 0x5ccd6 <glVertexAttribPointer+0x6d10>
+    3   0.2%  5ce3a  lw	s0, 0x5c(sp)
+    3   0.2%  5ce3c  lw	s1, 0x58(sp)
+    2   0.1%  5ce3e  lw	s2, 0x54(sp)
+    1   0.1%  5ce40  lw	s3, 0x50(sp)
+    1   0.1%  5ce42  lw	s4, 0x4c(sp)
+    0   0.0%  5ce44  lw	s5, 0x48(sp)
+    0   0.0%  5ce46  lw	s6, 0x44(sp)
+    3   0.2%  5ce48  lw	s7, 0x40(sp)
+    3   0.2%  5ce4a  lw	s8, 0x3c(sp)
+    1   0.1%  5ce4c  lw	s9, 0x38(sp)
+    1   0.1%  5ce4e  lw	s10, 0x34(sp)
+    3   0.2%  5ce50  lw	s11, 0x30(sp)
+    2   0.1%  5ce52  addi	sp, sp, 0x60
+    4   0.2%  5ce54  ret
+    0   0.0%  5ce56  ret
+# zf8_wnn_p0: 1876 samples at [0x5cc26, 0x5ce58) (load base 0x95645000)

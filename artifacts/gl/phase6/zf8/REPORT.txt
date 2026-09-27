@@ -1,0 +1,178 @@
+GL phase 6 - zf8: QuakeSpasm's world filler (zf8_wnn_p0), host only -
+2026-09-27. Nothing touched the board; no make / Buildroot. Base: main at
+f0a5ac44 (gl/ = 8793388b, the library artifacts/gl/glquake/prof8 profiled).
+Workload: the QuakeSpasm proxy on the p5f2-tf0 trace (S31GL_TEXFILTER=0,
+the shipped nearest config), RV32 qemu instruction counter, board flags.
+Raw data beside this file: board-zf8_wnn_p0.txt (board samples per
+instruction), qemu-counts/ (per-instruction counts before and after, function
+profiles, the replays), gates/. s31, MIT.
+
+1. WHERE THE BOARD TIME WAS (prof8-r1: 8000 hart-1 samples, 1876 in
+   zf8_wnn_p0 = 23.4% of CPU0; zp_run_mt_direct, its runner, another 134 =
+   1.7%). The profiled bytes were checked first: the Buildroot build in the
+   volume and a rebuild of 8793388b with the Buildroot compiler and flags
+   (gl/bench/out-zf8/brbuild.sh, not committed) have byte-identical
+   zf8_wnn_p0 at the same address, 0x5cc26-0x5ce58, as libGL-thr.so.
+   Mapped with the new gl/bench/h1sann.py (PCs + maps + nm -> disassembly
+   with samples):
+     prologue (a call per 32-pixel chunk)           106   5.7%
+     block setup (1/w, the four walks, 8 px)        141   7.5%
+     pixel: indices, depth load and test            634  33.8%
+     pixel: texel + lightmap fetch, product, pack,
+            depth and colour stores                 685  36.5%
+     pixel: walk steps, loop                        225  12.0%
+     block end + epilogue                            85   4.5%
+   About 20 samples per instruction per pixel everywhere, except two
+   neighbours of the depth load: 0x5cd64 (162, two before `lhu pz`) and
+   0x5cd82 (202, just before `bltu`, the first use of the loaded depth).
+   Read as "the sample names the last retired instruction": the depth load
+   waiting to issue behind the previous pixel's stores (a colour-buffer
+   store miss, write-allocate) and the branch waiting for a depth-buffer
+   miss. Together ~17% of the function above its instruction share - the
+   z-buffer / colour-buffer line misses (64-byte lines; spans average 11
+   pixels, so nearly every span row starts with a miss in each buffer).
+   The texel and lightmap index loads (0x5cd88 57, 0x5cd8c 40) run about 2x
+   the base rate: texture misses, a smaller cost. Everything else is
+   instruction count, and 30% of it was per chunk and per block rather
+   than per pixel.
+
+2. WHAT CHANGED (gl/tinygl/source/zpipe_fused8.h; bit-identical)
+  - Depth walked as z << 2: the 16-bit depth is one shift, no zext
+    (bits 16-31 of 4z are bits 14-29 of z; 4(z + dz) = 4z + 4dz mod 2^32).
+  - The depth test before any texel work (a failing pixel: 22 -> 8
+    instructions).
+  - The P8 texel's channels as three byte loads from its palette word (no
+    field extraction: -3).
+  - m = (l << sh) 257 as one multiply; for sh a constant, l * 257 with the
+    shift folded into each channel's sh1add (the product's add).
+  - One clamp constant for the three fields: min(31, v >> 19) =
+    min(v, 2^24 - 1) >> 19 and min(63, v >> 18) = min(v, 2^24 - 1) >> 18.
+  - A whole span per call: the batch's ZPipeX.run_mt is the filler's own
+    runner (zf8_wnn_r_*), which cuts the span into the chunks zp_run_t
+    would and advances the span values between them with zp_run_t's own
+    statements (so the same fmadd rounding; the ZP_N_* conditions copied),
+    so zp_run_mt_direct, its indirect call and a prologue per chunk go.
+    The stage form (zf8_wnn_p0 ..., for any other caller of x->chunk) is
+    the same body with N = f->n.
+  - zf8_wnn_s_p0s1: QuakeSpasm's batch (P8, LEQUAL + write, sh 1 - its
+    overbright) with sh constant and each 8-pixel block unrolled, entered
+    at its first pixel through a jump table (a block of k pixels runs the
+    last k copies, addressed back from the block's end): no pointer steps,
+    no end test, no walk step after the last pixel. Two empty asm operands
+    and the chunk end in a volatile stack slot keep GCC from holding
+    derived pointers live through the pixels (each worth a spill a pixel).
+    The other five variants (sh 0 / 2, LEQUAL no-write, LESS, RGB565) take
+    the same body as a loop.
+  - S31GL_ZF8 (s31_mtex.c, GLContext.zf8_on at the end of the struct): 1
+    default; 0 the loop before this work for QuakeSpasm's batch
+    (zf8_wnn0_p0 run by zp_run_mt_direct, byte-for-byte the old code: its
+    7,793,557 instructions a frame reproduce exactly); 2 zf8 plus
+    next-row touches (below). Both are board A/B arms.
+  - ramtext.list: the new hot functions (S31GL_RAMTEXT=1 moves them and
+    their .rodata jump table; the rv32 gate's ramtext line moved 69
+    sections, 42,624 B, 0 read-only words left).
+
+3. NUMBERS (RV32 qemu, p5f2-tf0, 80 counted frames; qemu-counts/*.annot)
+  Per tested pixel (125,744 a frame; 93,039 pass the depth test):
+                                   before           after
+    pixel that passes              56               45 (one spill left)
+    pixel that fails               22                8
+    per block (8 px)               52               33 (+ ~16 for a
+                                                     partial block's
+                                                     jump-table entry)
+    per call                       71 + runner ~34  71 + ~30 per chunk
+                                   per 32-px chunk  (calls: 10,920 chunks
+                                                     -> 9,483 spans)
+    zf8_wnn_p0 insn/frame          7,793,557        6,094,885 (-21.8%)
+      + zp_run_mt_direct           ~360,000         0
+    instructions per tested px     62.0 (64.9 with  48.5
+                                   the runner)
+  QuakeSpasm proxy, M instructions per counted frame (windows 0 / 1):
+    p5f2-tf0  17.7274 / 17.0444  ->  15.9356 / 14.7389  (-10.1% / -13.5%)
+    p5a-tf0   17.2807 / 16.5078  ->  15.4888 / 14.2022  (-10.4% / -14.0%)
+    the filtered traces (p5a, p5f2, p5mtex default config) and the phase 4
+    ones: unchanged to the last digit (they do not take this filler).
+    S31GL_ZF8=2 costs +0.17 / +0.19 M a frame (the touches, ~18 a span).
+  Code size, Buildroot flags (gl/bench/brsize.sh, base = 8793388b):
+    .text 277,364 -> 278,948 (+1,584 B), .rodata +12 B, stripped
+    427,724 -> 431,820 (+4,096: a page). zf8_wnn_s_p0s1 is 1,758 B (was
+    562 B + zp_run_mt_direct's 428 B on this path); zf8_wnn0_p0 (562 B)
+    exists only for the A/B and should go once the board has decided.
+
+4. GATES (gates/)
+  run-3a p6-zf8 (host, suite, pixels, raster, prims, mtex, prec, qsr-fused,
+  bench, rv32): core_test 292/0, raster_gate 51/0, filt_test 32/0,
+  fused_test 45/0 (both FILT8 modes; also 45/0 with S31GL_ZF8=0),
+  headless_gears md5 34a082d3... (unchanged); suitecmp 0 apps worse and
+  line-for-line identical to phase 6 gates/t0; pixels and raster
+  summaries identical to gates/t0 (the "DIFFER" run-3a prints is against
+  the phase-2 bases, as before); prims PASS; mtex 4 of 5 PASS, 5 logs 0
+  differ (as before); prec 99.35%.
+  qsr-fused over all 9 traces present (QSR_TRACES: p5a p5a-tf0 p4final
+  p4final-tf0 p4final-b p5f2 p5f2-tf0 p5mtex p5mtex-tf0 - the other phase
+  5 captures were deleted when the disk filled): 756 of 756 full frames
+  fused = general and 756 of 756 fused = the unpacked reference; p5f2-tf0
+  also 84 of 84 identical to the live board capture, in all three
+  S31GL_ZF8 arms.
+  RV32 qemu-user: core_test 290/0, raster_gate 51/0, d2f 0 mismatches,
+  filt_test 32/0, fused_test 45/0, headless_gears md5 unchanged.
+  bench.sh: every line identical to gates/t0 (hashes and counts); 62
+  within limits.txt, the same 6 owner-pending lines over.
+  run-qsr-threads (p5f2-tf0, p5a-tf0): S31GL_THREADS=2 at both band layouts
+  84 of 84 frames identical to THREADS=0 (the worker calls the new runner).
+  Mutation check: advancing the chunk's 1/w by 1.0001x in the new runner
+  fails fused_test's world-nearest scenarios (1,706 and 1,733 values), so
+  the multi-chunk path is covered.
+
+5. NOT DONE, AND WHY
+  - PIE SIMD: not clearly worthwhile, so not attempted. The pixel is two
+    gathers (index plane, palette, lightmap) PIE cannot do, and the
+    products need 26 bits (x * l * 257 * 2 + 32894) where PIE has 16-bit
+    lanes and no 32-bit lane multiply; moving eight pixels' r, g, b, l into
+    lanes costs more than the 16 ALU instructions it would replace, and
+    spans average 11 pixels (docs/tinygl-hw-accel-assessment-2026-09-25.md
+    table rows PIE / G08; no compiler support, hand asm only).
+  - A combined palette x light table (256 x 256 x 2 B = 128 kB) is twice
+    the shared D-cache and RAM this board does not have; per-light rows
+    built lazily cost a check a pixel. The exact product is already one
+    multiply and a shNadd a channel.
+  - The last spill (unit 0's shift, one lw a passing pixel, ~93 k a
+    frame): all 27 allocatable registers are live; GCC never allocates ra.
+    A local register variable in ra through asm operands would free one;
+    ~1% of the filler, left for a hand-scheduled version if the board says
+    the filler is still worth it.
+  - The per-span prologue (71 a span, 0.67 M a frame): 12 saved registers
+    and the batch's constants, once per 11-pixel span. The lever is a
+    multi-span call from the triangle filler (GEOMETRY.txt section 5's
+    plane-per-triangle idea), outside this function.
+  - Hiding the depth / colour line misses: the samples say a store miss
+    blocks the next memory access, so a prefetch probably only moves the
+    wait. S31GL_ZF8=2 is there to measure it, not a recommendation.
+
+6. BOARD A/B TO RUN (coordinator; stock QuakeSpasm 0.96.3 timedemo demo1,
+   320x240 fullscreen, fresh boot per run, interleaved arms, >= 4 runs per
+   arm - the band is 7.4-8.3 fps, so a 5% gain needs the repeats)
+  Library: gl/bench/out-zf8/br-final/libGL.so.1 (stripped, from this tree
+  with the Buildroot compiler and flags, -DS31GL_TEXFILTER_DEFAULT=0
+  -DS31GL_RAMTEXT_DEFAULT=0; sha256 a3005a47...), or the package build of
+  this commit. Put it where the prof8 and thr2 arms loaded theirs
+  (/root/thr/libGL.so.1 on the SD card; the arm lines below assume
+  LD_LIBRARY_PATH=/root/thr is how - use whatever those arms used) with
+  scripts/board/deploy.py. Confirm it is this build: `strings libGL.so.1 |
+  grep S31GL_ZF8` must print one line (the 8793388b library has none), and
+  the game's maps must name /root/thr/libGL.so.1.
+    scripts/board/glquake-arm.sh zf8-A1 2 LD_LIBRARY_PATH=/root/thr \
+      -- -mixspeed 11025 -zone 384 -heapsize 12288 -width 320 -height 240 -fullscreen
+    scripts/board/glquake-arm.sh zf8-A0 2 LD_LIBRARY_PATH=/root/thr S31GL_ZF8=0 -- (same)
+    scripts/board/glquake-arm.sh zf8-A2 2 LD_LIBRARY_PATH=/root/thr S31GL_ZF8=2 -- (same)
+  (run 1 of each arm is the warm-up; alternate A1 / A0 over >= 4 boots
+  each, then A2 against A1.)
+  A0 vs A1 is the headline. Prediction: the filler + runner were 25.1% of
+  CPU0; their instructions fall 25% but the ~17% of their samples that
+  are line misses stay, so about -5% of CPU0 time: 7.9 -> ~8.3 fps if the
+  frame stays CPU-bound. A profile (scripts/board/gq-prof.py) of the A1
+  arm should show zf8_wnn_s_p0s1 near 18-19% and no zp_run_mt_direct.
+  A2 vs A1: keep 2 only if clearly better; otherwise delete it and
+  zf8_wnn0_p0 together.
+  Regression: glxgears, Doom and the desktop (xcalc) as usual - they do
+  not take this filler, so they must be unchanged.

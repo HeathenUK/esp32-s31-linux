@@ -860,7 +860,8 @@ void zpf_select(GLContext *c)
      fillers (zpipe_fused8.h); the 565 ones read ZPipe.tex */
   if ((c->tex_active && x->tf[0].t8) || (c->tu1_on && x->tf[1].t8)) {
     int direct;
-    fn = zpf8_pick(c, &kind, &direct);
+    void (*run)(ZBuffer *zb, ZSpan *s);
+    fn = zpf8_pick(c, &kind, &direct, &run);
     zpf_count[kind]++;
     if (fn == NULL) { x->bil0 = 0; return; }
     for (k = 0; k <= n; k++) x->gen_st[k] = st[k];
@@ -875,7 +876,7 @@ void zpf_select(GLContext *c)
       /* the filler tests depth itself and the runners call it directly */
       p->depth = zf_pass;
       x->chunk = fn;
-      x->run_mt = zp_run_mt_direct;
+      x->run_mt = run;
       if (direct == 2) x->run_lod_mt = zp_run_lod_mt_direct;
     }
     return;
