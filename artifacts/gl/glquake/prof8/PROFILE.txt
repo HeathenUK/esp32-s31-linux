@@ -1,0 +1,95 @@
+8000 samples
+  62.0%   4963  libGL.so.1
+            23.4%  zf8_wnn_p0
+             5.0%  ZB_fillTriangleGeneralMT
+             3.3%  zx8_base_p8
+             3.3%  gl_vertex4f
+             2.8%  ZB_fill16
+   9.9%    789  kernel: sched/tick/timer
+             0.6%  RAM __schedule
+             0.3%  RAM esp32s31_clic_handle_irq
+             0.3%  RAM __update_load_avg_se
+             0.2%  RAM ktime_get
+             0.2%  flash switch_mm
+   6.0%    483  quakespasm
+             0.7%  GL_DrawAliasFrame
+             0.5%  S_PaintChannels
+             0.5%  RecursiveLightPoint
+             0.5%  R_DrawTextureChains_Multitexture
+             0.4%  ?
+             0.2%  R_MarkSurfaces
+             0.2%  __muldf3
+             0.2%  R_RenderDynamicLightmaps.part.0
+             0.1%  __extendsfdf2
+             0.1%  R_CullBox
+             0.1%  R_SetupAliasLighting
+             0.1%  R_DrawAliasModel
+   5.0%    397  lvdesk
+             3.1%  xshm_request
+             0.5%  main
+             0.1%  cursor_vis_update
+             0.1%  send_reply
+             0.1%  ?
+   3.7%    293  kernel: kernel other
+             0.2%  RAM do_raw_spin_lock
+             0.1%  RAM __fget_light
+             0.1%  RAM mmiowb_spin_lock
+             0.1%  RAM mmiowb_spin_unlock
+             0.1%  RAM note_interrupt
+   3.6%    287  libc.so
+             0.7%  memset
+             0.5%  __adddf3
+             0.4%  __muldf3
+             0.4%  __subdf3
+             0.3%  ?
+   1.8%    140  kernel: paging/mm
+             0.2%  flash fallback_scalar_usercopy_sum_enabled
+             0.1%  flash memset
+             0.1%  RAM __irq_resolve_mapping
+             0.1%  flash memcpy
+             0.1%  flash default_write_copy
+   1.7%    137  kernel: SD/block
+             0.3%  RAM dw_mci_request
+             0.2%  RAM dw_mci_interrupt
+             0.1%  RAM dw_mci_ka_timer
+             0.1%  flash esp32s31_cache_range
+             0.1%  RAM add_interrupt_randomness
+   1.6%    128  M-mode firmware
+   1.3%    106  kernel: syscall/fs/net
+             0.2%  RAM do_sys_poll
+             0.1%  flash __se_sys_ioctl
+             0.1%  RAM sock_poll
+             0.1%  flash esp32s31_lcd_present_ioctl
+             0.1%  RAM unix_poll
+   1.1%     91  kernel: sound
+             0.2%  RAM snd_pcm_update_hw_ptr0
+             0.2%  flash __snd_pcm_lib_xfer
+             0.1%  flash snd_pcm_period_elapsed
+             0.1%  RAM snd_soc_pcm_component_pointer
+             0.1%  flash _snd_pcm_stream_lock_irqsave
+   1.1%     89  kernel: irq/exception entry
+             0.3%  flash handle_exception
+             0.2%  RAM clic_writeb
+             0.1%  flash __fstate_restore
+             0.1%  flash ret_from_exception
+             0.1%  RAM do_trap_ecall_u
+   0.4%     34  libasound.so.2.0.0
+             0.1%  snd1_pcm_write_areas
+             0.1%  ?
+             0.1%  snd_pcm_state
+             0.0%  snd_pcm_hw_writei
+             0.0%  snd1_pcm_areas_from_buf
+   0.2%     20  libX11.so.6.4.0
+             0.2%  ?
+   0.2%     19  libSDL-1.2.so.0.11.4
+             0.1%  ?
+             0.0%  SDL_RunAudio
+             0.0%  SDL_ThreadID
+             0.0%  SDL_PumpEvents
+             0.0%  ALSA_PlayAudio
+   0.2%     15  kernel: idle
+             0.2%  flash arch_cpu_idle
+   0.1%      5  unresolved user
+             0.1%  ?
+   0.1%      4  libasound_module_pcm_s31route.so
+             0.1%  ?
