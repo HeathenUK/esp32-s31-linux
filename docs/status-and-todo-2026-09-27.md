@@ -95,6 +95,36 @@ Details: rootfs/s31fp/v2/V2-REPORT.txt.
    reader, stalls the app. s31route must never block on a sink that no
    one drains.
 
+## Agents stopped by the weekly usage limit (~15:25; it resets 1 Oct 04:00)
+
+1. **s31fp regression check.** Quiet fresh-boot A/B, preload on (default)
+   against S31FP=0:
+   - prboom 320x240 fullscreen: 40.3 fps on, 39.7 fps off. **No s31fp
+     cost.** The low prboom number reads the same with the preload off, so
+     it comes from the boot or harness state, not s31fp.
+   - prboom's 5-6 patched helpers have only 18 call sites and none of them
+     is in a per-pixel loop.
+   - sdlquake: 20.2 fps on. The coordinator is running the off/on pairs
+     (sqab).
+
+   **Resume:** the copy-in-place crash hunt (a prboom SIGSEGV at level
+   load under S31FP_COPY=1, 1 in 4 runs).
+
+   **Hypothesis to test:** in trampoline mode the v2 code runs from
+   libs31fp in XIP flash, so try the library on the SD root.
+2. **Generic interceptions, v3 WIP** (commit 7da299bf, rootfs/s31fp/v3):
+   - A1 (string routines) and A2 (user-space clock) are built and pass on
+     qemu. The agent was replacing TLS with a pthread key when it stopped.
+   - **Resume:** the board tests (exec cost, correctness under migration,
+     clock drift against the syscall, PIE bounce counts).
+3. **Bluetooth sink-switch fix.** Committed (682776d8) and staged, not
+   flashed.
+   - **Resume:** build the overlay; gate with scripts/xipdiff.sh (image 1
+     may change only in the s31route plugin, image 2 only in s31-bt); flash
+     both images; run the arms that do not need headphones; leave sinkear.sh
+     ready for the owner.
+   - Baselines: images/sinkfix-base/.
+
 ## Queued (in order)
 
 1. **sdlquake frame-dip investigation.**
