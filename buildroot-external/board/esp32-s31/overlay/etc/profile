@@ -12,3 +12,5 @@ export XDG_CACHE_HOME=/root/.cache
 # found by their full bodies and redirected at load. S31FP=0 turns it off for
 # a process; musl starts programs normally if the file is missing.
 [ -r /usr/lib/libs31fp.so ] && export LD_PRELOAD=/usr/lib/libs31fp.so
+# Validated v3 on SD, retaining the XIP v2 fallback above.
+[ -r /etc/s31fp.env ] && . /etc/s31fp.env

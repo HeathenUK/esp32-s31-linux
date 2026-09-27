@@ -1,0 +1,20 @@
+sh /tmp/r.sh 2>&1 & __rp=$!; ( trap 'kill "$__rs_sleep" 2>/dev/null; wait "$
+__rs_sleep" 2>/dev/null; exit' TERM INT; sleep 27 & __rs_sleep=$!; wait "$__rs_s
+leep"; kill -0 $__rp 2>/dev/null && { echo RS_TIME"K"ILL; kill -9 $__rp 2>/dev/n
+ull; } ) & __rw=$!; wait $__rp 2>/dev/null; __rc=$?; kill $__rw 2>/dev/null; wai
+t $__rw 2>/dev/null; printf "RS_EXIT:%s\n" "$__rc"; echo RS_DONE
+Linux esp32-s31 7.1.10 #401 SMP Sun Sep 27 09:58:01 UTC 2026 riscv32 GNU/Linux
+# Shared login/desktop policy for the validated SD-resident s31fp v3 release.
+# The XIP v2 library remains the fallback if this installation is absent.
+if [ -r /opt/s31/libs31fp.so ]; then
+    export LD_PRELOAD=/opt/s31/libs31fp.so
+    export S31FP_COPY=${S31FP_COPY:-1}
+    export S31STR=${S31STR:-1}
+    # The estimated fast clock is not accepted for deployment.
+    export S31CLK=0
+fi
+5c791e53d368685a267dbb29fdf66b28  /opt/s31/libs31fp.so
+253
+RS_EXIT:0
+RS_DONE
+[2]+  Done(143)                  (trap "kill \"\$__rs_sleep\" 2>/dev/null; wait \"\$__rs_sleep\" 2>/dev/null; exit" TERM INT; sleep 27; ; wait "${__rs_sleep}"; kill -0 ${__

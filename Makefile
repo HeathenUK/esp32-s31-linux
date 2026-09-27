@@ -1524,6 +1524,13 @@ S31FP_V3_OUT ?= $(BUILD_DIR)/s31fp-v3
 s31fp-v3: s31fp-v2
 	B=$(S31FP_V3_OUT) V2_BUILD=$(S31FP_TEST_OUT) sh rootfs/s31fp/v3/build-v3.sh
 
+# Keep v3's interposed text in the tested SD/page-cache placement. No image
+# repack here: the existing rootfs overlay carries this file on future builds.
+.PHONY: s31fp-v3-stage
+s31fp-v3-stage: s31fp-v3
+	mkdir -p buildroot-external/board/esp32-s31/overlay/opt/s31
+	cp $(S31FP_V3_OUT)/libs31fp.so buildroot-external/board/esp32-s31/overlay/opt/s31/libs31fp.so
+
 segvtrap: $(BUILD_DIR)/diagnostics/segvtrap.so $(BUILD_DIR)/diagnostics/segvtrap-test
 $(BUILD_DIR)/diagnostics/segvtrap.so: rootfs/segvtrap.c
 	mkdir -p $(@D)

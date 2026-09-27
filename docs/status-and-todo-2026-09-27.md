@@ -1,10 +1,7 @@
-> **s31fp update, 18:07 UTC:** see [the detailed handoff](s31fp-handoff-2026-09-27.md).
-> Copy failure paths are hardened; the old crash remains unreproduced. The v3
-> string candidate passed actual-board migration/correctness tests; a separate
-> detached-cancellation test crash is diagnosed and fixed. QuakeSpasm completed
-> quiet 8.9/9.4 fps arms (not a proven gain). Fast clock remains unaccepted/off.
-> No new library or kernel has been shipped. A final quiet application check
-> is in flight; consult the handoff before using the serial port.
+> **Latest s31fp release:** tested copy/string v3 is deployed on SD and boot-verified.
+> Fast clock is being replaced with a kernel-backed time64 vDSO; not yet shipped.
+> Final quiet prboom acceptance: 46.6 fps; Tyrian underruns remain.
+> See [the handoff](s31fp-handoff-2026-09-27.md) for hashes and evidence.
 
 # Status and to-do, 2026-09-27 (~15:10)
 
