@@ -1,0 +1,40 @@
+env LD_PRELOAD=/usr/lib/libs31fp.so
+== arm shipped tag 1 pid 451 uname #401 SMP Sun Sep 27 09:58:01 UTC 2026 up 102.33
+s31fp: scanned main text, patched 0x0000000c
+s31fp: of which copied in place 0x00000000
+s31fp: pages given their original frame colour 0x00000000
+audio_tid 453
+xruns_per_10s 280 260 254 234 224 226  alive yes
+RESULT xruns/s 23.83  audio_thread_cpu 91.7%  process_cpu 121.7%  window 62.3s
+VmRSS:	    2976 kB RssAnon:	    2320 kB RssFile:	     416 kB 
+MEM private_dirty_kB 2404 private_clean_kB 408
+maps_libs31fp 3
+    845 overrun occurred
+TYR_DONE
+LD_PRELOAD=/usr/lib/libs31fp.so
+== arm shipped uname #401 SMP Sun Sep 27 09:58:01 UTC 2026 up 180.29
+glxgears /root/gl2/bin/glxgears
+GLXGEARS 279 frames in 5.0 seconds = 55.495 FPS
+GLXGEARS 283 frames in 5.0 seconds = 56.445 FPS
+GLXGEARS 287 frames in 5.0 seconds = 57.131 FPS
+PRBOOM after 5s 
+SDLQUAKE 969 frames  47.4 seconds  20.5 fps
+REG_DONE
+prboom.cfg
+ default file: /root/.prboom/prboom.cfg
+IdentifyVersion: IWAD not found
+
+IdentifyVersion: IWAD not found
+
+xlite: 2 unimplemented functions were called:
+xlite:   XOpenIM                          x1
+xlite:   XSetExtensionErrorHandler        x1
+xlite: that is the to-do list for this client.
+
+604.78
+== prboom shipped env LD_PRELOAD=/usr/lib/libs31fp.so up 75.32
+s31fp: cache hit, patched 0x00000006
+s31fp: of which copied in place 0x00000000
+s31fp: pages given their original frame colour 0x00000000
+PRBOOM after 130s Timed 5026 gametics in 4406 realtics = 39.9 frames per second  segv 0
+PBS_DONE

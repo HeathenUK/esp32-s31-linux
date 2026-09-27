@@ -1,8 +1,8 @@
 s31fp v2 - bit-exact soft-double helpers and a cheap interception
 ===================================================================
-2026-09-27. Kernel #401 on the board. Status: CANDIDATE, NOT SHIPPED. Nothing
-is installed and no environment is changed. rootfs/s31fp/v2/delivery.diff
-lists the exact places for when the owner says ship.
+2026-09-27. Kernel #401 on the board. Status: SHIPPED 2026-09-27, trampoline
+default (section 10). Earlier sections describe the candidate as it was
+measured before shipping.
 
 Rules in force (owner rulings of 2026-09-27):
   - musl and ld.so are not modified. In-libc delivery and ld.so-level
@@ -456,3 +456,85 @@ regression.
   statx (1), would take a further few ms off every launch.
 - Test binaries remain in /root/afp2 on the card, along with the test cache
   /root/afp2/cache. Nothing outside /root/afp2 was changed.
+
+
+10. COPY-IN-PLACE, FRAME COLOURING, AND WHAT SHIPPED (2026-09-27, later)
+-----------------------------------------------------------------------
+Copy-in-place (S31FP_COPY=1): the v2 routine is copied over libgcc's own
+body in the program instead of jumping to it.
+  - 13 of 14 routines: all but divdf3, which is compiled C.
+  - gedf2/ledf2 are 200 bytes against libgcc's 184, so only their
+    non-negative fast compare is copied; other cases jump back to the full
+    routine in the library.
+  - v2.S is built without linker relaxation, and every fallback tail call
+    is an explicit auipc/jalr pair recorded in section s31fix, re-encoded
+    for the copy's address. build-preload3.sh fails unless those pairs are
+    the only relocations.
+  - QEMU: 0 mismatches over 5 M sets per helper through the copies, and
+    4,783 instructions per sample for the title song, the same as static v2
+    (trampoline 4,973).
+  - Board: 14/14 two-process dumps identical (unpatched, copy, trampoline)
+    and 280/280 in the hammer (board-b5.txt).
+
+Title song, CPU0, us per sample:
+  static v2                       18.2-18.4
+  copy, uncoloured                19.4-20.5 in most runs, but 22.6-31.1 in
+                                  about 1 run in 4-6 (board-b6/b7.txt)
+  copy, colour-placed             19.9-20.6 in 26/26 runs (0.88 core;
+                                  board-b8/b10.txt)
+  trampoline                      21.3-22.1
+CPU1 (the lent hart) is 20-25% slower for EVERY arm, static v2 and plain
+libgcc included (board-b9.txt), so that is a property of the hart, not of
+the preload.
+
+The lottery is the physically indexed I-cache (32 kB, 2-way, 16 kB per way;
+frame bits 12-13 pick the colour). The write COW's each patched text page
+into a fresh frame of random colour. In board-b7.txt the slow runs are
+exactly those where two or three of the patched pages drew colour 0.
+The fix is to give each patched page a frame of its ORIGINAL page-cache
+frame's colour:
+  1. take frames from a small populated anonymous pool, 4 pages at a time
+     (colours read from pagemap, root only);
+  2. copy the page's original bytes into the chosen frame and mremap it
+     over the text page BEFORE any write (it arrives RW, never executable);
+  3. then the usual writes, the single RX mprotect (the cache flush) and
+     fence.i.
+This is the RAMTEXT tier-6 technique. It costs about +6 ms per launch, and
+the whole preload costs about +20 ms per launch with copy+colour.
+
+WHY COPY-IN-PLACE DID NOT SHIP: one prboom timedemo, run under
+copy+colour after the OpenTyrian arm on a fresh boot, died of SIGSEGV at
+level load, then hung in I_ShutdownSound. That was 1 of 4 prboom runs under
+copy; the 3 others (25 s each, past level load, with segvtrap) were clean,
+and I could not reproduce it or find a cause. Every trampoline prboom run
+completed. So the shipped library defaults to the trampoline, and copy is
+opt-in (S31FP_COPY=1; colouring then applies automatically). The cost of
+that choice is ~1.3 us per sample on OpenTyrian's title.
+
+SHIPPED (commit a2c77724; board verified after a hard reset):
+  /usr/lib/libs31fp.so   077a697a, XIP image 1 (fa39f3b2, rebuilt from the
+                         current overlay; 417,792 bytes free; image 1 only,
+                         kernel #401 untouched, xip2 not flashed)
+  /usr/bin/lvdesk        4b06dbec = 963dc698 + setenv(LD_PRELOAD, 0);
+                         verified: its launched child carries LD_PRELOAD
+  /etc/profile           c8b1481a (on the card via deploy.py): exports
+                         LD_PRELOAD when the library exists
+  /var/lib/s31fp         on the card: the per-binary cache (fills itself)
+  s31route               b651fa15 (unchanged)
+Programs report their routines patched (amixer 7, oplbench 10,
+OpenTyrian 12). Kill switch: S31FP=0.
+
+One quiet fresh-boot regression in the shipped state (board-shipped.txt):
+  OpenTyrian title, 60 s   xruns per 10 s 280 260 254 234 224 226
+                           (23.8/s), audio thread 91.7%, still alive.
+                           Not real-time; the synth alone needs ~0.97 core
+                           through the trampoline.
+  glxgears windowed        55.5 / 56.4 / 57.1 fps
+  sdlquake timedemo        20.5 fps (earlier boots 21.2-22.5)
+  prboom fullscreen        39.9 fps, completed, no SIGSEGV (6 routines
+                           patched; 320x240 -fullscreen from /root/doom/wads,
+                           the menu's invocation; separate fresh boot because
+                           the first attempt ran from /root/doom and found no
+                           IWAD - with S31FP=0 too, a harness error). There
+                           is no same-mode baseline today; the 48.4-48.9 fps
+                           earlier are windowed 320x200.
