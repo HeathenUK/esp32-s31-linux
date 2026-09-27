@@ -1,0 +1,22 @@
+ARM new glpre= render_scale=1 shmbufs=2 mode=win runs=6 bin=/usr/bin/lvdesk lib=/usr/lib lvenv= glenv= #393 SMP Sat Sep 26 12:31:02 UTC 2026 up 80.51
+RUN 1 fps 49.8 gears 90% lvdesk 86% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+261 frames in 5.0 seconds = 51.925 FPS 207 frames in 5.0 seconds = 41.380 FPS 292 frames in 5.0 seconds = 58.354 FPS 
+RUN 2 fps 53.4 gears 74% lvdesk 96% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+204 frames in 5.0 seconds = 40.718 FPS 257 frames in 5.0 seconds = 51.383 FPS 284 frames in 5.0 seconds = 56.506 FPS 
+RUN 3 fps 47.8 gears 86% lvdesk 79% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+266 frames in 5.0 seconds = 53.128 FPS 247 frames in 5.0 seconds = 49.391 FPS 237 frames in 5.0 seconds = 47.186 FPS 
+RUN 4 fps 49.6 gears 82% lvdesk 84% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+274 frames in 5.0 seconds = 54.592 FPS 225 frames in 5.0 seconds = 44.698 FPS 262 frames in 5.0 seconds = 52.390 FPS 
+RUN 5 fps 47.6 gears 69% lvdesk 88% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+268 frames in 5.0 seconds = 53.505 FPS 180 frames in 5.0 seconds = 35.933 FPS 285 frames in 5.0 seconds = 56.634 FPS 
+RUN 6 fps 52.7 gears 72% lvdesk 97% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+185 frames in 5.0 seconds = 36.944 FPS 247 frames in 5.0 seconds = 49.312 FPS 282 frames in 5.0 seconds = 56.295 FPS 
+xshim: render scale 0x200002 150x150 refused
+xshim: render scale 0x200002 150x150 refused
+xshim: render scale 0x200002 150x150 refused
+xshim: render scale 0x200002 150x150 refused
+xshim: render scale 0x200002 150x150 refused
+xshim: render scale 0x200002 150x150 refused
+              total        used        free      shared  buff/cache   available
+Mem:          15336        9232        2248         104        3856        4484
+DONE

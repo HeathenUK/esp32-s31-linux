@@ -184,3 +184,13 @@ and per-instruction counts before / after, the replays), gates/. s31, MIT.
   2.8%.
   Regression: glxgears, Doom and the desktop (xcalc) as usual - the
   REPEAT P8 stage is on every P8 one-unit / alias path, so re-check them.
+
+BOARD RESULT, 2026-09-27 (coordinator). QuakeSpasm timedemo demo1, fullscreen,
+fresh boot per run, arms alternated. Library 91771d02, loaded from /root/t2.
+  S31GL_ZF8=1 (tier 2):                 8.6, 8.9, 8.8, 8.9 fps  (112.1/108.8/109.5/109.2 s)
+  S31GL_ZF8=3 (= the shipped f9310c2d): 8.2, 8.3, 8.8, 8.7 fps  (117.8/116.7/110.2/111.8 s)
+Mean time 109.9 s against 114.1 s: +3.8%. Tier 2 was ahead in every pair.
+Shipped: 91771d02 is now /usr/lib/libGL.so.1.2.0 on the SD root.
+glxgears windowed with f9310c2d against the earlier 17a5bb48, alternated,
+6 runs a boot: both are bimodal at 47.6-53.5 (CPU placement), with no
+regression (artifacts/gl/phase6/zf8/gears-ab).

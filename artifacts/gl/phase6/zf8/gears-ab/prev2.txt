@@ -1,0 +1,22 @@
+ARM prev2 glpre= render_scale=1 shmbufs=2 mode=win runs=6 bin=/usr/bin/lvdesk lib=/root/prev lvenv= glenv= #393 SMP Sat Sep 26 12:31:02 UTC 2026 up 79.79
+RUN 1 fps 49.1 gears 70% lvdesk 94% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+266 frames in 5.0 seconds = 53.181 FPS 207 frames in 5.0 seconds = 41.395 FPS 285 frames in 5.0 seconds = 56.978 FPS 
+RUN 2 fps 53.7 gears 75% lvdesk 94% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+217 frames in 5.0 seconds = 43.399 FPS 256 frames in 5.0 seconds = 51.141 FPS 284 frames in 5.0 seconds = 56.799 FPS 
+RUN 3 fps 48.9 gears 69% lvdesk 90% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+267 frames in 5.0 seconds = 53.295 FPS 254 frames in 5.0 seconds = 50.649 FPS 233 frames in 5.0 seconds = 46.597 FPS 
+RUN 4 fps 49.2 gears 68% lvdesk 90% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+264 frames in 5.0 seconds = 52.652 FPS 213 frames in 5.0 seconds = 42.469 FPS 277 frames in 5.0 seconds = 55.347 FPS 
+RUN 5 fps 48.5 gears 71% lvdesk 95% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+256 frames in 5.0 seconds = 51.131 FPS 208 frames in 5.0 seconds = 41.519 FPS 285 frames in 5.0 seconds = 56.666 FPS 
+RUN 6 fps 55.2 gears 97% lvdesk 85% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+236 frames in 5.0 seconds = 47.175 FPS 261 frames in 5.0 seconds = 52.048 FPS 301 frames in 5.0 seconds = 60.097 FPS 
+xshim: render scale 0x200002 150x150 refused
+xshim: render scale 0x200002 150x150 refused
+xshim: render scale 0x200002 150x150 refused
+xshim: render scale 0x200002 150x150 refused
+xshim: render scale 0x200002 150x150 refused
+xshim: render scale 0x200002 150x150 refused
+              total        used        free      shared  buff/cache   available
+Mem:          15336        8920        2352          80        4064        4780
+DONE

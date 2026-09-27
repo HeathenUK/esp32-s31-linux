@@ -1,0 +1,22 @@
+ARM prev glpre= render_scale=1 shmbufs=2 mode=win runs=6 bin=/usr/bin/lvdesk lib=/root/prev lvenv= glenv= #393 SMP Sat Sep 26 12:31:02 UTC 2026 up 80.33
+RUN 1 fps 47.6 gears 68% lvdesk 91% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+247 frames in 5.0 seconds = 49.340 FPS 202 frames in 5.0 seconds = 40.343 FPS 281 frames in 5.0 seconds = 56.095 FPS 
+RUN 2 fps 52.2 gears 69% lvdesk 93% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+207 frames in 5.0 seconds = 41.301 FPS 252 frames in 5.0 seconds = 50.061 FPS 278 frames in 5.0 seconds = 55.363 FPS 
+RUN 3 fps 47.8 gears 64% lvdesk 88% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+255 frames in 5.0 seconds = 50.857 FPS 241 frames in 5.0 seconds = 48.179 FPS 256 frames in 5.0 seconds = 50.926 FPS 
+RUN 4 fps 47.6 gears 65% lvdesk 88% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+258 frames in 5.0 seconds = 51.397 FPS 224 frames in 5.0 seconds = 44.621 FPS 241 frames in 5.0 seconds = 48.004 FPS 
+RUN 5 fps 47.6 gears 67% lvdesk 91% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+253 frames in 5.0 seconds = 50.438 FPS 196 frames in 5.0 seconds = 39.143 FPS 276 frames in 5.0 seconds = 54.890 FPS 
+RUN 6 fps 51.8 gears 70% lvdesk 94% | gaps0 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 | gaps1 <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0
+214 frames in 5.0 seconds = 42.786 FPS 245 frames in 5.0 seconds = 48.918 FPS 276 frames in 5.0 seconds = 54.952 FPS 
+xshim: render scale 0x200002 150x150 refused
+xshim: render scale 0x200002 150x150 refused
+xshim: render scale 0x200002 150x150 refused
+xshim: render scale 0x200002 150x150 refused
+xshim: render scale 0x200002 150x150 refused
+xshim: render scale 0x200002 150x150 refused
+              total        used        free      shared  buff/cache   available
+Mem:          15336        9004        2244          88        4088        4708
+DONE
