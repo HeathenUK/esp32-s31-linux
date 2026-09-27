@@ -1,0 +1,6 @@
+bins/opentyrian: text 429776 B, read 0.91 ms, scan 6.11 ms (14.2 ns/B), 12 routines found: muldf3 adddf3 subdf3 divdf3 fixdfsi floatsidf fixunsdfsi floatunsidf extendsfdf2 truncdfsf2 gedf2 ledf2
+total insns: 2012215
+bins/libSDL-1.2.so.0: text 369528 B, read 0.87 ms, scan 8.85 ms (24.0 ns/B), 13 routines found: muldf3 adddf3 subdf3 divdf3 fixdfsi floatsidf fixunsdfsi floatunsidf extendsfdf2 truncdfsf2 gedf2 ledf2 eqdf2
+total insns: 1768265
+oplbench-dyn: text 33888 B, read 0.69 ms, scan 1.03 ms (30.3 ns/B), 10 routines found: muldf3 adddf3 subdf3 divdf3 fixdfsi floatsidf fixunsdfsi floatunsidf gedf2 ledf2
+total insns: 203832

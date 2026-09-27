@@ -1,0 +1,15 @@
+s31fp: scanned main text, patched 0x0000000e
+RESULT add: 5000000 operand sets (+1251571 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 88599 libgcc-vs-hw differences; R
+RESULT div: 5000000 operand sets (+1250661 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 86299 libgcc-vs-hw differences; R
+RESULT eq: 5000000 operand sets (+1249589 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE fa
+RESULT ext: 5000000 operand sets (+1246169 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 1374279 libgcc-vs-hw differences;
+RESULT fixsi: 5000000 operand sets (+1249847 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 158727 libgcc-vs-hw differences
+RESULT fixun: 5000000 operand sets (+1250444 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 158158 libgcc-vs-hw differences
+RESULT fltsi: 5000000 operand sets (+1249465 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE
+RESULT fltun: 5000000 operand sets (+1250298 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE
+RESULT ge: 5000000 operand sets (+1250380 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE fa
+RESULT le: 5000000 operand sets (+1251193 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE fa
+RESULT mul: 5000000 operand sets (+1249403 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 101917 libgcc-vs-hw differences; 
+RESULT sub: 5000000 operand sets (+1251171 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 92200 libgcc-vs-hw differences; R
+RESULT trunc: 5000000 operand sets (+1249136 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 119080 libgcc-vs-hw differences
+RESULT unord: 5000000 operand sets (+1249429 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE

@@ -1,0 +1,14 @@
+RESULT add: 20000000 operand sets (+5000519 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 373533 libgcc-vs-hw differences
+RESULT div: 20000000 operand sets (+5004183 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 373102 libgcc-vs-hw differences
+RESULT eq: 20000000 operand sets (+5001101 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences
+RESULT ext: 20000000 operand sets (+4997247 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 5507747 libgcc-vs-hw differences
+RESULT fixsi: 20000000 operand sets (+5001148 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 630704 libgcc-vs-hw differences
+RESULT fixun: 20000000 operand sets (+4999277 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 631799 libgcc-vs-hw differences
+RESULT fltsi: 20000000 operand sets (+5002633 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences
+RESULT fltun: 20000000 operand sets (+4999613 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences
+RESULT ge: 20000000 operand sets (+5000760 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences
+RESULT le: 20000000 operand sets (+4999804 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences
+RESULT mul: 20000000 operand sets (+5002169 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 403332 libgcc-vs-hw differences
+RESULT sub: 20000000 operand sets (+4999550 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 459485 libgcc-vs-hw differences
+RESULT trunc: 20000000 operand sets (+4996000 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 475717 libgcc-vs-hw differences
+RESULT unord: 20000000 operand sets (+4995829 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences

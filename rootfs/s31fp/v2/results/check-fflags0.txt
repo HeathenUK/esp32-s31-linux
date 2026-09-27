@@ -1,0 +1,14 @@
+RESULT add: 5000000 operand sets (+1249899 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 883
+RESULT div: 5000000 operand sets (+1250424 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 874
+RESULT eq: 5000000 operand sets (+1248839 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 li
+RESULT ext: 5000000 operand sets (+1249892 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 137
+RESULT fixsi: 5000000 operand sets (+1249027 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 1
+RESULT fixun: 5000000 operand sets (+1249695 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 1
+RESULT fltsi: 5000000 operand sets (+1248278 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0
+RESULT fltun: 5000000 operand sets (+1252136 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0
+RESULT ge: 5000000 operand sets (+1251185 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 li
+RESULT le: 5000000 operand sets (+1249703 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 li
+RESULT mul: 5000000 operand sets (+1248703 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 101
+RESULT sub: 5000000 operand sets (+1249757 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 928
+RESULT trunc: 5000000 operand sets (+1248381 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 1
+RESULT unord: 5000000 operand sets (+1251477 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0

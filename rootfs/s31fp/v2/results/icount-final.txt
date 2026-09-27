@@ -1,0 +1,19 @@
+== final (fcsr once, NX only if unset), FENV=1
+op     class     libgcc      old       v2
+mul    gen        187.6     72.8     78.1
+mul    low0       187.5     57.8     59.0
+mul    pow2       170.0     60.0     30.0
+mul    zero        77.0     58.0     20.0
+add    same        86.3     69.8     76.6
+add    opp         88.3     70.5     77.0
+add    cancel      77.0    146.0     86.0
+sub    opp         90.2     71.7     78.5
+div    gen        188.1    188.1    134.5
+ge     gen         26.5     26.5     22.3
+le     gen         26.5     26.5     22.3
+eq     gen         20.0     20.0     23.0
+fltsi  int         22.2     15.8     14.8
+fixsi  int         28.5     19.0     22.0
+fixun  int         29.0     29.0     21.0
+ext    int         23.0     23.0     14.0
+trunc  int         52.0     52.0     30.0

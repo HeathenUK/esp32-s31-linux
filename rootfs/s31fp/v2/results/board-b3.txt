@@ -1,0 +1,43 @@
+== uname #401 SMP Sun Sep 27 09:58:01 UTC 2026
+== 1. patch path: first launch (scan), second (cache hit), debug
+s31fp: scanned main text, patched 0x0000001c
+RESULT mul: 1000 operand sets (+236 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE fast-path share 100.0%; libgcc non-canonical NaN results 0
+s31fp: cache hit, patched 0x0000001c
+RESULT mul: 1000 operand sets (+236 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE fast-path share 100.0%; libgcc non-canonical NaN results 0
+total 4
+-rw-r--r--    1 root     root           232 Sep 27 12:08 000000b300000000-0000000000000eb7-00000000000389f0-000000006ab8f91d
+== 2. hammer: 300 fresh processes, each patches 14 entries then checks 1000 sets through them
+hammer ok=300 bad=0
+== 3. patched entry points on silicon: 200k sets per helper
+RESULT mul: 200000 operand sets (+49675 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences
+RESULT add: 200000 operand sets (+49860 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences
+RESULT sub: 200000 operand sets (+49738 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences
+RESULT div: 200000 operand sets (+49842 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences
+RESULT ge: 200000 operand sets (+49612 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences;
+RESULT le: 200000 operand sets (+50343 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences;
+RESULT eq: 200000 operand sets (+50036 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences;
+RESULT unord: 200000 operand sets (+50312 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differenc
+RESULT fltsi: 200000 operand sets (+49912 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differenc
+RESULT fltun: 200000 operand sets (+50295 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differenc
+RESULT fixsi: 200000 operand sets (+49910 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differenc
+RESULT fixun: 200000 operand sets (+49971 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differenc
+RESULT ext: 200000 operand sets (+49919 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences
+RESULT trunc: 200000 operand sets (+50167 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differenc
+== 4. audio through the trampoline (hash must equal oplbench-lg's)
+36 44100 4 8.124 45.60 0.497 0.00 0 0.00 0.00 0.00 0.00 42be0a6d
+36 44100 4 3.964 22.25 1.019 0.00 0 0.00 0.00 0.00 0.00 42be0a6d
+5 44100 8 11.469 32.37 0.701 0.00 0 0.00 0.00 0.00 0.00 ca17c7a8
+== 5. missing library (does musl refuse to start the program?)
+exit 2
+usage: ./oplbench-dyn music.mus song|-1 seconds [rate]
+
+== 6. exec cost, 20 launches, ms/exec (busybox env included in every arm)
+apps: ./oplbench-dyn ./sdltone1 /usr/bin/xcalc /usr/bin/xclock
+r1 ./oplbench-dyn plain               51.5 ms/exec
+r1 ./oplbench-dyn v1                 215.5 ms/exec
+r1 ./oplbench-dyn v2-scan             63.0 ms/exec
+r1 ./oplbench-dyn v2-cache            62.5 ms/exec
+r1 ./sdltone1 plain                   64.0 ms/exec
+r1 ./sdltone1 v1                     308.5 ms/exec
+r1 ./sdltone1 v2-scan                 65.0 ms/exec
+r1 ./sdltone1 v2-cache                72.0 ms/exec

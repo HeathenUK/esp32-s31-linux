@@ -1,0 +1,42 @@
+NOT APPLIED. The system-wide delivery, for when the board tests pass and the
+owner says ship. LD_PRELOAD is set by OUR components only - never per app,
+never in musl or ld.so (owner ruling 2026-09-27).
+
+1) Install the library into XIP image 1 (text costs zero RSS; every process
+   maps the same flash pages):
+   - build: rootfs/s31fp/v2/build-preload3.sh -> out/libs31fp.so, staged at
+     /usr/lib/libs31fp.so the same way as the s31route plugin
+   - Makefile XIP_ROOTS (line ~961): add  usr/lib/libs31fp.so
+   - the cache directory must exist on ext4 (/var/cache is a symlink to the
+     tmpfs /tmp on this board, so the default is /var/lib/s31fp):
+     buildroot-external/board/esp32-s31/overlay/var/lib/s31fp/  (empty dir)
+
+2) Login / profile environment - every shell, the serial console, and every
+   app lvdesk starts (lvdesk runs them through `/bin/sh -sh -l -c <cmd>`,
+   lvdesk.c:9828, a login shell that reads /etc/profile; its terminal is
+   `-sh -i`, lvdesk.c:2478, also a login shell):
+--- a/buildroot-external/board/esp32-s31/overlay/etc/profile
++++ b/buildroot-external/board/esp32-s31/overlay/etc/profile
+@@
+ export XDG_CACHE_HOME=/root/.cache
++# s31fp: bit-exact, faster soft-double for every dynamically linked program
++# (rootfs/s31fp/v2). musl ignores a missing LD_PRELOAD library (measured), so
++# the test only avoids the variable pointing at nothing.
++[ -r /usr/lib/libs31fp.so ] && export LD_PRELOAD=/usr/lib/libs31fp.so
+
+3) lvdesk's own environment, so anything it execs without a login shell (and
+   everything those children start) inherits it - next to DISPLAY:
+--- a/lvdesk/lvdesk.c
++++ b/lvdesk/lvdesk.c
+@@ (after setenv("XFILESEARCHPATH", ...), ~line 15521)
+ 	setenv("XFILESEARCHPATH", "/usr/share/X11/app-defaults/%N", 1);
++	/* s31fp (rootfs/s31fp/v2): every client gets the fast, bit-exact
++	 * soft-double routines; overwrite=0 keeps an explicit choice. */
++	if (!access("/usr/lib/libs31fp.so", R_OK))
++		setenv("LD_PRELOAD", "/usr/lib/libs31fp.so", 0);
+
+Not covered, by design: daemons started from /etc/init.d before any login
+(Xorg is not used; bluetoothd, wpa_supplicant... are not double-bound), static
+binaries (LD_PRELOAD does not apply; busybox is static), objects dlopen()ed
+later, and shared libraries' own copies of the routines (only the main
+executable is scanned). Kill switch: S31FP=0 in the environment.

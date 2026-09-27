@@ -1,0 +1,60 @@
+# fresh-boot arms (#401). Boot A: v2 preload (OpenTyrian title, then regression on the same boot)
+##### tyr-v2-1.txt
+== arm v2 tag 1 pid 455 uname #401 SMP Sun Sep 27 09:58:01 UTC 2026 up 102.63
+s31fp: scanned main text, patched 0x0000000c
+audio_tid 457
+RESULT xruns/s 26.59  audio_thread_cpu 92.4%  process_cpu 118.1%  window 20.4s
+VmRSS:	    2100 kB RssAnon:	    1484 kB RssFile:	     380 kB 
+MEM private_dirty_kB 1484 private_clean_kB 372
+maps_libs31fp 2
+    371 overrun occurred
+    371 ALSA lib pcm.c:8787:(snd_pcm_recover) [error.pcm] underrun
+##### reg-v2.txt (boot A)
+== arm v2 up 140.75
+glxgears   (not run: not in PATH - fixed to /root/gl2/bin/glxgears for later boots)
+PRBOOM after 105s Timed 5026 gametics in 3631 realtics = 48.4 frames per second
+SDLQUAKE 969 frames  43.1 seconds  22.5 fps
+# Boot B: stock (no preload)
+##### tyr-stock-1.txt
+== arm stock tag 1 pid 447 up 102.70
+audio_tid 450
+RESULT xruns/s 14.62  audio_thread_cpu 94.9%  process_cpu 120.1%  window 20.5s
+VmRSS:	    2016 kB RssAnon:	    1468 kB RssFile:	     312 kB 
+MEM private_dirty_kB 1468 private_clean_kB 304
+maps_libs31fp 0
+    276 overrun occurred
+    276 ALSA lib pcm.c:8787:(snd_pcm_recover) [error.pcm] underrun
+##### reg-plain.txt (boot B)
+glxgears /root/gl2/bin/glxgears
+GLXGEARS 278 frames in 5.0 seconds = 55.491 FPS
+GLXGEARS 283 frames in 5.0 seconds = 56.570 FPS
+GLXGEARS 285 frames in 5.0 seconds = 56.944 FPS
+PRBOOM after 105s Timed 5026 gametics in 3622 realtics = 48.6 frames per second
+SDLQUAKE 969 frames  45.7 seconds  21.2 fps
+# Boot C: v2 preload
+##### tyr-v2-2.txt
+s31fp: cache hit, patched 0x0000000c   (cache persisted across the reboot, ext4)
+RESULT xruns/s 26.56  audio_thread_cpu 92.4%  process_cpu 117.9%  window 20.4s
+VmRSS:	    2052 kB RssAnon:	    1488 kB RssFile:	     328 kB 
+MEM private_dirty_kB 1488 private_clean_kB 320
+    372 overrun occurred
+##### reg-v2.txt (boot C)
+GLXGEARS 247 frames in 5.0 seconds = 49.235 FPS
+GLXGEARS 245 frames in 5.0 seconds = 48.870 FPS
+GLXGEARS 250 frames in 5.0 seconds = 49.989 FPS
+PRBOOM after 105s Timed 5026 gametics in 3600 realtics = 48.9 frames per second
+SDLQUAKE 969 frames  43.4 seconds  22.3 fps
+# Boot D: stock (no preload), then glxgears A/B interleaved on the same boot
+##### tyr-stock-2.txt
+RESULT xruns/s 14.20  audio_thread_cpu 94.8%  process_cpu 120.3%  window 20.4s
+VmRSS:	    2044 kB RssAnon:	    1468 kB RssFile:	     340 kB 
+MEM private_dirty_kB 1468 private_clean_kB 332
+    268 overrun occurred
+##### ggab.txt (last two 5 s reports of each 12 s run)
+r1 plain 56.122 56.691 
+r1 v2 55.740 57.295 
+r2 plain 55.326 56.287 
+r2 v2 54.988 56.774 
+r3 plain 55.708 55.679 
+r3 v2 55.399 55.948 
+glxgears: s31fp: scanned main text, patched 0x0000000a

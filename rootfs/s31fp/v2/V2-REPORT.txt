@@ -1,0 +1,458 @@
+s31fp v2 - bit-exact soft-double helpers and a cheap interception
+===================================================================
+2026-09-27. Kernel #401 on the board. Status: CANDIDATE, NOT SHIPPED. Nothing
+is installed and no environment is changed. rootfs/s31fp/v2/delivery.diff
+lists the exact places for when the owner says ship.
+
+Rules in force (owner rulings of 2026-09-27):
+  - musl and ld.so are not modified. In-libc delivery and ld.so-level
+    injection are NOT PERMITTED; they are not options here.
+  - An intercepting, in-memory-patching LD_PRELOAD is permitted.
+  - It is set system-wide by our own components (the login/profile
+    environment and lvdesk), never per app.
+
+
+1. RESULT IN ONE SCREEN
+-----------------------
+OpenTyrian's OPL synthesis loop (oplbench: its own opl.c and lds_play.c, the
+shipped flags) on hart 1 (CPU0) at 44.1 kHz, in us per output sample.
+Board figures are medians; the title song ran 5 interleaved repeats.
+
+  song        libgcc   old s31fp   v2 exact   v2 via preload   v2 frm-only   v2 no-fenv
+  36 title    44.17    21.38       18.89      22.00            17.94         16.87
+  0           55.53    29.52       23.24
+  9           50.89    24.45       20.72
+  5 (worst)   68.28    34.13       27.91      31.68
+
+  Column sources:
+    libgcc, old s31fp   run 1 (board-b1.txt; title x5, range +-0.3)
+    v2 columns          run 4 (board-b4.txt; final build, title x3,
+                        range +-0.1 static, 21.77-22.60 via the preload)
+    via preload         the real path: the dynamic, shipped-shape oplbench
+                        with LD_PRELOAD=libs31fp.so, entries patched at load
+    frm-only            frm honoured, fast paths raise no NX
+    no-fenv             no CSR access at all
+  The last two are stated deviations, not proposals.
+
+In cores at 44.1 kHz, the title song needs:
+  libgcc                                   1.95
+  old s31fp                                0.94
+  v2                                       0.83
+  v2 through the real preload trampoline   0.97
+Song 5 needs 1.40 through the preload.
+
+The stock game at its title still does not keep up (section 8). Its audio
+thread gets 92-95% of one CPU, and the callback does more than the synth.
+
+Bit-exactness:
+  - QEMU: 0 mismatches in 280 M operand sets (20 M for each of 14 helpers),
+    covering result bits including NaN payloads and fflags, under RNE and
+    all four directed modes, with random pre-set flags.
+  - Silicon: 0 mismatches in 8.4 M operand sets (runs 1 and 4).
+  - Through the real preload's patched entry points: 0 mismatches; results
+    and flags are byte-identical to an unpatched process (section 4).
+  - The synthesised audio has the same hash in every build.
+
+Exec cost: the 2026-09-20 preload costs +160 to +392 ms per launch on the
+same five programs; the candidate costs +4 to +28 ms, mostly under +13
+(section 6).
+
+
+2. WHAT IS HERE (rootfs/s31fp/v2)
+---------------------------------
+Helpers:
+  v2.S        muldf3, adddf3/subdf3, floatsidf, floatunsidf, fixdfsi,
+              fixunsdfsi, extendsfdf2, truncdfsf2, and the comparisons ge/gt,
+              le/lt, eq/ne, unord. Hand-written rv32imafc + Zbb/Zbs.
+  v2div.c     divdf3. The seed is the hardware fdiv.s (fflags saved and
+              restored around it), followed by two integer residual
+              corrections and an exact remainder check. Correctly rounded by
+              construction.
+  lgref.o     built by build-v2.sh: libgcc's OWN routines from this
+              toolchain's libgcc.a, renamed __x -> s31lg_x. They are the
+              fallback for every case the fast paths do not decide, and the
+              test reference.
+
+Interception:
+  preload3.c  -> out/libs31fp.so, the candidate (section 6).
+  mksig3.py   sigs3.h: the full libgcc bodies with a relocation mask.
+
+Tests and instruments:
+  v2test.c         check / bench / dump harness
+  hw.c             QEMU D-extension oracle
+  wrap.c           counts fallbacks to libgcc (--wrap)
+  oplbench2.c      = audiofp/oplbench.c plus an output hash
+  tbprof.c         QEMU per-PC profiler plugin; attr.py resolves it
+  icount.sh, oplcount.sh
+  scanbench.c, scan2.h
+  noesp.c          plain memchr/strcmp/memcpy/memcmp: this musl's versions
+                   use Espressif PIE instructions that QEMU cannot run
+
+Build scripts:
+  build-v2.sh, build-opl.sh, build-preload3.sh, build-scanbench.sh
+
+Board scripts:
+  board/*.sh       all fire detached, with output to a file on the card
+
+Results:
+  results/*.txt    every number quoted here
+
+
+3. SEMANTICS - EXACTLY libgcc's, AND WHAT libgcc ITSELF DOES
+------------------------------------------------------------
+The reference is this target's libgcc (soft-fp, riscv sfp-machine.h). Its
+disassembly shows each routine reading frm at entry (frrm) and accruing
+flags with csrs fflags. v2 splits the work in two.
+
+  Fast paths:
+    - normal operands and a normal result;
+    - zero operands (x*0, x+0, 0/y);
+    - powers of two (mul, div);
+    - int/float-derived operands whose low word is zero (mul);
+    - frm == RNE.
+    These are computed in place and raise exactly what soft-fp raises
+    there: NX when inexact. Overflow and underflow never happen on a fast
+    path, because the exponent range checks exclude them.
+  Everything else:
+    - NaN, inf, subnormals, 0*inf;
+    - results that leave the normal range;
+    - frm != RNE.
+    These tail-call libgcc's own routine with the argument registers
+    untouched, so they are libgcc by construction rather than by imitation.
+
+frm:
+  Honoured. Any mode other than RNE goes to libgcc, which rounds exactly as
+  libgcc does.
+
+fflags:
+  Reproduced bit for bit (checked on every operand set, from random initial
+  flags). Each routine reads fcsr ONCE, getting frm and the accrued flags
+  together, and writes NX only when it is not already set.
+    Why: a CSR access costs 25-30 ns on this core (section 5).
+    Sole difference from libgcc: if a signal handler clears NX between that
+    read and the routine's end, libgcc would set NX again and v2 does not.
+  fixdfsi and fixunsdfsi ignore frm (they truncate), read no CSR, and write
+  NX when the result is inexact.
+
+NaN:
+  libgcc on this target returns the canonical quiet NaN 0x7ff8000000000000
+  for arithmetic (0 non-canonical NaN results over 80 M mul/add/sub/div
+sets). But:
+  extendsfdf2 KEEPS the float NaN's payload and sign, and fixdfsi saturates
+  a NaN by its sign bit. v2 gives NaNs to libgcc, so it matches all of this
+  by construction.
+
+Where libgcc is not IEEE (from the QEMU D-extension oracle; v2 matches
+libgcc, deliberately):
+  - frm = RMM (4): libgcc does not implement round-to-max-magnitude and
+    truncates instead. It differs from IEEE on about 8% of mul/add/sub/
+    div/trunc operand sets in that mode. RNE, RTZ, RDN and RUP agree with
+    the oracle on every set, flags included.
+  - fixdfsi(NaN) gives INT_MIN for a negative NaN; hardware gives INT_MAX.
+    fixunsdfsi(NaN or negative) gives 0; hardware gives UINT_MAX for NaN.
+    Both raise NV.
+  - extendsfdf2(NaN) keeps the payload; hardware canonicalises.
+
+Frozen variants, measured, not proposed:
+  FFLAGS=0   frm honoured, NX not raised on fast paths
+  FENV=0     no CSR access at all
+Results under RNE are identical in both (checked). They exist only to price
+the fenv work.
+
+
+4. BIT-EXACTNESS, THE EVIDENCE
+------------------------------
+QEMU (qemu-riscv32 10.0, -cpu max), results/check-final.txt:
+  Coverage per helper:
+    - 20 M operand sets, plus a directed rounding mode on 1 in 4
+      (~5 M more).
+    - Half the calls start from random pre-set fflags.
+    - Operand classes: subnormals, zeros, inf, NaN (quiet and signalling,
+      any payload and sign), the smallest and largest normals, powers of
+      two, few-mantissa-bit values (exact products and ties), int-, float-
+      and low-word-zero values, the int32/uint32 and float range and
+      rounding edges, all-ones mantissas, and derived pairs (x-x, equal
+      high words, exponent gaps 0-59, exact quotients b*c/b).
+  Compared:
+    - v2 against libgcc's own routine: result bits and fflags.
+    - libgcc against the D-extension oracle, separately.
+  Outcome:
+    - 0 mismatches for all 14 helpers.
+    - fast paths decided 74-100% of the sets on their own (36% for
+      fixunsdfsi, by design: negatives go to libgcc).
+  Earlier helper revisions (check.txt, check-fenv1.txt) and the FFLAGS=0 /
+  FENV=0 builds (results only): also 0.
+
+Patched entry points, QEMU (ptest-qemu.txt, check-final.txt): a static
+program whose own libgcc copies are patched by preload3's constructor, 3-5 M
+sets per helper through those patched entries: 0 mismatches.
+
+Silicon (board-b1.txt, board-b4.txt): v2check-board, v2 against the renamed libgcc
+copies, 300 k sets per helper plus directed modes: 0 mismatches.
+
+The real preload on the board (board-b4.txt):
+  - Same operands in an unpatched process (S31FP=0) and a patched one; the
+    md5 of every result and flag must match: 14 of 14 helpers SAME (100 k sets each).
+  - Hammer: 280 of 280 passed: fresh processes, each patching its entries and running
+    1000 sets through them. They ran on CPU0, CPU1 and either CPU, with
+    scan and cache hits alternating.
+
+Audio: oplbench's output hash is identical in every build, on QEMU and on
+silicon, statically linked and through the preload:
+  song 36  42be0a6d (4 s)
+  song 5   ca17c7a8
+  song 0   120dbca6
+  song 9   f9f406de
+
+
+5. COST PER HELPER
+------------------
+Instructions executed per call, QEMU libinsn (icount-final.txt). "old" is
+the 2026-09-20 s31fp; where it had no routine, the figure is libgcc's.
+
+  op/class      libgcc   old    v2 final
+  mul general    188      73     78
+  mul int op     188      58     59     (y from an int: 2 multiplies)
+  mul 2^k        170      60     30     (exponent add, exact)
+  mul by 0        77      58     20
+  add same sign   86      70     77
+  add cancel      77     146     86     (clz renormalise, no C fallback)
+  div            188     188    135
+  gt/ge           27      27     22     (both >= 0: one NaN test)
+  floatsidf       22      16     15
+  fixdfsi         29      19     22     (+ NX; old raised no flags)
+  extendsfdf2     23      23     14
+  truncdfsf2      52      52     30
+
+Nanoseconds per call on silicon (CPU0; bench loop minus an empty call;
+run 1, frrm build, board-b1.txt):
+
+  op/class       libgcc   old    v2 (run 1)   v2 final (run 4)
+  mul general     654     249    306          281
+  mul int op      667     235    225          194
+  mul 2^k         602     203     91          86
+  mul by 0        261     377     75
+  add same        345     249    301          260
+  div             904     825    582          554
+  ge              136     156    115
+  floatsidf        75      41     35
+  fixdfsi         140      50    115
+  truncdfsf2      194     195    129
+
+Two things the counts alone hide:
+  - A CSR access costs 25-30 ns on this core. With libgcc's pattern (frrm,
+    then csrsi), v2's general multiply is slower than the old s31fp's,
+    which touched no CSR, despite ~the same instruction count. The final
+    build reads fcsr once and skips the write when NX is already set,
+    which it is after a program's first inexact operation.
+  - Title song, per sample:
+      v2 exact, frrm + csrsi (run 1)            19.36 us
+      final, fcsr once + NX only if unset (run 4)  18.89 us
+      frm-only                                     17.94 us
+      no CSR at all                                16.87 us
+
+Where the title song's instructions go (QEMU, oplbench-profile-36.txt).
+Per sample:
+  - 53.7 __muldf3, 20.4 floatsidf, 10.2 fixdfsi, 10.4 gtdf2, 4.1 adddf3.
+  - The multiplies split into 17 general, 10 with an int operand, 24.5 by a
+    power of two (x/16, amp 1.0, a trem of 2^k), and 1.3 by zero.
+Instructions per sample:
+  libgcc  11,696
+  old      5,661
+  v2       4,783 (final)
+  - 1,478 of those are OPL code outside the helpers: the floor with
+    infinitely fast helpers.
+
+
+6. THE INTERCEPTION: libs31fp.so (preload3.c)
+---------------------------------------------
+What it does:
+  - Finds libgcc's statically linked double routines in the MAIN
+    EXECUTABLE's text.
+  - Overwrites each entry with `auipc t0 / jalr x0, t0` to the v2 routine.
+  - The page is a private copy-on-write copy; the file is untouched.
+
+Matching - no match, no patch:
+  - Full bodies, not prefixes. 13 of the 14 libgcc members contain only
+    intra-routine branches, so their linked bodies are the member's .text
+    byte for byte. __divdf3 has one PC-relative data reference: those two
+    instruction words are masked, and if the linker relaxed it the length
+    differs and nothing matches.
+  - A prefix match would have been WRONG. __gedf2 and __ledf2 are identical
+    for their first 64 bytes; they differ only in the unordered return
+    value (-2 vs 2). The 2026-09-20 preload's 64-byte scheme would have
+    patched __ledf2 to the ge routine. It never included the comparisons,
+    so it was not affected.
+  - mksig3.py now asserts that no two bodies are equal.
+  - Guards: it never patches its own renamed reference copies or its own
+    signature tables. The static QEMU test caught the second, because
+    rodata can share the executable segment.
+
+Patch sequence: the RAMTEXT one (gl/.../s31_ramtext.c). Here the I-cache
+does not snoop the D-cache and fence.i does not write the D-cache back; the
+kernel's exec-PTE hook does. So:
+  1. one mprotect to RW (never W+X);
+  2. every write, as halfwords (RVC alignment);
+  3. one mprotect back to RX, which gives D-cache writeback and I-cache
+     invalidate for the new COW frames;
+  4. the fence.i syscall and a fence.i.
+Nothing is written after step 3. The main executable's code runs only after
+all shared-library constructors, so no CPU-written instruction can execute
+before step 3. If the RW mprotect fails, nothing is patched.
+
+Launch cost:
+  - Only the main executable is scanned.
+  - One pass, 2-byte aligned, through a 4096-bit filter on the first
+    halfword.
+  - Per-binary cache in $S31FP_CACHE, default /var/lib/s31fp. It is ext4:
+    /var/cache on this board is a symlink to the tmpfs /tmp. The key is
+    dev/inode/size/mtime (statx of /proc/self/exe). The entry holds the
+    offsets, or nothing for a binary with no helpers. It is written
+    tmp+rename, and every body is re-verified on a hit.
+  - No libc: raw system calls and a single import (environ). Its 72
+    relocations are all RELATIVE.
+  - About 10 system calls in the constructor: auxv open/read/close, statx,
+    cache open/read/close, 2x mprotect, fence.i. On this board syscalls,
+    not scanning, are the remaining cost.
+
+  Measured (board-b4.txt, two rounds), ms per launch over 20 launches each,
+  busybox env in every arm. The plain column is absolute; the others are the
+  change from plain:
+
+    app                      plain   old preload  loaded, off   scan    cache
+    oplbench-dyn              48.2   +159.8        +4.8         +12.8   +27.8*
+    sdltone1 (libSDL)         67.8   +241.0        -3.2          +3.8    +6.0
+    amixer -v                 83.5   +392.0        +0.0          +5.5   +10.8
+    aplay --version           90.5   +362.0        -2.0          +9.2   +13.2
+    bluetoothctl --version   113.8   +392.0       +12.8         +28.0   +20.8
+
+  * that round included a poll of mine; the other round read +13.
+
+  - "loaded, off" (S31FP=0) is the dynamic loader mapping the library and
+    nothing else.
+  - The noise is about +-8 ms; with that, scan and cache are the same for
+    these small programs. A cache hit pays statx plus an open/read/close,
+    which is about what scanning a small text costs. The cache pays off on
+    big texts (below).
+  - On this board a syscall, not the scan, is the unit of cost.
+  - Patched per program: oplbench 10, sdltone1 9, amixer 7, aplay 8,
+    bluetoothctl 2, glxgears 10, OpenTyrian 12.
+
+  Scan cost of big texts, as a file (scanbench, the same filter; board):
+    sdlquake   435 KB   12.1 ms   27.7 ns/B   11 routines
+    prboom     693 KB   20.4 ms   29.4 ns/B    6 routines
+  That cost is paid on the first launch only; later launches are cache
+  hits. OpenTyrian's cache entry survived a reboot and was hit on the next
+  fresh boot.
+
+Memory:
+  - 25 KB of shared text/rodata. It belongs in XIP image 1, where it costs
+    zero RSS.
+  - One private 4 KB page per process (1.3 KB of data/bss/GOT).
+  - For a patched program: the COW'd text pages holding the patched entries,
+    typically 2-3 pages.
+  - OpenTyrian measured: VmRSS 2100/2052 kB with the preload against 2016/2044 kB without, and Private_Dirty 1484/1488 against 1468/1468 kB, i.e. +16-20 kB
+
+Trampoline cost: the extra auipc+jalr on every call costs about 3.1 us per sample (16%) on
+the title song against the statically linked v2 (18.89 static vs 22.00
+through the preload, same helpers).
+
+Not covered: static binaries, dlopen()ed objects, and shared libraries' own
+copies (musl's libc.so, libSDL and the rest keep theirs).
+
+Missing library: if LD_PRELOAD names a missing file, musl still starts the
+program. Measured: the program ran and printed its usage.
+
+
+7. DELIVERY (rootfs/s31fp/v2/delivery.diff - NOT APPLIED)
+---------------------------------------------------------
+System-wide, through our components only:
+  (1) /usr/lib/libs31fp.so in XIP image 1 (Makefile XIP_ROOTS), plus an
+      empty /var/lib/s31fp in the overlay.
+  (2) /etc/profile (buildroot-external/board/esp32-s31/overlay/etc/profile):
+      export LD_PRELOAD when the library exists. This covers the serial
+      console and every app lvdesk starts, because lvdesk runs them as
+      `/bin/sh -sh -l -c <cmd>` (lvdesk.c:9828), a login shell, and its
+      terminal is `-sh -i` (lvdesk.c:2478).
+  (3) lvdesk.c, next to setenv("DISPLAY") (~line 15514):
+      setenv("LD_PRELOAD", ..., 0) when the library exists, so anything it
+      starts without a login shell inherits it too.
+Kill switch: S31FP=0.
+Not applied: the owner asked for the report first.
+
+
+8. THE STOCK GAME, AND THE REGRESSION SET (fresh boots)
+-------------------------------------------------------
+OpenTyrian = /root/oty/usr/bin/opentyrian, the binary the lvdesk menu
+starts. At its title, music playing, fresh boot, measured over a 20 s window
+with nothing polling. Preload arms: LD_PRELOAD for that launch only.
+
+  arm                 boot   xruns/s   audio thread CPU   process CPU
+  stock               B      14.62     94.9%              120.1%
+  stock               D      14.20     94.8%              120.3%
+  v2 preload (scan)   A      26.59     92.4%              118.1%
+  v2 preload (cache)  C      26.56     92.4%              117.9%
+
+The preload patched 12 routines in the game. The four boots repeat to within
+0.4 xruns/s, but the two arms clearly differ, and in the WRONG direction on
+this metric.
+  - The audio thread is saturated in both arms (92-95% of a CPU), so the
+    music is still not real-time.
+  - The synthesis alone needs 0.97 cores through the preload (oplbench),
+    and the callback does more than synthesis.
+  - The earlier study saw the same pattern with the old s31fp (7.1 -> 12.7
+    xruns/s) and read it as a faster synth making more restart cycles.
+    That is plausible, but not established here. I did not listen, and
+    xruns/s alone cannot say which arm sounds better.
+Verdict: v2 through the preload does NOT make OpenTyrian's title real-time.
+An ear check is needed before claiming it is better or worse.
+
+Memory, OpenTyrian with the preload: +16-20 kB private dirty (the COW'd text
+pages plus the library's data page).
+
+Regression, quiet (DAC 110 during the run, restored to 143); one fresh boot
+per arm, run after the OpenTyrian arm on the same boot:
+
+  arm          boot   glxgears (3 x 5 s)       prboom timedemo (-window)   sdlquake timedemo
+  plain        B      55.5 / 56.6 / 56.9       48.6 fps                    21.2 fps
+  v2 preload   A      (not run: path)          48.4 fps                    22.5 fps
+  v2 preload   C      49.2 / 48.9 / 50.0       48.9 fps                    22.3 fps
+
+  - glxgears: boot C read 12% lower than boot B, so I measured it again on
+    ONE boot (D), interleaved plain / v2 three times:
+      plain  55.3-56.7 fps
+      v2     55.0-57.3 fps
+    No difference. Boot C's low number was a whole-boot effect; per-boot
+    layout variation is a known lottery here.
+  - prboom: within 0.5 fps across all three boots.
+  - sdlquake: 21.2 plain against 22.5 and 22.3 with the preload.
+  - Nothing crashed, and dmesg showed no faults in any arm.
+  - The preload patched glxgears (10 routines), prboom and sdlquake, and
+    they ran normally.
+Only one plain boot for prboom and sdlquake, so the spread is thin. Another
+fresh-boot pair would be prudent before shipping, but nothing points at a
+regression.
+
+
+9. OPEN / NEXT
+--------------
+- Not shipped. The system-wide delivery is written down in delivery.diff
+  (profile + lvdesk + XIP image 1 + /var/lib/s31fp), awaiting the owner.
+- The trampoline costs 16% of the title-song gain (22.00 via the preload
+  against 18.89 static). Removing it means copying the v2 routine into the
+  patched body, with its PC-relative calls into s31lg_* retargeted. That is
+  the same write-then-RX step as RAMTEXT, with more code written. It is
+  worth ~3 us per sample for OpenTyrian and nothing for most programs.
+- fenv: fcsr-once with NX-only-if-unset is already applied. The remaining
+  CSR read costs ~1 us per sample on the title. Dropping NX on fast paths
+  (frm-only) saves another 0.95 us, at the price of a stated deviation.
+  Owner's call.
+- Even with every lever (v2n static, 16.87 us = 0.74 cores), OpenTyrian's
+  title leaves the audio thread little margin, and song 5 needs 1.1 cores.
+  The earlier study's conclusion stands for the loud songs.
+- Exec cost: about 10 syscalls in the constructor. Reading AT_PHDR through
+  dl_iterate_phdr instead of /proc/self/auxv (3 syscalls), and keying the
+  cache on an in-memory fingerprint verified by the body check instead of
+  statx (1), would take a further few ms off every launch.
+- Test binaries remain in /root/afp2 on the card, along with the test cache
+  /root/afp2/cache. Nothing outside /root/afp2 was changed.

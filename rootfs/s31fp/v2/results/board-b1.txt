@@ -1,0 +1,146 @@
+== uname #401 SMP Sun Sep 27 09:58:01 UTC 2026
+== check on silicon: v2 vs libgcc's own routines, bits + fflags, RNE + directed modes
+RESULT mul: 300000 operand sets (+74666 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE fast-path share 74.0%; libgcc non-canonical NaN results 0
+RESULT add: 300000 operand sets (+74983 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE fast-path share 78.7%; libgcc non-canonical NaN results 0
+RESULT sub: 300000 operand sets (+74737 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE fast-path share 78.8%; libgcc non-canonical NaN results 0
+RESULT div: 300000 operand sets (+75081 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE fast-path share 79.9%; libgcc non-canonical NaN results 0
+RESULT ge: 300000 operand sets (+74919 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE fast-path share 90.2%; libgcc non-canonical NaN results 0
+RESULT le: 300000 operand sets (+74542 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE fast-path share 90.1%; libgcc non-canonical NaN results 0
+RESULT eq: 300000 operand sets (+75215 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE fast-path share 90.1%; libgcc non-canonical NaN results 0
+RESULT unord: 300000 operand sets (+75087 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE fast-path share 90.1%; libgcc non-canonical NaN results 0
+RESULT fltsi: 300000 operand sets (+74970 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE fast-path share 100.0%; libgcc non-canonical NaN results 0
+RESULT fltun: 300000 operand sets (+74937 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE fast-path share 100.0%; libgcc non-canonical NaN results 0
+RESULT fixsi: 300000 operand sets (+75672 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE fast-path share 64.5%; libgcc non-canonical NaN results 0
+RESULT fixun: 300000 operand sets (+74908 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE fast-path share 36.4%; libgcc non-canonical NaN results 0
+RESULT ext: 300000 operand sets (+75107 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE fast-path share 62.8%; libgcc non-canonical NaN results 0
+RESULT trunc: 300000 operand sets (+75134 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE fast-path share 51.9%; libgcc non-canonical NaN results 0
+== routines lg CPU0
+mul general    585 ns
+floatsidf+mul  771 ns
+floatsidf      77 ns
+mul by 1/16    581 ns
+mul+fixdfsi    721 ns
+gtdf2          107 ns
+adddf3         258 ns
+== routines old CPU0
+mul general    231 ns
+floatsidf+mul  273 ns
+floatsidf      50 ns
+mul by 1/16    219 ns
+mul+fixdfsi    276 ns
+gtdf2          114 ns
+adddf3         240 ns
+== routines v2 CPU0
+mul general    116 ns
+floatsidf+mul  314 ns
+floatsidf      47 ns
+mul by 1/16    111 ns
+mul+fixdfsi    221 ns
+gtdf2          39 ns
+adddf3         254 ns
+== routines v2n CPU0
+mul general    97 ns
+floatsidf+mul  245 ns
+floatsidf      53 ns
+mul by 1/16    92 ns
+mul+fixdfsi    148 ns
+gtdf2          38 ns
+adddf3         237 ns
+== helper bench CPU0 (ns per loop iteration; subtract nop)
+nop mul gen 151.7 ns/iter sink 7ec467eac42b85ec
+nop mul low0 141.5 ns/iter sink 794794215d6724e2
+nop mul pow2 154.7 ns/iter sink 7ec467eac42b85ed
+nop mul zero 152.1 ns/iter sink 7ec467eac42b85ed
+nop add same 145.1 ns/iter sink f8b8e63aeda30f27
+nop add opp 149.5 ns/iter sink f8b8e63aeda30f27
+nop add cancel 149.8 ns/iter sink 794794215d6724e3
+nop div gen 130.0 ns/iter sink 7ec467eac42b85ec
+nop ge gen 121.3 ns/iter sink 7ec467eac42b85ec
+nop eq gen 146.1 ns/iter sink 7ec467eac42b85ec
+nop fltsi int 151.5 ns/iter sink 3e15986f
+nop fixsi int 147.3 ns/iter sink 80251cf000000000
+nop fixun int 132.3 ns/iter sink fe85d800000000
+nop ext int 133.9 ns/iter sink 7e9dab53
+nop trunc int 151.1 ns/iter sink 831b719c459dab53
+lg mul gen 806.2 ns/iter sink 1e76f193a7c30cad
+lg mul low0 808.9 ns/iter sink b6c2059ef7ba846
+lg mul pow2 756.8 ns/iter sink 14467eac42b85ed
+lg mul zero 413.2 ns/iter sink 0
+lg add same 490.0 ns/iter sink f73e95b3ba84c922
+lg add opp 511.3 ns/iter sink fe92745beea450bd
+lg add cancel 442.4 ns/iter sink f4c000000000000
+lg div gen 1034.5 ns/iter sink 5d190bf4cdfaa35
+lg ge gen 257.5 ns/iter sink fffffffe
+lg eq gen 223.0 ns/iter sink 7ec467ea00000000
+lg fltsi int 226.8 ns/iter sink 7e11e8332e800000
+lg fixsi int 286.8 ns/iter sink 1ffff9230
+lg fixun int 275.6 ns/iter sink d709
+lg ext int 223.1 ns/iter sink 7fd3b56a60000000
+lg trunc int 344.8 ns/iter sink 8000000098db946c
+old mul gen 400.7 ns/iter sink 1e76f193a7c30cad
+old mul low0 376.8 ns/iter sink b6c2059ef7ba846
+old mul pow2 357.4 ns/iter sink 14467eac42b85ed
+old mul zero 528.7 ns/iter sink 0
+old add same 394.1 ns/iter sink f73e95b3ba84c922
+old add opp 393.9 ns/iter sink fe92745beea450bd
+old add cancel 632.3 ns/iter sink f4c000000000000
+old div gen 955.1 ns/iter sink 5d190bf4cdfaa35
+old ge gen 277.0 ns/iter sink fffffffe
+old eq gen 216.9 ns/iter sink 7ec467ea00000000
+old fltsi int 192.2 ns/iter sink 7e11e8332e800000
+old fixsi int 197.3 ns/iter sink 80251cf0ffff9230
+old fixun int 270.5 ns/iter sink d709
+old ext int 219.9 ns/iter sink 7fd3b56a60000000
+old trunc int 345.6 ns/iter sink 8000000098db946c
+v2 mul gen 457.3 ns/iter sink 1e76f193a7c30cad
+v2 mul low0 366.1 ns/iter sink b6c2059ef7ba846
+v2 mul pow2 245.9 ns/iter sink 14467eac42b85ed
+v2 mul zero 227.3 ns/iter sink 0
+v2 add same 445.7 ns/iter sink f73e95b3ba84c922
+v2 add opp 461.5 ns/iter sink fe92745beea450bd
+v2 add cancel 446.3 ns/iter sink f4c000000000000
+v2 div gen 711.8 ns/iter sink 5d190bf4cdfaa35
+v2 ge gen 236.7 ns/iter sink 7ec467eafffffffe
+v2 eq gen 244.6 ns/iter sink 7ec467ea00000000
+v2 fltsi int 186.5 ns/iter sink 7e11e8332e800000
+v2 fixsi int 262.5 ns/iter sink 80251cf0ffff9230
+v2 fixun int 248.7 ns/iter sink fe85d80000d709
+v2 ext int 204.1 ns/iter sink 7fd3b56a60000000
+v2 trunc int 280.0 ns/iter sink 831b719c98db946c
+== title song 36, 4 s, x5 interleaved, CPU0
+lg r1 36 44100 4 7.871 44.17 0.513 0.00 0 0.00 0.00 0.00 0.00 42be0a6d
+old r1 36 44100 4 3.771 21.17 1.071 0.00 0 0.00 0.00 0.00 0.00 42be0a6d
+v2 r1 36 44100 4 3.464 19.44 1.166 0.00 0 0.00 0.00 0.00 0.00 42be0a6d
+v2n r1 36 44100 4 2.975 16.70 1.358 0.00 0 0.00 0.00 0.00 0.00 42be0a6d
+lg r2 36 44100 4 7.957 44.66 0.508 0.00 0 0.00 0.00 0.00 0.00 42be0a6d
+old r2 36 44100 4 3.819 21.43 1.058 0.00 0 0.00 0.00 0.00 0.00 42be0a6d
+v2 r2 36 44100 4 3.566 20.01 1.133 0.00 0 0.00 0.00 0.00 0.00 42be0a6d
+v2n r2 36 44100 4 3.167 17.77 1.276 0.00 0 0.00 0.00 0.00 0.00 42be0a6d
+lg r3 36 44100 4 7.880 44.23 0.513 0.00 0 0.00 0.00 0.00 0.00 42be0a6d
+old r3 36 44100 4 3.850 21.61 1.049 0.00 0 0.00 0.00 0.00 0.00 42be0a6d
+v2 r3 36 44100 4 3.430 19.25 1.178 0.00 0 0.00 0.00 0.00 0.00 42be0a6d
+v2n r3 36 44100 4 2.976 16.70 1.358 0.00 0 0.00 0.00 0.00 0.00 42be0a6d
+lg r4 36 44100 4 7.868 44.16 0.513 0.00 0 0.00 0.00 0.00 0.00 42be0a6d
+old r4 36 44100 4 3.792 21.28 1.065 0.00 0 0.00 0.00 0.00 0.00 42be0a6d
+v2 r4 36 44100 4 3.450 19.36 1.171 0.00 0 0.00 0.00 0.00 0.00 42be0a6d
+v2n r4 36 44100 4 2.992 16.79 1.350 0.00 0 0.00 0.00 0.00 0.00 42be0a6d
+lg r5 36 44100 4 7.861 44.12 0.514 0.00 0 0.00 0.00 0.00 0.00 42be0a6d
+old r5 36 44100 4 3.810 21.38 1.060 0.00 0 0.00 0.00 0.00 0.00 42be0a6d
+v2 r5 36 44100 4 3.432 19.26 1.177 0.00 0 0.00 0.00 0.00 0.00 42be0a6d
+v2n r5 36 44100 4 2.950 16.56 1.369 0.00 0 0.00 0.00 0.00 0.00 42be0a6d
+lg song0 0 44100 8 19.675 55.53 0.408 0.00 0 0.00 0.00 0.00 0.00 120dbca6
+old song0 0 44100 8 10.459 29.52 0.768 0.00 0 0.00 0.00 0.00 0.00 120dbca6
+v2 song0 0 44100 8 8.217 23.19 0.978 0.00 0 0.00 0.00 0.00 0.00 120dbca6
+v2n song0 0 44100 8 7.695 21.72 1.044 0.00 0 0.00 0.00 0.00 0.00 120dbca6
+lg song9 9 44100 8 18.030 50.89 0.446 0.00 0 0.00 0.00 0.00 0.00 f9f406de
+old song9 9 44100 8 8.663 24.45 0.927 0.00 0 0.00 0.00 0.00 0.00 f9f406de
+v2 song9 9 44100 8 7.477 21.10 1.074 0.00 0 0.00 0.00 0.00 0.00 f9f406de
+v2n song9 9 44100 8 6.763 19.09 1.188 0.00 0 0.00 0.00 0.00 0.00 f9f406de
+lg song5 5 44100 8 24.194 68.28 0.332 0.00 0 0.00 0.00 0.00 0.00 ca17c7a8
+old song5 5 44100 8 12.094 34.13 0.664 0.00 0 0.00 0.00 0.00 0.00 ca17c7a8
+v2 song5 5 44100 8 9.981 28.17 0.805 0.00 0 0.00 0.00 0.00 0.00 ca17c7a8
+v2n song5 5 44100 8 8.742 24.67 0.919 0.00 0 0.00 0.00 0.00 0.00 ca17c7a8
+== title on CPU1 (lent hart)
+lg cpu1 36 44100 4 9.739 54.66 0.415 0.00 0 0.00 0.00 0.00 0.00 42be0a6d
+v2 cpu1 36 44100 4 3.441 19.31 1.174 0.00 0 0.00 0.00 0.00 0.00 42be0a6d
+B1_DONE

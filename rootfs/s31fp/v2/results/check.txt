@@ -1,0 +1,78 @@
+RESULT add: 20000000 operand sets (+5002003 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 352636 libgcc-vs-hw differences; RNE fast-path share 78.8%; libgcc non-canonical NaN results 0
+RESULT div: 20000000 operand sets (+5000338 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 346846 libgcc-vs-hw differences; RNE fast-path share 80.0%; libgcc non-canonical NaN results 0
+RESULT eq: 20000000 operand sets (+4997829 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE fast-path share 90.1%; libgcc non-canonical NaN results 0
+RESULT ext: 20000000 operand sets (+4997455 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 5503803 libgcc-vs-hw differences; RNE fast-path share 62.8%; libgcc non-canonical NaN results 0
+RESULT fixsi: 20000000 operand sets (+5003082 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 632565 libgcc-vs-hw differences; RNE fast-path share 64.6%; libgcc non-canonical NaN results 0
+RESULT fixun: 20000000 operand sets (+5001038 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 631684 libgcc-vs-hw differences; RNE fast-path share 36.3%; libgcc non-canonical NaN results 0
+RESULT fltsi: 20000000 operand sets (+5001143 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE fast-path share 100.0%; libgcc non-canonical NaN results 0
+RESULT fltun: 20000000 operand sets (+5003941 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE fast-path share 100.0%; libgcc non-canonical NaN results 0
+RESULT ge: 20000000 operand sets (+5000051 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE fast-path share 90.2%; libgcc non-canonical NaN results 0
+RESULT le: 20000000 operand sets (+4998838 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE fast-path share 90.1%; libgcc non-canonical NaN results 0
+RESULT mul: 20000000 operand sets (+4998837 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 407614 libgcc-vs-hw differences; RNE fast-path share 74.1%; libgcc non-canonical NaN results 0
+RESULT sub: 20000000 operand sets (+4999550 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 368388 libgcc-vs-hw differences; RNE fast-path share 78.9%; libgcc non-canonical NaN results 0
+RESULT trunc: 20000000 operand sets (+4999110 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 476020 libgcc-vs-hw differences; RNE fast-path share 51.9%; libgcc non-canonical NaN results 0
+RESULT unord: 20000000 operand sets (+4998178 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE fast-path share 90.1%; libgcc non-canonical NaN results 0
+== FENV=0 build, results only, RNE
+RESULT add: 20000000 operand sets (+0 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE fast-path share 78.8%; libgcc non-canonical NaN results 0
+RESULT div: 20000000 operand sets (+0 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE fast-path share 80.0%; libgcc non-canonical NaN results 0
+RESULT eq: 20000000 operand sets (+0 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE fast-path share 90.1%; libgcc non-canonical NaN results 0
+RESULT ext: 20000000 operand sets (+0 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 4407209 libgcc-vs-hw differences; RNE fast-path share 62.7%; libgcc non-canonical NaN results 0
+RESULT fixsi: 20000000 operand sets (+0 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 506136 libgcc-vs-hw differences; RNE fast-path share 64.6%; libgcc non-canonical NaN results 0
+RESULT fixun: 20000000 operand sets (+0 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 505436 libgcc-vs-hw differences; RNE fast-path share 36.3%; libgcc non-canonical NaN results 0
+RESULT fltsi: 20000000 operand sets (+0 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE fast-path share 100.0%; libgcc non-canonical NaN results 0
+RESULT fltun: 20000000 operand sets (+0 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE fast-path share 100.0%; libgcc non-canonical NaN results 0
+RESULT ge: 20000000 operand sets (+0 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE fast-path share 90.1%; libgcc non-canonical NaN results 0
+RESULT le: 20000000 operand sets (+0 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE fast-path share 90.1%; libgcc non-canonical NaN results 0
+RESULT mul: 20000000 operand sets (+0 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE fast-path share 74.1%; libgcc non-canonical NaN results 0
+RESULT sub: 20000000 operand sets (+0 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE fast-path share 78.9%; libgcc non-canonical NaN results 0
+RESULT trunc: 20000000 operand sets (+0 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE fast-path share 51.9%; libgcc non-canonical NaN results 0
+RESULT unord: 20000000 operand sets (+0 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 libgcc-vs-hw differences; RNE fast-path share 90.1%; libgcc non-canonical NaN results 0
+== sample libgcc vs D-extension oracle differences
+libgcc!=hw add rm4 a=3e3bd080ccfcef62 b=c1b4c463ec000000 libgcc=c1b4c463ebffffff/01 hw=c1b4c463ec000000/01
+libgcc!=hw add rm4 a=34d62b455acf4575 b=ffee560dc1ca3d9d libgcc=ffee560dc1ca3d9c/01 hw=ffee560dc1ca3d9d/01
+libgcc!=hw add rm4 a=b3b3b893f667d6ba b=2f32c8b6ed9d9aab libgcc=b3b3b893f667d6b9/01 hw=b3b3b893f667d6ba/01
+libgcc!=hw add rm4 a=c1b6feac7fffffff b=3c9464cdcfffffff libgcc=c1b6feac7ffffffe/01 hw=c1b6feac7fffffff/01
+libgcc!=hw add rm4 a=401cbf6462221975 b=3d6cbf6462221975 libgcc=401cbf6462221d0c/01 hw=401cbf6462221d0d/01
+libgcc!=hw add rm4 a=3a6a618d209e801e b=3d8713b280000000 libgcc=3d8713b280000006/01 hw=3d8713b280000007/01
+libgcc!=hw div rm4 a=4e11dc71fac948ad b=ce1aa4a468bbdc7d libgcc=bfe573c7dc33fad0/01 hw=bfe573c7dc33fad1/01
+libgcc!=hw div rm4 a=c1d87599940d86d7 b=3a8db8261e9ad194 libgcc=c73a561dd509e7bc/01 hw=c73a561dd509e7bd/01
+libgcc!=hw div rm4 a=41e00000000015c2 b=c1ee1bf4bdd75f36 libgcc=bfe101387144c86a/01 hw=bfe101387144c86b/01
+libgcc!=hw div rm4 a=3feb415688ea858c b=3feb415688ea858d libgcc=3feffffffffffffe/01 hw=3fefffffffffffff/01
+libgcc!=hw div rm4 a=7fecd2392b0687e9 b=ad80f2c0d1e6e634 libgcc=ffefffffffffffff/05 hw=fff0000000000000/05
+libgcc!=hw div rm4 a=3f2e99d500000000 b=bf2e99d500000001 libgcc=bfeffffffffffffe/01 hw=bfefffffffffffff/01
+libgcc!=hw ext rm0 a=00000000ffe02fd5 b=0000000000000000 libgcc=fffc05faa0000000/00 hw=7ff8000000000000/00
+libgcc!=hw ext rm0 a=00000000ffb5e011 b=0000000000000000 libgcc=fffebc0220000000/10 hw=7ff8000000000000/10
+libgcc!=hw ext rm0 a=000000007ff052b5 b=0000000000000000 libgcc=7ffe0a56a0000000/00 hw=7ff8000000000000/00
+libgcc!=hw ext rm0 a=00000000ffe11e9d b=0000000000000000 libgcc=fffc23d3a0000000/00 hw=7ff8000000000000/00
+libgcc!=hw ext rm0 a=000000007fe370eb b=0000000000000000 libgcc=7ffc6e1d60000000/00 hw=7ff8000000000000/00
+libgcc!=hw ext rm0 a=000000007f845d93 b=0000000000000000 libgcc=7ff88bb260000000/10 hw=7ff8000000000000/10
+libgcc!=hw fixsi rm0 a=ffffffffffffffff b=0000000000000000 libgcc=0000000080000000/10 hw=000000007fffffff/10
+libgcc!=hw fixsi rm0 a=ffffffffffffffff b=0000000000000000 libgcc=0000000080000000/10 hw=000000007fffffff/10
+libgcc!=hw fixsi rm0 a=fff8000000000000 b=0000000000000000 libgcc=0000000080000000/10 hw=000000007fffffff/10
+libgcc!=hw fixsi rm3 a=fff8000000000000 b=0000000000000000 libgcc=0000000080000000/10 hw=000000007fffffff/10
+libgcc!=hw fixsi rm0 a=fff9b7c7848191a0 b=0000000000000000 libgcc=0000000080000000/10 hw=000000007fffffff/10
+libgcc!=hw fixsi rm0 a=ffffca11a2cd260f b=0000000000000000 libgcc=0000000080000000/10 hw=000000007fffffff/10
+libgcc!=hw fixun rm0 a=fff8000000000000 b=0000000000000000 libgcc=0000000000000000/10 hw=00000000ffffffff/10
+libgcc!=hw fixun rm0 a=fff9f4b51117aad7 b=0000000000000000 libgcc=0000000000000000/10 hw=00000000ffffffff/10
+libgcc!=hw fixun rm2 a=fff9f4b51117aad7 b=0000000000000000 libgcc=0000000000000000/10 hw=00000000ffffffff/10
+libgcc!=hw fixun rm0 a=fffc092365ca040b b=0000000000000000 libgcc=0000000000000000/10 hw=00000000ffffffff/10
+libgcc!=hw fixun rm0 a=fff8000000000000 b=0000000000000000 libgcc=0000000000000000/10 hw=00000000ffffffff/10
+libgcc!=hw fixun rm0 a=fff8000000000000 b=0000000000000000 libgcc=0000000000000000/10 hw=00000000ffffffff/10
+libgcc!=hw mul rm4 a=e6e0000000000000 b=66c8c2b5463d6d19 libgcc=ffefffffffffffff/05 hw=fff0000000000000/05
+libgcc!=hw mul rm4 a=412e000000000000 b=412e000000000002 libgcc=426c200000000001/01 hw=426c200000000002/01
+libgcc!=hw mul rm4 a=ffd1b879f6ac21c5 b=bb7a4d296b445e86 libgcc=7b5d213bdb50c3b3/01 hw=7b5d213bdb50c3b4/01
+libgcc!=hw mul rm4 a=beeee34e00000000 b=002f36d075c0e127 libgcc=8000003c4238b588/03 hw=8000003c4238b589/03
+libgcc!=hw mul rm4 a=bfbc0ef000000000 b=3fbc0ef000000003 libgcc=bf889a2af9080002/01 hw=bf889a2af9080003/01
+libgcc!=hw mul rm4 a=c1f002c14d57ec2f b=c21ed0bb0465e35d libgcc=441ed609668c2f05/01 hw=441ed609668c2f06/01
+libgcc!=hw sub rm4 a=332f792d0bfe169a b=3a511e139fffffff libgcc=ba511e139ffffffe/01 hw=ba511e139fffffff/01
+libgcc!=hw sub rm4 a=41e0000000000000 b=3d72e00000000000 libgcc=41dfffffffffffff/01 hw=41e0000000000000/01
+libgcc!=hw sub rm4 a=3c9a0bd2c0000000 b=4ac33936c93b1dc6 libgcc=cac33936c93b1dc5/01 hw=cac33936c93b1dc6/01
+libgcc!=hw sub rm4 a=46695ae02fffffff b=41d2c2ebd617ba9b libgcc=46695ae02ffffffe/01 hw=46695ae02fffffff/01
+libgcc!=hw sub rm4 a=c1f0000000000006 b=b0c4c17bc4806ce0 libgcc=c1f0000000000005/01 hw=c1f0000000000006/01
+libgcc!=hw sub rm4 a=c2c1a62046697637 b=b57ad68d6e9f1e00 libgcc=c2c1a62046697636/01 hw=c2c1a62046697637/01
+libgcc!=hw trunc rm4 a=bd0f371e73f17000 b=0000000000000000 libgcc=00000000a879b8f3/01 hw=00000000a879b8f4/01
+libgcc!=hw trunc rm4 a=be680baf9c4d0000 b=0000000000000000 libgcc=00000000b3405d7c/01 hw=00000000b3405d7d/01
+libgcc!=hw trunc rm4 a=471f52c9d0000000 b=0000000000000000 libgcc=0000000078fa964e/01 hw=0000000078fa964f/01
+libgcc!=hw trunc rm4 a=c1be8ae576624466 b=0000000000000000 libgcc=00000000cdf4572b/01 hw=00000000cdf4572c/01
+libgcc!=hw trunc rm4 a=4fc0000000000000 b=0000000000000000 libgcc=000000007f7fffff/05 hw=000000007f800000/05
+libgcc!=hw trunc rm4 a=c7f5d62bfdb6c67e b=0000000000000000 libgcc=00000000ff7fffff/05 hw=00000000ff800000/05

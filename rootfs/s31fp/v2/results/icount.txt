@@ -1,0 +1,38 @@
+== FENV=1 (default)
+op     class     libgcc      old       v2
+mul    gen        187.6     72.8     75.1
+mul    low0       187.5     57.8     56.0
+mul    pow2       170.0     60.0     28.0
+mul    zero        77.0     58.0     19.0
+add    same        86.3     69.8     74.6
+add    opp         88.3     70.5     75.0
+add    cancel      77.0    146.0     85.0
+sub    opp         90.2     71.7     76.6
+div    gen        188.1    188.1    133.5
+ge     gen         26.5     26.5     22.3
+le     gen         26.5     26.5     22.3
+eq     gen         20.0     20.0     23.0
+fltsi  int         22.2     15.8     14.8
+fixsi  int         28.5     19.0     22.0
+fixun  int         29.0     29.0     21.0
+ext    int         23.0     23.0     14.0
+trunc  int         52.0     52.0     28.0
+== FENV=0
+op class v2
+mul gen 71.1
+mul low0 52.0
+mul pow2 26.0
+mul zero 17.0
+add same 70.7
+add opp 71.1
+add cancel 82.0
+sub opp 72.6
+div gen 125.5
+ge gen 22.3
+le gen 22.3
+eq gen 23.0
+fltsi int 14.8
+fixsi int 16.0
+fixun int 13.0
+ext int 14.0
+trunc int 24.0
