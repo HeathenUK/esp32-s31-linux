@@ -1,0 +1,4 @@
+song=36 arm=old median=19.52 range=19.47..19.80 us/sample
+song=36 arm=new median=19.48 range=19.40..19.56 us/sample
+song=5 arm=old median=27.95 range=27.81..28.79 us/sample
+song=5 arm=new median=28.06 range=27.84..28.28 us/sample

@@ -1,0 +1,40 @@
+diff --git a/rootfs/s31fp/v2/v2.S b/rootfs/s31fp/v2/v2.S
+index 79add2ec..3bbfe143 100644
+--- a/rootfs/s31fp/v2/v2.S
++++ b/rootfs/s31fp/v2/v2.S
+@@ -140,12 +140,12 @@ s31v2_muldf3:
+ 	or	a3, a3, t5
+ 	bseti	a3, a3, 31
+ 	slli	a2, a2, 11
+-	mul	t4, a0, a2		/* L00 */
+ 	mulhu	t5, a0, a2		/* H00 */
+-	mul	t0, a0, a3		/* L01 */
++	mul	t4, a0, a2		/* L00 */
+ 	mulhu	a5, a0, a3		/* H01 */
+-	mul	t1, a1, a2		/* L10 */
++	mul	t0, a0, a3		/* L01 */
+ 	mulhu	a7, a1, a2		/* H10 */
++	mul	t1, a1, a2		/* L10 */
+ 	mul	a6, a1, a3		/* L11 */
+ 	mulhu	a1, a1, a3		/* H11 */
+ 	add	t5, t5, t0		/* w1 = H00 + L01 + L10 */
+@@ -179,8 +179,8 @@ s31v2_muldf3:
+ 	or	a3, a3, t5
+ 	bseti	a3, a3, 31
+ 	slli	a2, a2, 11
+-	mul	t5, a1, a2
+ 	mulhu	a5, a1, a2
++	mul	t5, a1, a2
+ 	mul	a6, a1, a3
+ 	mulhu	a1, a1, a3
+ 	add	a5, a5, a6
+@@ -209,8 +209,8 @@ s31v2_muldf3:
+ 	slli	a3, a3, 12
+ 	srli	a3, a3, 1
+ 	bseti	a3, a3, 31
+-	mul	t5, a0, a3
+ 	mulhu	a5, a0, a3
++	mul	t5, a0, a3
+ 	mul	a6, a1, a3
+ 	mulhu	a1, a1, a3
+ 	add	a5, a5, a6

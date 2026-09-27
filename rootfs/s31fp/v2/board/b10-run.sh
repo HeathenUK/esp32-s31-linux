@@ -6,8 +6,11 @@ DONE=$2
 if [ "$1" = arithmetic ] || [ "$1" = arithmetic-exact ]; then
   unset LD_PRELOAD S31FP_DEBUG
   C=/root/afp2/oncpu; M=/root/afp2/music.mus
-  OLD=/root/afp2/candidate/libs31fp.so
-  NEW=/root/afp2/mul-review/libs31fp.so
+  OLD=${B10_OLD:-/root/afp2/candidate/libs31fp.so}
+  NEW=${B10_NEW:-/root/afp2/mul-review/libs31fp.so}
+  D=${B10_WORK:-/root/afp2/mul-review}
+  [ -x "$C" ] && [ -x ./ptest-dyn ] && [ -x ./oplbench-dyn ] &&
+    [ -r "$M" ] && [ -r "$OLD" ] && [ -r "$NEW" ] && [ -d "$D" ] || exit 1
   md5sum "$OLD" "$NEW"
   # Compare separate disabled/enabled processes: body matching can also
   # patch the checker's renamed libgcc reference, so an in-process oracle
@@ -15,12 +18,12 @@ if [ "$1" = arithmetic ] || [ "$1" = arithmetic-exact ]; then
   for mask in 1 2; do
     for enabled in 0 1; do
       env S31FP=$enabled S31FP_COPY=1 S31FP_DEBUG=1 LD_PRELOAD="$NEW" \
-        "$C" "$mask" ./ptest-dyn dump mul 100 173 > "/root/afp2/mul-review/dump-$enabled" || exit 1
+        "$C" "$mask" ./ptest-dyn dump mul 100 173 > "$D/dump-$enabled" || exit 1
     done
-    cmp /root/afp2/mul-review/dump-0 /root/afp2/mul-review/dump-1 || exit 1
+    cmp "$D/dump-0" "$D/dump-1" || exit 1
     echo "ARITHMETIC_EXACT mask=$mask"
   done
-  rm /root/afp2/mul-review/dump-0 /root/afp2/mul-review/dump-1
+  rm "$D/dump-0" "$D/dump-1"
   [ "$1" != arithmetic-exact ] || { echo ARITHMETIC_EXACT_DONE; exit; }
   for r in 0 1 2 3 4 5; do
     arms="old new"; [ $((r % 2)) = 0 ] || arms="new old"
