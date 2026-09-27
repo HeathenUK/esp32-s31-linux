@@ -139,3 +139,12 @@ if it wins with no glxgears regression.
 - `docs/current-state.md`: the GLQuake paging and tick sections.
 - `buildroot-external/board/esp32-s31/overlay/etc/sysctl.d/99-s31-memory.conf`:
   the swap settings, with their numbers.
+
+## Git note
+
+Commit a97b9851 (this document's first version) also carries the revert of
+tier 3's eight tinygl source files to their tier-2 state (9ecf5f86). The
+tier-7 agent had staged that revert, and the documentation commit picked it
+up. So the tier-3 revert is recorded under that commit, not under tier 7's
+e567cb01. From here on, documentation commits name their paths
+explicitly (`git commit -- <path>`).
