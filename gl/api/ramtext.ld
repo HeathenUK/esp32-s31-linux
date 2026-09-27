@@ -23,7 +23,7 @@ SECTIONS
     *api_gen_stubs.o(.text .text.*)
     . = ALIGN(32);
     HIDDEN(__s31hot_start = .);
-    KEEP(*(s31hot_text))
+    KEEP(*(SORT_BY_NAME(s31hot_text*)))   /* hotorder.list's order */
     KEEP(*(s31hot_rodata))      /* their jump tables (ramtext.py) */
     HIDDEN(__s31hot_end = .);
   }

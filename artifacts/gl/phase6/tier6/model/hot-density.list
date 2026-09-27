@@ -1,0 +1,301 @@
+zpipe_fused    zf1_blend                        #    3 lines,     890.2 k insns/frame,  33495.0 fetches/line/frame
+zpipe_fused    zf8_wnn_t_p0s1                   #   33 lines,    6406.6 k insns/frame,  18053.8 fetches/line/frame
+zpipe_fused    zf8_sbar                         #    5 lines,     773.2 k insns/frame,  13132.8 fetches/line/frame
+s31_tfilter    zx8_base_p8r                     #    5 lines,     645.7 k insns/frame,  14866.6 fetches/line/frame
+zpipe          zdw_lequal                       #    1 lines,      97.0 k insns/frame,  17830.1 fetches/line/frame
+zpipe          zc_smooth                        #    2 lines,     128.6 k insns/frame,   5563.0 fetches/line/frame
+raster         to_vg                            #    6 lines,     279.3 k insns/frame,   7961.3 fetches/line/frame
+zpipe_fused    zf8_alias_bl                     #   13 lines,     602.7 k insns/frame,   4352.8 fetches/line/frame
+zbuffer        ZB_fill16                        #    2 lines,      86.4 k insns/frame,   2404.0 fetches/line/frame
+# not in the library: rp_run (4 lines, 159.2 k insns/frame)
+zpipe_fused    zf1_pica                         #    2 lines,      71.5 k insns/frame,  10818.6 fetches/line/frame
+api_gl_pixels  glCopyTexSubImage2D              #    1 lines,      35.3 k insns/frame,  11712.3 fetches/line/frame
+vertex         gl_vertex4f                      #   25 lines,     855.9 k insns/frame,   5380.6 fetches/line/frame
+api_gl_attrib  glTexCoord2f                     #    1 lines,      33.4 k insns/frame,   8120.9 fetches/line/frame
+api            tgl_glColor4f                    #    3 lines,      98.1 k insns/frame,   4760.6 fetches/line/frame
+api            tgl_glTexCoord4f                 #    1 lines,      32.6 k insns/frame,   9320.2 fetches/line/frame
+zpipe_fused    zf8_pic                          #    3 lines,      88.9 k insns/frame,   5934.5 fetches/line/frame
+zpipe          zt_rr                            #    3 lines,      86.1 k insns/frame,   4489.5 fetches/line/frame
+s31_tfilter    zx8_1_base                       #    7 lines,     184.9 k insns/frame,   4666.6 fetches/line/frame
+clip           gl_set_provoking_flat            #    2 lines,      50.8 k insns/frame,   3293.9 fetches/line/frame
+zpipe          zo_max                           #    1 lines,      23.5 k insns/frame,   5223.4 fetches/line/frame
+raster         gl_draw_triangle_general         #    2 lines,      46.0 k insns/frame,   5316.8 fetches/line/frame
+s31_tex8       t8_l8_pass                       #   12 lines,     274.7 k insns/frame,   3910.9 fetches/line/frame
+api_context    s31_hook_viewport                #    1 lines,      22.0 k insns/frame,   4657.4 fetches/line/frame
+# not in the library: d_glVertex3fv (1 lines, 21.3 k insns/frame)
+clip           gl_draw_triangle                 #    3 lines,      58.2 k insns/frame,   5214.3 fetches/line/frame
+zpipe          zp_run                           #    7 lines,     128.0 k insns/frame,   5636.6 fetches/line/frame
+zpipe          zd_less                          #    1 lines,      17.5 k insns/frame,   2597.9 fetches/line/frame
+# not in the library: d_glCopyTexSubImage2D (1 lines, 16.7 k insns/frame)
+zpipe          zd_lequal                        #    1 lines,      16.3 k insns/frame,   2597.9 fetches/line/frame
+zpipe_fused    zf8_alias1                       #    4 lines,      62.4 k insns/frame,   1565.2 fetches/line/frame
+ztriangle_gen  ZB_fillTriangleGeneral           #   51 lines,     727.2 k insns/frame,   2045.4 fetches/line/frame
+zpipe          zp_out_fn                        #    4 lines,      53.7 k insns/frame,   1369.9 fetches/line/frame
+api_gl_attrib  glVertex3fv                      #    1 lines,      11.5 k insns/frame,   5048.5 fetches/line/frame
+# not in the library: d_glTexImage2D (1 lines, 11.1 k insns/frame)
+zpipe_fused    zf8_pica                         #    1 lines,      10.9 k insns/frame,   2083.2 fetches/line/frame
+zpipe          zp_run_mt_direct                 #    1 lines,      10.8 k insns/frame,   1205.0 fetches/line/frame
+s31_mtex       tgl_multi_tex_coord              #    2 lines,      21.4 k insns/frame,   3509.1 fetches/line/frame
+# not in the library: memmove (1 lines, 10.6 k insns/frame)
+api_gl_attrib  glColor4ubv                      #    1 lines,      10.6 k insns/frame,   3977.2 fetches/line/frame
+# not in the library: memset (6 lines, 61.8 k insns/frame)
+zpipe_fused    zf8_wnn_s_c0                     #   11 lines,     106.9 k insns/frame,    863.6 fetches/line/frame
+# not in the library: d_glOrtho (1 lines, 9.3 k insns/frame)
+raster         set_flat                         #    5 lines,      45.8 k insns/frame,   1372.3 fetches/line/frame
+list           glopCallList                     #    1 lines,       8.9 k insns/frame,   1188.6 fetches/line/frame
+api            tgl_glDisable                    #    1 lines,       8.7 k insns/frame,   1527.2 fetches/line/frame
+zpipe_fused    zf8_wnn_rp_p0s1                  #    1 lines,       8.6 k insns/frame,    720.4 fetches/line/frame
+texture        tex_env                          #    9 lines,      70.3 k insns/frame,    697.6 fetches/line/frame
+api            tgl_glBegin                      #    1 lines,       7.6 k insns/frame,   1538.5 fetches/line/frame
+zpipe_fused    zf8_glow                         #    6 lines,      45.1 k insns/frame,    668.7 fetches/line/frame
+s31_tfilter    fill_pq_slow                     #    1 lines,       7.2 k insns/frame,   1440.8 fetches/line/frame
+zpipe_fused    zf8_part                         #    7 lines,      48.6 k insns/frame,    987.7 fetches/line/frame
+raster         gl_draw_triangle_mt              #    8 lines,      54.3 k insns/frame,   1062.2 fetches/line/frame
+s31_tfilter    zc_smooth_pc                     #    5 lines,      33.5 k insns/frame,    712.0 fetches/line/frame
+s31_state      s31_cap_index                    #    2 lines,      13.0 k insns/frame,   1788.9 fetches/line/frame
+s31_state      cap_set                          #    1 lines,       6.3 k insns/frame,   2523.6 fetches/line/frame
+ztriangle_genmt ZB_fillTriangleGeneralMT         #   61 lines,     379.0 k insns/frame,    873.6 fetches/line/frame
+list           gl_add_op                        #    1 lines,       6.0 k insns/frame,   2417.0 fetches/line/frame
+s31_mtex       tu_swap                          #    9 lines,      52.2 k insns/frame,    615.2 fetches/line/frame
+vertex         glopBegin                        #   10 lines,      55.2 k insns/frame,   2036.3 fetches/line/frame
+s31_state      s31_cap_swap_unit                #    2 lines,      11.0 k insns/frame,   1675.2 fetches/line/frame
+zmath          gl_M4_IsId                       #    1 lines,       5.4 k insns/frame,   2108.8 fetches/line/frame
+# not in the library: main (1 lines, 5.3 k insns/frame)
+zpipe          zd_none                          #    1 lines,       5.2 k insns/frame,   2611.7 fetches/line/frame
+s31_tfilter    zx8_base                         #    8 lines,      37.8 k insns/frame,    620.5 fetches/line/frame
+clip           updateTmp                        #   11 lines,      50.6 k insns/frame,    607.4 fetches/line/frame
+clip           gl_transform_to_viewport         #    5 lines,      21.9 k insns/frame,    527.7 fetches/line/frame
+zpipe_fused    zf8_con                          #    1 lines,       4.4 k insns/frame,    311.8 fetches/line/frame
+api_gl_core    glHint                           #    2 lines,       8.4 k insns/frame,    549.3 fetches/line/frame
+zpipe_fused    zf8_fence                        #    2 lines,       7.8 k insns/frame,    709.6 fetches/line/frame
+zmath          gl_M4_RotateSC                   #    2 lines,       7.5 k insns/frame,   1113.1 fetches/line/frame
+s31_tex8       t8_fold                          #    2 lines,       7.1 k insns/frame,   1617.0 fetches/line/frame
+s31_state      state_op                         #    4 lines,      14.1 k insns/frame,    525.5 fetches/line/frame
+zmath          m4_mul_rows                      #    3 lines,      10.4 k insns/frame,    396.6 fetches/line/frame
+raster_sel     zs_build                         #    1 lines,       3.5 k insns/frame,    748.8 fetches/line/frame
+vertex         glopEnd                          #    2 lines,       6.8 k insns/frame,    983.4 fetches/line/frame
+zpipe          zp_run_mt                        #    7 lines,      21.5 k insns/frame,    972.0 fetches/line/frame
+zpipe_fused    zf8_wnn_s_p0s1                   #    1 lines,       3.0 k insns/frame,    435.0 fetches/line/frame
+s31_tex8       st565_rows                       #    8 lines,      22.7 k insns/frame,    588.3 fetches/line/frame
+s31_tfilter    zpx_tri_unit                     #    1 lines,       2.5 k insns/frame,    623.7 fetches/line/frame
+zpipe_fused    zf_btab                          #    3 lines,       6.9 k insns/frame,    768.1 fetches/line/frame
+clip           clip_zmax                        #    1 lines,       2.3 k insns/frame,    325.4 fetches/line/frame
+# not in the library: d_glBindTexture (1 lines, 2.0 k insns/frame)
+api            tgl_glBindTexture                #    1 lines,       2.0 k insns/frame,    279.4 fetches/line/frame
+clip           clip_ymin                        #    2 lines,       3.9 k insns/frame,    209.0 fetches/line/frame
+clip           clip_xmax                        #    1 lines,       2.0 k insns/frame,    297.7 fetches/line/frame
+clip           clip_xmin                        #    1 lines,       1.9 k insns/frame,    182.3 fetches/line/frame
+clip           gl_draw_triangle_clip            #   10 lines,      19.0 k insns/frame,    428.6 fetches/line/frame
+s31_tex8       t8_idx                           #    1 lines,       1.9 k insns/frame,    624.4 fetches/line/frame
+s31_state      valid_blend                      #    1 lines,       1.9 k insns/frame,    941.1 fetches/line/frame
+api_gl_core    glTexEnvi                        #    1 lines,       1.8 k insns/frame,    429.7 fetches/line/frame
+# not in the library: __trunctfdf2 (1 lines, 1.8 k insns/frame)
+misc           glopViewport                     #    1 lines,       1.5 k insns/frame,    308.1 fetches/line/frame
+raster_sel     f8                               #    1 lines,       1.4 k insns/frame,    651.5 fetches/line/frame
+s31_tex8       t8_row                           #    7 lines,       9.5 k insns/frame,    406.9 fetches/line/frame
+api_gl_core    glTexEnvf                        #    1 lines,       1.3 k insns/frame,    211.6 fetches/line/frame
+misc           glopPolygonOffset                #    1 lines,       1.3 k insns/frame,    602.7 fetches/line/frame
+raster_sel     gl_build_pipe                    #   38 lines,      44.6 k insns/frame,    249.7 fetches/line/frame
+raster_sel     comb_reads                       #    2 lines,       2.3 k insns/frame,    437.7 fetches/line/frame
+texture        glopTexEnv                       #    1 lines,       1.1 k insns/frame,    277.8 fetches/line/frame
+s31_tex8       t8_bytes                         #    2 lines,       2.1 k insns/frame,    155.8 fetches/line/frame
+texture        gl_texture_complete              #    4 lines,       4.0 k insns/frame,    355.1 fetches/line/frame
+api            tgl_glEnable                     #    1 lines,       1.0 k insns/frame,    247.8 fetches/line/frame
+api_gl_core    glPolygonMode                    #    1 lines,       1.0 k insns/frame,    121.9 fetches/line/frame
+clip           clip_ymax                        #    1 lines,       0.9 k insns/frame,    116.2 fetches/line/frame
+api            tgl_glRotatef                    #    1 lines,       0.9 k insns/frame,    164.6 fetches/line/frame
+s31_mtex       tgl_active_texture               #    2 lines,       1.7 k insns/frame,    210.9 fetches/line/frame
+api            tgl_glPolygonMode                #    1 lines,       0.9 k insns/frame,    201.3 fetches/line/frame
+zline          ZB_line                          #    1 lines,       0.8 k insns/frame,     76.2 fetches/line/frame
+api_gl_core    glTexImage2D                     #    1 lines,       0.8 k insns/frame,    117.6 fetches/line/frame
+memory         gl_free                          #    1 lines,       0.8 k insns/frame,    161.5 fetches/line/frame
+s31_tfilter    zpx_level0                       #    2 lines,       1.6 k insns/frame,    135.3 fetches/line/frame
+s31_tex8       t8_write                         #    7 lines,       5.5 k insns/frame,    287.5 fetches/line/frame
+raster_sel     comb_prog                        #   11 lines,       8.4 k insns/frame,    155.6 fetches/line/frame
+zmath          gl_M4_MulLeft                    #    1 lines,       0.7 k insns/frame,    134.4 fetches/line/frame
+# not in the library: d_glFrustum (1 lines, 0.7 k insns/frame)
+s31_tfilter    zpx_tri                          #    5 lines,       3.4 k insns/frame,     83.6 fetches/line/frame
+misc           glopEnableDisable                #    3 lines,       2.0 k insns/frame,    150.6 fetches/line/frame
+api_gl_core    glLoadIdentity                   #    1 lines,       0.7 k insns/frame,     93.7 fetches/line/frame
+s31_zepoch     zep_set_chk                      #    3 lines,       2.0 k insns/frame,    179.9 fetches/line/frame
+texture        tgl_glDeleteTextures             #    1 lines,       0.6 k insns/frame,     93.1 fetches/line/frame
+zpipe          zp_depth_fn                      #    3 lines,       1.9 k insns/frame,    234.1 fetches/line/frame
+zpipe_fused    zpf_select                       #   54 lines,      33.4 k insns/frame,    229.2 fetches/line/frame
+s31_state      s31_cap_record                   #    3 lines,       1.9 k insns/frame,    207.7 fetches/line/frame
+s31_tfilter    zpx_is_tex_stage                 #    1 lines,       0.6 k insns/frame,     61.6 fetches/line/frame
+s31_mtex       gl_mtex_init                     #    1 lines,       0.6 k insns/frame,    180.2 fetches/line/frame
+zpipe          zp_texenv8_fn                    #    1 lines,       0.6 k insns/frame,    296.2 fetches/line/frame
+ztriangle      ZB_fillTriangleMappingPerspective #   23 lines,      13.5 k insns/frame,    100.0 fetches/line/frame
+s31_xform      gl_vertex_extra                  #    1 lines,       0.6 k insns/frame,    146.3 fetches/line/frame
+s31_fmath      s31_sincos_deg                   #    6 lines,       3.5 k insns/frame,     75.5 fetches/line/frame
+zpipe_fused    zf1_sbar                         #    1 lines,       0.6 k insns/frame,     38.8 fetches/line/frame
+s31_tfilter    zpx_stage_u                      #    1 lines,       0.6 k insns/frame,     87.9 fetches/line/frame
+raster_sel     tu1_update                       #    5 lines,       2.8 k insns/frame,     89.9 fetches/line/frame
+texture        glopBindTexture                  #    3 lines,       1.7 k insns/frame,    187.2 fetches/line/frame
+# not in the library: memcpy (2 lines, 1.1 k insns/frame)
+api            tgl_glLoadIdentity               #    1 lines,       0.5 k insns/frame,    135.9 fetches/line/frame
+light          gl_enable_disable_light          #    1 lines,       0.5 k insns/frame,    168.6 fetches/line/frame
+s31_tex8       t8_stats                         #    5 lines,       2.5 k insns/frame,    127.1 fetches/line/frame
+zpipe_fused    zf_alias_st                      #    1 lines,       0.5 k insns/frame,    177.2 fetches/line/frame
+matrix         glopRotate                       #    5 lines,       2.4 k insns/frame,    108.0 fetches/line/frame
+# not in the library: d_glColor3fv (1 lines, 0.5 k insns/frame)
+s31_draw       glopPolygonStipple               #    1 lines,       0.5 k insns/frame,     51.4 fetches/line/frame
+raster_sel     gl_update_raster                 #   28 lines,      12.7 k insns/frame,    104.3 fetches/line/frame
+raster_sel     tier1_t8_map                     #    1 lines,       0.4 k insns/frame,    152.4 fetches/line/frame
+matrix         glopTranslate                    #    2 lines,       0.9 k insns/frame,     39.6 fetches/line/frame
+# not in the library: d_glTexCoord2f (1 lines, 0.4 k insns/frame)
+s31_zepoch     zdb_fold                         #    1 lines,       0.4 k insns/frame,    157.6 fetches/line/frame
+s31_tfilter    zpx_stage8_u                     #    1 lines,       0.4 k insns/frame,    159.0 fetches/line/frame
+api_gl_attrib  s31_d2f_bits                     #    2 lines,       0.8 k insns/frame,     85.8 fetches/line/frame
+api_gl_core    s31_d2f_bits                     #    2 lines,       0.8 k insns/frame,     85.8 fetches/line/frame
+api_gl_pixels  s31_d2f_bits                     #    2 lines,       0.8 k insns/frame,     85.8 fetches/line/frame
+api_gl_core    glFogfv                          #    1 lines,       0.4 k insns/frame,     47.6 fetches/line/frame
+s31_zepoch     zdb_enabled                      #    1 lines,       0.4 k insns/frame,     52.6 fetches/line/frame
+api_gl_core    glClearColor                     #    1 lines,       0.3 k insns/frame,     27.3 fetches/line/frame
+api_gl_core    glRotatef                        #    1 lines,       0.3 k insns/frame,     88.1 fetches/line/frame
+s31_tfilter    zpx_is_base8                     #    1 lines,       0.3 k insns/frame,     59.9 fetches/line/frame
+# not in the library: rp_scratch (1 lines, 0.3 k insns/frame)
+# not in the library: d_glActiveTextureARB (1 lines, 0.3 k insns/frame)
+s31_mtex       glopMultiTexCoord                #    1 lines,       0.3 k insns/frame,     60.1 fetches/line/frame
+s31_state      tgl_pixel_transfer_get           #    1 lines,       0.3 k insns/frame,     45.9 fetches/line/frame
+zmath          gl_M4_Inv                        #    1 lines,       0.3 k insns/frame,     51.4 fetches/line/frame
+matrix         glopPushMatrix                   #    1 lines,       0.2 k insns/frame,     61.9 fetches/line/frame
+s31_zepoch     zep_materialise                  #    1 lines,       0.2 k insns/frame,     81.7 fetches/line/frame
+api_gl_core    glTexParameterf                  #    2 lines,       0.5 k insns/frame,     30.2 fetches/line/frame
+texture        tgl_tex_envf                     #    1 lines,       0.2 k insns/frame,     60.0 fetches/line/frame
+matrix         glopScale                        #    3 lines,       0.7 k insns/frame,     21.6 fetches/line/frame
+zpipe          zp_texidx1_fn                    #    1 lines,       0.2 k insns/frame,    103.2 fetches/line/frame
+api            tgl_glTexSubImage2D              #    2 lines,       0.4 k insns/frame,     25.6 fetches/line/frame
+api            tgl_glShadeModel                 #    1 lines,       0.2 k insns/frame,     57.8 fetches/line/frame
+s31_xform      gl_update_xform                  #    1 lines,       0.2 k insns/frame,     38.4 fetches/line/frame
+s31_rpos       glopRasterPos                    #    1 lines,       0.2 k insns/frame,     81.9 fetches/line/frame
+matrix         glopPopMatrix                    #    1 lines,       0.2 k insns/frame,     97.8 fetches/line/frame
+zpipe          zp_fog_fn                        #    1 lines,       0.2 k insns/frame,     56.7 fetches/line/frame
+texture        find_texture                     #    1 lines,       0.2 k insns/frame,    140.2 fetches/line/frame
+specbuf        specbuf_get_buffer               #    1 lines,       0.2 k insns/frame,     46.5 fetches/line/frame
+api            tgl_glMatrixMode                 #    1 lines,       0.2 k insns/frame,     45.4 fetches/line/frame
+api_gl_core    glBlendFunc                      #    1 lines,       0.2 k insns/frame,     32.9 fetches/line/frame
+matrix         glopLoadIdentity                 #    1 lines,       0.2 k insns/frame,     34.0 fetches/line/frame
+ztriangle      ZB_fillTriangleSmoothLong        #    1 lines,       0.2 k insns/frame,      7.6 fetches/line/frame
+s31_state      glopState                        #    7 lines,       1.2 k insns/frame,     33.4 fetches/line/frame
+api_gl_core    glDepthRange                     #    1 lines,       0.2 k insns/frame,     15.7 fetches/line/frame
+raster_sel     tier1_t8                         #    2 lines,       0.3 k insns/frame,     46.6 fetches/line/frame
+s31_zepoch     zep_demote                       #    1 lines,       0.2 k insns/frame,     32.3 fetches/line/frame
+zpipe          zc_comb0                         #    1 lines,       0.2 k insns/frame,    105.2 fetches/line/frame
+misc           enable_disable                   #    8 lines,       1.1 k insns/frame,     54.0 fetches/line/frame
+raster_sel     zs_op                            #    1 lines,       0.1 k insns/frame,     34.8 fetches/line/frame
+matrix         glopMultMatrix                   #    1 lines,       0.1 k insns/frame,     15.5 fetches/line/frame
+# not in the library: d_glDisable (1 lines, 0.1 k insns/frame)
+api            tgl_glScalef                     #    1 lines,       0.1 k insns/frame,     35.1 fetches/line/frame
+s31_xform      gl_tu1_begin                     #    1 lines,       0.1 k insns/frame,     38.4 fetches/line/frame
+zpipe          zp_color_fn                      #    1 lines,       0.1 k insns/frame,     72.3 fetches/line/frame
+ztriangle      ztri_setup                       #   12 lines,       1.3 k insns/frame,     16.0 fetches/line/frame
+ztriangle_lt   ztri_setup                       #   12 lines,       1.3 k insns/frame,     16.0 fetches/line/frame
+ztriangle_nt   ztri_setup                       #   12 lines,       1.3 k insns/frame,     16.0 fetches/line/frame
+ztriangle_nw   ztri_setup                       #   12 lines,       1.3 k insns/frame,     16.0 fetches/line/frame
+api            tgl_glTexParameteri              #    1 lines,       0.1 k insns/frame,     19.4 fetches/line/frame
+misc           glopHint                         #    1 lines,       0.1 k insns/frame,     28.9 fetches/line/frame
+api_gl_core    glOrtho                          #    3 lines,       0.3 k insns/frame,     17.5 fetches/line/frame
+matrix         glopOrtho                        #    3 lines,       0.3 k insns/frame,      7.8 fetches/line/frame
+list           gl_list_own                      #    1 lines,       0.1 k insns/frame,     28.4 fetches/line/frame
+zpipe          zp_alpha_fn                      #    1 lines,       0.1 k insns/frame,     34.6 fetches/line/frame
+texture        gl_tex_subimage_src              #    9 lines,       0.8 k insns/frame,     21.8 fetches/line/frame
+s31_zepoch     zep_guard                        #    1 lines,       0.1 k insns/frame,     82.7 fetches/line/frame
+api_gl_core    glViewport                       #    1 lines,       0.1 k insns/frame,     11.5 fetches/line/frame
+ztriangle_nw   ZB_fillTriangleMappingPerspective32_nw #    1 lines,       0.1 k insns/frame,     10.8 fetches/line/frame
+api            tgl_glViewport                   #    1 lines,       0.1 k insns/frame,      6.7 fetches/line/frame
+# not in the library: prog (1 lines, 0.1 k insns/frame)
+s31_zepoch     zep_tri_check                    #    2 lines,       0.1 k insns/frame,     22.8 fetches/line/frame
+s31_tex8       t8_to565                         #    1 lines,       0.1 k insns/frame,      6.4 fetches/line/frame
+api_gl_core    glDepthFunc                      #    1 lines,       0.1 k insns/frame,      6.0 fetches/line/frame
+vertex         gl_eval_viewport                 #    8 lines,       0.4 k insns/frame,      6.1 fetches/line/frame
+api_context    s31gl_stencil_zeroed             #    1 lines,       0.0 k insns/frame,     10.5 fetches/line/frame
+s31_state      tgl_state_f                      #    1 lines,       0.0 k insns/frame,      8.0 fetches/line/frame
+s31_tex8       t8_scan_src                      #    2 lines,       0.1 k insns/frame,      8.0 fetches/line/frame
+api            tgl_glOrtho                      #    1 lines,       0.0 k insns/frame,      9.7 fetches/line/frame
+s31_tex8       t8_amode_to                      #    1 lines,       0.0 k insns/frame,      3.2 fetches/line/frame
+matrix         glopFrustum                      #    4 lines,       0.1 k insns/frame,      4.6 fetches/line/frame
+raster_sel     texenv_op                        #    2 lines,       0.1 k insns/frame,     18.4 fetches/line/frame
+misc           glopCullFace                     #    1 lines,       0.0 k insns/frame,      9.6 fetches/line/frame
+s31_tex8       gl_tex8_knob                     #    1 lines,       0.0 k insns/frame,     11.6 fetches/line/frame
+vertex         glopColor                        #    1 lines,       0.0 k insns/frame,      3.7 fetches/line/frame
+s31_stencil    zst_unpack                       #    1 lines,       0.0 k insns/frame,      3.6 fetches/line/frame
+matrix         glopMatrixMode                   #    1 lines,       0.0 k insns/frame,     11.3 fetches/line/frame
+matrix         glopLoadMatrix                   #    1 lines,       0.0 k insns/frame,     11.3 fetches/line/frame
+# not in the library: q_off (1 lines, 0.0 k insns/frame)
+texture        glopTexImage2D                   #    1 lines,       0.0 k insns/frame,      1.4 fetches/line/frame
+# not in the library: d_glTexSubImage2D (1 lines, 0.0 k insns/frame)
+api_gl_core    glFrustum                        #    2 lines,       0.0 k insns/frame,      4.0 fetches/line/frame
+s31_zepoch     zep_sync                         #    1 lines,       0.0 k insns/frame,      6.0 fetches/line/frame
+s31_zepoch     zdb_clear_colour                 #    4 lines,       0.1 k insns/frame,      4.2 fetches/line/frame
+s31_zepoch     zdb_slot                         #    2 lines,       0.0 k insns/frame,      4.2 fetches/line/frame
+s31_pixels     s31_unpack_setup                 #    5 lines,       0.1 k insns/frame,      3.8 fetches/line/frame
+s31_zepoch     box_union                        #    1 lines,       0.0 k insns/frame,     10.5 fetches/line/frame
+s31_xform      gl_vertex_texcoord               #    1 lines,       0.0 k insns/frame,      6.0 fetches/line/frame
+s31_zepoch     zep_clear                        #    7 lines,       0.1 k insns/frame,      4.4 fetches/line/frame
+api_gl_core    fog                              #    3 lines,       0.0 k insns/frame,      3.7 fetches/line/frame
+s31_tex8       t8_amode                         #    1 lines,       0.0 k insns/frame,      5.8 fetches/line/frame
+s31_tex8       gl_tex8_sub                      #    9 lines,       0.1 k insns/frame,      2.4 fetches/line/frame
+clear          glopClear                        #    7 lines,       0.1 k insns/frame,      3.2 fetches/line/frame
+texture        tgl_glGenTextures                #    3 lines,       0.0 k insns/frame,      8.0 fetches/line/frame
+s31_zepoch     zep_prim                         #    1 lines,       0.0 k insns/frame,      1.0 fetches/line/frame
+s31_zepoch     zep_depth                        #    1 lines,       0.0 k insns/frame,      2.0 fetches/line/frame
+s31_ctx        gl_prepare_slow                  #    3 lines,       0.0 k insns/frame,      5.0 fetches/line/frame
+s31_tex8       pal_set                          #    1 lines,       0.0 k insns/frame,      1.8 fetches/line/frame
+api            tgl_glTexImage2D                 #    2 lines,       0.0 k insns/frame,      1.2 fetches/line/frame
+api_gl_core    glFogf                           #    1 lines,       0.0 k insns/frame,      3.0 fetches/line/frame
+clear          glopClearDepth                   #    1 lines,       0.0 k insns/frame,      2.0 fetches/line/frame
+s31_zepoch     zdb_reset                        #    3 lines,       0.0 k insns/frame,      3.1 fetches/line/frame
+s31_pixels     format_components                #    2 lines,       0.0 k insns/frame,      3.0 fetches/line/frame
+s31_pixels     comp8                            #    1 lines,       0.0 k insns/frame,      2.4 fetches/line/frame
+s31_zepoch     zep_attach                       #    2 lines,       0.0 k insns/frame,      3.5 fetches/line/frame
+# not in the library: on_swap (2 lines, 0.0 k insns/frame)
+api_context    s31gl_frame_end                  #    1 lines,       0.0 k insns/frame,      2.0 fetches/line/frame
+s31_zepoch     zdb_invalidate                   #    1 lines,       0.0 k insns/frame,      3.0 fetches/line/frame
+# not in the library: d_glGenTextures (2 lines, 0.0 k insns/frame)
+texture        gl_tex_target                    #    1 lines,       0.0 k insns/frame,      3.1 fetches/line/frame
+s31_pixels     s31_unpack_pixel                 #    1 lines,       0.0 k insns/frame,      0.5 fetches/line/frame
+s31_zepoch     zdb_tri                          #    1 lines,       0.0 k insns/frame,      1.0 fetches/line/frame
+s31_ctx        tgl_ctx_set_retained             #    1 lines,       0.0 k insns/frame,      1.0 fetches/line/frame
+api_gl_get     glGetIntegerv                    #    1 lines,       0.0 k insns/frame,      0.5 fetches/line/frame
+s31_draw       draw_stencil                     #    1 lines,       0.0 k insns/frame,      0.3 fetches/line/frame
+s31_draw       glopCopyPixels                   #    1 lines,       0.0 k insns/frame,      0.5 fetches/line/frame
+s31_draw       tgl_copy_tex                     #    2 lines,       0.0 k insns/frame,      0.9 fetches/line/frame
+# not in the library: d_glDeleteTextures (1 lines, 0.0 k insns/frame)
+# not in the library: dump_dcalls (1 lines, 0.0 k insns/frame)
+s31_ctx        tgl_ctx_make_current             #    1 lines,       0.0 k insns/frame,      3.0 fetches/line/frame
+s31_draw       copy_tex                         #    5 lines,       0.0 k insns/frame,      0.7 fetches/line/frame
+s31_pixels     s31_unpack_fb                    #    2 lines,       0.0 k insns/frame,      0.4 fetches/line/frame
+s31_tex8       gl_tex_class                     #    2 lines,       0.0 k insns/frame,      1.6 fetches/line/frame
+s31_zepoch     zep_tri_sliver                   #    3 lines,       0.0 k insns/frame,      0.8 fetches/line/frame
+# not in the library: __wrap_realloc (1 lines, 0.0 k insns/frame)
+texture        alloc_texture_detached           #    1 lines,       0.0 k insns/frame,      1.5 fetches/line/frame
+s31_tex8       t8_others                        #    1 lines,       0.0 k insns/frame,      1.1 fetches/line/frame
+s31_tex8       gl_tex8_image                    #   17 lines,       0.0 k insns/frame,      0.2 fetches/line/frame
+s31_draw       glopCopyTex                      #    1 lines,       0.0 k insns/frame,      0.3 fetches/line/frame
+s31_tex8       t8_compact                       #    1 lines,       0.0 k insns/frame,      1.2 fetches/line/frame
+s31_draw       rs_read                          #    1 lines,       0.0 k insns/frame,      0.5 fetches/line/frame
+s31_tex8       lv_get                           #    1 lines,       0.0 k insns/frame,      0.3 fetches/line/frame
+# not in the library: d_glTexParameterf (1 lines, 0.0 k insns/frame)
+# not in the library: sbrk_aligned (1 lines, 0.0 k insns/frame)
+# not in the library: _malloc_r (4 lines, 0.0 k insns/frame)
+texture        alloc_texture                    #    2 lines,       0.0 k insns/frame,      0.1 fetches/line/frame
+# not in the library: __wrap_malloc (4 lines, 0.0 k insns/frame)
+api            tgl_glClearColor                 #    1 lines,       0.0 k insns/frame,      0.1 fetches/line/frame
+s31_tex8       t8_scan_init                     #    1 lines,       0.0 k insns/frame,      0.1 fetches/line/frame
+# not in the library: on_ctx (1 lines, 0.0 k insns/frame)
+# not in the library: __wrap_calloc (1 lines, 0.0 k insns/frame)
+# not in the library: _findenv_r (1 lines, 0.0 k insns/frame)
+s31_tex8       gl_tex8_free_level               #    1 lines,       0.0 k insns/frame,      0.0 fetches/line/frame
+texture        tex_parameter                    #    4 lines,       0.0 k insns/frame,      0.1 fetches/line/frame
+texture        gl_tex_image_src                 #   13 lines,       0.0 k insns/frame,      0.1 fetches/line/frame
+# not in the library: rp_gen_textures (2 lines, 0.0 k insns/frame)
+s31_tex8       pal_cap                          #    1 lines,       0.0 k insns/frame,      0.1 fetches/line/frame
+texture        glopTexParameter                 #    1 lines,       0.0 k insns/frame,      0.1 fetches/line/frame
+# not in the library: d_glGetString (1 lines, 0.0 k insns/frame)
+# not in the library: rp_texnames (1 lines, 0.0 k insns/frame)
+# not in the library: __malloc_unlock (1 lines, 0.0 k insns/frame)
+# not in the library: __libc_fini_array (1 lines, 0.0 k insns/frame)
+# not in the library: _kill_r (1 lines, 0.0 k insns/frame)
+# not in the library: __wrap_free (1 lines, 0.0 k insns/frame)
+texture        gl_tex_free_mip                  #    1 lines,       0.0 k insns/frame,      0.0 fetches/line/frame

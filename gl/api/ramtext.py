@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """ramtext.py - build side of lever L1 (tinygl/source/s31_ramtext.c). s31, MIT.
 
-  ramtext.py rename OBJCOPY LIST OBJDIR
+  ramtext.py rename OBJCOPY LIST OBJDIR [ORDER]
       Move the sections of the functions api/ramtext.list names into
       "s31hot_text" (objcopy --rename-section: the code is unchanged).
+      With ORDER (api/hotorder.list) the range is laid out in its order
+      (see cmd_rename).
   ramtext.py fix ANALYSIS TARGET
       ANALYSIS is the link with -Wl,-q (the linker's relocations kept),
       TARGET the same link without it (what ships). Lists every PC-relative
@@ -651,37 +653,70 @@ def rodata_re(fn):
     return re.compile(r'^\.rodata\.%s' % re.escape(fn) + CLONE)
 
 
-def cmd_rename(objcopy, listfile, objdir):
-    total = 0
+def cmd_rename(objcopy, listfile, objdir, orderfile=None):
+    """With ORDERFILE (phase 6 tier 6: api/hotorder.list, lines "object
+    function", hottest first) each function it names goes to
+    "s31hot_text.NNNN", NNNN its line, whether or not ramtext.list names it;
+    ramtext.list's other functions go to "s31hot_text.8000" and the
+    .text.unlikely parts of all of them to "s31hot_text.9000".
+    api/ramtext.ld sorts the range by those names, so the order is the
+    file's and the code is still exactly what the compiler made."""
+    order = {}
+    if orderfile:
+        for i, line in enumerate(l.split('#', 1)[0].split() for l in open(orderfile)):
+            if line:
+                order.setdefault((line[0], line[1]), len(order))
+    want = {}                   # object path -> [(function, from the list)]
+    def obj_of(o, where):
+        for cand in ('tgl_%s.o' % o, '%s.o' % o):
+            path = os.path.join(objdir, cand)
+            if os.path.exists(path):
+                return path
+        die('%s: no object for %s' % (where, o))
     for line in open(listfile):
         line = line.split('#', 1)[0].split()
         if not line:
             continue
-        obj = os.path.join(objdir, 'tgl_%s.o' % line[0])
-        if not os.path.exists(obj):
-            obj = os.path.join(objdir, '%s.o' % line[0])
-        if not os.path.exists(obj):
-            die('%s: no object for %s' % (listfile, line[0]))
-        names = [s['name'] for s in Elf(obj).sh]
-        args = []
+        obj = obj_of(line[0], listfile)
         for fn in line[1:]:
+            want.setdefault(obj, []).append((line[0], fn))
+    for (o, fn) in order:
+        obj = obj_of(o, orderfile)
+        if (o, fn) not in want.get(obj, []):
+            want.setdefault(obj, []).append((o, fn))
+    total = 0
+    for obj, fns in want.items():
+        names = [s['name'] for s in Elf(obj).sh]
+        args, done = [], set()
+        for o, fn in fns:
             r, rd = section_re(fn), rodata_re(fn)
-            hit = [n for n in names if r.match(n)]
-            if not hit:
+            hit = [n for n in names if r.match(n) and n not in done]
+            if not hit and not any(r.match(n) for n in names):
                 die('%s: no section for %s in %s' % (listfile, fn, obj))
             for n in hit:
-                args += ['--rename-section', '%s=s31hot_text' % n]
+                done.add(n)
+                if not order:
+                    dst = 's31hot_text'
+                elif n.startswith('.text.unlikely.'):
+                    dst = 's31hot_text.9000'
+                elif (o, fn) in order:
+                    dst = 's31hot_text.%04d' % order[(o, fn)]
+                else:
+                    dst = 's31hot_text.8000'
+                args += ['--rename-section', '%s=%s' % (n, dst)]
             for n in names:
-                if rd.match(n):
+                if rd.match(n) and n not in done:
+                    done.add(n)
                     args += ['--rename-section', '%s=s31hot_rodata' % n]
-        subprocess.check_call([objcopy] + args + [obj])
+        if args:
+            subprocess.check_call([objcopy] + args + [obj])
         total += len(args) // 2
-    print('ramtext: %d sections moved to s31hot_text' % total)
+    print('ramtext: %d sections moved to s31hot_text%s' % (total, ' (ordered: %d functions from %s)' % (len(order), orderfile) if order else ''))
 
 
 def main(a):
-    if len(a) == 4 and a[0] == 'rename':
-        cmd_rename(a[1], a[2], a[3])
+    if len(a) in (4, 5) and a[0] == 'rename':
+        cmd_rename(a[1], a[2], a[3], a[4] if len(a) == 5 else None)
     elif len(a) in (2, 3) and a[0] == 'fix':
         cmd_fix(a[1], a[-1])
     else:

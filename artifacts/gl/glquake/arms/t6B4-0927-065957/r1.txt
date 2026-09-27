@@ -1,0 +1,101 @@
+GQ t6B4-r1 args: -mixspeed 11025 -zone 384 -heapsize 12288 -width 320 -height 240 -fullscreen | #393 SMP Sat Sep 26 12:31:02 UTC 2026 up 62.11
+MEM0 MemFree: 2188 kB MemAvailable: 4824 kB SwapFree: 65268 kB CmaFree: 544 kB 
+VM0 pswpin=63 pswpout=122 pgmajfault=241 
+LV0 lvdesk: frames 0  gaps <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 xshim: 0 MIT-SHM ShmPutImage, 0 identical (no rows changed) 
+CCSTATE ctrl=0x00000000
+CC 0 0x00000E76 0x00000D5B 0x00002C8F 0x0000213E 0x0000750E 0x0000CD3C
+CC 10 0x00127D4E 0x0009835D 0x00477238 0x0028B1F3 0x0021C9C2 0x00377379
+PL 10 quakespasm:1:881 quakespasm:0:43 lvdesk:1:256  cpu0=1282/2913/290 cpu1=553/2631/68 
+S 10 VmRSS:5156 VmSwap:14184  majflt=267 sdrd=63606 pswpin=408 pswpout=2927 pgmajfault=585 
+CC 20 0x002B72AB 0x00165DF7 0x00761946 0x0042EA72 0x00489100 0x00770AE3
+PL 20 quakespasm:1:1800 quakespasm:0:99 lvdesk:1:393  cpu0=1762/3240/392 cpu1=793/2999/129 
+S 20 VmRSS:5940 VmSwap:13756  majflt=1283 sdrd=87710 pswpin=2252 pswpout=4539 pgmajfault=1679 
+CC 30 0x003AAD38 0x001DB226 0x00AFC3A9 0x00609A4B 0x005D5043 0x00B56B34
+PL 30 quakespasm:0:2786 quakespasm:1:147 lvdesk:1:545  cpu0=2597/3431/452 cpu1=951/3154/136 
+S 30 VmRSS:5648 VmSwap:14096  majflt=1500 sdrd=92310 pswpin=2610 pswpout=4775 pgmajfault=1914 
+CC 40 0x004D3AB3 0x00271E46 0x00EF19BA 0x00835775 0x0072A8FA 0x00EAFB29
+PL 40 quakespasm:0:3806 quakespasm:0:194 lvdesk:0:715  cpu0=3472/3585/483 cpu1=1157/3297/138 
+S 40 VmRSS:5856 VmSwap:13968  majflt=1654 sdrd=95246 pswpin=2848 pswpout=4877 pgmajfault=2071 
+CC 50 0x00609D5D 0x00318157 0x012F4B2E 0x00A9B92C 0x0088ACEB 0x0121062F
+PL 50 quakespasm:0:4822 quakespasm:0:239 lvdesk:1:916  cpu0=4366/3722/523 cpu1=1352/3471/140 
+S 50 VmRSS:5632 VmSwap:14180  majflt=1804 sdrd=97710 pswpin=3048 pswpout=5010 pgmajfault=2234 
+CC 60 0x0075A10F 0x003C777D 0x0168856E 0x00CA331E 0x00A089B9 0x0156A3FA
+PL 60 quakespasm:1:5852 quakespasm:0:285 lvdesk:0:1105  cpu0=5181/3861/552 cpu1=1652/3597/143 
+S 60 VmRSS:5736 VmSwap:14068  majflt=1901 sdrd=99398 pswpin=3162 pswpout=5024 pgmajfault=2339 
+PC quakespasm 0x0 ..........333032133301012301010........2..2023.2.311203....203233332.1.....010333033......0...2..............1020110.312.0..12.0130011.....................
+PH quakespasm 20 17 14 23
+PC libSDL-1.2.so.0.11.4 0x0 1230123012301230123012301230123012301230123012301230123012301230123012301230123012301230123
+PH libSDL-1.2.so.0.11.4 22 23 23 23
+PC libGL.so.1 0x0 .............13320..003..30.313032.1113.......1..0130..1...2.......302312312121130..01102222011222....22.02
+PH libGL.so.1 13 17 17 13
+M 620 296 0 296 /root/quake/quakespasm
+M 3980 288 496 784 
+M 964 296 456 752 
+M 1588 240 1288 1528 
+M 268 4 264 268 
+M 884 476 408 884 
+M 1244 484 760 1244 
+M 356 108 248 356 
+M 12292 2524 9768 12292 
+CC 70 0x008C9365 0x0047B5A1 0x01A41DFD 0x00E91425 0x00BD3F7A 0x0197D531
+PL 70 quakespasm:0:6924 quakespasm:0:336 lvdesk:0:1260  cpu0=6014/4060/605 cpu1=1969/3767/152 
+S 70 VmRSS:5556 VmSwap:14184  majflt=2180 sdrd=105190 pswpin=3608 pswpout=5265 pgmajfault=2624 
+CC 80 0x009EB3E2 0x00501BF6 0x01E48691 0x010B958C 0x00D3623F 0x01CF1CD0
+PL 80 quakespasm:0:7955 quakespasm:0:382 lvdesk:1:1436  cpu0=6955/4162/637 cpu1=2158/3918/155 
+S 80 VmRSS:5516 VmSwap:14244  majflt=2275 sdrd=107150 pswpin=3753 pswpout=5359 pgmajfault=2734 
+CC 90 0x00B04DFF 0x0058BEDA 0x0224A31D 0x012E0635 0x00E7AA0B 0x0207A505
+PL 90 quakespasm:0:8983 quakespasm:0:428 lvdesk:1:1612  cpu0=7890/4286/656 cpu1=2354/4047/156 
+S 90 VmRSS:5484 VmSwap:14352  majflt=2315 sdrd=107678 pswpin=3789 pswpout=5360 pgmajfault=2766 
+CC 100 0x00C59792 0x00639F39 0x02630200 0x0150BC69 0x00FDDB3F 0x02381E57
+PL 100 quakespasm:0:10004 quakespasm:0:470 lvdesk:1:1789  cpu0=8755/4382/673 cpu1=2635/4151/157 
+S 100 VmRSS:5668 VmSwap:14172  majflt=2351 sdrd=108166 pswpin=3848 pswpout=5362 pgmajfault=2802 
+CC 110 0x00D7BDF8 0x006C34D0 0x02A4749C 0x01746096 0x011503D6 0x0271291C
+PL 110 quakespasm:0:11003 quakespasm:0:519 lvdesk:1:1998  cpu0=9656/4550/710 cpu1=2814/4330/158 
+S 110 VmRSS:5444 VmSwap:14484  majflt=2533 sdrd=112790 pswpin=4079 pswpout=5535 pgmajfault=2998 
+CC 120 0x00ED8BF6 0x00771C83 0x02D28136 0x018C6ED4 0x012B90BF 0x02A237D5
+PL 120 quakespasm:0:12044 quakespasm:0:564 lvdesk:0:2224  cpu0=10486/4665/741 cpu1=3157/4464/159 
+S 120 VmRSS:5900 VmSwap:14032  majflt=2654 sdrd=114550 pswpin=4248 pswpout=5547 pgmajfault=3128 
+CC end 0x00F04C12 0x007871E8 0x02D71609 0x018EBEEA 0x01308E88 0x02A8C844
+WALL 65.05 203.26
+RESULT 969 frames 113.5 seconds   8.5 fps
+VM1 pswpin=4252 pswpout=5552 pgmajfault=3130 
+LV1 lvdesk: frames 1010  gaps <25:0 <50:4 <100:402 <200:517 <400:78 >=400:9 xshim: 1150 MIT-SHM ShmPutImage, 139 identical (no rows changed) 
+MEM1 MemFree: 856 kB MemAvailable: 664 kB SwapFree: 45956 kB CmaFree: 128 kB 
+FINAL VmHWM:6716 VmRSS:5560 VmData:22432 VmSwap:14244  majflt=2654 cpu=12972
+--- log
+12.0 megabyte heap
+Video mode 320x240x16 60Hz (16-bit z-buffer, 0x FSAA) initialized
+GL_VENDOR: s31
+GL_RENDERER: Software Rasterizer
+GL_VERSION: 1.1 s31-tinygl
+Warning: OpenGL version < 1.5, skipping ARB_vertex_buffer_object check
+FOUND: ARB_multitexture
+GL_MAX_TEXTURE_UNITS: 2
+FOUND: ARB_texture_env_combine
+FOUND: ARB_texture_env_add
+Warning: vertical sync not supported (swap_control doesn't match vid_vsync)
+Warning: texture_filter_anisotropic not supported
+Warning: texture_non_power_of_two not supported
+Warning: OpenGL version < 2, GLSL not available
+Warning: GLSL gamma not available, using hardware gamma
+Warning: GLSL alias model rendering not available, using Fitz renderer
+Warning: glGenerateMipmap not available, liquids won't have mipmaps
+Sound Initialization
+969 frames 113.5 seconds   8.5 fps
+--- out
+GL_VERSION: 1.1 s31-tinygl
+Warning: OpenGL version < 1.5, skipping ARB_vertex_buffer_object check
+FOUND: ARB_multitexture
+GL_MAX_TEXTURE_UNITS: 2
+FOUND: ARB_texture_env_combine
+FOUND: ARB_texture_env_add
+Warning: vertical sync not supported (swap_control doesn't match vid_vsync)
+Warning: texture_filter_anisotropic not supported
+Warning: texture_non_power_of_two not supported
+Warning: OpenGL version < 2, GLSL not available
+Warning: GLSL gamma not available, using hardware gamma
+Warning: GLSL alias model rendering not available, using Fitz renderer
+Warning: glGenerateMipmap not available, liquids won't have mipmaps
+
+Sound Initialization
+GQDONE

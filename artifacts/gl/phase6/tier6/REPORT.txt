@@ -1,0 +1,244 @@
+GL phase 6 - tier 6: libGL's instruction-cache footprint. Board + host,
+2026-09-27. Kernel #393, shipped libGL (SD root, tier 2, md5 91771d02),
+swappiness 60 / min_free 512, lvdesk e83b9d67. s31, MIT.
+
+VERDICT
+  NO WIN. Nothing shipped. The board is on the shipped state (SD-root
+  91771d02, RAMTEXT off).
+  - Geometry, measured on the board: hart 1's I-cache is 32 kB, 2-way,
+    64 B lines and PHYSICALLY indexed, so a way is 16 kB and every 4 kB
+    text page gets one of 4 colours (PA bits 12-13) at random each boot.
+    IDF's Kconfig and the kernel driver's comment (16 kB) are wrong.
+  - Fps across 14 fresh boots tracks hart-1 I-refills per frame at
+    r = -0.98. Placement (which CPU Quake and lvdesk ran on) does not
+    separate fast boots from slow ones.
+  - In the host model (libGL + the replay harness only) page placement
+    alone spreads one image over 4.3-44.4 k refills a frame. Ordering the
+    hot range is noise (mean -6%). Ordering plus colour-sequential frames
+    for the hot range cuts the mean 43% and the tail from 19 k to 8 k.
+  - ON THE BOARD neither lever moved anything. Ordering (bit-identical)
+    gave 8.50 against 8.58 fps. The colour-chosen RAM copy (every hot page
+    on its sequence colour, verified per boot) gave 8.38 fps and I-refills
+    of 43.5-49.5 k a frame against 41.3-50.2 k. libGL's own hot-range
+    colours are therefore NOT what makes a slow boot. The draw that matters
+    involves code the model does not contain: QuakeSpasm's page-cache text,
+    and the kernel's XIP paths, which share hart 1's I-cache.
+  - A RAM copy of the reordered 56 kB range WEDGES THE SoC (section 5),
+    while the same mechanism on the shipped 46 kB range runs. This is not
+    diagnosed.
+
+1. GEOMETRY (step 1): MEASURED, NOT TAKEN FROM THE DOCS
+  Vendor sources (container /opt/esp-idf, v6.1-dev, esp32s31):
+    - Kconfig.cache: CACHE_L1_ICACHE_SIZE 0x4000 (16 kB), 64 B lines.
+    - rom/cache.h: MAX_L1_ICACHE_SIZE 32 kB, MAX_L1_ICACHE_WAY 2,
+      MIN_L1_ICACHE_LINE_SIZE 64 (the D-cache: 64 kB, 2-way).
+    - CACHE_L1_ICACHE_CACHESIZE_CONF_REG (0x2C000018) reads 0x80 on the
+      board. That is bit 7, the 32 kB field (bit 0 = 256 B ... bit 12 =
+      1 MB). BLOCKSIZE_CONF (0x2C00001c) reads 0x8 = 64 B. The D-cache
+      reads 0x100 = 64 kB.
+  The docs disagree, so the geometry was measured. icgeo.c (this directory)
+  runs chains of one jump per 64-byte line from file pages that SD DMA
+  filled, with physical frames read from /proc/self/pagemap. It counts
+  IBUS1 next-level reads (line refills), pinned to CPU0 = hart 1:
+    size   k VA-contiguous pages, whatever frames they got:
+           k=1..6 (24 kB) 0.00-0.03 refills/line/pass, k=7 0.47, 8 0.42,
+           9 0.37, 10 0.65, 11 0.69, 12 0.89 - EXACTLY what a 32 kB, 2-way,
+           16 kB-way cache predicts from those pages' PA bits 12-13
+           (k=7 adds a third page of colour 1: 3/7 = 0.43 thrash; k=10 a
+           third page of colour 2: 6/10 = 0.60; k=12: 10/12 = 0.83). A 16 kB
+           cache (8 kB way) would already thrash at k=4 (3 pages of colour
+           1 under bit 12 alone). It reads 0.003.
+    same   k pages with equal PA bits 12-14: k=2 0.002, k=3 1.03, k=4
+           1.04, k=5 1.03 -> 2 ways.
+    b13    3 pages, PA bit 12 equal, bits 13-14 not: 0.004 (fits) -> bit
+           13 indexes.
+    va12   3 pages with equal VA bits 12-14, PA bit 12 0,0,1: 0.007 (fits;
+           a virtually indexed cache would thrash) -> PHYSICALLY indexed.
+  => hart 1's L1 I-cache: 32 kB, 2-way, 64 B lines, 16 kB a way, indexed
+     by PA bits 6-13. A text page's colour is PA bits 12-13 (4 colours),
+     chosen by the kernel's frame allocator. Two pages of one colour fit
+     and a third thrashes the lines at the same page offsets. The Kconfig's
+     16 kB is wrong for hart 1, and so is the comment in
+     linux-71-port/drivers/cache/esp32s31_cache.c ("the 16 KiB I-cache").
+     The prelock work sized against it should be re-read.
+  Hart 0 (CPU1, IBUS0) did NOT show the pattern: same k=3 read 0.02 and
+  size k=8 0.008. Either hart 0's I-cache is bigger or has more ways, or
+  IBUS0 is not the bus it runs on. Unresolved; Quake's main thread runs
+  mostly on CPU0.
+  A WARNING, measured the hard way: icgeo's first version wrote its jump
+  chains with CPU stores into anonymous RWX pages and ran them. That WEDGED
+  THE WHOLE SoC on the first pass: no console at either baud, no hart0
+  post-mortem, and reset.py recovered it. The likely mechanism is an I-fetch
+  of a line still dirty in the shared write-back D-cache. That is not
+  established. The version here never writes code: every line holds
+  "lw t0,0(a0); addi a0,a0,4; jr t0", and a chain is a data table.
+
+2. ATTRIBUTION ON THE BOARD (step 2): 2 fresh boots, the shipped config
+  glquake-run.sh gained GQ_PL=1. Each 10 s sample adds a PL line (every
+  thread of the game and of lvdesk as comm:cpu:utime+stime, with /proc
+  field 39 = the CPU it last ran on) and the cpu0/cpu1 lines of /proc/stat.
+  At GQ_SMAPS time /root/pgcol (pgcol.c) prints the I-cache colour of every
+  resident page of the game's text mappings. plsum.py summarises the runs:
+    boot  fps  I1/frame  quake main on CPU0  lvdesk on CPU0  hot pages per colour
+    plv1  8.0  57.3 k    7/11 samples        3/11            [3, 5, 1, 3]
+    plv2  8.6  40.4 k    5/10                4/10            [3, 3, 4, 2]
+  ("hot pages" = the 12 pages of 91771d02's [__s31hot_start, __s31hot_end),
+  0x566e0-0x61afc.) Placement did not separate the two boots: Quake's main
+  thread moves between the CPUs on both. The slower boot has five of the
+  twelve hot pages on one colour, where two fit. That is suggestive with
+  two boots, not proof. The host model (section 3) is what shows colour
+  alone produces a spread this size. libc and libSDL are XIP (flash,
+  physically contiguous, colours 0123... in order). QuakeSpasm's own text
+  and libGL's are page cache, with random colours.
+  Raw data: artifacts/gl/glquake/arms/plv{1,2}-*/r1.txt.
+
+3. FOOTPRINT (step 3, host): gl/bench/qemu/icsim.c + gl/bench/icsim.sh
+  A QEMU plugin runs every instruction fetch of the QuakeSpasm proxy's
+  counted frames (qsreplay.sh's image: p5f2-tf0 trace, S31GL_TEXFILTER=0,
+  board flags) through the measured geometry, LRU. It counts the distinct
+  lines each frame executes and the modelled refills, and dumps them per
+  line. pages=1,seed=S gives every code page a random frame, as the page
+  cache does. seq=LO:HI then gives that range frames of colour (vpage & 3),
+  the colour-chosen copy of section 5. icattr.py attributes the dump to
+  functions and hotorder.py turns it into an order. The image holds only
+  libGL and the replay harness (no kernel, no Quake, no libc), so it is an
+  A/B instrument for layouts, not a board number.
+  Tier 2 (the shipped code; model/attr-tier2-contiguous.txt):
+    14.70 M instructions, 790 distinct lines = 49.4 kB a frame, 709 lines
+    (44 kB) in every counted frame - more than the whole 32 kB cache.
+    Contiguous frames: 10.0 k refills a frame. The refills are the per-
+    triangle and per-vertex code evicting itself: ZB_fillTriangleGeneral
+    1.39 k, glopBegin 0.80 k, s31_hook_viewport 0.78 k (one line), the MT
+    filler 0.59 k, gl_update_raster 0.48 k, gl_vertex4f 0.46 k. The span
+    loop zf8_wnn_t_p0s1 (6.4 M instructions, 33 lines, 0.49 k) is not the
+    problem.
+  Random placement, 48 seeds each (model/seeds48*.txt), refills a frame:
+    layout                          median  mean (se)    p75    p90    max
+    tier 2 (shipped layout)          9,872  11,267 (975) 13,947 19,273 44,379
+    + all 262 executed fns ordered   8,173  10,561 (965) 12,080 21,439 39,351
+      by instructions/line ("density")
+    + the 95 with >= 2 k insns/frame 9,985  13,084 (1146) 17,661 22,002 39,616
+    + the 77 with >= 5 k ("d5")     10,466  12,996 (1208) 15,363 25,632 40,701
+    colour-sequential hot range (seq):
+    tier 2                           7,414   8,886 (611)  9,031 17,085 21,706
+    d5                               6,170   6,368 (190)  6,777  7,618 10,834
+    density                          5,032   5,930 (285)  6,376 10,730 11,093
+  (Orders by instructions per frame and by line fetches per line were worse
+  than density on 12-16 seeds: medians 11.3 k and 8.6 k.)
+  Read: with random colours the order is noise. The spread between
+  placements (4.3-44.4 k for one image) is 4x the difference between any
+  two orders. With the colours controlled, order and colour together take
+  the mean down 43% and cut the tail from 19-44 k to 8-11 k. One
+  consequence: the full density order does not fit the RAM-copy fixup
+  table (1,747 entries > RT_FIXMAX 1,532), so d5 is the one built.
+  The board scale (tier 5): the slow boot's +30 k refills a frame cost
+  ~18 ms of a ~115 ms frame, about 0.6 us each. The model's mean
+  difference (~5 k) would be worth ~2.5%, and its tail (15-35 k) the whole
+  7.5-vs-8.9 fps bimodality. Kernel and Quake refills are not modelled.
+
+4. THE ORDERING MECHANISM (bit-identical; built, board-measured)
+  gl/api/ramtext.py rename takes an optional ORDER file (api/hotorder.list,
+  or S31GL_HOTORDER in build-lib.sh): "object function" lines, hottest
+  first. Each named function goes to s31hot_text.NNNN, and ramtext.list's
+  others go to .8000. api/ramtext.ld keeps the range with
+  SORT_BY_NAME(s31hot_text*). There is no order file in the tree, so the
+  default build is unchanged. A Buildroot-flag rebuild of 9ecf5f86's gl/
+  with this mechanism and no order strips to 91771d02, byte for byte. The
+  bench's qemu/link.ld places .s31hot the same way.
+  The d5 build (gl/bench/t6src = 9ecf5f86's gl/ + this mechanism + the
+  section 5 change, S31GL_HOTORDER=model/hot-d5.list): hot range 56,428 B,
+  0x54220-0x61e8c (tier 2: 46,108 B). Stripped md5
+  8b3d03fd7ad997269f04afb7e83e636a. It is a pure relink of the same
+  objects, and the proxy replays of the ordered builds give 84/84 full
+  frames identical to the live capture with the same instruction counts
+  (15.3397 / 14.0638 M) as tier 2.
+  BOARD A/B, order alone (RAMTEXT off), fresh boot per run, interleaved,
+  GQ_CC=1 GQ_PL=1:
+    A = shipped (SD root 91771d02)   B = /root/t6/libGL.so.1 (8b3d03fd)
+    boot  fps  I1 refills/frame  hot pages per colour
+    A1    8.7  44.1 k            [3, 3, 3, 3]
+    B1    8.7  39.9 k            [7, 3, 2, 2]
+    A2    8.4  50.2 k            [0, 2, 5, 5]
+    B2    8.7  41.5 k            [3, 5, 2, 4]
+    A3    8.6  41.3 k            [2, 4, 4, 2]
+    B3    8.1  54.9 k            [2, 1, 4, 7]
+    A4    8.6  42.4 k            [2, 0, 3, 7]
+    B4    8.5  42.2 k            [3, 4, 7, 0]
+    A mean 8.58 fps (8.4-8.7), B mean 8.50 (8.1-8.7). A NULL result, as
+    the model predicted for order without colours: each arm has one slow
+    boot, and it is the one with the high I-refill count. Not shipped.
+    Across all 14 fresh boots measured today with GQ_CC (tier 5's ccv1-4,
+    plv1-2, t6A1-4, t6B1-4), fps and hart-1 I-refills per frame correlate
+    at r = -0.98. A simple "pages per colour" count of the hot range does
+    NOT predict the slow boots (A4 has 7 pages on one colour and is fast).
+    Which lines collide matters, not the page count, and QuakeSpasm's own
+    page-cache text is part of the draw.
+
+5. COLOUR-CHOSEN RAM COPY (S31GL_RAMTEXT=2): WORKS ON THE TIER-2 LAYOUT;
+   ANY RAM COPY OF THE d5 LAYOUT WEDGES THE BOARD
+  rtcolour.patch (against gl/tinygl/source/s31_ramtext.c). It is RAMTEXT's
+  copy with every slot page first given a frame of colour (vpage & 3). The
+  frames come from a pool of populated anonymous pages, read through
+  /proc/self/pagemap and put in place with mremap before anything is
+  written, so the copy, mprotect(RX) and the kernel's exec-PTE D-cache
+  writeback run as they do for RAMTEXT=1. The pool is released afterwards.
+  The "ramtext on" line prints the colours. 40 s QuakeSpasm sanity runs on
+  the board:
+    d5 library (8b3d03fd), RAMTEXT=2  the SoC WEDGED within seconds (no
+                                      console at either baud, no hart0
+                                      post-mortem, the harness's file never
+                                      reached the card); reset.py recovers
+    d5 library, RAMTEXT=1             THE SAME: it is not the colour code
+    d5 library, RAMTEXT=0             runs (and the section 4 A/B)
+    shipped 91771d02, RAMTEXT=1       runs: "46108 bytes in 12 pages, 910
+                                      fixup entries ... 49152 bytes mlocked"
+    tier-2 layout + this patch        runs: "... I-cache colours
+      (7f1ee18e), RAMTEXT=2           123012301230" (every page on its
+                                      sequence colour)
+  So the colouring works. What wedges is a RAM copy of the d5 range:
+  56,428 B in 14 pages, with ABI-layer functions (glTexCoord2f,
+  glColor4ubv, glVertex3fv, s31_hook_viewport, glCopyTexSubImage2D ...)
+  now inside it. ramtext.py accepted it (1,010 table entries, 0 unmovable
+  references). This is NOT diagnosed. Section 1's anon-RWX wedge has the
+  same signature, and until the cause is known a new RAMTEXT range is a
+  board-wedge hazard: sanity-run every one before any A/B. The default
+  stays 0.
+
+6. BOARD RESULT, COLOUR-CHOSEN COPY (4 fresh boots, run straight after
+   the section 4 arms, so the A column is t6A1-4)
+  C = /root/t6c/libGL.so.1 (tier-2 layout + rtcolour.patch, 7f1ee18e),
+      S31GL_RAMTEXT=2
+    boot  fps  I1 refills/frame  copy colours (from the ramtext line)
+    C1    8.3  49.5 k            230123012301
+    C2    8.3  45.9 k            012301230123
+    C3    8.5  43.5 k            301230123012
+    C4    8.4  45.0 k            230123012301
+  C mean 8.38 fps (8.3-8.5) against A 8.58 (8.4-8.7) and B 8.50. That is
+  about 2% slower, not interleaved with A, and with 4 runs a side it is
+  within the noise. The I-refills did not fall. The model's promise does
+  not carry to the board: with libGL's hot range perfectly coloured, hart
+  1 still refills ~45 k lines a frame. As in ramtext/README.txt, the RAM
+  copy itself (49 kB mlocked, entries through the copy) does not pay.
+  Raw data: artifacts/gl/glquake/arms/t6{A,B,C}[1-4]-*/r1.txt.
+
+WHAT THIS LEAVES
+  - The slow-boot I-refill blow-up is real (r = -0.98) and set per boot,
+    but libGL's colours are not it. The next suspects, in order:
+    QuakeSpasm's own text (page cache, 620 kB mapped, random colours:
+    pgcol prints it, PC quakespasm lines in every run above), and the
+    kernel's XIP hot paths, which sit at fixed colours and collide with
+    whatever user pages land on theirs. The model can test the first:
+    trace QuakeSpasm itself rather than the replay.
+  - The tools are in place for that: icsim.c (any image, pages=/seq=),
+    GQ_PL/pgcol (per-boot colours of every text mapping), and icgeo.c
+    (the geometry).
+
+NOT DONE
+  - Splitting cold paths out of hot functions, and -Os for the warm ones.
+    TinyGL's hot files are built -O2 by build-lib.sh; Buildroot's -Os is
+    overridden. The model says ordering without colours is noise, so these
+    were not worth their bit-identity risk before colours are controlled.
+  - Removing tier 3's table variants and the unused ZF8 arms: they are not
+    in the shipped tier 2 library that the A/B used.
+  - The d5 range's RAM-copy wedge (section 5): not diagnosed. It is moot
+    for this lever, because colouring the copy did not pay.

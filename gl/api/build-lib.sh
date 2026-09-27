@@ -149,7 +149,10 @@ ls "$OBJ"/tgl_*.o "$OBJ"/api_*.o > "$OBJ/core.list"
 # the renamed section too, and link it wherever their script puts it.
 OBJCOPY=${OBJCOPY:-${NM%nm}objcopy}
 if [ -z "$S31GL_NO_RAMTEXT" ]; then
-	python3 "$GL/api/ramtext.py" rename "$OBJCOPY" "$GL/api/ramtext.list" "$OBJ"
+	# phase 6 tier 6: S31GL_HOTORDER (a file; default api/hotorder.list when
+	# present, "" for none) lays the range out hottest first (ramtext.py)
+	HO=${S31GL_HOTORDER-$GL/api/hotorder.list}; [ -f "$HO" ] || HO=
+	python3 "$GL/api/ramtext.py" rename "$OBJCOPY" "$GL/api/ramtext.list" "$OBJ" $HO
 	RAMLD="-Wl,-T,$GL/api/ramtext.ld"
 fi
 [ -n "$S31GL_OBJONLY" ] && exit 0

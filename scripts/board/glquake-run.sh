@@ -25,6 +25,10 @@
 # next-level reads/writes of DBUS0 DBUS1 (the shared D-cache, both harts)
 # and IBUS0 IBUS1 - 6 devmem reads per 10 s, cleared and enabled at launch,
 # disabled at the end. nxtlvl counts do not wrap inside a 10 s window.
+# GQ_PL=1 (GL tier 6) adds, per sample, a PL line - every thread of the game
+# and of the desktop as comm:cpu:utime+stime (field 39 = the CPU it last ran
+# on) - and the cpu0/cpu1 lines of /proc/stat; and at GQ_SMAPS time the
+# I-cache page colours of the game's resident text (/root/pgcol: PC/PH lines).
 L=$1; MAX=$2; shift 2
 mkdir -p /root/gq; O=/root/gq/$L.txt
 exec >$O 2>&1
@@ -48,13 +52,16 @@ cc 0
 T0=$(cut -d' ' -f1 /proc/uptime)
 DISPLAY=:0 HOME=${GQ_HOME:-/root/quake} setsid $GQ_WRAP $BIN -basedir $B -condebug "$@" >/root/gq/$L.out 2>&1 </dev/null &
 P=$!
+LVP=$(pidof lvdesk lvdesk.new | cut -d' ' -f1)
 t=0
 while [ $t -lt $MAX ]; do
 	sleep 10; t=$((t+10))
 	[ -d /proc/$P ] || { echo "EXITED at ${t}s"; break; }
 	cc $t
+	[ -n "$GQ_PL" ] && echo "PL $t $(awk '{c=$0; sub(/^[^(]*\(/,"",c); n=c; sub(/\).*/,"",n); sub(/^[^)]*\) /,"",c); split(c,f," "); printf "%s:%s:%d ", n, f[37], f[12]+f[13]}' /proc/$P/task/*/stat /proc/$LVP/task/*/stat 2>/dev/null) $(grep -E '^cpu[01] ' /proc/stat | awk '{printf "%s=%d/%d/%d ",$1,$2+$3,$4,$6+$7+$8}')"
 	echo "S $t $(awk '/^(VmRSS|VmSwap)/{printf "%s%s ",$1,$2}' /proc/$P/status) majflt=$(awk '{print $12}' /proc/$P/stat) sdrd=$(awk '{print $3}' /sys/block/mmcblk0/stat) $(vm)"
 	# once, mid-run: every mapping with more than 256 kB resident or swapped
+	[ -n "$GQ_PL" ] && [ $t -eq ${GQ_SMAPS:-60} ] && /root/pgcol $P libGL quakespasm libSDL ld-musl
 	[ $t -eq ${GQ_SMAPS:-60} ] && awk '/^[0-9a-f]+-/{if(n>=256)print "M",sz,r,sw,n,nm; nm=$6; r=0;sw=0;n=0} /^Size:/{sz=$2} /^Rss:/{r=$2;n+=$2} /^Swap:/{sw=$2;n+=$2} END{if(n>=256)print "M",sz,r,sw,n,nm}' /proc/$P/smaps
 	# GQ_PROF=<t>: at t s pin the game and the desktop to CPU0 (the hart0 PC
 	# sampler sees only hart 1 = CPU0), take GQ_PROFN x 4000 h1s samples

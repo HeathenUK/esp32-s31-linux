@@ -1,0 +1,152 @@
+--- gl/tinygl/source/s31_ramtext.c	2026-09-26 22:56:03.621649434 +0100
++++ gl/bench/t6src/tinygl/source/s31_ramtext.c	2026-09-27 06:23:36.150499044 +0100
+@@ -58,6 +58,9 @@
+  * - Elsewhere (bare-metal gl/bench images, other architectures) the copy
+  *   is compiled out and S31GL_RAMTEXT does nothing.
+  */
++#ifndef _GNU_SOURCE
++#define _GNU_SOURCE                 /* mremap, MREMAP_FIXED (tier 6) */
++#endif
+ #include <stdint.h>
+ #include <string.h>
+ #include <stdlib.h>
+@@ -83,6 +86,7 @@
+ uintptr_t s31_rt_lo, s31_rt_len;
+ extern const unsigned char __s31hot_start[] __attribute__((visibility("hidden")));
+ extern const unsigned char __s31hot_end[] __attribute__((visibility("hidden")));
++#include <fcntl.h>
+ #include <sys/mman.h>
+ #include <sys/syscall.h>
+ #include <unistd.h>
+@@ -313,8 +317,89 @@
+   return moved;
+ }
+ 
++/* Phase 6 tier 6: S31GL_RAMTEXT=2 also chooses the copy's page frames.
++   The hart-1 L1 I-cache is 32 kB, 2-way, 64-byte lines and PHYSICALLY
++   indexed, so a way is 16 kB and set bits 12-13 come from the frame
++   (measured: artifacts/gl/phase6/tier6/icgeo.c). Page-cache and anonymous
++   frames land on those two bits at random, and three hot pages of one
++   colour thrash lines at the same page offset - a lottery drawn afresh
++   every boot (artifacts/gl/phase6/tier6/REPORT.txt). Here every page of
++   the copy gets a frame of colour (virtual page & 3), so the hot range
++   maps onto the cache as if it were physically contiguous. Frames come
++   from a pool of populated anonymous pages, read through
++   /proc/self/pagemap (root) and put in place with mremap; any failure
++   leaves that page's frame as it was (still correct, only uncoloured). */
++#define RC_POOL 96
++static int rc_fd = -1;
++static uintptr_t rc_va[RC_POOL];        /* 0 once taken */
++static signed char rc_col[RC_POOL];
++static int rc_n;
++
++static int rc_colour(uintptr_t va)
++{
++  unsigned long long e;
++  if (pread(rc_fd, &e, 8, (off_t)(va >> 12) * 8) != 8 || !(e >> 63)) return -1;
++  e &= (1ULL << 55) - 1;
++  return e ? (int)(e & 3) : -1;
++}
++
++/* a pool page whose frame has colour want, or 0 */
++static uintptr_t rc_take(int want)
++{
++  int i;
++  for (;;) {
++    void *m;
++    for (i = 0; i < rc_n; i++)
++      if (rc_va[i] && rc_col[i] == want) {
++        uintptr_t v = rc_va[i];
++        rc_va[i] = 0;
++        return v;
++      }
++    if (rc_n + 16 > RC_POOL) return 0;
++    m = mmap(NULL, 16 * 4096, PROT_READ | PROT_WRITE,
++             MAP_PRIVATE | MAP_ANONYMOUS | MAP_POPULATE, -1, 0);
++    if (m == MAP_FAILED) return 0;
++    for (i = 0; i < 16; i++) {
++      rc_va[rc_n] = (uintptr_t)m + (uintptr_t)i * 4096;
++      rc_col[rc_n] = (signed char)rc_colour(rc_va[rc_n]);
++      rc_n++;
++    }
++  }
++}
++
++/* colour the zero, writable pages [page, page + span) before anything is
++   written to them; col[] gets each page's colour ('.' unknown), the
++   return value how many now have the colour asked for */
++static int rc_place(unsigned char *page, size_t span, char *col)
++{
++  size_t i, np = span / 4096;
++  int ok = 0;
++  rc_fd = open("/proc/self/pagemap", O_RDONLY | O_CLOEXEC);
++  for (i = 0; i < np; i++) {
++    uintptr_t va = (uintptr_t)page + i * 4096, from;
++    int want = (int)((va >> 12) & 3), c;
++    *(volatile unsigned char *)va = 0;          /* a frame of its own */
++    c = rc_fd < 0 ? -1 : rc_colour(va);
++    /* a pool page is zero, as the slot page is: nothing to copy */
++    if (c >= 0 && c != want && (from = rc_take(want)) != 0 &&
++        mremap((void *)from, 4096, 4096, MREMAP_MAYMOVE | MREMAP_FIXED,
++               (void *)va) != MAP_FAILED)
++      c = rc_colour(va);
++    if (c == want) ok++;
++    col[i] = c < 0 ? '.' : (char)('0' + c);
++  }
++  col[np] = 0;
++  for (i = 0; i < (size_t)rc_n; i++)
++    if (rc_va[i]) munmap((void *)rc_va[i], 4096);
++  rc_n = 0;
++  if (rc_fd >= 0) close(rc_fd);
++  rc_fd = -1;
++  return ok;
++}
++
+ static const char *rt_copy(size_t *bytes, size_t *pages, unsigned int *nfix,
+-                           int *nmoved, int *ndw, long *locked)
++                           int *nmoved, int *ndw, long *locked, int colour,
++                           char *col, int *ncol)
+ {
+   const uint32_t *t = s31_ramtext_fix;
+   const unsigned char *s = __s31hot_start;
+@@ -344,6 +429,7 @@
+   page = (unsigned char *)(((uintptr_t)s31_ramtext_slot + 4095) & ~(uintptr_t)4095);
+   dst = page + off;
+   d = (intptr_t)(dst - s);
++  if (colour) *ncol = rc_place(page, span, col);
+   memcpy(dst, s, len);
+   if (fix_all(t + RT_HDR, n, s, dst, len)) {
+     /* give the pages back; the XIP copy stays in use */
+@@ -397,7 +483,7 @@
+   if (done) return;
+   done = 1;
+   e = getenv("S31GL_RAMTEXT");
+-  if (e != NULL) on = atoi(e) != 0;
++  if (e != NULL) on = atoi(e);
+   if (!on) return;
+ #ifdef RT_COPY
+   {
+@@ -405,16 +491,20 @@
+     unsigned int nfix = 0;
+     int moved = 0, ndw = 0;
+     long locked = 0;
+-    const char *why = rt_copy(&bytes, &pages, &nfix, &moved, &ndw, &locked);
++    int ncol = -1;
++    char col[RT_SLOT / 4096 + 2] = "";
++    const char *why = rt_copy(&bytes, &pages, &nfix, &moved, &ndw, &locked,
++                              on == 2, col, &ncol);
+     /* one line, and only when asked for by name: the board A/B's proof
+        of which arm ran */
+     if (e == NULL) return;
+     if (why) fprintf(stderr, "libGL: ramtext off: %s\n", why);
+     else fprintf(stderr, "libGL: ramtext on: %u bytes in %u pages, "
+                  "%u fixup entries, %d entry points, %d data words, "
+-                 "%ld bytes mlocked%s\n", (unsigned)bytes,
++                 "%ld bytes mlocked%s%s%s\n", (unsigned)bytes,
+                  (unsigned)pages, nfix, moved, ndw, locked < 0 ? 0 : locked,
+-                 locked < 0 ? " (mlock FAILED)" : "");
++                 locked < 0 ? " (mlock FAILED)" : "",
++                 ncol >= 0 ? ", I-cache colours " : "", col);
+   }
+ #else
+   if (e != NULL) fprintf(stderr, "libGL: ramtext off: not built for this target\n");
