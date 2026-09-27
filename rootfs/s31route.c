@@ -39,12 +39,40 @@
  *    The slave's ring is therefore sized to mirror the application's, and
  *    its avail_min is chosen so that the sink says "writable" exactly when
  *    the plugin's ring has a period free. Then the poll really sleeps.
+ *
+ * NEVER BLOCK THE APPLICATION ON A SINK NOBODY DRAINS (2026-09-27).
+ *
+ * The Bluetooth sink is a loopback, and a loopback is only worth writing to
+ * while s31-bt has an A2DP sink to send it to. Moving /run/s31-sink to it
+ * mid-stream with no transport stalled the application's stream on the
+ * board (docs/gl-performance-campaign-2026-09-27.md), on the old path and
+ * the new one alike. Three rules now make that impossible:
+ *
+ *  - The loopback is used only while s31-bt says it can carry it:
+ *    /run/s31-bt-sink holds s31-bt's pid while route mode is on AND a
+ *    transport exists. Until then the stream stays on the codec - the same
+ *    fall-back the desktop makes on a disconnect - and it moves across the
+ *    moment the file appears, and back the moment it goes (or its pid dies).
+ *
+ *  - Every sink is opened non-blocking. A blocking open of a busy PCM sleeps
+ *    in the kernel until the device is free, which may be never.
+ *
+ *  - Writes to anything but the codec are bounded: non-blocking, with
+ *    snd_pcm_wait() and a deadline of two sink buffers. A sink that takes
+ *    nothing for that long is declared stalled, the chunk goes to the codec
+ *    instead, and the stalled sink is not tried again until s31-bt
+ *    republishes or the desktop re-selects. The codec keeps its one blocking
+ *    ioctl per period: it is DMA-driven, and a poll per period would be a
+ *    syscall on every transfer for a failure it does not have.
  */
 #define _GNU_SOURCE
 #include <errno.h>
 #include <alsa/asoundlib.h>
 #include <alsa/pcm_external.h>
 #include <sys/eventfd.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <time.h>
 #include <sys/stat.h>
 #include <poll.h>
 #include <stdlib.h>
@@ -58,14 +86,31 @@
 
 #define SINK_FILE	"/run/s31-sink"
 #define SINK_DEFAULT	"hw:0,0"
+/* present, holding s31-bt's pid, while the loopback has somewhere to go */
+#define READY_FILE	"/run/s31-bt-sink"
 
 struct route {
 	snd_pcm_ioplug_t io;
 	snd_pcm_t *slave;
-	char sink[64];
-	time_t seen;
+	char sink[64];		/* what is open now */
+	char want[64];		/* what /run/s31-sink asks for */
+	char failed[64];	/* last sink that would not open; not retried */
+	char said[64];		/* last sink announced on stderr */
+	unsigned retry_ctr;	/* pacing: retry a failed sink every 10 checks */
+	struct timespec seen;	/* /run/s31-sink mtime (ns: two switches in */
+	ino_t seen_ino;		/* one second are two switches) */
+	struct timespec ready_mt; /* READY_FILE as last read */
+	ino_t ready_ino;
+	pid_t ready_pid;	/* 0: absent or unreadable */
+	int stalled;		/* want took nothing for stall_ms; see header */
+	int bounded;		/* slave is non-blocking: sink_write() waits */
+	int stall_ms;		/* no progress for this long = stalled */
+	int pace;		/* no sink could be opened: sleep, not block */
+	struct timespec pace_next; /* when the next paced chunk is due */
 	int pfd;		/* what the application polls; see the header */
+	int evfd;		/* signalled eventfd, parked behind pfd when no sink */
 	unsigned follow_ctr;	/* throttle the /run/s31-sink stat() */
+	unsigned follow_every;	/* transfers per check, ~300 ms of audio */
 	snd_pcm_uframes_t transferred;
 	/*
 	 * What transfer() does to the application's frames before the sink
@@ -104,6 +149,13 @@ static void slave_close(struct route *r)
 	if (r->slave) {
 		snd_pcm_close(r->slave);
 		r->slave = NULL;
+		/*
+		 * pfd is a dup of the sink's descriptor, and while it exists
+		 * the device is still open - so reopening a single-substream
+		 * sink (the codec) after it went away found it busy. Park the
+		 * signalled eventfd there instead, as at startup.
+		 */
+		dup2(r->evfd, r->pfd);
 	}
 }
 
@@ -111,8 +163,8 @@ static void slave_close(struct route *r)
  * Negotiate the sink: `rate` and `channels` are what it should run at (the
  * sink's side of any conversion), `exact` says whether the rate may move.
  */
-static int sink_params(struct route *r, snd_pcm_t *pcm, unsigned rate,
-		       unsigned channels, int exact, int conv,
+static int sink_params(struct route *r, snd_pcm_t *pcm, const char *name,
+		       unsigned rate, unsigned channels, int exact, int conv,
 		       const char **step)
 {
 	int err;
@@ -301,7 +353,7 @@ static int sink_params(struct route *r, snd_pcm_t *pcm, unsigned rate,
 		}
 		if (getenv("S31ROUTE_DEBUG"))
 			fprintf(stderr, "s31route: %s app %u Hz %u ch ring %lu/%lu -> sink %u Hz %u ch %lu/%lu avail_min %lu conv %s\n",
-				r->sink, r->io.rate, r->io.channels,
+				name, r->io.rate, r->io.channels,
 				(unsigned long)r->io.buffer_size,
 				(unsigned long)r->io.period_size, rate,
 				channels, (unsigned long)buf, (unsigned long)per,
@@ -352,13 +404,35 @@ static int sink_is_codec(const char *sink)
 }
 
 /*
+ * Open a sink without ever sleeping in open(). A blocking open of a busy
+ * PCM waits in the kernel until the device is free, and an application
+ * inside that wait is stalled for as long as someone else holds it. The
+ * codec is then put back into blocking mode: its writei sleeps in the kernel
+ * in one ioctl, which is the cheapest pacing there is. Everything else stays
+ * non-blocking and is waited on, with a deadline, by sink_write().
+ */
+static int sink_open_pcm(snd_pcm_t **pcmp, const char *name, int bounded)
+{
+	int err = snd_pcm_open(pcmp, name, SND_PCM_STREAM_PLAYBACK,
+			       SND_PCM_NONBLOCK);
+
+	if (err < 0)
+		return err;
+	if (!bounded && (err = snd_pcm_nonblock(*pcmp, 0)) < 0) {
+		snd_pcm_close(*pcmp);
+		*pcmp = NULL;
+	}
+	return err;
+}
+
+/*
  * The codec, opened as itself, with s31route doing any rate conversion and
  * the mono -> stereo route (option 3 of the 2026-09-27 audio study). Any
  * failure returns an error and the caller falls back to plug:, which is what
  * every stream got before.
  */
-static int open_direct(struct route *r, snd_pcm_t **pcmp, struct s31rs *rs,
-		       int *conv, const char **step)
+static int open_direct(struct route *r, const char *sink, snd_pcm_t **pcmp,
+		       struct s31rs *rs, int *conv, const char **step)
 {
 	snd_pcm_t *pcm = NULL;
 	unsigned in = r->io.rate, out;
@@ -367,7 +441,7 @@ static int open_direct(struct route *r, snd_pcm_t **pcmp, struct s31rs *rs,
 	memset(rs, 0, sizeof(*rs));
 
 	*step = "open direct";
-	err = snd_pcm_open(&pcm, r->sink, SND_PCM_STREAM_PLAYBACK, 0);
+	err = sink_open_pcm(&pcm, sink, 0);
 	if (err < 0)
 		return err;
 	*step = "codec rate";
@@ -383,7 +457,7 @@ static int open_direct(struct route *r, snd_pcm_t **pcmp, struct s31rs *rs,
 	} else {
 		*conv = r->io.channels == 1 ? CONV_DUP : CONV_PASS;
 	}
-	err = sink_params(r, pcm, out, 2, 1, *conv, step);
+	err = sink_params(r, pcm, sink, out, 2, 1, *conv, step);
 	if (err < 0)
 		goto fail;
 	*pcmp = pcm;
@@ -394,13 +468,14 @@ fail:
 	return err;
 }
 
-static int slave_open(struct route *r)
+static int slave_open(struct route *r, const char *sink)
 {
 	char name[80];
 	snd_pcm_t *old = r->slave, *pcm = NULL;
 	const char *step = "open";
 	struct s31rs rs;
-	int err, conv = CONV_PASS;
+	int err, conv = CONV_PASS, bounded = !sink_is_codec(sink);
+	snd_pcm_uframes_t buf = 0, per = 0;
 
 	/*
 	 * Open the new sink BEFORE closing the old one. A switch to a sink
@@ -412,9 +487,9 @@ static int slave_open(struct route *r)
 	 * The codec directly, converting here (open_direct above), unless
 	 * S31ROUTE_PLUG=1 asks for the old path for an A/B.
 	 */
-	if (sink_is_codec(r->sink) && !getenv("S31ROUTE_PLUG")) {
-		snprintf(name, sizeof(name), "%s", r->sink);
-		err = open_direct(r, &pcm, &rs, &conv, &step);
+	if (sink_is_codec(sink) && !getenv("S31ROUTE_PLUG")) {
+		snprintf(name, sizeof(name), "%s", sink);
+		err = open_direct(r, sink, &pcm, &rs, &conv, &step);
 		if (!err)
 			goto done;
 		if (getenv("S31ROUTE_DEBUG"))
@@ -435,11 +510,12 @@ static int slave_open(struct route *r)
 	 * the trailing 0 as a second argument to plug, which fails with
 	 * "Unknown parameter 1" and leaves the sink unopenable.
 	 */
-	snprintf(name, sizeof(name), "plug:'%s'", r->sink);
-	err = snd_pcm_open(&pcm, name, SND_PCM_STREAM_PLAYBACK, 0);
+	snprintf(name, sizeof(name), "plug:'%s'", sink);
+	err = sink_open_pcm(&pcm, name, bounded);
 	if (err < 0)
 		goto done;
-	err = sink_params(r, pcm, r->io.rate, r->io.channels, 0, conv, &step);
+	err = sink_params(r, pcm, sink, r->io.rate, r->io.channels, 0, conv,
+			  &step);
 done:
 	if (err < 0) {
 		if (getenv("S31ROUTE_DEBUG"))
@@ -455,49 +531,146 @@ done:
 	s31rs_free(&r->rs);
 	r->rs = rs;
 	r->conv = conv;
+	r->bounded = bounded;
+	snprintf(r->sink, sizeof(r->sink), "%s", sink);
+	/*
+	 * The stall deadline: two of the sink's buffers, plus scheduling
+	 * slack. A healthy sink frees avail_min - at most one buffer - within
+	 * one buffer's time, so this is never reached by a sink that drains,
+	 * and it is short enough that the application's own ring (at least
+	 * four periods) is what covers the one gap a stall costs.
+	 */
+	r->stall_ms = 250;
+	if (snd_pcm_get_params(pcm, &buf, &per) == 0 && r->io.rate) {
+		int ms = (int)((uint64_t)buf * 2000 / r->io.rate) + 50;
+
+		if (ms > r->stall_ms)
+			r->stall_ms = ms;
+	}
+	r->pace = 0;
 	if (old)
 		snd_pcm_close(old);
 	return 0;
 }
 
-/* Has the desktop moved the output since we last looked? */
-static void sink_follow(struct route *r)
+static int ts_eq(struct timespec a, struct timespec b)
 {
-	char want[64];
+	return a.tv_sec == b.tv_sec && a.tv_nsec == b.tv_nsec;
+}
+
+/*
+ * Can the loopback be heard? s31-bt keeps READY_FILE, holding its pid,
+ * exactly while route mode is on and an A2DP transport exists. A file left
+ * behind by a daemon that died does not count: its pid is checked.
+ */
+static int bt_ready(struct route *r)
+{
 	struct stat st;
+
+	if (stat(READY_FILE, &st) < 0) {
+		r->ready_ino = 0;
+		r->ready_pid = 0;
+		return 0;
+	}
+	if (st.st_ino != r->ready_ino || !ts_eq(st.st_mtim, r->ready_mt)) {
+		FILE *f = fopen(READY_FILE, "r");
+		long pid = 0;
+
+		if (f) {
+			if (fscanf(f, "%ld", &pid) != 1)
+				pid = 0;
+			fclose(f);
+		}
+		r->ready_ino = st.st_ino;
+		r->ready_mt = st.st_mtim;
+		r->ready_pid = (pid_t)pid;
+		/* republished: a sink that stalled before is worth a retry */
+		r->stalled = 0;
+		r->failed[0] = 0;
+	}
+	if (r->ready_pid <= 0)
+		return 0;
+	return kill(r->ready_pid, 0) == 0 || errno == EPERM;
+}
+
+/*
+ * Has the desktop moved the output since we last looked - or has what it
+ * asked for become (un)usable? `force` skips the throttle.
+ */
+static void sink_follow(struct route *r, int force)
+{
+	struct stat st;
+	const char *eff;
 
 	/*
 	 * Called from every transfer (~86/s at a 256-frame period). A stat()
 	 * per transfer is pure overhead when the sink almost never changes;
-	 * check roughly twice a second instead. A switch is picked up within
-	 * ~0.5 s, which is imperceptible for a speaker/Bluetooth swap. The
-	 * slave is always opened immediately when there is none (below), so
-	 * startup is not delayed.
+	 * check once per ~300 ms of audio instead (follow_every, set in
+	 * prepare). That is also how quickly a stream follows s31-bt gaining
+	 * or losing its transport. It was once per 128 transfers, which is
+	 * 1.5-3.6 s depending on the period. When there is no sink at all
+	 * the first check is immediate, so startup is not delayed.
 	 */
-	if (r->slave && r->follow_ctr++ % 128)
+	if (!force && (r->slave || r->pace) &&
+	    r->follow_ctr++ % (r->follow_every ? r->follow_every : 1))
 		return;
 	if (stat(SINK_FILE, &st) < 0) {
-		if (!r->slave)
-			slave_open(r);
+		snprintf(r->want, sizeof(r->want), "%s", SINK_DEFAULT);
+		r->seen_ino = 0;
+	} else if (st.st_ino != r->seen_ino || !ts_eq(st.st_mtim, r->seen) ||
+		   !r->want[0]) {
+		/*
+		 * Nanosecond mtime and the inode, not st_mtime: two switches
+		 * inside one second used to leave the stream on the first.
+		 * Any write re-arms a sink that stalled or would not open -
+		 * selecting it again in the panel is the way to retry it.
+		 */
+		r->seen_ino = st.st_ino;
+		r->seen = st.st_mtim;
+		sink_read(r, r->want, sizeof(r->want));
+		r->stalled = 0;
+		r->failed[0] = 0;
+	}
+	eff = r->want;
+	if (!sink_is_codec(eff)) {
+		/* bt_ready() first: a republish is what clears `stalled` */
+		int ready = bt_ready(r);
+
+		if (r->stalled || !ready)
+			eff = SINK_DEFAULT;	/* nobody would hear it */
+	}
+	if (r->slave && !strcmp(eff, r->sink))
+		return;
+	/*
+	 * Tried and failed: wait for a change - or, with no sink at all
+	 * (pacing), retry every ~3 s rather than on every check.
+	 */
+	if (!strcmp(eff, r->failed) && (r->slave || r->retry_ctr++ % 10))
+		return;
+	/* say where the stream went and why, once per decision */
+	if (getenv("S31ROUTE_DEBUG") || strcmp(r->said, eff)) {
+		fprintf(stderr, "s31route: %s -> %s (asked for %s%s)\n",
+			r->slave ? r->sink : "none", eff, r->want,
+			strcmp(eff, r->want) ? r->stalled ? ", stalled" :
+			", no A2DP sink ready" : "");
+		snprintf(r->said, sizeof(r->said), "%s", eff);
+	}
+	if (slave_open(r, eff) == 0) {
+		r->failed[0] = 0;
 		return;
 	}
-	if (st.st_mtime == r->seen && r->slave)
-		return;
-	r->seen = st.st_mtime;
-	sink_read(r, want, sizeof(want));
-	if (r->slave && !strcmp(want, r->sink))
-		return;
-	snprintf(r->sink, sizeof(r->sink), "%s", want);
-	slave_open(r);
+	snprintf(r->failed, sizeof(r->failed), "%s", eff);
+	if (!r->slave && !sink_is_codec(eff))
+		slave_open(r, SINK_DEFAULT);
 }
 
 static int route_start(snd_pcm_ioplug_t *io)
 {
 	struct route *r = io->private_data;
 
-	sink_follow(r);
+	sink_follow(r, 0);
 	if (!r->slave)
-		return -ENODEV;
+		return 0;		/* transfer() paces until a sink opens */
 	if (snd_pcm_state(r->slave) == SND_PCM_STATE_PREPARED)
 		snd_pcm_start(r->slave);
 	return 0;
@@ -532,7 +705,15 @@ static int route_prepare(snd_pcm_ioplug_t *io)
 	struct route *r = io->private_data;
 
 	r->transferred = 0;
-	sink_follow(r);
+	/* ~300 ms of the application's audio between sink checks */
+	if (io->period_size && io->rate) {
+		r->follow_every = (unsigned)((uint64_t)io->rate * 3 /
+					     (io->period_size * 10));
+		if (!r->follow_every)
+			r->follow_every = 1;
+	}
+	clock_gettime(CLOCK_MONOTONIC, &r->pace_next);
+	sink_follow(r, 0);
 	if (r->conv == CONV_RESAMPLE)
 		s31rs_reset(&r->rs);	/* a restart is a new signal */
 	if (r->slave)
@@ -566,8 +747,6 @@ static snd_pcm_sframes_t route_pointer(snd_pcm_ioplug_t *io)
 	snd_pcm_sframes_t delay = 0;
 	int err;
 
-	if (!r->slave)
-		return -ENODEV;
 	/*
 	 * Report handed-on frames, not truly-played frames.
 	 *
@@ -586,7 +765,7 @@ static snd_pcm_sframes_t route_pointer(snd_pcm_ioplug_t *io)
 	 * video to the audio clock can restore the exact query with
 	 * S31ROUTE_ACCURATE_DELAY=1.
 	 */
-	if (!getenv("S31ROUTE_ACCURATE_DELAY"))
+	if (!r->slave || !getenv("S31ROUTE_ACCURATE_DELAY"))
 		return (snd_pcm_sframes_t)(r->transferred % io->buffer_size);
 	err = snd_pcm_delay(r->slave, &delay);
 	if (err == -EPIPE || snd_pcm_state(r->slave) == SND_PCM_STATE_XRUN)
@@ -600,19 +779,66 @@ static snd_pcm_sframes_t route_pointer(snd_pcm_ioplug_t *io)
 }
 
 /*
- * Convert the application's frames for the codec and hand them on. The
- * write blocks exactly as the pass-through one does, so pacing is unchanged;
- * the application is told all of its frames were taken.
+ * Hand `m` frames to the sink. The codec: blocking writei, as always.
+ * Anything else was opened non-blocking and is waited on here, and a sink
+ * that frees no room for stall_ms comes back as -ETIMEDOUT instead of
+ * holding the application for ever. snd_pcm_wait() consults the cached
+ * avail first, so a sink with room costs no extra syscall.
  */
-static snd_pcm_sframes_t transfer_converted(struct route *r,
-					    const int16_t *in,
-					    snd_pcm_uframes_t size)
+static snd_pcm_sframes_t sink_write(struct route *r, const void *p,
+				    snd_pcm_uframes_t m, size_t fbytes)
 {
-	unsigned need = r->conv == CONV_RESAMPLE ?
-			s31rs_max_out(&r->rs, (unsigned)size) : (unsigned)size;
 	snd_pcm_uframes_t off = 0;
+	int idle = 0;
+
+	while (off < m) {
+		snd_pcm_sframes_t n;
+
+		if (r->bounded) {
+			int w = snd_pcm_wait(r->slave, r->stall_ms);
+
+			if (w == 0)
+				return -ETIMEDOUT;
+			if (w < 0)
+				return w;
+		}
+		n = snd_pcm_writei(r->slave, (const char *)p + off * fbytes,
+				   m - off);
+		if (n > 0) {
+			off += (snd_pcm_uframes_t)n;
+			idle = 0;
+			continue;
+		}
+		if (n == 0 || n == -EAGAIN) {
+			/* ready by poll, refused by write: do not spin on it */
+			if (!r->bounded || ++idle > 8)
+				return -ETIMEDOUT;
+			continue;
+		}
+		return n;
+	}
+	return (snd_pcm_sframes_t)off;
+}
+
+/*
+ * One attempt at the current sink: convert the application's frames for it
+ * if it is the codec at another rate or channel count, and hand them on.
+ * Converting here rather than once per chunk means a retry on another sink
+ * (below) gets frames converted for THAT sink.
+ */
+static snd_pcm_sframes_t transfer_once(struct route *r, const int16_t *in,
+				       snd_pcm_uframes_t size)
+{
+	unsigned need;
+	snd_pcm_sframes_t n;
 	int m;
 
+	if (r->conv == CONV_PASS) {
+		n = sink_write(r, in, size, (size_t)r->io.channels * 2);
+		return n < 0 ? n : (snd_pcm_sframes_t)size;
+	}
+	need = r->conv == CONV_RESAMPLE ?
+	       s31rs_max_out(&r->rs, (unsigned)size) : (unsigned)size;
 	if (need > r->ocap) {
 		int16_t *o = realloc(r->obuf, (size_t)need * 4);
 
@@ -629,30 +855,49 @@ static snd_pcm_sframes_t transfer_converted(struct route *r,
 		s31rs_dup(in, (unsigned)size, r->obuf);
 		m = (int)size;
 	}
-	while (off < (snd_pcm_uframes_t)m) {
-		snd_pcm_sframes_t n = snd_pcm_writei(r->slave, r->obuf + 2 * off,
-						     (snd_pcm_uframes_t)m - off);
+	n = sink_write(r, r->obuf, (snd_pcm_uframes_t)m, 4);
+	return n < 0 ? n : (snd_pcm_sframes_t)size;
+}
 
-		if (n == -EPIPE)
-			return xrun(r);
-		if (n == -ENODEV || n == -EIO) {
-			/*
-			 * The sink went away mid-stream. Pick it up again and
-			 * drop this chunk: the frames were converted for the
-			 * old sink, and a reopen may have chosen another.
-			 */
-			slave_close(r);
-			sink_follow(r);
-			if (!r->slave)
-				return -ENODEV;
-			break;
-		}
-		if (n < 0)
-			return n;
-		off += (snd_pcm_uframes_t)n;
+/*
+ * No sink will take the audio (the codec is busy, or a stalled sink could
+ * not be replaced). Drain and pace: the chunk is dropped and the application is
+ * held for exactly its duration, so it runs at its own rate and never waits
+ * on a device - and the next sink check can pick a sink up again.
+ */
+static void pace_chunk(struct route *r, snd_pcm_uframes_t size)
+{
+	struct timespec now;
+	uint64_t ns = r->io.rate ? (uint64_t)size * 1000000000ull / r->io.rate
+				 : 0;
+
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	/* more than a second adrift (a stop, a long preemption): start over */
+	if (now.tv_sec > r->pace_next.tv_sec + 1 ||
+	    now.tv_sec + 1 < r->pace_next.tv_sec)
+		r->pace_next = now;
+	r->pace_next.tv_nsec += (long)(ns % 1000000000ull);
+	r->pace_next.tv_sec += (time_t)(ns / 1000000000ull);
+	if (r->pace_next.tv_nsec >= 1000000000L) {
+		r->pace_next.tv_nsec -= 1000000000L;
+		r->pace_next.tv_sec++;
 	}
-	r->transferred += size;
-	return (snd_pcm_sframes_t)size;
+	while (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &r->pace_next,
+			       NULL) == EINTR)
+		;
+}
+
+/* The sink took nothing for stall_ms: say so once, and leave it. */
+static void sink_stalled(struct route *r)
+{
+	fprintf(stderr, "s31route: %s took nothing for %d ms - nobody is draining it\n",
+		r->sink, r->stall_ms);
+	r->stalled = 1;
+	sink_follow(r, 1);
+	if (r->slave && r->bounded) {
+		/* nothing to fall back to: drop it, and pace (pace_chunk) */
+		slave_close(r);
+	}
 }
 
 static snd_pcm_sframes_t route_transfer(snd_pcm_ioplug_t *io,
@@ -662,7 +907,8 @@ static snd_pcm_sframes_t route_transfer(snd_pcm_ioplug_t *io,
 {
 	struct route *r = io->private_data;
 	const char *buf;
-	snd_pcm_sframes_t n;
+	snd_pcm_sframes_t n = -ENODEV;
+	int tries;
 
 	/*
 	 * THE THREAD THAT FEEDS THE CODEC OUTRANKS THE ONE THAT DRAWS.
@@ -698,27 +944,51 @@ static snd_pcm_sframes_t route_transfer(snd_pcm_ioplug_t *io,
 					    (id_t)syscall(SYS_gettid), prio);
 		}
 	}
-	sink_follow(r);
-	if (!r->slave)
-		return -ENODEV;
+	sink_follow(r, 0);
 	buf = (const char *)areas->addr + (areas->first + areas->step * offset) / 8;
-	if (r->conv != CONV_PASS)
-		return transfer_converted(r, (const int16_t *)buf, size);
-	n = snd_pcm_writei(r->slave, buf, size);
+	/*
+	 * At most three attempts: the sink we have, then whatever replaced it
+	 * after it stalled or went away (sink_follow picks the codec when the
+	 * loopback is unusable), and once more for luck. A chunk that no sink
+	 * takes is dropped and paced, never waited on.
+	 */
+	for (tries = 0; r->slave && tries < 3; tries++) {
+		n = transfer_once(r, (const int16_t *)buf, size);
+		if (n >= 0)
+			break;
+		if (n == -ETIMEDOUT) {
+			if (!r->bounded)
+				break;		/* the codec: drop, below */
+			sink_stalled(r);
+		} else if (n == -ENODEV || n == -EIO) {
+			/* the sink went away mid-stream; pick it up again */
+			slave_close(r);
+			sink_follow(r, 1);
+		} else {
+			break;
+		}
+	}
 	if (n == -EPIPE)
 		return xrun(r);
-	if (n == -ENODEV || n == -EIO) {
-		/* the sink went away mid-stream; try to pick it up again */
-		slave_close(r);
-		sink_follow(r);
-		if (!r->slave)
-			return -ENODEV;
-		n = snd_pcm_writei(r->slave, buf, size);
+	if (n == -ETIMEDOUT)
+		n = (snd_pcm_sframes_t)size;	/* taken by nobody: dropped */
+	if (!r->slave) {
+		/*
+		 * Nowhere to play - the codec busy in another process, or a
+		 * stalled sink with nothing to replace it: drain and pace.
+		 * Returning -ENODEV instead sent SDL 2 into a loop of 230,000
+		 * "underrun" recoveries in 8 s at 13% of a core (host rig,
+		 * codec held by two aplays), where this plays silence at the
+		 * application's own rate and picks a sink up within ~3 s.
+		 */
+		r->pace = 1;
+		pace_chunk(r, size);
+		n = (snd_pcm_sframes_t)size;
 	}
 	if (n < 0)
 		return n;
-	r->transferred += (snd_pcm_uframes_t)n;
-	return n;
+	r->transferred += size;
+	return (snd_pcm_sframes_t)size;
 }
 
 static int route_close(snd_pcm_ioplug_t *io)
@@ -728,6 +998,8 @@ static int route_close(snd_pcm_ioplug_t *io)
 	slave_close(r);
 	if (r->pfd >= 0)
 		close(r->pfd);
+	if (r->evfd >= 0)
+		close(r->evfd);
 	s31rs_free(&r->rs);
 	free(r->obuf);
 	free(r);
@@ -852,21 +1124,26 @@ SND_PCM_PLUGIN_DEFINE_FUNC(s31route)
 		return -ENOMEM;
 	/*
 	 * Until a sink is open there is nothing to wait for: a signalled
-	 * eventfd holds the number, so a write goes straight through and
-	 * reports -ENODEV rather than sleeping on nothing. slave_open()
-	 * dup2()s the sink's descriptor over it.
+	 * eventfd holds the number, so a write goes straight through to
+	 * transfer(), which paces it (pace_chunk) rather than sleeping on
+	 * nothing. slave_open() dup2()s the sink's descriptor over it.
 	 */
-	r->pfd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
-	if (r->pfd < 0) {
+	r->evfd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+	if (r->evfd < 0) {
 		free(r);
 		return -errno;
 	}
-	if (write(r->pfd, &one, sizeof(one)) < 0) {
-		close(r->pfd);
+	/*
+	 * The number the application polls is a dup, so that slave_close()
+	 * can park the eventfd behind it again (see there).
+	 */
+	if (write(r->evfd, &one, sizeof(one)) < 0 ||
+	    (r->pfd = fcntl(r->evfd, F_DUPFD_CLOEXEC, 0)) < 0) {
+		err = -errno;
+		close(r->evfd);
 		free(r);
-		return -errno;
+		return err;
 	}
-	sink_read(r, r->sink, sizeof(r->sink));
 
 	r->io.version	= SND_PCM_IOPLUG_VERSION;
 	r->io.name	= "ESP32-S31 output router";
@@ -879,6 +1156,7 @@ SND_PCM_PLUGIN_DEFINE_FUNC(s31route)
 	err = snd_pcm_ioplug_create(&r->io, name, stream, mode);
 	if (err < 0) {
 		close(r->pfd);
+		close(r->evfd);
 		free(r);
 		return err;
 	}

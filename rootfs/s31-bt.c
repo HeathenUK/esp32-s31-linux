@@ -963,6 +963,18 @@ static struct {
 
 #define ROUTE_IDLE_MS	2000		/* quiet for this long -> let go */
 
+/*
+ * "The loopback can be heard": present, holding our pid, exactly while route
+ * mode is on and an A2DP transport exists. s31route (the ALSA plugin every
+ * application plays through) moves a stream onto the loopback only while
+ * this says so, and keeps it on the codec otherwise - before, a stream moved
+ * to a loopback nobody drained simply stalled. The transport being idle
+ * (released after ROUTE_IDLE_MS of quiet) does not clear it: route_watch
+ * re-acquires on the next sound, and dropping the stream to the speaker for
+ * every quiet moment in a game would be worse than the gap.
+ */
+#define ROUTE_READY_FILE "/run/s31-bt-sink"
+
 #define S31_HOSTED_IOC_COEX _IOWR('S', 0x37, struct s31_hosted_coex_msg)
 static void coex_hint(int streaming)
 {
@@ -1436,12 +1448,71 @@ static int route_sink_busy(void)
 	return strncmp(buf, "closed", 6) != 0;
 }
 
+/*
+ * Route mode with no transport: go and look for one, backed off.
+ *
+ * This used to run only once audio was heard on the loopback. s31route no
+ * longer plays into the loopback until a transport exists (READY_FILE,
+ * below) - it keeps the stream on the speaker instead - so waiting for
+ * sound here would wait for ever. It runs whenever route mode is on and
+ * there is no transport, playing or not; the backoff (3 s doubling to 60 s)
+ * is unchanged and resets on InterfacesAdded.
+ */
+static void route_find_transport(void)
+{
+	static uint64_t last_scan;
+
+	if (transport_path[0])
+		return;
+	/*
+	 * BlueZ 5.79 may never call SetConfiguration on our endpoint:
+	 * when the sink is already configured the stream appears
+	 * under the REMOTE endpoint and we are simply never told.
+	 * Waiting for the callback leaves us idle beside a working
+	 * transport, which is exactly what "connected but silent"
+	 * looked like. Go and look for it instead.
+	 */
+	/*
+	 * Backed off, because this is the FALLBACK path and it used to
+	 * run every 3 s for as long as audio was routed to a sink that
+	 * was not there - hours, with sleeping earbuds. Each pass asks
+	 * for GetManagedObjects, whose reply carries every BlueZ object
+	 * and all their properties, so it is the largest allocation
+	 * this daemon makes and it was making it 7,800 times per
+	 * 6.5 hours. musl keeps freed small allocations in its arena
+	 * rather than returning them, so that churn is what grew the
+	 * heap to ~7 MB.
+	 *
+	 * Backing off 3 s -> 60 s cuts that to ~400 passes, ~20x
+	 * fewer, and costs nothing that matters: InterfacesAdded still
+	 * arrives the instant BlueZ has something to say (we match on
+	 * it and reset the backoff there), the first look is still at
+	 * 3 s, and this path only runs when there is NO transport - so
+	 * no audio is flowing and nothing here can glitch a stream.
+	 */
+	if (now_us() - last_scan > scan_gap) {
+		last_scan = now_us();
+		load_objects();
+		if (transport_path[0]) {
+			scan_gap = 3000000ull;
+			event("ROUTE found transport %s",
+			      transport_path);
+		} else {
+			a2dp_connect_profile();
+			scan_gap *= 2;
+			if (scan_gap > 60000000ull)
+				scan_gap = 60000000ull;
+		}
+	}
+}
+
 static int route_watch(void)
 {
 	unsigned char probe[4096];
 	int loud = 0, guard = 0;
 	snd_pcm_state_t sst;
 
+	route_find_transport();
 	if (!route_sink_busy()) {
 		/* nobody is playing: hold nothing open, cost nothing */
 		if (st.cap) {
@@ -1490,50 +1561,6 @@ static int route_watch(void)
 	}
 	if (!loud)
 		return 50000;
-	if (!transport_path[0]) {
-		/*
-		 * BlueZ 5.79 may never call SetConfiguration on our endpoint:
-		 * when the sink is already configured the stream appears
-		 * under the REMOTE endpoint and we are simply never told.
-		 * Waiting for the callback leaves us idle beside a working
-		 * transport, which is exactly what "connected but silent"
-		 * looked like. Go and look for it instead.
-		 */
-		static uint64_t last_scan;
-
-		/*
-		 * Backed off, because this is the FALLBACK path and it used to
-		 * run every 3 s for as long as audio was routed to a sink that
-		 * was not there - hours, with sleeping earbuds. Each pass asks
-		 * for GetManagedObjects, whose reply carries every BlueZ object
-		 * and all their properties, so it is the largest allocation
-		 * this daemon makes and it was making it 7,800 times per
-		 * 6.5 hours. musl keeps freed small allocations in its arena
-		 * rather than returning them, so that churn is what grew the
-		 * heap to ~7 MB.
-		 *
-		 * Backing off 3 s -> 60 s cuts that to ~400 passes, ~20x
-		 * fewer, and costs nothing that matters: InterfacesAdded still
-		 * arrives the instant BlueZ has something to say (we match on
-		 * it and reset the backoff there), the first look is still at
-		 * 3 s, and this path only runs when there is NO transport - so
-		 * no audio is flowing and nothing here can glitch a stream.
-		 */
-		if (now_us() - last_scan > scan_gap) {
-			last_scan = now_us();
-			load_objects();
-			if (transport_path[0]) {
-				scan_gap = 3000000ull;
-				event("ROUTE found transport %s",
-				      transport_path);
-			} else {
-				a2dp_connect_profile();
-				scan_gap *= 2;
-				if (scan_gap > 60000000ull)
-					scan_gap = 60000000ull;
-			}
-		}
-	}
 	if (!transport_path[0]) {
 		/*
 		 * Audio is playing with nowhere to send it. Say so - rate
@@ -2131,6 +2158,50 @@ static int client(int argc, char **argv)
 
 /* ------------------------------------------------------------ main */
 
+/* Keep ROUTE_READY_FILE in step with route mode and the transport. */
+static void route_ready_publish(int force_off)
+{
+	static int published = -1;
+	int ready = !force_off && st.route && transport_path[0];
+
+	if (ready == published)
+		return;
+	published = ready;
+	if (ready) {
+		char line[24];
+		int fd = open(ROUTE_READY_FILE ".new",
+			      O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+		int n = snprintf(line, sizeof(line), "%d\n", (int)getpid());
+
+		/* written whole and renamed, so a reader never sees half */
+		if (fd < 0 || write(fd, line, (size_t)n) != n) {
+			if (fd >= 0)
+				close(fd);
+			unlink(ROUTE_READY_FILE ".new");
+			published = -1;		/* try again next pass */
+			return;
+		}
+		close(fd);
+		if (rename(ROUTE_READY_FILE ".new", ROUTE_READY_FILE) < 0) {
+			unlink(ROUTE_READY_FILE ".new");
+			published = -1;
+			return;
+		}
+	} else {
+		unlink(ROUTE_READY_FILE);
+	}
+	if (!force_off)
+		event("ROUTE sink %s", ready ? "ready" : "not ready");
+}
+
+/* Stopped: nothing will carry the loopback now, so say so on the way out. */
+static void on_term(int sig)
+{
+	(void)sig;
+	unlink(ROUTE_READY_FILE);
+	_exit(0);
+}
+
 int main(int argc, char **argv)
 {
 	DBusError err;
@@ -2143,6 +2214,10 @@ int main(int argc, char **argv)
 		return client(argc, argv);
 
 	signal(SIGPIPE, SIG_IGN);
+	/* a previous instance's file says nothing about this one */
+	route_ready_publish(1);
+	signal(SIGTERM, on_term);
+	signal(SIGINT, on_term);
 	for (i = 0; i < MAXCLI; i++)
 		clis[i].fd = -1;
 	{
@@ -2262,6 +2337,7 @@ int main(int argc, char **argv)
 		while (dbus_connection_dispatch(conn) == DBUS_DISPATCH_DATA_REMAINS)
 			;
 		/* housekeeping */
+		route_ready_publish(0);
 		if (confirm_msg && now_us() - confirm_at > 30000000ull) {
 			event("FAIL %s pair confirmation timed out", confirm_addr);
 			confirm_finish(0);
