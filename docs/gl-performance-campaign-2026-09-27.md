@@ -141,6 +141,21 @@ if it wins with no glxgears regression.
 - `buildroot-external/board/esp32-s31/overlay/etc/sysctl.d/99-s31-memory.conf`:
   the swap settings, with their numbers.
 
+## Queued after the audio work (owner request, 2026-09-27)
+
+**sdlquake frame dips.** While the audio regression runs played, the owner
+watched sdlquake. It ran at about 25 fps for long stretches, with dips that
+pulled the average down to about 15 fps.
+- **Target:** find what causes the dips and remove it, so the long-stretch
+  rate becomes the average.
+- **Tools:** the per-frame timing and attribution tools from the glxgears
+  dips work, adapted to sdlquake's SDL path: swapstamp-style per-frame
+  timestamps, placement and PIE-bounce counts, paging counters, and the
+  cache counters.
+- **First check:** the recorded sdlquake timedemo band was 19.2-20.1 fps.
+  If the new audio path (kernel #401 and s31route) lowered it, that
+  regression is fixed before anything else.
+
 ## Git note
 
 Commit a97b9851 (this document's first version) also carries the revert of
