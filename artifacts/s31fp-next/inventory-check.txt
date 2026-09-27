@@ -1,0 +1,4 @@
+mkdir -p /src/build/s31fp-tools
+cc -O2 -Wall -Wextra -Werror -o /src/build/s31fp-tools/scanbench rootfs/s31fp/v2/scanbench.c
+python3 rootfs/s31fp/v2/test-scanbench.py /src/build/s31fp-tools/scanbench
+PASS scanbench 9 ELF/matcher fixtures

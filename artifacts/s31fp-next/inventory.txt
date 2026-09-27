@@ -1,0 +1,95 @@
+618565c1debe480e164a3a5688ba137c  /src/artifacts/s31fp-copy-fix/prboom.elf
+55dd4f36a7faff640c1496d673df03d6  /src/rootfs/sdlquake
+6701438d07c377dbb858775aeb9ddd6d  /src/rootfs/quakespasm
+f37f6ebd8858050c98aba4a380e6b98a  /src/build/buildroot/target/usr/bin/opentyrian
+dd6fe3c1653b34aa5e3d91f9156ea0df  /src/build/buildroot/target/usr/lib/libSDL-1.2.so.0.11.4
+5c0923891274f068bdcb883a82910554  /src/build/buildroot/target/usr/lib/libSDL2-2.0.so.0.3200.10
+ec0920a8501c7b6a58162b6c71247b70  /src/build/buildroot/target/usr/lib/libSDL_mixer-1.2.so.0.12.1
+4a6bbc22dca699b4599087d405bdd4c0  /src/build/buildroot/target/usr/lib/libGL.so.1.2.0
+b643055ab45598d09ccf1389ac091dec  /src/gl/bench/out-t7/br-final/libGL.so.1.2.0
+MATCH /src/artifacts/s31fp-copy-fix/prboom.elf segment=3 vaddr=0x00086ac2 file=0x00086ac2 __divdf3 bytes=1562
+MATCH /src/artifacts/s31fp-copy-fix/prboom.elf segment=3 vaddr=0x000870dc file=0x000870dc __muldf3 bytes=1364
+MATCH /src/artifacts/s31fp-copy-fix/prboom.elf segment=3 vaddr=0x00087630 file=0x00087630 __fixdfsi bytes=182
+MATCH /src/artifacts/s31fp-copy-fix/prboom.elf segment=3 vaddr=0x000876e6 file=0x000876e6 __floatsidf bytes=80
+MATCH /src/artifacts/s31fp-copy-fix/prboom.elf segment=3 vaddr=0x00087736 file=0x00087736 __floatunsidf bytes=60
+MATCH /src/artifacts/s31fp-copy-fix/prboom.elf segment=3 vaddr=0x00087772 file=0x00087772 __extendsfdf2 bytes=158
+SUMMARY /src/artifacts/s31fp-copy-fix/prboom.elf type=3 xsegments=1 text=693020 read_ms=0.498 scan_report_ms=0.307 matches=6 __muldf3=1 __divdf3=1 __fixdfsi=1 __floatsidf=1 __floatunsidf=1 __extendsfdf2=1
+MATCH /src/rootfs/sdlquake segment=3 vaddr=0x0004e1b0 file=0x0004e1b0 __adddf3 bytes=2050
+MATCH /src/rootfs/sdlquake segment=3 vaddr=0x0004e9b2 file=0x0004e9b2 __divdf3 bytes=1562
+MATCH /src/rootfs/sdlquake segment=3 vaddr=0x0004efcc file=0x0004efcc __eqdf2 bytes=152
+MATCH /src/rootfs/sdlquake segment=3 vaddr=0x0004f064 file=0x0004f064 __gedf2 bytes=184
+MATCH /src/rootfs/sdlquake segment=3 vaddr=0x0004f11c file=0x0004f11c __ledf2 bytes=184
+MATCH /src/rootfs/sdlquake segment=3 vaddr=0x0004f1d4 file=0x0004f1d4 __muldf3 bytes=1364
+MATCH /src/rootfs/sdlquake segment=3 vaddr=0x0004f728 file=0x0004f728 __subdf3 bytes=2068
+MATCH /src/rootfs/sdlquake segment=3 vaddr=0x0004ff3c file=0x0004ff3c __fixdfsi bytes=182
+MATCH /src/rootfs/sdlquake segment=3 vaddr=0x0004fff2 file=0x0004fff2 __floatsidf bytes=80
+MATCH /src/rootfs/sdlquake segment=3 vaddr=0x00050182 file=0x00050182 __extendsfdf2 bytes=158
+MATCH /src/rootfs/sdlquake segment=3 vaddr=0x00050220 file=0x00050220 __truncdfsf2 bytes=526
+SUMMARY /src/rootfs/sdlquake type=3 xsegments=1 text=435472 read_ms=0.243 scan_report_ms=0.195 matches=11 __muldf3=1 __adddf3=1 __subdf3=1 __divdf3=1 __fixdfsi=1 __floatsidf=1 __extendsfdf2=1 __truncdfsf2=1 __gedf2=1 __ledf2=1 __eqdf2=1
+MATCH /src/rootfs/quakespasm segment=3 vaddr=0x0006ebe6 file=0x0006ebe6 __adddf3 bytes=2050
+MATCH /src/rootfs/quakespasm segment=3 vaddr=0x0006f3e8 file=0x0006f3e8 __divdf3 bytes=1562
+MATCH /src/rootfs/quakespasm segment=3 vaddr=0x0006fa02 file=0x0006fa02 __eqdf2 bytes=152
+MATCH /src/rootfs/quakespasm segment=3 vaddr=0x0006fa9a file=0x0006fa9a __gedf2 bytes=184
+MATCH /src/rootfs/quakespasm segment=3 vaddr=0x0006fb52 file=0x0006fb52 __ledf2 bytes=184
+MATCH /src/rootfs/quakespasm segment=3 vaddr=0x0006fc0a file=0x0006fc0a __muldf3 bytes=1364
+MATCH /src/rootfs/quakespasm segment=3 vaddr=0x0007015e file=0x0007015e __subdf3 bytes=2068
+MATCH /src/rootfs/quakespasm segment=3 vaddr=0x00070972 file=0x00070972 __fixdfsi bytes=182
+MATCH /src/rootfs/quakespasm segment=3 vaddr=0x00070a28 file=0x00070a28 __floatsidf bytes=80
+MATCH /src/rootfs/quakespasm segment=3 vaddr=0x00070a78 file=0x00070a78 __extendsfdf2 bytes=158
+MATCH /src/rootfs/quakespasm segment=3 vaddr=0x00070b16 file=0x00070b16 __truncdfsf2 bytes=526
+SUMMARY /src/rootfs/quakespasm type=3 xsegments=1 text=633772 read_ms=0.262 scan_report_ms=0.285 matches=11 __muldf3=1 __adddf3=1 __subdf3=1 __divdf3=1 __fixdfsi=1 __floatsidf=1 __extendsfdf2=1 __truncdfsf2=1 __gedf2=1 __ledf2=1 __eqdf2=1
+MATCH /src/build/buildroot/target/usr/bin/opentyrian segment=3 vaddr=0x0005ac24 file=0x0005ac24 __adddf3 bytes=2050
+MATCH /src/build/buildroot/target/usr/bin/opentyrian segment=3 vaddr=0x0005b426 file=0x0005b426 __divdf3 bytes=1562
+MATCH /src/build/buildroot/target/usr/bin/opentyrian segment=3 vaddr=0x0005ba40 file=0x0005ba40 __gedf2 bytes=184
+MATCH /src/build/buildroot/target/usr/bin/opentyrian segment=3 vaddr=0x0005baf8 file=0x0005baf8 __ledf2 bytes=184
+MATCH /src/build/buildroot/target/usr/bin/opentyrian segment=3 vaddr=0x0005bbb0 file=0x0005bbb0 __muldf3 bytes=1364
+MATCH /src/build/buildroot/target/usr/bin/opentyrian segment=3 vaddr=0x0005c104 file=0x0005c104 __subdf3 bytes=2068
+MATCH /src/build/buildroot/target/usr/bin/opentyrian segment=3 vaddr=0x0005c918 file=0x0005c918 __fixdfsi bytes=182
+MATCH /src/build/buildroot/target/usr/bin/opentyrian segment=3 vaddr=0x0005c9ce file=0x0005c9ce __fixunsdfsi bytes=140
+MATCH /src/build/buildroot/target/usr/bin/opentyrian segment=3 vaddr=0x0005ca5a file=0x0005ca5a __floatsidf bytes=80
+MATCH /src/build/buildroot/target/usr/bin/opentyrian segment=3 vaddr=0x0005caaa file=0x0005caaa __floatunsidf bytes=60
+MATCH /src/build/buildroot/target/usr/bin/opentyrian segment=3 vaddr=0x0005cae6 file=0x0005cae6 __extendsfdf2 bytes=158
+MATCH /src/build/buildroot/target/usr/bin/opentyrian segment=3 vaddr=0x0005cb84 file=0x0005cb84 __truncdfsf2 bytes=526
+SUMMARY /src/build/buildroot/target/usr/bin/opentyrian type=3 xsegments=1 text=429776 read_ms=0.076 scan_report_ms=0.179 matches=12 __muldf3=1 __adddf3=1 __subdf3=1 __divdf3=1 __fixdfsi=1 __floatsidf=1 __fixunsdfsi=1 __floatunsidf=1 __extendsfdf2=1 __truncdfsf2=1 __gedf2=1 __ledf2=1
+MATCH /src/build/buildroot/target/usr/lib/libSDL-1.2.so.0.11.4 segment=1 vaddr=0x00043f68 file=0x00043f68 __adddf3 bytes=2050
+MATCH /src/build/buildroot/target/usr/lib/libSDL-1.2.so.0.11.4 segment=1 vaddr=0x0004476a file=0x0004476a __divdf3 bytes=1562
+MATCH /src/build/buildroot/target/usr/lib/libSDL-1.2.so.0.11.4 segment=1 vaddr=0x00044d84 file=0x00044d84 __eqdf2 bytes=152
+MATCH /src/build/buildroot/target/usr/lib/libSDL-1.2.so.0.11.4 segment=1 vaddr=0x00044e1c file=0x00044e1c __gedf2 bytes=184
+MATCH /src/build/buildroot/target/usr/lib/libSDL-1.2.so.0.11.4 segment=1 vaddr=0x00044ed4 file=0x00044ed4 __ledf2 bytes=184
+MATCH /src/build/buildroot/target/usr/lib/libSDL-1.2.so.0.11.4 segment=1 vaddr=0x00044f8c file=0x00044f8c __muldf3 bytes=1364
+MATCH /src/build/buildroot/target/usr/lib/libSDL-1.2.so.0.11.4 segment=1 vaddr=0x000454e0 file=0x000454e0 __subdf3 bytes=2068
+MATCH /src/build/buildroot/target/usr/lib/libSDL-1.2.so.0.11.4 segment=1 vaddr=0x00045cf4 file=0x00045cf4 __fixdfsi bytes=182
+MATCH /src/build/buildroot/target/usr/lib/libSDL-1.2.so.0.11.4 segment=1 vaddr=0x00045daa file=0x00045daa __fixunsdfsi bytes=140
+MATCH /src/build/buildroot/target/usr/lib/libSDL-1.2.so.0.11.4 segment=1 vaddr=0x00045e36 file=0x00045e36 __floatsidf bytes=80
+MATCH /src/build/buildroot/target/usr/lib/libSDL-1.2.so.0.11.4 segment=1 vaddr=0x00045e86 file=0x00045e86 __floatunsidf bytes=60
+MATCH /src/build/buildroot/target/usr/lib/libSDL-1.2.so.0.11.4 segment=1 vaddr=0x00045ec2 file=0x00045ec2 __extendsfdf2 bytes=158
+MATCH /src/build/buildroot/target/usr/lib/libSDL-1.2.so.0.11.4 segment=1 vaddr=0x00045f60 file=0x00045f60 __truncdfsf2 bytes=526
+SUMMARY /src/build/buildroot/target/usr/lib/libSDL-1.2.so.0.11.4 type=3 xsegments=1 text=369528 read_ms=0.058 scan_report_ms=0.172 matches=13 __muldf3=1 __adddf3=1 __subdf3=1 __divdf3=1 __fixdfsi=1 __floatsidf=1 __fixunsdfsi=1 __floatunsidf=1 __extendsfdf2=1 __truncdfsf2=1 __gedf2=1 __ledf2=1 __eqdf2=1
+MATCH /src/build/buildroot/target/usr/lib/libSDL2-2.0.so.0.3200.10 segment=1 vaddr=0x000bcd54 file=0x000bcd54 __adddf3 bytes=2050
+MATCH /src/build/buildroot/target/usr/lib/libSDL2-2.0.so.0.3200.10 segment=1 vaddr=0x000bd556 file=0x000bd556 __divdf3 bytes=1562
+MATCH /src/build/buildroot/target/usr/lib/libSDL2-2.0.so.0.3200.10 segment=1 vaddr=0x000bdb70 file=0x000bdb70 __eqdf2 bytes=152
+MATCH /src/build/buildroot/target/usr/lib/libSDL2-2.0.so.0.3200.10 segment=1 vaddr=0x000bdc08 file=0x000bdc08 __gedf2 bytes=184
+MATCH /src/build/buildroot/target/usr/lib/libSDL2-2.0.so.0.3200.10 segment=1 vaddr=0x000bdcc0 file=0x000bdcc0 __ledf2 bytes=184
+MATCH /src/build/buildroot/target/usr/lib/libSDL2-2.0.so.0.3200.10 segment=1 vaddr=0x000bdd78 file=0x000bdd78 __muldf3 bytes=1364
+MATCH /src/build/buildroot/target/usr/lib/libSDL2-2.0.so.0.3200.10 segment=1 vaddr=0x000be2cc file=0x000be2cc __subdf3 bytes=2068
+MATCH /src/build/buildroot/target/usr/lib/libSDL2-2.0.so.0.3200.10 segment=1 vaddr=0x000beae0 file=0x000beae0 __fixdfsi bytes=182
+MATCH /src/build/buildroot/target/usr/lib/libSDL2-2.0.so.0.3200.10 segment=1 vaddr=0x000beb96 file=0x000beb96 __floatsidf bytes=80
+MATCH /src/build/buildroot/target/usr/lib/libSDL2-2.0.so.0.3200.10 segment=1 vaddr=0x000bebe6 file=0x000bebe6 __floatunsidf bytes=60
+MATCH /src/build/buildroot/target/usr/lib/libSDL2-2.0.so.0.3200.10 segment=1 vaddr=0x000bec22 file=0x000bec22 __extendsfdf2 bytes=158
+MATCH /src/build/buildroot/target/usr/lib/libSDL2-2.0.so.0.3200.10 segment=1 vaddr=0x000becc0 file=0x000becc0 __truncdfsf2 bytes=526
+SUMMARY /src/build/buildroot/target/usr/lib/libSDL2-2.0.so.0.3200.10 type=3 xsegments=1 text=1153988 read_ms=0.366 scan_report_ms=0.520 matches=12 __muldf3=1 __adddf3=1 __subdf3=1 __divdf3=1 __fixdfsi=1 __floatsidf=1 __floatunsidf=1 __extendsfdf2=1 __truncdfsf2=1 __gedf2=1 __ledf2=1 __eqdf2=1
+MATCH /src/build/buildroot/target/usr/lib/libSDL_mixer-1.2.so.0.12.1 segment=1 vaddr=0x00008f18 file=0x00008f18 __divdf3 bytes=1562
+MATCH /src/build/buildroot/target/usr/lib/libSDL_mixer-1.2.so.0.12.1 segment=1 vaddr=0x00009532 file=0x00009532 __gedf2 bytes=184
+MATCH /src/build/buildroot/target/usr/lib/libSDL_mixer-1.2.so.0.12.1 segment=1 vaddr=0x000095ea file=0x000095ea __muldf3 bytes=1364
+MATCH /src/build/buildroot/target/usr/lib/libSDL_mixer-1.2.so.0.12.1 segment=1 vaddr=0x00009b3e file=0x00009b3e __fixdfsi bytes=182
+MATCH /src/build/buildroot/target/usr/lib/libSDL_mixer-1.2.so.0.12.1 segment=1 vaddr=0x00009bf4 file=0x00009bf4 __fixunsdfsi bytes=140
+MATCH /src/build/buildroot/target/usr/lib/libSDL_mixer-1.2.so.0.12.1 segment=1 vaddr=0x00009c80 file=0x00009c80 __floatsidf bytes=80
+MATCH /src/build/buildroot/target/usr/lib/libSDL_mixer-1.2.so.0.12.1 segment=1 vaddr=0x00009cd0 file=0x00009cd0 __floatunsidf bytes=60
+MATCH /src/build/buildroot/target/usr/lib/libSDL_mixer-1.2.so.0.12.1 segment=1 vaddr=0x00009d0c file=0x00009d0c __extendsfdf2 bytes=158
+SUMMARY /src/build/buildroot/target/usr/lib/libSDL_mixer-1.2.so.0.12.1 type=3 xsegments=1 text=49880 read_ms=0.010 scan_report_ms=0.023 matches=8 __muldf3=1 __divdf3=1 __fixdfsi=1 __floatsidf=1 __fixunsdfsi=1 __floatunsidf=1 __extendsfdf2=1 __gedf2=1
+MATCH /src/build/buildroot/target/usr/lib/libGL.so.1.2.0 segment=1 vaddr=0x000531a6 file=0x000531a6 __extendsfdf2 bytes=158
+MATCH /src/build/buildroot/target/usr/lib/libGL.so.1.2.0 segment=1 vaddr=0x00053244 file=0x00053244 __truncdfsf2 bytes=526
+SUMMARY /src/build/buildroot/target/usr/lib/libGL.so.1.2.0 type=3 xsegments=1 text=428956 read_ms=0.054 scan_report_ms=0.201 matches=2 __extendsfdf2=1 __truncdfsf2=1
+MATCH /src/gl/bench/out-t7/br-final/libGL.so.1.2.0 segment=1 vaddr=0x00054da6 file=0x00054da6 __extendsfdf2 bytes=158
+MATCH /src/gl/bench/out-t7/br-final/libGL.so.1.2.0 segment=1 vaddr=0x00054e44 file=0x00054e44 __truncdfsf2 bytes=526
+SUMMARY /src/gl/bench/out-t7/br-final/libGL.so.1.2.0 type=3 xsegments=1 text=435112 read_ms=0.341 scan_report_ms=0.211 matches=2 __extendsfdf2=1 __truncdfsf2=1

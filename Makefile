@@ -1524,6 +1524,17 @@ S31FP_V3_OUT ?= $(BUILD_DIR)/s31fp-v3
 s31fp-v3: s31fp-v2
 	B=$(S31FP_V3_OUT) V2_BUILD=$(S31FP_TEST_OUT) sh rootfs/s31fp/v3/build-v3.sh
 
+# Read-only full-body inventory of RV32 files, executed on the build host.
+# Uses shipping signatures; no application execution or board access.
+HOSTCC ?= cc
+.PHONY: s31fp-scanbench s31fp-scanbench-check
+s31fp-scanbench-check: s31fp-scanbench
+	python3 rootfs/s31fp/v2/test-scanbench.py $(BUILD_DIR)/s31fp-tools/scanbench
+s31fp-scanbench: $(BUILD_DIR)/s31fp-tools/scanbench
+$(BUILD_DIR)/s31fp-tools/scanbench: rootfs/s31fp/v2/scanbench.c rootfs/s31fp/v2/sigs3.h
+	mkdir -p $(@D)
+	$(HOSTCC) -O2 -Wall -Wextra -Werror -o $@ $<
+
 # Keep v3's interposed text in the tested SD/page-cache placement. No image
 # repack here: the existing rootfs overlay carries this file on future builds.
 .PHONY: s31fp-v3-stage

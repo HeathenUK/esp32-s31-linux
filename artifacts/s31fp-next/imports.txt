@@ -1,0 +1,83 @@
+FILE /src/artifacts/s31fp-copy-fix/prboom.elf
+ 0x00000001 (NEEDED)                     Shared library: [libSDL_net-1.2.so.0]
+ 0x00000001 (NEEDED)                     Shared library: [libSDL-1.2.so.0]
+ 0x00000001 (NEEDED)                     Shared library: [libpng16.so.16]
+ 0x00000001 (NEEDED)                     Shared library: [libSDL_mixer-1.2.so.0]
+ 0x00000001 (NEEDED)                     Shared library: [libc.so]
+     4: 00000000     0 FUNC    GLOBAL DEFAULT  UND memcmp
+    32: 00000000     0 FUNC    GLOBAL DEFAULT  UND memset
+    39: 00000000     0 FUNC    GLOBAL DEFAULT  UND memmove
+    47: 00000000     0 FUNC    GLOBAL DEFAULT  UND sqrt
+   140: 00000000     0 FUNC    GLOBAL DEFAULT  UND memcpy
+   142: 00000000     0 FUNC    GLOBAL DEFAULT  UND strlen
+FILE /src/rootfs/sdlquake
+ 0x00000001 (NEEDED)                     Shared library: [libSDL-1.2.so.0]
+ 0x00000001 (NEEDED)                     Shared library: [libc.so]
+     9: 00000000     0 FUNC    GLOBAL DEFAULT  UND gettimeofday
+    19: 00000000     0 FUNC    GLOBAL DEFAULT  UND memset
+    26: 00000000     0 FUNC    GLOBAL DEFAULT  UND memmove
+    36: 00000000     0 FUNC    GLOBAL DEFAULT  UND sqrt
+    53: 00000000     0 FUNC    GLOBAL DEFAULT  UND sincosf
+    67: 00000000     0 FUNC    GLOBAL DEFAULT  UND floor
+    71: 00000000     0 FUNC    GLOBAL DEFAULT  UND sincos
+   107: 00000000     0 FUNC    GLOBAL DEFAULT  UND memcpy
+   110: 00000000     0 FUNC    GLOBAL DEFAULT  UND strlen
+FILE /src/rootfs/quakespasm
+ 0x00000001 (NEEDED)                     Shared library: [libGL.so.1]
+ 0x00000001 (NEEDED)                     Shared library: [libSDL-1.2.so.0]
+ 0x00000001 (NEEDED)                     Shared library: [libc.so]
+     9: 00000000     0 FUNC    GLOBAL DEFAULT  UND memmove
+    20: 00000000     0 FUNC    GLOBAL DEFAULT  UND sincos
+    54: 00000000     0 FUNC    GLOBAL DEFAULT  UND memcpy
+    80: 00000000     0 FUNC    GLOBAL DEFAULT  UND memset
+   117: 00000000     0 FUNC    GLOBAL DEFAULT  UND sqrtf
+   162: 00000000     0 FUNC    GLOBAL DEFAULT  UND memcmp
+   181: 00000000     0 FUNC    GLOBAL DEFAULT  UND sqrt
+   192: 00000000     0 FUNC    GLOBAL DEFAULT  UND strlen
+   211: 00000000     0 FUNC    GLOBAL DEFAULT  UND floor
+FILE /src/build/buildroot/target/usr/bin/opentyrian
+ 0x00000001 (NEEDED)                     Shared library: [libSDL-1.2.so.0]
+ 0x00000001 (NEEDED)                     Shared library: [libc.so]
+    10: 00000000     0 FUNC    GLOBAL DEFAULT  UND memmove
+    21: 00000000     0 FUNC    GLOBAL DEFAULT  UND sqrtf
+    23: 00000000     0 FUNC    GLOBAL DEFAULT  UND memcpy
+    70: 00000000     0 FUNC    GLOBAL DEFAULT  UND memset
+    82: 00000000     0 FUNC    GLOBAL DEFAULT  UND sincosf
+    99: 00000000     0 FUNC    GLOBAL DEFAULT  UND strlen
+FILE /src/build/buildroot/target/usr/lib/libSDL-1.2.so.0.11.4
+ 0x00000001 (NEEDED)                     Shared library: [libc.so]
+    14: 00000000     0 FUNC    GLOBAL DEFAULT  UND memmove
+    27: 00000000     0 FUNC    GLOBAL DEFAULT  UND memcpy
+    71: 00000000     0 FUNC    GLOBAL DEFAULT  UND memcmp
+    82: 00000000     0 FUNC    GLOBAL DEFAULT  UND gettimeofday
+    84: 00000000     0 FUNC    GLOBAL DEFAULT  UND memset
+   116: 00000000     0 FUNC    GLOBAL DEFAULT  UND strlen
+FILE /src/build/buildroot/target/usr/lib/libSDL2-2.0.so.0.3200.10
+ 0x00000001 (NEEDED)                     Shared library: [libc.so]
+     4: 00000000     0 FUNC    GLOBAL DEFAULT  UND memcmp
+    21: 00000000     0 FUNC    GLOBAL DEFAULT  UND gettimeofday
+    37: 00000000     0 FUNC    GLOBAL DEFAULT  UND floorf
+    40: 00000000     0 FUNC    GLOBAL DEFAULT  UND memset
+    53: 00000000     0 FUNC    GLOBAL DEFAULT  UND memmove
+    65: 00000000     0 FUNC    GLOBAL DEFAULT  UND scalbnf
+    66: 00000000     0 FUNC    GLOBAL DEFAULT  UND clock_gettime
+    72: 00000000     0 FUNC    GLOBAL DEFAULT  UND sqrt
+    97: 00000000     0 FUNC    GLOBAL DEFAULT  UND scalbn
+   121: 00000000     0 FUNC    GLOBAL DEFAULT  UND floor
+   132: 00000000     0 FUNC    GLOBAL DEFAULT  UND sqrtf
+   162: 00000000     0 FUNC    GLOBAL DEFAULT  UND trunc
+   172: 00000000     0 FUNC    GLOBAL DEFAULT  UND ceilf
+   191: 00000000     0 FUNC    GLOBAL DEFAULT  UND memcpy
+   196: 00000000     0 FUNC    GLOBAL DEFAULT  UND strlen
+   198: 00000000     0 FUNC    GLOBAL DEFAULT  UND truncf
+   207: 00000000     0 FUNC    GLOBAL DEFAULT  UND ceil
+FILE /src/gl/bench/out-t7/br-final/libGL.so.1.2.0
+ 0x00000001 (NEEDED)                     Shared library: [libXext.so.6]
+ 0x00000001 (NEEDED)                     Shared library: [libX11.so.6]
+ 0x00000001 (NEEDED)                     Shared library: [libc.so]
+     4: 00000000     0 FUNC    GLOBAL DEFAULT  UND memcmp
+    11: 00000000     0 FUNC    GLOBAL DEFAULT  UND memset
+    15: 00000000     0 FUNC    GLOBAL DEFAULT  UND memmove
+    41: 00000000     0 FUNC    GLOBAL DEFAULT  UND sqrtf
+    65: 00000000     0 FUNC    GLOBAL DEFAULT  UND memcpy
+    67: 00000000     0 FUNC    GLOBAL DEFAULT  UND strlen

@@ -1,5 +1,9 @@
 # Where this work stands
 
+Next campaign: [s31fp forward plan](s31fp-forward-plan-2026-09-27.md).
+The first read-only coverage inventory is complete; no new runtime change has
+been deployed. The plan records candidate ranking, identity caveats and gates.
+
 ## Latest s31fp release (2026-09-27)
 
 Kernel #402 adds the real RV32 time64 vDSO (patch 0075). The SD-installed
