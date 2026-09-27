@@ -1,0 +1,15 @@
+sh /tmp/r.sh 2>&1 & __rp=$!; ( trap 'kill "$__rs_sleep" 2>/dev/null; wait "$
+__rs_sleep" 2>/dev/null; exit' TERM INT; sleep 27 & __rs_sleep=$!; wait "$__rs_s
+leep"; kill -0 $__rp 2>/dev/null && { echo RS_TIME"K"ILL; kill -9 $__rp 2>/dev/n
+ull; } ) & __rw=$!; wait $__rp 2>/dev/null; kill $__rw 2>/dev/null; wait $__rw 2
+>/dev/null; echo RS_DONE
+GQ s31str-1 args: -mixspeed 11025 -zone 384 -heapsize 12288 -width 320 -height 240 -fullscreen | #401 SMP Sun Sep 27 09:58:01 UTC 2026 up 85.92
+MEM0 MemFree: 1116 kB MemAvailable: 4364 kB SwapFree: 65260 kB CmaFree: 8 kB 
+VM0 pswpin=57 pswpout=117 pgmajfault=210 
+LV0 lvdesk: frames 0  gaps <25:0 <50:0 <100:0 <200:0 <400:0 >=400:0 xshim: 0 MIT-SHM ShmPutImage, 0 identical (no rows changed) 
+Killed
+EXIT=137
+RESULT 969 frames 103.4 seconds   9.4 fps
+GQDONE
+RS_DONE
+[2]+  Done(143)                  (trap "kill \"\$__rs_s

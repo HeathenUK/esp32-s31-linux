@@ -1,0 +1,76 @@
+sh /tmp/r.sh 2>&1 & __rp=$!; ( trap 'kill "$__rs_sleep" 2>/dev/null; wait "$
+__rs_sleep" 2>/dev/null; exit' TERM INT; sleep 27 & __rs_sleep=$!; wait "$__rs_s
+leep"; kill -0 $__rp 2>/dev/null && { echo RS_TIME"K"ILL; kill -9 $__rp 2>/dev/n
+ull; } ) & __rw=$!; wait $__rp 2>/dev/null; __rc=$?; kill $__rw 2>/dev/null; wai
+t $__rw 2>/dev/null; printf "RS_EXIT:%s\n" "$__rc"; echo RS_DONE
+Linux esp32-s31 7.1.10 #401 SMP Sun Sep 27 09:58:01 UTC 2026 riscv32 GNU/Linux
+a4d25e13dfe369fb7fe1c6244e4e8a15  /root/afp2/mul-review/clktest
+ac8e317f1fe86d88913fc8aa9c67568c  /root/afp3/libs31fp.so
+CLOCK_CASE /root/afp2/oncpu 1 /root/afp2/mul-review/clktest rdtime
+RESULT rdtime 275916800659 on cpu 0
+CLOCK_EXIT=0
+CLOCK_CASE /root/afp2/oncpu 1 /root/afp2/mul-review/clktest hz 500
+320003956
+CLOCK_EXIT=0
+CLOCK_CASE env LD_PRELOAD=/root/afp3/libs31fp.so S31FP=0 S31STR=0 S31CLK=0 /root/afp2/oncpu 1 /root/afp2/mul-review/clktest cost 10000
+COST clock_gettime(MONOTONIC) 2706.4 ns/call
+COST clock_gettime(MONOTONIC_RAW) 2713.8 ns/call
+COST clock_gettime(REALTIME) 2678.3 ns/call
+COST gettimeofday 2618.4 ns/call
+COST syscall clock_gettime64 2630.6 ns/call
+COST rdtime 45.0 ns/call
+CLOCK_EXIT=0
+CLOCK_CASE env LD_PRELOAD=/root/afp3/libs31fp.so S31FP=0 S31STR=0 S31CLK=1 /root/afp2/oncpu 1 /root/afp2/mul-review/clktest cost 10000
+COST clock_gettime(MONOTONIC) 708.5 ns/call
+COST clock_gettime(MONOTONIC_RAW) 479.9 ns/call
+COST clock_gettime(REALTIME) 2951.7 ns/call
+COST gettimeofday 2735.1 ns/call
+COST syscall clock_gettime64 2722.4 ns/call
+COST rdtime 45.4 ns/call
+CLOCK_EXIT=0
+CLOCK_CASE /root/afp2/oncpu 2 /root/afp2/mul-review/clktest rdtime
+RESULT rdtime 276315381373 on cpu 1
+CLOCK_EXIT=0
+CLOCK_CASE /root/afp2/oncpu 2 /root/afp2/mul-review/clktest hz 500
+320002252
+CLOCK_EXIT=0
+CLOCK_CASE env LD_PRELOAD=/root/afp3/libs31fp.so S31FP=0 S31STR=0 S31CLK=0 /root/afp2/oncpu 2 /root/afp2/mul-review/clktest cost 10000
+COST clock_gettime(MONOTONIC) 2783.8 ns/call
+COST clock_gettime(MONOTONIC_RAW) 2790.1 ns/call
+COST clock_gettime(REALTIME) 4293.3 ns/call
+COST gettimeofday 3172.1 ns/call
+COST syscall clock_gettime64 2819.5 ns/call
+COST rdtime 64.3 ns/call
+CLOCK_EXIT=0
+CLOCK_CASE env LD_PRELOAD=/root/afp3/libs31fp.so S31FP=0 S31STR=0 S31CLK=1 /root/afp2/oncpu 2 /root/afp2/mul-review/clktest cost 10000
+COST clock_gettime(MONOTONIC) 991.3 ns/call
+COST clock_gettime(MONOTONIC_RAW) 800.6 ns/call
+COST clock_gettime(REALTIME) 3250.5 ns/call
+COST gettimeofday 2913.1 ns/call
+COST syscall clock_gettime64 3821.1 ns/call
+COST rdtime 86.7 ns/call
+CLOCK_EXIT=0
+CLOCK_CASE env LD_PRELOAD=/root/afp3/libs31fp.so S31FP=0 S31STR=0 S31CLK=0 /root/afp2/mul-review/clktest mono 10 3
+RESULT mono: 1729404 calls, violations mono 0 raw 0 realtime 0 (threads 3)
+CLOCK_EXIT=0
+CLOCK_CASE env LD_PRELOAD=/root/afp3/libs31fp.so S31FP=0 S31STR=0 S31CLK=0 /root/afp2/mul-review/clktest drift 5
+RESULT drift clock 1: 246 samples, max|err| 6034 ns, mean 3625 ns, first 0 last 4745
+RESULT drift clock 4: 246 samples, max|err| 4952 ns, mean 2117 ns, first 3583 last 2023
+RESULT drift clock 0: 246 samples, max|err| 3250 ns, mean 1563 ns, first 3250 last 1558
+RESULT gettimeofday max|err| 11 us, time() out of range 0, wide brackets skipped 19
+CLOCK_EXIT=0
+CLOCK_CASE env LD_PRELOAD=/root/afp3/libs31fp.so S31FP=0 S31STR=0 S31CLK=1 /root/afp2/mul-review/clktest mono 10 3
+RESULT mono: 2378880 calls, violations mono 0 raw 0 realtime 0 (threads 3)
+CLOCK_EXIT=0
+CLOCK_CASE env LD_PRELOAD=/root/afp3/libs31fp.so S31FP=0 S31STR=0 S31CLK=1 /root/afp2/mul-review/clktest drift 5
+RESULT drift clock 1: 243 samples, max|err| 6504 ns, mean 2471 ns, first 0 last 1565
+RESULT drift clock 4: 243 samples, max|err| 3068 ns, mean 1550 ns, first 0 last 2088
+RESULT drift clock 0: 243 samples, max|err| 4621 ns, mean 2437 ns, first 4621 last 2321
+RESULT gettimeofday max|err| 325 us, time() out of range 0, wide brackets skipped 81
+CLOCK_EXIT=0
+CLOCK_REVIEW_DONE
+RS_EXIT:0
+RS_DONE
+[2]+  Done(143)                  (trap "kill \"\$__rs_sleep\" 2>/dev/null; wait \"\$__rs_sleep\" 2>/dev/null; exit" TERM INT; sleep 27; ; wait "${__rs_sleep}"; kill -0 ${__rp} 2>/dev/null && echo RS_TIME"K"ILL; kill -9 ${__rp} 2>/dev/null)
+[1]+  Done                       sh /tmp/r.sh 2>&1
+~ # 

@@ -1,0 +1,301 @@
+sh /tmp/r.sh 2>&1 & __rp=$!; ( trap 'kill "$__rs_sleep" 2>/dev/null; wait "$
+__rs_sleep" 2>/dev/null; exit' TERM INT; sleep 27 & __rs_sleep=$!; wait "$__rs_s
+leep"; kill -0 $__rp 2>/dev/null && { echo RS_TIME"K"ILL; kill -9 $__rp 2>/dev/n
+ull; } ) & __rw=$!; wait $__rp 2>/dev/null; kill $__rw 2>/dev/null; wait $__rw 2
+>/dev/null; echo RS_DONE
+Linux esp32-s31 7.1.10 #401 SMP Sun Sep 27 09:58:01 UTC 2026 riscv32 GNU/Linux
+ac8e317f1fe86d88913fc8aa9c67568c  /root/afp3/libs31fp.so
+46472bef1d5af79fc650b22f7f3f9cfc  /root/afp3/strtest
+CMP round=1 mode=0 size=8 where=-1
+BENCH memcmp size 8: 1548.3 ns/call
+BENCH strcmp size 8: 975.5 ns/call
+CMP_EXIT=0
+CMP round=1 mode=scalar size=8 where=-1
+BENCH memcmp size 8: 603.5 ns/call
+BENCH strcmp size 8: 253.3 ns/call
+CMP_EXIT=0
+CMP round=1 mode=0 size=8 where=0
+BENCH memcmp size 8: 134.8 ns/call
+BENCH strcmp size 8: 162.1 ns/call
+CMP_EXIT=0
+CMP round=1 mode=scalar size=8 where=0
+BENCH memcmp size 8: 280.3 ns/call
+BENCH strcmp size 8: 150.2 ns/call
+CMP_EXIT=0
+CMP round=1 mode=0 size=8 where=7
+BENCH memcmp size 8: 430.8 ns/call
+BENCH strcmp size 8: 378.0 ns/call
+CMP_EXIT=0
+CMP round=1 mode=scalar size=8 where=7
+BENCH memcmp size 8: 358.9 ns/call
+BENCH strcmp size 8: 291.5 ns/call
+CMP_EXIT=0
+CMP round=1 mode=0 size=64 where=-1
+BENCH memcmp size 64: 662.9 ns/call
+BENCH strcmp size 64: 2425.3 ns/call
+CMP_EXIT=0
+CMP round=1 mode=scalar size=64 where=-1
+BENCH memcmp size 64: 407.3 ns/call
+BENCH strcmp size 64: 709.3 ns/call
+CMP_EXIT=0
+CMP round=1 mode=0 size=64 where=0
+BENCH memcmp size 64: 303.2 ns/call
+BENCH strcmp size 64: 151.4 ns/call
+CMP_EXIT=0
+CMP round=1 mode=scalar size=64 where=0
+BENCH memcmp size 64: 184.0 ns/call
+BENCH strcmp size 64: 134.2 ns/call
+CMP_EXIT=0
+CMP round=1 mode=0 size=64 where=63
+BENCH memcmp size 64: 1073.2 ns/call
+BENCH strcmp size 64: 2084.1 ns/call
+CMP_EXIT=0
+CMP round=1 mode=scalar size=64 where=63
+BENCH memcmp size 64: 573.1 ns/call
+BENCH strcmp size 64: 801.7 ns/call
+CMP_EXIT=0
+CMP round=1 mode=0 size=1024 where=-1
+BENCH memcmp size 1024: 7222.2 ns/call
+BENCH strcmp size 1024: 10568.3 ns/call
+CMP_EXIT=0
+CMP round=1 mode=scalar size=1024 where=-1
+BENCH memcmp size 1024: 4567.9 ns/call
+BENCH strcmp size 1024: 7781.4 ns/call
+CMP_EXIT=0
+CMP round=1 mode=0 size=1024 where=0
+BENCH memcmp size 1024: 245.0 ns/call
+BENCH strcmp size 1024: 154.2 ns/call
+CMP_EXIT=0
+CMP round=1 mode=scalar size=1024 where=0
+BENCH memcmp size 1024: 178.5 ns/call
+BENCH strcmp size 1024: 133.4 ns/call
+CMP_EXIT=0
+CMP round=1 mode=0 size=1024 where=1023
+BENCH memcmp size 1024: 7940.9 ns/call
+BENCH strcmp size 1024: 10910.6 ns/call
+CMP_EXIT=0
+CMP round=1 mode=scalar size=1024 where=1023
+BENCH memcmp size 1024: 4629.8 ns/call
+BENCH strcmp size 1024: 7853.3 ns/call
+CMP_EXIT=0
+CMP round=1 mode=0 size=4096 where=-1
+BENCH memcmp size 4096: 28101.3 ns/call
+BENCH strcmp size 4096: 37699.3 ns/call
+CMP_EXIT=0
+CMP round=1 mode=scalar size=4096 where=-1
+BENCH memcmp size 4096: 20151.2 ns/call
+BENCH strcmp size 4096: 33206.4 ns/call
+CMP_EXIT=0
+CMP round=1 mode=0 size=4096 where=0
+BENCH memcmp size 4096: 469.1 ns/call
+BENCH strcmp size 4096: 150.3 ns/call
+CMP_EXIT=0
+CMP round=1 mode=scalar size=4096 where=0
+BENCH memcmp size 4096: 178.3 ns/call
+BENCH strcmp size 4096: 211.0 ns/call
+CMP_EXIT=0
+CMP round=1 mode=0 size=4096 where=4095
+BENCH memcmp size 4096: 29921.5 ns/call
+BENCH strcmp size 4096: 37912.3 ns/call
+CMP_EXIT=0
+CMP round=1 mode=scalar size=4096 where=4095
+BENCH memcmp size 4096: 17508.6 ns/call
+BENCH strcmp size 4096: 30633.7 ns/call
+CMP_EXIT=0
+CMP round=2 mode=scalar size=8 where=-1
+BENCH memcmp size 8: 366.8 ns/call
+BENCH strcmp size 8: 251.1 ns/call
+CMP_EXIT=0
+CMP round=2 mode=0 size=8 where=-1
+BENCH memcmp size 8: 496.2 ns/call
+BENCH strcmp size 8: 504.6 ns/call
+CMP_EXIT=0
+CMP round=2 mode=scalar size=8 where=0
+BENCH memcmp size 8: 134.0 ns/call
+BENCH strcmp size 8: 133.5 ns/call
+CMP_EXIT=0
+CMP round=2 mode=0 size=8 where=0
+BENCH memcmp size 8: 122.8 ns/call
+BENCH strcmp size 8: 241.4 ns/call
+CMP_EXIT=0
+CMP round=2 mode=scalar size=8 where=7
+BENCH memcmp size 8: 530.1 ns/call
+BENCH strcmp size 8: 243.5 ns/call
+CMP_EXIT=0
+CMP round=2 mode=0 size=8 where=7
+BENCH memcmp size 8: 427.4 ns/call
+BENCH strcmp size 8: 418.0 ns/call
+CMP_EXIT=0
+CMP round=2 mode=scalar size=64 where=-1
+BENCH memcmp size 64: 493.6 ns/call
+BENCH strcmp size 64: 758.2 ns/call
+CMP_EXIT=0
+CMP round=2 mode=0 size=64 where=-1
+BENCH memcmp size 64: 669.7 ns/call
+BENCH strcmp size 64: 2263.0 ns/call
+CMP_EXIT=0
+CMP round=2 mode=scalar size=64 where=0
+BENCH memcmp size 64: 248.0 ns/call
+BENCH strcmp size 64: 133.7 ns/call
+CMP_EXIT=0
+CMP round=2 mode=0 size=64 where=0
+BENCH memcmp size 64: 242.1 ns/call
+BENCH strcmp size 64: 152.7 ns/call
+CMP_EXIT=0
+CMP round=2 mode=scalar size=64 where=63
+BENCH memcmp size 64: 719.3 ns/call
+BENCH strcmp size 64: 725.0 ns/call
+CMP_EXIT=0
+CMP round=2 mode=0 size=64 where=63
+BENCH memcmp size 64: 1041.8 ns/call
+BENCH strcmp size 64: 2076.6 ns/call
+CMP_EXIT=0
+CMP round=2 mode=scalar size=1024 where=-1
+BENCH memcmp size 1024: 4593.5 ns/call
+BENCH strcmp size 1024: 7845.4 ns/call
+CMP_EXIT=0
+CMP round=2 mode=0 size=1024 where=-1
+BENCH memcmp size 1024: 7239.3 ns/call
+BENCH strcmp size 1024: 10759.8 ns/call
+CMP_EXIT=0
+CMP round=2 mode=scalar size=1024 where=0
+BENCH memcmp size 1024: 238.6 ns/call
+BENCH strcmp size 1024: 133.6 ns/call
+CMP_EXIT=0
+CMP round=2 mode=0 size=1024 where=0
+BENCH memcmp size 1024: 242.7 ns/call
+BENCH strcmp size 1024: 237.1 ns/call
+CMP_EXIT=0
+CMP round=2 mode=scalar size=1024 where=1023
+BENCH memcmp size 1024: 4605.5 ns/call
+BENCH strcmp size 1024: 7903.5 ns/call
+CMP_EXIT=0
+CMP round=2 mode=0 size=1024 where=1023
+BENCH memcmp size 1024: 7943.3 ns/call
+BENCH strcmp size 1024: 10962.7 ns/call
+CMP_EXIT=0
+CMP round=2 mode=scalar size=4096 where=-1
+BENCH memcmp size 4096: 16997.2 ns/call
+BENCH strcmp size 4096: 30463.0 ns/call
+CMP_EXIT=0
+CMP round=2 mode=0 size=4096 where=-1
+BENCH memcmp size 4096: 27999.6 ns/call
+BENCH strcmp size 4096: 37568.1 ns/call
+CMP_EXIT=0
+CMP round=2 mode=scalar size=4096 where=0
+BENCH memcmp size 4096: 178.1 ns/call
+BENCH strcmp size 4096: 133.6 ns/call
+CMP_EXIT=0
+CMP round=2 mode=0 size=4096 where=0
+BENCH memcmp size 4096: 281.0 ns/call
+BENCH strcmp size 4096: 154.5 ns/call
+CMP_EXIT=0
+CMP round=2 mode=scalar size=4096 where=4095
+BENCH memcmp size 4096: 17718.8 ns/call
+BENCH strcmp size 4096: 32793.9 ns/call
+CMP_EXIT=0
+CMP round=2 mode=0 size=4096 where=4095
+BENCH memcmp size 4096: 31355.1 ns/call
+BENCH strcmp size 4096: 40509.3 ns/call
+CMP_EXIT=0
+CMP round=3 mode=0 size=8 where=-1
+BENCH memcmp size 8: 370.3 ns/call
+BENCH strcmp size 8: 465.6 ns/call
+CMP_EXIT=0
+CMP round=3 mode=scalar size=8 where=-1
+BENCH memcmp size 8: 432.2 ns/call
+BENCH strcmp size 8: 237.0 ns/call
+CMP_EXIT=0
+CMP round=3 mode=0 size=8 where=0
+BENCH memcmp size 8: 146.3 ns/call
+BENCH strcmp size 8: 133.7 ns/call
+CMP_EXIT=0
+CMP round=3 mode=scalar size=8 where=0
+BENCH memcmp size 8: 122.9 ns/call
+BENCH strcmp size 8: 136.3 ns/call
+CMP_EXIT=0
+CMP round=3 mode=0 size=8 where=7
+BENCH memcmp size 8: 349.8 ns/call
+BENCH strcmp size 8: 434.6 ns/call
+CMP_EXIT=0
+CMP round=3 mode=scalar size=8 where=7
+BENCH memcmp size 8: 358.7 ns/call
+BENCH strcmp size 8: 307.7 ns/call
+CMP_EXIT=0
+CMP round=3 mode=0 size=64 where=-1
+BENCH memcmp size 64: 589.1 ns/call
+BENCH strcmp size 64: 2542.2 ns/call
+CMP_EXIT=0
+CMP round=3 mode=scalar size=64 where=-1
+BENCH memcmp size 64: 428.9 ns/call
+BENCH strcmp size 64: 649.8 ns/call
+CMP_EXIT=0
+CMP round=3 mode=0 size=64 where=0
+BENCH memcmp size 64: 242.1 ns/call
+BENCH strcmp size 64: 160.3 ns/call
+CMP_EXIT=0
+CMP round=3 mode=scalar size=64 where=0
+BENCH memcmp size 64: 178.9 ns/call
+BENCH strcmp size 64: 222.0 ns/call
+CMP_EXIT=0
+CMP round=3 mode=0 size=64 where=63
+BENCH memcmp size 64: 1022.5 ns/call
+BENCH strcmp size 64: 2184.5 ns/call
+CMP_EXIT=0
+CMP round=3 mode=scalar size=64 where=63
+BENCH memcmp size 64: 510.6 ns/call
+BENCH strcmp size 64: 733.3 ns/call
+CMP_EXIT=0
+CMP round=3 mode=0 size=1024 where=-1
+BENCH memcmp size 1024: 7353.3 ns/call
+BENCH strcmp size 1024: 10700.8 ns/call
+CMP_EXIT=0
+CMP round=3 mode=scalar size=1024 where=-1
+BENCH memcmp size 1024: 4630.3 ns/call
+BENCH strcmp size 1024: 7697.1 ns/call
+CMP_EXIT=0
+CMP round=3 mode=0 size=1024 where=0
+BENCH memcmp size 1024: 304.7 ns/call
+BENCH strcmp size 1024: 154.2 ns/call
+CMP_EXIT=0
+CMP round=3 mode=scalar size=1024 where=0
+BENCH memcmp size 1024: 178.2 ns/call
+BENCH strcmp size 1024: 133.9 ns/call
+CMP_EXIT=0
+CMP round=3 mode=0 size=1024 where=1023
+BENCH memcmp size 1024: 7959.7 ns/call
+BENCH strcmp size 1024: 10955.4 ns/call
+CMP_EXIT=0
+CMP round=3 mode=scalar size=1024 where=1023
+BENCH memcmp size 1024: 4621.9 ns/call
+BENCH strcmp size 1024: 7934.9 ns/call
+CMP_EXIT=0
+CMP round=3 mode=0 size=4096 where=-1
+BENCH memcmp size 4096: 28577.4 ns/call
+BENCH strcmp size 4096: 38074.7 ns/call
+CMP_EXIT=0
+CMP round=3 mode=scalar size=4096 where=-1
+BENCH memcmp size 4096: 17431.3 ns/call
+BENCH strcmp size 4096: 30638.2 ns/call
+CMP_EXIT=0
+CMP round=3 mode=0 size=4096 where=0
+BENCH memcmp size 4096: 299.1 ns/call
+BENCH strcmp size 4096: 154.6 ns/call
+CMP_EXIT=0
+CMP round=3 mode=scalar size=4096 where=0
+BENCH memcmp size 4096: 178.6 ns/call
+BENCH strcmp size 4096: 146.1 ns/call
+CMP_EXIT=0
+CMP round=3 mode=0 size=4096 where=4095
+BENCH memcmp size 4096: 28456.0 ns/call
+BENCH strcmp size 4096: 39579.1 ns/call
+CMP_EXIT=0
+CMP round=3 mode=scalar size=4096 where=4095
+BENCH memcmp size 4096: 17509.4 ns/call
+BENCH strcmp size 4096: 30348.2 ns/call
+CMP_EXIT=0
+V3_CMP_DONE failures=0
+RS_DONE
+[2]+  Done(143)                  (trap "kill \"\$__rs_sleep\" 2>/dev/null; wait \"\$__rs_sleep\" 2>/dev/null; exit" TERM INT; sleep 27; ; wait "${__rs_sleep}"; kill -0 ${__rp} 2>/dev/null && echo RS_TIME"K"ILL; kill -9 ${__rp} 2>/dev/null)
+[1]+  Done                       sh /tmp/r.sh 2>&1
+~ # 

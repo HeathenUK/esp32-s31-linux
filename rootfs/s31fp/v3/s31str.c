@@ -30,7 +30,9 @@
  * mirroring libc's own entry tests above, whether libc's routine could reach
  * PIE for these arguments:
  *   - no  -> libc's own routine (dlsym RTLD_NEXT), unchanged;
- *   - yes -> read this thread's CPU from its rseq area (one load; the kernel
+ *   - eligible comparisons -> scalar on both CPUs: the board matrix found
+ *            it faster, including early mismatches; no rseq lookup needed.
+ *   - other eligible calls -> read this thread's CPU from its rseq area (one load; the kernel
  *            keeps it current): on CPU0 (hart 1, PIE) libc's own routine, so
  *            the 128-bit paths still serve; anywhere else the scalar
  *            routine below.
@@ -211,17 +213,7 @@ static LC void *sc_memcpy(void *restrict dst, const void *restrict src, size_t n
 	return dst;
 }
 
-static LC void *sc_memmem(const void *h0, size_t k, const void *n0, size_t l)
-{
-	const unsigned char *h = h0, *n = n0, *p;
-	if (!l) return (void *)h;
-	while (k >= l && (p = sc_memchr(h, n[0], k - l + 1))) {
-		if (!sc_memcmp(p + 1, n + 1, l - 1)) return (void *)p;
-		k -= (size_t)(p + 1 - h);
-		h = p + 1;
-	}
-	return 0;
-}
+#include "sc_memmem.h"
 
 /* first occurrence (= musl's strstr result); only used on the lent CPU
  * for needles of 64+ bytes */
@@ -273,6 +265,11 @@ static int g_on;		/* S31STR=1 */
 static int g_scalar;		/* S31STR=scalar: never libc for eligible calls */
 static int g_dbg;
 static unsigned g_nscalar, g_npie, g_nreg, g_nregfail;
+/* Diagnostics are opt-in: no shared counter writes on the normal hot path. */
+static inline void count(unsigned *p)
+{
+	if (S31_UNLIKELY(g_dbg)) __atomic_fetch_add(p, 1, __ATOMIC_RELAXED);
+}
 
 #define DECL(ret, name, args) static ret (*l_##name) args;
 DECL(void *, memcpy, (void *, const void *, size_t))
@@ -292,22 +289,27 @@ DECL(int, pthread_create, (void *, const void *, void *(*)(void *), void *))
 static void rs_register(struct tstate *t)
 {
 	t->st = 4;
+	/* Do not rely on the kernel to clear stale allocator contents. */
+	t->rs.rseq_cs = 0;
+	t->rs.flags = t->rs.node_id = t->rs.mm_cid = t->rs.pad = 0;
 	t->rs.cpu_id_start = 0;
 	t->rs.cpu_id = (uint32_t)-1;	/* RSEQ_CPU_ID_UNINITIALIZED */
 	if (s31_sc(S31_NR_rseq, (long)&t->rs, sizeof(t->rs), 0, RSEQ_SIG, 0) == 0) {
-		g_nreg++;
+		count(&g_nreg);
 		t->st = 2;
 	} else {
-		g_nregfail++;
+		count(&g_nregfail);
 		t->st = 3;
 	}
 }
 
-static void rs_unregister(struct tstate *t)
+static int rs_unregister(struct tstate *t)
 {
+	long rc = 0;
 	if (t->st == 2)
-		s31_sc(S31_NR_rseq, (long)&t->rs, sizeof(t->rs), 1 /* UNREGISTER */, RSEQ_SIG, 0);
+		rc = s31_sc(S31_NR_rseq, (long)&t->rs, sizeof(t->rs), 1 /* UNREGISTER */, RSEQ_SIG, 0);
 	t->st = 3;
+	return rc == 0;
 }
 
 /* A PIE-eligible call: may libc's own routine run here? */
@@ -319,7 +321,7 @@ static inline int use_libc(const void *fn)
 	if (S31_UNLIKELY(!t)) goto scalar;
 	if (S31_LIKELY(t->st == 2)) {
 		if (*(volatile uint32_t *)&t->rs.cpu_id == PIE_CPU) {
-			g_npie++;
+			count(&g_npie);
 			return 1;
 		}
 		goto scalar;
@@ -327,12 +329,12 @@ static inline int use_libc(const void *fn)
 	if (t->st == 1) {
 		rs_register(t);
 		if (t->st == 2 && *(volatile uint32_t *)&t->rs.cpu_id == PIE_CPU) {
-			g_npie++;
+			count(&g_npie);
 			return 1;
 		}
 	}
 scalar:
-	g_nscalar++;
+	count(&g_nscalar);
 	return 0;
 }
 
@@ -382,16 +384,20 @@ S31_EXP void *memrchr(const void *p, int c, size_t n)
 S31_EXP int memcmp(const void *a, const void *b, size_t n)
 {
 	int elig = n >= 64 && !(((uintptr_t)a ^ (uintptr_t)b) & 15);
-	if (l_memcmp && (!elig || !g_on || use_libc(l_memcmp)))
+	/* Board comparison matrix: scalar wins equal, first- and last-byte
+	 * mismatch cases on CPU0 as well. Avoid both PIE and the rseq lookup. */
+	if (l_memcmp && (!elig || !g_on))
 		return l_memcmp(a, b, n);
+	if (g_on) count(&g_nscalar);
 	return sc_memcmp(a, b, n);
 }
 
 S31_EXP int bcmp(const void *a, const void *b, size_t n)
 {
 	int elig = n >= 64 && !(((uintptr_t)a ^ (uintptr_t)b) & 15);
-	if (l_bcmp && (!elig || !g_on || use_libc(l_bcmp)))
+	if (l_bcmp && (!elig || !g_on))
 		return l_bcmp(a, b, n);
+	if (g_on) count(&g_nscalar);
 	return sc_memcmp(a, b, n);
 }
 
@@ -400,8 +406,9 @@ S31_EXP int bcmp(const void *a, const void *b, size_t n)
 S31_EXP int strcmp(const char *a, const char *b)
 {
 	int elig = !(((uintptr_t)a ^ (uintptr_t)b) & 15);
-	if (l_strcmp && (!elig || !g_on || use_libc(l_strcmp)))
+	if (l_strcmp && (!elig || !g_on))
 		return l_strcmp(a, b);
+	if (g_on) count(&g_nscalar);
 	return sc_strcmp(a, b);
 }
 
@@ -409,8 +416,9 @@ S31_EXP int strcmp(const char *a, const char *b)
 S31_EXP int strcoll(const char *a, const char *b)
 {
 	int elig = !(((uintptr_t)a ^ (uintptr_t)b) & 15);
-	if (l_strcoll && (!elig || !g_on || use_libc(l_strcoll)))
+	if (l_strcoll && (!elig || !g_on))
 		return l_strcoll(a, b);
+	if (g_on) count(&g_nscalar);
 	return sc_strcmp(a, b);
 }
 
@@ -472,9 +480,11 @@ struct s31_start { void *(*fn)(void *); void *arg; };
 static void thr_done(void *raw)
 {
 	struct tstate *t = (struct tstate *)(((uintptr_t)raw + 31) & ~(uintptr_t)31);
-	rs_unregister(t);
+	int released = rs_unregister(t);
 	pthread_setspecific(g_key, 0);
-	free(raw);
+	/* If unregister fails, retain the kernel-visible storage until process
+	 * exit rather than hand it back to the allocator while still registered. */
+	if (released) free(raw);
 }
 
 static void *thr_start(void *p)
@@ -506,7 +516,7 @@ S31_EXP int pthread_create(void *th, const void *attr, void *(*fn)(void *), void
 	if (S31_UNLIKELY(!l_pthread_create))
 		l_pthread_create = (int (*)(void *, const void *, void *(*)(void *), void *))
 			dlsym(S31_RTLD_NEXT, "pthread_create");
-	if (!g_on || !g_key_ok || !(st = malloc(sizeof(*st))))
+	if (!g_on || g_scalar || !g_key_ok || !(st = malloc(sizeof(*st))))
 		return l_pthread_create(th, attr, fn, arg);
 	st->fn = fn;
 	st->arg = arg;
@@ -544,13 +554,13 @@ __attribute__((destructor)) static void s31str_fini(void)
 	while (*t) *p++ = *t++;
 	p = s31_utoa(p, (uint32_t)g_on + g_scalar);
 	for (t = " eligible->libc(PIE cpu)="; *t; ) *p++ = *t++;
-	p = s31_utoa(p, g_npie);
+	p = s31_utoa(p, __atomic_load_n(&g_npie, __ATOMIC_RELAXED));
 	for (t = " eligible->scalar="; *t; ) *p++ = *t++;
-	p = s31_utoa(p, g_nscalar);
+	p = s31_utoa(p, __atomic_load_n(&g_nscalar, __ATOMIC_RELAXED));
 	for (t = " rseq_reg="; *t; ) *p++ = *t++;
-	p = s31_utoa(p, g_nreg);
+	p = s31_utoa(p, __atomic_load_n(&g_nreg, __ATOMIC_RELAXED));
 	for (t = " rseq_fail="; *t; ) *p++ = *t++;
-	p = s31_utoa(p, g_nregfail);
+	p = s31_utoa(p, __atomic_load_n(&g_nregfail, __ATOMIC_RELAXED));
 	*p++ = '\n';
 	*p = 0;
 	s31_puts(b);

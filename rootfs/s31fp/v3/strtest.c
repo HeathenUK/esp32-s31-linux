@@ -31,6 +31,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <sys/syscall.h>
+#include <sys/mman.h>
 
 #define LC __attribute__((noinline, optimize("no-tree-loop-distribute-patterns")))
 
@@ -50,7 +51,8 @@ static LC char *r_strstr(const char *h, const char *n)
 { size_t i; if (!*n) return (char *)h; for (; *h; h++) { for (i = 0; n[i] && h[i] == n[i]; i++); if (!n[i]) return (char *)h; } return 0; }
 static LC void *r_memmem(const void *h, size_t k, const void *n, size_t l)
 { const unsigned char *p = h; size_t i; if (!l) return (void *)h; if (k < l) return 0;
-  for (i = 0; i + l <= k; i++) if (!r_memcmp(p + i, n, l)) return (void *)(p + i); return 0; }
+  for (i = 0; i + l <= k; i++) if (!r_memcmp(p + i, n, l)) return (void *)(p + i);
+  return 0; }
 
 /* the functions under test, called through pointers so nothing is inlined */
 struct fns {
@@ -86,7 +88,7 @@ static unsigned char rbyte(uint32_t *s)
 }
 
 #define BUF 4608
-struct ctx { uint32_t seed; unsigned long n, bad, calls; int id; };
+struct ctx { uint32_t seed; unsigned long n, bad, calls; int id, done, cancel_ready, cancel_sent; };
 
 /* No %s anywhere: printf's %s is libc's internal strnlen -> memchr, whose PIE
  * path QEMU cannot run (and which a lent-CPU run would trap on). */
@@ -184,28 +186,78 @@ static void bind(void)
 	B(strcoll); B(strnlen); B(strrchr); B(strstr); B(memmem);
 }
 
+/* End-of-mapping inputs: a vector/word overread must fault rather than hide
+ * in spare heap capacity. Run through the same exported/reference binding. */
+static int page_edges(void)
+{
+	char *a = mmap(0, 8192, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+	char *b = mmap(0, 8192, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+	if (a == MAP_FAILED || b == MAP_FAILED) return 1;
+	if (mprotect(a+4096, 4096, PROT_NONE) || mprotect(b+4096, 4096, PROT_NONE)) return 1;
+	for (size_t n = 0; n < 160; n++) {
+		char *x = a+4095-n, *y = b+4095-n;
+		for (size_t i = 0; i < n; i++) x[i] = y[i] = 'a';
+		x[n] = y[n] = 0;
+		if (F.memcpy(y, x, n+1) != y || F.memcmp(x,y,n+1) || F.strcmp(x,y) ||
+		    F.memchr(x,0,n+1) != x+n || F.memrchr(x,0,n+1) != x+n ||
+		    F.strnlen(x,n+1) != n || F.strrchr(x,0) != x+n ||
+		    F.strstr(x,y) != x || F.memmem(x,n,y,n) != x) return 1;
+	}
+	munmap(a,8192); munmap(b,8192);
+	return 0;
+}
+
 static unsigned long g_iters;
+static pthread_mutex_t done_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t done_cv = PTHREAD_COND_INITIALIZER;
+struct worker_storage { struct ctx *ctx; void *a, *b, *d, *e; };
+static void worker_done(void *arg)
+{
+	struct worker_storage *w = arg;
+	free(w->a); free(w->b); free(w->d); free(w->e);
+	pthread_mutex_lock(&done_mu);
+	w->ctx->done = 1;
+	pthread_cond_broadcast(&done_cv);
+	pthread_mutex_unlock(&done_mu);
+}
 static void *worker(void *p)
 {
 	struct ctx *c = p;
+	int cancel_target = c->id >= 1000 && c->id % 3 == 2;
+	/* Detached storage must survive the ENTIRE pthread_cancel call. musl
+	 * publishes the cancel flag before pthread_kill takes the target's lock;
+	 * an enabled target can otherwise exit/unmap underneath that lock. */
+	if (cancel_target) pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, 0);
 	unsigned char *A = malloc(BUF), *B = malloc(BUF), *D = malloc(BUF), *E = malloc(BUF);
+	struct worker_storage w = { c, A, B, D, E };
+	pthread_cleanup_push(worker_done, &w);
+	if (!A || !B || !D || !E) { c->bad++; pthread_exit(0); }
 	for (unsigned long i = 0; i < g_iters; i++) {
 		one(c, A, B, D, E);
 		c->n++;
 		if (c->id >= 1000 && c->id % 3 == 1 && i == g_iters / 2) pthread_exit(0);	/* leave early */
-		if (c->id >= 1000 && c->id % 3 == 2) pthread_testcancel();
 	}
-	free(A); free(B); free(D); free(E);
+	if (cancel_target) {
+		pthread_mutex_lock(&done_mu);
+		c->cancel_ready = 1;
+		pthread_cond_broadcast(&done_cv);
+		while (!c->cancel_sent) pthread_cond_wait(&done_cv, &done_mu);
+		pthread_mutex_unlock(&done_mu);
+		pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, 0);
+		pthread_testcancel();
+		c->bad++; /* A pending cancellation must run the cleanup handler. */
+	}
+	pthread_cleanup_pop(1);
 	return 0;
 }
 
-static volatile int g_stop;
+static int g_stop;
 static pthread_t g_tids[64];
 static int g_ntids;
 static void *hammer(void *u)
 {
 	(void)u;
-	for (unsigned k = 0; !g_stop; k++) {
+	for (unsigned k = 0; !__atomic_load_n(&g_stop, __ATOMIC_RELAXED); k++) {
 		cpu_set_t m;
 		CPU_ZERO(&m);
 		CPU_SET(k & 1, &m);
@@ -225,22 +277,28 @@ static double now(void)
 int main(int argc, char **argv)
 {
 	const char *mode = argc > 1 ? argv[1] : "check";
-	if (!strcmp(mode, "bench")) {
+	if (!strcmp(mode, "bench") || !strcmp(mode, "cmpbench")) {
 		size_t sz = argc > 2 ? strtoul(argv[2], 0, 0) : 256;
 		unsigned long n = argc > 3 ? strtoul(argv[3], 0, 0) : 100000, i;
 		unsigned char *a = aligned_alloc(16, sz + 64), *b = aligned_alloc(16, sz + 64);
-		volatile long sink = 0;
+		volatile uintptr_t sink = 0;
 		bind();
 		for (i = 0; i < sz; i++) a[i] = b[i] = 'x';
 		a[sz] = b[sz] = 0;
-#define T(name, expr) { double t0 = now(); for (i = 0; i < n; i++) sink += (long)(expr); \
-			char ob[80]; out("BENCH " name); \
-			snprintf(ob, sizeof ob, " size %zu: %.1f ns/call\n", sz, (now() - t0) * 1e9 / n); out(ob); }
+		if (!strcmp(mode, "cmpbench")) {
+			long where = argc > 4 ? strtol(argv[4], 0, 0) : -1;
+			if (where >= 0 && (size_t)where < sz) b[where] = 'y';
+		}
+#define T(name, expr) { double t0 = now(); for (i = 0; i < n; i++) sink += (uintptr_t)(expr); \
+			double elapsed = now() - t0; char ob[80]; out("BENCH " name); \
+			snprintf(ob, sizeof ob, " size %zu: %.1f ns/call\n", sz, elapsed * 1e9 / n); out(ob); }
+		if (strcmp(mode, "cmpbench")) {
 		T("memcpy", FP->memcpy(a, b, sz));
 		T("memchr", FP->memchr(a, 'y', sz));
+		}
 		T("memcmp", FP->memcmp(a, b, sz));
 		T("strcmp", FP->strcmp((char *)a, (char *)b));
-		T("strnlen", FP->strnlen((char *)a, sz + 8));
+		if (strcmp(mode, "cmpbench")) { T("strnlen", FP->strnlen((char *)a, sz + 8)); }
 		(void)sink;
 		return 0;
 	}
@@ -249,6 +307,19 @@ int main(int argc, char **argv)
 	int nt = argc > 3 ? atoi(argv[3]) : 1, ham = argc > 4 ? atoi(argv[4]) : 0;
 	bind();
 	if (!F.memcpy || !F.memmem) { out("RESULT bind failed\n"); return 2; }
+	if (page_edges()) { out("RESULT page-edge failure\n"); return 1; }
+	/* Repetitive long needles exercise the scalar two-way search, including
+	 * misses that made the previous naive fallback quadratic. */
+	{
+		static char hay[32769], pat[4097];
+		for (size_t i = 0; i < sizeof(hay)-1; i++) hay[i] = 'a';
+		for (size_t i = 0; i < sizeof(pat)-1; i++) pat[i] = 'a';
+		pat[4095] = 'b';
+		if (F.memmem(hay, 32768, pat, 4096) || F.strstr(hay, pat)) return 1;
+		hay[32767] = 'b';
+		if (F.memmem(hay, 32768, pat, 4096) != hay + 28672 ||
+		    F.strstr(hay, pat) != hay + 28672) return 1;
+	}
 	struct ctx cs[64] = { 0 };
 	unsigned long tot = 0, bad = 0, calls = 0;
 	if (nt <= 1) {
@@ -260,23 +331,44 @@ int main(int argc, char **argv)
 		if (nt > 32) nt = 32;
 		for (int i = 0; i < nt; i++) {
 			cs[i].seed = 0x12345u + 77777u * i; cs[i].id = i;
-			pthread_create(&g_tids[i], 0, worker, &cs[i]);
+			if (pthread_create(&g_tids[i], 0, worker, &cs[i])) return 2;
 		}
 		g_ntids = nt;
-		if (ham) pthread_create(&hm, 0, hammer, 0);
-		for (int i = 0; i < nt; i++) pthread_join(g_tids[i], 0);
-		g_stop = 1;
+		if (ham && pthread_create(&hm, 0, hammer, 0)) return 2;
+		/* Stop the affinity writer BEFORE joining/freeing worker handles.
+		 * Completed joinable workers retain their pthread storage until join. */
+		pthread_mutex_lock(&done_mu);
+		for (int i = 0; i < nt; i++)
+			while (!cs[i].done) pthread_cond_wait(&done_cv, &done_mu);
+		pthread_mutex_unlock(&done_mu);
+		__atomic_store_n(&g_stop, 1, __ATOMIC_RELAXED);
 		if (ham) pthread_join(hm, 0);
+		for (int i = 0; i < nt; i++) pthread_join(g_tids[i], 0);
 		/* detached batch: return / pthread_exit / cancel */
 		for (int i = nt; i < 2 * nt; i++) {
 			pthread_t t; pthread_attr_t at;
 			cs[i].seed = 0x777u + 99991u * i; cs[i].id = 1000 + i;
 			pthread_attr_init(&at);
 			pthread_attr_setdetachstate(&at, PTHREAD_CREATE_DETACHED);
-			pthread_create(&t, &at, worker, &cs[i]);
-			if (i % 3 == 2) { usleep(2000); pthread_cancel(t); }
+			if (pthread_create(&t, &at, worker, &cs[i])) return 2;
+			pthread_attr_destroy(&at);
+			if (cs[i].id % 3 == 2) {
+				pthread_mutex_lock(&done_mu);
+				while (!cs[i].cancel_ready) pthread_cond_wait(&done_cv, &done_mu);
+				pthread_mutex_unlock(&done_mu);
+				if (pthread_cancel(t)) return 2;
+				pthread_mutex_lock(&done_mu);
+				cs[i].cancel_sent = 1;
+				pthread_cond_broadcast(&done_cv);
+				pthread_mutex_unlock(&done_mu);
+			}
 		}
-		sleep(1 + (int)(g_iters / 20000));
+		/* Completion, not a guessed sleep: detached workers may be slower on
+		 * the board, and reading live counters would race the workload. */
+		pthread_mutex_lock(&done_mu);
+		for (int i = nt; i < 2 * nt; i++)
+			while (!cs[i].done) pthread_cond_wait(&done_cv, &done_mu);
+		pthread_mutex_unlock(&done_mu);
 		for (int i = 0; i < 2 * nt; i++) { tot += cs[i].n; bad += cs[i].bad; calls += cs[i].calls; }
 	}
 	{

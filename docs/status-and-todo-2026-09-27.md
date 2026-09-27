@@ -1,3 +1,11 @@
+> **s31fp update, 18:07 UTC:** see [the detailed handoff](s31fp-handoff-2026-09-27.md).
+> Copy failure paths are hardened; the old crash remains unreproduced. The v3
+> string candidate passed actual-board migration/correctness tests; a separate
+> detached-cancellation test crash is diagnosed and fixed. QuakeSpasm completed
+> quiet 8.9/9.4 fps arms (not a proven gain). Fast clock remains unaccepted/off.
+> No new library or kernel has been shipped. A final quiet application check
+> is in flight; consult the handoff before using the serial port.
+
 # Status and to-do, 2026-09-27 (~15:10)
 
 This is a single place for what is on the board now, what is in progress

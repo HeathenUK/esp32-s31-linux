@@ -1,0 +1,119 @@
+sh /tmp/r.sh 2>&1 & __rp=$!; ( trap 'kill "$__rs_sleep" 2>/dev/null; wait "$
+__rs_sleep" 2>/dev/null; exit' TERM INT; sleep 27 & __rs_sleep=$!; wait "$__rs_s
+leep"; kill -0 $__rp 2>/dev/null && { echo RS_TIME"K"ILL; kill -9 $__rp 2>/dev/n
+ull; } ) & __rw=$!; wait $__rp 2>/dev/null; __rc=$?; kill $__rw 2>/dev/null; wai
+t $__rw 2>/dev/null; printf "RS_EXIT:%s\n" "$__rc"; echo RS_DONE
+Linux esp32-s31 7.1.10 #401 SMP Sun Sep 27 09:58:01 UTC 2026 riscv32 GNU/Linux
+5c791e53d368685a267dbb29fdf66b28  /root/afp3/libs31fp.so
+04bc0733229843f3710fb63a1701bb72  /root/afp3/strtest
+START libc-cpu0
+RESULT libc-vs-reference: 5000 cases, 65000 calls, 0 mismatches (threads 1 hammer 0)
+END libc-cpu0 rc=0
+START dispatch-cpu0
+RESULT exported-vs-reference: 5000 cases, 65000 calls, 0 mismatches (threads 1 hammer 0)
+s31str: on=1 eligible->libc(PIE cpu)=16632 eligible->scalar=8367 rseq_reg=1 rseq_fail=0
+END dispatch-cpu0 rc=0
+START dispatch-cpu1
+RESULT exported-vs-reference: 5000 cases, 65000 calls, 0 mismatches (threads 1 hammer 0)
+s31str: on=1 eligible->libc(PIE cpu)=0 eligible->scalar=24999 rseq_reg=1 rseq_fail=0
+END dispatch-cpu1 rc=0
+START migration
+RESULT exported-vs-reference: 22501 cases, 292513 calls, 0 mismatches (threads 4 hammer 1)
+s31str: on=1 eligible->libc(PIE cpu)=46174 eligible->scalar=63429 rseq_reg=9 rseq_fail=0
+END migration rc=0
+ROUTING mode=0 start_mask=2
+WORK cpu start 1 end 0 sink 0
+ROUTING_EXIT=0
+ROUTING mode=1 start_mask=2
+WORK cpu start 1 end 1 sink 0
+ROUTING_EXIT=0
+BENCH_ARM libc-cpu0 size=64
+BENCH memcpy size 64: 435.2 ns/call
+BENCH memchr size 64: 679.1 ns/call
+BENCH memcmp size 64: 781.0 ns/call
+BENCH strcmp size 64: 2260.0 ns/call
+BENCH strnlen size 64: 662.4 ns/call
+BENCH_EXIT=0
+BENCH_ARM dispatch-cpu0 size=64
+BENCH memcpy size 64: 514.1 ns/call
+BENCH memchr size 64: 720.9 ns/call
+BENCH memcmp size 64: 423.0 ns/call
+BENCH strcmp size 64: 746.4 ns/call
+BENCH strnlen size 64: 792.2 ns/call
+BENCH_EXIT=0
+BENCH_ARM dispatch-cpu1 size=64
+BENCH memcpy size 64: 808.5 ns/call
+BENCH memchr size 64: 1193.2 ns/call
+BENCH memcmp size 64: 634.5 ns/call
+BENCH strcmp size 64: 965.4 ns/call
+BENCH strnlen size 64: 996.8 ns/call
+BENCH_EXIT=0
+BENCH_ARM scalar-cpu0 size=64
+BENCH memcpy size 64: 411.5 ns/call
+BENCH memchr size 64: 739.8 ns/call
+BENCH memcmp size 64: 396.8 ns/call
+BENCH strcmp size 64: 690.5 ns/call
+BENCH strnlen size 64: 792.7 ns/call
+BENCH_EXIT=0
+BENCH_ARM libc-cpu0 size=1024
+BENCH memcpy size 1024: 922.4 ns/call
+BENCH memchr size 1024: 6874.0 ns/call
+BENCH memcmp size 1024: 7176.5 ns/call
+BENCH strcmp size 1024: 10892.0 ns/call
+BENCH strnlen size 1024: 6755.4 ns/call
+BENCH_EXIT=0
+BENCH_ARM dispatch-cpu0 size=1024
+BENCH memcpy size 1024: 1041.6 ns/call
+BENCH memchr size 1024: 9697.4 ns/call
+BENCH memcmp size 1024: 4492.1 ns/call
+BENCH strcmp size 1024: 7915.5 ns/call
+BENCH strnlen size 1024: 6779.1 ns/call
+BENCH_EXIT=0
+BENCH_ARM dispatch-cpu1 size=1024
+BENCH memcpy size 1024: 3005.8 ns/call
+BENCH memchr size 1024: 9614.0 ns/call
+BENCH memcmp size 1024: 5957.8 ns/call
+BENCH strcmp size 1024: 9814.5 ns/call
+BENCH strnlen size 1024: 9819.7 ns/call
+BENCH_EXIT=0
+BENCH_ARM scalar-cpu0 size=1024
+BENCH memcpy size 1024: 2506.6 ns/call
+BENCH memchr size 1024: 8744.1 ns/call
+BENCH memcmp size 1024: 4630.9 ns/call
+BENCH strcmp size 1024: 7687.3 ns/call
+BENCH strnlen size 1024: 8688.1 ns/call
+BENCH_EXIT=0
+BENCH_ARM libc-cpu0 size=4096
+BENCH memcpy size 4096: 2881.4 ns/call
+BENCH memchr size 4096: 25702.6 ns/call
+BENCH memcmp size 4096: 28390.0 ns/call
+BENCH strcmp size 4096: 38508.5 ns/call
+BENCH strnlen size 4096: 25594.0 ns/call
+BENCH_EXIT=0
+BENCH_ARM dispatch-cpu0 size=4096
+BENCH memcpy size 4096: 2858.8 ns/call
+BENCH memchr size 4096: 25594.6 ns/call
+BENCH memcmp size 4096: 17236.2 ns/call
+BENCH strcmp size 4096: 30745.3 ns/call
+BENCH strnlen size 4096: 25925.1 ns/call
+BENCH_EXIT=0
+BENCH_ARM dispatch-cpu1 size=4096
+BENCH memcpy size 4096: 10709.2 ns/call
+BENCH memchr size 4096: 41561.0 ns/call
+BENCH memcmp size 4096: 20566.2 ns/call
+BENCH strcmp size 4096: 38015.8 ns/call
+BENCH strnlen size 4096: 41815.9 ns/call
+BENCH_EXIT=0
+BENCH_ARM scalar-cpu0 size=4096
+BENCH memcpy size 4096: 8978.0 ns/call
+BENCH memchr size 4096: 35476.9 ns/call
+BENCH memcmp size 4096: 17058.8 ns/call
+BENCH strcmp size 4096: 30675.5 ns/call
+BENCH strnlen size 4096: 33689.7 ns/call
+BENCH_EXIT=0
+V3_DONE failures=0
+RS_EXIT:0
+RS_DONE
+[2]+  Done(143)                  (trap "kill \"\$__rs_sleep\" 2>/dev/null; wait \"\$__rs_sleep\" 2>/dev/null; exit" TERM INT; sleep 27; ; wait "${__rs_sleep}"; kill -0 ${__rp} 2>/dev/null && echo RS_TIME"K"ILL; kill -9 ${__rp} 2>/dev/null)
+[1]+  Done                       sh /tmp/r.sh 2>&1
+~ # 

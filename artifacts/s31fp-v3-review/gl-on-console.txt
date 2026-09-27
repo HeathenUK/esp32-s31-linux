@@ -1,0 +1,84 @@
+sh /tmp/r.sh 2>&1 & __rp=$!; ( trap 'kill "$__rs_sleep" 2>/dev/null; wait "$
+__rs_sleep" 2>/dev/null; exit' TERM INT; sleep 42 & __rs_sleep=$!; wait "$__rs_s
+leep"; kill -0 $__rp 2>/dev/null && { echo RS_TIME"K"ILL; kill -9 $__rp 2>/dev/n
+ull; } ) & __rw=$!; wait $__rp 2>/dev/null; kill $__rw 2>/dev/null; wait $__rw 2
+>/dev/null; echo RS_DONE
+GQ_SUBMITTED
+RS_DONE
+[2]+  Done(143)                  (trap "kill \"\$__rs_sleep\" 2>/dev/null; wait \"\$__rs_sleep\" 2>/dev/null; exit" TERM INT; sleep 42; ; wait "${__rs_sleep}"; kill -0 ${__rp} 2>/dev/null && echo RS_TIME"K"ILL; kill -9 ${__rp} 2>/dev/null)
+[1]+  Done                       sh /tmp/r.sh 2>&1
+~ # Command line: /root/quake/quakespasm -basedir /root/quake/td -condebug -mixspeed 11025 -zone 384 -heapsize 12288 -width 320 -height 240 -fullscreen
+Found SDL version 1.2.15
+Terminal input not available.
+Detected 2 CPUs.
+Initializing QuakeSpasm v0.96.3
+Host_Init
+Playing shareware version.
+Console initialized.
+UDP Initialized
+Server using protocol 666 (FitzQuake)
+Exe: 08:27:00 Sep 26 2026
+12.0 megabyte heap
+xlite: UNIMPLEMENTED XSetExtensionErrorHandler() - returning 0 and carrying on
+xlite: UNIMPLEMENTED XOpenIM() - returning 0 and carrying on
+libGL: context 1 created (pid 468, comm quakespasm)
+xlite: UNIMPLEMENTED XReparentWindow() - returning 0 and carrying on
+Video mode 320x240x16 60Hz (16-bit z-buffer, 0x FSAA) initialized
+GL_VENDOR: s31
+GL_RENDERER: Software Rasterizer
+GL_VERSION: 1.1 s31-tinygl
+Warning: OpenGL version < 1.5, skipping ARB_vertex_buffer_object check
+FOUND: ARB_multitexture
+GL_MAX_TEXTURE_UNITS: 2
+FOUND: ARB_texture_env_combine
+FOUND: ARB_texture_env_add
+Warning: vertical sync not supported (swap_control doesn't match vid_vsync)
+Warning: texture_filter_anisotropic not supported
+Warning: texture_non_power_of_two not supported
+Warning: OpenGL version < 2, GLSL not available
+Warning: GLSL gamma not available, using hardware gamma
+Warning: GLSL alias model rendering not available, using Fitz renderer
+Warning: glGenerateMipmap not available, liquids won't have mipmaps
+
+Sound Initialization
+SDL audio spec  : 11025 Hz, 512 samples, 2 channels
+SDL audio driver: alsa, 32768 bytes buffer
+Audio: 16 bit, stereo, 11025 Hz
+SDL detected 0 CD-ROM drives
+
+Language initialization
+Couldn't load 'localization/loc_english.txt'
+from '/root/quake/td'
+
+========= Quake Initialized =========
+
+execing quake.rc
+execing default.cfg
+couldn't exec config.cfg
+execing autoexec.cfg
+Playing demo from demo1.dem.
+3 demo(s) in loop
+
+
+the Necropolis
+Using protocol 15
+Couldn't find a cdrip for track 2
+You got the shells
+You got the Grenade Launcher
+You receive 25 health
+You get 2 rockets  
+You got the rockets
+You got the nailgun
+You got the nails
+You got the nails
+You receive 15 health
+You receive 15 health
+You got the rockets
+You get 2 rockets  
+You got the nails
+You got the nails
+You receive 25 health
+        You need the gold key
+You got the gold key
+969 frames 103.4 seconds   9.4 fps
+

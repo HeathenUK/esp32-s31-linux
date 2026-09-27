@@ -1,0 +1,120 @@
+MODE=scalar ROUND=1
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=scalar ROUND=2
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=scalar ROUND=3
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=scalar ROUND=4
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=scalar ROUND=5
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=scalar ROUND=6
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=scalar ROUND=7
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=scalar ROUND=8
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=scalar ROUND=9
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=scalar ROUND=10
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=scalar ROUND=11
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=scalar ROUND=12
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=scalar ROUND=13
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=scalar ROUND=14
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=scalar ROUND=15
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=scalar ROUND=16
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=scalar ROUND=17
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=scalar ROUND=18
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=scalar ROUND=19
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=scalar ROUND=20
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=scalar ROUND=21
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=scalar ROUND=22
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=scalar ROUND=23
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=scalar ROUND=24
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=scalar ROUND=25
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=scalar ROUND=26
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=scalar ROUND=27
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=scalar ROUND=28
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=scalar ROUND=29
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=scalar ROUND=30
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=1 ROUND=1
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=1 ROUND=2
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=1 ROUND=3
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=1 ROUND=4
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=1 ROUND=5
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=1 ROUND=6
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=1 ROUND=7
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=1 ROUND=8
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=1 ROUND=9
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=1 ROUND=10
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=1 ROUND=11
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=1 ROUND=12
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=1 ROUND=13
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=1 ROUND=14
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=1 ROUND=15
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=1 ROUND=16
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=1 ROUND=17
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=1 ROUND=18
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=1 ROUND=19
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=1 ROUND=20
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=1 ROUND=21
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=1 ROUND=22
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=1 ROUND=23
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=1 ROUND=24
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=1 ROUND=25
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=1 ROUND=26
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=1 ROUND=27
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=1 ROUND=28
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=1 ROUND=29
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)
+MODE=1 ROUND=30
+RESULT exported-vs-reference: 75001 cases, 975013 calls, 0 mismatches (threads 4 hammer 0)

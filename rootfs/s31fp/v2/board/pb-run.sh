@@ -12,6 +12,7 @@ PB_ARMS=${PB_ARMS:-copycol copynocol copycol}
 PB_TRAP=${PB_TRAP:-/root/afp2/segvtrap-copy.so}
 PB_WARMUP=${PB_WARMUP:-0} # original failure followed OpenTyrian + glxgears
 PB_WINDOW=${PB_WINDOW:-0}
+PB_QUIET=${PB_QUIET:-0} # no reporter or hot-path debug counters; application acceptance only
 case $PB_TAG in *[!a-zA-Z0-9_-]*|'') echo BAD_TAG; exit 1;; esac
 set -- $PB_ARMS
 [ $# -ge 1 ] && [ $# -le 3 ] || { echo BAD_ARMS; exit 1; }
@@ -19,7 +20,8 @@ set -- $PB_ARMS
 for arm do
   case $arm in copycol|copynocol|tramp|plain) ;; *) echo BAD_ARM; exit 1;; esac
 done
-[ -r "$PB_LIB" ] && [ -r "$PB_TRAP" ] && [ -r /root/doom/wads/doom1.wad ] || exit 1
+[ -r "$PB_LIB" ] && [ -r /root/doom/wads/doom1.wad ] || exit 1
+[ "$PB_QUIET" = 1 ] || [ -r "$PB_TRAP" ] || exit 1
 if [ "$PB_WARMUP" = 1 ]; then
   [ -x /root/oty/usr/bin/opentyrian ] && [ -x /root/gl2/bin/glxgears ] &&
     [ -d /root/oty/usr/share/opentyrian/data ] || { echo WARMUP_MISSING; exit 1; }
@@ -28,12 +30,14 @@ fi
 D=/root/afp2/pb-$PB_TAG
 mkdir "$D" || exit 1
 cat > "$D/run.sh" <<'IN'
-D=$1; P=$2; ST=$3; WARM=$4; WINDOW=$5; shift 5
+D=$1; P=$2; ST=$3; WARM=$4; WINDOW=$5; DONE=$6; QUIET=$7; shift 7
+[ -z "$DONE" ] || trap 'printf "\n%s\n" "$DONE" > /dev/console' EXIT
 exec > "$D/summary.txt" 2>&1
 ulimit -c 0
-unset LD_PRELOAD S31FP S31FP_COPY S31FP_COLOUR
+unset LD_PRELOAD S31FP S31FP_COPY S31FP_COLOUR S31FP_DEBUG
 printf 'BOARD '; uname -a
-md5sum "$P" "$ST" /root/doom/prboom
+md5sum "$P" /root/doom/prboom
+echo "QUIET=$QUIET"
 amixer -q sset DACL 110; amixer -q sset DACR 110
 if [ "$WARM" = 1 ]; then
   cd /root/oty/usr/share/opentyrian/data || exit 1
@@ -53,6 +57,11 @@ cd /root/doom/wads || exit 1
 height=240; mode=-fullscreen
 [ "$WINDOW" = 1 ] && { height=200; mode=-window; }
 n=0; bad=0
+PRELOAD=$P
+if [ "$QUIET" != 1 ]; then
+  PRELOAD="$P $ST"
+  export S31FP_DEBUG=1
+fi
 for arm do
   n=$((n+1)); log=$D/$n-$arm.log
   copy=0; colour=0; enable=1
@@ -60,9 +69,9 @@ for arm do
   echo "START $n $arm"
   # Same sleep/reap watchdog pattern as runsh.py (no timeout applet on card).
   # No observer commands during the demo.
-  env LD_PRELOAD="$P $ST" SEGVTRAP_HOLD=1 \
+  env LD_PRELOAD="$PRELOAD" SEGVTRAP_HOLD=1 \
     S31FP=$enable S31FP_COPY=$copy S31FP_COLOUR=$colour S31FP_CACHE="$D/cache" \
-    S31FP_DEBUG=1 SDL_NOPARACHUTE=1 DISPLAY=:0 /root/doom/prboom \
+    SDL_NOPARACHUTE=1 DISPLAY=:0 /root/doom/prboom \
     -iwad /root/doom/wads/doom1.wad -width 320 -height "$height" \
     "$mode" -timedemo demo1 > "$log" 2>&1 &
   game=$!
@@ -79,11 +88,11 @@ for arm do
   # 255 is expected ONLY with the full completion line and no fault report.
   [ "$rc" = 255 ] && grep -aq 'Timed 5026 gametics.*frames per second' "$log" || ok=0
   if grep -aqE 'SEGVTRAP sig |signal 11' "$log"; then ok=0; fi
-  grep -aq 'SEGVTRAP holding fault handlers' "$log" || ok=0
-  if [ "$copy" = 1 ]; then
+  [ "$QUIET" = 1 ] || grep -aq 'SEGVTRAP holding fault handlers' "$log" || ok=0
+  if [ "$copy" = 1 ] && [ "$QUIET" != 1 ]; then
     grep -aq 'of which copied in place 0x0000000[1-9a-f]' "$log" || ok=0
   fi
-  if [ "$colour" = 1 ]; then
+  if [ "$colour" = 1 ] && [ "$QUIET" != 1 ]; then
     grep -aq 'pages given their original frame colour 0x0000000[1-9a-f]' "$log" || ok=0
   fi
   [ "$ok" = 1 ] || bad=$((bad+1))
@@ -93,5 +102,5 @@ for arm do
 amixer -q sset DACL 143; amixer -q sset DACR 143
 echo "PB_DONE runs=$n failures=$bad"
 IN
-setsid sh "$D/run.sh" "$D" "$PB_LIB" "$PB_TRAP" "$PB_WARMUP" "$PB_WINDOW" "$@" </dev/null >/dev/null 2>&1 &
+setsid sh "$D/run.sh" "$D" "$PB_LIB" "$PB_TRAP" "$PB_WARMUP" "$PB_WINDOW" "${PB_DONE_TOKEN:-}" "$PB_QUIET" "$@" </dev/null >/dev/null 2>&1 &
 echo "PB_STARTED $D pid=$!"
