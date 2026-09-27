@@ -12,6 +12,20 @@ M="-march=rv32imafc_zicsr_zifencei_zba_zbb_zbc_zbs -mabi=ilp32"
 # no libc: raw syscalls, one import (environ)
 $CC $M -O2 -fPIC -fno-builtin -ffreestanding -fno-stack-protector -Wall -fvisibility=hidden -c -o /tmp/p3.o preload3.c
 $CC $M -O2 -fPIC -DS31V2_FENV=1 -c -o /tmp/p3v2.o v2.S
+# copy-in-place precondition: the only relocations in v2's .text are the
+# TAILREF pairs (PCREL_HI20 + PCREL_LO12_I, one pair per s31fix entry)
+R=$($T-objdump -r -j .text /tmp/p3v2.o | awk '/R_RISCV/{print $2}' | sort | uniq -c | tr '\n' ' ')
+NF=$($T-objdump -r -j s31fix /tmp/p3v2.o | grep -c R_RISCV_32)
+echo "v2.S .text relocations: $R  s31fix entries: $NF"
+BAD=$($T-objdump -r -j .text /tmp/p3v2.o | awk '/R_RISCV/ && $2 != "R_RISCV_PCREL_HI20" && $2 != "R_RISCV_PCREL_LO12_I"' | wc -l)
+NH=$($T-objdump -r -j .text /tmp/p3v2.o | grep -c R_RISCV_PCREL_HI20)
+# (TAILREFs to local labels are resolved by the assembler: fewer HI20s than entries)
+SITES=$($T-objdump -r -j .text /tmp/p3v2.o | awk '/R_RISCV_PCREL_HI20/{print $1}' | sort)
+FIXS=$($T-objdump -d -j .text /tmp/p3v2.o | awk '/\tauipc\tt1,/{sub(":","",$1); printf "%08x\n", strtonum("0x"$1)}' | sort)
+MISS=$(for a in $SITES; do echo "$FIXS" | grep -qx $a || echo $a; done | wc -l)
+NA=$(echo "$FIXS" | grep -c .)
+echo "auipc t1 sites: $NA, unmatched relocation sites: $MISS"
+[ "$BAD" = 0 ] && [ "$MISS" = 0 ] && [ "$NA" = "$NF" ] || { echo "v2.S is not copyable: unexpected relocations"; exit 1; }
 $CC $M -O2 -fPIC -fno-builtin -fno-stack-protector -fvisibility=hidden -DS31V2_FENV=1 -c -o /tmp/p3div.o v2div.c
 $CC $M -shared -nostdlib -Wl,-z,now -Wl,--hash-style=gnu -o $B/libs31fp.so /tmp/p3.o /tmp/p3v2.o /tmp/p3div.o $B/lgref.o
 $T-strip $B/libs31fp.so

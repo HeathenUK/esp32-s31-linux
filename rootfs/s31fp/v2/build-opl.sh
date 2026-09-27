@@ -60,6 +60,12 @@ for v in lg old v2 v2n; do
 done
 cp /src/build/buildroot/target/usr/share/opentyrian/data/music.mus $B/music.mus
 ls -l $B/oplbench-*
+# QEMU: static oplbench with libgcc's helpers AND preload3's constructor linked
+# in - its own copies get patched at start exactly as the preload would
+$CC $M -O2 -fno-builtin -c -o $W/p3s.o $V/preload3.c -I$V
+$CC $M -O2 -c -o $W/p3sv2.o $V/v2.S
+$CC $M -O2 -c -o $W/p3sdiv.o $V/v2div.c
+$CC -static -o $B/oplbench-pre.q $OBJ $W/noesp.o $W/p3s.o $W/p3sv2.o $W/p3sdiv.o $W/lgref.o -lm
 # dynamic, libgcc helpers - the shipped binary's shape; for the preload test
 $CC -o $B/oplbench-dyn $OBJ -lm
 ls -l $B/oplbench-dyn

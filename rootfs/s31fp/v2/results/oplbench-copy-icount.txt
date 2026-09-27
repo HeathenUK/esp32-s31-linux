@@ -1,0 +1,3 @@
+copy s31fp: scanned main text, patched 0x0000000b s31fp: of which copied in place 0x0000000a  7d220d1a insn/sample 4783
+tramp s31fp: scanned main text, patched 0x0000000b s31fp: of which copied in place 0x00000000  7d220d1a insn/sample 4973
+v2static  7d220d1a insn/sample 4783

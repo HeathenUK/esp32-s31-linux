@@ -70,12 +70,30 @@
 #endif
 .endm
 
+ /*
+ * TAILREF: tail call as an explicit auipc t1 / jalr x0 pair, never relaxed,
+ * with its address recorded in section s31fix - the preload's copy-in-place
+ * re-encodes these for the copy's new location. Every other reference in a
+ * routine is an assembler-resolved branch inside it, so a routine is
+ * position-independent apart from these (build-preload3.sh checks: the only
+ * relocations in v2.o's .text are these pairs).
+ */
+.macro TAILREF sym
+1770:
+	auipc	t1, %pcrel_hi(\sym)
+	jalr	x0, %pcrel_lo(1770b)(t1)
+	.pushsection s31fix, "aw"
+	.word	1770b
+	.popsection
+.endm
+
 .macro FUNC name
 	.globl	\name
 	.type	\name, @function
 .endm
 
 	.text
+	.option	norelax
 	.align	2
 
 /* ------------------------------------------------------------------ mul */
@@ -264,7 +282,8 @@ s31v2_muldf3:
 	li	a0, 0
 	ret
 .Lm_ref:
-	tail	s31lg_muldf3
+	TAILREF	s31lg_muldf3
+.Lend_muldf3:
 	.size	s31v2_muldf3, . - s31v2_muldf3
 
 /* ------------------------------------------------------------- add/sub */
@@ -451,7 +470,8 @@ s31v2_adddf3:
 	bnez	t3, .La_ref
 	ret				/* x + 0 = x */
 .La_ref:
-	tail	s31lg_adddf3
+	TAILREF	s31lg_adddf3
+.Lend_adddf3:
 	.size	s31v2_adddf3, . - s31v2_adddf3
 
 /* --------------------------------------------------------- conversions */
@@ -474,6 +494,7 @@ s31v2_floatsidf:			/* exact */
 	ret
 9:	li	a1, 0
 	ret
+.Lend_floatsidf:
 	.size	s31v2_floatsidf, . - s31v2_floatsidf
 
 FUNC s31v2_floatunsidf
@@ -490,6 +511,7 @@ s31v2_floatunsidf:
 	ret
 9:	li	a1, 0
 	ret
+.Lend_floatunsidf:
 	.size	s31v2_floatunsidf, . - s31v2_floatunsidf
 
 /* truncate toward zero; NX when fraction bits are dropped (as soft-fp does),
@@ -527,7 +549,8 @@ s31v2_fixdfsi:
 	li	a0, 0
 	NX_ALWAYS t4
 	ret
-7:	tail	s31lg_fixdfsi
+7:	TAILREF	s31lg_fixdfsi
+.Lend_fixdfsi:
 	.size	s31v2_fixdfsi, . - s31v2_fixdfsi
 
 FUNC s31v2_fixunsdfsi
@@ -567,7 +590,8 @@ s31v2_fixunsdfsi:
 	bnez	t0, 7f
 	li	a0, 0
 	ret
-7:	tail	s31lg_fixunsdfsi
+7:	TAILREF	s31lg_fixunsdfsi
+.Lend_fixunsdfsi:
 	.size	s31v2_fixunsdfsi, . - s31v2_fixunsdfsi
 
 /* float -> double: exact for normals and zeros; subnormal/inf/NaN -> libgcc */
@@ -592,7 +616,8 @@ s31v2_extendsfdf2:
 	mv	a1, a0			/* +-0 */
 	li	a0, 0
 	ret
-6:	tail	s31lg_extendsfdf2
+6:	TAILREF	s31lg_extendsfdf2
+.Lend_extendsfdf2:
 	.size	s31v2_extendsfdf2, . - s31v2_extendsfdf2
 
 /* double -> float, RNE; result must be a normal float that cannot round into
@@ -630,7 +655,8 @@ s31v2_truncdfsf2:
 	bnez	t1, 6f
 	mv	a0, a1
 	ret
-6:	tail	s31lg_truncdfsf2
+6:	TAILREF	s31lg_truncdfsf2
+.Lend_truncdfsf2:
 	.size	s31v2_truncdfsf2, . - s31v2_truncdfsf2
 
 /* --------------------------------------------------------- comparisons */
@@ -705,10 +731,16 @@ FUNC s31v2_gtdf2
 s31v2_gedf2:
 s31v2_gtdf2:
 	POSCMP	7f
-7:	NANCHK	a1, a0, 8f
+	/* a copy-in-place ends here: its slow path returns to the full body
+	 * below, in the library (in the library itself this is one extra jump,
+	 * on the slow path only) */
+7:	TAILREF	.Lge_full
+.Lge_copyend:
+.Lge_full:
+	NANCHK	a1, a0, 8f
 	NANCHK	a3, a2, 8f
 	CMP3
-8:	tail	s31lg_gedf2
+8:	TAILREF	s31lg_gedf2
 	.size	s31v2_gedf2, . - s31v2_gedf2
 
 FUNC s31v2_ledf2
@@ -716,10 +748,16 @@ FUNC s31v2_ltdf2
 s31v2_ledf2:
 s31v2_ltdf2:
 	POSCMP	7f
-7:	NANCHK	a1, a0, 8f
+	/* a copy-in-place ends here: its slow path returns to the full body
+	 * below, in the library (in the library itself this is one extra jump,
+	 * on the slow path only) */
+7:	TAILREF	.Lle_full
+.Lle_copyend:
+.Lle_full:
+	NANCHK	a1, a0, 8f
 	NANCHK	a3, a2, 8f
 	CMP3
-8:	tail	s31lg_ledf2
+8:	TAILREF	s31lg_ledf2
 	.size	s31v2_ledf2, . - s31v2_ledf2
 
 FUNC s31v2_eqdf2
@@ -739,7 +777,8 @@ s31v2_nedf2:
 	snez	t1, t1
 	and	a0, t0, t1
 	ret
-8:	tail	s31lg_eqdf2
+8:	TAILREF	s31lg_eqdf2
+.Lend_eqdf2:
 	.size	s31v2_eqdf2, . - s31v2_eqdf2
 
 FUNC s31v2_unorddf2
@@ -748,5 +787,31 @@ s31v2_unorddf2:
 	NANCHK	a3, a2, 8f
 	li	a0, 0
 	ret
-8:	tail	s31lg_unorddf2
+8:	TAILREF	s31lg_unorddf2
+.Lend_unorddf2:
 	.size	s31v2_unorddf2, . - s31v2_unorddf2
+
+/*
+ * Copy table for the preload's copy-in-place, in sigs3.h order: the block
+ * [start, end) that replaces libgcc's body; 0 = keep the trampoline.
+ * subdf3's block is sub's two instructions plus the whole of add.
+ */
+	.section .data.rel.ro.s31copy, "aw"
+	.align	2
+	.globl	s31v2_copytab
+	.hidden	s31v2_copytab
+s31v2_copytab:
+	.word	s31v2_muldf3, .Lend_muldf3
+	.word	s31v2_adddf3, .Lend_adddf3
+	.word	s31v2_subdf3, .Lend_adddf3
+	.word	0, 0				/* divdf3: C, may reference data */
+	.word	s31v2_fixdfsi, .Lend_fixdfsi
+	.word	s31v2_floatsidf, .Lend_floatsidf
+	.word	s31v2_fixunsdfsi, .Lend_fixunsdfsi
+	.word	s31v2_floatunsidf, .Lend_floatunsidf
+	.word	s31v2_extendsfdf2, .Lend_extendsfdf2
+	.word	s31v2_truncdfsf2, .Lend_truncdfsf2
+	.word	s31v2_gedf2, .Lge_copyend
+	.word	s31v2_ledf2, .Lle_copyend
+	.word	s31v2_eqdf2, .Lend_eqdf2
+	.word	s31v2_unorddf2, .Lend_unorddf2

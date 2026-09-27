@@ -1,0 +1,22 @@
+s31fp: scanned main text, patched 0x0000000e
+s31fp: of which copied in place 0x0000000d
+RESULT add: 5000000 operand sets (+1250492 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 880
+RESULT div: 5000000 operand sets (+1250405 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 868
+RESULT eq: 5000000 operand sets (+1250323 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 li
+RESULT ext: 5000000 operand sets (+1250314 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 137
+RESULT fixsi: 5000000 operand sets (+1249337 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 1
+RESULT fixun: 5000000 operand sets (+1248904 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 1
+RESULT fltsi: 5000000 operand sets (+1249616 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0
+RESULT fltun: 5000000 operand sets (+1250430 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0
+RESULT ge: 5000000 operand sets (+1250022 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 li
+RESULT le: 5000000 operand sets (+1249876 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0 li
+RESULT mul: 5000000 operand sets (+1248945 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 101
+RESULT sub: 5000000 operand sets (+1248587 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 918
+RESULT trunc: 5000000 operand sets (+1250136 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 1
+RESULT unord: 5000000 operand sets (+1247628 under a directed rounding mode), 0 v2 mismatches vs libgcc (bits+fflags), 0
+dump mul unpatched bc7f429b2e89 copy bc7f429b2e89 tramp bc7f429b2e89
+dump trunc unpatched fb1ae9e2b65b copy fb1ae9e2b65b tramp fb1ae9e2b65b
+dump ge unpatched d25efdd4eda2 copy d25efdd4eda2 tramp d25efdd4eda2
+dump le unpatched 8bfaa7d114dc copy 8bfaa7d114dc tramp 8bfaa7d114dc
+dump add unpatched 1bd45d61dba4 copy 1bd45d61dba4 tramp 1bd45d61dba4
+dump sub unpatched 9dd5380a35aa copy 9dd5380a35aa tramp 9dd5380a35aa

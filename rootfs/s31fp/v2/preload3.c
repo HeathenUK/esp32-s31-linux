@@ -6,9 +6,10 @@
  * Every program here was linked against the same libgcc.a, which copies its
  * soft-double routines INTO the program as local functions no symbol
  * interposition can reach. This constructor finds them in the MAIN
- * EXECUTABLE's text by their full bodies (sigs3.h), and overwrites each
- * entry with `auipc t0 / jalr x0, t0` to the v2 routine (v2.S, v2div.c),
- * which is bit-exact to libgcc including fflags and frm - it hands every
+ * EXECUTABLE's text by their full bodies (sigs3.h), and replaces each with
+ * the v2 routine (v2.S) COPIED IN PLACE over libgcc's body where it fits (13
+ * of 14; see copy_len), else an entry `auipc t0 / jalr x0, t0` to it (divdf3,
+ * compiled C). v2 is bit-exact to libgcc including fflags and frm - it hands every
  * case it does not decide itself to libgcc's own routine, linked into this
  * library renamed (s31lg_*).
  *
@@ -35,7 +36,8 @@
  * constructors, which run after this one, so no CPU-written code executes
  * before the RX step. Any failure before the writes means no patch.
  *
- * S31FP=0 disables it. S31FP_DEBUG=1 reports to stderr.
+ * S31FP=0 disables it. S31FP_COPY=0 uses the trampoline for every routine.
+ * S31FP_DEBUG=1 reports to stderr.
  */
 #include <stddef.h>
 #include <stdint.h>
@@ -159,21 +161,81 @@ static void scan(const unsigned char *b, unsigned len)
 	}
 }
 
+/*
+ * Copy-in-place (default; S31FP_COPY=0 keeps the trampoline everywhere):
+ * where the v2 routine fits inside libgcc's body, the routine itself is
+ * copied over it, so the program calls our code directly - no auipc/jalr
+ * hop, and the hot code sits in the program's own (COW) pages rather than in
+ * this library, which may live in XIP flash. The only non-relative
+ * references in a v2 routine are its TAILREF pairs (v2.S, recorded in
+ * section s31fix); each is re-encoded for the copy so it still reaches the
+ * same target in this library. A routine whose pairs do not decode as
+ * auipc/jalr, or that does not fit, gets the trampoline instead.
+ */
+HID extern const uint32_t s31v2_copytab[2 * S31_NSIG];
+HID extern const uint32_t __start_s31fix[], __stop_s31fix[];
+static int copy_on = 1;
+static unsigned ncopied;
+
+static uint32_t rd32(const uint8_t *p) { const uint16_t *h = (const uint16_t *)p; return h[0] | (uint32_t)h[1] << 16; }
+static void wr32(uint8_t *p, uint32_t v) { uint16_t *h = (uint16_t *)p; h[0] = (uint16_t)v; h[1] = (uint16_t)(v >> 16); }
+
+/* can routine s be copied? (checked before anything is written) */
+static unsigned copy_len(unsigned s)
+{
+	uintptr_t a = s31v2_copytab[2 * s], e = s31v2_copytab[2 * s + 1];
+	if (!copy_on || !a || e <= a || e - a > s31_sigs[s].len || ((e - a) & 1)) return 0;
+	for (const uint32_t *f = __start_s31fix; f < __stop_s31fix; f++) {
+		const uint8_t *x = (const uint8_t *)(uintptr_t)*f;
+		if ((uintptr_t)x < a || (uintptr_t)x >= e) continue;
+		if ((uintptr_t)x + 8 > e) return 0;
+		if ((rd32(x) & 0x7f) != 0x17 || (rd32(x + 4) & 0x707f) != 0x0067) return 0;
+	}
+	return (unsigned)(e - a);
+}
+
+static void copy_to(uint8_t *at, unsigned s, unsigned n)
+{
+	const uint8_t *a = (const uint8_t *)(uintptr_t)s31v2_copytab[2 * s];
+	const uint16_t *src = (const uint16_t *)a;
+	uint16_t *dst = (uint16_t *)at;
+	for (unsigned i = 0; i < n / 2; i++) dst[i] = src[i];
+	for (const uint32_t *f = __start_s31fix; f < __stop_s31fix; f++) {
+		const uint8_t *x = (const uint8_t *)(uintptr_t)*f;
+		if (x < a || x >= a + n) continue;
+		uint32_t au = rd32(x), jr = rd32(x + 4);
+		uintptr_t tgt = (uintptr_t)x + (int32_t)(au & 0xFFFFF000u) + ((int32_t)jr >> 20);
+		uint8_t *y = at + (x - a);
+		int32_t rel = (int32_t)(tgt - (uintptr_t)y);
+		uint32_t h20 = ((uint32_t)rel + 0x800u) & 0xFFFFF000u;
+		uint32_t l12 = ((uint32_t)rel - h20) & 0xFFFu;
+		wr32(y, (au & 0xFFFu) | h20);
+		wr32(y + 4, (jr & 0x000FFFFFu) | (l12 << 20));
+	}
+}
+
 static unsigned patch(unsigned char *b)
 {
+	unsigned clen[MAXSITE];
 	uintptr_t lo = ~(uintptr_t)0, hi = 0;
 	unsigned i;
 	if (!nsite) return 0;
 	for (i = 0; i < nsite; i++) {
 		uintptr_t a = (uintptr_t)b + soff[i];
+		clen[i] = copy_len(ssig[i]);
 		if (a < lo) lo = a;
-		if (a + 8 > hi) hi = a + 8;
+		if (a + (clen[i] ? clen[i] : 8) > hi) hi = a + (clen[i] ? clen[i] : 8);
 	}
 	lo &= ~(uintptr_t)(PG - 1);
 	hi = (hi + PG - 1) & ~(uintptr_t)(PG - 1);
 	if (sc(NR_mprotect, lo, hi - lo, PROT_R | PROT_W, 0, 0)) { say("s31fp: mprotect RW failed, nothing patched\n"); return 0; }
 	for (i = 0; i < nsite; i++) {
 		uint32_t *at = (uint32_t *)(b + soff[i]);
+		if (clen[i]) {
+			copy_to((uint8_t *)at, ssig[i], clen[i]);
+			ncopied++;
+			continue;
+		}
 		int32_t rel = (int32_t)((uintptr_t)target[ssig[i]] - (uintptr_t)at);
 		uint32_t h20 = ((uint32_t)rel + 0x800u) & 0xFFFFF000u;
 		uint32_t l12 = ((uint32_t)rel - h20) & 0xFFFu;
@@ -257,6 +319,8 @@ __attribute__((constructor)) static void s31fp_init(void)
 
 	if (e && e[0] == '0') return;
 	dbg = env("S31FP_DEBUG") != 0;
+	e = env("S31FP_COPY");
+	copy_on = !(e && e[0] == '0');
 	if (!dir) dir = "/var/lib/s31fp";
 	if (main_text(&b, &len)) { say("s31fp: no main text\n"); return; }
 	kl = dir[0] ? keypath(path, dir) : -1;
@@ -274,6 +338,7 @@ __attribute__((constructor)) static void s31fp_init(void)
 				}
 				n = patch(b);
 				sayx("s31fp: cache hit, patched ", n);
+				sayx("s31fp: of which copied in place ", ncopied);
 				return;
 			}
 		}
@@ -299,4 +364,5 @@ __attribute__((constructor)) static void s31fp_init(void)
 	}
 	n = patch(b);
 	sayx("s31fp: scanned main text, patched ", n);
+	sayx("s31fp: of which copied in place ", ncopied);
 }
