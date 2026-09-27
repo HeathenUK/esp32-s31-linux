@@ -116,6 +116,18 @@ Details: rootfs/s31fp/v2/V2-REPORT.txt.
 4. **Fast filtered GL fillers**, so that QuakeSpasm's trilinear default
    becomes affordable. This is a quality item.
 
+## For the owner to test later
+
+**Bluetooth sink-switch fix.** It is committed as 682776d8 and ships to the
+board with XIP images 1 and 2 once the s31fp regression check finishes.
+
+To test it:
+1. Connect the soundcore Liberty 4 NC.
+2. Run `sh /root/afp/sinkear.sh` on the board console. It plays a 24 s
+   quiet tone that switches speaker -> headphones -> speaker -> headphones
+   at DAC 143.
+3. Listen for a stall, a click storm or dropouts at each switch.
+
 ## Held for the owner's ruling
 
 - **App-specific bit-exact rewrites.** The first candidate is a fused
