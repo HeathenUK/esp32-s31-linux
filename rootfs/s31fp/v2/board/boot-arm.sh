@@ -1,5 +1,6 @@
 # one fresh-boot arm: OpenTyrian title (ARM=stock|v2), then on the same boot the
 # regression set with the matching preload setting (plain|v2) when REG=1.
+# OpenTyrian window: 60 s from uptime ~100; regression starts at uptime 180.
 ARM=${ARM:-stock}; TAG=${TAG:-1}; REG=${REG:-0}
 # STOCK OpenTyrian (/root/oty/usr/bin/opentyrian, what the lvdesk menu starts) at its title screen, music playing,
 # on a FRESH boot; arm = stock | v2 (LD_PRELOAD=libs31fp.so v2 candidate for
@@ -14,7 +15,7 @@ read u _ < /proc/uptime; u=${u%.*}; [ $u -lt 75 ] && sleep $((75 - u))
 for p in $(pidof opentyrian); do kill -9 $p; done; sleep 1
 D=/root/oty/usr/share/opentyrian/data
 cd $D
-PRE=; [ $ARM = v2 ] && PRE="LD_PRELOAD=/root/afp2/libs31fp.so S31FP_CACHE=/root/afp2/cache S31FP_DEBUG=1"
+PRE=; [ $ARM = v2 ] && PRE="LD_PRELOAD=/root/afp2/libs31fp.so S31FP_CACHE=/root/afp2/cache5 S31FP_DEBUG=1"
 env $PRE HOME=/root DISPLAY=:0 /root/oty/usr/bin/opentyrian --no-joystick </dev/null >$LOG 2>&1 &
 sleep 25
 PID=$(pidof opentyrian | cut -d' ' -f1)
@@ -26,7 +27,10 @@ echo "audio_tid $AT"
 x0=$(grep -a -c -i -E "occurred|underrun" $LOG); u0=$(cut -d" " -f1 /proc/uptime)
 set -- $(cat /proc/$PID/task/$AT/stat); a0=$((${14}+${15}))
 set -- $(cat /proc/$PID/stat); p0=$((${14}+${15}))
-sleep 20
+# 60 s window, xruns counted per 10 s (does it HOLD, not just the mean)
+xp=$x0; B=""
+for k in 1 2 3 4 5 6; do sleep 10; xk=$(grep -a -c -i -E "occurred|underrun" $LOG); B="$B $((xk - xp))"; xp=$xk; done
+echo "xruns_per_10s$B  alive $([ -d /proc/$PID ] && echo yes || echo NO)"
 x1=$(grep -a -c -i -E "occurred|underrun" $LOG); u1=$(cut -d" " -f1 /proc/uptime)
 set -- $(cat /proc/$PID/task/$AT/stat); a1=$((${14}+${15}))
 set -- $(cat /proc/$PID/stat); p1=$((${14}+${15}))
@@ -51,8 +55,8 @@ if [ "$ARM" = v2 ]; then ARM=v2; else ARM=plain; fi
 cat > /root/afp2/reg-inner.sh <<'IN'
 ARM=$1; O=/root/afp2/reg-$ARM.txt; exec > $O 2>&1
 # after the OpenTyrian arm on the same boot (done by ~125 s): ONE sleep, no polling
-read u _ < /proc/uptime; u=${u%.*}; [ $u -lt ${REG_AT:-140} ] && sleep $((${REG_AT:-140} - u))
-PRE=; [ $ARM = v2 ] && PRE="LD_PRELOAD=/root/afp2/libs31fp.so S31FP_CACHE=/root/afp2/cache"
+read u _ < /proc/uptime; u=${u%.*}; [ $u -lt ${REG_AT:-180} ] && sleep $((${REG_AT:-180} - u))
+PRE=; [ $ARM = v2 ] && PRE="LD_PRELOAD=/root/afp2/libs31fp.so S31FP_CACHE=/root/afp2/cache5"
 echo "== arm $ARM uname $(uname -v) up $(cut -d' ' -f1 /proc/uptime)"
 amixer -q sset DACL 110 2>/dev/null; amixer -q sset DACR 110 2>/dev/null
 G=/root/gl2/bin/glxgears	# stock glxgears; the shipped libGL from /usr/lib

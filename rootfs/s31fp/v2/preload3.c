@@ -36,7 +36,8 @@
  * constructors, which run after this one, so no CPU-written code executes
  * before the RX step. Any failure before the writes means no patch.
  *
- * S31FP=0 disables it. S31FP_COPY=0 uses the trampoline for every routine.
+ * S31FP=0 disables it. S31FP_COPY=1 enables copy-in-place (default: trampoline).
+ * S31FP_COLOUR=0 skips the frame colouring.
  * S31FP_DEBUG=1 reports to stderr.
  */
 #include <stddef.h>
@@ -64,6 +65,10 @@ static long sc(long n, long a, long b, long c, long d, long e)
 #define NR_getpid 172
 #define NR_statx 291
 #define NR_riscv_flush_icache 259
+#define NR_pread64 67
+#define NR_mmap2 222
+#define NR_munmap 215
+#define NR_mremap 216
 #define AT_FDCWD -100
 #define O_RDONLY 0
 #define O_WRONLY 1
@@ -174,7 +179,7 @@ static void scan(const unsigned char *b, unsigned len)
  */
 HID extern const uint32_t s31v2_copytab[2 * S31_NSIG];
 HID extern const uint32_t __start_s31fix[], __stop_s31fix[];
-static int copy_on = 1;
+static int copy_on;
 static unsigned ncopied;
 
 static uint32_t rd32(const uint8_t *p) { const uint16_t *h = (const uint16_t *)p; return h[0] | (uint32_t)h[1] << 16; }
@@ -214,6 +219,108 @@ static void copy_to(uint8_t *at, unsigned s, unsigned n)
 	}
 }
 
+#ifdef S31FP_COLOURDBG
+static void colours(uintptr_t lo, uintptr_t hi, const char *tag)
+{
+	long fd = sc(NR_openat, AT_FDCWD, (long)"/proc/self/pagemap", O_RDONLY, 0, 0);
+	char b[160]; unsigned n = 0;
+	if (fd < 0) return;
+	for (const char *t = "s31fp: colours "; *t; ) b[n++] = *t++;
+	for (const char *t = tag; *t; ) b[n++] = *t++;
+	for (uintptr_t a = lo; a < hi && n < 140; a += PG) {
+		uint64_t e = 0;
+		sc(NR_pread64, fd, (long)&e, 8, (long)((a / PG) * 8), 0);
+		b[n++] = ' '; b[n++] = "0123456789abcdef"[(a >> 12) & 15]; b[n++] = ':';
+		b[n++] = (e >> 63) ? "0123"[e & 3] : '-';
+	}
+	b[n++] = '\n';
+	sc(NR_write, 2, (long)b, n, 0, 0);
+	sc(NR_close, fd, 0, 0, 0, 0);
+}
+#endif
+
+/*
+ * Frame colouring (S31FP_COLOUR=0 disables). The hart-1 I-cache is 32 kB,
+ * 2-way, PHYSICALLY indexed: a way is 16 kB, so bits 12-13 of the frame
+ * number pick which quarter of the sets a page lands in. The copy-in-place
+ * write COW's each patched text page into a fresh frame of random colour,
+ * and measured on the board (results/board-b7.txt, 20 runs of OpenTyrian's
+ * synth) that is a lottery: 15 runs 19.5-20.3 us/sample, 5 runs 22.6-31.1,
+ * the slow ones exactly those where two or three of the patched pages drew
+ * colour 0. So each patched page is given a frame of its ORIGINAL page-cache
+ * frame's colour - the copy then occupies the same cache sets the unpatched
+ * code did - taken from a small populated anonymous pool (pagemap, root) and
+ * moved over the text page with mremap BEFORE anything is written: the page
+ * arrives RW and not executable, holding the original bytes; the patch
+ * writes follow, then the single RX mprotect does the cache maintenance
+ * exactly as without colouring. Any failure leaves that page to the normal
+ * COW: correct, only uncoloured. (The same technique as RAMTEXT tier 6,
+ * gl/bench/t6src/tinygl/source/s31_ramtext.c rc_place.)
+ */
+#define POOL 16
+static int colour_on = 1;
+static unsigned ncoloured, ncoltried;
+
+/* colours of n consecutive pages from va, in ONE pread (-1 = unknown) */
+static void frame_colours(long fd, uintptr_t va, unsigned n, int *col)
+{
+	uint64_t e[POOL];
+	long r = sc(NR_pread64, fd, (long)e, 8 * n, (long)((va / PG) * 8), 0);
+	for (unsigned i = 0; i < n; i++) {
+		uint64_t pfn = e[i] & ((1ULL << 55) - 1);
+		col[i] = (r == (long)(8 * n) && (e[i] >> 63) && pfn) ? (int)(pfn & 3) : -1;
+	}
+}
+
+static unsigned ncopied_planned(const unsigned *clen)
+{
+	unsigned n = 0;
+	for (unsigned i = 0; i < nsite; i++) n += clen[i] != 0;
+	return n;
+}
+
+/* the pool grows 4 pages at a time until every wanted colour is found (8
+ * pages expected for 3 wanted colours), at most POOL: allocation is most of
+ * this step's cost */
+#define CHUNK 4
+static void colour_pages(uintptr_t lo, uintptr_t hi)
+{
+	unsigned np = (unsigned)((hi - lo) / PG), done = 0, need = 0, nch = 0;
+	int want[POOL], pcol[CHUNK];
+	long fd, ch[POOL / CHUNK]; unsigned used[POOL / CHUNK];
+	if (np > POOL) return;
+	fd = sc(NR_openat, AT_FDCWD, (long)"/proc/self/pagemap", O_RDONLY, 0, 0);
+	if (fd < 0) return;
+	for (unsigned k = 0; k < np; k++) (void)*(volatile const uint32_t *)(lo + k * PG);	/* resident */
+	frame_colours(fd, lo, np, want);
+	for (unsigned k = 0; k < np; k++) if (want[k] >= 0) { need |= 1u << k; ncoltried++; }
+	while (need & ~done && nch < POOL / CHUNK) {
+		long m = sc(NR_mmap2, 0, CHUNK * PG, PROT_R | PROT_W, 0x22 | 0x8000 /* PRIVATE|ANON|POPULATE */, -1);
+		if (m < 0 && m > -4096) break;
+		ch[nch] = m; used[nch] = 0;
+		frame_colours(fd, (uintptr_t)m, CHUNK, pcol);
+		for (unsigned k = 0; k < np; k++) {
+			if (!(need & ~done & (1u << k))) continue;
+			for (unsigned i = 0; i < CHUNK; i++) {
+				if (used[nch] & (1u << i) || pcol[i] != want[k]) continue;
+				const uint32_t *src = (const uint32_t *)(lo + k * PG);
+				uint32_t *dst = (uint32_t *)((uintptr_t)m + i * PG);
+				for (unsigned w = 0; w < PG / 4; w++) dst[w] = src[w];
+				used[nch] |= 1u << i;
+				done |= 1u << k;
+				if (sc(NR_mremap, (long)dst, PG, PG, 3 /* MAYMOVE|FIXED */, (long)(lo + k * PG)) == (long)(lo + k * PG))
+					ncoloured++;
+				break;
+			}
+		}
+		nch++;
+	}
+	sc(NR_close, fd, 0, 0, 0, 0);
+	for (unsigned c = 0; c < nch; c++)
+		if (used[c] != (1u << CHUNK) - 1)
+			sc(NR_munmap, ch[c], CHUNK * PG, 0, 0, 0);	/* moved pages are no longer in it */
+}
+
 static unsigned patch(unsigned char *b)
 {
 	unsigned clen[MAXSITE];
@@ -228,6 +335,11 @@ static unsigned patch(unsigned char *b)
 	}
 	lo &= ~(uintptr_t)(PG - 1);
 	hi = (hi + PG - 1) & ~(uintptr_t)(PG - 1);
+#ifdef S31FP_COLOURDBG
+	colours(lo, hi, "before");
+#endif
+	if (colour_on && ncopied_planned(clen))
+		colour_pages(lo, hi);
 	if (sc(NR_mprotect, lo, hi - lo, PROT_R | PROT_W, 0, 0)) { say("s31fp: mprotect RW failed, nothing patched\n"); return 0; }
 	for (i = 0; i < nsite; i++) {
 		uint32_t *at = (uint32_t *)(b + soff[i]);
@@ -252,6 +364,9 @@ static unsigned patch(unsigned char *b)
 	}
 	sc(NR_riscv_flush_icache, lo, hi, 0, 0, 0);
 	__asm__ volatile("fence.i" ::: "memory");
+#ifdef S31FP_COLOURDBG
+	colours(lo, hi, "after");
+#endif
 	return nsite;
 }
 
@@ -319,8 +434,14 @@ __attribute__((constructor)) static void s31fp_init(void)
 
 	if (e && e[0] == '0') return;
 	dbg = env("S31FP_DEBUG") != 0;
+	/* copy-in-place is OPT-IN (S31FP_COPY=1): on 2026-09-27 one prboom
+	 * timedemo died of SIGSEGV at level load under it (1 of 4 copy runs,
+	 * cause not found; every trampoline run completed). Exactness and the
+	 * 280-process hammer pass with it on - see V2-REPORT.txt section 10. */
 	e = env("S31FP_COPY");
-	copy_on = !(e && e[0] == '0');
+	copy_on = e && e[0] == '1';
+	e = env("S31FP_COLOUR");
+	colour_on = !(e && e[0] == '0');
 	if (!dir) dir = "/var/lib/s31fp";
 	if (main_text(&b, &len)) { say("s31fp: no main text\n"); return; }
 	kl = dir[0] ? keypath(path, dir) : -1;
@@ -339,6 +460,7 @@ __attribute__((constructor)) static void s31fp_init(void)
 				n = patch(b);
 				sayx("s31fp: cache hit, patched ", n);
 				sayx("s31fp: of which copied in place ", ncopied);
+				sayx("s31fp: pages given their original frame colour ", ncoloured);
 				return;
 			}
 		}
@@ -365,4 +487,5 @@ __attribute__((constructor)) static void s31fp_init(void)
 	n = patch(b);
 	sayx("s31fp: scanned main text, patched ", n);
 	sayx("s31fp: of which copied in place ", ncopied);
+	sayx("s31fp: pages given their original frame colour ", ncoloured);
 }

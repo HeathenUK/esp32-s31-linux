@@ -1,0 +1,40 @@
+== uname #401 SMP Sun Sep 27 09:58:01 UTC 2026  md5 54f702d3
+s31fp: scanned main text, patched 0x0000001c
+s31fp: of which copied in place 0x0000001a
+s31fp: pages given their original frame colour 0x00000006
+mul SAME  add SAME  sub SAME  div SAME  ge SAME  le SAME  eq SAME  unord SAME  fltsi SAME  fltun SAME  fixsi SAME  fixun SAME  ext SAME  trunc SAME  
+cpu1 col 1 6:0 7:1 8:2 us 20.12
+cpu1 col 2 4:0 5:1 6:2 us 20.11
+cpu1 tramp 2 21.42
+cpu1 static 2 18.31
+cpu1 plain 2 44.55
+cpu1 col 3 a:0 b:1 c:2 us 20.23
+cpu1 col 4 9:0 a:1 b:2 us 19.98
+cpu1 tramp 4 21.32
+cpu1 static 4 18.43
+cpu1 plain 4 44.50
+cpu1 col 5 4:0 5:1 6:2 us 19.98
+cpu1 col 6 9:0 a:1 b:2 us 20.06
+cpu1 tramp 6 21.26
+cpu1 static 6 18.15
+cpu1 plain 6 44.61
+== exec cost (20 launches x2), ms/exec
+r1 ./oplbench-dyn | plain                   46.5 ms/exec
+r1 ./oplbench-dyn | cache                   73.5 ms/exec
+r1 ./oplbench-dyn | cache nocolour          55.5 ms/exec
+r1 ./sdltone1 | plain                       54.0 ms/exec
+r1 ./sdltone1 | cache                       73.5 ms/exec
+r1 ./sdltone1 | cache nocolour              65.0 ms/exec
+r1 /usr/bin/amixer -v | plain               74.0 ms/exec
+r1 /usr/bin/amixer -v | cache               95.5 ms/exec
+r1 /usr/bin/amixer -v | cache nocolour     101.5 ms/exec
+r2 ./oplbench-dyn | plain                   49.0 ms/exec
+r2 ./oplbench-dyn | cache                   66.0 ms/exec
+r2 ./oplbench-dyn | cache nocolour          63.0 ms/exec
+r2 ./sdltone1 | plain                       58.0 ms/exec
+r2 ./sdltone1 | cache                       85.0 ms/exec
+r2 ./sdltone1 | cache nocolour              70.0 ms/exec
+r2 /usr/bin/amixer -v | plain               76.5 ms/exec
+r2 /usr/bin/amixer -v | cache               98.0 ms/exec
+r2 /usr/bin/amixer -v | cache nocolour      99.5 ms/exec
+B10_DONE

@@ -1,0 +1,55 @@
+== uname #401 SMP Sun Sep 27 09:58:01 UTC 2026  md5 63e29628
+s31fp: scanned main text, patched 0x0000001c
+s31fp: of which copied in place 0x0000001a
+s31fp: pages given their original frame colour 0x00000006
+mul SAME  add SAME  sub SAME  div SAME  ge SAME  le SAME  eq SAME  unord SAME  fltsi SAME  fltun SAME  fixsi SAME  fixun SAME  ext SAME  trunc SAME  
+cpu1 col 1 e:0 f:1 0:2 us 20.05
+cpu1 col 2 b:0 c:1 d:2 us 20.16
+cpu1 tramp 2 21.87
+cpu1 static 2 18.35
+cpu1 plain 2 44.60
+cpu1 col 3 c:0 d:1 e:2 us 19.95
+cpu1 col 4 1:0 2:1 3:2 us 19.94
+cpu1 tramp 4 21.93
+cpu1 static 4 18.35
+cpu1 plain 4 44.52
+cpu1 col 5 4:0 5:1 6:2 us 19.94
+cpu1 col 6 8:0 9:1 a:2 us 20.06
+cpu1 tramp 6 21.87
+cpu1 static 6 18.31
+cpu1 plain 6 45.34
+cpu2 col 1 f:0 0:1 1:2 us 25.12
+cpu2 col 2 e:0 f:1 0:2 us 24.84
+cpu2 tramp 2 27.26
+cpu2 static 2 22.53
+cpu2 plain 2 54.56
+cpu2 col 3 9:0 a:1 b:2 us 25.07
+cpu2 col 4 8:0 9:1 a:2 us 24.89
+cpu2 tramp 4 29.11
+cpu2 static 4 22.37
+cpu2 plain 4 55.13
+cpu2 col 5 1:0 2:1 3:2 us 24.66
+cpu2 col 6 9:0 a:1 b:2 us 24.84
+cpu2 tramp 6 26.97
+cpu2 static 6 22.42
+cpu2 plain 6 54.91
+== exec cost (20 launches x2), ms/exec
+r1 ./oplbench-dyn | plain                   48.5 ms/exec
+r1 ./oplbench-dyn | cache                   72.5 ms/exec
+r1 ./oplbench-dyn | cache nocolour          60.5 ms/exec
+r1 ./sdltone1 | plain                       61.5 ms/exec
+r1 ./sdltone1 | cache                       81.0 ms/exec
+r1 ./sdltone1 | cache nocolour              73.5 ms/exec
+r1 /usr/bin/amixer -v | plain               76.5 ms/exec
+r1 /usr/bin/amixer -v | cache               98.0 ms/exec
+r1 /usr/bin/amixer -v | cache nocolour      91.5 ms/exec
+r2 ./oplbench-dyn | plain                   47.5 ms/exec
+r2 ./oplbench-dyn | cache                   68.0 ms/exec
+r2 ./oplbench-dyn | cache nocolour          59.5 ms/exec
+r2 ./sdltone1 | plain                       55.5 ms/exec
+r2 ./sdltone1 | cache                       72.0 ms/exec
+r2 ./sdltone1 | cache nocolour              64.5 ms/exec
+r2 /usr/bin/amixer -v | plain               76.5 ms/exec
+r2 /usr/bin/amixer -v | cache              104.0 ms/exec
+r2 /usr/bin/amixer -v | cache nocolour     101.0 ms/exec
+B9_DONE

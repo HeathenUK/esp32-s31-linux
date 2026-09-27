@@ -1,0 +1,52 @@
+== uname #401 SMP Sun Sep 27 09:58:01 UTC 2026  md5 860d98a2
+s31fp: scanned main text, patched 0x0000001c
+s31fp: of which copied in place 0x0000001a
+== 1. two-process exactness: unpatched vs copy-in-place vs trampoline (md5 of 100k results+flags)
+mul 5be0c995a946 5be0c995a946 5be0c995a946 SAME
+add ec405613ba19 ec405613ba19 ec405613ba19 SAME
+sub 3d142a03685b 3d142a03685b 3d142a03685b SAME
+div 70d096f01547 70d096f01547 70d096f01547 SAME
+ge e3a988a04c65 e3a988a04c65 e3a988a04c65 SAME
+le 511f57cb8932 511f57cb8932 511f57cb8932 SAME
+eq 6437eaa1db1a 6437eaa1db1a 6437eaa1db1a SAME
+unord 6577ef89c71e 6577ef89c71e 6577ef89c71e SAME
+fltsi 77830f50e9b1 77830f50e9b1 77830f50e9b1 SAME
+fltun a1666b1af3a0 a1666b1af3a0 a1666b1af3a0 SAME
+fixsi 1a34122d66cf 1a34122d66cf 1a34122d66cf SAME
+fixun 81b69b5e60d9 81b69b5e60d9 81b69b5e60d9 SAME
+ext 70500ef7b6a2 70500ef7b6a2 70500ef7b6a2 SAME
+trunc 3c2bb0af13ba 3c2bb0af13ba 3c2bb0af13ba SAME
+== 2. hammer: 280 fresh copy-in-place processes, CPU0/CPU1/either, scan and cache alternating
+hammer ok=280 bad=0
+== 3. title song 4 s x3 interleaved, CPU0: static v2 / preload copy / preload trampoline
+v2static r1 36 44100 4 3.351 18.81 1.206 0.00 0 0.00 0.00 0.00 0.00 42be0a6d
+copy r1 36 44100 4 4.563 25.61 0.885 0.00 0 0.00 0.00 0.00 0.00 42be0a6d
+tramp r1 36 44100 4 4.027 22.60 1.003 0.00 0 0.00 0.00 0.00 0.00 42be0a6d
+v2static r2 36 44100 4 3.359 18.85 1.203 0.00 0 0.00 0.00 0.00 0.00 42be0a6d
+copy r2 36 44100 4 3.586 20.13 1.127 0.00 0 0.00 0.00 0.00 0.00 42be0a6d
+tramp r2 36 44100 4 4.064 22.81 0.994 0.00 0 0.00 0.00 0.00 0.00 42be0a6d
+v2static r3 36 44100 4 3.385 19.00 1.194 0.00 0 0.00 0.00 0.00 0.00 42be0a6d
+copy r3 36 44100 4 3.587 20.13 1.126 0.00 0 0.00 0.00 0.00 0.00 42be0a6d
+tramp r3 36 44100 4 4.070 22.84 0.993 0.00 0 0.00 0.00 0.00 0.00 42be0a6d
+copy song5 5 44100 8 10.675 30.13 0.753 0.00 0 0.00 0.00 0.00 0.00 ca17c7a8
+copy song0 0 44100 8 9.109 25.71 0.882 0.00 0 0.00 0.00 0.00 0.00 120dbca6
+copy song9 9 44100 8 8.042 22.70 0.999 0.00 0 0.00 0.00 0.00 0.00 f9f406de
+copy cpu1 36 44100 4 4.575 25.67 0.883 0.00 0 0.00 0.00 0.00 0.00 42be0a6d
+== 4. exec cost, 20 launches x2 rounds, ms/exec
+r1 ./oplbench-dyn | plain                   45.0 ms/exec
+r1 ./oplbench-dyn | cache                   63.5 ms/exec
+r1 ./sdltone1 | plain                       57.5 ms/exec
+r1 ./sdltone1 | cache                       77.5 ms/exec
+r1 /usr/bin/amixer -v | plain               74.5 ms/exec
+r1 /usr/bin/amixer -v | cache              104.5 ms/exec
+r1 /usr/bin/aplay --version | plain         83.5 ms/exec
+r1 /usr/bin/aplay --version | cache         92.0 ms/exec
+r2 ./oplbench-dyn | plain                   48.5 ms/exec
+r2 ./oplbench-dyn | cache                   66.0 ms/exec
+r2 ./sdltone1 | plain                       58.5 ms/exec
+r2 ./sdltone1 | cache                       75.0 ms/exec
+r2 /usr/bin/amixer -v | plain               75.0 ms/exec
+r2 /usr/bin/amixer -v | cache               90.0 ms/exec
+r2 /usr/bin/aplay --version | plain         83.0 ms/exec
+r2 /usr/bin/aplay --version | cache        101.0 ms/exec
+B5_DONE

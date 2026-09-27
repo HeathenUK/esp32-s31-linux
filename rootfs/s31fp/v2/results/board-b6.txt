@@ -1,0 +1,25 @@
+copy 1 20.42
+copy 2 19.95
+tramp 2 21.95
+static 2 18.26
+copy 3 19.37
+copy 4 19.39
+tramp 4 21.97
+static 4 18.38
+copy 5 20.37
+copy 6 24.47
+tramp 6 22.05
+static 6 18.40
+copy 7 20.14
+copy 8 19.82
+tramp 8 22.09
+static 8 18.29
+copy 9 20.06
+copy 10 20.47
+tramp 10 22.02
+static 10 18.27
+copy 11 19.63
+copy 12 19.65
+tramp 12 21.89
+static 12 18.39
+B6_DONE

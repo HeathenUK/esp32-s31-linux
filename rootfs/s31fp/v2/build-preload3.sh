@@ -29,6 +29,9 @@ echo "auipc t1 sites: $NA, unmatched relocation sites: $MISS"
 $CC $M -O2 -fPIC -fno-builtin -fno-stack-protector -fvisibility=hidden -DS31V2_FENV=1 -c -o /tmp/p3div.o v2div.c
 $CC $M -shared -nostdlib -Wl,-z,now -Wl,--hash-style=gnu -o $B/libs31fp.so /tmp/p3.o /tmp/p3v2.o /tmp/p3div.o $B/lgref.o
 $T-strip $B/libs31fp.so
+# diagnostic twin: prints the physical colour (PFN & 3) of each patched page
+$CC $M -O2 -fPIC -fno-builtin -ffreestanding -fno-stack-protector -Wall -fvisibility=hidden -DS31FP_COLOURDBG -c -o /tmp/p3c.o preload3.c
+$CC $M -shared -nostdlib -Wl,-z,now -Wl,--hash-style=gnu -o $B/libs31fp-colour.so /tmp/p3c.o /tmp/p3v2.o /tmp/p3div.o $B/lgref.o
 echo "dynamic symbols (exports/imports):"; $T-nm -D $B/libs31fp.so | grep -v " [tTrRdDbB] s31\| A " | head
 echo "relocations: $($T-readelf -r $B/libs31fp.so | grep -c R_RISCV)"
 ls -l $B/libs31fp.so
