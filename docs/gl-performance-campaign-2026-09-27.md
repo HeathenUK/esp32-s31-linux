@@ -177,6 +177,31 @@ stream. The old path behaves identically, so this predates today's work.
   back again. The app must never stall or underrun-storm. Check the result
   by ear at DAC 143.
 
+## Queued after the s31fp v2 board phase: generic S31-aware interception (2026-09-27)
+
+This grows the s31fp idea. A system-wide preload replaces what stock apps
+would have done differently had they known the S31. It must be bit-exact
+and must need no app-specific knowledge. The owner allows intercepting and
+in-memory-patching preloads; musl itself stays untouched.
+
+- **A1: CPU-safe string routines for every process.** Interpose memcpy,
+  memset and str* with lvdesk/lentcpu.c's rseq cpu_id dispatch: PIE on
+  hart 1, scalar on the lent CPU. This removes trap-driven migration for
+  all apps.
+- **A2: a user-space clock.** There is no vDSO, so clock_gettime and
+  gettimeofday are syscalls. Answer them from the `time` CSR if U-mode can
+  read it (check scounteren/zicntr).
+- **A3: bit-exact S31 fast paths in the shared SDL 1.2/SDL2 libraries:**
+  audio mixing and conversion, and blits.
+- **First step, measurement only:**
+  - clock syscall rates in QuakeSpasm, sdlquake and OpenTyrian;
+  - per-app PIE bounce counts;
+  - the hottest SDL library functions in each app's profile;
+  - whether U-mode can read `time`.
+- **Owner decides case by case:** app-specific bit-exact rewrites, e.g. a
+  fused soft-double operator_output for OpenTyrian's OPL that unpacks once
+  and rounds each step exactly. These are held until ruled on.
+
 ## Git note
 
 Commit a97b9851 (this document's first version) also carries the revert of
