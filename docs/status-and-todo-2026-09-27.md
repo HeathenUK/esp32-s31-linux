@@ -104,8 +104,8 @@ Details: rootfs/s31fp/v2/V2-REPORT.txt.
      it comes from the boot or harness state, not s31fp.
    - prboom's 5-6 patched helpers have only 18 call sites and none of them
      is in a per-pixel loop.
-   - sdlquake: 20.2 fps on. The coordinator is running the off/on pairs
-     (sqab).
+   - sdlquake, quiet fresh boots: 20.2 and 21.3 fps on, 20.8 off. **No
+     s31fp cost** there either; the 20.5 was boot spread.
 
    **Resume:** the copy-in-place crash hunt (a prboom SIGSEGV at level
    load under S31FP_COPY=1, 1 in 4 runs).
