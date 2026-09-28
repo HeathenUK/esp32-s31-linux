@@ -164,13 +164,15 @@ To test it:
    at DAC 143.
 3. Listen for a stall, a click storm or dropouts at each switch.
 
-## Held for the owner's ruling
+## Owner rulings (formerly held)
 
-- **App-specific bit-exact rewrites.** The first candidate is a fused
-  soft-double `operator_output` for OpenTyrian's OPL, which the heavier
-  songs need.
-- **musl libc, ld.so and libm are off-limits** (owner ruling). The
-  interception preloads are allowed.
+- **Bit-exact rewrites, RULED 2026-09-28.** The effect of the fused OPL
+  `operator_output` is wanted, applied to as many cases as possible
+  through generic, pattern-matched rules, not app-specific ones. See
+  `docs/s31fp-generic-acceleration-plan-2026-09-28.md`, Phase 3.
+- **musl libc, ld.so and libm, CLARIFIED 2026-09-28.** Their source is not
+  edited. Intercepting them (preload interposition, full-body copy-patch
+  of helpers inside apps) is allowed.
 
 ## Standing rules learned today (also in memory)
 

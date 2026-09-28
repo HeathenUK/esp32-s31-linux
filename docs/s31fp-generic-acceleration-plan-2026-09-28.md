@@ -109,8 +109,8 @@ Phase 1 item's ship gate cites a row of it.
 
 | # | Item | Mechanism | Evidence | Notes |
 |---|---|---|---|---|
-| 1.1 | Double libm: `sin cos sincos tan atan atan2 exp log pow sqrt` | musl 1.2.5 source rebuilt with the v2 helpers, interposed | PROBE: 37-48% fewer instructions per call; 300 k cases per function, random frm and flags, 0 mismatches | Reaches QuakeSpasm's `sincos` and libc soft-double. D1 (confirm scope). |
-| 1.2 | Float libm: `sinf cosf sincosf tanf expf logf powf hypotf` | Single-precision FPU evaluation, exact against musl, with a fallback | PROBE: 9-23× fewer instructions; unary functions exhaustive over 2^32 with 0 mismatches | The largest per-call win found. Also needs D1. |
+| 1.1 | Double libm: `sin cos sincos tan atan atan2 exp log pow sqrt` | musl 1.2.5 source rebuilt with the v2 helpers, interposed | PROBE: 37-48% fewer instructions per call; 300 k cases per function, random frm and flags, 0 mismatches | Reaches QuakeSpasm's `sincos` and libc soft-double. Allowed (D1). |
+| 1.2 | Float libm: `sinf cosf sincosf tanf expf logf powf hypotf` | Single-precision FPU evaluation, exact against musl, with a fallback | PROBE: 9-23× fewer instructions; unary functions exhaustive over 2^32 with 0 mismatches | The largest per-call win found. Allowed (D1). |
 | 1.3 | `floor ceil trunc` | Integer bit manipulation | VERIFIED in QEMU: 0 / 20 M; floor 427→38 instructions | Arithmetic roadmap W6 |
 | 1.4 | `strlen` (and any `str*` not already in `s31str.c`) | Zbb `orc.b` word loop | PROBE: 0.60-0.75× instructions; 200 k cases, 0 mismatches | Check the exact overlap with v3's list first |
 | 1.5 | Zero-timeout `select`/`poll` | Answer from the fd state without a syscall | PROBE: 1 syscall → 0 per call. **Not exact:** 42 of 790,918 decisions differed (classified benign) | Must be redesigned to be exact, or fall back to the syscall; otherwise kill. D3. |
@@ -181,11 +181,22 @@ neither interposition nor whole-function copy-patch reaches.
 | R2 | `ext → op → trunc` float idiom | One F instruction, frm-guarded | VERIFIED in QEMU: 0 / 32 M outside RMM (roadmap W8) |
 | R3 | `__divdi3`/`__udivdi3` by a constant (`li` operands) | Multiply-high sequence | INFERRED; roadmap C6 found generic 64-bit division slower, so only the constant-divisor sites |
 | R4 | Repeated product at a site | Per-site memo keyed on operand bits, adaptively disabled on a low hit rate | VERIFIED on OPL (> 97% hits); generic payoff unknown |
-| R5 | Chains with adds, ending in a conversion | Wider exact evaluator (operand alignment) | Not started. Only if 0.3 shows Quake's 120 static chains are hot. |
+| R5 | Chains with adds, ending in a conversion | Wider exact evaluator (operand alignment) | Not started. Part of the standard rule set under D2; built after R1 and ordered by 0.3 heat. Quake has 120 static chains ending in a conversion. |
 
-**First deployment target.** OpenTyrian's inlined `operator_output`
-through R1. This is the owner-hold item (D2). If the hold stands, the
-first target is Quake's hottest R1/R2 sites that 0.3 identifies.
+**Deployment policy (D2).**
+- Every rule is generic: it is matched by pattern in any binary, with no
+  per-app tables and no per-app code.
+- The aim is maximum coverage, applying the OPL result's effect to as many
+  sites as possible.
+- OpenTyrian's inlined `operator_output` is the first validation target,
+  because its gain is already proven: 5,105 → 3,327 instructions per
+  sample. It is reached through R1, not through an OPL-specific kernel.
+- `s31opl_out` remains the reference implementation and oracle for R1.
+- Coverage then grows rule by rule (R1 → R2 → R5 → R3), ordered by the heat
+  rows from 0.3.
+- A static chain census runs over every installed binary:
+  `tools/s31fp/chainscan.py`, extended to report matching windows per
+  rule.
 
 ## Phase 4: finish the survey (after the usage limit resets)
 
@@ -202,30 +213,32 @@ first target is Quake's hottest R1/R2 sites that 0.3 identifies.
 
 ## Owner decisions needed
 
-- **D1: libm by interposition.** The ruling reads "musl libc, ld.so and
-  libm are off-limits (owner ruling). The interception preloads are
-  allowed." (`status-and-todo-2026-09-27.md:171-172`). Phase 1 interposes
-  libm exports from the preload and writes no libm bytes, so it appears to
-  be inside the allowance. Please confirm that the allowance covers libm
-  exports as well as the shipped string and clock interposition.
-- **D2: OPL hold.** "A fused soft-double operator_output for OpenTyrian's
-  OPL" is held (`status-and-todo-2026-09-27.md:168-170`). R1 is a generic
-  rule whose first beneficiary is exactly that. Lift the hold for R1, or
-  keep it and start with Quake.
+- **D1: libm by interposition. RULED 2026-09-28.** The rule is that the
+  *source* of off-the-shelf libraries (musl libc, libm, ld.so) is not
+  edited. Interception is allowed. Phase 1 therefore proceeds:
+  - Replacements live in `libs31fp.so`.
+  - The installed libraries are never modified.
+  - Reusing unmodified upstream source as the reference or basis for our
+    own implementation (1.1: musl's libm source built against the v2
+    helpers inside the preload) is our code, not an edit of theirs.
+- **D2: OPL hold. RULED 2026-09-28.** Achieve the same effect as the
+  fused OPL kernel, applied to as many cases as possible from now on. This
+  means generic rules, matched by pattern, with OPL as the first
+  validation target. See "Deployment policy" in Phase 3.
 - **D3: `select`/`poll`.** Accept only an exact redesign (the current probe
-  is 42 / 790,918 decisions off), or drop the item.
+  is 42 / 790,918 decisions off), or drop the item. Open.
 - **D4: shared libraries.** Phase 1 items are exported symbols
   (interposition). Copy-patching app-static helpers inside DSOs (roadmap
-  W4) stays default-off until 0.3 shows heat.
+  W4) stays default-off until 0.3 shows heat. Open.
 
 ## Order of work, and what can happen without the board
 
 | Step | Where | Blocked on |
 |---|---|---|
 | 0.2 counting build + transparency test | Cloud | — |
-| 1.1-1.4 implementations + differentials | Cloud | D1 for 1.1/1.2 |
+| 1.1-1.4 implementations + differentials | Cloud | — |
 | 3.1-3.3 engine and harness | Cloud | — |
-| R1 generalisation, tested against OPL and synthetic chains | Cloud | — |
+| R1 generalisation, tested against OPL and synthetic chains; chain census tool | Cloud | — |
 | 0.1 and 0.3 census | Board | — |
 | 2.1 A/B, and the 2.2 silicon check | Board | — |
 | Phase 1 and R1 ship A/Bs | Board | 0.3 heat rows |
